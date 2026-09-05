@@ -57,7 +57,7 @@ provider = "grok"
 [crews.gemini-flash]
 backend = "cli"
 model = "gemini-3.8-flash-high"
-provider = "agy"
+provider = "antigravity"
 
 
 [pr]
