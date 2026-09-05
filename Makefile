@@ -131,6 +131,7 @@ ci-fast:
 	./scripts/check-orphan-modules.sh
 	./scripts/check-crate-agent-guides.sh
 	./scripts/check-embedded-asset-portability.py
+	./scripts/sync-activity-assets.sh --check
 	./scripts/sync-plugin-skills.sh --check
 	./scripts/test-validate-codex-plugin.sh
 	./scripts/test-validate-agent-plugin.sh
