@@ -356,6 +356,7 @@ fn append_linux_provider_state_roots(
     // `~/.copilot` on hosts that have never installed the CLI.
     directories.extend(linux_copilot_state_roots(provider, home.as_deref()));
     directories.extend(linux_cursor_state_roots_with(provider, home.as_deref()));
+    directories.extend(linux_pi_state_roots(provider, home.as_deref()));
     for directory in directories {
         ensure_owned_directory(&directory)?;
         let canonical = directory.canonicalize().map_err(|error| {
@@ -381,6 +382,41 @@ pub(super) fn linux_cursor_state_roots_with(provider: &str, home: Option<&Path>)
     }
     home.map(|home| vec![home.join(".cursor")])
         .unwrap_or_default()
+}
+
+/// Process-env wrapper around [`linux_pi_state_roots_with`].
+#[cfg(target_os = "linux")]
+fn linux_pi_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
+    linux_pi_state_roots_with(
+        provider,
+        home,
+        std::env::var_os("PI_CODING_AGENT_DIR")
+            .map(PathBuf::from)
+            .as_deref(),
+    )
+}
+
+/// Writable state root for an active Pi executor on Linux. The CLI stores
+/// `/login` credentials, settings, saved project trust decisions, installed
+/// packages, and sessions under `$PI_CODING_AGENT_DIR` when set, otherwise
+/// `$HOME/.pi`. No other provider receives this grant — every entry in the
+/// caller's list is *created* by `ensure_owned_directory`, so an unconditional
+/// entry would mkdir a `~/.pi` on hosts that never installed Pi. [ORB-11296]
+#[cfg(target_os = "linux")]
+pub(super) fn linux_pi_state_roots_with(
+    provider: &str,
+    home: Option<&Path>,
+    pi_coding_agent_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    if orbit_types::workflow::Provider::parse(provider).ok()
+        != Some(orbit_types::workflow::Provider::Pi)
+    {
+        return Vec::new();
+    }
+    match pi_coding_agent_dir {
+        Some(path) => vec![path.to_path_buf()],
+        None => home.map(|home| vec![home.join(".pi")]).unwrap_or_default(),
+    }
 }
 
 /// Process-env wrapper around [`linux_copilot_state_roots_with`].

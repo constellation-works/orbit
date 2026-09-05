@@ -16,7 +16,9 @@ const LINUX: &str = "linux";
 
 /// Shipped executors that opt into Orbit's sandbox wrapper. `local-shell` is
 /// deliberately excluded — it stays unsandboxed on every platform.
-const SANDBOXED_SHIPPED: &[&str] = &["claude", "codex", "gemini", "grok", "copilot", "cursor"];
+const SANDBOXED_SHIPPED: &[&str] = &[
+    "claude", "codex", "gemini", "grok", "copilot", "cursor", "pi",
+];
 
 fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
     let now = Utc::now();

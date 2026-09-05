@@ -67,16 +67,22 @@ impl ReasoningEffort {
 
     /// Validates the provider-model contract before an effort reaches argv.
     ///
-    /// Claude and Codex expose the complete crew vocabulary. Grok's published
-    /// contract is model-specific, so unknown models fail closed instead of
-    /// accepting a setting the CLI might silently reinterpret.
+    /// Claude and Codex expose the complete crew vocabulary. Pi does too: its
+    /// `--thinking` flag validates against a fixed, model-independent set
+    /// (`off, minimal, low, medium, high, xhigh, max`) that is a strict
+    /// superset of this enum, and it rejects a value outside that set with a
+    /// diagnostic rather than ignoring it. [ORB-11296]
+    ///
+    /// Grok's published contract is model-specific, so unknown models fail
+    /// closed instead of accepting a setting the CLI might silently
+    /// reinterpret.
     pub fn validate_for_provider_model(
         self,
         provider: &str,
         model: Option<&str>,
     ) -> Result<(), String> {
         match provider {
-            "claude" | "codex" => Ok(()),
+            "claude" | "codex" | "pi" => Ok(()),
             "grok" => Self::validate_grok_model_effort(self, model),
             other => Err(format!(
                 "provider '{other}' does not support configured reasoning effort"

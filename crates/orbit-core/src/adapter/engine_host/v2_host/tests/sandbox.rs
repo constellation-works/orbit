@@ -905,3 +905,50 @@ mod cursor_state_roots {
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+mod pi_state_roots {
+    use std::path::{Path, PathBuf};
+
+    use crate::adapter::engine_host::v2_host::sandbox::linux_pi_state_roots_with;
+
+    #[test]
+    fn active_pi_gets_only_its_agent_state_root() {
+        assert_eq!(
+            linux_pi_state_roots_with("pi", Some(Path::new("/home/test")), None),
+            vec![PathBuf::from("/home/test/.pi")]
+        );
+        assert!(linux_pi_state_roots_with("pi", None, None).is_empty());
+    }
+
+    #[test]
+    fn the_agent_dir_override_replaces_the_home_default() {
+        assert_eq!(
+            linux_pi_state_roots_with(
+                "pi",
+                Some(Path::new("/home/test")),
+                Some(Path::new("/srv/pi-agent")),
+            ),
+            vec![PathBuf::from("/srv/pi-agent")]
+        );
+    }
+
+    #[test]
+    fn other_and_unknown_providers_get_nothing() {
+        for provider in [
+            "claude",
+            "codex",
+            "gemini",
+            "grok",
+            "copilot",
+            "cursor",
+            "ollama",
+            "not-a-provider",
+        ] {
+            assert!(
+                linux_pi_state_roots_with(provider, Some(Path::new("/home/test")), None).is_empty(),
+                "{provider} must not inherit Pi state roots",
+            );
+        }
+    }
+}

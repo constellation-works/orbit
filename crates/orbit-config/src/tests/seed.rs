@@ -117,6 +117,28 @@ fn cursor_only_seeds_cursor_and_a_system_crew() {
     assert_default_crew(&parsed, Some("cursor"));
 }
 
+#[test]
+fn pi_only_seeds_pi_and_a_system_crew() {
+    let contents = seed_contents(&seed_for(&["pi"]));
+    let parsed = parsed_config(&contents);
+
+    assert_eq!(crew_names(&parsed), vec!["pi", "system"]);
+    assert_crew(&parsed, "pi", "pi", "sonnet");
+    assert_crew(&parsed, "system", "pi", "sonnet");
+    assert_default_crew(&parsed, Some("pi"));
+}
+
+/// [ORB-11296] Pi is appended last in the preference order, so installing it
+/// beside an earlier family never moves that host's default or system crew.
+#[test]
+fn adding_pi_never_displaces_an_earlier_family() {
+    let parsed = parsed_config(&seed_contents(&seed_for(&["claude", "pi"])));
+
+    assert_default_crew(&parsed, Some("opus"));
+    assert_crew(&parsed, "system", "claude", "sonnet");
+    assert_crew(&parsed, "pi", "pi", "sonnet");
+}
+
 /// Orbit ships no `ollama` crew, so a host whose only agent CLI is ollama
 /// seeds an explicitly empty registry rather than a dangling default.
 #[test]

@@ -153,6 +153,15 @@ availability must be checked on the execution host before dispatch.
 
 Installed executors include provider-specific CLI integrations; a model name
 from another vendor does not change the executor's identity. For example,
-Copilot and Cursor keep their own authentication and sandbox grants regardless
-of the model they route to. Use the installed executor catalog and provider CLI
-help for supported model IDs instead of treating examples as a permanent list.
+Copilot, Cursor, and Pi keep their own authentication and sandbox grants
+regardless of the model they route to. Use the installed executor catalog and
+provider CLI help for supported model IDs instead of treating examples as a
+permanent list.
+
+Executor tool reach is not uniform. Some provider CLIs have no MCP client at
+all, so Orbit's tools are reached from the agent's shell through the `orbit`
+binary on the child's `PATH` rather than through an injected MCP server. That
+path enforces the same allowlist and caller-role gates, but it means an
+executor definition that disables the provider's shell tool also removes the
+Orbit tool path. Check the provider section of the configuration reference
+before assuming MCP-native tool injection.

@@ -20,9 +20,12 @@ pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../assets/default
 
 /// Crew families Orbit ships crews for, in the order a seeded config prefers
 /// them. `ollama` is deliberately absent: Orbit ships no `ollama` crew.
-/// Copilot and Cursor are appended after the original four families so adding
-/// either cannot move an existing host's default crew. [ORB-10946] [ORB-10945]
-const CREW_FAMILY_PREFERENCE: &[&str] = &["claude", "codex", "gemini", "grok", "copilot", "cursor"];
+/// Copilot, Cursor, and Pi are appended after the original four families so
+/// adding any of them cannot move an existing host's default crew.
+/// [ORB-10946] [ORB-10945] [ORB-11296]
+const CREW_FAMILY_PREFERENCE: &[&str] = &[
+    "claude", "codex", "gemini", "grok", "copilot", "cursor", "pi",
+];
 
 /// Explicit, host-independent inputs for rendering a fresh `config.toml`.
 ///
@@ -158,6 +161,7 @@ fn default_crew_name(seed: &ConfigSeed) -> Option<&'static str> {
             "grok" => "grok",
             "copilot" => "copilot",
             "cursor" => "cursor",
+            "pi" => "pi",
             _ => unreachable!("available crew families are fixed"),
         })
 }
@@ -246,7 +250,7 @@ fn render_crews(seed: &ConfigSeed) -> Result<String, OrbitError> {
 fn default_system_crew(seed: &ConfigSeed) -> Option<CrewSeed> {
     use orbit_common::model_defaults::{
         CLAUDE_DEFAULT_WEAK, CODEX_LUNA_MODEL, COPILOT_CREW_MODEL, CURSOR_CREW_MODEL,
-        GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL,
+        GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, PI_CREW_MODEL,
     };
     let (provider, model) = if seed.has_family("codex") {
         ("codex", CODEX_LUNA_MODEL)
@@ -260,6 +264,8 @@ fn default_system_crew(seed: &ConfigSeed) -> Option<CrewSeed> {
         ("copilot", COPILOT_CREW_MODEL)
     } else if seed.has_family("cursor") {
         ("cursor", CURSOR_CREW_MODEL)
+    } else if seed.has_family("pi") {
+        ("pi", PI_CREW_MODEL)
     } else {
         return None;
     };

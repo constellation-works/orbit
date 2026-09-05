@@ -698,6 +698,73 @@ fn compile_grants_cursor_state_only_to_an_active_cursor_executor() {
 }
 
 #[test]
+fn pi_state_dir_defaults_under_home_and_honors_the_agent_dir_override() {
+    assert_eq!(
+        pi_state_dir(Some(OsStr::new("/Users/test")), None),
+        Some(PathBuf::from("/Users/test/.pi"))
+    );
+    assert_eq!(
+        pi_state_dir(
+            Some(OsStr::new("/Users/test")),
+            Some(OsStr::new("/var/folders/test/pi-agent"))
+        ),
+        Some(PathBuf::from("/var/folders/test/pi-agent"))
+    );
+    assert_eq!(pi_state_dir(None, None), None);
+}
+
+#[test]
+fn compile_grants_pi_state_only_to_an_active_pi_executor() {
+    let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
+    let pi_profile = compile_with_env(
+        &resolved,
+        "pi",
+        EnvOverrides {
+            home: Some("/Users/test"),
+            ..Default::default()
+        },
+    );
+    assert!(
+        pi_profile.contains("(allow file-write* (subpath \"/Users/test/.pi\"))"),
+        "active Pi must be granted its agent state directory",
+    );
+
+    for provider in ["claude", "codex", "gemini", "grok", "copilot", "cursor"] {
+        let other = compile_with_env(
+            &resolved,
+            provider,
+            EnvOverrides {
+                home: Some("/Users/test"),
+                ..Default::default()
+            },
+        );
+        assert!(
+            !other.contains("/Users/test/.pi\""),
+            "{provider} must not inherit Pi state write access",
+        );
+    }
+}
+
+#[test]
+fn compile_uses_the_pi_coding_agent_dir_override_for_the_active_executor() {
+    let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
+
+    let text = compile_with_env(
+        &resolved,
+        "pi",
+        EnvOverrides {
+            home: Some("/Users/test"),
+            pi_coding_agent_dir: Some("/var/folders/test/pi-agent"),
+            ..Default::default()
+        },
+    );
+
+    assert!(text.contains("(allow file-write* (subpath \"/var/folders/test/pi-agent\"))"));
+    // With the override set, the default location is not additionally granted.
+    assert!(!text.contains("\"/Users/test/.pi\""));
+}
+
+#[test]
 fn compile_uses_the_copilot_home_override_for_the_active_executor() {
     let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
 
