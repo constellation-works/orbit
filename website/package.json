@@ -4,9 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node ./scripts/clean-legacy-metrics.mjs",
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
+    "prebuild": "node ./scripts/clean-legacy-metrics.mjs",
     "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
+    "prepreview": "node ./scripts/clean-legacy-metrics.mjs",
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",
+    "precheck": "node ./scripts/clean-legacy-metrics.mjs",
     "check": "ASTRO_TELEMETRY_DISABLED=1 astro check"
   },
   "dependencies": {
