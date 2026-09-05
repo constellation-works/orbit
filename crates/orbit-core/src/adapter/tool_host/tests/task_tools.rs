@@ -975,6 +975,180 @@ fn task_update_tool_persists_complexity_without_adding_history() {
     assert_eq!(omitted.get("complexity"), Some(&json!("medium")));
 }
 
+/// An MCP session started with `orbit mcp serve --orchestrator <crew>` and
+/// bound to this test workspace.
+fn session_with_orchestrator(workspace: &str, orchestrator: &str) -> ToolSessionContext {
+    ToolSessionContext {
+        orchestrator: Some(orchestrator.to_string()),
+        ..ToolSessionContext::with_workspace(workspace.to_string())
+    }
+}
+
+fn add_with_session(
+    runtime: &crate::OrbitRuntime,
+    input: Value,
+    session: ToolSessionContext,
+) -> Result<Value, orbit_common::OrbitError> {
+    runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.add",
+            input,
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+            ToolEntryPoint::Mcp,
+            session,
+        )
+        .map(|outcome| outcome.value)
+}
+
+#[test]
+fn session_orchestrator_default_is_resolved_against_the_target_workspace_crews() {
+    // The default is a crew name, not a persisted decision: the workspace the
+    // call lands in resolves it, so an unconfigured name fails that call
+    // rather than quietly attributing the task to some other crew.
+    let (_root, runtime, repo_root) = test_runtime();
+    let workspace = repo_root.to_string_lossy().into_owned();
+
+    let added = add_with_session(
+        &runtime,
+        json!({
+            "title": "Session-attributed task",
+            "description": "The MCP session supplies orchestrator attribution.",
+            "complexity": "low",
+        }),
+        session_with_orchestrator(&workspace, "sol"),
+    )
+    .expect("a configured session orchestrator is accepted");
+    assert_eq!(added.get("orchestrator"), Some(&json!("sol")));
+    assert_eq!(
+        added.get("crew"),
+        Some(&json!(null)),
+        "attribution must not select an execution crew"
+    );
+
+    let rejected = add_with_session(
+        &runtime,
+        json!({
+            "title": "Unconfigured session orchestrator",
+            "description": "An unknown session default must fail loudly.",
+            "complexity": "low",
+        }),
+        session_with_orchestrator(&workspace, "does-not-exist"),
+    );
+    let message = match rejected {
+        Err(error) => format!("{error:?}"),
+        Ok(value) => panic!("expected an unknown session orchestrator to be rejected, got {value}"),
+    };
+    assert!(
+        message.contains("crew 'does-not-exist' is not defined"),
+        "error should name the unresolvable crew: {message}"
+    );
+}
+
+#[test]
+fn an_explicit_orchestrator_beats_the_session_default_end_to_end() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let workspace = repo_root.to_string_lossy().into_owned();
+
+    let added = add_with_session(
+        &runtime,
+        json!({
+            "title": "Explicit attribution",
+            "description": "The call names its own orchestrator.",
+            "complexity": "low",
+            "orchestrator": "terra",
+        }),
+        session_with_orchestrator(&workspace, "sol"),
+    )
+    .expect("explicit orchestrator is accepted");
+    assert_eq!(added.get("orchestrator"), Some(&json!("terra")));
+}
+
+#[test]
+fn the_session_orchestrator_never_backfills_an_existing_task() {
+    // The default applies at creation only. A task created before the session
+    // was configured keeps its own attribution, and an ordinary update through
+    // that session must not acquire one.
+    let (_root, runtime, repo_root) = test_runtime();
+    let workspace = repo_root.to_string_lossy().into_owned();
+
+    let created = add_with_session(
+        &runtime,
+        json!({
+            "title": "Unattributed task",
+            "description": "Created before any session default existed.",
+            "complexity": "low",
+        }),
+        ToolSessionContext::with_workspace(workspace.clone()),
+    )
+    .expect("task add succeeds");
+    let task_id = created["id"].as_str().expect("task id").to_string();
+    assert_eq!(created.get("orchestrator"), Some(&json!(null)));
+
+    let updated = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.update",
+            json!({ "id": task_id, "title": "Still unattributed" }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+            ToolEntryPoint::Mcp,
+            session_with_orchestrator(&workspace, "sol"),
+        )
+        .expect("task update succeeds")
+        .value;
+    assert_eq!(
+        updated.get("orchestrator"),
+        Some(&json!(null)),
+        "a configured session must not backfill attribution on an existing task"
+    );
+}
+
+#[test]
+fn the_session_orchestrator_respects_the_lifecycle_restriction() {
+    // Attribution stays changeable only while proposed or backlog, whether it
+    // came from the call or from the session.
+    let (_root, runtime, repo_root) = test_runtime();
+    let workspace = repo_root.to_string_lossy().into_owned();
+
+    let created = add_with_session(
+        &runtime,
+        json!({
+            "title": "Lifecycle-restricted attribution",
+            "description": "Attribution changes stay gated by status.",
+            "complexity": "low",
+        }),
+        session_with_orchestrator(&workspace, "sol"),
+    )
+    .expect("task add succeeds");
+    let task_id = created["id"].as_str().expect("task id").to_string();
+
+    for status in ["backlog", "in-progress"] {
+        run_tool_as_operator(
+            &runtime,
+            "orbit.task.update",
+            json!({ "id": task_id, "status": status, "model": "codex" }),
+        )
+        .unwrap_or_else(|error| panic!("advance to {status}: {error}"));
+    }
+
+    let message = invalid_input_message(
+        runtime
+            .execute_tool_command_dispatch_with_session_context(
+                "orbit.task.update",
+                json!({ "id": task_id, "orchestrator": "terra" }),
+                Some("codex".to_string()),
+                Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+                ToolEntryPoint::Mcp,
+                session_with_orchestrator(&workspace, "sol"),
+            )
+            .map(|outcome| outcome.value),
+    );
+    assert!(
+        message.contains("only be changed while proposed or backlog"),
+        "error should name the lifecycle restriction: {message}"
+    );
+}
+
 #[test]
 fn task_add_tool_rejects_unknown_crew() {
     // Un-retiring crew also means it is validated: an unknown crew is now

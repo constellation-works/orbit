@@ -94,6 +94,16 @@ This is the deliberate bootstrap path for a human-facing orchestrator; bare
 workspace-scoped tools route without an explicit selector on every call —
 most MCP clients cannot announce one at initialize.
 
+`orbit mcp serve --orchestrator <crew>` binds a second session default, this
+one purely descriptive: tasks the session creates are attributed to that crew
+unless the call passes its own `orchestrator`. It is independent of
+`--operator` and grants nothing, does not select the crew or model a task
+executes under, and never rewrites an existing task. The crew is resolved
+against the workspace the call lands in, so an unconfigured name fails that
+call instead of silently selecting another crew. Because a connection outlives
+a model switch in the client, pass `orchestrator` per call or restart the
+session when the orchestrating crew changes.
+
 Choose the real integration branch; do not assume the product default `main`
 is the repository's landing branch. `--ship-mode local` selects worktree-based
 local merge delivery instead of opening PRs. For another host's workspace, use

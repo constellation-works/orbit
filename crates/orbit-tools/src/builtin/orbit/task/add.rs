@@ -97,7 +97,7 @@ impl Tool for OrbitTaskAddTool {
             },
             ToolParam {
                 name: "orchestrator".to_string(),
-                description: "Optional named crew responsible for orchestration attribution; does not select execution".to_string(),
+                description: "Optional named crew responsible for orchestration attribution; does not select execution. Defaults to the MCP session's `orbit mcp serve --orchestrator` crew when omitted".to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },
@@ -118,6 +118,7 @@ impl Tool for OrbitTaskAddTool {
         required_string(&input, &["description"], "description")?;
         required_string(&input, &["complexity"], "complexity")?;
         super::super::resolve_workspace_argument(ctx, &mut input, "orbit.task.add")?;
+        super::super::apply_session_orchestrator_default(ctx, &mut input);
 
         let ignored_fields = strip_retired_task_add_input_fields(&mut input);
         if !ignored_fields.is_empty() {
