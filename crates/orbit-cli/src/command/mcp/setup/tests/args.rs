@@ -69,6 +69,7 @@ fn provider_selection_all_includes_every_supported_provider() {
                 McpProvider::Claude,
                 McpProvider::Codex,
                 McpProvider::Gemini,
+                McpProvider::Antigravity,
                 McpProvider::Grok,
                 McpProvider::Cursor,
                 McpProvider::Vscode,

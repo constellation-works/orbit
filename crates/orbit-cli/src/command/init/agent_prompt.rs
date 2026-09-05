@@ -115,17 +115,22 @@ pub(crate) fn collect_system_crew_setting(
 
 /// Cheap-tier system options in the same preference order as
 /// `orbit-config::default_system_crew`: Codex Luna, Claude Sonnet, Grok,
-/// Gemini Flash, Copilot Haiku, Cursor, Pi.
+/// Antigravity Flash, Gemini Flash, Copilot Haiku, Cursor, Pi.
 fn system_crew_options(detected: &DetectedAgents) -> Vec<CrewSeed> {
     use orbit_common::model_defaults::{
-        CLAUDE_DEFAULT_WEAK, CODEX_LUNA_MODEL, COPILOT_CREW_MODEL, CURSOR_CREW_MODEL,
-        GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, PI_CREW_MODEL,
+        ANTIGRAVITY_CREW_MODEL, CLAUDE_DEFAULT_WEAK, CODEX_LUNA_MODEL, COPILOT_CREW_MODEL,
+        CURSOR_CREW_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, PI_CREW_MODEL,
     };
     let mut options = Vec::new();
     for (enabled, provider, model) in [
         (detected.codex_cli, "codex", CODEX_LUNA_MODEL),
         (detected.claude_cli, "claude", CLAUDE_DEFAULT_WEAK),
         (detected.grok_cli, "grok", GROK_DEFAULT_MODEL),
+        (
+            detected.antigravity_cli,
+            "antigravity",
+            ANTIGRAVITY_CREW_MODEL,
+        ),
         (detected.gemini_cli, "gemini", GEMINI_CREW_MODEL),
         (detected.copilot_cli, "copilot", COPILOT_CREW_MODEL),
         (detected.cursor_cli, "cursor", CURSOR_CREW_MODEL),
@@ -162,6 +167,7 @@ fn system_crew_label(option: &CrewSeed) -> &'static str {
         Some("codex") => "Codex",
         Some("claude") => "Claude",
         Some("grok") => "Grok",
+        Some("antigravity") => "Antigravity",
         Some("gemini") => "Gemini",
         Some("copilot") => "Copilot",
         Some("cursor") => "Cursor",
@@ -240,7 +246,7 @@ struct AgentFamily {
     provider: &'static str,
 }
 
-const AGENT_FAMILIES: [AgentFamily; 8] = [
+const AGENT_FAMILIES: [AgentFamily; 9] = [
     AgentFamily {
         label: "Claude CLI",
         provider: "claude",
@@ -248,6 +254,10 @@ const AGENT_FAMILIES: [AgentFamily; 8] = [
     AgentFamily {
         label: "Codex CLI",
         provider: "codex",
+    },
+    AgentFamily {
+        label: "Antigravity CLI",
+        provider: "antigravity",
     },
     AgentFamily {
         label: "Gemini CLI",
@@ -279,6 +289,7 @@ fn agent_families(detected: &DetectedAgents) -> impl Iterator<Item = (AgentFamil
     AGENT_FAMILIES.into_iter().zip([
         detected.claude_cli,
         detected.codex_cli,
+        detected.antigravity_cli,
         detected.gemini_cli,
         detected.grok_cli,
         detected.copilot_cli,

@@ -80,12 +80,13 @@ fn provider_capability_predicates_match_contract() {
     // the only variants allowed to exist without a row are the ones named here.
     // An accidental new variant still fails this test.
     //
-    // Copilot, Cursor, and Pi are such identities. Adding any of them upstream
-    // is a cross-system change (Worker and Bridge resolve against the same
-    // rows); until that lands, Orbit can dispatch them while Worker correctly
-    // refuses them — which is what `is_worker_executable() == false` encodes.
-    // [ORB-10946] [ORB-10945] [ORB-11296]
-    const ORBIT_ONLY_PROVIDERS: &[&str] = &["copilot", "cursor", "pi"];
+    // Copilot, Cursor, Pi, and Antigravity are such identities. Adding any of
+    // them upstream is a cross-system change (Worker and Bridge resolve
+    // against the same rows); until that lands, Orbit can dispatch them while
+    // Worker correctly refuses them — which is what
+    // `is_worker_executable() == false` encodes.
+    // [ORB-10946] [ORB-10945] [ORB-11296] [ORB-11299]
+    const ORBIT_ONLY_PROVIDERS: &[&str] = &["copilot", "cursor", "pi", "antigravity"];
 
     for name in &known {
         assert!(
@@ -198,6 +199,27 @@ fn provider_capability_predicates_match_contract() {
             "vendor alias '{vendor_alias}' must not resolve to Pi",
         );
     }
+
+    let antigravity = Provider::parse("antigravity").expect("antigravity is canonical");
+    assert_eq!(antigravity.as_str(), "antigravity");
+    assert_eq!(antigravity.to_string(), "antigravity");
+    assert!(
+        antigravity.has_cli_runtime(),
+        "Orbit ships an Antigravity CLI runtime"
+    );
+    assert!(
+        !antigravity.is_worker_executable(),
+        "Worker has no Antigravity lane, so it must refuse rather than fall back",
+    );
+    for spelling in ["agy", "antigravity-cli", "google-antigravity"] {
+        assert!(
+            Provider::parse(spelling).is_err(),
+            "'{spelling}' must not alias the Antigravity provider",
+        );
+    }
+    let google = Provider::resolve_name("google").expect("google still aliases to gemini");
+    assert_eq!(google.provider, Provider::Gemini);
+    assert_ne!(google.provider, antigravity);
 }
 
 #[test]

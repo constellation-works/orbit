@@ -116,9 +116,11 @@ orbit mcp init --client claude --client codex        # repeatable
 orbit mcp init --all --scope home                    # user-level rather than repo-local
 ```
 
-Supported clients: `claude`, `codex`, `gemini`, `grok`, `cursor`, `vscode`,
-`windsurf`. `--scope workspace` (the default) writes repo-local config;
-`--scope home` writes user-level config.
+Supported clients: `claude`, `codex`, `gemini`, `antigravity`, `grok`, `cursor`,
+`vscode`, `windsurf`. `--scope workspace` (the default) writes repo-local config;
+`--scope home` writes user-level config. The current Google terminal CLI is
+`agy` (Antigravity). Gemini CLI remains available for enterprise / API-key
+deployments; individual Gemini CLI accounts stopped on 2026-06-18.
 
 ## Step 5 — Verify
 

@@ -3,7 +3,7 @@
 //! Two families live here:
 //!
 //! - **CLI transports** (`claude`, `codex`, `copilot`, `cursor-agent`, `gemini`,
-//!   `grok`, `ollama`, `pi`, `mock_agent`):
+//!   `agy`, `grok`, `ollama`, `pi`, `mock_agent`):
 //!   translate an [`AgentRequest`] into a CLI command invocation and stdin
 //!   envelope that the engine runs via `orbit-exec`.
 //! - **HTTP transports** (`anthropic`, `openai_compat`, `gemini_http`): implement the sibling
@@ -15,6 +15,7 @@
 //! existing CLI path, and the shared `AgentRuntime` trait is unchanged.
 
 pub mod anthropic;
+pub(crate) mod antigravity;
 pub(crate) mod claude;
 pub(crate) mod codex;
 mod common;
@@ -71,6 +72,7 @@ pub fn normalize_cli_stdout<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
         "copilot" => Cow::Owned(copilot::normalize_copilot_stdout(stdout)),
         "cursor" => Cow::Owned(cursor::normalize_cursor_stdout(stdout)),
         "pi" => Cow::Owned(pi::normalize_pi_stdout(stdout)),
+        "antigravity" | "agy" => Cow::Owned(antigravity::normalize_antigravity_stdout(stdout)),
         _ => Cow::Borrowed(stdout),
     }
 }

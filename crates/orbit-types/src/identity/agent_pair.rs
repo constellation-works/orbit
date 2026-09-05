@@ -84,6 +84,7 @@ impl ReasoningEffort {
         match provider {
             "claude" | "codex" | "pi" => Ok(()),
             "grok" => Self::validate_grok_model_effort(self, model),
+            "antigravity" => Self::validate_antigravity_effort(self, model),
             other => Err(format!(
                 "provider '{other}' does not support configured reasoning effort"
             )),
@@ -110,6 +111,40 @@ impl ReasoningEffort {
             ),
         }
     }
+
+    fn validate_antigravity_effort(self, model: Option<&str>) -> Result<(), String> {
+        match self {
+            Self::Low | Self::Medium | Self::High => validate_antigravity_model(model),
+            other => Err(format!(
+                "Antigravity CLI supports effort values low, medium, high (`agy --effort`); '{other}' is unsupported. Migrate xhigh/max to high, or choose a *-high model slug from `agy models`. Values are not remapped."
+            )),
+        }
+    }
+}
+
+/// Reject Gemini CLI model ids that `agy` does not accept.
+///
+/// Verified against Antigravity CLI 1.1.27 (`agy models`): Gemini slugs carry
+/// an effort suffix (`gemini-3.8-flash-high`). Bare ids such as
+/// `gemini-3.8-flash` fail at the CLI rather than falling back. Orbit fails
+/// the same way with migration text instead of rewriting the id. [ORB-11299]
+pub fn validate_antigravity_model(model: Option<&str>) -> Result<(), String> {
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+        return Ok(());
+    };
+    if is_legacy_gemini_cli_model_id(model) {
+        return Err(format!(
+            "Antigravity CLI does not accept Gemini CLI model id '{model}'. Use a slug from `agy models` such as gemini-3.8-flash-high; ids are not remapped. Individual Gemini CLI accounts stopped on 2026-06-18, but enterprise Gemini Code Assist and API-key Gemini CLI remain available on the legacy `gemini` provider."
+        ));
+    }
+    Ok(())
+}
+
+fn is_legacy_gemini_cli_model_id(model: &str) -> bool {
+    if !model.starts_with("gemini-") {
+        return false;
+    }
+    !(model.ends_with("-low") || model.ends_with("-medium") || model.ends_with("-high"))
 }
 
 impl fmt::Display for ReasoningEffort {
@@ -250,7 +285,10 @@ pub fn normalize_agent_family_for_model(
 ) -> Result<Option<String>, IdentityError> {
     let agent = agent_cli
         .map(agent_family_from_cli)
-        .filter(|value| !value.trim().is_empty());
+        .filter(|value| !value.trim().is_empty())
+        // `agy` / `antigravity` name the execution lane, not a family.
+        // Family comes from the model string (`gemini-*` stays `gemini`).
+        .filter(|value| !is_antigravity_cli(value));
     let model = model.map(str::trim).filter(|value| !value.is_empty());
     let inferred = model.and_then(infer_agent_family_from_model);
 
@@ -264,4 +302,8 @@ pub fn normalize_agent_family_for_model(
     }
 
     Ok(agent.or(inferred))
+}
+
+fn is_antigravity_cli(name: &str) -> bool {
+    matches!(name, "agy" | "antigravity")
 }

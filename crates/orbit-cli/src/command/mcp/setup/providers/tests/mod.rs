@@ -1,5 +1,6 @@
 #![allow(missing_docs)]
 
+mod antigravity;
 mod claude;
 mod codex;
 mod gemini;

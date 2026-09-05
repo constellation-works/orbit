@@ -51,9 +51,10 @@ pub fn claude_state_dir_from_env() -> Option<PathBuf> {
     claude_state_dir(home.as_deref(), claude_config_dir.as_deref())
 }
 
-/// Gemini CLI does not document a stable env override — it writes state
-/// under `$HOME/.gemini`. If a future CLI release surfaces an override, plumb
-/// it through `SandboxCompileEnv` here.
+/// Gemini CLI and Antigravity CLI both write under `$HOME/.gemini`
+/// (Antigravity uses `$HOME/.gemini/antigravity-cli/`). Neither documents a
+/// stable env override. If a future CLI release surfaces one, plumb it
+/// through `SandboxCompileEnv` here. [ORB-11299]
 fn gemini_state_dir(home: Option<&OsStr>) -> Option<PathBuf> {
     non_empty_env_path(home).map(|path| path.join(".gemini"))
 }

@@ -31,14 +31,27 @@ fn built_in_crews_use_standard_model_specific_names() {
     // lane. [ORB-10877] It is built in because shipped job steps name it
     // directly, so a config with no `[crews]` table must still resolve it.
     //
-    // `copilot`, `cursor`, and `pi` are provider-lane exceptions: each can
-    // route to models supplied by several vendors, so the crew names retain the
-    // execution provider identity. [ORB-10946] [ORB-10945] [ORB-11296]
+    // `copilot`, `cursor`, `pi`, and `antigravity` are provider-lane
+    // exceptions: each can route to models supplied by several vendors, so the
+    // crew names retain the execution provider identity. [ORB-10946]
+    // [ORB-10945] [ORB-11296] [ORB-11299]
     assert_eq!(
         crews.keys().map(String::as_str).collect::<Vec<_>>(),
         vec![
-            "astra", "copilot", "cursor", "fable", "gemini", "grok", "luna", "opus", "pi", "sol",
-            "sonnet", "system", "terra"
+            "antigravity",
+            "astra",
+            "copilot",
+            "cursor",
+            "fable",
+            "gemini",
+            "grok",
+            "luna",
+            "opus",
+            "pi",
+            "sol",
+            "sonnet",
+            "system",
+            "terra",
         ]
     );
     for (name, provider, model) in [
@@ -50,6 +63,7 @@ fn built_in_crews_use_standard_model_specific_names() {
         ("luna", "codex", "gpt-5.6-luna"),
         ("astra", "codex", "gpt-6-astra"),
         ("gemini", "gemini", "gemini-3.8-flash"),
+        ("antigravity", "antigravity", "gemini-3.8-flash-high"),
         ("grok", "grok", "grok-4.6"),
         ("copilot", "copilot", "claude-sonnet-4.5"),
         ("cursor", "cursor", "gpt-5"),
@@ -299,6 +313,26 @@ fn crew_effort_fails_closed_for_invalid_values_and_unsupported_providers() {
         unsupported
             .to_string()
             .contains("does not support configured reasoning effort")
+    );
+
+    let agy_xhigh = load_config(
+        "[crews.antigravity]\nmodel = \"gemini-3.8-flash-high\"\nprovider = \"antigravity\"\neffort = \"xhigh\"\n\n[workflow]\ndefault_crew = \"antigravity\"\n",
+    )
+    .expect_err("agy does not accept xhigh");
+    assert!(
+        agy_xhigh.to_string().contains("low, medium, high"),
+        "{agy_xhigh}"
+    );
+
+    let agy_legacy_model = load_config(
+        "[crews.antigravity]\nmodel = \"gemini-3.8-flash\"\nprovider = \"antigravity\"\n\n[workflow]\ndefault_crew = \"antigravity\"\n",
+    )
+    .expect_err("legacy gemini CLI model ids are not remapped");
+    assert!(
+        agy_legacy_model
+            .to_string()
+            .contains("gemini-3.8-flash-high"),
+        "{agy_legacy_model}"
     );
 }
 

@@ -194,6 +194,7 @@ pub enum Provider {
     OpenaiCompat,
     Cursor,
     Pi,
+    Antigravity,
 }
 
 /// One accepted non-canonical spelling for a [`Provider`]. Alias normalization
@@ -234,7 +235,7 @@ impl std::error::Error for ProviderParseError {}
 impl Provider {
     /// Every canonical provider, in declaration order. Adding a variant here is
     /// a compile-time forcing function for the match arms below.
-    pub const ALL: [Provider; 9] = [
+    pub const ALL: [Provider; 10] = [
         Provider::Claude,
         Provider::Codex,
         Provider::Gemini,
@@ -244,6 +245,7 @@ impl Provider {
         Provider::OpenaiCompat,
         Provider::Cursor,
         Provider::Pi,
+        Provider::Antigravity,
     ];
 
     /// Accepted non-canonical spellings, normalized by [`Provider::parse`] /
@@ -255,13 +257,14 @@ impl Provider {
     /// This table is **closed** — an unlisted string is `provider.unknown`,
     /// never guessed. New aliases require a contract bump.
     ///
-    /// `copilot`, `cursor`, and `pi` deliberately have **no** alias rows.
+    /// `copilot`, `cursor`, `pi`, and `antigravity` deliberately have **no**
+    /// alias rows.
     /// Neither the platform name nor a selected underlying model vendor may
     /// resolve to a different execution lane. This matters most for `pi`,
     /// whose own `--provider` flag names the model vendor (`anthropic`,
     /// `openai`, ...) *inside* the Pi lane: those vendor spellings already
     /// resolve to other Orbit executors and must keep doing so.
-    /// [ORB-10946] [ORB-10945] [ORB-11296]
+    /// [ORB-10946] [ORB-10945] [ORB-11296] [ORB-11299]
     pub const ALIASES: &'static [ProviderAlias] = &[
         ProviderAlias {
             alias: "anthropic",
@@ -297,7 +300,7 @@ impl Provider {
 
     /// Human-readable canonical id list used in diagnostics.
     pub const CANONICAL_LIST: &'static str =
-        "claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi";
+        "claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity";
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -310,6 +313,7 @@ impl Provider {
             Provider::OpenaiCompat => "openai_compat",
             Provider::Cursor => "cursor",
             Provider::Pi => "pi",
+            Provider::Antigravity => "antigravity",
         }
     }
 
@@ -370,8 +374,8 @@ impl Provider {
 
     /// Whether the model-neutral Worker leaf executor can execute this
     /// provider. Worker only wires the four shared CLI agent families;
-    /// `copilot`, `cursor`, `pi`, `ollama`, and `openai_compat` are
-    /// Orbit-canonical capabilities Worker does not run.
+    /// `copilot`, `cursor`, `pi`, `antigravity`, `ollama`, and `openai_compat`
+    /// are Orbit-canonical capabilities Worker does not run.
     /// Preserving this distinction is an explicit ORB-10091 constraint — Orbit
     /// keeps the wider set even though Worker cannot execute all of it.
     ///

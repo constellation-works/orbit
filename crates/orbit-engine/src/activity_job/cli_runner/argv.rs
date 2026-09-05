@@ -82,7 +82,7 @@ pub(super) fn neutralize_inner_sandbox(
         "codex" => {
             provider_config.insert("sandbox".to_string(), "danger-full-access".to_string());
         }
-        "gemini" => {
+        "gemini" | "antigravity" => {
             *static_args = filter_gemini_inner_sandbox_args(static_args);
         }
         "grok" => {

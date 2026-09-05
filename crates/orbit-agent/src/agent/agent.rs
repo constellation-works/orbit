@@ -16,6 +16,7 @@ pub enum ProviderOptions {
         writable_dirs: Vec<String>,
     },
     Gemini,
+    Antigravity,
     Grok,
     Copilot,
     Cursor,

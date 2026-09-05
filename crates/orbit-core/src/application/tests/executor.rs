@@ -17,7 +17,14 @@ const LINUX: &str = "linux";
 /// Shipped executors that opt into Orbit's sandbox wrapper. `local-shell` is
 /// deliberately excluded — it stays unsandboxed on every platform.
 const SANDBOXED_SHIPPED: &[&str] = &[
-    "claude", "codex", "gemini", "grok", "copilot", "cursor", "pi",
+    "claude",
+    "codex",
+    "gemini",
+    "antigravity",
+    "grok",
+    "copilot",
+    "cursor",
+    "pi",
 ];
 
 fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
@@ -328,6 +335,59 @@ fn shipped_direct_agent_defaults_omit_legacy_model_pair_override() {
             "fresh {name} default must retain crew-selected model flag behavior"
         );
     }
+}
+
+#[test]
+fn seeding_adds_antigravity_without_rewriting_a_customized_gemini_executor() {
+    let store = InMemoryExecutorStore::default();
+    let mut custom = base_def("gemini", ExecutorType::DirectAgent);
+    custom.command = Some("gemini".to_string());
+    custom.args = vec![
+        "--approval-mode".to_string(),
+        "yolo".to_string(),
+        "--allowed-mcp-server-names".to_string(),
+        "orbit".to_string(),
+        "-o".to_string(),
+        "json".to_string(),
+    ];
+    custom.model_pair_override = Some(orbit_types::workflow::ModelPairOverride {
+        strong: "custom-strong".to_string(),
+        weak: "custom-weak".to_string(),
+    });
+    custom.model_flag = Some("-m".to_string());
+    custom.sandbox = Some(ExecutorSandboxKind::LinuxBwrap);
+    store
+        .upsert_executor_def(&custom)
+        .expect("seed custom gemini");
+
+    seed_default_executors_for_platform(&store, false, LINUX).expect("seed defaults");
+
+    let gemini = store
+        .get_executor_def("gemini")
+        .expect("get")
+        .expect("gemini present");
+    assert_eq!(gemini.command.as_deref(), Some("gemini"));
+    assert_eq!(gemini.args, custom.args);
+    assert_eq!(gemini.model_pair_override, custom.model_pair_override);
+    assert_eq!(gemini.model_flag, custom.model_flag);
+
+    let antigravity = store
+        .get_executor_def("antigravity")
+        .expect("get")
+        .expect("antigravity seeded");
+    assert_eq!(antigravity.command.as_deref(), Some("agy"));
+    assert!(
+        !antigravity.args.iter().any(|arg| arg == "--approval-mode"
+            || arg == "-o"
+            || arg == "--allowed-mcp-server-names")
+    );
+    assert!(
+        antigravity
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--output-format", "stream-json"])
+    );
+    assert_eq!(antigravity.model_pair_override, None);
 }
 
 #[test]

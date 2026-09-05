@@ -7,6 +7,10 @@ pub(crate) const DEFAULT_EXECUTOR_FILES: &[(&str, &str)] = &[
     ("claude", include_str!("../../assets/executors/claude.yaml")),
     ("codex", include_str!("../../assets/executors/codex.yaml")),
     ("gemini", include_str!("../../assets/executors/gemini.yaml")),
+    (
+        "antigravity",
+        include_str!("../../assets/executors/antigravity.yaml"),
+    ),
     ("grok", include_str!("../../assets/executors/grok.yaml")),
     (
         "copilot",

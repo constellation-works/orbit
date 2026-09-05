@@ -55,7 +55,7 @@ system_crew = "system"      # crew for recovery paths with no job step to name o
 - **`default_crew`** — name of the crew under `[crews.<name>]` used for any task whose own `crew` field is unset. Must match a defined crew or config load fails. See [Per-task crew override](#per-task-crew-override) for how individual tasks select a different crew.
 - **`system_crew`** — name of the crew for system activities that are synthesized at runtime and so have no job step to name a crew on, principally `step_failure_recovery`. Defaults to `system`. Shipped pipelines such as `task_pilot_pipeline` and `task_triage_pipeline` do **not** read this key: their steps name `crew: system` directly, so the definition states which crew does the work. Either way the crew is resolved at dispatch through an explicit crew input, so system work never inherits a failed task's crew or the workspace default. A missing or unusable crew leaves the original failed step failed and emits a diagnostic naming `workflow.system_crew` and the configured crew.
 
-  **The `system` crew.** Interactive `orbit init` (or `--force` on a fresh rewrite) asks which detected bounded family should back `[crews.system]`: Codex Luna (`gpt-5.6-luna`), Claude Sonnet, Gemini Flash (`gemini-3.8-flash`), Grok (`grok-4.6`), Copilot Haiku, Cursor (`gpt-5`; Cursor has no stable cheap-tier alias), or Pi (`sonnet`; Pi has no stable cheap-tier alias either). It does not offer Astra, Sol, Opus, Terra, or a free-form custom provider, and it never prompts for a QA crew. `workflow.system_crew` stays `system`; only the assignment behind that name is chosen. A host with exactly one of those families auto-accepts it; a host with none omits `[crews.system]` rather than inventing a provider. `--non-interactive` never prompts and still auto-seeds `[crews.system]` from the preference order: Codex Luna, then Claude Sonnet, then Grok, then Gemini Flash, then Copilot, then Cursor, then Pi. Appending the newer lanes preserves every existing family's selection. To change what runs system work after init, edit `[crews.system]`. Configs written before this crew existed have no such table, so the name is resolved first onto the crew `system_crew` names when that crew exists. For Orbit's default or legacy lane names (`system` and `qa`), a missing crew falls back to an existing `qa` crew and then to the already-validated workspace default; the latter keeps old Gemini- and Grok-only configs working even though they never seeded `qa`. Unknown custom names are not substituted. A host that points `system_crew` at a defined cheap crew therefore keeps running system work there rather than being silently relocated. An explicit `[crews.system]` always wins. `[crews.qa]` remains a loadable compatibility lane for explicitly user-authored legacy configs, but fresh init never creates it.
+  **The `system` crew.** Interactive `orbit init` (or `--force` on a fresh rewrite) asks which detected bounded family should back `[crews.system]`: Codex Luna (`gpt-5.6-luna`), Claude Sonnet, Grok (`grok-4.6`), Antigravity Flash (`gemini-3.8-flash-low` via `agy`), Gemini Flash (`gemini-3.8-flash` on the legacy Gemini CLI), Copilot Haiku, Cursor (`gpt-5`; Cursor has no stable cheap-tier alias), or Pi (`sonnet`; Pi has no stable cheap-tier alias either). It does not offer Astra, Sol, Opus, Terra, or a free-form custom provider, and it never prompts for a QA crew. `workflow.system_crew` stays `system`; only the assignment behind that name is chosen. A host with exactly one of those families auto-accepts it; a host with none omits `[crews.system]` rather than inventing a provider. `--non-interactive` never prompts and still auto-seeds `[crews.system]` from the preference order: Codex Luna, then Claude Sonnet, then Grok, then Antigravity Flash, then Gemini Flash, then Copilot, then Cursor, then Pi. Appending the newer lanes preserves every existing family's selection. To change what runs system work after init, edit `[crews.system]`. Configs written before this crew existed have no such table, so the name is resolved first onto the crew `system_crew` names when that crew exists. For Orbit's default or legacy lane names (`system` and `qa`), a missing crew falls back to an existing `qa` crew and then to the already-validated workspace default; the latter keeps old Gemini- and Grok-only configs working even though they never seeded `qa`. Unknown custom names are not substituted. A host that points `system_crew` at a defined cheap crew therefore keeps running system work there rather than being silently relocated. An explicit `[crews.system]` always wins. `[crews.qa]` remains a loadable compatibility lane for explicitly user-authored legacy configs, but fresh init never creates it.
 
 ---
 
@@ -65,9 +65,9 @@ A **crew** is one provider-model assignment. Activities do not carry a model-sel
 
 | Field | Purpose | Values |
 |---|---|---|
-| `model` | Model identifier passed to the provider CLI | Provider-specific (e.g. `opus`, `sonnet`, `gpt-6-astra`, `gemini-3.8-flash`, `grok-4.6`) |
-| `provider` | Agent family | `claude`, `codex`, `gemini`, `grok`, `copilot`, `cursor`, `pi` (the CLI-executable crew families; see [Provider identity and resolution](#provider-identity-and-resolution) for the full canonical set) |
-| `effort` | Optional provider reasoning effort | Claude/Codex: `low`, `medium`, `high`, `xhigh`, or `max`; Grok: verified per model below |
+| `model` | Model identifier passed to the provider CLI | Provider-specific (e.g. `opus`, `sonnet`, `gpt-6-astra`, `gemini-3.8-flash-high`, `grok-4.6`) |
+| `provider` | Agent family or execution lane | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi` (the CLI-executable crew families; see [Provider identity and resolution](#provider-identity-and-resolution) for the full canonical set) |
+| `effort` | Optional provider reasoning effort | Claude/Codex: `low`, `medium`, `high`, `xhigh`, or `max`; Antigravity: `low`, `medium`, `high`; Grok: verified per model below |
 | `description` | Optional human-facing crew summary | Any non-empty string after trimming |
 | `tags` | Optional discovery labels | Array of strings; normalized, sorted, and deduplicated |
 
@@ -85,7 +85,8 @@ tags = ["implementation", "review"]
 `effort` is omitted by default, which leaves the provider's existing model
 default unchanged. When set, Orbit validates it while loading `config.toml`
 and passes it through the provider's documented argv: Codex receives
-`model_reasoning_effort`, Claude receives `--effort`, and Grok receives
+`model_reasoning_effort`, Claude receives `--effort`, Antigravity receives
+`--effort` (`low`/`medium`/`high` only), and Grok receives
 `--reasoning-effort`. The installed Claude CLI (2.1.261, checked September
 2026) advertises all five values, so Orbit forwards `low`, `medium`, `high`,
 `xhigh`, and `max` exactly; [Claude's effort documentation](https://code.claude.com/docs/en/model-config)
@@ -94,7 +95,8 @@ notes that availability can still depend on the selected model. Grok Build
 `grok models` currently lists `grok-4.6` and `grok-4.5`. Orbit accepts `low`,
 `medium`, `high`, and `xhigh` for `grok-4.6`, and `low`, `medium`, and `high`
 for `grok-4.5`, matching [xAI's reasoning contract](https://docs.x.ai/developers/model-capabilities/text/reasoning).
-It rejects `max`, unsupported Grok model/effort pairs, and effort on other
+It rejects `max`, unsupported Grok model/effort pairs, Antigravity `xhigh`/`max`,
+legacy Gemini CLI model ids on the Antigravity lane, and effort on other
 providers clearly rather than silently downgrading or ignoring a request. A
 selected activity crew (including `workflow.system_crew`) supplies its effort
 together with its provider and model, so it takes precedence over an activity's
@@ -113,9 +115,9 @@ provider = "grok"
 
 The current Grok Build CLI lists `grok-4.6` as its default from `grok models`, so Orbit uses that live menu id. The older `grok-build` string is not retained as a default or alias.
 
-Fresh `orbit init` configuration advertises only detected provider CLIs. Claude seeds `opus`, `sonnet`, and `fable`; Codex seeds `astra`, `sol`, `terra`, and `luna`; Gemini seeds `gemini`; Grok seeds `grok`; Copilot seeds `copilot`; an installed `cursor-agent` seeds `cursor`; and an installed `pi` seeds `pi`. Copilot, Cursor, and Pi are appended after the original four families, so installing any of them never changes the default crew, default provider, or system crew on a host that already has an earlier family. Interactive init still asks for the default crew (`[crews.custom]`) and, separately, for the system crew written as `[crews.system]`; it does not ask for QA. `--non-interactive` auto-seeds `[crews.system]` from the preference order above whenever a supported family is detected. The legacy `qa` name remains loadable when an existing user-authored config defines `[crews.qa]`, but init does not seed that table. If no supported provider CLI is detected, init leaves both the crew registry and `workflow.default_crew` unset instead of writing an unusable provider.
+Fresh `orbit init` configuration advertises only detected provider CLIs. Claude seeds `opus`, `sonnet`, and `fable`; Codex seeds `astra`, `sol`, `terra`, and `luna`; an installed `agy` seeds `antigravity`; Gemini CLI still seeds the legacy `gemini` crew when that binary is present; Grok seeds `grok`; Copilot seeds `copilot`; an installed `cursor-agent` seeds `cursor`; and an installed `pi` seeds `pi`. Antigravity occupies Gemini CLI's previous default-provider slot, so a host with both `agy` and `gemini` prefers Antigravity. Copilot, Cursor, and Pi remain appended after the original families. Interactive init still asks for the default crew (`[crews.custom]`) and, separately, for the system crew written as `[crews.system]`; it does not ask for QA. `--non-interactive` auto-seeds `[crews.system]` from the preference order above whenever a supported family is detected. The legacy `qa` name remains loadable when an existing user-authored config defines `[crews.qa]`, but init does not seed that table. If no supported provider CLI is detected, init leaves both the crew registry and `workflow.default_crew` unset instead of writing an unusable provider.
 
-The `astra` crew (`gpt-6-astra`) is the Codex fresh-config default; the existing `sol`, `terra`, and `luna` crews remain available. The Gemini `gemini` crew uses `gemini-3.8-flash`. These exact IDs are the current provider-advertised model codes: [GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra) and [Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash). Existing explicit model pins are retained when their configuration loads.
+The `astra` crew (`gpt-6-astra`) is the Codex fresh-config default; the existing `sol`, `terra`, and `luna` crews remain available. The Antigravity `antigravity` crew uses `gemini-3.8-flash-high` from `agy models` (verified against Antigravity CLI 1.1.27). The legacy `gemini` crew still uses `gemini-3.8-flash` for enterprise Gemini CLI. These exact IDs are not remapped: a crew that names `gemini-3.8-flash` on `provider = "antigravity"` fails with migration guidance. Existing explicit model pins are retained when their configuration loads.
 
 You can define any number of crews. Set the workspace-wide fallback with `workflow.default_crew`; assign a specific crew to individual tasks via the [per-task crew override](#per-task-crew-override). Crews are validated at load time: each crew must have non-empty `model` and `provider`; `workflow.default_crew` must name a defined crew.
 
@@ -161,6 +163,7 @@ Every `provider` string Orbit reads — in `[crews.<name>]`, in an activity's in
 | `openai_compat` | `openai-compat` | **no** (HTTP-only) | no | **no** |
 | `cursor` | — | yes (`cursor-agent`) | no | **no** |
 | `pi` | — | yes (`pi`) | no | **no** |
+| `antigravity` | — | yes (`agy`) | no | **no** |
 
 - **Parsing is case- and whitespace-insensitive.** `Claude`, `  claude `, and `CLAUDE` all resolve to `claude`. `openai-compat` normalizes to `openai_compat`.
 - **Deprecated aliases resolve *and* warn.** The legacy vendor names normalize to their canonical id and log an `orbit.config.crew` deprecation warning (`{alias, canonical}`) — they never fail, but update the config:
@@ -172,16 +175,16 @@ Every `provider` string Orbit reads — in `[crews.<name>]`, in an activity's in
   | `google` | `gemini` |
   | `xai` | `grok` |
 
-  `copilot`, `cursor`, and `pi` have **no** aliases. `github`, `cursor-agent`,
-  `anysphere`, `pi-coding-agent`, and `earendil` are not provider spellings, and
-  the vendor that supplies a session's underlying model never changes its
-  execution-lane identity. This last point is load-bearing for `pi`, whose own
-  `--provider` flag names the model vendor *inside* the Pi lane: writing
-  `provider = "anthropic"` in a crew still selects the `claude` executor, not
-  Pi. See [GitHub Copilot CLI](#github-copilot-cli),
-  [Cursor Agent CLI](#cursor-agent-cli), and [Pi CLI](#pi-cli).
+  `copilot`, `cursor`, `pi`, and `antigravity` have **no** aliases. `github`,
+  `cursor-agent`, `anysphere`, `pi-coding-agent`, `earendil`, and `agy` are not
+  provider spellings, and the vendor that supplies a session's underlying model
+  never changes its execution-lane identity. `google` still aliases to `gemini`
+  (the model family / legacy Gemini CLI), not Antigravity. See
+  [GitHub Copilot CLI](#github-copilot-cli),
+  [Cursor Agent CLI](#cursor-agent-cli), [Pi CLI](#pi-cli), and
+  [Antigravity CLI](#antigravity-cli).
 
-- **Canonical ≠ Worker-executable.** Orbit's canonical set is deliberately wider than what the model-neutral Worker leaf executor can run: `copilot`, `cursor`, `pi`, `ollama`, and `openai_compat` are first-class Orbit providers but Worker does not execute them. This distinction is preserved on purpose — do not narrow the canonical set to Worker's subset. For `copilot`, `cursor`, and `pi` this is a *stable diagnostic*, not a fallback: a Worker-routed step naming one of those lanes is refused by identity rather than silently re-pointed at another family.
+- **Canonical ≠ Worker-executable.** Orbit's canonical set is deliberately wider than what the model-neutral Worker leaf executor can run: `copilot`, `cursor`, `pi`, `antigravity`, `ollama`, and `openai_compat` are first-class Orbit providers but Worker does not execute them. This distinction is preserved on purpose — do not narrow the canonical set to Worker's subset. For `copilot`, `cursor`, `pi`, and `antigravity` this is a *stable diagnostic*, not a fallback: a Worker-routed step naming one of those lanes is refused by identity rather than silently re-pointed at another family.
 - **Known ≠ executable at this entry point.** The shared contract recognizes `ollama`, but the Orbit CLI capability set is the canonical cross-repo four; explicitly selecting `ollama` fails as `provider.unsupported` rather than falling back.
 - **`openai_compat` has no CLI runtime.** Every crew dispatches through the CLI agent path, so selecting it fails structurally (see below) rather than falling back.
 
@@ -213,7 +216,7 @@ Explicit selections that are unsupported or unavailable **fail with a stable dia
 
 - `provider openai_compat is unsupported by the Orbit CLI entry point (HTTP-only)` — a CLI-executable dispatch selected an HTTP-only provider.
 - `provider ollama is unsupported by the Orbit CLI entry point` — a known provider is outside this entry point's capability set.
-- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi — no CLI runtime registered` — the provider string did not resolve to a canonical id.
+- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity — no CLI runtime registered` — the provider string did not resolve to a canonical id.
 
 An **unrecognized `[crews.<name>].provider` value** is the one non-fatal case: it is logged (`orbit.config.crew` warn) and that field falls back to the activity's inline `provider`, because a config typo should not coerce dispatch onto a wrong runtime — the inline value is the known-good identity, not a default guess.
 
@@ -563,6 +566,89 @@ providers do not inherit that grant, and Pi does not inherit theirs. The
 worktree and all other paths remain governed by the activity filesystem profile;
 Pi has no OS-level sandbox flag of its own, so the enclosing Orbit
 macOS/Linux sandbox is the only filesystem boundary and remains authoritative.
+
+---
+
+## Antigravity CLI
+
+The `antigravity` provider launches the local `agy` binary as an
+Orbit-supervised worker. This is Google's current terminal agent after the
+Gemini CLI transition for individual accounts (2026-06-18). It is **not** a
+rename of the `gemini` executor: the protocol, flags, MCP config, and model
+slugs are different.
+
+Gemini remains a **model family**. `gemini-*` model ids still attribute as
+`gemini`. `provider = "gemini"` still means the legacy Gemini CLI, which
+enterprise Gemini Code Assist and API-key deployments continue to support.
+Do not treat every Gemini API deployment as shut down.
+
+### Installation and detection
+
+Install from [Antigravity CLI](https://www.antigravity.google/docs/cli/headless/)
+and verify:
+
+```sh
+agy --version    # this change was verified against 1.1.27
+agy models
+```
+
+Ensure the installed directory is on `PATH` before `orbit init`. Fresh init
+detects `agy`, adds a `[crews.antigravity]` assignment, and prefers it over
+the legacy Gemini CLI when both binaries are present. Selecting `antigravity`
+when `agy` is missing fails with a permanent diagnostic naming `agy`; Orbit
+never falls back to `gemini` or another vendor.
+
+### Authentication and credential handling
+
+Authenticate once with an interactive `agy` session. Headless runs use that
+cached login under `$HOME/.gemini/antigravity-cli/`. Orbit never runs `agy`
+login, never rewrites credentials, and does not pass API keys on argv. A
+non-interactive run that is not already authenticated exits with an
+`authentication required` error instead of hanging. Permission denials in
+headless mode are printed to stderr and name the tool plus how to allow it.
+
+### Model and effort
+
+Every Antigravity invocation receives `--model <slug>` from its crew. The
+shipped crew uses a slug from `agy models`:
+
+```toml
+[crews.antigravity]
+model = "gemini-3.8-flash-high"
+provider = "antigravity"
+```
+
+Official headless docs list `--effort low|medium|high`. `xhigh` and `max` fail
+closed with migration guidance; they are not dropped or remapped. Bare Gemini
+CLI ids such as `gemini-3.8-flash` also fail closed: use a slug from
+`agy models`. Unknown `--model` values fail at the CLI rather than falling
+back. Running a Claude or GPT slug through `agy` does not change the
+execution-lane identity: the run remains `antigravity`.
+
+Migrate an old crew with `provider = "gemini"` by changing the provider to
+`antigravity` and the model to a current `agy models` slug. Customized
+`gemini` executor definitions and credentials are left intact.
+
+### Headless execution, output, MCP, and sandbox
+
+The shipped executor uses `--input-format stream-json --output-format
+stream-json --dangerously-skip-permissions`. The Orbit prompt is one
+documented stdin `user` event, then stdin is closed, so the envelope never
+enters argv. `--dangerously-skip-permissions` is the unattended analog of
+interactive Ask; Orbit's OS sandbox remains the filesystem/network boundary.
+Do not copy Gemini CLI flags (`--approval-mode yolo`, `-o json`,
+`--allowed-mcp-server-names`). Do not pass `agy --sandbox`; the outer Orbit
+sandbox is authoritative.
+
+On success `agy` emits a terminal `result` with `status: "SUCCESS"`, the
+assistant text in `response`, and token counts in `usage`. Orbit rejects
+`ERROR` / malformed / missing terminal objects as missing completion evidence.
+MCP for Antigravity is configured at `~/.gemini/config/mcp_config.json`
+(home) or `.agents/mcp_config.json` (workspace), not the legacy Gemini
+`.gemini/settings.json` `mcpServers` map.
+
+`$HOME/.gemini` is already a sandbox write grant (shared with the legacy
+Gemini CLI). Other providers do not receive extra Antigravity-only roots.
 
 ---
 
