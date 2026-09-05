@@ -2,12 +2,28 @@ use std::path::Path;
 
 use orbit_common::fs::task_io::prune_missing_context_files;
 use orbit_engine::{DispatchError, WORKFLOW_RUN_FAILED_EVENT};
-use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::task::{canonicalize_context_files_for_read, context_workspace_root};
 use crate::runtime::run_input::singular_task_id_from_input;
+
+/// Ceiling on the number of comments surfaced to an implementing agent.
+///
+/// Comments are unbounded in principle (an orchestrator can post any number of
+/// refinements), but the envelope is a single JSON payload handed to an agent
+/// invocation. The newest comments are the ones that can supersede the
+/// description (see [ORB-11327]), so truncation must drop the oldest entries
+/// first and say so rather than silently dropping the entries that matter.
+const MAX_TASK_COMMENTS: usize = 20;
+
+/// Ceiling on the total size, in bytes, of the retained comment bodies.
+///
+/// Applied after [`MAX_TASK_COMMENTS`] as a second, size-based cut: a handful
+/// of very long comments could still blow out the envelope even under the
+/// count cap.
+const MAX_TASK_COMMENTS_BYTES: usize = 16 * 1024;
 
 pub(crate) fn associated_task_ids(input: &Value) -> Vec<String> {
     let mut task_ids = Vec::new();
@@ -56,9 +72,15 @@ pub(crate) fn task_context_for_agent_input(
             "load task `{task_id}` history for agent envelope: {err}"
         ))
     })?;
+    let comments = runtime.get_task_comments(task_id).map_err(|err| {
+        DispatchError::CliInvocationFailed(format!(
+            "load task `{task_id}` comments for agent envelope: {err}"
+        ))
+    })?;
     Ok(Some(agent_task_context_json(
         &task,
         &task_history,
+        &comments,
         input,
         &runtime.paths().repo_root,
     )))
@@ -67,6 +89,7 @@ pub(crate) fn task_context_for_agent_input(
 fn agent_task_context_json(
     task: &Task,
     task_history: &[TaskHistoryEntry],
+    comments: &[TaskComment],
     input: &Value,
     fallback_repo_root: &Path,
 ) -> Value {
@@ -119,7 +142,40 @@ fn agent_task_context_json(
         );
     }
 
+    let (kept_comments, omitted_count) = bounded_task_comments(comments);
+    context.insert(
+        "comments".to_string(),
+        serde_json::to_value(kept_comments).unwrap_or_else(|_| Value::Array(Vec::new())),
+    );
+    if omitted_count > 0 {
+        context.insert("comments_truncated".to_string(), Value::Bool(true));
+        context.insert(
+            "comments_omitted_count".to_string(),
+            Value::Number(omitted_count.into()),
+        );
+    }
+
     Value::Object(context)
+}
+
+/// Keep the newest comments within [`MAX_TASK_COMMENTS`] and
+/// [`MAX_TASK_COMMENTS_BYTES`], dropping the oldest entries first so a
+/// superseding refinement never falls off the envelope. Returns the retained
+/// comments (still in chronological order) and how many oldest entries were
+/// dropped.
+fn bounded_task_comments(comments: &[TaskComment]) -> (&[TaskComment], usize) {
+    let count_start = comments.len().saturating_sub(MAX_TASK_COMMENTS);
+    let mut kept = &comments[count_start..];
+
+    while kept.len() > 1 {
+        let total_bytes: usize = kept.iter().map(|comment| comment.message.len()).sum();
+        if total_bytes <= MAX_TASK_COMMENTS_BYTES {
+            break;
+        }
+        kept = &kept[1..];
+    }
+
+    (kept, comments.len() - kept.len())
 }
 
 fn workflow_failure_status_note(task_history: &[TaskHistoryEntry]) -> Option<&str> {

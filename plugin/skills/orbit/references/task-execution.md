@@ -14,6 +14,13 @@ then use
 required outcome), `plan` (author one if blank or placeholder), `context_files`,
 and `status`.
 
+Also read `comments` (chronological, each with `by` and `at`) before trusting
+the description. A description is written once at filing time and is never
+rewritten when an orchestrator later posts a refinement, so a comment that
+postdates the description always takes precedence over a "Suggested
+direction"/"Suggested fix" section still sitting in that description —
+implement the comment's direction, not the description's.
+
 Read each `file:` target with the provider-native file-read tool. For a `dir:`
 selector, do not call the file-read tool on the directory: after verifying it
 resolves beneath the workspace root, use `rg --files <directory>` to list it,

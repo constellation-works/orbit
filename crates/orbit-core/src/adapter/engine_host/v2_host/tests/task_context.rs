@@ -126,3 +126,152 @@ fn task_context_for_agent_input_marks_write_gated_statuses_terminal() {
     assert_eq!(context["status"], "done");
     assert_eq!(context["terminal"], true);
 }
+
+/// [ORB-11327]: a task with no comments must still project a `comments` array
+/// rather than a null/absent field, so downstream consumers never special-case
+/// the empty case.
+#[test]
+fn task_context_for_agent_input_has_empty_comments_when_none_posted() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "No comments yet".to_string(),
+            description: "Task description for agent context.".to_string(),
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("add task");
+
+    let context = runtime
+        .task_context_for_agent_input(&json!({ "task_id": task.id.clone() }))
+        .expect("build task context")
+        .expect("task context present");
+
+    assert_eq!(context["comments"], json!([]));
+    assert!(context.get("comments_truncated").is_none());
+    assert!(context.get("comments_omitted_count").is_none());
+}
+
+/// [ORB-11327]: comments are the mechanism an orchestrator uses to supersede a
+/// stale "suggested direction" left in the description (the ORB-11248
+/// incident). The envelope must carry them, in order, with author and
+/// timestamp so the executor can see a later refinement without an extra call.
+#[test]
+fn task_context_for_agent_input_includes_ordered_comments_with_author_and_timestamp() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Suggested direction gets superseded".to_string(),
+            description: "## Suggested direction\n\nDo the naive thing.".to_string(),
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("add task");
+
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                comment: Some("First pass looks reasonable.".to_string()),
+                ..Default::default()
+            },
+            Some("codex".to_string()),
+            None,
+        )
+        .expect("post first comment");
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                comment: Some(
+                    "Orchestrator refinement before implementation: do not adopt the \
+                     suggested direction as-is."
+                        .to_string(),
+                ),
+                ..Default::default()
+            },
+            Some("codex".to_string()),
+            None,
+        )
+        .expect("post superseding comment");
+
+    let context = runtime
+        .task_context_for_agent_input(&json!({ "task_id": task.id.clone() }))
+        .expect("build task context")
+        .expect("task context present");
+
+    let comments = context["comments"]
+        .as_array()
+        .expect("comments is an array");
+    assert_eq!(comments.len(), 2);
+    assert_eq!(comments[0]["message"], "First pass looks reasonable.");
+    assert_eq!(comments[0]["by"], "codex");
+    assert!(comments[0]["at"].is_string());
+    assert_eq!(
+        comments[1]["message"],
+        "Orchestrator refinement before implementation: do not adopt the suggested \
+         direction as-is."
+    );
+    assert_eq!(comments[1]["by"], "codex");
+    // Chronological order: the superseding comment is last, not first.
+    assert!(comments[0]["at"].as_str() <= comments[1]["at"].as_str());
+    assert!(context.get("comments_truncated").is_none());
+}
+
+/// [ORB-11327]: comment history is unbounded in principle, so the envelope
+/// caps it. Truncation must drop the *oldest* entries first — the newest
+/// comments are the ones that can supersede the description — and must signal
+/// that truncation happened rather than silently dropping entries.
+#[test]
+fn task_context_for_agent_input_truncates_oldest_comments_over_the_count_cap() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Long comment history".to_string(),
+            description: "Task description for agent context.".to_string(),
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("add task");
+
+    const POSTED: usize = 25;
+    const MAX_KEPT: usize = 20;
+    for index in 0..POSTED {
+        runtime
+            .update_task_with_identity(
+                &task.id,
+                TaskUpdateParams {
+                    comment: Some(format!("comment {index}")),
+                    ..Default::default()
+                },
+                Some("codex".to_string()),
+                None,
+            )
+            .expect("post comment");
+    }
+
+    let context = runtime
+        .task_context_for_agent_input(&json!({ "task_id": task.id.clone() }))
+        .expect("build task context")
+        .expect("task context present");
+
+    let comments = context["comments"]
+        .as_array()
+        .expect("comments is an array");
+    assert_eq!(comments.len(), MAX_KEPT);
+    // Oldest-first truncation: the surviving window is the newest MAX_KEPT
+    // comments, still in chronological order, ending on the very last post.
+    assert_eq!(
+        comments[0]["message"],
+        format!("comment {}", POSTED - MAX_KEPT)
+    );
+    assert_eq!(
+        comments[MAX_KEPT - 1]["message"],
+        format!("comment {}", POSTED - 1)
+    );
+    assert_eq!(context["comments_truncated"], true);
+    assert_eq!(
+        context["comments_omitted_count"],
+        (POSTED - MAX_KEPT) as u64
+    );
+}

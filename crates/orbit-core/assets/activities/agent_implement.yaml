@@ -58,6 +58,17 @@ spec:
        criteria, plan, and context files. If it is absent or malformed, recover
        it with `orbit.task.show`. Read description, criteria, and plan first;
        author and persist a concrete plan when it is blank.
+    1a. Read the injected `comments` array (chronological, each with `by` and
+        `at`) before trusting the description. A description is written once
+        at filing time and is never rewritten when an orchestrator later posts
+        a refinement; a comment that postdates the description always takes
+        precedence over a "Suggested direction"/"Suggested fix" section still
+        sitting in that description. For example, if the description proposes
+        one approach and a later comment says not to adopt it, implement the
+        comment's direction, not the description's. If `comments_truncated` is
+        `true`, the visible comments are still authoritative — truncation
+        drops the oldest entries first, so the newest, most relevant
+        refinements are always present.
     2. Resolve every canonical `context_files` selector: read each `file:`
        target with the provider-native file-read tool. For each `dir:` selector,
        do not call the file-read tool on the directory; after verifying it
