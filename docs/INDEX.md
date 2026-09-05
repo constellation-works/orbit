@@ -60,6 +60,7 @@ a conservative title/status fallback.
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Accepted | codex |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Draft | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Accepted | codex |
+| [Operation Mode](./design/operation-mode/1_overview.md) | Proposed operation-mode presets for scoped preparation, promotion, delivery, and bounded recovery through existing Orbit pipelines. | Draft | codex |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of four hand-copied layers. | Accepted | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional application, runtime, adapter, bootstrap, and composition boundaries inside orbit-core. | Accepted | codex |
 | [Orbit Docs](./design/orbit-docs/1_overview.md) | Orbit Docs — the human-authored workspace corpus and how operators and agents retrieve from it. | Draft | claude |
