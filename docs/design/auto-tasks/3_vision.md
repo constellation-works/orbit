@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Vision
 owner: claude
-last_updated: 2026-07-12
-last_validated: 2026-08-29
+last_updated: 2026-09-05
+last_validated: 2026-09-05
 status: Accepted
 feature: auto-tasks
 doc_role: vision
@@ -11,13 +11,18 @@ summary: Forward-looking directions for the auto-task primitive — cross-worksp
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks]
-related_artifacts: [ORB-10149]
+related_artifacts: [ORB-10149, ORB-11315]
 ---
 
 # Auto-tasks — Vision
 
 Forward-looking directions for the primitive. Everything here is speculative and
 deliberately unbuilt; the shipped surface is in 2_design.md.
+
+The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
+from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
+immutable batches and separate successful-coverage checkpoints. It is proposed
+and unimplemented; existing scheduling and action semantics remain current.
 
 ## 1. Open Questions
 
@@ -69,6 +74,8 @@ task's provenance tag, and observability is the existing task + routine surfaces
 - POSIX cron; systemd timer `Persistent=` (catch-up analogue).
 
 ## Task References
+
+- [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
 
 - ORB-10149 — Auto-task primitive.
 - ORB-10148 — qa-sweep V1.
