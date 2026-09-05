@@ -16,7 +16,8 @@ use orbit_common::OrbitError;
 use orbit_common::model_defaults::{
     ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK, CLAUDE_FABLE_MODEL,
     CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL, CODEX_TERRA_MODEL, COPILOT_DEFAULT_MODEL,
-    CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, PI_DEFAULT_MODEL,
+    CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, OPENCODE_DEFAULT_MODEL,
+    PI_DEFAULT_MODEL,
 };
 use orbit_common::security::child_env::{allowlisted_child_env, inherited_child_env};
 use orbit_common::security::redaction::redact_home_dir;
@@ -216,6 +217,7 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
         ("copilot", COPILOT_DEFAULT_MODEL, "copilot"),
         ("cursor", CURSOR_DEFAULT_MODEL, "cursor"),
         ("pi", PI_DEFAULT_MODEL, "pi"),
+        ("opencode", OPENCODE_DEFAULT_MODEL, "opencode"),
         // [ORB-10877] Shipped job steps name `system` directly, so the
         // built-in set used by a config with no `[crews]` table must define it
         // or those pipelines fail validation. `orbit init` overwrites this with

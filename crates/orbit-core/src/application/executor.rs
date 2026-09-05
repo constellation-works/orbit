@@ -19,6 +19,10 @@ pub(crate) const DEFAULT_EXECUTOR_FILES: &[(&str, &str)] = &[
     ("cursor", include_str!("../../assets/executors/cursor.yaml")),
     ("pi", include_str!("../../assets/executors/pi.yaml")),
     (
+        "opencode",
+        include_str!("../../assets/executors/opencode.yaml"),
+    ),
+    (
         "local-shell",
         include_str!("../../assets/executors/local-shell.yaml"),
     ),

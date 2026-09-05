@@ -4,7 +4,7 @@ summary: Add and validate a CLI-agent or deterministic local-shell executor with
 tags: [contributors, executors, providers, testing]
 paths: ["crates/orbit-agent/**", "crates/orbit-core/assets/executors/**", "crates/orbit-core/src/application/executor.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/cli_executor.rs", "crates/orbit-engine/src/activity_job/**"]
 related_features: [activity-job, policy-sandbox]
-related_artifacts: [ORB-11294, ORB-11296, ORB-11299]
+related_artifacts: [ORB-11294, ORB-11295, ORB-11296, ORB-11299]
 ---
 
 # Onboard an Executor
@@ -25,7 +25,9 @@ orbit executor show <existing-executor> --json
 <provider-cli> --version
 ```
 
-Use the provider's published CLI help and a pinned observed version to establish flags, stdin format, terminal output, authentication behavior, and supported model/effort values. Do not copy flags from another provider and do not claim a universal `--json`, sandbox, login, or MCP flag. `docs/CONFIG.md` records the currently verified contracts for shipped lanes; the Pi and Antigravity entries are representative, not templates with interchangeable flags.
+Use the provider's published CLI help and a pinned observed version to establish flags, stdin format, terminal output, authentication behavior, and supported model/effort values. Do not copy flags from another provider and do not claim a universal `--json`, sandbox, login, or MCP flag. `docs/CONFIG.md` records the currently verified contracts for shipped lanes; the Pi, Antigravity, and OpenCode entries are representative, not templates with interchangeable flags.
+
+Verify the prompt transport specifically, and do not assume a CLI that documents a positional prompt cannot accept stdin. OpenCode documents `opencode run [message..]`, but upstream reads piped stdin when stdin is not a TTY and uses it as the whole message when the positional is empty — which is what let that lane keep the envelope off argv. If the published help is silent, read the upstream argument handling before choosing a transport. [ORB-11295]
 
 An authenticated smoke test is optional and needs explicit operator consent. Run it only against an isolated test workspace and test account or disposable credentials. State exactly what it did not prove (for example, no authenticated account, no vendor model access, or no OS sandbox available); passing fixture contract tests remains sufficient for a normal source change when they exercise Orbit's real dispatch seam.
 
@@ -55,7 +57,7 @@ Verify the seams against the current checkout before editing. These are the auth
 | Child lifecycle, cancellation, and cleanup | `crates/orbit-engine/src/activity_job/cli_runner/`; `crates/orbit-exec/src/supervision/` | Reuse the v2 runner and supervisor. Do not add provider-owned process spawning or cleanup. |
 | Deterministic shell input and output | `crates/orbit-engine/src/executor/automation/shell.rs` — `local_shell`, `parse_shell_config`, `compose_argv` | Keep argv in static activity config. Run an actual shell only when `shell` and `script` are declared explicitly. |
 | OS sandbox / provider home grant | `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs`; `crates/orbit-exec/src/macos_sandbox/provider_dirs.rs` | Give only the active provider's required state directory a write grant. Keep the activity `fsProfile` authoritative for the worktree. |
-| End-to-end fixtures | `crates/orbit-core/tests/pi_fake_agent.rs`, `crates/orbit-core/tests/antigravity_fake_agent.rs`, `crates/orbit-engine/tests/v2_local_shell.rs` | Exercise the real v2 dispatch seam with fakes; add output/error/timeout/cancellation cases. |
+| End-to-end fixtures | `crates/orbit-core/tests/pi_fake_agent.rs`, `crates/orbit-core/tests/antigravity_fake_agent.rs`, `crates/orbit-core/tests/opencode_fake_agent.rs`, `crates/orbit-engine/tests/v2_local_shell.rs` | Exercise the real v2 dispatch seam with fakes; add output/error/timeout/cancellation cases. |
 
 ## Add a CLI-agent executor
 
@@ -99,7 +101,7 @@ For a new deterministic default, add a `kind: Executor` resource with `executor_
 
 ## Output, errors, and lifecycle contract
 
-An agent exit status and its response envelope are independent evidence; both must be valid. The v2 path fails closed when the CLI exits non-zero even if stdout contains success-looking JSON. It also fails closed on missing terminal output, malformed protocol records, an error/aborted terminal event, missing response/completion envelope, and stale prompt echo. Provider normalization must retain only the documented terminal answer before the common envelope reader scans it. Pi's `message_end` reducer exists specifically to avoid accepting the later conversation replay in `agent_end`; Antigravity accepts only a terminal `result` whose status is `SUCCESS`.
+An agent exit status and its response envelope are independent evidence; both must be valid. The v2 path fails closed when the CLI exits non-zero even if stdout contains success-looking JSON. It also fails closed on missing terminal output, malformed protocol records, an error/aborted terminal event, missing response/completion envelope, and stale prompt echo. Provider normalization must retain only the documented terminal answer before the common envelope reader scans it. Pi's `message_end` reducer exists specifically to avoid accepting the later conversation replay in `agent_end`; Antigravity accepts only a terminal `result` whose status is `SUCCESS`; OpenCode keeps only assistant `text` parts, because its `tool_use` frames carry tool output that can replay Orbit's own prompt and its `reasoning` frames can carry a draft envelope.
 
 Set a wall-clock deadline through the agent activity or `local_shell` config and reuse the supervisor. Verify timeout cancellation and child-process cleanup rather than implementing a provider-specific timer. A normal local-shell non-zero exit is an activity failure unless `allow_nonzero_exit` is explicitly true; when true, its structured output still reports `success`, `exit_code`, `stderr`, `timed_out`, `timeout_ms`, `argv`, `cwd`, and `sandbox`.
 

@@ -22,6 +22,7 @@ pub enum ProviderOptions {
     Cursor,
     Ollama,
     Pi,
+    Opencode,
     Mock,
 }
 

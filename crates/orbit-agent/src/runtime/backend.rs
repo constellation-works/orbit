@@ -60,6 +60,7 @@ impl Default for ProviderRegistry {
         let _ = registry.register(Arc::new(crate::providers::cursor::CursorFactory));
         let _ = registry.register(Arc::new(crate::providers::ollama::OllamaFactory));
         let _ = registry.register(Arc::new(crate::providers::pi::PiFactory));
+        let _ = registry.register(Arc::new(crate::providers::opencode::OpencodeFactory));
         registry
     }
 }

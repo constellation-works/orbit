@@ -71,8 +71,8 @@ A **crew** is one provider-model assignment. Activities do not carry a model-sel
 | Field | Purpose | Values |
 |---|---|---|
 | `model` | Model identifier passed to the provider CLI | Provider-specific (e.g. `opus`, `sonnet`, `gpt-6-astra`, `gemini-3.8-flash-high`, `grok-4.6`) |
-| `provider` | Agent family or execution lane | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi` (the CLI-executable crew families; see [Provider identity and resolution](#provider-identity-and-resolution) for the full canonical set) |
-| `effort` | Optional provider reasoning effort | Claude/Codex: `low`, `medium`, `high`, `xhigh`, or `max`; Antigravity: `low`, `medium`, `high`; Grok: verified per model below |
+| `provider` | Agent family or execution lane | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, `opencode` (the CLI-executable crew families; see [Provider identity and resolution](#provider-identity-and-resolution) for the full canonical set) |
+| `effort` | Optional provider reasoning effort | Claude/Codex: `low`, `medium`, `high`, `xhigh`, or `max`; Antigravity: `low`, `medium`, `high`; OpenCode: `high` or `max`; Grok: verified per model below |
 | `description` | Optional human-facing crew summary | Any non-empty string after trimming |
 | `tags` | Optional discovery labels | Array of strings; normalized, sorted, and deduplicated |
 
@@ -101,6 +101,7 @@ notes that availability can still depend on the selected model. Grok Build
 `medium`, `high`, and `xhigh` for `grok-4.6`, and `low`, `medium`, and `high`
 for `grok-4.5`, matching [xAI's reasoning contract](https://docs.x.ai/developers/model-capabilities/text/reasoning).
 It rejects `max`, unsupported Grok model/effort pairs, Antigravity `xhigh`/`max`,
+OpenCode `low`/`medium`/`xhigh`,
 legacy Gemini CLI model ids on the Antigravity lane, and effort on other
 providers clearly rather than silently downgrading or ignoring a request. A
 selected activity crew (including `workflow.system_crew`) supplies its effort
@@ -169,6 +170,7 @@ Every `provider` string Orbit reads — in `[crews.<name>]`, in an activity's in
 | `cursor` | — | yes (`cursor-agent`) | no | **no** |
 | `pi` | — | yes (`pi`) | no | **no** |
 | `antigravity` | — | yes (`agy`) | no | **no** |
+| `opencode` | — | yes (`opencode`) | no | **no** |
 
 - **Parsing is case- and whitespace-insensitive.** `Claude`, `  claude `, and `CLAUDE` all resolve to `claude`. `openai-compat` normalizes to `openai_compat`.
 - **Deprecated aliases resolve *and* warn.** The legacy vendor names normalize to their canonical id and log an `orbit.config.crew` deprecation warning (`{alias, canonical}`) — they never fail, but update the config:
@@ -180,16 +182,16 @@ Every `provider` string Orbit reads — in `[crews.<name>]`, in an activity's in
   | `google` | `gemini` |
   | `xai` | `grok` |
 
-  `copilot`, `cursor`, `pi`, and `antigravity` have **no** aliases. `github`,
-  `cursor-agent`, `anysphere`, `pi-coding-agent`, `earendil`, and `agy` are not
-  provider spellings, and the vendor that supplies a session's underlying model
-  never changes its execution-lane identity. `google` still aliases to `gemini`
-  (the model family / legacy Gemini CLI), not Antigravity. See
-  [GitHub Copilot CLI](#github-copilot-cli),
-  [Cursor Agent CLI](#cursor-agent-cli), [Pi CLI](#pi-cli), and
-  [Antigravity CLI](#antigravity-cli).
+  `copilot`, `cursor`, `pi`, `antigravity`, and `opencode` have **no** aliases.
+  `github`, `cursor-agent`, `anysphere`, `pi-coding-agent`, `earendil`, `agy`,
+  and `sst` are not provider spellings, and the vendor that supplies a session's
+  underlying model never changes its execution-lane identity. `google` still
+  aliases to `gemini` (the model family / legacy Gemini CLI), not Antigravity.
+  See [GitHub Copilot CLI](#github-copilot-cli),
+  [Cursor Agent CLI](#cursor-agent-cli), [Pi CLI](#pi-cli),
+  [Antigravity CLI](#antigravity-cli), and [OpenCode CLI](#opencode-cli).
 
-- **Canonical ≠ Worker-executable.** Orbit's canonical set is deliberately wider than what the model-neutral Worker leaf executor can run: `copilot`, `cursor`, `pi`, `antigravity`, `ollama`, and `openai_compat` are first-class Orbit providers but Worker does not execute them. This distinction is preserved on purpose — do not narrow the canonical set to Worker's subset. For `copilot`, `cursor`, `pi`, and `antigravity` this is a *stable diagnostic*, not a fallback: a Worker-routed step naming one of those lanes is refused by identity rather than silently re-pointed at another family.
+- **Canonical ≠ Worker-executable.** Orbit's canonical set is deliberately wider than what the model-neutral Worker leaf executor can run: `copilot`, `cursor`, `pi`, `antigravity`, `opencode`, `ollama`, and `openai_compat` are first-class Orbit providers but Worker does not execute them. This distinction is preserved on purpose — do not narrow the canonical set to Worker's subset. For `copilot`, `cursor`, `pi`, `antigravity`, and `opencode` this is a *stable diagnostic*, not a fallback: a Worker-routed step naming one of those lanes is refused by identity rather than silently re-pointed at another family.
 - **Known ≠ executable at this entry point.** The shared contract recognizes `ollama`, but the Orbit CLI capability set is the canonical cross-repo four; explicitly selecting `ollama` fails as `provider.unsupported` rather than falling back.
 - **`openai_compat` has no CLI runtime.** Every crew dispatches through the CLI agent path, so selecting it fails structurally (see below) rather than falling back.
 
@@ -221,7 +223,7 @@ Explicit selections that are unsupported or unavailable **fail with a stable dia
 
 - `provider openai_compat is unsupported by the Orbit CLI entry point (HTTP-only)` — a CLI-executable dispatch selected an HTTP-only provider.
 - `provider ollama is unsupported by the Orbit CLI entry point` — a known provider is outside this entry point's capability set.
-- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity — no CLI runtime registered` — the provider string did not resolve to a canonical id.
+- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode — no CLI runtime registered` — the provider string did not resolve to a canonical id.
 
 An **unrecognized `[crews.<name>].provider` value** is the one non-fatal case: it is logged (`orbit.config.crew` warn) and that field falls back to the activity's inline `provider`, because a config typo should not coerce dispatch onto a wrong runtime — the inline value is the known-good identity, not a default guess.
 
@@ -656,6 +658,160 @@ MCP for Antigravity is configured at `~/.gemini/config/mcp_config.json`
 
 `$HOME/.gemini` is already a sandbox write grant (shared with the legacy
 Gemini CLI). Other providers do not receive extra Antigravity-only roots.
+
+---
+
+## OpenCode CLI
+
+The `opencode` provider launches the local `opencode` binary as an
+Orbit-supervised worker. Everything below was verified against **opencode
+1.18.29**: the published [CLI reference](https://opencode.ai/docs/cli/) and the
+upstream `packages/opencode/src/cli/cmd/run.ts` and
+`packages/core/src/global.ts` sources. OpenCode's hosted/served modes
+(`opencode serve`, `--attach`, `opencode web`) are not used.
+
+### Installation and detection
+
+```sh
+opencode --version   # this change was verified against 1.18.29
+opencode models
+```
+
+Fresh init detects `opencode`, adds a `[crews.opencode]` assignment, and can
+choose it only after every previously supported family in the preference order,
+so adding this lane cannot change what an already-provisioned host picks.
+Selecting `opencode` when its binary is unavailable fails with a permanent
+diagnostic naming `opencode`; Orbit never substitutes another provider.
+
+### Authentication and credential handling
+
+OpenCode supports two local authentication paths, and Orbit changes neither:
+
+1. Run `opencode auth login` once. The resulting credentials live in
+   `auth.json` under OpenCode's XDG **data** directory — `$XDG_DATA_HOME/opencode`,
+   default `$HOME/.local/share/opencode`.
+2. Export a vendor API key and explicitly pass it to the agent subprocess:
+
+   ```toml
+   [execution.env]
+   pass = ["ANTHROPIC_API_KEY"]
+   ```
+
+Orbit adds no `*_API_KEY` to the provider's required environment and never puts
+a credential on argv. An interactive `opencode auth login` is a separate,
+unsandboxed setup action that no Orbit workflow turn performs.
+
+### Model and variant selection
+
+Every OpenCode invocation receives `--model <provider>/<model>` from its crew
+assignment. The coordinate must be **fully qualified**: OpenCode splits on the
+first `/` and looks the leading segment up in its own provider catalog, so a
+bare model id does not resolve.
+
+```toml
+[crews.opencode]
+model = "anthropic/claude-sonnet-4-5"
+provider = "opencode"
+effort = "high"
+description = "OpenCode through its local CLI"
+tags = ["implementation"]
+```
+
+The crew chooses the `opencode` executor. The `anthropic/` prefix names the
+**model vendor inside the OpenCode lane** and **never changes the provider
+identity**: the run remains an `opencode` run for its authentication, state
+directories, audit attribution, and sandbox policy. Orbit renders no separate
+provider flag, and `anthropic`, `openai`, and `google` continue to resolve to
+their own executors rather than to `opencode`. Run `opencode models` to inspect
+the coordinates available to the authenticated account.
+
+A crew `effort` is rendered as OpenCode's `--variant <value>`, documented as
+"model variant (provider-specific reasoning effort, e.g., high, max, minimal)".
+Because OpenCode forwards that value verbatim to whichever model provider
+`--model` selected and publishes no provider-independent vocabulary, Orbit
+admits only `high` and `max`. `low`, `medium`, and `xhigh` are **rejected at
+configuration load** with a diagnostic — they are not remapped onto `minimal` or
+`high`, and they are never silently dropped at spawn. Omitting `effort` omits
+the flag and leaves OpenCode's own default in place.
+
+### Headless execution, output, and permissions
+
+The shipped executor supplies only static non-interactive flags:
+
+- `run` is the non-interactive subcommand; without it the CLI starts its TUI.
+- `--format json` is OpenCode's raw event stream: one JSON object per line,
+  shaped `{type, timestamp, sessionID, ...}`.
+- `--auto` auto-approves permission requests that are not explicitly denied.
+  This is **required** for unattended runs: without it OpenCode *auto-rejects*
+  every request and the turn cannot touch the worktree. It is the documented
+  non-interactive analog of an interactive approval, **not** a security
+  boundary — see [Sandbox](#sandbox-1) below.
+
+`--continue`, `--session`, and `--share` are deliberately absent: the first two
+would let one run's context resurface inside another, and `--share` publishes
+the session. Every Orbit invocation is a fresh session.
+
+The Orbit prompt travels on standard input, never as a positional argument.
+OpenCode reads piped stdin whenever stdin is not a TTY and uses it as the whole
+message when no positional `[message..]` is supplied, which keeps the execution
+envelope out of process listings, audit argv, and spawn diagnostics.
+
+Orbit reads only the assistant `text` parts of the event stream, concatenated in
+order. Dropping the rest is a correctness requirement, not tidying: `tool_use`
+frames carry full tool input and output, so an agent that reads its own task
+record or echoes the prompt through a shell tool replays Orbit's own execution
+envelope — including the literal example envelope in the response contract —
+inside a tool payload, and `reasoning` frames are the model thinking aloud,
+where a draft envelope is not an answer. A terminal `error` event clears any
+answer text already accumulated, so a partially written envelope from before a
+failure cannot be projected as success. OpenCode also exits non-zero on session
+failure, and the v2 runner fails closed on a non-zero exit even when stdout
+contains success-looking JSON; exit status and envelope are independent
+evidence and both must be valid.
+
+Because the reduction drops OpenCode's `step_finish` frames, Orbit does **not**
+claim provider-reported token usage for an OpenCode run; the invocation trace
+carries whatever the Orbit response envelope itself declares. Full stdout and
+stderr are still captured in the run's audit record, so OpenCode's own
+diagnostics remain available for debugging. `--print-logs` is not passed;
+OpenCode writes logs to its data directory's `log/` tree.
+
+### Tool integration: MCP is not auto-configured
+
+OpenCode has a native MCP client configured through its own `opencode.json`.
+**Orbit does not write, merge, or manage that file**, and `orbit mcp setup` does
+not offer an OpenCode target. An operator who wants OpenCode's MCP client
+pointed at an Orbit server configures it themselves.
+
+This costs nothing for Orbit's own tools. An OpenCode run reaches them the same
+way every non-MCP lane does: the execution envelope directs the agent to call
+`orbit tool run <tool.name> --input '<json>'` through OpenCode's shell tool,
+using the `orbit` binary supplied on its `PATH`. Tool grants and caller-role
+gates are still enforced by `orbit tool run`, so the activity's scoped authority
+is unchanged. Two consequences follow:
+
+- OpenCode cannot receive an MCP-native tool schema for Orbit's tools, so tool
+  discovery is what the envelope states rather than a negotiated list.
+- The route depends on OpenCode's shell tool being available. An operator who
+  has disabled it on a custom executor or in `opencode.json` breaks Orbit tool
+  access for that lane.
+
+### Sandbox
+
+Only an active OpenCode executor receives write access to OpenCode's XDG roots:
+`$XDG_DATA_HOME/opencode` (default `$HOME/.local/share/opencode`, holding
+`auth.json`, the session and message stores, and logs), the config root
+(`$OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`, else
+`$HOME/.config/opencode`), `$XDG_STATE_HOME/opencode`, and
+`$XDG_CACHE_HOME/opencode`. All four are granted because OpenCode creates the
+data, config, and state roots during startup — before it ever reads Orbit's
+envelope. Other providers do not inherit that grant, and OpenCode does not
+inherit theirs.
+
+The worktree and all other paths remain governed by the activity filesystem
+profile. `--auto` cannot grant filesystem access the enclosing sandbox denies:
+the Orbit macOS/Linux sandbox is the only filesystem boundary and remains
+authoritative.
 
 ---
 

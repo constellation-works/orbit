@@ -25,6 +25,7 @@ const SANDBOXED_SHIPPED: &[&str] = &[
     "copilot",
     "cursor",
     "pi",
+    "opencode",
 ];
 
 fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {

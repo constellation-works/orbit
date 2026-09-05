@@ -358,6 +358,7 @@ fn compiled_profile_allows_writes_to_provider_state_dirs() {
             grok_home: None,
             copilot_home: None,
             xdg_cache_home: None,
+            ..SandboxCompileEnv::default()
         },
     )
     .expect("compile sbpl");
@@ -430,6 +431,7 @@ fn compiled_profile_allows_writes_to_grok_json_lock_and_tmp_files() {
             grok_home: None,
             copilot_home: None,
             xdg_cache_home: None,
+            ..SandboxCompileEnv::default()
         },
     )
     .expect("compile sbpl");
@@ -516,6 +518,7 @@ fn compiled_profile_allows_writes_to_claude_home_json_siblings() {
             grok_home: None,
             copilot_home: None,
             xdg_cache_home: None,
+            ..SandboxCompileEnv::default()
         },
     )
     .expect("compile sbpl");
@@ -808,4 +811,113 @@ fn copilot_does_not_receive_the_macos_keychain_carve_out() {
     assert!(!text.contains("(allow file-read* (subpath \"/Users/test/Library/Keychains\"))"));
     assert!(text.contains("(deny file-read* (subpath \"/Users/test/Library/Keychains\"))"));
     assert!(text.contains("(deny file-read* (subpath \"/Users/test/.config/gh\"))"));
+}
+
+#[test]
+fn opencode_state_dirs_default_to_the_xdg_home_locations() {
+    // [ORB-11295] OpenCode resolves every root through `xdg-basedir` and
+    // creates data/config/state during startup, before it reads Orbit's
+    // envelope, so all four roots must be present.
+    assert_eq!(
+        opencode_state_dirs(OpencodeDirEnv {
+            home: Some(OsStr::new("/Users/test")),
+            ..Default::default()
+        }),
+        vec![
+            PathBuf::from("/Users/test/.local/share/opencode"),
+            PathBuf::from("/Users/test/.config/opencode"),
+            PathBuf::from("/Users/test/.local/state/opencode"),
+            PathBuf::from("/Users/test/.cache/opencode"),
+        ]
+    );
+    assert!(opencode_state_dirs(OpencodeDirEnv::default()).is_empty());
+}
+
+#[test]
+fn opencode_state_dirs_honor_xdg_variables_and_the_config_override() {
+    assert_eq!(
+        opencode_state_dirs(OpencodeDirEnv {
+            home: Some(OsStr::new("/Users/test")),
+            xdg_data_home: Some(OsStr::new("/srv/data")),
+            xdg_config_home: Some(OsStr::new("/srv/config")),
+            xdg_state_home: Some(OsStr::new("/srv/state")),
+            xdg_cache_home: Some(OsStr::new("/srv/cache")),
+            opencode_config_dir: None,
+        }),
+        vec![
+            PathBuf::from("/srv/data/opencode"),
+            PathBuf::from("/srv/config/opencode"),
+            PathBuf::from("/srv/state/opencode"),
+            PathBuf::from("/srv/cache/opencode"),
+        ]
+    );
+
+    // `OPENCODE_CONFIG_DIR` is the config root itself, not an XDG base, so it
+    // is used verbatim and outranks `XDG_CONFIG_HOME`.
+    let dirs = opencode_state_dirs(OpencodeDirEnv {
+        home: Some(OsStr::new("/Users/test")),
+        xdg_config_home: Some(OsStr::new("/srv/config")),
+        opencode_config_dir: Some(OsStr::new("/srv/opencode-config")),
+        ..Default::default()
+    });
+    assert_eq!(dirs[1], PathBuf::from("/srv/opencode-config"));
+}
+
+#[test]
+fn opencode_state_dirs_ignore_empty_overrides() {
+    assert_eq!(
+        opencode_state_dirs(OpencodeDirEnv {
+            home: Some(OsStr::new("/Users/test")),
+            xdg_data_home: Some(OsStr::new("")),
+            opencode_config_dir: Some(OsStr::new("")),
+            ..Default::default()
+        }),
+        vec![
+            PathBuf::from("/Users/test/.local/share/opencode"),
+            PathBuf::from("/Users/test/.config/opencode"),
+            PathBuf::from("/Users/test/.local/state/opencode"),
+            PathBuf::from("/Users/test/.cache/opencode"),
+        ]
+    );
+}
+
+#[test]
+fn compile_grants_opencode_state_only_to_an_active_opencode_executor() {
+    let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
+    let opencode_profile = compile_with_env(
+        &resolved,
+        "opencode",
+        EnvOverrides {
+            home: Some("/Users/test"),
+            ..Default::default()
+        },
+    );
+    for root in [
+        "/Users/test/.local/share/opencode",
+        "/Users/test/.config/opencode",
+        "/Users/test/.local/state/opencode",
+        "/Users/test/.cache/opencode",
+    ] {
+        assert!(
+            opencode_profile.contains(&format!("(allow file-write* (subpath \"{root}\"))")),
+            "active OpenCode must be granted {root}",
+        );
+    }
+
+    for provider in [
+        "claude", "codex", "gemini", "grok", "copilot", "cursor", "pi",
+    ] {
+        let other = compile_with_env(
+            &resolved,
+            provider,
+            EnvOverrides {
+                home: Some("/Users/test"),
+                ..Default::default()
+            },
+        );
+        assert!(
+            !other.contains("/opencode"),
+            "{provider} must not inherit OpenCode state write access",
+        );
+    }
 }

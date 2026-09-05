@@ -23,6 +23,10 @@ pub(super) struct EnvOverrides<'a> {
     pub(super) copilot_home: Option<&'a str>,
     pub(super) xdg_cache_home: Option<&'a str>,
     pub(super) pi_coding_agent_dir: Option<&'a str>,
+    pub(super) xdg_data_home: Option<&'a str>,
+    pub(super) xdg_config_home: Option<&'a str>,
+    pub(super) xdg_state_home: Option<&'a str>,
+    pub(super) opencode_config_dir: Option<&'a str>,
 }
 
 /// Provider used by profile tests that are not about the per-provider
@@ -46,6 +50,10 @@ pub(super) fn compile_with_env(
             copilot_home: env.copilot_home.map(OsStr::new),
             xdg_cache_home: env.xdg_cache_home.map(OsStr::new),
             pi_coding_agent_dir: env.pi_coding_agent_dir.map(OsStr::new),
+            xdg_data_home: env.xdg_data_home.map(OsStr::new),
+            xdg_config_home: env.xdg_config_home.map(OsStr::new),
+            xdg_state_home: env.xdg_state_home.map(OsStr::new),
+            opencode_config_dir: env.opencode_config_dir.map(OsStr::new),
         },
     )
     .expect("compile")
