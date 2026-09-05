@@ -14,9 +14,6 @@ spec:
   - --prompt-file
   - /dev/stdin
   stdout_format: envelope
-  model_pair_override:
-    strong: grok-build
-    weak: grok-build
   model_flag: -m
   env: {}
   sandbox: linux-bwrap

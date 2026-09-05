@@ -9,9 +9,6 @@ spec:
   - exec
   - --json
   stdout_format: envelope
-  model_pair_override:
-    strong: gpt-5.5
-    weak: gpt-5.4-mini
   model_flag: --model
   env: {}
   sandbox: linux-bwrap

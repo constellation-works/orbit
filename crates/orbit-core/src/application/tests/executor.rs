@@ -308,40 +308,44 @@ fn custom_executor_sandbox_choice_is_not_rewritten_by_seed_migration() {
     );
 }
 
-/// The asset↔const seam: the shipped `claude.yaml` cannot reference the
-/// Rust constants, so this test pins the executor asset's model pair to the
-/// authoritative `orbit-common::model_defaults` values. A drift on either side
-/// (bumping the const without the asset, or vice versa) fails here.
+/// Shipped direct-agent defaults use crew-selected models at runtime. Their
+/// legacy model-pair field remains readable for older/user-authored files but
+/// must not be emitted by fresh assets.
 #[test]
-fn shipped_claude_executor_pair_matches_model_defaults() {
-    use orbit_common::model_defaults::{CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK};
-
-    let (_name, yaml) = DEFAULT_EXECUTOR_FILES
-        .iter()
-        .find(|(name, _)| *name == "claude")
-        .expect("claude executor asset present");
-    let def = parse_default_executor("claude", yaml).expect("parse claude executor");
-    let pair = def
-        .model_pair_override()
-        .expect("claude executor declares a model pair");
-    assert_eq!(pair.strong, CLAUDE_DEFAULT_STRONG);
-    assert_eq!(pair.weak, CLAUDE_DEFAULT_WEAK);
+fn shipped_direct_agent_defaults_omit_legacy_model_pair_override() {
+    for name in SANDBOXED_SHIPPED {
+        let def = parse_default_executor_for_platform(name, yaml_for(name), LINUX)
+            .unwrap_or_else(|err| panic!("parse {name}: {err}"));
+        assert_eq!(
+            def.model_pair_override(),
+            None,
+            "fresh {name} default must omit the legacy model pair override"
+        );
+        assert!(
+            def.model_flag.is_some(),
+            "fresh {name} default must retain crew-selected model flag behavior"
+        );
+    }
 }
 
-/// The Gemini executor asset carries the Flash/default lane while the strong
-/// pin remains independently controlled by the centralized defaults.
 #[test]
-fn shipped_gemini_executor_pair_matches_model_defaults() {
-    use orbit_common::model_defaults::{GEMINI_PAIR_STRONG, GEMINI_PAIR_WEAK};
+fn seeding_preserves_customized_legacy_model_pair_override() {
+    let store = InMemoryExecutorStore::default();
+    let mut custom = base_def("claude", ExecutorType::DirectAgent);
+    custom.model_pair_override = Some(orbit_types::workflow::ModelPairOverride {
+        strong: "custom-strong".to_string(),
+        weak: "custom-weak".to_string(),
+    });
+    custom.model_flag = Some("--model".to_string());
+    custom.sandbox = Some(ExecutorSandboxKind::LinuxBwrap);
+    store.upsert_executor_def(&custom).expect("seed custom def");
 
-    let (_name, yaml) = DEFAULT_EXECUTOR_FILES
-        .iter()
-        .find(|(name, _)| *name == "gemini")
-        .expect("gemini executor asset present");
-    let def = parse_default_executor("gemini", yaml).expect("parse gemini executor");
-    let pair = def
-        .model_pair_override()
-        .expect("gemini executor declares a model pair");
-    assert_eq!(pair.strong, GEMINI_PAIR_STRONG);
-    assert_eq!(pair.weak, GEMINI_PAIR_WEAK);
+    seed_default_executors_for_platform(&store, false, LINUX).expect("seed defaults");
+
+    let persisted = store
+        .get_executor_def("claude")
+        .expect("get")
+        .expect("claude present");
+    assert_eq!(persisted.model_pair_override, custom.model_pair_override);
+    assert_eq!(persisted.model_flag, custom.model_flag);
 }

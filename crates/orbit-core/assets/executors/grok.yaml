@@ -15,8 +15,5 @@ spec:
     - /dev/stdin
   stdout_format: envelope
   sandbox: macos-sandbox-exec
-  model_pair_override:
-    strong: grok-4.6
-    weak: grok-4.6
   model_flag: "-m"
   env: {}

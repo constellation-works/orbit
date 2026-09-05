@@ -15,8 +15,5 @@ spec:
     - default
   stdout_format: envelope
   sandbox: macos-sandbox-exec
-  model_pair_override:
-    strong: opus
-    weak: sonnet
   model_flag: "--model"
   env: {}

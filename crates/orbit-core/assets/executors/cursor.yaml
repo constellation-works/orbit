@@ -18,8 +18,5 @@ spec:
     - json
   stdout_format: envelope
   sandbox: macos-sandbox-exec
-  model_pair_override:
-    strong: gpt-5
-    weak: gpt-5
   model_flag: "--model"
   env: {}

@@ -9,12 +9,12 @@
 //!
 //! ## Asset ↔ const seam
 //!
-//! YAML/TOML assets (executor definitions under `assets/executors/*.yaml`,
-//! seeded `config.toml`) cannot reference a Rust const. For those, "single
-//! source of truth" means using the provider alias directly in the asset and
-//! keeping this module authoritative for production Rust paths. The executor
-//! asset ↔ const agreement is guarded by a test in orbit-core's executor
-//! command module.
+//! YAML/TOML assets (including seeded `config.toml`) cannot reference a Rust
+//! const. For those, "single source of truth" means using the provider alias
+//! directly in the asset and keeping this module authoritative for production
+//! Rust paths. Shipped executor assets select models through crews and
+//! `model_flag`; the legacy executor model-pair override is retained only for
+//! compatibility with older/user-authored definitions.
 //!
 //! ## Aliases vs. version pins
 //!
@@ -56,7 +56,7 @@ pub const CODEX_ASTRA_MODEL: &str = "gpt-6-astra";
 /// Default codex model (Astra is the provider default).
 pub const CODEX_DEFAULT_MODEL: &str = CODEX_ASTRA_MODEL;
 
-/// Default codex "weak" model used by the executor model pair.
+/// Legacy codex "weak" model retained for compatibility with executor pairs.
 pub const CODEX_DEFAULT_WEAK: &str = "gpt-5.4-mini";
 
 /// Default gemini model for the provider-default map.
@@ -65,10 +65,10 @@ pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.8-flash";
 /// Default gemini model seeded into crew roles.
 pub const GEMINI_CREW_MODEL: &str = "gemini-3.8-flash";
 
-/// Default gemini "strong" model used by the executor model pair.
+/// Legacy gemini "strong" model retained for compatibility with executor pairs.
 pub const GEMINI_PAIR_STRONG: &str = "gemini-3.1-pro";
 
-/// Default gemini "weak" model used by the executor model pair.
+/// Legacy gemini "weak" model retained for compatibility with executor pairs.
 pub const GEMINI_PAIR_WEAK: &str = "gemini-3.8-flash";
 
 /// Default Grok Build model (the canonical model listed by `grok models`).
