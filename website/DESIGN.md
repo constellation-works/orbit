@@ -11,8 +11,7 @@
 The Orbit website is a **documentation site**, not a marketing site. It exists to host:
 
 - Reference documentation (CLI commands, activity/job YAML schemas, policy formats)
-- How-to guides (task lifecycle, writing activities, scoping rules)
-- Architecture summaries grounded in the source tree
+- How-to guides (task lifecycle, delivery windows, recurring work, task publication)
 - Conceptual explainers (activity/job model, task lifecycle, agent runtimes)
 
 **Primary audience:** engineers evaluating or actively using Orbit. They arrive via search, know roughly what they want, and leave as soon as they have it. The site optimizes for that path.
@@ -114,8 +113,7 @@ Initial top-level sections (left nav, in order):
 3. **Concepts** — tasks, activities/jobs, policies, agents
 4. **How-to Guides** — task-oriented recipes
 5. **Reference** — CLI, YAML schemas, config, scoping rules
-6. **Architecture** — current crate boundaries and dependency direction
-7. **Contributing** — local dev, crate layout, PR workflow
+6. **Contributing** — local dev, crate layout, PR workflow
 
 Each section has an index page that lists its children with one-line descriptions. No "coming soon" placeholders — sections appear only when populated.
 
@@ -156,7 +154,7 @@ Nextra is reserved for a future scenario where interactive React widgets become 
 
 1. **Domain name.** `orbit.dev`, `orbitcli.dev`, subdomain of an existing property? orbit-cli.com
 2. **Versioning.** Starlight supports versioned docs via directory structure. Add it when release-specific documentation becomes necessary.
-3. **Architecture detail.** Keep public summaries current without exposing internal decision history.
+3. **Architecture detail.** Crate boundaries and dependency direction are contributor material, not published here; they live in the repository's `ARCHITECTURE.md`. Revisit only if a public extension surface makes them user-facing.
 4. **Logo design.** Ring-with-offset-dot concept agreed; actual SVG not yet drawn.
 5. **Analytics.** Plausible (privacy-respecting) or none at all? Default to none unless there's a decision to measure something specific.
 

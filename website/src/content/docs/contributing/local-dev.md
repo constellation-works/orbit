@@ -24,10 +24,14 @@ The website is independent of the Rust workspace.
 cd website
 npm install
 npm run dev
+npm run check
 npm run build
 ```
 
-`npm run build` syncs the architecture mirror before building.
+Every page is authored by hand under `website/src/content/docs/`; nothing is
+generated at build time. When you change CLI behavior, verify the affected page
+against `orbit <command> --help` from a current build and update it in the same
+pull request.
 
 ## Orbit State
 

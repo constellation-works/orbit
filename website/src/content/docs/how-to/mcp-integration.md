@@ -13,6 +13,15 @@ Use auto-detection:
 orbit mcp init --auto
 ```
 
+This registers the **agent-only** tool surface — the same authority as bare
+`orbit mcp serve`. If you want an agent to be able to dispatch workflows and run
+governed operations, register the operator-authorized integration during
+workspace setup instead:
+
+```bash
+orbit workspace init --mcp
+```
+
 Or target a client explicitly:
 
 ```bash
