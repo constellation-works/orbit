@@ -25,6 +25,7 @@ pub mod skill;
 pub mod sweep;
 pub mod task;
 pub mod tool;
+pub mod update;
 pub mod web;
 pub mod workspace;
 
@@ -83,6 +84,7 @@ Environment:
   config      Show or update Orbit configuration
   semantic    Manage local orbit-search indexing
   migrate     Apply or inspect pending .orbit layout/schema migrations
+  update      Install a published Orbit release and converge to it
 
 Operate:
   run         Run a workflow (ship, job)
@@ -140,6 +142,7 @@ pub enum Commands {
     Config(config::ConfigCommand),
     Semantic(semantic::SemanticCommand),
     Migrate(migrate::MigrateCommand),
+    Update(update::UpdateCommand),
 
     // ── Operate ──
     Run(run::RunCommand),

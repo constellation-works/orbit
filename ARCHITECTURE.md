@@ -64,7 +64,7 @@ feature.
 ## Crates
 
 - **orbit-types**: lowest internal contract crate — no Orbit deps. Domain-qualified modules (`identity`, `workspace`, `task`, `workflow`, `policy`, `resource`, `tool`, `telemetry`, `record`) own shared serde contracts, pure constructors, normalization, and narrow domain errors. `OrbitId` is the only crate-root primitive. This crate does not perform filesystem, process, environment, database, network, logging, or tracing work.
-- **orbit-common**: mechanism crate above `orbit-types`. Owns workspace-wide `OrbitError`, governance (`authorization`, `operation`, `friction`), filesystem/path helpers, process support, storage, protocol/YAML codecs, observability, and security (redaction plus `security::child_env`, the single
+- **orbit-common**: mechanism crate above `orbit-types`. Owns workspace-wide `OrbitError`, governance (`authorization`, `operation`, `friction`), filesystem/path helpers, process support, storage, protocol/YAML codecs, observability, and security (release-artifact trust in `security::release` — the one Rust copy of the release signing key set and its signature/checksum verification, shared by `orbit update` and `orbit semantic install`; redaction; plus `security::child_env`, the single
   allowlist-based builder for agent-subprocess environments that `orbit-config`
   parameterizes with `[execution.env]` and every subprocess launcher applies to a
   cleared environment). Operation registries still live here so every consumer surface can read them without a new dependency edge; the matching handler table lives in `orbit-core` and is joined to it by the noun's verb enum. MCP v1 explicitly defers capability decisions inside Core while retaining ordinary domain and sandbox validation.
@@ -113,7 +113,7 @@ feature.
   adapters. Core exposes `OrbitRuntime` to `orbit-cmd`, `orbit-cli`, and
   `orbit-web`; it does not depend on transport/presentation crates,
   `orbit-agent`, or `orbit-cmd`.
-- **orbit-cmd**: shared application composition for CLI and Web consumers. It owns CLI-facing command groups plus registry-aware runtime and routine assembly, joining `orbit-core` kernels to `orbit-registry` without reversing either lower-layer dependency. Runtime methods are exposed as per-module `*Commands` extension traits.
+- **orbit-cmd**: shared application composition for CLI and Web consumers. It owns CLI-facing command groups plus registry-aware runtime and routine assembly, joining `orbit-core` kernels to `orbit-registry` without reversing either lower-layer dependency. `update` is the one group that composes outward instead of downward: it owns install-channel detection, release download and integrity, executable replacement, and the post-replacement convergence the *newly installed* binary performs as a subprocess. Runtime methods are exposed as per-module `*Commands` extension traits.
 - **orbit-cli**: clap-based entry point and local client-configuration surface. It assembles MCP, Registry, Web, and Core. `mcp serve` and `mcp listen` compose one host and serve it over stdio or TCP; `mcp serve --mode remote` delegates only the byte-transparent SSH process to `orbit-mcp`. In every case the accepting machine resolves local state and dispatches through Core.
 
 ---

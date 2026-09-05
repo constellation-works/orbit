@@ -28,6 +28,7 @@ pub mod migrate;
 pub mod registry_routines;
 pub mod registry_runtime;
 pub mod task_owner;
+pub mod update;
 pub mod workspace_catalog;
 
 #[cfg(test)]

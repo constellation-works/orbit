@@ -28,7 +28,6 @@ libc.workspace = true
 orbit-common = { path = "../orbit-common", features = ["sqlite"] }
 orbit-types = { path = "../orbit-types" }
 reqwest.workspace = true
-rsa.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
