@@ -51,6 +51,7 @@ macro_rules! deterministic_action_catalog {
                 GitMerge => "git_merge",
                 GitPush => "git_push",
                 GitRebase => "git_rebase",
+                LocalShell => "local_shell",
                 PrFailureHandoff => "pr_failure_handoff",
                 PrOpen => "pr_open",
                 PrPrepare => "pr_prepare",

@@ -1,4 +1,4 @@
-use std::process::ChildStdout;
+use std::process::{Child, ChildStdout};
 use std::thread;
 use std::time::Instant;
 
@@ -91,6 +91,54 @@ pub fn run_process(
         exit_code: result.exit_code,
         duration_ms: started.elapsed().as_millis() as u64,
         output: None,
+    })
+}
+
+/// Outcome of supervising a child Orbit did not spawn itself.
+///
+/// [`ExecutionResult`] cannot say *why* a run produced no exit code, so the
+/// deadline verdict travels alongside it rather than being re-derived from
+/// stderr text.
+#[derive(Debug, Clone)]
+pub struct SupervisedOutcome {
+    pub result: ExecutionResult,
+    /// The wall-clock deadline elapsed and the supervisor terminated the
+    /// child's process group.
+    pub timed_out: bool,
+}
+
+/// Supervise a child that the caller already spawned.
+///
+/// [`run_process`] is the entry point when Orbit creates the child itself.
+/// Callers that must build the child through a sandbox wrapper — the
+/// `spawn_under_linux_bwrap` / `spawn_under_macos_sandbox` helpers in this
+/// crate — hand the spawned child here so output draining, the wall-clock
+/// deadline, signal-driven cancellation, and process-group cleanup stay
+/// byte-identical to the unsandboxed path instead of being reimplemented per
+/// call site.
+///
+/// `stdin_payload` is written to the child's stdin pipe and then closed.
+/// Passing `Some(Vec::new())` closes stdin immediately, which is what a
+/// non-interactive step wants: a piped-but-never-closed stdin leaves a reader
+/// blocked until the deadline.
+pub fn supervise_child(
+    child: Child,
+    timeout_ms: Option<u64>,
+    stdin_payload: Option<Vec<u8>>,
+) -> Result<SupervisedOutcome, OrbitError> {
+    let started = Instant::now();
+    let result =
+        crate::supervision::wait_with_optional_timeout(child, timeout_ms, false, stdin_payload)?;
+    Ok(SupervisedOutcome {
+        result: ExecutionResult {
+            success: result.exit_success,
+            stdout: String::from_utf8_lossy(&result.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&result.stderr).to_string(),
+            exit_code: result.exit_code,
+            duration_ms: started.elapsed().as_millis() as u64,
+            output: None,
+        },
+        timed_out: result.timed_out,
     })
 }
 

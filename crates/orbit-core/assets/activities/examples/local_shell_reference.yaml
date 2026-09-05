@@ -1,0 +1,69 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: local_shell_reference
+spec:
+  type: deterministic
+  description: >
+    Reference for deterministic local command execution. Runs one child process
+    through the v2 dispatch path with an explicit program, literal arguments,
+    working directory, and environment, and reports its stdout, stderr, and exit
+    status. The program and its arguments come from `config` and are never taken
+    from step input, so no templated value can reach argv.
+  fsProfile: implementer
+  input_schema_json:
+    type: object
+    properties:
+      workspace_path:
+        type: string
+        description: >
+          Checkout to run in. Defaults to the registered repository root; a
+          `task_pr_pipeline` run passes its worktree here.
+  output_schema_json:
+    type: object
+    required: [success, stdout, stderr, argv, cwd]
+    properties:
+      success:
+        type: boolean
+      exit_code:
+        type: [integer, "null"]
+      stdout:
+        type: string
+      stderr:
+        type: string
+      duration_ms:
+        type: integer
+      timed_out:
+        type: boolean
+      timeout_ms:
+        type: integer
+      argv:
+        type: array
+        items:
+          type: string
+      cwd:
+        type: string
+      sandbox:
+        type: string
+  action: local_shell
+  config:
+    # Literal argv. Orbit execs this directly — there is no shell in the chain,
+    # so nothing here is word-split, globbed, or expanded.
+    command: git
+    args: ["status", "--porcelain"]
+    # Relative to the resolved workspace root; the step fails if it escapes.
+    cwd: "."
+    env:
+      GIT_OPTIONAL_LOCKS: "0"
+    timeout_ms: 60000
+    # Set true to return a nonzero exit as ordinary structured output instead of
+    # failing the step.
+    allow_nonzero_exit: false
+    #
+    # To run a shell script instead, name the interpreter explicitly. Orbit
+    # never builds a command line out of `command` + `args`:
+    #
+    #   shell: /bin/sh
+    #   script: |
+    #     set -eu
+    #     make ci-fast

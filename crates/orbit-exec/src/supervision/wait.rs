@@ -25,6 +25,10 @@ pub(crate) struct WaitResult {
     pub(crate) stdout: Vec<u8>,
     /// Stderr text; includes "process timed out" appended when timed out.
     pub(crate) stderr: Vec<u8>,
+    /// Whether the wall-clock deadline elapsed and the supervisor terminated
+    /// the child's process group. Callers that must distinguish a timeout from
+    /// an ordinary nonzero exit read this instead of matching stderr text.
+    pub(crate) timed_out: bool,
 }
 
 pub(crate) fn wait_with_optional_timeout(
@@ -185,6 +189,7 @@ pub(super) fn wait_with_timeout_and_output_limit(
         exit_code,
         stdout,
         stderr,
+        timed_out,
     })
 }
 
