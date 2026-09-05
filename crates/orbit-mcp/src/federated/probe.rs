@@ -103,6 +103,11 @@ pub struct SshDestinationProbe {
     caller_machine_id: String,
     probe_timeout: Duration,
     delivery_timeout: Duration,
+    /// The mux's orchestrator attribution default, carried into each
+    /// destination's own argv [ORB-11313]. A routed session forwards no
+    /// session context of its own, so this travels the same way the caller
+    /// machine identity does.
+    orchestrator: Option<String>,
 }
 
 impl SshDestinationProbe {
@@ -113,11 +118,13 @@ impl SshDestinationProbe {
         caller_machine_id: String,
         probe_timeout: Duration,
         delivery_timeout: Duration,
+        orchestrator: Option<String>,
     ) -> Self {
         Self {
             caller_machine_id,
             probe_timeout,
             delivery_timeout,
+            orchestrator,
         }
     }
 }
@@ -240,7 +247,11 @@ impl DestinationProbe for CompositeDestinationProbe {
 
 impl SshDestinationProbe {
     fn start_session(&self, destination: &Destination) -> Result<DestinationSession, OrbitError> {
-        let child = spawn_destination_session(destination, &self.caller_machine_id)?;
+        let child = spawn_destination_session(
+            destination,
+            &self.caller_machine_id,
+            self.orchestrator.as_deref(),
+        )?;
         // The session is one process; the guard ends it on every path,
         // including the timeout path where the child is still mid-answer.
         let mut session =
@@ -313,6 +324,7 @@ impl RoutedSession for SshRoutedSession {
 fn spawn_destination_session(
     destination: &Destination,
     caller_machine_id: &str,
+    orchestrator: Option<&str>,
 ) -> Result<Child, OrbitError> {
     let ssh = destination.ssh_target().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
@@ -324,7 +336,10 @@ fn spawn_destination_session(
         .arg("-T")
         .arg("--")
         .arg(ssh)
-        .arg(crate::remote::remote_serve_command(caller_machine_id))
+        .arg(crate::remote::remote_serve_command(
+            caller_machine_id,
+            orchestrator,
+        ))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         // The destination's logs are its own; folding them into this process's

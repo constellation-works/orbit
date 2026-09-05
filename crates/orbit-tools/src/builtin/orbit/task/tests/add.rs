@@ -491,3 +491,142 @@ fn schema_workspace_param_documents_the_shared_selector_grammar() {
         workspace.description
     );
 }
+
+/// A session configured with `orbit mcp serve --orchestrator <crew>` and,
+/// like every MCP session, a bound workspace.
+fn session_with_orchestrator(workspace: &str, orchestrator: &str) -> ToolSessionContext {
+    ToolSessionContext {
+        orchestrator: Some(orchestrator.to_string()),
+        ..ToolSessionContext::with_workspace(workspace)
+    }
+}
+
+fn add_input(title: &str) -> Value {
+    json!({
+        "title": title,
+        "description": "orchestrator attribution default",
+        "complexity": "low",
+        "model": "codex"
+    })
+}
+
+fn recorded_add(host: &RecordingHost) -> Value {
+    host.call
+        .lock()
+        .expect("lock")
+        .take()
+        .expect("host was called")
+        .input
+}
+
+#[test]
+fn add_call_uses_session_orchestrator_when_input_omits_one() {
+    let host = RecordingHost::default();
+    let mut ctx = mk_ctx(host.clone());
+    ctx.session_context = session_with_orchestrator("/tmp/canonical-ws", "hub");
+
+    OrbitTaskAddTool
+        .execute(&ctx, add_input("Session orchestrator default"))
+        .expect("session orchestrator should apply");
+
+    assert_eq!(recorded_add(&host)["orchestrator"], "hub");
+}
+
+#[test]
+fn explicit_orchestrator_takes_precedence_over_the_session_default() {
+    let host = RecordingHost::default();
+    let mut ctx = mk_ctx(host.clone());
+    ctx.session_context = session_with_orchestrator("/tmp/canonical-ws", "hub");
+
+    let mut input = add_input("Explicit orchestrator wins");
+    input["orchestrator"] = json!("relay");
+    OrbitTaskAddTool
+        .execute(&ctx, input)
+        .expect("explicit orchestrator should win");
+
+    assert_eq!(recorded_add(&host)["orchestrator"], "relay");
+}
+
+#[test]
+fn add_call_without_a_session_orchestrator_sends_no_attribution() {
+    // The absent-default path must be byte-identical to the behavior that
+    // shipped before the session default existed, so a server started without
+    // the flag cannot start attributing tasks to anyone.
+    let host = RecordingHost::default();
+    let mut ctx = mk_ctx(host.clone());
+    ctx.session_context = ToolSessionContext::with_workspace("/tmp/canonical-ws");
+
+    OrbitTaskAddTool
+        .execute(&ctx, add_input("No attribution"))
+        .expect("absent default should preserve existing behavior");
+
+    assert!(
+        recorded_add(&host).get("orchestrator").is_none(),
+        "an unconfigured session must not invent an orchestrator"
+    );
+}
+
+#[test]
+fn a_blank_session_orchestrator_is_the_same_as_none() {
+    let host = RecordingHost::default();
+    let mut ctx = mk_ctx(host.clone());
+    ctx.session_context = session_with_orchestrator("/tmp/canonical-ws", "   ");
+
+    OrbitTaskAddTool
+        .execute(&ctx, add_input("Blank default"))
+        .expect("blank default should be ignored");
+
+    assert!(recorded_add(&host).get("orchestrator").is_none());
+}
+
+#[test]
+fn the_session_orchestrator_is_isolated_between_sessions() {
+    // Two clients against the same tool must not see each other's configured
+    // default: it lives on the per-session context, never in process state.
+    let host = RecordingHost::default();
+    let mut hub = mk_ctx(host.clone());
+    hub.session_context = session_with_orchestrator("/tmp/canonical-ws", "hub");
+    let mut relay = mk_ctx(host.clone());
+    relay.session_context = session_with_orchestrator("/tmp/canonical-ws", "relay");
+    let mut unconfigured = mk_ctx(host.clone());
+    unconfigured.session_context = ToolSessionContext::with_workspace("/tmp/canonical-ws");
+
+    for (ctx, expected) in [
+        (&hub, Some("hub")),
+        (&relay, Some("relay")),
+        (&unconfigured, None),
+        (&hub, Some("hub")),
+    ] {
+        OrbitTaskAddTool
+            .execute(ctx, add_input("Session isolation"))
+            .expect("add succeeds");
+        assert_eq!(
+            recorded_add(&host)
+                .get("orchestrator")
+                .and_then(Value::as_str),
+            expected
+        );
+    }
+}
+
+#[test]
+fn the_session_orchestrator_grants_no_capability_and_selects_no_execution_crew() {
+    // Attribution is independent of authority and of execution provenance:
+    // the default must not appear as a capability, a `crew`, or a `model`.
+    let host = RecordingHost::default();
+    let mut ctx = mk_ctx(host.clone());
+    ctx.session_context = session_with_orchestrator("/tmp/canonical-ws", "hub");
+
+    OrbitTaskAddTool
+        .execute(&ctx, add_input("Independent provenance"))
+        .expect("add succeeds");
+
+    let recorded = recorded_add(&host);
+    assert_eq!(recorded["orchestrator"], "hub");
+    assert!(recorded.get("crew").is_none());
+    assert_eq!(recorded["model"], "codex");
+    assert!(
+        ctx.session_context.effective_capabilities.is_empty(),
+        "attribution must not add a session capability"
+    );
+}

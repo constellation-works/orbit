@@ -58,6 +58,40 @@ per-run crew input: passing `--input crew=...` does not override that step.
 Inspect `[crews.system]` and any compatibility fallback in the active config;
 change persistent configuration only within the user's authorization.
 
+## Record who orchestrated the work
+
+Orchestrator attribution is a separate field from the execution crew. It names
+the crew that prepared and supervised the task; it selects nothing, grants no
+authority, and never changes which crew or model executes the task. Set it on
+creation, when the task is `proposed` or `backlog` — after that it is fixed.
+
+A session can carry the value so every task it creates is attributed without
+each call remembering to pass it. Start the server with the crew you orchestrate
+as:
+
+```bash
+orbit mcp serve --workspace <selector> --orchestrator <your-crew>
+```
+
+Precedence is explicit-then-session: a call that passes `orchestrator` uses that
+value, a call that omits it inherits the session's, and a session started
+without the flag attributes nothing at all. The name is resolved against the
+crews of whichever workspace the call lands in, so an unconfigured crew fails
+that call rather than being replaced by another one. The default applies only to
+tasks the session creates: existing tasks are never rewritten.
+
+```bash
+orbit tool run orbit.task.add --input '{"workspace":"<selector>","title":"<title>","description":"<description>","complexity":"medium","orchestrator":"<crew>","model":"<agent-family>"}'
+```
+
+Treat the flag as configuration, not as evidence of who is calling. An MCP
+connection outlives a model switch in the client, so a session started under one
+crew keeps stamping that crew after the client moves to another. When the
+orchestrating crew actually changes, pass `orchestrator` on the individual call
+or restart the connection with the new value. `--operator` is unrelated and
+unchanged: it decides what a session may do, this decides only what gets
+recorded.
+
 ## Prepare context with task-pilot
 
 ```bash

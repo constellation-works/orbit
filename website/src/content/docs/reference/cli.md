@@ -123,7 +123,7 @@ See [Schedule Recurring Work](../../how-to/recurring-work/).
 | Command | Purpose |
 |---|---|
 | `orbit mcp init` / `orbit mcp remove` | Register or unregister MCP client integration. Clients: `claude`, `codex`, `gemini`, `grok`, `cursor`, `vscode`, `windsurf`. `--federated` manages the mux entry separately. |
-| `orbit mcp serve` | Serve the MCP tool surface over stdio. |
+| `orbit mcp serve` | Serve the MCP tool surface over stdio. `--operator` serves operator authority; `--orchestrator <crew>` sets the orchestrator attribution recorded on tasks the session creates, and grants nothing. |
 | `orbit mcp listen [ADDR]` | Serve the same surface on a TCP socket. Binds `127.0.0.1:7879` unless `--allow-non-loopback` is passed. |
 | `orbit mcp callers` | Inspect and seed which callers this machine serves, and as what. |
 | `orbit web serve` | Serve the Orbit dashboard. |

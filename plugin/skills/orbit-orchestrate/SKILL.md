@@ -29,6 +29,13 @@ Inspect evidence → search open and closed work → author a bounded task → p
 - Under an authorized continuous-completion policy, post-merge review, QA, and
   CI produce repair tasks; do not insert an unrequested pre-merge review gate.
   Repository protections still apply.
+- Attribute the work you orchestrate. `orchestrator` records the crew that
+  prepared and supervised a task; it is not the execution crew and grants no
+  authority. Set it while the task is `proposed` or `backlog`, either per call
+  or once for the session with `orbit mcp serve --orchestrator <crew>`. That
+  flag is configuration, not proof of who is calling: a connection outlives a
+  model switch, so override it per call or restart the session when the
+  orchestrating crew changes.
 - Agent reports are advisory. Verify persisted task changes, run outcomes,
   merges, tests, and deployed behavior independently. Do not make activity
   success depend on enforcing the shape of an agent's reported output.
@@ -40,7 +47,7 @@ Inspect evidence → search open and closed work → author a bounded task → p
 
 | Reference | Read it for |
 |---|---|
-| [loop.md](references/loop.md) | Discovery, task quality, crew selection, zero-input pilot, immediate promotion, and observation. |
+| [loop.md](references/loop.md) | Discovery, task quality, crew selection, orchestrator attribution, zero-input pilot, immediate promotion, and observation. |
 | [authorization.md](references/authorization.md) | Executable `--complete` examples, concurrency and crew limits, window boundaries, and handoff metrics. |
 | [recovery.md](references/recovery.md) | CI deduplication, triage, failed completion, operational repair tasks, and deployment verification. |
 | [walkthroughs.md](references/walkthroughs.md) | Decisions for missing context, duplicates, locks, unavailable authority, provider limits, and window expiry. |
