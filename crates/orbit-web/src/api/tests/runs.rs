@@ -561,7 +561,7 @@ fn run_detail_uses_v2_audit_steps_when_step_bundle_is_empty() {
 }
 
 #[test]
-fn run_detail_exposes_the_provider_pid_and_liveness_for_an_open_agent_step() {
+fn run_detail_keeps_a_parallel_provider_open_when_another_invocation_finishes() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-web-provider-pid";
     seed_v2_audit_events(
@@ -580,18 +580,61 @@ fn run_detail_exposes_the_provider_pid_and_liveness_for_an_open_agent_step() {
             }),
             json!({
                 "schemaVersion": 1,
-                "event_type": "cli.invocation.process",
-                "event_id": "evt-pid",
+                "event_type": "activity.started",
+                "event_id": "evt-live-invocation",
                 "ts": "2026-07-27T02:41:02Z",
                 "run_id": run_id,
                 "agent_identity": "codex",
                 "parent_event_id": "evt-step-started",
+                "body_kind": "activity_started"
+            }),
+            json!({
+                "schemaVersion": 1,
+                "event_type": "activity.started",
+                "event_id": "evt-finished-invocation",
+                "ts": "2026-07-27T02:41:03Z",
+                "run_id": run_id,
+                "agent_identity": "codex",
+                "parent_event_id": "evt-step-started",
+                "body_kind": "activity_started"
+            }),
+            json!({
+                "schemaVersion": 1,
+                "event_type": "cli.invocation.process",
+                "event_id": "evt-finished-pid",
+                "ts": "2026-07-27T02:41:04Z",
+                "run_id": run_id,
+                "agent_identity": "codex",
+                "parent_event_id": "evt-finished-invocation",
                 "body_kind": "cli_invocation_process",
                 "provider": "codex",
-                // Unreachable PID: the probe must resolve it as gone rather
-                // than reporting a live child that does not exist.
+                "pid": u32::MAX - 2
+            }),
+            json!({
+                "schemaVersion": 1,
+                "event_type": "cli.invocation.process",
+                "event_id": "evt-live-pid",
+                "ts": "2026-07-27T02:41:05Z",
+                "run_id": run_id,
+                "agent_identity": "codex",
+                "parent_event_id": "evt-live-invocation",
+                "body_kind": "cli_invocation_process",
+                "provider": "codex",
+                // This PID is unreachable: the projection must retain the
+                // open record and report its liveness independently.
                 "pid": u32::MAX - 1,
                 "pid_start_time": "ps-lstart-utc-v1:seeded"
+            }),
+            json!({
+                "schemaVersion": 1,
+                "event_type": "cli.invocation.finished",
+                "event_id": "evt-finished",
+                "ts": "2026-07-27T02:41:06Z",
+                "run_id": run_id,
+                "agent_identity": "codex",
+                "parent_event_id": "evt-finished-invocation",
+                "body_kind": "cli_invocation_finished",
+                "exit_code": 0
             }),
         ],
     );
@@ -623,16 +666,19 @@ fn run_detail_exposes_the_provider_pid_and_liveness_for_an_open_agent_step() {
         .as_array()
         .expect("provider_processes array");
 
-    assert_eq!(processes.len(), 1);
-    assert_eq!(processes[0]["pid"], u32::MAX - 1);
-    assert_eq!(processes[0]["provider"], "codex");
-    assert_eq!(processes[0]["step_id"], "agent_implement");
-    assert_eq!(processes[0]["finished"], false);
-    assert_eq!(processes[0]["exit_code"], Value::Null);
+    assert_eq!(processes.len(), 2);
+    assert_eq!(processes[0]["pid"], u32::MAX - 2);
+    assert_eq!(processes[0]["finished"], true);
+    assert_eq!(processes[0]["exit_code"], 0);
+    assert_eq!(processes[1]["pid"], u32::MAX - 1);
+    assert_eq!(processes[1]["provider"], "codex");
+    assert_eq!(processes[1]["step_id"], "agent_implement");
+    assert_eq!(processes[1]["finished"], false);
+    assert_eq!(processes[1]["exit_code"], Value::Null);
     if cfg!(unix) {
-        assert_eq!(processes[0]["liveness"], "exited");
+        assert_eq!(processes[1]["liveness"], "exited");
     } else {
-        assert_eq!(processes[0]["liveness"], "unknown");
+        assert_eq!(processes[1]["liveness"], "unknown");
     }
 }
 

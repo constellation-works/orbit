@@ -563,6 +563,26 @@ Liveness is computed at read time, not stored. `orbit_common::process::identity:
 - Cost: liveness is only as fresh as the moment it is queried and only meaningful on the host that ran the child. A remote or later reader of the same audit trail gets `exited` for every historical open invocation, because the answer is derived from the local process table rather than persisted with the event. A heartbeat would have survived that, at the price of a write per interval per invocation and a staleness threshold to tune.
 - Cost: `pid_start_time` costs one `ps` invocation per provider spawn. A sandbox that blocks `ps` yields `None`, which weakens the record to unguarded-PID liveness rather than failing the spawn.
 
+## Provider completions correlate by invocation ancestry
+
+**Recorded:** 2026-09-05 · [ORB-11284]
+**Paths:** `crates/orbit-core/src/runtime/run_audit.rs`, `crates/orbit-core/src/runtime/tests/run_audit.rs`
+
+### Context
+
+The original read-side reconstruction paired a `cli.invocation.finished` event with the newest unfinished provider process in its enclosing step. That preserved sequential retry ordering, but a fan-out can run two invocations with the same `step_id`. In `jrun-20260905-1721`, a completion beneath one invocation instead marked the other invocation's still-live provider PID as finished.
+
+### Decision
+
+Use the direct `parent_event_id` as the provider invocation identity when pairing a process event with a completion. A completion with ancestry only closes an unfinished process with the same ancestry and step; it never falls back to another same-step process. For historical records with absent ancestry, close a process only when exactly one unfinished, ancestry-free process exists in the step. Keep multiple candidates open and report their read-time liveness rather than guessing.
+
+### Consequences
+
+- Parallel same-step completions may arrive in either order without changing another invocation's exit or liveness fields.
+- Sequential retries still pair normally: after each completion there is one matching open process under the invocation identity.
+- Older sparse trails remain useful when their sole candidate is unambiguous, while ambiguous evidence honestly preserves uncertainty instead of fabricating an exit.
+- CLI and API run projections share this Core read boundary, so they cannot apply competing correlation policies.
+
 ## Friction records carry an author-settable title; derivation is a structural fallback
 
 **Recorded:** 2026-08-02 23:41:57.916629Z · [ORB-10590], [ORB-10598]

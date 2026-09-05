@@ -9,12 +9,12 @@ mod support;
 
 use chrono::Utc;
 use clap::{Parser, error::ErrorKind};
-use orbit_core::OrbitRuntime;
 use orbit_core::runtime::run_audit::RunAuditEvent;
+use orbit_core::{OrbitRuntime, V2AuditEventInsertParams};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
-use crate::command::{Cli, Commands, Execute};
+use crate::command::{Cli, CommandOutput, Commands, Execute};
 
 use super::cancel::RunCancelArgs;
 use super::*;
@@ -314,6 +314,87 @@ fn parses_run_show_run_id() {
         }
         _ => panic!("expected show"),
     }
+}
+
+#[test]
+fn run_show_projects_parallel_provider_completion_by_invocation_parent() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    let scheduled_at = Utc::now();
+    let run = JobRun {
+        run_id: "jrun-cli-parallel-provider".to_string(),
+        job_id: "task_pr_pipeline".to_string(),
+        attempt: 1,
+        state: JobRunState::Running,
+        scheduled_at,
+        started_at: Some(scheduled_at),
+        finished_at: None,
+        duration_ms: None,
+        created_at: scheduled_at,
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+    };
+    runtime
+        .sqlite_store()
+        .expect("store")
+        .upsert_job_run_for_workspace(&workspace_id, &run, None)
+        .expect("insert run");
+
+    let events = [
+        json!({ "event_id": "run", "ts": "2026-09-05T17:26:00Z", "body_kind": "run_started" }),
+        json!({ "event_id": "step", "ts": "2026-09-05T17:26:01Z", "parent_event_id": "run", "body_kind": "step_started", "step_id": "pilot" }),
+        json!({ "event_id": "finished-invocation", "ts": "2026-09-05T17:26:02Z", "parent_event_id": "step", "body_kind": "activity_started" }),
+        json!({ "event_id": "live-invocation", "ts": "2026-09-05T17:26:03Z", "parent_event_id": "step", "body_kind": "activity_started" }),
+        json!({ "event_id": "finished-pid", "ts": "2026-09-05T17:26:04Z", "parent_event_id": "finished-invocation", "body_kind": "cli_invocation_process", "pid": u32::MAX - 2 }),
+        json!({ "event_id": "live-pid", "ts": "2026-09-05T17:26:05Z", "parent_event_id": "live-invocation", "body_kind": "cli_invocation_process", "pid": u32::MAX - 1 }),
+        json!({ "event_id": "finished", "ts": "2026-09-05T17:26:06Z", "parent_event_id": "finished-invocation", "body_kind": "cli_invocation_finished", "exit_code": 0 }),
+    ];
+    for event in events {
+        let ts = event["ts"]
+            .as_str()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc))
+            .expect("event timestamp");
+        runtime
+            .insert_v2_audit_event(&V2AuditEventInsertParams {
+                workspace_id: workspace_id.clone(),
+                event_id: event["event_id"].as_str().expect("event id").to_string(),
+                source: "v2_envelope".to_string(),
+                schema_version: 1,
+                event_type: "test.event".to_string(),
+                ts,
+                run_id: run.run_id.clone(),
+                agent_identity: "codex".to_string(),
+                parent_event_id: event
+                    .get("parent_event_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                workspace_path: None,
+                payload_json: event.to_string(),
+            })
+            .expect("insert event");
+    }
+
+    let output =
+        super::run_show_payload(&runtime, Some(&run.run_id), None).expect("show run payload");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("show should produce a payload");
+    };
+    let (document, _) = payload.into_view();
+    let processes = document["provider_processes"]
+        .as_array()
+        .expect("provider process projection");
+    assert_eq!(processes.len(), 2);
+    assert_eq!(processes[0]["pid"], u32::MAX - 2);
+    assert_eq!(processes[0]["finished"], true);
+    assert_eq!(processes[1]["pid"], u32::MAX - 1);
+    assert_eq!(processes[1]["finished"], false);
 }
 
 #[test]

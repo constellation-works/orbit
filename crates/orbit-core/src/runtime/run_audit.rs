@@ -117,6 +117,10 @@ impl OrbitRuntime {
             .map(|step| (step.step_id, step.step_index))
             .collect::<HashMap<_, _>>();
         let mut records: Vec<RunProviderProcess> = Vec::new();
+        // The direct parent of a provider process / completion event is the
+        // invocation that emitted it. Keep that correlation private to this
+        // reconstruction rather than projecting it as a new API field.
+        let mut invocation_parent_by_process_event = HashMap::<String, String>::new();
 
         for event in events {
             match event.body_kind.as_deref() {
@@ -133,6 +137,10 @@ impl OrbitRuntime {
                         .step_id
                         .as_ref()
                         .and_then(|step_id| step_index_by_id.get(step_id).copied());
+                    if let Some(parent_event_id) = &event.parent_event_id {
+                        invocation_parent_by_process_event
+                            .insert(event.event_id.clone(), parent_event_id.clone());
+                    }
                     records.push(RunProviderProcess {
                         run_id: event
                             .raw
@@ -163,16 +171,12 @@ impl OrbitRuntime {
                         liveness: ProcessLiveness::Exited,
                     });
                 }
-                // Events arrive oldest-first, so the newest still-open record in
-                // the same step is the one this exit closes. Retries within a
-                // step therefore pair up in order rather than all collapsing
-                // onto the first spawn.
                 Some("cli_invocation_finished") => {
-                    let Some(record) = records
-                        .iter_mut()
-                        .rev()
-                        .find(|record| !record.finished && record.step_id == event.step_id)
-                    else {
+                    let Some(record) = matching_provider_process_for_completion(
+                        &mut records,
+                        &invocation_parent_by_process_event,
+                        &event,
+                    ) else {
                         continue;
                     };
                     record.finished = true;
@@ -405,6 +409,48 @@ impl OrbitRuntime {
     fn v2_audit_blob_root(&self) -> PathBuf {
         self.data_root().join("state").join("audit").join("blobs")
     }
+}
+
+/// Find the open provider process that a completion can honestly close.
+///
+/// Modern events carry their emitting invocation as `parent_event_id`, so a
+/// completion must match that identity as well as its enclosing step. Older
+/// traces can lack ancestry. In that case a sole ancestry-free open process is
+/// unambiguous (including sequential retries); multiple candidates remain open
+/// rather than guessing which concurrent invocation completed.
+fn matching_provider_process_for_completion<'a>(
+    records: &'a mut [RunProviderProcess],
+    invocation_parent_by_process_event: &HashMap<String, String>,
+    completion: &RunAuditEvent,
+) -> Option<&'a mut RunProviderProcess> {
+    let mut candidates = records
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, record)| !record.finished && record.step_id == completion.step_id)
+        .map(|(index, _)| index);
+
+    let index = match completion.parent_event_id.as_deref() {
+        Some(parent_event_id) => candidates.find(|index| {
+            invocation_parent_by_process_event
+                .get(&records[*index].event_id)
+                .is_some_and(|record_parent| record_parent == parent_event_id)
+        }),
+        None => {
+            let index = candidates.find(|index| {
+                !invocation_parent_by_process_event.contains_key(&records[*index].event_id)
+            })?;
+            if candidates.any(|index| {
+                !invocation_parent_by_process_event.contains_key(&records[index].event_id)
+            }) {
+                None
+            } else {
+                Some(index)
+            }
+        }
+    }?;
+
+    records.get_mut(index)
 }
 
 fn enclosing_step_id(event: &Value, events: &HashMap<String, Value>) -> Option<String> {
