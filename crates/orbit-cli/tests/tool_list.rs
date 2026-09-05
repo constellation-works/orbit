@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use predicates::prelude::*;
 use tempfile::tempdir;
 
@@ -30,6 +31,25 @@ const INACTIVE_TOOL_NAMES: &[&str] = &[
     "orbit.friction.stats",
 ];
 
+/// An `orbit` invocation pinned to the fixture's own home, with no inherited
+/// authority.
+///
+/// ORB-11300: clearing `ORBIT_ROOT` alone left the inherited
+/// `ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` pair in place, and that pair
+/// outranks `HOME` — a suite launched from inside a managed Orbit run listed
+/// and initialized against the live workspace instead of this temp one.
+fn orbit_at_home(work: &std::path::Path, home: &std::path::Path) -> assert_cmd::Command {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(work)
+        .env("HOME", home)
+        .env("USERPROFILE", home);
+    command
+}
+
 #[test]
 fn tool_list_all_shows_inactive_lock_reservation_with_required_input_shape() {
     let temp = tempdir().expect("tempdir");
@@ -38,11 +58,7 @@ fn tool_list_all_shows_inactive_lock_reservation_with_required_input_shape() {
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&work).expect("create work");
 
-    cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    orbit_at_home(&work, &home)
         // `--format table` because `assert_cmd` captures through a pipe, where
         // `auto` resolves to the plain form and suppresses the header
         // (`specs/output-modes.md` §2). The STATUS *column* is what this test
@@ -66,11 +82,7 @@ fn tool_list_json_hides_inactive_tools_by_default() {
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&work).expect("create work");
 
-    let output = cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    let output = orbit_at_home(&work, &home)
         .args(["tool", "list", "--json"])
         .assert()
         .success()
@@ -100,11 +112,7 @@ fn tool_list_json_all_includes_inactive_tools_with_status() {
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&work).expect("create work");
 
-    let output = cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    let output = orbit_at_home(&work, &home)
         .args(["tool", "list", "--json", "--all"])
         .assert()
         .success()
@@ -132,11 +140,7 @@ fn tool_list_json_all_includes_parameter_schema_for_inactive_tools() {
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&work).expect("create work");
 
-    let output = cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    let output = orbit_at_home(&work, &home)
         .args(["tool", "list", "--json", "--all"])
         .assert()
         .success()
@@ -175,11 +179,7 @@ fn tool_list_json_includes_task_show_context_parameters() {
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&work).expect("create work");
 
-    let output = cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    let output = orbit_at_home(&work, &home)
         .args(["tool", "list", "--json"])
         .assert()
         .success()
@@ -223,11 +223,7 @@ fn tool_show_displays_lock_reservation_shapes() {
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&work).expect("create work");
 
-    cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    orbit_at_home(&work, &home)
         .args(["tool", "show", "orbit.task.locks.reserve"])
         .assert()
         .success()
@@ -249,11 +245,7 @@ fn tool_run_rejects_inactive_tools() {
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&work).expect("create work");
 
-    cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    orbit_at_home(&work, &home)
         .args([
             "tool",
             "run",

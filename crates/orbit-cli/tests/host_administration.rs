@@ -2,9 +2,32 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use predicates::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
+
+/// An `orbit` invocation with no inherited authority.
+///
+/// ORB-11300: every fixture here writes durable host identity and workspace
+/// registry state. Clearing `ORBIT_ROOT` alone left the inherited
+/// `ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` pair in place, which outranks
+/// `HOME` and routes writes at the live registry.
+fn orbit(cwd: &std::path::Path) -> assert_cmd::Command {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command.current_dir(cwd);
+    command
+}
+
+/// The same isolation, with `HOME` pinned at the fixture's own global root.
+fn orbit_at_home(cwd: &std::path::Path, home: &std::path::Path) -> assert_cmd::Command {
+    let mut command = orbit(cwd);
+    command.env("HOME", home).env("USERPROFILE", home);
+    command
+}
 
 fn initialized_workspace() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let temp = tempdir().expect("tempdir");
@@ -13,11 +36,7 @@ fn initialized_workspace() -> (tempfile::TempDir, std::path::PathBuf, std::path:
     std::fs::create_dir_all(&home).expect("create home");
     std::fs::create_dir_all(&work).expect("create work");
 
-    cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    orbit_at_home(&work, &home)
         .args([
             "init",
             "--non-interactive",
@@ -28,11 +47,7 @@ fn initialized_workspace() -> (tempfile::TempDir, std::path::PathBuf, std::path:
         ])
         .assert()
         .success();
-    cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    orbit_at_home(&work, &home)
         .args(["workspace", "init", "--name", "local-workspace"])
         .assert()
         .success();
@@ -44,32 +59,20 @@ fn fleet_administration_and_inventory_are_absent_from_cli_and_tool_registry() {
     let (_temp, home, work) = initialized_workspace();
 
     for subcommand in ["register", "list", "retire"] {
-        cargo_bin_cmd!("orbit")
-            .current_dir(&work)
-            .env("HOME", &home)
-            .env("USERPROFILE", &home)
-            .env_remove("ORBIT_ROOT")
+        orbit_at_home(&work, &home)
             .args(["host", subcommand])
             .assert()
             .failure()
             .stderr(predicate::str::contains("unrecognized subcommand"));
     }
 
-    cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    orbit_at_home(&work, &home)
         .args(["workspace", "link"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("unrecognized subcommand"));
 
-    cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    orbit_at_home(&work, &home)
         .args(["tool", "list", "--json"])
         .assert()
         .success()
@@ -91,11 +94,7 @@ fn rename_updates_host_and_local_owner_names_without_changing_stable_identity() 
         .to_string();
     assert_eq!(before["task_prefix"].as_str(), Some("DE"));
 
-    cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    orbit_at_home(&work, &home)
         .args(["host", "rename", "local", "renamed"])
         .assert()
         .success()
@@ -118,11 +117,7 @@ fn rename_updates_host_and_local_owner_names_without_changing_stable_identity() 
         "rename must not change stable owner binding"
     );
 
-    cargo_bin_cmd!("orbit")
-        .current_dir(&work)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("ORBIT_ROOT")
+    orbit_at_home(&work, &home)
         .args(["host", "rename", "local", "again"])
         .assert()
         .failure()
@@ -154,8 +149,7 @@ fn show_reports_the_persisted_identity_outside_a_workspace_without_writing() {
         .as_str()
         .expect("machine id")
         .to_string();
-    let human = cargo_bin_cmd!("orbit")
-        .current_dir(&outside)
+    let human = orbit(&outside)
         .args(["--root", root_arg, "host", "show"])
         .assert()
         .success()
@@ -167,8 +161,7 @@ fn show_reports_the_persisted_identity_outside_a_workspace_without_writing() {
         format!("machine_id: {machine_id}\nhost_id: operator-host\ntask_prefix: DE\n")
     );
 
-    let json_output = cargo_bin_cmd!("orbit")
-        .current_dir(&outside)
+    let json_output = orbit(&outside)
         .args(["--root", root_arg, "host", "show", "--json"])
         .assert()
         .success()
@@ -220,8 +213,7 @@ fn show_rejects_invalid_host_identities_without_replacing_them() {
         }
         let before = std::fs::read(&identity_path).ok();
 
-        cargo_bin_cmd!("orbit")
-            .current_dir(temp.path())
+        orbit(temp.path())
             .args(["--root", root.to_str().expect("utf8 root"), "host", "show"])
             .assert()
             .failure()
@@ -233,12 +225,12 @@ fn show_rejects_invalid_host_identities_without_replacing_them() {
 
 #[test]
 fn host_show_is_listed_in_help() {
-    cargo_bin_cmd!("orbit")
+    orbit(std::path::Path::new("."))
         .args(["host", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("show"));
-    cargo_bin_cmd!("orbit")
+    orbit(std::path::Path::new("."))
         .args(["host", "show", "--help"])
         .assert()
         .success()

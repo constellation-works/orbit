@@ -20,6 +20,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
+use orbit_common::test_env;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
@@ -153,24 +154,15 @@ impl McpWorkspace {
 
     fn orbit_program_command(program: &Path, work: &Path, home: &Path) -> Command {
         let mut command = Command::new(program);
+        // ORB-11300: one shared list for every fixture that spawns `orbit`.
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
         command
             .current_dir(work)
             .env("PATH", stub_first_path(&Self::stub_bin_dir(home)))
             .env("HOME", home)
-            .env("USERPROFILE", home)
-            .env_remove("ORBIT_ROOT")
-            .env_remove("ORBIT_SESSION_ID")
-            .env_remove("ORBIT_TASK_ID")
-            .env_remove("ORBIT_RUN_ID")
-            .env_remove("ORBIT_ACTIVITY_ID")
-            .env_remove("ORBIT_STEP_INDEX")
-            .env_remove("ORBIT_AGENT_NAME")
-            .env_remove("ORBIT_AGENT_MODEL")
-            .env_remove("ORBIT_OPERATOR")
-            .env_remove("ORBIT_MANAGED_RUN_CONTEXT")
-            .env_remove("ORBIT_TASK_ACTOR_KIND")
-            .env_remove("ORBIT_REGISTRY_ROOT")
-            .env_remove("ORBIT_WORKSPACE");
+            .env("USERPROFILE", home);
         command
     }
 

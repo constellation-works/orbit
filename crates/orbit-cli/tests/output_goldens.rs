@@ -142,6 +142,12 @@ impl Fixture {
     /// color-configuration sweep.
     fn run(&self, args: &[&str], extra_env: &[(&str, &str)]) -> std::process::Output {
         let mut command = cargo_bin_cmd!("orbit");
+        // ORB-11300: one shared list, so this fixture and its siblings cannot
+        // drift apart on which ambient variable still routes a write. The
+        // pinned identity below is deliberate and applies after the scrub.
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
         command
             .current_dir(&self.work)
             .env("HOME", &self.home)
@@ -149,18 +155,6 @@ impl Fixture {
             .env("COLUMNS", "100")
             .env("ORBIT_AGENT_NAME", "claude")
             .env("ORBIT_AGENT_MODEL", "claude")
-            .env_remove("ORBIT_ROOT")
-            .env_remove("ORBIT_SESSION_ID")
-            .env_remove("ORBIT_TASK_ID")
-            .env_remove("ORBIT_ACTIVE_TASK_ID")
-            .env_remove("ORBIT_RUN_ID")
-            .env_remove("ORBIT_ACTIVITY_ID")
-            .env_remove("ORBIT_STEP_INDEX")
-            .env_remove("ORBIT_OPERATOR")
-            .env_remove("ORBIT_MANAGED_RUN_CONTEXT")
-            .env_remove("ORBIT_TASK_ACTOR_KIND")
-            .env_remove("ORBIT_REGISTRY_ROOT")
-            .env_remove("ORBIT_WORKSPACE")
             .env_remove("ORBIT_FORMAT")
             .env_remove("NO_COLOR")
             .env_remove("CLICOLOR_FORCE")

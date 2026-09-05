@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::Command as StdCommand;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -401,16 +402,16 @@ fn task_ids(value: &Value) -> Vec<String> {
 
 fn run_orbit(cwd: &Path, home: &Path, args: &[&str]) -> assert_cmd::assert::Assert {
     let mut command = cargo_bin_cmd!("orbit");
+    // ORB-11300: this fixture exercises selector resolution, so the inherited
+    // `ORBIT_WORKSPACE`/`ORBIT_REGISTRY_ROOT` pair is exactly the input under
+    // test. Take the whole shared list rather than a local subset.
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env_remove("ORBIT_ROOT")
-        .env_remove("ORBIT_AGENT_NAME")
-        .env_remove("ORBIT_AGENT_MODEL")
-        .env_remove("ORBIT_MANAGED_RUN_CONTEXT")
-        .env_remove("ORBIT_RUN_ID")
-        .env_remove("ORBIT_WORKSPACE")
         .args(args);
     command.assert()
 }

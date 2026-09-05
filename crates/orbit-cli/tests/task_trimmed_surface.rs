@@ -490,46 +490,27 @@ impl TestWorkspace {
 
 fn run_orbit(cwd: &Path, home: &Path, args: &[&str]) -> Output {
     let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env_remove("ORBIT_ROOT")
-        .env_remove("ORBIT_SESSION_ID")
-        .env_remove("ORBIT_TASK_ID")
-        .env_remove("ORBIT_RUN_ID")
-        .env_remove("ORBIT_ACTIVITY_ID")
-        .env_remove("ORBIT_STEP_INDEX")
-        .env_remove("ORBIT_AGENT_NAME")
-        .env_remove("ORBIT_AGENT_MODEL")
-        .env_remove("ORBIT_OPERATOR")
-        .env_remove("ORBIT_MANAGED_RUN_CONTEXT")
-        .env_remove("ORBIT_TASK_ACTOR_KIND")
-        .env_remove("ORBIT_REGISTRY_ROOT")
-        .env_remove("ORBIT_WORKSPACE")
         .args(args);
     command.output().expect("run orbit")
 }
 
 fn run_orbit_as_operator(cwd: &Path, home: &Path, args: &[&str]) -> Output {
     let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env("ORBIT_OPERATOR", "1")
-        .env_remove("ORBIT_ROOT")
-        .env_remove("ORBIT_SESSION_ID")
-        .env_remove("ORBIT_TASK_ID")
-        .env_remove("ORBIT_RUN_ID")
-        .env_remove("ORBIT_ACTIVITY_ID")
-        .env_remove("ORBIT_STEP_INDEX")
-        .env_remove("ORBIT_AGENT_NAME")
-        .env_remove("ORBIT_AGENT_MODEL")
-        .env_remove("ORBIT_MANAGED_RUN_CONTEXT")
-        .env_remove("ORBIT_TASK_ACTOR_KIND")
-        .env_remove("ORBIT_REGISTRY_ROOT")
-        .env_remove("ORBIT_WORKSPACE")
         .args(args);
     command.output().expect("run orbit as operator")
 }
@@ -542,24 +523,19 @@ fn run_orbit_with_identity(
     model: &str,
 ) -> Output {
     let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env_remove("ORBIT_ROOT")
-        .env_remove("ORBIT_SESSION_ID")
-        .env_remove("ORBIT_TASK_ID")
-        .env_remove("ORBIT_RUN_ID")
-        .env_remove("ORBIT_ACTIVITY_ID")
-        .env_remove("ORBIT_STEP_INDEX")
+        // A managed identity this fixture synthesizes itself, on top of a
+        // cleared environment — never the host run's (ORB-11300).
         .env("ORBIT_AGENT_NAME", agent)
         .env("ORBIT_AGENT_MODEL", model)
         .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
         .env("ORBIT_RUN_ID", "task-trimmed-surface-managed")
-        .env_remove("ORBIT_OPERATOR")
-        .env_remove("ORBIT_TASK_ACTOR_KIND")
-        .env_remove("ORBIT_REGISTRY_ROOT")
-        .env_remove("ORBIT_WORKSPACE")
         .args(args);
     command.output().expect("run orbit with managed identity")
 }
