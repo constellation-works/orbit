@@ -30,8 +30,5 @@ spec:
     - --no-remote-export
   stdout_format: envelope
   sandbox: macos-sandbox-exec
-  model_pair_override:
-    strong: claude-sonnet-4.5
-    weak: claude-haiku-4.5
   model_flag: "--model"
   env: {}

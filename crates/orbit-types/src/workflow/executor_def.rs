@@ -122,8 +122,10 @@ pub struct ExecutorDef {
     /// Expected stdout format, serialized as "envelope", "json", or "text".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdout_format: Option<StdoutFormat>,
-    /// Overrides the agent family's default `AgentModelPair` resolution for audit
-    /// canonicalization, envelope rendering, and review attribution.
+    /// Legacy override for the agent family's `AgentModelPair` resolution used
+    /// by older/user-authored definitions for audit canonicalization, envelope
+    /// rendering, and review attribution. Fresh shipped defaults use
+    /// crew-selected models instead.
     ///
     /// Does NOT control which model the subprocess actually runs; operators
     /// should encode runtime model selection in `args`.
@@ -159,14 +161,15 @@ pub struct ExecutorDef {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Override for an agent family's strong/weak `AgentModelPair`.
+/// Legacy override for an agent family's strong/weak `AgentModelPair`.
 ///
 /// Controls how Orbit canonicalizes the agent's model for audit trail,
 /// envelope rendering, and review automation attribution.
 ///
-/// Does NOT control which model the subprocess actually runs. Operators must
-/// encode the runtime model in `args`, and may set `ORBIT_AGENT_MODEL` via
-/// `env:` for explicit audit attribution.
+/// Does NOT control which model the subprocess actually runs. Older or
+/// customized definitions may retain this field; new definitions should use
+/// crew-selected models and `model_flag`. Operators can also set
+/// `ORBIT_AGENT_MODEL` via `env:` for explicit audit attribution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(deny_unknown_fields)]
 pub struct ModelPairOverride {

@@ -14,9 +14,6 @@ spec:
   - --tools
   - default
   stdout_format: envelope
-  model_pair_override:
-    strong: opus
-    weak: sonnet
   model_flag: --model
   env: {}
   sandbox: linux-bwrap

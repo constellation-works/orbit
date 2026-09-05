@@ -2,14 +2,14 @@
 type: design
 summary: "Agent Families — Glossary"
 tags: ["agent-families"]
-last_validated: 2026-08-29
+last_validated: 2026-09-05
 ---
 
 # Agent Families — Glossary
 
 **agent family** — A stable identifier (`claude`, `codex`, `gemini`, `grok`) representing a coherent set of models, CLIs, and integration requirements that Orbit treats uniformly for attribution, execution, and analytics.
 
-**model pair** — The `(orchestrator, helper)` model duo represented by `AgentModelPair`, loaded from an executor's `model_pair_override` via `configured_agent_model_pair()`.
+**model pair** — The legacy `(orchestrator, helper)` model duo represented by `AgentModelPair`. User-authored executor definitions may retain `model_pair_override` for compatibility; shipped defaults use crew-selected models and `model_flag` instead.
 
 **all_agent_families()** — The single source of truth function in `orbit-common` that returns the fixed-size array of supported families. Changing its size is intentionally high-friction.
 

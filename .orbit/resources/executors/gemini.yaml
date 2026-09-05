@@ -13,9 +13,6 @@ spec:
   - -o
   - json
   stdout_format: envelope
-  model_pair_override:
-    strong: gemini-3.1-pro
-    weak: gemini-3-flash
   model_flag: -m
   env: {}
   sandbox: linux-bwrap
