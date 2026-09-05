@@ -1,7 +1,7 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-08-23
+last_updated: 2026-09-05
 last_validated: 2026-09-05
 status: Accepted
 ---
@@ -211,6 +211,7 @@ Retired features stay listed with their `_archive/` path as a historical record.
 |---------|--------|------|
 | Activity / Job | [docs/design/activity-job/](./activity-job/) | codex |
 | Agent Families | [docs/design/agent-families/](./agent-families/) | grok |
+| Automation Triggers | [docs/design/automation-triggers/](./automation-triggers/) | codex |
 | Auditability | [docs/design/auditability/](./auditability/) | codex |
 | Executors | [docs/design/executors/](./executors/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |

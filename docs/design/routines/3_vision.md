@@ -1,8 +1,8 @@
 ---
 title: Routines — Vision
 owner: claude
-last_updated: 2026-08-15
-last_validated: 2026-08-16
+last_updated: 2026-09-05
+last_validated: 2026-09-05
 status: Draft
 feature: routines
 doc_role: vision
@@ -11,7 +11,7 @@ summary: Open questions and prior art for the routines scheduler — leases, eve
 tags: [routines, scheduler]
 paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/**"]
 related_features: [routines, activity-job, host-registry]
-related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319]
+related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-11315]
 ---
 
 # Routines — Vision
@@ -32,10 +32,11 @@ task, implementation, and validation evidence, not by drifting in.
    mode needs a lease: the natural v2 shape is a lease table in one designated host's store,
    reached over SSH (port 22 is the only always-open channel between the current hosts).
    Worth doing only when a real routine needs failover, not before.
-2. **Event triggers.** File-watch, webhook, or run-completion triggers ("reindex after any
-   docs change") require a resident process — the thing v1 deliberately avoids. If bridge
-   ever grows a long-lived daemon on the always-on box, it may be the natural event source,
-   with routines subscribing rather than Orbit growing its own daemon.
+2. **State-driven triggers.** The [shared trigger proposal](../automation-triggers/2_design.md)
+   from [ORB-11315] defines bounded reconciliation of deliveries, preparation eligibility
+   and settled failures over the existing sweep clock. This does not require a resident
+   process. Immediate file-watch/webhook wakeups remain optional future optimizations;
+   the proposal is unimplemented and does not change the current cron-only contract.
 3. **Routine-emitted tasks.** A routine whose job files an Orbit task on findings (nightly
    drift check → task per drift) works today via job semantics; what's open is whether
    routines should get first-class dedup support ("don't file a duplicate of an open task
@@ -118,6 +119,8 @@ External:
 ---
 
 ## Task References
+
+- [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
 
 - [ORB-10001] — authored this design-doc folder (proposal; no implementation).
 - [ORB-10021] — implemented routines v1.

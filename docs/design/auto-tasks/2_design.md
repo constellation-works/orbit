@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-08-30
-last_validated: 2026-08-30
+last_updated: 2026-09-05
+last_validated: 2026-09-05
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -11,7 +11,7 @@ summary: Current implementation of the auto-task record, due-math, host-local cu
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/operations.js"]
 related_features: [auto-tasks]
-related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095]
+related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315]
 ---
 
 # Auto-tasks — Design
@@ -21,9 +21,14 @@ due computation, cursor state, the scheduler pass, and the CRUD surfaces. The
 routine machinery it rides on (cron eval, fire records, dashboard health) is
 documented under `docs/design/routines/`.
 
+The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
+from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
+immutable batches and separate successful-coverage checkpoints. It is proposed
+and unimplemented; existing scheduling and action semantics remain current.
+
 ## 1. The definition record
 
-`AutoTaskDefinition` (`crates/orbit-common/src/types/auto_task.rs`) is a
+`AutoTaskDefinition` (`crates/orbit-types/src/workflow/auto_task.rs`) is a
 `deny_unknown_fields` struct: `schemaVersion`, `name`, `description`, `enabled`,
 `schedule`, `template`, `dedupe`, and provenance (`created_by/at`,
 `updated_by/at`). `schedule` is an untagged enum — `{ cron: "…" }` or
@@ -182,10 +187,10 @@ or mint.
 
 ## 6. Concerns & Honest Limitations
 
-The checked-in `qa-sweep` definition is the first concrete consumer. It files a
-backlog task for crew `qa` every six hours, dedupes while one remains open, and
-asks the executor to validate recent changes hands-on and file real findings
-through Orbit. Its `no-diff-expected` tag lets workflow handoff succeed when the
+The seeded `qa-sweep` definition is disabled by default. When enabled, its
+`50 * * * *` cron mints a backlog task for crew `system` at minute 50 each hour,
+dedupes while one remains open, and asks the executor to validate recent changes
+hands-on and file real findings through Orbit. Its `no-diff-expected` tag lets workflow handoff succeed when the
 validation correctly produces only task-side effects.
 
 The workspace-local `model-price-audit` definition (ORB-10583) is an enabled
@@ -218,6 +223,8 @@ accurate.
   low-risk, but not zero.
 
 ## Task References
+
+- [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
 
 - ORB-10876 — dashboard Operations inspection, toggle, and manual mint.
 - ORB-10149 — Auto-task primitive.
