@@ -87,12 +87,11 @@ pub(super) fn validate_bundles(action: &str, input: &Value) -> Result<Value, Dis
 /// Submit a child v2 Job, link it durably, then block on its terminal state.
 ///
 /// [ORB-10971] Submission and waiting are two observable phases of one
-/// activity. The child's exact run id — the one `orbit.pipeline.invoke`
-/// returned, never one inferred from task status or timestamps — is persisted
-/// into the parent's run state and the audit log *before* the wait begins, so
-/// the dispatch boundary is fail-observable: either a durable child exists and
-/// every reader can name it, or the step fails promptly carrying the concrete
-/// invocation error instead of idling to the wait timeout.
+/// activity. [ORB-11310] Child creation and the first parent link now share the
+/// store transaction that checks the parent's admissions stop; the checkpoint
+/// below adds independent audit evidence before the wait begins. The exact run
+/// id always comes from that durable admission, never from task status or
+/// timestamps.
 ///
 /// [ORB-10819]'s blocking leaf contract is unchanged past that checkpoint: the
 /// activity still returns the child's terminal wait entry, so a following
@@ -103,7 +102,16 @@ pub(super) fn invoke_and_wait(
     input: &Value,
     tool_context: ToolContext,
 ) -> Result<Value, DispatchError> {
-    let wait_context = tool_context.clone();
+    let parent_step_id = child_dispatch::parent_step_id(input);
+    let parent_run_id = child_dispatch::parent_run_id(input);
+    let invoke_context = child_invoke_context(
+        tool_context.clone(),
+        action,
+        parent_run_id,
+        parent_step_id,
+        true,
+    )?;
+    let wait_context = tool_context;
     invoke_and_wait_with(
         runtime,
         action,
@@ -113,7 +121,7 @@ pub(super) fn invoke_and_wait(
                 "orbit.pipeline.invoke",
                 args,
                 Role::Admin,
-                tool_context,
+                invoke_context,
             )
         },
         |args| {
@@ -167,6 +175,14 @@ where
         );
         action_failed(action, message)
     })?;
+    if invoke_output_admissions_stopped(&invoke_output) {
+        return Ok(serde_json::json!({
+            "skipped": true,
+            "status": "succeeded",
+            "reason": "admissions_stopped",
+            "job_name": job_name,
+        }));
+    }
 
     // Phase 2 — link, durably, before blocking on anything.
     let dispatch = child_dispatch::dispatch_from_invoke_output(
@@ -358,10 +374,9 @@ pub(super) fn invoke_detached(
     let parent_run_id = child_dispatch::parent_run_id(input);
     let parent_step_id = child_dispatch::parent_step_id(input);
 
-    // [ORB-11283] Re-check at the submit boundary, not only in classify: a
-    // stop can land after the drain offered work and before this child is
-    // durable. Skipping here admits nothing; failing would take down the
-    // coordinator and is not an admissions stop.
+    // [ORB-11283] This read is a fast path, not the authority: a stop can land
+    // after it. [ORB-11310] The pipeline submission below re-reads the same
+    // state inside the SQLite transaction that creates and links the child.
     if parent_run_id
         .as_deref()
         .is_some_and(|run_id| runtime.drain_admissions_stopped(run_id))
@@ -373,12 +388,19 @@ pub(super) fn invoke_detached(
         }));
     }
 
+    let invoke_context = child_invoke_context(
+        tool_context,
+        action,
+        parent_run_id.clone(),
+        parent_step_id.clone(),
+        false,
+    )?;
     let invoke_output = runtime
         .run_tool_with_context_and_role(
             "orbit.pipeline.invoke",
             invoke_args(&job_name, input),
             Role::Admin,
-            tool_context,
+            invoke_context,
         )
         .map_err(|err| {
             let message = format!("pipeline.invoke failed: {err}");
@@ -392,6 +414,9 @@ pub(super) fn invoke_detached(
             );
             action_failed(action, message)
         })?;
+    if invoke_output_admissions_stopped(&invoke_output) {
+        return Ok(invoke_output);
+    }
 
     // [ORB-10971] A detached child is linked on the same durable checkpoint as
     // a blocked-on one. The caller re-observes it later, so the linkage is the
@@ -417,6 +442,56 @@ pub(super) fn invoke_detached(
         "queued": dispatch.queued,
         "submitted_at": invoke_output.get("submitted_at").cloned(),
     }))
+}
+
+/// Attach trusted dispatch metadata to the engine-owned parent-run context.
+/// Tool input cannot select the parent whose stop governs this admission.
+fn child_invoke_context(
+    mut tool_context: ToolContext,
+    action: &str,
+    parent_run_id: Option<String>,
+    parent_step_id: Option<String>,
+    blocking: bool,
+) -> Result<ToolContext, DispatchError> {
+    if let (Some(owner), Some(parent_run_id)) = (
+        tool_context.reservation_owner.as_ref(),
+        parent_run_id.as_ref(),
+    ) && owner.owner_run_id != *parent_run_id
+    {
+        return Err(action_failed(
+            action,
+            format!(
+                "activity parent run '{}' does not match trusted run owner '{}'",
+                parent_run_id, owner.owner_run_id
+            ),
+        ));
+    }
+    let Some(owner) = tool_context.reservation_owner.as_mut() else {
+        return Ok(tool_context);
+    };
+    let mut metadata = match owner.owner_metadata_json.as_deref() {
+        Some(raw) => serde_json::from_str::<Value>(raw)
+            .map_err(|error| action_failed(action, format!("invalid run metadata: {error}")))?,
+        None => serde_json::json!({}),
+    };
+    let object = metadata
+        .as_object_mut()
+        .ok_or_else(|| action_failed(action, "run metadata must be a JSON object".to_string()))?;
+    object.insert(
+        "pipeline_child_admission".to_string(),
+        serde_json::json!({
+            "action": action,
+            "parent_step_id": parent_step_id,
+            "blocking": blocking,
+        }),
+    );
+    owner.owner_metadata_json = Some(metadata.to_string());
+    Ok(tool_context)
+}
+
+fn invoke_output_admissions_stopped(output: &Value) -> bool {
+    output.get("skipped").and_then(Value::as_bool) == Some(true)
+        && output.get("reason").and_then(Value::as_str) == Some("admissions_stopped")
 }
 
 /// Re-check live workflow admission for `admission_task_ids` immediately before

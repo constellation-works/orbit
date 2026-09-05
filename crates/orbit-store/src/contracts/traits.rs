@@ -374,6 +374,19 @@ pub trait JobRunStoreBackend: Send + Sync {
         input: Option<serde_json::Value>,
         retry_source_run_id: Option<String>,
     ) -> Result<JobRun, OrbitError>;
+    /// Atomically admit and link a child run unless its parent has stopped
+    /// admissions.
+    ///
+    /// The parent-state read, child insert, and parent dispatch checkpoint are
+    /// committed in one backend transaction. That commit is the
+    /// cross-process linearization point shared with an admissions-stop
+    /// update: a stop that commits first makes this return
+    /// [`ChildJobRunAdmissionOutcome::AdmissionsStopped`], while a child that
+    /// commits first is already linked when stop acknowledges.
+    fn admit_child_job_run(
+        &self,
+        params: &ChildJobRunAdmissionParams,
+    ) -> Result<ChildJobRunAdmissionOutcome, OrbitError>;
     /// [ORB-10965] Apply a `Start` event to a run, atomically and idempotently.
     ///
     /// Scheduling is at-least-once, so this is the single point that decides
@@ -446,6 +459,25 @@ pub trait JobRunStoreBackend: Send + Sync {
         run_id: &str,
         update: &mut dyn FnMut(JobRunState, &mut PipelineState) -> Result<(), OrbitError>,
     ) -> Result<RunStateUpdate, OrbitError>;
+}
+
+/// Durable inputs for one parent-authorized child admission.
+#[derive(Debug, Clone)]
+pub struct ChildJobRunAdmissionParams {
+    pub parent_run_id: String,
+    pub parent_step_id: Option<String>,
+    pub job_id: String,
+    pub action: String,
+    pub blocking: bool,
+    pub attempt: u32,
+    pub scheduled_at: DateTime<Utc>,
+    pub input: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChildJobRunAdmissionOutcome {
+    Admitted(Box<JobRun>),
+    AdmissionsStopped,
 }
 
 #[derive(Debug, Clone)]

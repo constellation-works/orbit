@@ -203,6 +203,7 @@ use crate::adapter::engine_host::v2_host::child_dispatch::{
     CHILD_DISPATCH_AUDIT, CHILD_WAIT_AUDIT,
 };
 use orbit_common::OrbitError;
+use orbit_store::contracts::{ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase, PipelineState,
@@ -258,6 +259,135 @@ fn healthy_invoke_output() -> Value {
         "queued": false,
         "submitted_at": "2026-08-22T19:55:00Z",
     })
+}
+
+fn atomic_child_admission(parent_run_id: &str, blocking: bool) -> ChildJobRunAdmissionParams {
+    ChildJobRunAdmissionParams {
+        parent_run_id: parent_run_id.to_string(),
+        parent_step_id: Some("ship_leaves".to_string()),
+        job_id: "task_auto_pipeline".to_string(),
+        action: if blocking {
+            "invoke_and_wait".to_string()
+        } else {
+            "invoke_detached".to_string()
+        },
+        blocking,
+        attempt: 1,
+        scheduled_at: chrono::Utc::now(),
+        input: Some(json!({ "task_ids": ["ORB-1", "ORB-2"] })),
+    }
+}
+
+fn admitted_output(outcome: ChildJobRunAdmissionOutcome) -> Value {
+    match outcome {
+        ChildJobRunAdmissionOutcome::Admitted(run) => json!({
+            "run_id": run.run_id,
+            "job_name": run.job_id,
+            "queued": false,
+            "submitted_at": run.scheduled_at.to_rfc3339(),
+        }),
+        ChildJobRunAdmissionOutcome::AdmissionsStopped => json!({
+            "skipped": true,
+            "reason": "admissions_stopped",
+            "job_name": "task_auto_pipeline",
+        }),
+    }
+}
+
+/// The exact TOCTOU sequence from ORB-11310: the action observes eligibility,
+/// stop acknowledges, and only then does the stale action attempt its durable
+/// admission. The store boundary, rather than another read in the action,
+/// refuses the child.
+#[test]
+fn stop_between_eligibility_observation_and_admission_creates_no_child() {
+    let (runtime, parent) = parent_runtime();
+    assert!(!runtime.drain_admissions_stopped(&parent));
+
+    let output = invoke_and_wait_with(
+        &runtime,
+        "invoke_and_wait",
+        &ship_leaves_input(&parent),
+        |_| {
+            runtime
+                .stop_workspace_auto_admissions(
+                    crate::application::job::DrainAdmissionsStopRequest {
+                        actor: "tester",
+                        source: "unit",
+                        reason: None,
+                        claim_token: None,
+                    },
+                )
+                .expect("stop acknowledges between observation and admission");
+            runtime
+                .stores()
+                .jobs()
+                .admit_child_job_run(&atomic_child_admission(&parent, true))
+                .map(admitted_output)
+        },
+        |_| panic!("a stopped admission must not wait on a child"),
+    )
+    .expect("admissions stop is an idempotent skip");
+
+    assert_eq!(output["skipped"], true);
+    assert_eq!(output["status"], "succeeded");
+    assert_eq!(output["reason"], "admissions_stopped");
+    assert!(
+        runtime
+            .stores()
+            .jobs()
+            .list_job_runs("task_auto_pipeline")
+            .expect("list children")
+            .is_empty()
+    );
+}
+
+/// Admission's SQLite transaction ends before the action waits. A stop issued
+/// from inside the wait callback therefore completes immediately, while the
+/// already-admitted child remains linked and reaches its ordinary result.
+#[test]
+fn blocking_child_wait_holds_no_admission_lock_and_stop_does_not_cancel_child() {
+    let (runtime, parent) = parent_runtime();
+    let output = invoke_and_wait_with(
+        &runtime,
+        "invoke_and_wait",
+        &ship_leaves_input(&parent),
+        |_| {
+            runtime
+                .stores()
+                .jobs()
+                .admit_child_job_run(&atomic_child_admission(&parent, true))
+                .map(admitted_output)
+        },
+        |args| {
+            runtime
+                .stop_workspace_auto_admissions(
+                    crate::application::job::DrainAdmissionsStopRequest {
+                        actor: "tester",
+                        source: "unit",
+                        reason: None,
+                        claim_token: None,
+                    },
+                )
+                .expect("stop must not deadlock behind child wait");
+            let child_run_id = args["run_ids"][0].as_str().expect("child run id");
+            Ok(json!({
+                "results": [{ "run_id": child_run_id, "status": "succeeded" }]
+            }))
+        },
+    )
+    .expect("already-admitted child completes normally");
+
+    assert_eq!(output["status"], "succeeded");
+    let parent_state = runtime
+        .read_run_state(&parent)
+        .expect("read parent")
+        .expect("parent state");
+    assert!(parent_state.admissions_stopped());
+    assert_eq!(parent_state.child_dispatches.len(), 1);
+    let child = runtime
+        .show_job_run(&parent_state.child_dispatches[0].child_run_id)
+        .expect("read child");
+    assert_eq!(child.state, orbit_types::workflow::JobRunState::Pending);
 }
 
 fn recorded_dispatches(runtime: &OrbitRuntime, parent_run_id: &str) -> Vec<ChildDispatch> {

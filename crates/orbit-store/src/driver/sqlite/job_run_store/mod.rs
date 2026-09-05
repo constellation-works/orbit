@@ -6,12 +6,15 @@ use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, JobRunStep, JobTargetType, KnowledgeRunMetrics,
-    PipelineState, RunEvent, RunStateUpdate,
+    ChildDispatch, JobRun, JobRunStartOutcome, JobRunState, JobRunStep, JobTargetType,
+    KnowledgeRunMetrics, PipelineState, RunEvent, RunStateUpdate,
 };
-use rusqlite::TransactionBehavior;
+use rusqlite::{OptionalExtension, TransactionBehavior};
 
-use crate::contracts::{JobRunOrder, JobRunQuery, JobRunStepParams, JobRunStoreBackend};
+use crate::contracts::{
+    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunOrder, JobRunQuery,
+    JobRunStepParams, JobRunStoreBackend,
+};
 use crate::fs::path_safety::validate_path_stem;
 use crate::{Store, parse_timestamp};
 
@@ -145,6 +148,122 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         self.store
             .upsert_job_run_for_workspace(&self.workspace_id, &run, None)?;
         Ok(run)
+    }
+
+    /// [ORB-11310] The admissions-stop flag and durable child creation share
+    /// this SQLite `IMMEDIATE` transaction. SQLite's database writer lock is
+    /// process-wide, unlike a Rust mutex: whichever transaction commits first
+    /// defines the order seen by every process. The child row, its initial
+    /// state, and the parent link commit together, so stop can never
+    /// acknowledge between admission and linkage.
+    fn admit_child_job_run(
+        &self,
+        params: &ChildJobRunAdmissionParams,
+    ) -> Result<ChildJobRunAdmissionOutcome, OrbitError> {
+        validate_path_stem(&params.job_id, "job")?;
+        self.store
+            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                let parent_row = tx
+                    .tx
+                    .query_row(
+                        "SELECT state, pipeline_state_json FROM job_runs \
+                         WHERE workspace_id = ?1 AND run_id = ?2",
+                        rusqlite::params![self.workspace_id, params.parent_run_id],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                    )
+                    .map_err(|error| match error {
+                        rusqlite::Error::QueryReturnedNoRows => OrbitError::not_found(
+                            NotFoundKind::JobRun,
+                            params.parent_run_id.clone(),
+                        ),
+                        other => OrbitError::Store(other.to_string()),
+                    })?;
+                let parent_run_state = JobRunState::from_str(&parent_row.0).map_err(|error| {
+                    OrbitError::Store(format!("invalid job run state: {error}"))
+                })?;
+                if parent_run_state.is_terminal() {
+                    return Err(OrbitError::JobValidation(format!(
+                        "parent job run '{}' is {parent_run_state}; a terminal run admits no further work",
+                        params.parent_run_id
+                    )));
+                }
+                let raw_parent_state = parent_row.1.ok_or_else(|| {
+                    OrbitError::JobValidation(format!(
+                        "parent job run '{}' has no pipeline state; child admission cannot be guarded",
+                        params.parent_run_id
+                    ))
+                })?;
+                let mut parent_state: PipelineState = serde_json::from_str(&raw_parent_state)
+                    .map_err(|error| {
+                        OrbitError::Store(format!("invalid pipeline_state_json: {error}"))
+                    })?;
+                if parent_state.admissions_stopped() {
+                    return Ok(ChildJobRunAdmissionOutcome::AdmissionsStopped);
+                }
+
+                let run_id = next_run_id_conn(
+                    &tx.tx,
+                    &self.workspace_id,
+                    &params.job_id,
+                    params.scheduled_at,
+                )?;
+                let run = JobRun {
+                    run_id: run_id.clone(),
+                    job_id: params.job_id.clone(),
+                    attempt: params.attempt,
+                    state: JobRunState::Pending,
+                    scheduled_at: params.scheduled_at,
+                    started_at: None,
+                    finished_at: None,
+                    duration_ms: None,
+                    created_at: Utc::now(),
+                    pid: None,
+                    pid_start_time: None,
+                    input: params.input.clone(),
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: None,
+                    crew_model: None,
+                    steps: Vec::new(),
+                };
+                let child_state = PipelineState::new(
+                    run_id.clone(),
+                    params.job_id.clone(),
+                    params.input.clone().unwrap_or_else(|| serde_json::json!({})),
+                );
+                parent_state.record_child_dispatch(
+                    ChildDispatch::submitted(
+                        run_id,
+                        params.job_id.clone(),
+                        params.action.clone(),
+                        params.blocking,
+                        false,
+                        params.scheduled_at,
+                    )
+                    .with_parent_step_id(params.parent_step_id.clone()),
+                );
+
+                upsert_job_run_for_workspace_conn(
+                    &tx.tx,
+                    &self.workspace_id,
+                    &run,
+                    Some(&child_state),
+                )?;
+                let parent_state_json = serde_json::to_string_pretty(&parent_state)
+                    .map_err(|error| OrbitError::Store(format!("serialize pipeline state: {error}")))?;
+                tx.tx
+                    .execute(
+                        "UPDATE job_runs SET pipeline_state_json = ?3 \
+                         WHERE workspace_id = ?1 AND run_id = ?2",
+                        rusqlite::params![
+                            self.workspace_id,
+                            params.parent_run_id,
+                            parent_state_json
+                        ],
+                    )
+                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                Ok(ChildJobRunAdmissionOutcome::Admitted(Box::new(run)))
+            })
     }
 
     /// [ORB-10965] The single arbiter of job-run start authority.
@@ -704,6 +823,35 @@ fn upsert_job_run_for_workspace_conn(
     )
     .map_err(|e| OrbitError::Store(e.to_string()))?;
     Ok(())
+}
+
+fn next_run_id_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    job_id: &str,
+    submitted_at: DateTime<Utc>,
+) -> Result<String, OrbitError> {
+    let base = format!("jrun-{}", submitted_at.format("%Y%m%d-%H%M"));
+    for suffix in 1..1024_u32 {
+        let candidate = if suffix == 1 {
+            base.clone()
+        } else {
+            format!("{base}-{suffix}")
+        };
+        let exists = conn
+            .query_row(
+                "SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
+                rusqlite::params![workspace_id, candidate],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|error| OrbitError::Store(error.to_string()))?
+            .is_some();
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+    Ok(format!("{base}-{job_id}"))
 }
 
 fn get_job_run_for_workspace_conn(

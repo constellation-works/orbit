@@ -43,7 +43,7 @@ pub(super) fn execute(
             super::friction_tools::dispatch(runtime, verb, input, model)
         }
         OrbitBuiltinAction::PipelineInvoke => {
-            super::pipeline_tools::invoke(runtime, input, agent, model)
+            super::pipeline_tools::invoke(runtime, input, agent, model, reservation_owner)
         }
         OrbitBuiltinAction::PipelineWait => {
             super::pipeline_tools::wait(runtime, input, agent, model)

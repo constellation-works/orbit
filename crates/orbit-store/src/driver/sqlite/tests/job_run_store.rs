@@ -199,16 +199,18 @@ fn recency_order_truncates_by_finish_time_not_creation_time() {
 /// mutation, and the write are one operation, so a caller can refuse a run that
 /// has terminalized and can never half-apply a change it aborts.
 mod run_state_update {
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Barrier, mpsc};
     use std::thread;
     use std::time::Duration;
 
     use chrono::Utc;
     use orbit_common::OrbitError;
-    use orbit_types::workflow::{JobRunState, PipelineState, RunStateUpdate};
+    use orbit_types::workflow::{ChildDispatchPhase, JobRunState, PipelineState, RunStateUpdate};
 
     use crate::Store;
-    use crate::contracts::JobRunStoreBackend;
+    use crate::contracts::{
+        ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunStoreBackend,
+    };
     use crate::driver::sqlite::job_run_store::SqliteJobRunStore;
 
     fn started_run_with_state(backend: &SqliteJobRunStore, job_id: &str) -> String {
@@ -227,6 +229,19 @@ mod run_state_update {
             .write_run_state(&run.run_id, &state)
             .expect("write state");
         run.run_id
+    }
+
+    fn child_admission(parent_run_id: &str) -> ChildJobRunAdmissionParams {
+        ChildJobRunAdmissionParams {
+            parent_run_id: parent_run_id.to_string(),
+            parent_step_id: Some("leaf_invoke".to_string()),
+            job_id: "task_auto_pipeline".to_string(),
+            action: "invoke_detached".to_string(),
+            blocking: false,
+            attempt: 1,
+            scheduled_at: Utc::now(),
+            input: Some(serde_json::json!({ "task_ids": ["ORB-1"] })),
+        }
     }
 
     #[test]
@@ -382,5 +397,155 @@ mod run_state_update {
             .expect("read state")
             .expect("state exists");
         assert_eq!(stored.drain_worker_limit_revision(), 1);
+    }
+
+    /// [ORB-11310] Reproduce the stale-observation interleaving without a
+    /// timing sleep: admission first observes the parent as eligible, then a
+    /// stop transaction takes the SQLite writer lock and pauses before commit,
+    /// and an independent connection attempts child admission while that lock
+    /// is held. Stop commits first, so the serialized admission must observe
+    /// the flag and create nothing.
+    #[test]
+    fn stop_acknowledgement_wins_over_a_stale_child_admission_observation() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let db_path = temp.path().join("orbit.db");
+        let seed = SqliteJobRunStore::new(Store::open(&db_path).expect("seed store"), "ws_a");
+        let parent_run_id = started_run_with_state(&seed, "workspace_auto_pipeline");
+        assert!(
+            !seed
+                .read_run_state(&parent_run_id)
+                .expect("initial eligibility read")
+                .expect("parent state")
+                .admissions_stopped(),
+            "the admission path must first observe an eligible parent"
+        );
+        drop(seed);
+
+        let (stop_holds_lock_tx, stop_holds_lock_rx) = mpsc::channel();
+        let (release_stop_tx, release_stop_rx) = mpsc::channel();
+        let stop_path = db_path.clone();
+        let stop_parent = parent_run_id.clone();
+        let stop = thread::spawn(move || {
+            let backend =
+                SqliteJobRunStore::new(Store::open(&stop_path).expect("stop store"), "ws_a");
+            backend.update_run_state(&stop_parent, &mut |_, state| {
+                state.set_drain_admissions_stop("operator".to_string(), None);
+                stop_holds_lock_tx.send(()).expect("signal stop lock");
+                release_stop_rx.recv().expect("release stop commit");
+                Ok(())
+            })
+        });
+        stop_holds_lock_rx.recv().expect("stop holds writer lock");
+
+        let (admission_attempted_tx, admission_attempted_rx) = mpsc::channel();
+        let admission_path = db_path.clone();
+        let admission_parent = parent_run_id.clone();
+        let admission = thread::spawn(move || {
+            let backend = SqliteJobRunStore::new(
+                Store::open(&admission_path).expect("admission store"),
+                "ws_a",
+            );
+            admission_attempted_tx
+                .send(())
+                .expect("signal admission attempt");
+            backend.admit_child_job_run(&child_admission(&admission_parent))
+        });
+        admission_attempted_rx
+            .recv()
+            .expect("admission attempted after stale read");
+
+        release_stop_tx.send(()).expect("let stop acknowledge");
+        assert_eq!(
+            stop.join().expect("stop thread").expect("stop update"),
+            RunStateUpdate::Updated
+        );
+        assert_eq!(
+            admission
+                .join()
+                .expect("admission thread")
+                .expect("admission result"),
+            ChildJobRunAdmissionOutcome::AdmissionsStopped
+        );
+
+        let stored = SqliteJobRunStore::new(Store::open(&db_path).expect("verify store"), "ws_a");
+        assert!(
+            stored
+                .list_job_runs("task_auto_pipeline")
+                .expect("list children")
+                .is_empty(),
+            "no child may become durable after stop acknowledges"
+        );
+        let parent = stored
+            .read_run_state(&parent_run_id)
+            .expect("read parent")
+            .expect("parent state");
+        assert!(parent.admissions_stopped());
+        assert!(parent.child_dispatches.is_empty());
+    }
+
+    #[test]
+    fn a_child_admitted_before_stop_is_linked_and_left_running() {
+        let backend = SqliteJobRunStore::new(Store::open_in_memory().expect("store"), "ws_a");
+        let parent_run_id = started_run_with_state(&backend, "workspace_auto_pipeline");
+
+        let child = match backend
+            .admit_child_job_run(&child_admission(&parent_run_id))
+            .expect("admit child")
+        {
+            ChildJobRunAdmissionOutcome::Admitted(child) => child,
+            ChildJobRunAdmissionOutcome::AdmissionsStopped => panic!("parent was admitting"),
+        };
+        backend
+            .update_run_state(&parent_run_id, &mut |_, state| {
+                state.set_drain_admissions_stop("operator".to_string(), None);
+                Ok(())
+            })
+            .expect("stop after admission");
+
+        let parent = backend
+            .read_run_state(&parent_run_id)
+            .expect("read parent")
+            .expect("parent state");
+        assert!(parent.admissions_stopped());
+        assert_eq!(parent.child_dispatches.len(), 1);
+        assert_eq!(parent.child_dispatches[0].child_run_id, child.run_id);
+        assert_eq!(
+            parent.child_dispatches[0].phase,
+            ChildDispatchPhase::Submitted
+        );
+        assert_eq!(
+            backend
+                .get_job_run(&child.run_id)
+                .expect("read child")
+                .expect("child run")
+                .state,
+            JobRunState::Pending,
+            "stop is not cancellation"
+        );
+    }
+
+    #[test]
+    fn a_refused_terminal_parent_rolls_back_and_releases_the_writer_lock() {
+        let backend = SqliteJobRunStore::new(Store::open_in_memory().expect("store"), "ws_a");
+        let parent_run_id = started_run_with_state(&backend, "workspace_auto_pipeline");
+        backend
+            .finalize_job_run(&parent_run_id, JobRunState::Success, Utc::now(), Some(1))
+            .expect("finish parent");
+
+        let error = backend
+            .admit_child_job_run(&child_admission(&parent_run_id))
+            .expect_err("terminal parent refuses admission");
+        assert!(matches!(error, OrbitError::JobValidation(_)), "{error:?}");
+        assert!(
+            backend
+                .list_job_runs("task_auto_pipeline")
+                .expect("list children")
+                .is_empty(),
+            "the failed transaction must not leave a child"
+        );
+
+        backend
+            .insert_job_run("unrelated_pipeline", 1, Utc::now(), None, None)
+            .expect("a later writer proves the admission lock was released");
     }
 }
