@@ -263,3 +263,81 @@ fn streaming_log_marks_identity_incomplete_after_the_hard_scan_limit() {
     assert!(!log.checkout_evidence.complete);
     assert!(log.checkout_evidence.commits.is_empty());
 }
+
+/// jrun-20260905-1932, run 33986085270: one commit printed in full on the
+/// checkout command line and abbreviated on the `HEAD is now at` line. Two
+/// spellings of one commit are not a contradiction, and reporting them as two
+/// made an otherwise complete investigation look ambiguous.
+#[test]
+fn an_abbreviated_and_a_full_spelling_are_one_commit() {
+    let tested = "4968f137ab9969c35634496414fdc1637d22fe37";
+    let log = format!(
+        "macOS\tRun actions/checkout@v5\t2026-09-05T19:20:00.0000000Z [command]/usr/bin/git checkout --progress --force {tested}\n\
+         macOS\tRun actions/checkout@v5\t2026-09-05T19:20:01.0000000Z HEAD is now at 4968f13 feat: add Pi\n"
+    );
+
+    let evidence = scan_checkout_evidence(&log, 40);
+
+    assert_eq!(evidence.commits, vec![tested.to_string()]);
+    assert!(evidence.complete);
+}
+
+/// jrun-20260905-1932, run 33986582084: a pull-request merge checkout whose
+/// subject quotes both parents. The merge commit is what the runner tested;
+/// the parents are prose that happens to be hex.
+#[test]
+fn merge_parents_quoted_in_a_checkout_subject_are_not_checkout_identity() {
+    let merge = "7dcd45b8a214e861ad533c6d03257cd3948514f4";
+    let head = "d5b3f2a1c7e94806b1ad3ee0f1c2a9b8d7e6f504";
+    let base = "22037486aa1bb2cc3dd4ee5ff60718293a4b5c6d";
+    let log = format!(
+        "website\tRun actions/checkout@v5\t2026-09-05T19:20:00.0000000Z  * branch {head} -> FETCH_HEAD\n\
+         website\tRun actions/checkout@v5\t2026-09-05T19:20:01.0000000Z HEAD is now at {merge} Merge {head} into {base}\n"
+    );
+
+    let evidence = scan_checkout_evidence(&log, 40);
+
+    assert_eq!(evidence.commits, vec![merge.to_string()]);
+    assert!(
+        evidence.lines.iter().any(|line| line.contains(head)),
+        "the fetched head stays visible as evidence: {:?}",
+        evidence.lines
+    );
+}
+
+/// The reductions above must not become a way to launder a real disagreement
+/// into a confident answer.
+#[test]
+fn two_checkout_steps_naming_different_commits_stay_two_commits() {
+    let first = "3333333333333333333333333333333333333333";
+    let second = "4444444444444444444444444444444444444444";
+    let log = format!(
+        "ci\tCheckout\t2026-09-05T19:20:00.0000000Z HEAD is now at {first} first\n\
+         ci\tCheckout\t2026-09-05T19:20:01.0000000Z HEAD is now at {second} second\n"
+    );
+
+    let evidence = scan_checkout_evidence(&log, 40);
+
+    assert_eq!(
+        evidence.commits,
+        vec![first.to_string(), second.to_string()]
+    );
+}
+
+/// An abbreviation with two candidate expansions is left abbreviated: picking
+/// one would be a guess presented as evidence.
+#[test]
+fn an_abbreviation_with_rival_expansions_is_not_resolved_to_a_guess() {
+    let short = "abc1234";
+    let first = "abc1234000000000000000000000000000000000";
+    let second = "abc1234111111111111111111111111111111111";
+    let log = format!(
+        "ci\tCheckout\t2026-09-05T19:20:00.0000000Z  * branch {first} -> FETCH_HEAD\n\
+         ci\tCheckout\t2026-09-05T19:20:01.0000000Z  * branch {second} -> FETCH_HEAD\n\
+         ci\tCheckout\t2026-09-05T19:20:02.0000000Z HEAD is now at {short} ambiguous\n"
+    );
+
+    let evidence = scan_checkout_evidence(&log, 40);
+
+    assert_eq!(evidence.commits, vec![short.to_string()]);
+}

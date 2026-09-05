@@ -389,3 +389,76 @@ fn later_security_lookup_failure_is_redacted_retryable_and_writes_nothing() {
         "the first candidate must remain pending until all lookups succeed"
     );
 }
+
+/// The jrun-20260905-1932 aftermath: manual repairs (ORB-11306 for the macOS
+/// regression, ORB-11307 for the Website one) already own both complete
+/// findings while older candidates are still starved of investigation budget.
+/// Dedupe has to run against the complete findings — not be withheld by the
+/// incomplete ones — and the sweep still has to say what it owes.
+#[test]
+fn manual_repairs_dedupe_complete_findings_while_gaps_stay_visible() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let macos_owner = seed_manual_task(
+        &runtime,
+        "Fix red CI: Platform / macOS / cargo test",
+        "Workflow: Platform\nFailing job: macOS\nFailing step: cargo test\n\
+         Normalized error signature: ##[error]linker command failed",
+        TaskStatus::Backlog,
+    );
+    let website_owner = seed_manual_task(
+        &runtime,
+        "Fix red CI: Website / build / sync website",
+        "Workflow: Website\nFailing job: build\nFailing step: sync website\n\
+         Normalized error signature: ##[error]sync command not found",
+        TaskStatus::Backlog,
+    );
+
+    let mut uninvestigated = failure(33_900_000_001, "Platform", "", "", "", "");
+    uninvestigated["investigated"] = json!(false);
+    uninvestigated["failed_jobs"] = json!([]);
+    uninvestigated["log_excerpt"] = json!("");
+    let mut evidence = ci_snapshot(vec![
+        failure(
+            33_986_585_197,
+            "Platform",
+            "macOS",
+            "cargo test",
+            "ci\tmacOS\t2026-09-05T19:20:00Z ##[error]linker command failed\n",
+            CHECKOUT,
+        ),
+        failure(
+            33_986_582_084,
+            "Website",
+            "build",
+            "sync website",
+            "ci\tbuild\t2026-09-05T19:19:00Z ##[error]sync command not found\n",
+            CHECKOUT,
+        ),
+        uninvestigated,
+    ]);
+    evidence["retryable_errors"] = json!([{
+        "stage": "investigation",
+        "operation": "investigation_budget",
+        "run_id": 33_900_000_001_u64,
+        "retryable": true,
+        "message": "current failure was not investigated because max_investigated_runs was exhausted",
+    }]);
+
+    let output = file_ci(&runtime, evidence);
+
+    assert_eq!(output["filed_count"], json!(0), "{output}");
+    let owners = output["skipped_existing"]
+        .as_array()
+        .expect("skipped existing")
+        .iter()
+        .map(|entry| entry["task_id"].as_str().unwrap_or_default().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(owners, vec![macos_owner, website_owner]);
+    assert_eq!(output["audit"]["existing_task_skips"], json!(2));
+    assert_eq!(output["audit"]["deferred_failures"], json!(1));
+    assert_eq!(
+        output["deferred"][0]["run_id"],
+        json!(33_900_000_001_u64),
+        "the starved candidate is still owed: {output}"
+    );
+}

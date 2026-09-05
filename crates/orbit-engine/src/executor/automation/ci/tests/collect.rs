@@ -350,13 +350,16 @@ fn distinct_workflow_refs_keep_independent_failures() {
     let queries = FakeQueries::authenticated()
         .with_head("topic", HEAD)
         .with_head("main", HEAD)
+        // The ref is unscanned — no open pull request carries it — but it is
+        // still live on origin, so its failure is still somebody's to fix.
+        .with_head("side/feature", OLD)
         .with_runs(vec![vec![
             // A newer unsuccessful run on an unscanned ref must not hide the
             // landing-branch failure. Distinct refs stay independently current.
             run_on_branch(
                 50,
                 "ci",
-                "abandoned/feature",
+                "side/feature",
                 OLD,
                 "completed",
                 Some("failure"),
@@ -1193,4 +1196,240 @@ fn same_ref_rerun_success_suppresses_the_resolved_failure() {
         evidence["stale_or_superseded"][0]["superseded_by"]["run_id"],
         json!(40)
     );
+}
+
+/// The jrun-20260905-1932 shape: this workspace lands on `agent-main` while
+/// GitHub still reports `main` as the repository default, and most of the red
+/// runs in the listing belong to task pull requests that merged hours or days
+/// earlier and took their branches with them.
+#[test]
+fn merged_pull_request_branches_are_retired_while_live_refs_stay_current() {
+    let checkout = "ci\tCheckout\tHEAD is now at 3333333333333333333333333333333333333333\n";
+    let queries = FakeQueries::authenticated()
+        .with_head("agent-main", HEAD)
+        .with_head("main", OLD)
+        // The open pull request's branch is live on origin; the merged task
+        // branches are gone.
+        .with_head("orbit/ORB-11299-open", OLD)
+        .with_pull_request(json!({
+            "number": 1373,
+            "url": "https://github.com/acme/orbit/pull/1373",
+            "head_branch": "orbit/ORB-11299-open",
+            "reported_head_sha": OLD,
+        }))
+        .with_runs(vec![vec![
+            run_on_branch(
+                33986585197,
+                "Platform",
+                "agent-main",
+                HEAD,
+                "completed",
+                Some("failure"),
+                "2026-09-05T19:20:00Z",
+            ),
+            run_on_branch(
+                33986582084,
+                "Website",
+                "orbit/ORB-11299-open",
+                OLD,
+                "completed",
+                Some("failure"),
+                "2026-09-05T19:19:00Z",
+            ),
+            run_on_branch(
+                33900000001,
+                "Platform",
+                "orbit/ORB-11201-merged",
+                OLD,
+                "completed",
+                Some("failure"),
+                "2026-09-04T10:00:00Z",
+            ),
+            run_on_branch(
+                33900000002,
+                "Website",
+                "orbit/ORB-11150-merged",
+                OLD,
+                "completed",
+                Some("failure"),
+                "2026-09-03T10:00:00Z",
+            ),
+        ]])
+        .with_run_view(
+            "33986585197",
+            json!({"failed_jobs": [failed_job(5, "macOS")]}),
+        )
+        .with_log("33986585197", false, checkout)
+        .with_run_view(
+            "33986582084",
+            json!({"failed_jobs": [failed_job(6, "build")]}),
+        )
+        .with_log("33986582084", false, checkout);
+
+    let evidence = collect(
+        &queries,
+        &json!({"integration_branch": "agent-main", "max_checkout_log_reads": 1}),
+    )
+    .expect("collect");
+
+    assert_eq!(
+        current_ids(&evidence),
+        [33_986_585_197, 33_986_582_084],
+        "the landing-branch red and the open pull request's red are what is left: {evidence}"
+    );
+    let retired = evidence["stale_or_superseded"]
+        .as_array()
+        .expect("stale array")
+        .iter()
+        .map(|entry| (entry["run_id"].clone(), entry["reason"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        retired,
+        vec![
+            (json!(33_900_000_001_u64), json!("ref_no_longer_exists")),
+            (json!(33_900_000_002_u64), json!("ref_no_longer_exists")),
+        ],
+        "merged task branches are retired, not current: {evidence}"
+    );
+    assert_eq!(
+        evidence["truncation"]["retired_refs"],
+        json!(["orbit/ORB-11150-merged", "orbit/ORB-11201-merged"])
+    );
+}
+
+/// `Website` runs on its own trigger and has no push-workflow counterpart on
+/// the landing branch. Nothing else going green may stand in for it.
+#[test]
+fn a_landing_branch_website_failure_survives_without_a_push_counterpart() {
+    let queries = FakeQueries::authenticated()
+        .with_head("agent-main", HEAD)
+        .with_head("main", OLD)
+        .with_runs(vec![vec![
+            run_on_branch(
+                70,
+                "CI",
+                "agent-main",
+                HEAD,
+                "completed",
+                Some("success"),
+                "2026-09-05T19:30:00Z",
+            ),
+            run_on_branch(
+                71,
+                "Website",
+                "agent-main",
+                HEAD,
+                "completed",
+                Some("failure"),
+                "2026-09-05T19:20:00Z",
+            ),
+        ]])
+        .with_run_view("71", json!({"failed_jobs": [failed_job(9, "deploy")]}))
+        .with_log(
+            "71",
+            false,
+            "website\tdeploy\tHEAD is now at 3333333333333333333333333333333333333333\n\
+             website\tdeploy\t##[error]sync command not found\n",
+        );
+
+    let evidence = collect(
+        &queries,
+        &json!({"integration_branch": "agent-main", "max_checkout_log_reads": 1}),
+    )
+    .expect("collect");
+
+    assert_eq!(
+        current_ids(&evidence),
+        [71],
+        "a green CI run is not evidence about the Website workflow: {evidence}"
+    );
+    assert_eq!(evidence["stale_or_superseded"], json!([]));
+}
+
+/// A branch origin cannot be reached about is left alone. Failing to look is
+/// never evidence that a failure is resolved.
+#[test]
+fn an_unprobeable_branch_keeps_its_failure_current() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_branch_head_error("gone/feature", "fatal: unable to access origin")
+        .with_runs(vec![vec![run_on_branch(
+            60,
+            "ci",
+            "gone/feature",
+            OLD,
+            "completed",
+            Some("failure"),
+            "2026-08-30T05:00:00Z",
+        )]]);
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    assert_eq!(current_ids(&evidence), [60]);
+    assert_eq!(evidence["stale_or_superseded"], json!([]));
+    assert!(
+        evidence["truncation"]["notes"]
+            .as_array()
+            .expect("notes")
+            .iter()
+            .any(|note| note
+                .as_str()
+                .is_some_and(|note| note.contains("could not be checked against origin"))),
+        "the unprobed branch is reported: {evidence}"
+    );
+}
+
+/// A fixed prefix would investigate the same runs every hour and never reach
+/// anything below the cap. The ranked prefix keeps its slots; the last one
+/// rotates.
+#[test]
+fn the_investigation_budget_rotates_through_overflow_candidates() {
+    let checkout = "ci\tbuild\tHEAD is now at 3333333333333333333333333333333333333333\n";
+    let mut queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD);
+    let runs = (0..5_u64)
+        .map(|index| {
+            run(
+                10 + index,
+                &format!("workflow-{index}"),
+                HEAD,
+                "completed",
+                Some("failure"),
+                &format!("2026-08-30T0{index}:00:00Z"),
+            )
+        })
+        .collect::<Vec<_>>();
+    for index in 0..5_u64 {
+        queries = queries
+            .with_run_view(
+                &(10 + index).to_string(),
+                json!({"failed_jobs": [failed_job(5, "build")]}),
+            )
+            .with_log(&(10 + index).to_string(), false, checkout);
+    }
+    let queries = queries.with_runs(vec![runs]);
+
+    let investigated = |cursor: u64| {
+        collect(
+            &queries,
+            &json!({
+                "integration_branch": "topic",
+                "max_investigated_runs": 3,
+                "max_checkout_log_reads": 1,
+                "investigation_cursor": cursor,
+            }),
+        )
+        .expect("collect")["summary"]["investigated_failure_run_ids"]
+            .clone()
+    };
+
+    // Newest first inside the integration tier: 14, 13, 12, 11, 10.
+    assert_eq!(investigated(0), json!([14, 13, 12]));
+    assert_eq!(investigated(1), json!([14, 13, 11]));
+    assert_eq!(investigated(2), json!([14, 13, 10]));
+    // One rotation later the cycle repeats, so nothing is starved and the two
+    // highest-ranked candidates never lose their slots.
+    assert_eq!(investigated(3), json!([14, 13, 12]));
 }

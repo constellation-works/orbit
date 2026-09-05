@@ -983,3 +983,209 @@ fn query_error_prevents_filing_and_remains_retryable() {
             .is_empty()
     );
 }
+
+/// One uninvestigated run, shaped as collection leaves it when the budget runs
+/// out: a URL and a verdict, no job, step, or log.
+fn deferred_failure(run_id: u64, workflow: &str, branch: &str) -> Value {
+    let mut failure = failure(run_id, workflow, "", "", "", "");
+    failure["investigated"] = json!(false);
+    failure["failed_jobs"] = json!([]);
+    failure["log_excerpt"] = json!("");
+    failure["actual_checkout_shas"] = json!([]);
+    failure["checkout_evidence"] = json!([]);
+    failure["head_branch"] = json!(branch);
+    failure["ref_kind"] = json!("pull_request");
+    failure
+}
+
+fn budget_error(run_id: u64) -> Value {
+    json!({
+        "stage": "investigation",
+        "operation": "investigation_budget",
+        "run_id": run_id,
+        "retryable": true,
+        "message": "current failure was not investigated because max_investigated_runs was exhausted",
+    })
+}
+
+/// The jrun-20260905-1932 regression: fourteen candidates, three of them fully
+/// evidenced, and the other eleven starved of investigation budget. The three
+/// complete findings are real, filable defects and must not be withheld
+/// because their neighbours are incomplete.
+#[test]
+fn complete_findings_file_while_incomplete_ones_stay_deferred() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut current = vec![
+        failure(
+            33_986_585_197,
+            "Platform",
+            "macOS",
+            "cargo test",
+            "ci\tmacOS\t2026-09-05T19:20:00Z ##[error]linker command failed\n",
+            CHECKOUT,
+        ),
+        failure(
+            33_986_582_084,
+            "Website",
+            "build",
+            "sync website",
+            "ci\tbuild\t2026-09-05T19:19:00Z ##[error]sync command not found\n",
+            CHECKOUT,
+        ),
+        failure(
+            33_986_085_270,
+            "Pi",
+            "macOS",
+            "cargo build",
+            "ci\tmacOS\t2026-09-05T19:10:00Z ##[error]could not compile orbit-pi\n",
+            CHECKOUT,
+        ),
+    ];
+    let deferred_ids = (0..11_u64)
+        .map(|index| 33_900_000_000 + index)
+        .collect::<Vec<_>>();
+    for run_id in &deferred_ids {
+        current.push(deferred_failure(
+            *run_id,
+            "Platform",
+            "orbit/ORB-11200-older",
+        ));
+    }
+    let mut evidence = snapshot(current);
+    evidence["retryable_errors"] = json!(
+        deferred_ids
+            .iter()
+            .map(|run_id| budget_error(*run_id))
+            .collect::<Vec<_>>()
+    );
+
+    let output = file(&runtime, json!({"ci_evidence": evidence}));
+
+    assert_eq!(output["outcome"], json!("current_failures"));
+    assert_eq!(output["filed_count"], json!(3), "{output}");
+    assert_eq!(filed_task_ids(&output).len(), 3);
+    // The durable outcome is the tasks themselves, not the report.
+    assert_eq!(
+        runtime
+            .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+            .expect("list tasks")
+            .len(),
+        3
+    );
+
+    let deferred = output["deferred"].as_array().expect("deferred array");
+    assert_eq!(deferred.len(), 11);
+    assert_eq!(deferred[0]["run_id"], json!(33_900_000_000_u64));
+    assert_eq!(deferred[0]["investigated"], json!(false));
+    assert_eq!(deferred[0]["retryable"], json!(true));
+    assert_eq!(
+        deferred[0]["reasons"][0]["operation"],
+        json!("investigation_budget")
+    );
+
+    let audit = &output["audit"];
+    assert_eq!(audit["current_failures"], json!(14));
+    assert_eq!(audit["investigated_failures"], json!(3));
+    assert_eq!(audit["tasks_created"], json!(3));
+    assert_eq!(audit["deferred_failures"], json!(11));
+    assert_eq!(audit["retryable_errors"], json!(11));
+    assert_eq!(
+        audit["deferred_failure_run_ids"]
+            .as_array()
+            .expect("deferred ids")
+            .len(),
+        11
+    );
+}
+
+/// The boundary the partial path must not cross. A listing that failed may be
+/// the one holding the newer run that would have superseded a finding, so a
+/// snapshot-wide error still withholds everything — including findings that
+/// look complete.
+#[test]
+fn a_snapshot_wide_discovery_error_still_withholds_a_complete_finding() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut evidence = snapshot(vec![failure(
+        10,
+        "ci",
+        "build",
+        "cargo build",
+        "ci\tbuild\t2026-08-30T01:00:00Z ##[error]expected 3 arguments\n",
+        CHECKOUT,
+    )]);
+    evidence["retryable_errors"] = json!([
+        {
+            "stage": "discovery",
+            "operation": "run_list",
+            "run_id": Value::Null,
+            "retryable": true,
+            "message": "HTTP 502: Bad Gateway",
+        },
+        budget_error(11),
+    ]);
+
+    let error = file_error(&runtime, json!({"ci_evidence": evidence}));
+
+    assert!(error.contains("retryable_error"));
+    assert!(error.contains("run_list"));
+    // The run-scoped error travels with it, so one payload explains the sweep.
+    assert!(error.contains("investigation_budget"));
+    assert!(
+        runtime
+            .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+            .expect("list tasks")
+            .is_empty()
+    );
+}
+
+/// A finding whose own run carries an error is not filed from partial
+/// evidence: per-finding requirements are unchanged, and the gap is stated
+/// rather than papered over.
+#[test]
+fn a_finding_whose_own_run_failed_a_query_is_deferred_not_filed_from_partial_evidence() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut evidence = snapshot(vec![
+        failure(
+            10,
+            "ci",
+            "build",
+            "cargo build",
+            "ci\tbuild\t2026-08-30T01:00:00Z ##[error]expected 3 arguments\n",
+            CHECKOUT,
+        ),
+        failure(
+            11,
+            "Website",
+            "deploy",
+            "sync website",
+            "ci\tdeploy\t2026-08-30T01:00:00Z ##[error]sync command not found\n",
+            CHECKOUT,
+        ),
+    ]);
+    evidence["retryable_errors"] = json!([
+        {
+            "stage": "registration",
+            "operation": "checkout_evidence",
+            "run_id": 11,
+            "retryable": true,
+            "message": "checkout evidence scan reached its hard limit; actual checkout identity is incomplete",
+        }
+    ]);
+
+    let output = file(&runtime, json!({"ci_evidence": evidence}));
+
+    assert_eq!(output["filed_count"], json!(1));
+    assert_eq!(output["filed"][0]["workflow"], json!("ci"));
+    let deferred = output["deferred"].as_array().expect("deferred array");
+    assert_eq!(deferred.len(), 1);
+    assert_eq!(deferred[0]["run_id"], json!(11));
+    assert_eq!(
+        deferred[0]["investigated"],
+        json!(true),
+        "the run was investigated; its evidence is what is incomplete"
+    );
+    assert_eq!(
+        deferred[0]["reasons"][0]["operation"],
+        json!("checkout_evidence")
+    );
+}
