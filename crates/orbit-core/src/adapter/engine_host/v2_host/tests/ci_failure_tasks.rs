@@ -193,6 +193,81 @@ fn no_current_failure_is_a_clean_no_op_and_not_a_capability_problem() {
     );
 }
 
+/// The jrun-20260905-2307 regression: `collect_ci_evidence` deliberately
+/// filters an in-flight run with an observed failed job but unavailable logs
+/// out of `current_failures` (it is retryable, not a repair yet) while still
+/// recording a run-scoped error in `retryable_errors`
+/// (`incomplete_mixed_state_evidence_stays_retryable_until_logs_are_available`
+/// in `orbit-engine`'s collector tests). That error names no row in
+/// `current_failures` for the join-by-run-ID `deferred` construction to
+/// attach to, so it must not be silently dropped and read as a clean
+/// `no_current_failure`.
+#[test]
+fn incomplete_mixed_state_evidence_stays_retryable_through_filing() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    // Shaped exactly as the collector emits it for this case: the mixed-state
+    // run is absent from `current_failures` entirely, and its only trace is
+    // the run-scoped retryable error — passed through unmodified, the same
+    // way the `file` step of `ci_failure_sweep_pipeline` receives
+    // `steps.collect.output.ci_evidence`.
+    let mut evidence = snapshot(Vec::new());
+    evidence["outcome_hint"] = json!("retryable_error");
+    evidence["in_flight"] = json!([{
+        "run_id": 40,
+        "workflow": "ci",
+        "status": "in_progress",
+        "head_branch": "agent-main",
+    }]);
+    evidence["retryable_errors"] = json!([{
+        "stage": "investigation",
+        "operation": "run_logs",
+        "run_id": 40,
+        "retryable": true,
+        "message": "logs are not available until the job finishes",
+    }]);
+
+    let error = file_error(&runtime, json!({"ci_evidence": evidence}));
+
+    assert!(error.contains("retryable_error"));
+    assert!(error.contains("run_logs"));
+    assert!(error.contains("\"run_id\":40"));
+    assert!(
+        runtime
+            .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+            .expect("list tasks")
+            .is_empty(),
+        "a mixed-state run with incomplete logs must never be filed as a clean no-op"
+    );
+}
+
+/// The companion case: a genuinely pending in-flight run that never failed a
+/// job carries no retryable error at all (the collector never reads its logs
+/// or checkout), so it must remain a clean no-op rather than being swept up
+/// by the fix for the mixed-state gap above.
+#[test]
+fn a_pending_in_flight_run_with_no_failed_jobs_is_still_a_no_op() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut evidence = snapshot(Vec::new());
+    evidence["in_flight"] = json!([{
+        "run_id": 40,
+        "workflow": "ci",
+        "status": "in_progress",
+        "head_branch": "agent-main",
+    }]);
+
+    let output = file(&runtime, json!({"ci_evidence": evidence}));
+
+    assert_eq!(output["outcome"], json!("no_current_failure"));
+    assert_eq!(output["filed_count"], json!(0));
+    assert_eq!(output["deferred"], json!([]));
+    assert!(
+        runtime
+            .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+            .expect("list tasks")
+            .is_empty()
+    );
+}
+
 #[test]
 fn one_regression_across_push_and_pull_request_runs_becomes_one_task() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
