@@ -239,7 +239,35 @@ where
             retryable_errors,
         ));
     }
-    let (complete, deferred) = split_deferred_failures(&failures, &run_errors);
+    let (complete, mut deferred) = split_deferred_failures(&failures, &run_errors);
+    // A run-scoped retryable error whose run never made it into
+    // `current_failures` at all — an in-flight run with an observed failed
+    // job but logs collection could not read yet — has no failure row for
+    // `split_deferred_failures` to attach it to. Losing it here is exactly
+    // how that mixed state would read as a clean `no_current_failure` instead
+    // of the retryable gap it is: surface it as its own deferred entry so the
+    // run ID and reason stay visible for a later sweep.
+    let matched_run_ids: BTreeSet<String> = failures.iter().filter_map(run_id_key).collect();
+    for (run_id, reasons) in &run_errors {
+        if matched_run_ids.contains(run_id) {
+            continue;
+        }
+        let run_id_value = reasons
+            .first()
+            .and_then(|reason| reason.get("run_id"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        deferred.push(json!({
+            "run_id": run_id_value,
+            "url": Value::Null,
+            "workflow": Value::Null,
+            "head_branch": Value::Null,
+            "ref_kind": Value::Null,
+            "investigated": false,
+            "retryable": true,
+            "reasons": reasons,
+        }));
+    }
     let audit = deferral_audit(audit, &deferred);
     let clusters = cluster_failures(&complete);
 
