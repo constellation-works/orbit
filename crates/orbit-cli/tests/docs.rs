@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::Output;
 
 use assert_cmd::cargo::cargo_bin_cmd;
-use orbit_common::test_env::harden_dir;
+use orbit_common::test_env::{self, harden_dir};
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
@@ -551,14 +551,18 @@ fn run_orbit_with_companion(
     companion: Option<&std::path::Path>,
 ) -> Output {
     let mut cmd = cargo_bin_cmd!("orbit");
+    // ORB-11300: `HOME`/`ORBIT_HOME` do not outrank the inherited
+    // `ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` pair, so clear the whole
+    // ambient-authority set before pinning this fixture's own paths.
+    test_env::clear_inherited_authority(|name| {
+        cmd.env_remove(name);
+    });
     cmd.current_dir(work)
         .env("HOME", home)
+        .env("USERPROFILE", home)
         .env("ORBIT_HOME", home.join(".orbit-global"))
-        .env_remove("ORBIT_ROOT")
         .env_remove("ORBIT_SEARCH_COMPANION")
         .env_remove("ORBIT_SEARCH_COMPANION_ALLOW_UNSAFE")
-        .env_remove("ORBIT_AGENT_NAME")
-        .env_remove("ORBIT_AGENT_MODEL")
         .args(args);
     if let Some(path) = companion {
         cmd.env("ORBIT_SEARCH_COMPANION", path)

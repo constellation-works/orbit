@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::Output;
 
 use assert_cmd::cargo::cargo_bin_cmd;
-use orbit_common::test_env::harden_dir;
+use orbit_common::test_env::{self, harden_dir};
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
@@ -250,11 +250,15 @@ exit 7
 
 fn run_orbit(cwd: &Path, home: &Path, args: &[&str], companion: Option<&Path>) -> Output {
     let mut command = cargo_bin_cmd!("orbit");
+    // ORB-11300: drop inherited registry/workspace authority before the
+    // companion-specific overrides below.
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env_remove("ORBIT_ROOT")
         .env_remove("ORBIT_SEARCH_COMPANION")
         .env_remove("ORBIT_SEARCH_COMPANION_ALLOW_UNSAFE")
         .args(args);

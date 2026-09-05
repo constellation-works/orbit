@@ -23,6 +23,7 @@ use std::path::Path;
 use std::process::Output;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
 
@@ -233,27 +234,18 @@ impl TestWorkspace {
 }
 
 fn run_orbit(work: &Path, home: &Path, args: &[&str]) -> Output {
-    cargo_bin_cmd!("orbit")
+    let mut command = cargo_bin_cmd!("orbit");
+    // ORB-11300: shared with every other fixture that spawns `orbit`.
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
         .current_dir(work)
         .env("HOME", home)
         .env("USERPROFILE", home)
         // Pin the geometry: width resolution is only consulted for a terminal
         // sink, and these assertions must not depend on the runner's terminal.
         .env("COLUMNS", "120")
-        .env_remove("ORBIT_ROOT")
-        .env_remove("ORBIT_SESSION_ID")
-        .env_remove("ORBIT_TASK_ID")
-        .env_remove("ORBIT_ACTIVE_TASK_ID")
-        .env_remove("ORBIT_RUN_ID")
-        .env_remove("ORBIT_ACTIVITY_ID")
-        .env_remove("ORBIT_STEP_INDEX")
-        .env_remove("ORBIT_AGENT_NAME")
-        .env_remove("ORBIT_AGENT_MODEL")
-        .env_remove("ORBIT_OPERATOR")
-        .env_remove("ORBIT_MANAGED_RUN_CONTEXT")
-        .env_remove("ORBIT_TASK_ACTOR_KIND")
-        .env_remove("ORBIT_REGISTRY_ROOT")
-        .env_remove("ORBIT_WORKSPACE")
         .args(args)
         .output()
         .expect("run orbit")

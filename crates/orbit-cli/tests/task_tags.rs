@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::Output;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
@@ -203,11 +204,16 @@ impl TestWorkspace {
 
 fn run_orbit(cwd: &Path, home: &Path, args: &[&str], stdin: Option<&str>) -> Output {
     let mut command = cargo_bin_cmd!("orbit");
+    // ORB-11300: resetting HOME is not isolation. `ORBIT_REGISTRY_ROOT` and
+    // `ORBIT_WORKSPACE` outrank it, so a suite launched from inside a managed
+    // Orbit run used to add these fixture tasks to the live workspace.
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env_remove("ORBIT_ROOT")
         .args(args);
     if let Some(input) = stdin {
         command.write_stdin(input);

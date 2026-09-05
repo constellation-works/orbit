@@ -26,6 +26,7 @@ use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use orbit_common::test_env;
 use tempfile::tempdir;
 
 /// Upper bound this test allows between SIGTERM and process exit. Generous
@@ -177,10 +178,16 @@ fn free_port() -> u16 {
 }
 
 fn spawn_dashboard(home: &std::path::Path, port: u16) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_orbit"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbit"));
+    // ORB-11300: the dashboard serves whichever workspace it resolves. Without
+    // this the inherited `ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` pair pointed
+    // it at the live one instead of this fixture's empty home.
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env_remove("ORBIT_ROOT")
         .args(["web", "serve", "--port", &port.to_string(), "--no-open"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())

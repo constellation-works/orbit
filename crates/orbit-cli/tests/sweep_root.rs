@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
 
@@ -147,14 +148,13 @@ fn command(
     orbit_root: Option<&Path>,
 ) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
-        .env("USERPROFILE", home)
-        .env_remove("ORBIT_ROOT")
-        .env_remove("ORBIT_MANAGED_RUN_CONTEXT")
-        .env_remove("ORBIT_RUN_ID")
-        .env_remove("ORBIT_REGISTRY_ROOT");
+        .env("USERPROFILE", home);
     if let Some(root) = orbit_root {
         command.env("ORBIT_ROOT", root);
     }
