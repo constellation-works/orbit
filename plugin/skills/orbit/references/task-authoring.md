@@ -88,8 +88,12 @@ job fills them from real inspection. → [orchestration.md](orchestration.md)
   but inert. Only `produces`/`resolves` accept non-task targets; the rest
   require a task ID. A dangling target (unknown in every workspace this host
   can see) succeeds but emits a `TaskRelationDangling` audit event.
-- `parent_id`, `source_task_id` (the bug-introducing task; creation-time only —
-  `update` silently drops it), `tags` (reuse existing before inventing new).
+- `parent_id` is a retired `orbit.task.add` input and is stripped with the
+  other entries in `RETIRED_TASK_ADD_INPUT_FIELDS`; use a `child_of` relation
+  in `relations` when creating a subtask. `source_task_id` is also retired
+  from `orbit.task.add`; for bug tasks, set it after creation with
+  `orbit.task.update` (which accepts the field), and use an empty string there
+  to clear it. `tags` (reuse existing before inventing new).
 - `required_tools: ["<exact.canonical.tool>", ...]` — tools the task must add to
   any agent activity's baseline. Use only exact, active, agent-facing registered
   names; wildcards and prefixes are rejected at dispatch. The list is normalized,
