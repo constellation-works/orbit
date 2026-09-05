@@ -436,6 +436,24 @@ fn neutralize_inner_sandbox_drops_gemini_sandbox_flags() {
 }
 
 #[test]
+fn neutralize_inner_sandbox_drops_antigravity_sandbox_flag() {
+    let mut config = HashMap::new();
+    let mut args = vec![
+        "--input-format".to_string(),
+        "stream-json".to_string(),
+        "--sandbox".to_string(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+    ];
+    neutralize_inner_sandbox("antigravity", &mut config, &mut args);
+    assert!(
+        !args.iter().any(|a| a == "--sandbox"),
+        "antigravity --sandbox should be removed: {args:?}"
+    );
+    assert!(args.iter().any(|a| a == "--input-format"));
+}
+
+#[test]
 fn neutralize_inner_sandbox_drops_grok_sandbox_flag_and_value() {
     let mut config = HashMap::new();
     let mut args = vec![

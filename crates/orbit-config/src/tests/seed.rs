@@ -96,6 +96,31 @@ fn gemini_only_seeds_gemini_and_a_system_crew() {
 }
 
 #[test]
+fn antigravity_only_seeds_antigravity_and_a_system_crew() {
+    let contents = seed_contents(&seed_for(&["antigravity"]));
+    let parsed = parsed_config(&contents);
+
+    assert_eq!(crew_names(&parsed), vec!["antigravity", "system"]);
+    assert_crew(
+        &parsed,
+        "antigravity",
+        "antigravity",
+        "gemini-3.8-flash-high",
+    );
+    assert_crew(&parsed, "system", "antigravity", "gemini-3.8-flash-low");
+    assert_default_crew(&parsed, Some("antigravity"));
+}
+
+#[test]
+fn antigravity_outranks_legacy_gemini_when_both_are_available() {
+    let contents = seed_contents(&seed_for(&["antigravity", "gemini"]));
+    let parsed = parsed_config(&contents);
+    assert_eq!(crew_names(&parsed), vec!["antigravity", "gemini", "system"]);
+    assert_default_crew(&parsed, Some("antigravity"));
+    assert_crew(&parsed, "system", "antigravity", "gemini-3.8-flash-low");
+}
+
+#[test]
 fn grok_only_seeds_grok_and_a_system_crew() {
     let contents = seed_contents(&seed_for(&["grok"]));
     let parsed = parsed_config(&contents);

@@ -203,8 +203,9 @@ fn append_codex_side_write_roots(
 /// Allow the nested Orbit processes launched by provider CLIs to initialize
 /// only the runtime stores they need while staying inside the outer sandbox.
 ///
-/// Gemini and Claude do not have a codex-style `--add-dir` side channel, but
-/// their MCP/tool calls still execute `orbit ...` as a sandbox-inherited child.
+/// Gemini, Antigravity, and Claude do not have a codex-style `--add-dir` side
+/// channel, but their MCP/tool calls still execute `orbit ...` as a
+/// sandbox-inherited child.
 /// Those child processes initialize global logs/audit/databases/tasks plus the
 /// workspace stores exposed by activity tool allowlists.
 ///

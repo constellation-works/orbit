@@ -65,6 +65,15 @@ pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.8-flash";
 /// Default gemini model seeded into crew roles.
 pub const GEMINI_CREW_MODEL: &str = "gemini-3.8-flash";
 
+/// Default Antigravity (`agy`) model: a slug from `agy models` (verified
+/// against Antigravity CLI 1.1.27). Bare Gemini CLI ids such as
+/// `gemini-3.8-flash` are not remapped. [ORB-11299]
+pub const ANTIGRAVITY_DEFAULT_MODEL: &str = "gemini-3.8-flash-high";
+
+/// Cheap-tier Antigravity model used for the bounded system crew. Flash-low
+/// is the documented low-effort sibling of the default high slug.
+pub const ANTIGRAVITY_CREW_MODEL: &str = "gemini-3.8-flash-low";
+
 /// Legacy gemini "strong" model retained for compatibility with executor pairs.
 pub const GEMINI_PAIR_STRONG: &str = "gemini-3.1-pro";
 
@@ -129,6 +138,7 @@ pub fn default_model_for_provider(provider: &str) -> Option<&'static str> {
         "claude" => Some(CLAUDE_DEFAULT_STRONG),
         "codex" => Some(CODEX_DEFAULT_MODEL),
         "gemini" => Some(GEMINI_DEFAULT_MODEL),
+        "antigravity" => Some(ANTIGRAVITY_DEFAULT_MODEL),
         "grok" => Some(GROK_DEFAULT_MODEL),
         "copilot" => Some(COPILOT_DEFAULT_MODEL),
         "cursor" => Some(CURSOR_DEFAULT_MODEL),

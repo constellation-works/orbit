@@ -13,4 +13,4 @@ last_validated: 2026-09-05
 
 **all_agent_families()** — The single source of truth function in `orbit-common` that returns the fixed-size array of supported families. Changing its size is intentionally high-friction.
 
-**executor** — The YAML definition (`crates/orbit-core/assets/executors/<family>.yaml`) that describes how `backend: cli` invokes an agent's CLI.
+**executor** — The YAML definition (`crates/orbit-core/assets/executors/<name>.yaml`) that describes how `backend: cli` invokes an agent's CLI. The name is the execution lane (`antigravity` for `agy`), which is not always the model family (`gemini`).

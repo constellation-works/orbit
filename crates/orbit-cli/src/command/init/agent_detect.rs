@@ -74,6 +74,10 @@ pub struct DetectedAgents {
     pub claude_cli: bool,
     pub codex_cli: bool,
     pub gemini_cli: bool,
+    /// Antigravity CLI (`agy`). Distinct from the legacy `gemini` binary:
+    /// `agy` is the current Google terminal agent, while `gemini` remains the
+    /// enterprise/API-key Gemini CLI. [ORB-11299]
+    pub antigravity_cli: bool,
     pub grok_cli: bool,
     /// The standalone `copilot` CLI (npm `@github/copilot`). The retired
     /// `gh-copilot` gh extension is deliberately not probed: it is a shell
@@ -99,6 +103,7 @@ pub fn detect(probe: &dyn AgentEnvProbe) -> DetectedAgents {
         claude_cli: probe.binary_on_path("claude"),
         codex_cli: probe.binary_on_path("codex"),
         gemini_cli: probe.binary_on_path("gemini"),
+        antigravity_cli: probe.binary_on_path("agy"),
         grok_cli: probe.binary_on_path("grok"),
         copilot_cli: probe.binary_on_path("copilot"),
         cursor_cli: probe.binary_on_path("cursor-agent"),
@@ -119,6 +124,9 @@ pub fn available_crew_families(detected: &DetectedAgents) -> Vec<&'static str> {
     }
     if detected.codex_cli {
         families.push("codex");
+    }
+    if detected.antigravity_cli {
+        families.push("antigravity");
     }
     if detected.gemini_cli {
         families.push("gemini");
@@ -150,16 +158,20 @@ pub fn default_model_for(provider: &str) -> Option<&'static str> {
 
 /// Pick a default provider for the role given a detection snapshot.
 ///
-/// Preference order: first detected CLI in [claude, codex, gemini, grok,
-/// copilot, cursor, pi, ollama], else `claude` as a last resort. New families
-/// are appended after the original four so installing them never changes an
-/// existing host's default provider. [ORB-10946] [ORB-10945] [ORB-11296]
+/// Preference order: first detected CLI in [claude, codex, antigravity,
+/// gemini, grok, copilot, cursor, pi, ollama], else `claude` as a last
+/// resort. Antigravity (`agy`) occupies Gemini CLI's previous slot so a host
+/// with both prefers the current Google terminal CLI. [ORB-10946] [ORB-10945]
+/// [ORB-11296] [ORB-11299]
 pub fn default_provider(detected: &DetectedAgents) -> &'static str {
     if detected.claude_cli {
         return "claude";
     }
     if detected.codex_cli {
         return "codex";
+    }
+    if detected.antigravity_cli {
+        return "antigravity";
     }
     if detected.gemini_cli {
         return "gemini";

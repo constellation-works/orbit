@@ -92,5 +92,54 @@ mod resolution {
             infer_agent_family_from_model("grok3").as_deref(),
             Some("grok")
         );
+        assert_eq!(
+            infer_agent_family_from_model("gemini-3.8-flash-high").as_deref(),
+            Some("gemini")
+        );
+    }
+
+    #[test]
+    fn antigravity_cli_does_not_conflict_with_gemini_model_family() {
+        assert_eq!(
+            normalize_agent_family_for_model(Some("agy"), Some("gemini-3.8-flash-high"))
+                .expect("agy + gemini model")
+                .as_deref(),
+            Some("gemini")
+        );
+        assert_eq!(
+            normalize_agent_family_for_model(Some("antigravity"), Some("gemini-3.8-flash-high"))
+                .expect("antigravity + gemini model")
+                .as_deref(),
+            Some("gemini")
+        );
+        assert_eq!(
+            normalize_agent_family_for_model(Some("/usr/bin/agy"), Some("claude-sonnet-4-6"))
+                .expect("agy can run non-gemini models")
+                .as_deref(),
+            Some("claude")
+        );
+    }
+
+    #[test]
+    fn antigravity_effort_accepts_low_medium_high_and_rejects_xhigh_max() {
+        for effort in [
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+        ] {
+            effort
+                .validate_for_provider_model("antigravity", Some("gemini-3.8-flash-high"))
+                .expect("supported effort");
+        }
+        let err = ReasoningEffort::Xhigh
+            .validate_for_provider_model("antigravity", Some("gemini-3.8-flash-high"))
+            .expect_err("xhigh is unsupported");
+        assert!(err.contains("low, medium, high"), "{err}");
+        assert!(err.contains("not remapped"), "{err}");
+        let legacy = ReasoningEffort::High
+            .validate_for_provider_model("antigravity", Some("gemini-3.8-flash"))
+            .expect_err("legacy gemini CLI id is not remapped");
+        assert!(legacy.contains("gemini-3.8-flash-high"), "{legacy}");
+        assert!(legacy.contains("not remapped"), "{legacy}");
     }
 }

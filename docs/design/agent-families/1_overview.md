@@ -27,7 +27,7 @@ Family defaults were originally also used to pick activity role models, but that
 - **Model Inference:** `agent_from_model()` and `provider_from_model()` in `crates/orbit-types/src/identity/actor.rs`, together with `infer_agent_family_from_model()` in `crates/orbit-types/src/identity/agent_pair.rs`, map concrete model strings to families and providers. `infer_agent_family_from_model()` remains for legacy artifact recovery.
 - **Crew:** A named provider-model assignment loaded from `.orbit/config.toml` under `[crews.<name>]`; every activity dispatch resolves to it.
 - **Default Crew:** `[workflow].default_crew` names the workspace fallback when a task does not specify `crew`.
-- **Executor:** A YAML definition in `crates/orbit-core/assets/executors/<family>.yaml` describing how to invoke an agent CLI.
+- **Executor:** A YAML definition in `crates/orbit-core/assets/executors/<name>.yaml` describing how to invoke an agent CLI. The file is named for the execution lane (`antigravity.yaml` for `agy`), which may differ from the model family (`gemini`).
 - **Sandbox Surface:** Provider-specific state directories and lockfile rules required for safe `macos-sandbox-exec` execution.
 
 ## 3. At a Glance

@@ -20,11 +20,20 @@ pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../assets/default
 
 /// Crew families Orbit ships crews for, in the order a seeded config prefers
 /// them. `ollama` is deliberately absent: Orbit ships no `ollama` crew.
-/// Copilot, Cursor, and Pi are appended after the original four families so
-/// adding any of them cannot move an existing host's default crew.
-/// [ORB-10946] [ORB-10945] [ORB-11296]
+/// Antigravity occupies Gemini's previous default-provider slot so a host
+/// with `agy` prefers the current Google terminal CLI. Legacy `gemini` stays
+/// later so enterprise Gemini CLI-only hosts still seed. Copilot, Cursor, and
+/// Pi remain appended after the original families. [ORB-10946] [ORB-10945]
+/// [ORB-11296] [ORB-11299]
 const CREW_FAMILY_PREFERENCE: &[&str] = &[
-    "claude", "codex", "gemini", "grok", "copilot", "cursor", "pi",
+    "claude",
+    "codex",
+    "antigravity",
+    "gemini",
+    "grok",
+    "copilot",
+    "cursor",
+    "pi",
 ];
 
 /// Explicit, host-independent inputs for rendering a fresh `config.toml`.
@@ -157,6 +166,7 @@ fn default_crew_name(seed: &ConfigSeed) -> Option<&'static str> {
         .map(|family| match *family {
             "claude" => "opus",
             "codex" => "astra",
+            "antigravity" => "antigravity",
             "gemini" => "gemini",
             "grok" => "grok",
             "copilot" => "copilot",
@@ -249,8 +259,8 @@ fn render_crews(seed: &ConfigSeed) -> Result<String, OrbitError> {
 /// special-case a family.
 fn default_system_crew(seed: &ConfigSeed) -> Option<CrewSeed> {
     use orbit_common::model_defaults::{
-        CLAUDE_DEFAULT_WEAK, CODEX_LUNA_MODEL, COPILOT_CREW_MODEL, CURSOR_CREW_MODEL,
-        GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, PI_CREW_MODEL,
+        ANTIGRAVITY_CREW_MODEL, CLAUDE_DEFAULT_WEAK, CODEX_LUNA_MODEL, COPILOT_CREW_MODEL,
+        CURSOR_CREW_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, PI_CREW_MODEL,
     };
     let (provider, model) = if seed.has_family("codex") {
         ("codex", CODEX_LUNA_MODEL)
@@ -258,6 +268,8 @@ fn default_system_crew(seed: &ConfigSeed) -> Option<CrewSeed> {
         ("claude", CLAUDE_DEFAULT_WEAK)
     } else if seed.has_family("grok") {
         ("grok", GROK_DEFAULT_MODEL)
+    } else if seed.has_family("antigravity") {
+        ("antigravity", ANTIGRAVITY_CREW_MODEL)
     } else if seed.has_family("gemini") {
         ("gemini", GEMINI_CREW_MODEL)
     } else if seed.has_family("copilot") {

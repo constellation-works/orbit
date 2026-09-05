@@ -276,7 +276,13 @@ const TOKEN_BLOCK_OUTPUT_KEYS: &[&str] = &[
     "output",
 ];
 
-const THOUGHT_KEYS: &[&str] = &["thoughts", "thoughtsTokenCount", "thoughts_token_count"];
+const THOUGHT_KEYS: &[&str] = &[
+    "thoughts",
+    "thoughtsTokenCount",
+    "thoughts_token_count",
+    "thinking_tokens",
+    "thinkingTokens",
+];
 
 /// `None` when no counter was present; otherwise the saturating sum of the
 /// ones that were.
