@@ -94,7 +94,7 @@ them on the Orbit process):
 | `SCCACHE_CACHE_SIZE` | `5G` (sccache LRU) |
 | `ORBIT_COMPILER_CACHE_BIN` | `$HOME/.orbit/cache/bin/sccache`, else `sccache` on `PATH` |
 | `ORBIT_COMPILER_CACHE=0` | Force ordinary rustc |
-| `SCCACHE_BASEDIRS` | Set by the wrapper to the worktree root and `CARGO_TARGET_DIR` so absolute paths strip before hashing |
+| `SCCACHE_BASEDIRS` | For the pinned sccache `v0.17.0`, inert for rustc; Rust path normalization comes from the wrapper's `STABLE_SRC`/`STABLE_TGT` argv and environment rewrite when Linux Bubblewrap stable mounts alias the checkout and target |
 | `CARGO_INCREMENTAL=0` | Recommended for workers; sccache cannot cache rustc incremental invocations |
 
 After upgrading the Orbit binary that contains the Linux cache grant, new

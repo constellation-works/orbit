@@ -127,6 +127,9 @@ fi
 
 export SCCACHE_DIR="$cache_dir"
 export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-5G}"
+# sccache v0.17.0 does not use SCCACHE_BASEDIRS for rustc; retain this export
+# for sccache's non-Rust compatibility. Rust path normalization is performed by
+# the STABLE_SRC/STABLE_TGT rewrite above when the stable mounts are available.
 export SCCACHE_BASEDIRS="${SCCACHE_BASEDIRS:-$STABLE_SRC:$STABLE_TGT:$repo_root:$target_real}"
 debug "enabled bin=$cache_bin dir=$cache_dir"
 exec "$cache_bin" "$@"
