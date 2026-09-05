@@ -22,8 +22,16 @@ const MAX_TASK_COMMENTS: usize = 20;
 ///
 /// Applied after [`MAX_TASK_COMMENTS`] as a second, size-based cut: a handful
 /// of very long comments could still blow out the envelope even under the
-/// count cap.
+/// count cap. Comment creation accepts any non-empty message, so the last
+/// retained comment can exceed this on its own; the projection then cuts the
+/// body itself rather than shipping it whole (see [ORB-11338]).
 const MAX_TASK_COMMENTS_BYTES: usize = 16 * 1024;
+
+/// Marker appended to a comment body cut down to fit
+/// [`MAX_TASK_COMMENTS_BYTES`]. Its own bytes count against the budget, and it
+/// carries no variable-length detail so the cut point is computable in one
+/// pass.
+const COMMENT_TRUNCATION_MARKER: &str = "\n\n[comment truncated to fit the envelope byte budget]";
 
 pub(crate) fn associated_task_ids(input: &Value) -> Vec<String> {
     let mut task_ids = Vec::new();
@@ -142,28 +150,45 @@ fn agent_task_context_json(
         );
     }
 
-    let (kept_comments, omitted_count) = bounded_task_comments(comments);
+    let bounded_comments = bounded_task_comments(comments);
     context.insert(
         "comments".to_string(),
-        serde_json::to_value(kept_comments).unwrap_or_else(|_| Value::Array(Vec::new())),
+        serde_json::to_value(&bounded_comments.comments)
+            .unwrap_or_else(|_| Value::Array(Vec::new())),
     );
-    if omitted_count > 0 {
+    if bounded_comments.omitted_count > 0 || bounded_comments.body_truncated {
         context.insert("comments_truncated".to_string(), Value::Bool(true));
+    }
+    if bounded_comments.omitted_count > 0 {
         context.insert(
             "comments_omitted_count".to_string(),
-            Value::Number(omitted_count.into()),
+            Value::Number(bounded_comments.omitted_count.into()),
         );
     }
 
     Value::Object(context)
 }
 
+/// The comment projection for one envelope: the retained comments plus what
+/// had to be cut to hold them to [`MAX_TASK_COMMENTS_BYTES`].
+struct BoundedTaskComments {
+    /// Retained comments, still in chronological order. The last body may have
+    /// been cut down; every other body is verbatim.
+    comments: Vec<TaskComment>,
+    /// How many oldest entries were dropped entirely.
+    omitted_count: usize,
+    /// Whether the last retained body was cut down to fit the budget.
+    body_truncated: bool,
+}
+
 /// Keep the newest comments within [`MAX_TASK_COMMENTS`] and
 /// [`MAX_TASK_COMMENTS_BYTES`], dropping the oldest entries first so a
-/// superseding refinement never falls off the envelope. Returns the retained
-/// comments (still in chronological order) and how many oldest entries were
-/// dropped.
-fn bounded_task_comments(comments: &[TaskComment]) -> (&[TaskComment], usize) {
+/// superseding refinement never falls off the envelope.
+///
+/// Dropping entries cannot get under the byte budget once a single comment is
+/// left, and that comment is the newest — the one that can supersede the
+/// description — so it is kept and its body is cut instead ([ORB-11338]).
+fn bounded_task_comments(comments: &[TaskComment]) -> BoundedTaskComments {
     let count_start = comments.len().saturating_sub(MAX_TASK_COMMENTS);
     let mut kept = &comments[count_start..];
 
@@ -175,7 +200,35 @@ fn bounded_task_comments(comments: &[TaskComment]) -> (&[TaskComment], usize) {
         kept = &kept[1..];
     }
 
-    (kept, comments.len() - kept.len())
+    let omitted_count = comments.len() - kept.len();
+    let mut kept = kept.to_vec();
+    // Only reachable with one comment left: the loop above exits early once the
+    // retained window fits, so a longer window is already under budget.
+    let body_truncated = match kept.as_mut_slice() {
+        [only] if only.message.len() > MAX_TASK_COMMENTS_BYTES => {
+            only.message = truncate_comment_body(&only.message);
+            true
+        }
+        _ => false,
+    };
+
+    BoundedTaskComments {
+        comments: kept,
+        omitted_count,
+        body_truncated,
+    }
+}
+
+/// Cut `message` so the result, marker included, fits
+/// [`MAX_TASK_COMMENTS_BYTES`]. The cut lands on a UTF-8 character boundary at
+/// or below the budget, so a multi-byte character is dropped rather than split.
+fn truncate_comment_body(message: &str) -> String {
+    let budget = MAX_TASK_COMMENTS_BYTES.saturating_sub(COMMENT_TRUNCATION_MARKER.len());
+    let mut cut = budget.min(message.len());
+    while cut > 0 && !message.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}{COMMENT_TRUNCATION_MARKER}", &message[..cut])
 }
 
 fn workflow_failure_status_note(task_history: &[TaskHistoryEntry]) -> Option<&str> {
