@@ -140,6 +140,21 @@ fn a_downgrade_is_refused_until_it_is_asked_for_explicitly() {
 }
 
 #[test]
+fn an_explicit_prerelease_downgrade_is_refused_until_it_is_asked_for() {
+    let fixture = Fixture::new("0.19.0-rc.10");
+    fixture.publish("0.19.0-rc.2", FakeBinary::Healthy);
+
+    let mut requested = request();
+    requested.target_version = Some("0.19.0-rc.2".to_string());
+    let error = run_update(&fixture.environment(), &requested).expect_err("downgrade is refused");
+
+    assert!(error.to_string().contains("--allow-downgrade"), "{error}");
+    assert!(error.to_string().contains("0.19.0-rc.2"), "{error}");
+    assert_eq!(fixture.installed_reports(), "orbit 0.19.0-rc.10");
+    assert!(fixture.invocations().is_empty());
+}
+
+#[test]
 fn an_incompatible_downgrade_is_caught_before_the_binary_is_replaced() {
     let fixture = Fixture::new("0.19.0");
     // The older release cannot open state the newer one already migrated, so
@@ -166,6 +181,31 @@ fn an_incompatible_downgrade_is_caught_before_the_binary_is_replaced() {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn an_incompatible_prerelease_downgrade_runs_the_compatibility_preflight() {
+    let fixture = Fixture::new("0.19.0-rc.10");
+    fixture.publish("0.19.0-rc.2", FakeBinary::MigrationFails);
+
+    let mut requested = request();
+    requested.target_version = Some("0.19.0-rc.2".to_string());
+    requested.allow_downgrade = true;
+    let error = run_update(&fixture.environment(), &requested).expect_err("incompatible downgrade");
+
+    assert!(
+        error.to_string().contains("cannot open this workspace"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("nothing was replaced"),
+        "{error}"
+    );
+    assert_eq!(fixture.installed_reports(), "orbit 0.19.0-rc.10");
+    assert_eq!(
+        fixture.invocations(),
+        vec!["0.19.0-rc.2: migrate --dry-run".to_string()]
     );
 }
 
