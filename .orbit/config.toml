@@ -54,6 +54,11 @@ backend = "cli"
 model = "grok-4.6"
 provider = "grok"
 
+[crews.gemini-flash]
+backend = "cli"
+model = "gemini-3.8-flash-high"
+provider = "agy"
+
 
 [pr]
 task_url_template = "https://orbit-cli.com/tasks/{task_id}"
