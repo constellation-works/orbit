@@ -163,6 +163,7 @@ where
             "pilot_candidates": [],
             "skipped_existing": [],
             "skipped_over_cap": [],
+            "deferred": [],
             "audit": audit,
             "detail": "no CI evidence was gathered, so no task was filed; this is not a CI pass",
         }));
@@ -193,27 +194,56 @@ where
         .into_iter()
         .map(normalize_retryable_error)
         .collect();
+    // A gap in one run's evidence is a fact about that run. Letting it also
+    // withhold every complete finding in the same snapshot is how a sweep that
+    // had three fully evidenced regressions in hand filed nothing at all.
+    let (mut snapshot_wide, mut run_errors) = partition_retryable_errors(&retryable_errors);
+    // An uninvestigated failure collection said nothing else about still needs
+    // its own reason; one that already has a recorded cause keeps that cause
+    // rather than being restated generically.
     for failure in &failures {
-        if failure.get("investigated").and_then(Value::as_bool) != Some(true) {
-            retryable_errors.push(json!({
-                "stage": "registration",
-                "operation": "current_failure_not_investigated",
-                "run_id": failure.get("run_id"),
-                "retryable": true,
-                "message": "a current CI failure has no complete investigation and cannot be filed safely",
-            }));
+        if failure.get("investigated").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let run_id = run_id_key(failure);
+        if run_id
+            .as_ref()
+            .is_some_and(|run_id| run_errors.contains_key(run_id))
+        {
+            continue;
+        }
+        let error = json!({
+            "stage": "registration",
+            "operation": "current_failure_not_investigated",
+            "run_id": failure.get("run_id"),
+            "retryable": true,
+            "message": "a current CI failure has no complete investigation and cannot be filed safely",
+        });
+        retryable_errors.push(error.clone());
+        match run_id {
+            Some(run_id) => run_errors.entry(run_id).or_default().push(error),
+            // Without a run ID there is nothing to defer *to*: the finding
+            // cannot be told apart from any other, so the snapshot is unsafe
+            // to file from at all.
+            None => snapshot_wide += 1,
         }
     }
-    if !retryable_errors.is_empty() {
+    if snapshot_wide > 0 {
+        // A snapshot this incomplete cannot be filed from at all: the listing
+        // that failed may be exactly the one holding the newer run that would
+        // have superseded a finding. Report every error, not just the
+        // snapshot-wide ones, so one payload explains the whole sweep.
         return Err(retryable_pipeline_error(
             "collection_or_investigation",
             &audit,
             retryable_errors,
         ));
     }
-    let clusters = cluster_failures(&failures);
+    let (complete, deferred) = split_deferred_failures(&failures, &run_errors);
+    let audit = deferral_audit(audit, &deferred);
+    let clusters = cluster_failures(&complete);
 
-    if !failures.is_empty() && clusters.is_empty() {
+    if !complete.is_empty() && clusters.is_empty() {
         return Err(retryable_pipeline_error(
             "registration",
             &audit,
@@ -227,6 +257,15 @@ where
     }
 
     if clusters.is_empty() {
+        // Nothing was complete enough to file. The gaps are the whole result,
+        // so this stays a retryable error rather than a clean sweep.
+        if !deferred.is_empty() {
+            return Err(retryable_pipeline_error(
+                "collection_or_investigation",
+                &audit,
+                deferred_errors(&deferred),
+            ));
+        }
         return Ok(json!({
             "outcome": OUTCOME_NO_CURRENT_FAILURE,
             "capability": capability,
@@ -236,6 +275,7 @@ where
             "pilot_candidates": [],
             "skipped_existing": [],
             "skipped_over_cap": [],
+            "deferred": [],
             "audit": audit,
             "detail": "the queries ran and found no current, non-superseded failure",
         }));
@@ -417,9 +457,111 @@ where
         "pilot_candidates": pilot_candidates,
         "skipped_existing": skipped_existing,
         "skipped_over_cap": skipped_over_cap,
+        "deferred": deferred,
         "max_tasks": max_tasks,
         "audit": final_audit,
     }))
+}
+
+/// The run a snapshot entry — a retryable error or a current failure — is
+/// about, as a comparable key. Collection emits a numeric `run_id`; the
+/// version-1 `query_errors` shape used a string.
+fn run_id_key(entry: &Value) -> Option<String> {
+    match entry.get("run_id") {
+        Some(Value::Number(number)) => Some(number.to_string()),
+        Some(Value::String(text)) if !text.trim().is_empty() => Some(text.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// Split retryable errors by blast radius.
+///
+/// An error that names a run spoils that run's finding and nothing else. An
+/// error that names none — a repository read, a run listing, a pull-request
+/// listing — leaves the whole snapshot in doubt: any finding it did produce
+/// could be missing the newer run that would have superseded it, so filing
+/// from that snapshot is not safe.
+fn partition_retryable_errors(errors: &[Value]) -> (usize, BTreeMap<String, Vec<Value>>) {
+    let mut snapshot_wide = 0usize;
+    let mut by_run: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for error in errors {
+        match run_id_key(error) {
+            Some(run_id) => by_run.entry(run_id).or_default().push(error.clone()),
+            None => snapshot_wide += 1,
+        }
+    }
+    (snapshot_wide, by_run)
+}
+
+/// Separate the failures that can be filed from the ones whose evidence is
+/// incomplete.
+///
+/// Per-finding evidence requirements are unchanged: a failure is filed only
+/// when collection investigated it fully and no error is recorded against its
+/// run. What changes is that a deferred failure now says so in its own entry
+/// instead of silently withholding its neighbours.
+fn split_deferred_failures(
+    failures: &[Value],
+    run_errors: &BTreeMap<String, Vec<Value>>,
+) -> (Vec<Value>, Vec<Value>) {
+    let mut complete = Vec::new();
+    let mut deferred = Vec::new();
+    for failure in failures {
+        let reasons = run_id_key(failure)
+            .and_then(|run_id| run_errors.get(&run_id).cloned())
+            .unwrap_or_default();
+        let investigated = failure.get("investigated").and_then(Value::as_bool) == Some(true);
+        if reasons.is_empty() && investigated {
+            complete.push(failure.clone());
+            continue;
+        }
+        deferred.push(json!({
+            "run_id": failure.get("run_id"),
+            "url": failure.get("url"),
+            "workflow": failure.get("workflow"),
+            "head_branch": failure.get("head_branch"),
+            "ref_kind": failure.get("ref_kind"),
+            "investigated": investigated,
+            "retryable": true,
+            "reasons": if reasons.is_empty() {
+                vec![json!({
+                    "stage": "registration",
+                    "operation": "current_failure_not_investigated",
+                    "run_id": failure.get("run_id"),
+                    "retryable": true,
+                    "message": "a current CI failure has no complete investigation and cannot be filed safely",
+                })]
+            } else {
+                reasons
+            },
+        }));
+    }
+    (complete, deferred)
+}
+
+/// The deferred entries flattened back into the error list shape, for the
+/// ending where nothing could be filed at all.
+fn deferred_errors(deferred: &[Value]) -> Vec<Value> {
+    deferred
+        .iter()
+        .filter_map(|entry| entry.get("reasons").and_then(Value::as_array))
+        .flat_map(|reasons| reasons.iter().cloned())
+        .collect()
+}
+
+/// Make partial registration legible: an operator reading the audit must be
+/// able to tell "three findings, three filed" from "three findings filed and
+/// eleven still owed".
+fn deferral_audit(mut audit: Value, deferred: &[Value]) -> Value {
+    audit["deferred_failures"] = json!(deferred.len());
+    audit["deferred_failure_run_ids"] = json!(
+        deferred
+            .iter()
+            .filter_map(|entry| entry.get("run_id").cloned())
+            .collect::<Vec<_>>()
+    );
+    audit["retryable_errors"] = json!(deferred_errors(deferred).len());
+    audit
 }
 
 fn audit_summary(evidence: &Value, failures: &[Value]) -> Value {
@@ -452,6 +594,8 @@ fn audit_summary(evidence: &Value, failures: &[Value]) -> Value {
         "created_task_ids": [],
         "existing_task_skips": 0,
         "existing_task_owners": [],
+        "deferred_failures": 0,
+        "deferred_failure_run_ids": [],
         "retryable_errors": 0,
     })
 }

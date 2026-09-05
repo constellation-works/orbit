@@ -34,9 +34,18 @@
 # - No GitHub client or no credentials on this host: `collect` reports
 #   `capability_unavailable` and `file` passes that through unchanged. That is
 #   never reported as a no-current-failure and is never a CI pass.
-# - A discovery, investigation, registration, dedupe, or task-creation error
-#   fails `file` with a bounded `retryable_error` payload. The job retry wrapper
-#   retries the handoff; no current failure is consumed as a clean result.
+# - Errors are separated by blast radius. One that names a run defers only that
+#   finding: it is reported in `file`'s `deferred` list with its reasons and
+#   left for a later sweep, while every complete finding in the same snapshot
+#   still files, dedupes, and pilots. One that names no run — a repository or
+#   listing read, a registration, dedupe, or task-creation failure — or a
+#   snapshot in which nothing was complete enough to file, fails `file` with a
+#   bounded `retryable_error` payload. The job retry wrapper retries the
+#   handoff; no current failure is consumed as a clean result.
+# - Bounded investigation makes progress across sweeps rather than re-spending
+#   its budget on the same refs: red runs on branches origin no longer has are
+#   reported as `ref_no_longer_exists` instead of current, and the last
+#   investigation slot rotates through whatever the cap left over.
 # - Checkout identity is read from the runner-log stream before the bounded
 #   excerpt is formed. The extractor scans no more than 8 MiB per log and
 #   marks the identity incomplete if that hard limit is reached; it never

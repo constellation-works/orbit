@@ -329,6 +329,9 @@ const MAX_CHECKOUT_EVIDENCE_LINE_BYTES: usize = 16 * 1024;
 /// tested, so the two travel as separate fields and are never merged into one
 /// `sha`.
 pub struct CheckoutEvidence {
+    /// The distinct commits the log named as checked out, with an
+    /// abbreviation collapsed into the full SHA it prefixes. More than one
+    /// entry means the log genuinely disagreed with itself.
     pub commits: Vec<String>,
     pub lines: Vec<String>,
     /// False only when identity itself may have been missed: the source byte
@@ -431,6 +434,10 @@ struct CheckoutEvidenceCollector {
     dropping_line: bool,
     commits: Vec<String>,
     seen_commits: HashSet<String>,
+    /// Of the observed tokens, the ones a line actually named as the commit
+    /// that was checked out — as opposed to a merge parent or a fetched ref
+    /// that happened to share the line.
+    named_commits: HashSet<String>,
     lines: Vec<String>,
     complete: bool,
     display_truncated: bool,
@@ -447,6 +454,7 @@ impl CheckoutEvidenceCollector {
             dropping_line: false,
             commits: Vec::new(),
             seen_commits: HashSet::new(),
+            named_commits: HashSet::new(),
             lines: Vec::new(),
             complete: true,
             display_truncated: false,
@@ -491,7 +499,7 @@ impl CheckoutEvidenceCollector {
             self.observe_pending_line();
         }
         CheckoutEvidence {
-            commits: self.commits,
+            commits: canonical_checkout_commits(&self.commits, &self.named_commits),
             lines: self.lines,
             complete: self.complete,
             scanned_bytes: self.scanned_bytes,
@@ -516,7 +524,11 @@ impl CheckoutEvidenceCollector {
         } else {
             self.display_truncated = true;
         }
+        let named = named_checkout_commit(payload, &lowered, in_checkout_step);
         for token in commit_sha_tokens(payload) {
+            if named == Some(token) {
+                self.named_commits.insert(token.to_string());
+            }
             if self.seen_commits.contains(token) {
                 continue;
             }
@@ -588,6 +600,82 @@ fn is_hex(byte: u8) -> bool {
 fn is_bare_commit_sha(payload: &str) -> bool {
     let trimmed = payload.trim();
     trimmed.len() == MAX_SHA_LEN && trimmed.bytes().all(is_hex)
+}
+
+/// The prose `actions/checkout` prints in front of the commit it landed on.
+const HEAD_IS_NOW_AT: &str = "head is now at";
+
+/// The commit this line *names* as checked out, if it names one.
+///
+/// `HEAD is now at 7dcd45b Merge 4968f13 into abc1234` reports one checked-out
+/// commit and then quotes the merge's two parents inside the commit subject.
+/// Only the token directly after the marker is identity; the rest is prose
+/// that happens to be hex. Everything else — a fetched ref, a merge summary —
+/// names no commit and stays incidental evidence.
+fn named_checkout_commit<'a>(
+    payload: &'a str,
+    lowered: &str,
+    in_checkout_step: bool,
+) -> Option<&'a str> {
+    if let Some(marker) = lowered.find(HEAD_IS_NOW_AT) {
+        // `to_ascii_lowercase` rewrites ASCII bytes in place and leaves every
+        // multi-byte sequence alone, so offsets into `lowered` index `payload`.
+        return commit_sha_tokens(&payload[marker + HEAD_IS_NOW_AT.len()..])
+            .into_iter()
+            .next();
+    }
+    (in_checkout_step && is_bare_commit_sha(payload)).then(|| payload.trim())
+}
+
+/// Reduce the observed SHA tokens to the distinct commits actually checked out.
+///
+/// Two reductions, neither of which relaxes identity. A line that *names* the
+/// checked-out commit outranks one that merely quotes a merge parent or a
+/// fetched ref. An abbreviation and the full SHA it prefixes are one commit,
+/// not two — the same runner routinely prints both forms. A real disagreement
+/// between two checkout steps survives both reductions and is still reported
+/// as two commits, and an abbreviation with more than one distinct expansion
+/// is left abbreviated rather than resolved to a guess.
+fn canonical_checkout_commits(observed: &[String], named: &HashSet<String>) -> Vec<String> {
+    let identity: Vec<&String> = if observed.iter().any(|commit| named.contains(commit)) {
+        observed
+            .iter()
+            .filter(|commit| named.contains(*commit))
+            .collect()
+    } else {
+        observed.iter().collect()
+    };
+
+    let mut canonical: Vec<String> = Vec::new();
+    for commit in identity {
+        // `observed` holds distinct tokens, so two expansions of the same
+        // length are two different commits and the abbreviation cannot be
+        // resolved to either of them.
+        let mut longest: Option<&String> = None;
+        let mut contested = false;
+        for candidate in observed
+            .iter()
+            .filter(|candidate| candidate.len() > commit.len() && candidate.starts_with(&**commit))
+        {
+            match longest {
+                Some(current) if current.len() > candidate.len() => {}
+                Some(current) if current.len() == candidate.len() => contested = true,
+                _ => {
+                    longest = Some(candidate);
+                    contested = false;
+                }
+            }
+        }
+        let resolved = if contested {
+            commit
+        } else {
+            longest.unwrap_or(commit)
+        };
+        if !canonical.contains(resolved) {
+            canonical.push(resolved.clone());
+        }
+    }
+    canonical
 }
 
 /// Collect every lowercase-hex token of commit-SHA length in `payload`.

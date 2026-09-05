@@ -49,6 +49,10 @@ const MAX_LOG_MAX_BYTES: u64 = 262_144;
 /// Cap on full-log reads taken purely to evidence a checkout commit. The
 /// failed-step log usually lacks it, and a full log can be tens of megabytes.
 const DEFAULT_MAX_CHECKOUT_LOG_READS: u64 = 3;
+/// Cap on origin probes for branches no scanned head covers. One probe per
+/// distinct branch, and only for branches that actually carry a red run.
+const DEFAULT_MAX_RETIRED_REF_PROBES: u64 = 20;
+const MAX_RETIRED_REF_PROBES: u64 = 100;
 const MAX_RETRYABLE_ERROR_CHARS: usize = 500;
 
 /// Which of the workspace's heads a run belongs to.
@@ -84,6 +88,10 @@ struct Bounds {
     max_investigated_runs: usize,
     log_max_bytes: usize,
     max_checkout_log_reads: usize,
+    max_retired_ref_probes: usize,
+    /// Which overflow candidate this sweep spends its rotating investigation
+    /// slot on. Taken from the collection hour unless the caller pins it.
+    investigation_cursor: u64,
 }
 
 fn bounds_from_input(input: &Value) -> Result<Bounds, OrbitError> {
@@ -113,7 +121,25 @@ fn bounds_from_input(input: &Value) -> Result<Bounds, OrbitError> {
             DEFAULT_MAX_CHECKOUT_LOG_READS,
             MAX_INVESTIGATED_RUNS,
         )? as usize,
+        max_retired_ref_probes: bounded_u64(
+            input,
+            "max_retired_ref_probes",
+            DEFAULT_MAX_RETIRED_REF_PROBES,
+            MAX_RETIRED_REF_PROBES,
+        )? as usize,
+        investigation_cursor: bounded_u64(
+            input,
+            "investigation_cursor",
+            default_investigation_cursor(),
+            u64::MAX,
+        )?,
     })
+}
+
+/// The sweep runs hourly, so the hour advances the rotating investigation slot
+/// exactly once per sweep without any state to persist.
+fn default_investigation_cursor() -> u64 {
+    chrono::Utc::now().timestamp().max(0) as u64 / 3_600
 }
 
 /// Collect one CI evidence snapshot.
@@ -167,11 +193,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         &mut retryable_errors,
     )?;
 
-    let mut latest: Vec<Value> = Vec::new();
-    let mut current: Vec<Value> = Vec::new();
-    let mut stale: Vec<Value> = Vec::new();
-    let mut in_flight: Vec<Value> = Vec::new();
-    let mut mixed_candidates: Vec<Value> = Vec::new();
+    let mut partition = RunPartition::default();
     // One repository-wide query rather than one per ref: a single list is what
     // lets a newer *relevant* success supersede an older failure without
     // asking the ref it ran on whether it has advanced. Selection itself is
@@ -198,15 +220,15 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             bounds.max_runs, bounds.max_runs
         ));
     }
-    partition_runs(
-        &refs,
-        &runs,
-        &mut latest,
-        &mut current,
-        &mut stale,
-        &mut in_flight,
-        &mut mixed_candidates,
-    );
+    let retired = retired_branches(queries, &refs, &runs, &bounds, &mut notes);
+    partition_runs(&refs, &runs, &retired, &mut partition);
+    let RunPartition {
+        latest,
+        mut current,
+        stale,
+        in_flight,
+        mixed_candidates,
+    } = partition;
 
     let mut inspect = Vec::new();
     let mut seen_run_ids = std::collections::BTreeSet::new();
@@ -220,15 +242,21 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
     }
     sort_current_failures(&mut inspect);
     let investigation_candidates = inspect.len();
-    let attempted = investigation_candidates.min(bounds.max_investigated_runs);
+    let selected = investigation_slots(
+        investigation_candidates,
+        bounds.max_investigated_runs,
+        bounds.investigation_cursor,
+    );
+    let attempted = selected.len();
     if investigation_candidates > attempted {
         notes.push(format!(
             "{} of {investigation_candidates} current or mixed-state runs were listed but not \
-             investigated (max_investigated_runs={attempted}); their run URLs are still present",
+             investigated (max_investigated_runs={attempted}); their run URLs are still present, \
+             and the rotating slot reaches a different overflow candidate on the next sweep",
             investigation_candidates - attempted
         ));
-        for failure in inspect.iter().skip(attempted) {
-            if !run_is_completed(failure) {
+        for (index, failure) in inspect.iter().enumerate() {
+            if selected.contains(&index) || !run_is_completed(failure) {
                 continue;
             }
             push_retryable_error(
@@ -242,7 +270,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
     }
     let mut checkout_log_reads = 0usize;
     for (index, failure) in inspect.iter_mut().enumerate() {
-        if index >= attempted {
+        if !selected.contains(&index) {
             failure["investigated"] = json!(false);
             continue;
         }
@@ -318,6 +346,9 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             "log_max_bytes": bounds.log_max_bytes,
             "checkout_log_reads": checkout_log_reads,
             "max_checkout_log_reads": bounds.max_checkout_log_reads,
+            "retired_refs": retired.iter().collect::<Vec<_>>(),
+            "max_retired_ref_probes": bounds.max_retired_ref_probes,
+            "investigation_cursor": bounds.investigation_cursor,
             "notes": notes,
         }),
         "collected_at": chrono::Utc::now().to_rfc3339(),
@@ -440,6 +471,91 @@ fn derive_refs<Q: CiQueries + ?Sized>(
     Ok(refs)
 }
 
+/// Branches that carry a red run but no longer exist on origin.
+///
+/// A task branch is deleted when its pull request merges, so its old red runs
+/// describe code that either landed — where the landing branch's own runs are
+/// the current evidence — or was abandoned. Either way there is no ref left to
+/// fix, and treating those runs as current is what let a backlog of merged
+/// historical pull requests consume every sweep's investigation budget.
+///
+/// The probe is authoritative (origin, not a naming convention) and bounded:
+/// one query per distinct branch that actually carries a red run, and none at
+/// all for a branch already scanned as a landing head or an open pull request.
+/// A probe that fails leaves its branch alone — a failure to reach origin is
+/// never evidence that a failure is resolved.
+fn retired_branches<Q: CiQueries + ?Sized>(
+    queries: &Q,
+    refs: &[ScannedRef],
+    runs: &[Value],
+    bounds: &Bounds,
+    notes: &mut Vec<String>,
+) -> std::collections::BTreeSet<String> {
+    let mut candidates: Vec<&str> = Vec::new();
+    for run in runs {
+        let branch = run_branch(run);
+        if branch.is_empty() || !run_is_completed(run) || !run_is_unsuccessful(run) {
+            continue;
+        }
+        if refs.iter().any(|scanned| scanned.branch == branch) || candidates.contains(&branch) {
+            continue;
+        }
+        candidates.push(branch);
+    }
+
+    let mut retired = std::collections::BTreeSet::new();
+    for (probes, branch) in candidates.iter().enumerate() {
+        if probes >= bounds.max_retired_ref_probes {
+            notes.push(format!(
+                "{} branch(es) carrying red runs were not probed against origin \
+                 (max_retired_ref_probes={}); their failures stay listed as current rather than \
+                 being assumed merged",
+                candidates.len() - probes,
+                bounds.max_retired_ref_probes
+            ));
+            break;
+        }
+        match queries.remote_branch_head(branch) {
+            Ok(None) => {
+                retired.insert((*branch).to_string());
+            }
+            Ok(Some(_)) => {}
+            Err(error) => notes.push(format!(
+                "branch '{branch}' could not be checked against origin ({error}); its failures \
+                 stay listed as current"
+            )),
+        }
+    }
+    retired
+}
+
+/// Which candidates this sweep spends its investigation budget on.
+///
+/// The budget is smaller than the candidate list often enough that a fixed
+/// prefix would mean the same runs are investigated every hour and everything
+/// below the cap is never investigated at all — a permanent starvation that no
+/// number of sweeps resolves. So the ranked prefix keeps all but one slot, and
+/// the last slot rotates through the remainder: the landing-branch failures
+/// that gate delivery still go first, and every other candidate is reached
+/// within one rotation instead of never. With a budget of one there is nothing
+/// to rotate and the highest-ranked candidate keeps the slot.
+fn investigation_slots(
+    candidates: usize,
+    budget: usize,
+    cursor: u64,
+) -> std::collections::BTreeSet<usize> {
+    let attempted = candidates.min(budget);
+    let mut slots: std::collections::BTreeSet<usize> = (0..attempted).collect();
+    if candidates <= attempted || attempted < 2 {
+        return slots;
+    }
+    let rotating = attempted - 1;
+    slots.remove(&rotating);
+    let overflow = candidates - rotating;
+    slots.insert(rotating + (cursor % overflow as u64) as usize);
+    slots
+}
+
 fn head_json(scanned: &ScannedRef) -> Value {
     json!({
         "kind": scanned.kind.as_str(),
@@ -448,6 +564,16 @@ fn head_json(scanned: &ScannedRef) -> Value {
         "pr_number": scanned.pr_number,
         "pr_url": scanned.pr_url,
     })
+}
+
+/// Where each run lands once it has been classified.
+#[derive(Default)]
+struct RunPartition {
+    latest: Vec<Value>,
+    current: Vec<Value>,
+    stale: Vec<Value>,
+    in_flight: Vec<Value>,
+    mixed_candidates: Vec<Value>,
 }
 
 /// Classify repository-wide runs by relevant workflow/ref identity.
@@ -466,11 +592,8 @@ fn head_json(scanned: &ScannedRef) -> Value {
 fn partition_runs(
     refs: &[ScannedRef],
     runs: &[Value],
-    latest_runs: &mut Vec<Value>,
-    current: &mut Vec<Value>,
-    stale: &mut Vec<Value>,
-    in_flight: &mut Vec<Value>,
-    mixed_candidates: &mut Vec<Value>,
+    retired: &std::collections::BTreeSet<String>,
+    out: &mut RunPartition,
 ) {
     let landing_branches = landing_branch_names(refs);
     let mut workflows = std::collections::BTreeMap::<String, Vec<&Value>>::new();
@@ -488,7 +611,8 @@ fn partition_runs(
         let Some(latest) = workflow_runs.first().copied() else {
             continue;
         };
-        latest_runs.push(run_summary(ref_for_run(refs, latest), latest));
+        out.latest
+            .push(run_summary(ref_for_run(refs, latest), latest));
 
         let landing_success = workflow_runs.iter().copied().find(|run| {
             run_is_completed(run)
@@ -520,11 +644,12 @@ fn partition_runs(
             let mut seen_in_flight = false;
             for run in ref_runs.iter().copied() {
                 if !run_is_completed(run) {
-                    in_flight.push(run_summary(ref_for_run(refs, run), run));
+                    out.in_flight.push(run_summary(ref_for_run(refs, run), run));
                     if !seen_in_flight
                         && suppressor.is_none_or(|success| run_order(run) > run_order(success))
                     {
-                        mixed_candidates.push(run_summary(ref_for_run(refs, run), run));
+                        out.mixed_candidates
+                            .push(run_summary(ref_for_run(refs, run), run));
                     }
                     seen_in_flight = true;
                     continue;
@@ -532,10 +657,14 @@ fn partition_runs(
                 if !run_is_unsuccessful(run) {
                     continue;
                 }
+                if retired.contains(run_branch(run)) {
+                    out.stale.push(retired_ref_entry(refs, run));
+                    continue;
+                }
                 if let Some(success) =
                     suppressor.filter(|success| run_order(success) > run_order(run))
                 {
-                    stale.push(stale_entry(
+                    out.stale.push(stale_entry(
                         refs,
                         run,
                         success,
@@ -549,7 +678,7 @@ fn partition_runs(
                             && run_is_unsuccessful(candidate)
                             && run_order(candidate) > run_order(run)
                     }) {
-                        stale.push(stale_entry(
+                        out.stale.push(stale_entry(
                             refs,
                             run,
                             newer,
@@ -558,7 +687,7 @@ fn partition_runs(
                     }
                     continue;
                 }
-                current.push(run_summary(ref_for_run(refs, run), run));
+                out.current.push(run_summary(ref_for_run(refs, run), run));
                 seen_current = true;
             }
         }
@@ -596,6 +725,20 @@ fn is_actionable_current_failure(failure: &Value) -> bool {
         return run_is_unsuccessful(failure);
     }
     has_failed_jobs(failure) && failure.get("investigated").and_then(Value::as_bool) == Some(true)
+}
+
+/// A red run on a branch origin no longer has. Not superseded by a newer run —
+/// there is simply no ref left for the failure to be current on.
+fn retired_ref_entry(refs: &[ScannedRef], run: &Value) -> Value {
+    let mut entry = run_summary(ref_for_run(refs, run), run);
+    entry["reason"] = json!("ref_no_longer_exists");
+    entry["evidence"] = json!(format!(
+        "branch '{}' has no head on origin: its pull request was merged or the branch was \
+         deleted, so this run describes code that is either already landed — where the landing \
+         branch's own runs are the current evidence — or abandoned",
+        run_branch(run)
+    ));
+    entry
 }
 
 fn stale_entry(refs: &[ScannedRef], older: &Value, newer: &Value, reason: &str) -> Value {
