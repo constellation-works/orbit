@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
     CrewConfig, DispatchError, ResolvedActivityTools, ResolvedCliExecutor, ResolvedSandbox,
-    RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate, V2AuditWriter,
+    ResolvedShellExecutor, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate, V2AuditWriter,
 };
 use orbit_store::contracts::{
     InvocationInsertParams, InvocationQuery, InvocationRecord, JobRunStepParams,
@@ -437,6 +437,13 @@ impl RuntimeHost for OrbitRuntime {
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
         cli_executor::resolve_cli_executor(self, provider)
+    }
+
+    fn resolve_local_shell_executor(
+        &self,
+        executor: &str,
+    ) -> Result<ResolvedShellExecutor, DispatchError> {
+        cli_executor::resolve_local_shell_executor(self, executor)
     }
 
     fn provider_cli_config(&self, _provider: &str) -> HashMap<String, String> {

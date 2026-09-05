@@ -40,24 +40,24 @@ pub(crate) struct SpawnError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SandboxDispatchMetadata {
-    pub(super) backend: Option<String>,
-    pub(super) trusted_wrapper: Option<String>,
-    pub(super) probe_outcome: Option<String>,
-    pub(super) write_enforcement: String,
-    pub(super) read_enforcement: String,
+pub(crate) struct SandboxDispatchMetadata {
+    pub(crate) backend: Option<String>,
+    pub(crate) trusted_wrapper: Option<String>,
+    pub(crate) probe_outcome: Option<String>,
+    pub(crate) write_enforcement: String,
+    pub(crate) read_enforcement: String,
 }
 
-pub(super) struct PreparedSandbox<'a> {
-    pub(super) effective: Option<&'a ResolvedSandbox>,
-    pub(super) metadata: SandboxDispatchMetadata,
+pub(crate) struct PreparedSandbox<'a> {
+    pub(crate) effective: Option<&'a ResolvedSandbox>,
+    pub(crate) metadata: SandboxDispatchMetadata,
 }
 
 /// Resolve availability before provider argv construction. This ordering is
 /// security-sensitive: provider-native flags are neutralized only when the
 /// outer wrapper is actually usable, while an explicitly allowed bare
 /// fallback keeps those flags intact.
-pub(super) fn prepare_sandbox_for_dispatch(
+pub(crate) fn prepare_sandbox_for_dispatch(
     sandbox: Option<&ResolvedSandbox>,
 ) -> Result<PreparedSandbox<'_>, SpawnError> {
     match sandbox {
@@ -343,14 +343,14 @@ fn windows_executable_extensions() -> Vec<String> {
 }
 
 #[derive(Debug)]
-pub(super) struct SpawnedChild {
-    pub(super) child: Child,
+pub(crate) struct SpawnedChild {
+    pub(crate) child: Child,
     /// Sandbox profile tempfile, if any. Held until the supervisor returns
     /// so the kernel can keep reading the SBPL profile while the child runs.
-    pub(super) _profile_temp: Option<NamedTempFile>,
+    pub(crate) _profile_temp: Option<NamedTempFile>,
 }
 
-pub(super) fn spawn_child_with_optional_sandbox(
+pub(crate) fn spawn_child_with_optional_sandbox(
     program: &str,
     args: &[String],
     env: &[(String, String)],

@@ -1,4 +1,4 @@
-use orbit_engine::{DispatchError, ResolvedCliExecutor};
+use orbit_engine::{DispatchError, ResolvedCliExecutor, ResolvedShellExecutor};
 use orbit_types::workflow::ExecutorType;
 use orbit_types::workflow::activity_job::{Provider, ProviderEntryPoint};
 
@@ -84,4 +84,56 @@ pub(crate) fn resolve_cli_executor(
             "{err} — no CLI runtime registered"
         ))),
     }
+}
+
+/// Resolve the executor definition backing a `local_shell` deterministic step.
+///
+/// Deliberately separate from [`resolve_cli_executor`]: that function resolves
+/// an *agent* provider and rejects everything that is not `direct_agent` /
+/// `agent_cli`, while this one accepts only `local_shell`. A shell step can
+/// therefore never borrow an agent executor's identity, and an agent activity
+/// can never be pointed at a shell definition.
+///
+/// A definition written before [ORB-11294] spells this family `cli_command`;
+/// `ExecutorType` accepts that spelling as an alias, so a legacy bundled or
+/// user-authored `local-shell` definition loads unchanged and its `command`,
+/// `args`, `env`, and `timeout_seconds` keep working as the step's defaults.
+pub(crate) fn resolve_local_shell_executor(
+    runtime: &OrbitRuntime,
+    executor: &str,
+) -> Result<ResolvedShellExecutor, DispatchError> {
+    let Some(def) = runtime.get_executor_def(executor).map_err(|err| {
+        DispatchError::DeterministicActionFailed {
+            action: "local_shell".to_string(),
+            message: format!("load executor `{executor}`: {err}"),
+        }
+    })?
+    else {
+        return Err(DispatchError::DeterministicActionFailed {
+            action: "local_shell".to_string(),
+            message: format!(
+                "executor `{executor}` is not registered; run `orbit init` to seed the shipped \
+                 definitions or register your own"
+            ),
+        });
+    };
+    if def.executor_type != ExecutorType::LocalShell {
+        return Err(DispatchError::DeterministicActionFailed {
+            action: "local_shell".to_string(),
+            message: format!(
+                "executor `{executor}` has type `{}`; a local_shell step requires a local_shell executor",
+                def.executor_type
+            ),
+        });
+    }
+    Ok(ResolvedShellExecutor {
+        command: def
+            .command
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        args: def.args,
+        env: def.env.into_iter().collect(),
+        timeout_seconds: def.timeout_seconds,
+    })
 }

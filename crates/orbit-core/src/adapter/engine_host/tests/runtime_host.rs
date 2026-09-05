@@ -144,6 +144,7 @@ fn run_worktree_setup(runtime: &OrbitRuntime, task_ids: &[String], run_id: &str)
     orbit_engine::execute_deterministic_action(
         runtime,
         "worktree_setup",
+        &Value::Null,
         &json!({
             "run_id": run_id,
             "task_ids": task_ids,
@@ -522,6 +523,7 @@ fn update_task_automation_records_status_history_as_system() {
     orbit_engine::execute_deterministic_action(
         &runtime,
         "update_task",
+        &Value::Null,
         &json!({
             "task_id": task.id.clone(),
             "status": "review"

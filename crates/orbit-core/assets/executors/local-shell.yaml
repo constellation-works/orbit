@@ -3,6 +3,20 @@ kind: Executor
 metadata:
   name: local-shell
 spec:
-  executor_type: cli_command
+  # Deterministic local command execution, dispatched by the `local_shell`
+  # deterministic action. This executor carries no model, prompt, or agent tool
+  # authority; the activity's own config names the program to run.
+  #
+  # `command` and `args` here are optional defaults for steps that name no
+  # program of their own, `env` is layered onto the resolved [execution.env]
+  # baseline, and `timeout_seconds` is the fallback wall-clock budget.
+  #
+  # No `sandbox` is declared, so shell steps run bare under the process
+  # supervisor and are confined only by the cwd containment check and by
+  # whatever sandbox already contains the Orbit process. Add
+  # `sandbox: macos-sandbox-exec` (translated to `linux-bwrap` on Linux) plus an
+  # activity `fsProfile` to confine them at the kernel; each step reports the
+  # backend it actually ran under.
+  executor_type: local_shell
   args: []
   env: {}

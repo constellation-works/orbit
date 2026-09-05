@@ -2,6 +2,7 @@ mod ci;
 mod dependabot;
 mod input;
 pub(crate) mod review;
+mod shell;
 mod task_update;
 pub(crate) mod vcs;
 
@@ -19,6 +20,12 @@ pub struct StateExecutionContext {
     pub state_dir: Option<PathBuf>,
     pub agent: Option<String>,
     pub model: Option<String>,
+    /// Name of the dispatching activity's `fsProfile`. Actions that spawn a
+    /// subprocess resolve the executor sandbox against it, so a shell step is
+    /// confined by the same filesystem policy as the activity that ran it
+    /// [ORB-11294]. `None` means the caller supplied no profile and the host's
+    /// default applies.
+    pub fs_profile: Option<String>,
 }
 
 pub fn execute_action<
@@ -30,6 +37,7 @@ pub fn execute_action<
 >(
     host: &H,
     action: &str,
+    config: &Value,
     input: &Value,
     _debug: bool,
     _steps_outputs: &HashMap<String, Value>,
@@ -40,7 +48,7 @@ pub fn execute_action<
             "unsupported automation action '{action}'"
         )));
     };
-    execute_engine_action(host, action, input, state_context)
+    execute_engine_action(host, action, config, input, state_context)
 }
 
 pub(crate) fn execute_engine_action<
@@ -52,6 +60,7 @@ pub(crate) fn execute_engine_action<
 >(
     host: &H,
     action: EngineDeterministicAction,
+    config: &Value,
     input: &Value,
     state_context: Option<&StateExecutionContext>,
 ) -> Result<Value, OrbitError> {
@@ -69,6 +78,9 @@ pub(crate) fn execute_engine_action<
         }
         EngineDeterministicAction::GitCommit => vcs::git_commit(host, input),
         EngineDeterministicAction::GitRebase => vcs::rebase_pr_branch(host, input),
+        EngineDeterministicAction::LocalShell => {
+            shell::local_shell(host, config, input, state_context)
+        }
         EngineDeterministicAction::PrFailureHandoff => vcs::pr_failure_handoff(host, input),
         EngineDeterministicAction::GitPush => vcs::push_batch_changes(host, input),
         EngineDeterministicAction::GitMerge => vcs::git_merge(host, input),

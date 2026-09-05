@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use orbit_types::workflow::activity_job::V2AuditEventKind;
@@ -20,6 +21,28 @@ use super::cli_runner::run_cli_backend;
 pub struct ResolvedCliExecutor {
     pub command: String,
     pub args: Vec<String>,
+}
+
+/// The registered `local_shell` executor definition behind a deterministic
+/// shell step, resolved by the host [ORB-11294].
+///
+/// Every field is the *default* the definition contributes; the activity's own
+/// `config` block supplies the step's command and may override the timeout.
+/// Sandbox policy is not repeated here — it stays on the single
+/// [`RuntimeHost::resolve_executor_sandbox`] boundary the CLI runner already
+/// uses.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedShellExecutor {
+    /// Program used when the activity config names no `command`. This is where
+    /// a legacy `cli_command` definition's `command` field lands.
+    pub command: Option<String>,
+    /// Static arguments prepended to the activity's `args`.
+    pub args: Vec<String>,
+    /// Environment entries the definition adds on top of the host's
+    /// `[execution.env]` baseline.
+    pub env: BTreeMap<String, String>,
+    /// Default wall-clock budget for steps that do not set `timeout_ms`.
+    pub timeout_seconds: Option<u64>,
 }
 
 /// Sandbox descriptor for a CLI invocation. The host resolves the executor's
@@ -383,11 +406,13 @@ fn run_deterministic(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(ToOwned::to_owned),
+                fs_profile: fs_profile.map(ToOwned::to_owned),
                 ..crate::executor::automation::StateExecutionContext::default()
             };
             crate::executor::automation::execute_engine_action(
                 host,
                 action,
+                &spec.config,
                 input,
                 Some(&state_context),
             )

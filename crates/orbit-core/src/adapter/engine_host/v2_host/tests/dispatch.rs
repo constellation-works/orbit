@@ -21,6 +21,7 @@ fn dispatch_declared_action(
             orbit_engine::execute_deterministic_action(
                 runtime,
                 engine_action.name(),
+                &serde_json::Value::Null,
                 input,
                 false,
                 &std::collections::HashMap::new(),

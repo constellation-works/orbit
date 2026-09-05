@@ -12,7 +12,16 @@ use crate::resource::ExecutorResourceSpec;
 pub enum ExecutorType {
     AgentCli,
     DirectAgent,
-    CliCommand,
+    /// Deterministic local command execution. Dispatched by the `local_shell`
+    /// deterministic action, never by the agent CLI runner: it carries no
+    /// model, prompt, or agent tool authority.
+    ///
+    /// `cli_command` is the pre-[ORB-11294] spelling of this same executor
+    /// family and stays accepted on load, so a bundled or user-authored
+    /// definition written before the rename keeps working. Definitions are
+    /// re-serialized under the canonical `local_shell` name.
+    #[serde(alias = "cli_command")]
+    LocalShell,
     /// Generic out-of-process executor speaking the External Executor Protocol
     /// v1 (see `docs/design/executors/specs/external-executor-protocol.md`).
     /// Lets operators register a homegrown binary/script without forking core.
@@ -26,7 +35,7 @@ impl ExecutorType {
         match self {
             Self::AgentCli => "agent_cli",
             Self::DirectAgent => "direct_agent",
-            Self::CliCommand => "cli_command",
+            Self::LocalShell => "local_shell",
             Self::External => "external",
         }
     }
@@ -112,7 +121,7 @@ impl fmt::Display for StdoutFormat {
 pub struct ExecutorDef {
     pub name: String,
     /// Executor family, serialized as "agent_cli", "direct_agent",
-    /// "cli_command", or "external".
+    /// "local_shell", or "external".
     pub executor_type: ExecutorType,
     /// For agent_cli: the CLI command (e.g., "claude", "codex")
     #[serde(default, skip_serializing_if = "Option::is_none")]

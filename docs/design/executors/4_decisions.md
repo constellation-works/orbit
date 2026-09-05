@@ -7,11 +7,11 @@ status: Draft
 feature: executors
 doc_role: decisions
 type: design
-summary: Decision log for executor registration and the (now retired) External Executor Protocol.
+summary: Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol.
 tags: [executors]
 paths: ["crates/orbit-types/src/workflow/executor_def.rs"]
 related_features: [executors]
-related_artifacts: [ORB-00384, ORB-00400, ORB-10395]
+related_artifacts: [ORB-00384, ORB-00400, ORB-10395, ORB-11294]
 ---
 
 # Executors — Decisions
@@ -23,6 +23,66 @@ are the load-bearing docs for the shipped External Executor Protocol; placeholde
 executor feature narrative that this work has not established. Add numbered docs
 only when a future executor-architecture task owns that narrative, and retire
 this exception in the same PR.
+
+---
+
+## Restore local-shell as a deterministic v2 action rather than a v1 executor
+
+**Recorded:** 2026-09-05 · [ORB-11294]
+**Paths:** `crates/orbit-engine/src/executor/automation/shell.rs`, `crates/orbit-core/assets/executors/local-shell.yaml`, [specs/local-shell.md](./specs/local-shell.md)
+
+**Context.** [ORB-10395] deleted the v1 executor stack, including the
+`cli_command` implementation, but `assets/executors/local-shell.yaml` kept
+shipping with `executor_type: cli_command`. The asset advertised a capability
+no code could dispatch: a job that referenced it failed, and the definition was
+inert.
+
+**Decision.** Restore local shell execution as a **deterministic action**
+(`local_shell`) on the v2 dispatch path, not by resurrecting the v1 registry.
+The action reuses the `orbit-exec` spawn, sandbox-selection, and supervision
+machinery the CLI agent runner already uses; it does not carry a second copy of
+process-group setup or timeout handling. `ExecutorType::CliCommand` is renamed
+to `ExecutorType::LocalShell` with `cli_command` retained as a serde alias, so
+the executor definition remains the place operators declare sandbox, default
+program, environment additions, and timeout for shell steps.
+
+Two boundaries are kept deliberately separate. Agent provider resolution
+(`resolve_cli_executor`) rejects a shell definition, and shell executor
+resolution (`resolve_local_shell_executor`) rejects an agent definition. A shell
+step therefore cannot acquire agent authority — no prompt, no model, no tool
+allowlist, no Orbit registry/workspace identity variables.
+
+The program and its arguments are read from the activity's static `config`
+block and never from step input. Job step `with:` blocks are template-rendered
+and can carry agent-produced text; sourcing argv from them would make every
+shell step an injection surface.
+
+**Alternatives rejected.**
+
+- *Reinstate the v1 `ActivityExecutor` registry for this one type.* Restores a
+  parallel dispatch path that v2 deliberately collapsed, for a feature that maps
+  cleanly onto an existing deterministic action.
+- *Implement it as an `agent_loop` provider.* Would put deterministic shell
+  execution behind crew/model/provider resolution and grant it the agent
+  envelope, which is exactly the authority a shell step must not have.
+- *Leave the asset as a YAML-only claim.* Rejected outright: the task exists
+  because a shipped asset described behavior no runtime implemented.
+
+**Consequences.**
+
+- `local_shell` joins the engine deterministic action catalog, so job validation
+  can prove a catalog asset naming it is dispatchable before a run admits work.
+- Engine deterministic actions now receive the activity's `config` block and its
+  `fsProfile` alongside step input. `config` was previously reachable only by
+  core actions, and the profile only by the CLI runner.
+- The shipped `local-shell` definition declares no sandbox, so shell steps run
+  bare under the process supervisor and are confined by `cwd` containment plus
+  whatever sandbox already contains the Orbit process. Each step reports the
+  backend it actually ran under. Operators who want kernel confinement add a
+  `sandbox:` to the definition and an `fsProfile` to the activity.
+- `orbit-exec` gains `supervise_child`, the public seam for supervising a child
+  built through a sandbox wrapper. Without it the sandboxed path would have had
+  to reimplement draining, deadlines, and process-group cleanup.
 
 ---
 

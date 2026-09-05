@@ -351,3 +351,53 @@ fn seeding_preserves_customized_legacy_model_pair_override() {
     assert_eq!(persisted.model_pair_override, custom.model_pair_override);
     assert_eq!(persisted.model_flag, custom.model_flag);
 }
+
+/// The shipped `local-shell` asset advertises only what the runtime supports:
+/// the `local_shell` executor family that the deterministic `local_shell`
+/// action dispatches, and no agent-shaped fields. [ORB-11294]
+#[test]
+fn shipped_local_shell_advertises_the_local_shell_executor_family() {
+    let def = parse_default_executor_for_platform("local-shell", yaml_for("local-shell"), LINUX)
+        .expect("parse local-shell");
+
+    assert_eq!(def.executor_type, ExecutorType::LocalShell);
+    assert_eq!(def.command, None);
+    assert!(def.args.is_empty());
+    assert_eq!(def.model_pair_override, None);
+    assert_eq!(def.model_flag, None);
+    assert_eq!(def.stdout_format, None);
+}
+
+/// A definition installed before [ORB-11294] persists `executor_type:
+/// cli_command`. Re-seeding must load it, keep every customization the operator
+/// made, and not rewrite it.
+#[test]
+fn seeding_preserves_a_customized_legacy_local_shell_definition() {
+    let legacy_yaml = r#"schemaVersion: 2
+kind: Executor
+metadata:
+  name: local-shell
+spec:
+  executor_type: cli_command
+  command: /bin/bash
+  args: ["-lc"]
+  timeout_seconds: 90
+"#;
+    let legacy = parse_default_executor_for_platform("local-shell", legacy_yaml, LINUX)
+        .expect("legacy cli_command definition still loads");
+    assert_eq!(legacy.executor_type, ExecutorType::LocalShell);
+    assert_eq!(legacy.command.as_deref(), Some("/bin/bash"));
+
+    let store = InMemoryExecutorStore::default();
+    store.upsert_executor_def(&legacy).expect("install legacy");
+    seed_default_executors_for_platform(&store, false, LINUX).expect("seed");
+
+    let after = store
+        .get_executor_def("local-shell")
+        .expect("get")
+        .expect("local-shell present");
+    assert_eq!(
+        after, legacy,
+        "re-seeding must not overwrite an operator's local-shell definition"
+    );
+}
