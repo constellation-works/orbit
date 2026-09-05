@@ -222,5 +222,11 @@ fn run_json_with_lineage(runtime: &OrbitRuntime, run: &JobRun) -> Result<Value, 
             .and_then(|state| state.drain_worker_limit.as_ref()),
     )
     .map_err(serialize_error("serialize drain worker limit"))?;
+    value["drain_admissions_stop"] = serde_json::to_value(
+        state
+            .as_ref()
+            .and_then(|state| state.drain_admissions_stop.as_ref()),
+    )
+    .map_err(serialize_error("serialize drain admissions stop"))?;
     Ok(value)
 }

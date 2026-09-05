@@ -354,6 +354,21 @@ pub(super) fn invoke_detached(
     let parent_run_id = child_dispatch::parent_run_id(input);
     let parent_step_id = child_dispatch::parent_step_id(input);
 
+    // [ORB-11283] Re-check at the submit boundary, not only in classify: a
+    // stop can land after the drain offered work and before this child is
+    // durable. Skipping here admits nothing; failing would take down the
+    // coordinator and is not an admissions stop.
+    if parent_run_id
+        .as_deref()
+        .is_some_and(|run_id| runtime.drain_admissions_stopped(run_id))
+    {
+        return Ok(serde_json::json!({
+            "skipped": true,
+            "reason": "admissions_stopped",
+            "job_name": job_name,
+        }));
+    }
+
     let invoke_output = runtime
         .run_tool_with_context_and_role(
             "orbit.pipeline.invoke",

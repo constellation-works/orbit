@@ -7,9 +7,11 @@
 //! - `owner` — process signalling, owner identity classification, liveness probes (Unix + shims).
 //! - `conflict` — recording a terminal outcome that contradicts the one already persisted.
 //! - `worker_limit` — adjusting a live auto drain's worker ceiling.
+//! - `admissions_stop` — stopping new admissions on a live auto drain.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
 
 mod actions;
+mod admissions_stop;
 mod conflict;
 mod owner;
 mod projection;
@@ -23,6 +25,10 @@ mod tests;
 
 #[cfg(unix)]
 pub(crate) use actions::CANCELLATION_WORKER_EXIT_AUDIT;
+pub use admissions_stop::{
+    DrainAdmissionsStopChange, DrainAdmissionsStopRequest, DrainAdmissionsStopResult,
+    RemainingDrainChild,
+};
 #[cfg(test)]
 pub(crate) use conflict::TERMINAL_OUTCOME_CONFLICT_CODE;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};

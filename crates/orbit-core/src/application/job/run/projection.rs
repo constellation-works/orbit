@@ -18,11 +18,11 @@ pub struct ActivityInvocationEvidence {
 /// Project a job run and its optional persisted state for operator-facing APIs.
 ///
 /// Child-dispatch lineage is historical and remains visible after a run reaches
-/// a terminal state, and so is an operator-set worker ceiling [ORB-11253]: it
-/// is the evidence of what the run was admitting under, which a reader needs
-/// exactly when explaining a finished drain. Waiting reasons are momentary, so
-/// terminal runs omit them. Presentation adapters may add intentionally
-/// surface-specific fields.
+/// a terminal state, and so are an operator-set worker ceiling [ORB-11253] and
+/// admissions stop [ORB-11283]: they are the evidence of what the run was
+/// actually admitting under, which a reader needs exactly when explaining a
+/// finished drain. Waiting reasons are momentary, so terminal runs omit them.
+/// Presentation adapters may add intentionally surface-specific fields.
 pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     let last = run.steps.last();
     let child_dispatches = serde_json::to_value(
@@ -34,6 +34,10 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     let drain_worker_limit = state
         .and_then(|state| state.drain_worker_limit.as_ref())
         .and_then(|limit| serde_json::to_value(limit).ok())
+        .unwrap_or(Value::Null);
+    let drain_admissions_stop = state
+        .and_then(|state| state.drain_admissions_stop.as_ref())
+        .and_then(|stop| serde_json::to_value(stop).ok())
         .unwrap_or(Value::Null);
     let state = (!run.state.is_terminal()).then_some(state).flatten();
     let waiting_on_deps = state
@@ -51,6 +55,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     json!({
         "child_dispatches": child_dispatches,
         "drain_worker_limit": drain_worker_limit,
+        "drain_admissions_stop": drain_admissions_stop,
         "run_id": run.run_id,
         "job_id": run.job_id,
         "attempt": run.attempt,

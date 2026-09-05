@@ -20,6 +20,7 @@ use super::triage;
 const RUN_AFTER_HELP: &str = "\
 Workflow entrypoints:
   orbit run auto [--for 30m]
+  orbit run auto --stop
   orbit run ship [task_id ...]
   orbit run ship-sweep [--dry-run] [--json]
   orbit run triage [task_id ...]
@@ -51,7 +52,7 @@ Maintenance:
 {usage-heading} {usage}
 
 Workflows:
-  auto        Drain the workspace backlog for a window (loose leaves, plus one epic)
+  auto        Drain the workspace backlog for a window (loose leaves, plus one epic); --stop ends new admissions
   ship        Ship backlog or explicitly selected tasks through the gated task pipeline
   ship-sweep  Dispatch ship runs in every registered workspace with ready backlog tasks
   triage      Triage tasks blocked by failed runs; re-backlog environmental failures

@@ -135,3 +135,19 @@ fn worker_limit_line_reports_the_change_and_its_author() {
     assert!(line.contains("set by operator"), "{line}");
     assert!(line.contains("reason=more headroom"), "{line}");
 }
+
+/// [ORB-11283] A stopped drain says so in `orbit run show`.
+#[test]
+fn admissions_stop_line_names_the_actor_and_is_absent_when_unset() {
+    let mut state = PipelineState::new(
+        "jrun-drain".to_string(),
+        "workspace_auto_pipeline".to_string(),
+        json!({}),
+    );
+    assert_eq!(format_admissions_stop_line(Some(&state)), None);
+
+    state.set_drain_admissions_stop("operator".to_string(), Some("done for the day".to_string()));
+    let line = format_admissions_stop_line(Some(&state)).expect("stop line");
+    assert!(line.contains("Admissions: stopped by operator"), "{line}");
+    assert!(line.contains("reason=done for the day"), "{line}");
+}

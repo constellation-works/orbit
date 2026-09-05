@@ -319,10 +319,24 @@ impl OrbitRuntime {
         input: &Value,
         resume: Option<&ResumePlan>,
     ) -> Result<(), OrbitError> {
-        let initial_state = match resume.and_then(|plan| plan.resume_state.as_ref()) {
+        let mut initial_state = match resume.and_then(|plan| plan.resume_state.as_ref()) {
             Some(source_state) => seeded_resume_state(source_state, run),
             None => PipelineState::new(run.run_id.clone(), run.job_id.clone(), input.clone()),
         };
+        // [ORB-11283] A queued drain can carry an operator stop (or worker
+        // ceiling) written before the worker seeded this document. Replacing
+        // the whole state would silently resume admissions.
+        if let Some(existing) = self.read_run_state(&run.run_id)? {
+            if initial_state.drain_worker_limit.is_none() {
+                initial_state.drain_worker_limit = existing.drain_worker_limit;
+            }
+            if initial_state.drain_admissions_stop.is_none() {
+                initial_state.drain_admissions_stop = existing.drain_admissions_stop;
+            }
+            if initial_state.child_dispatches.is_empty() {
+                initial_state.child_dispatches = existing.child_dispatches;
+            }
+        }
         self.stores()
             .jobs()
             .write_run_state(&run.run_id, &initial_state)?;

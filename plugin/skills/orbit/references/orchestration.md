@@ -24,6 +24,7 @@ orbit run ship --mode local         # implement in a worktree, merge to the base
 orbit run auto --for 2h             # drain the backlog for a window
 orbit run auto --for 2h --concurrency 8   # ... with 8 tasks in flight at a time
 orbit run auto --for 2h --allow-crew opus,sonnet  # ... using only these crews
+orbit run auto --stop                      # stop new admissions; children keep running
 orbit run concurrency <run-id> --set 7     # retune a live drain, without replacing it
 orbit run readiness                        # explain current auto-drain eligibility, read-only
 orbit run readiness TASK-123 --json        # explain selected task IDs as JSON
@@ -60,6 +61,13 @@ authorization. The retune keeps all of them:
   one you read, so two operators cannot silently overwrite each other. The
   current value and who last moved it are on `orbit run show <run-id>`
   (`drain_worker_limit`) and `orbit run readiness`.
+
+`orbit run auto --stop` ends new admissions for this workspace's active
+coordinator. It does not need a run id, does not cancel children, and is
+idempotent when nothing is running. `orbit run show` reports
+`Admissions: stopped by ...` and lists remaining children. To cancel workers
+already in flight, `orbit run cancel <child-run-id> --confirm` each one —
+do not cancel the coordinator for this.
 
 `--allow-crew` restricts one drain to the crews you name — the lever for a
 provider that is unavailable, rate-limited, or out of budget. It is opt-in and

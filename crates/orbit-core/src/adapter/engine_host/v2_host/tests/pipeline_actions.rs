@@ -550,3 +550,37 @@ fn a_detached_child_is_recorded_as_non_blocking() {
         "a detached child was dispatched to outlive its parent's step"
     );
 }
+
+#[test]
+fn invoke_detached_skips_when_the_parent_has_stopped_admissions() {
+    let (runtime, parent) = parent_runtime();
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&parent, chrono::Utc::now(), std::process::id())
+        .expect("start parent");
+    runtime
+        .stop_workspace_auto_admissions(crate::application::job::DrainAdmissionsStopRequest {
+            actor: "tester",
+            source: "unit",
+            reason: None,
+            claim_token: None,
+        })
+        .expect("stop parent");
+
+    let output = invoke_detached(
+        &runtime,
+        "invoke_detached",
+        &ship_leaves_input(&parent),
+        orbit_tools::ToolContext::default(),
+    )
+    .expect("stopped parent skips rather than failing");
+
+    assert_eq!(output["skipped"], true);
+    assert_eq!(output["reason"], "admissions_stopped");
+    assert!(output.get("run_id").is_none());
+    assert!(
+        recorded_dispatches(&runtime, &parent).is_empty(),
+        "a skipped invoke must not create a child"
+    );
+}
