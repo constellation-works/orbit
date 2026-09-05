@@ -3,7 +3,7 @@
 //! Two families live here:
 //!
 //! - **CLI transports** (`claude`, `codex`, `copilot`, `cursor-agent`, `gemini`,
-//!   `agy`, `grok`, `ollama`, `pi`, `mock_agent`):
+//!   `agy`, `grok`, `ollama`, `opencode`, `pi`, `mock_agent`):
 //!   translate an [`AgentRequest`] into a CLI command invocation and stdin
 //!   envelope that the engine runs via `orbit-exec`.
 //! - **HTTP transports** (`anthropic`, `openai_compat`, `gemini_http`): implement the sibling
@@ -27,6 +27,7 @@ pub(crate) mod grok;
 pub(crate) mod mock_agent;
 pub(crate) mod ollama;
 pub mod openai_compat;
+pub(crate) mod opencode;
 pub(crate) mod pi;
 
 use std::borrow::Cow;
@@ -62,7 +63,10 @@ pub(crate) fn build_invocation_spec(
 /// module docs for why that reduction is a correctness requirement rather
 /// than tidying. `cursor` wraps the assistant response in a terminal JSON
 /// result object; its adapter validates that wrapper and exposes only the
-/// model-authored `result` string. [ORB-10946] [ORB-10945]
+/// model-authored `result` string. `opencode` emits NDJSON events whose
+/// `tool_use` and `reasoning` frames can replay Orbit's own prompt, so its
+/// adapter keeps only the assistant `text` parts.
+/// [ORB-10946] [ORB-10945] [ORB-11295]
 ///
 /// `provider` is the resolved canonical provider id. An unrecognized id is
 /// not an error here: normalization is a per-provider accommodation, and the
@@ -73,6 +77,7 @@ pub fn normalize_cli_stdout<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
         "cursor" => Cow::Owned(cursor::normalize_cursor_stdout(stdout)),
         "pi" => Cow::Owned(pi::normalize_pi_stdout(stdout)),
         "antigravity" | "agy" => Cow::Owned(antigravity::normalize_antigravity_stdout(stdout)),
+        "opencode" => Cow::Owned(opencode::normalize_opencode_stdout(stdout)),
         _ => Cow::Borrowed(stdout),
     }
 }

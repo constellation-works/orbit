@@ -164,6 +164,38 @@ fn adding_pi_never_displaces_an_earlier_family() {
     assert_crew(&parsed, "pi", "pi", "sonnet");
 }
 
+#[test]
+fn opencode_only_seeds_opencode_and_a_system_crew() {
+    let contents = seed_contents(&seed_for(&["opencode"]));
+    let parsed = parsed_config(&contents);
+
+    assert_eq!(crew_names(&parsed), vec!["opencode", "system"]);
+    assert_crew(
+        &parsed,
+        "opencode",
+        "opencode",
+        "anthropic/claude-sonnet-4-5",
+    );
+    assert_crew(&parsed, "system", "opencode", "anthropic/claude-haiku-4-5");
+    assert_default_crew(&parsed, Some("opencode"));
+}
+
+/// [ORB-11295] OpenCode is appended last in the preference order, so installing
+/// it beside an earlier family never moves that host's default or system crew.
+#[test]
+fn adding_opencode_never_displaces_an_earlier_family() {
+    let parsed = parsed_config(&seed_contents(&seed_for(&["claude", "pi", "opencode"])));
+
+    assert_default_crew(&parsed, Some("opus"));
+    assert_crew(&parsed, "system", "claude", "sonnet");
+    assert_crew(
+        &parsed,
+        "opencode",
+        "opencode",
+        "anthropic/claude-sonnet-4-5",
+    );
+}
+
 /// Orbit ships no `ollama` crew, so a host whose only agent CLI is ollama
 /// seeds an explicitly empty registry rather than a dangling default.
 #[test]

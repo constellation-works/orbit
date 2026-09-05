@@ -80,13 +80,13 @@ fn provider_capability_predicates_match_contract() {
     // the only variants allowed to exist without a row are the ones named here.
     // An accidental new variant still fails this test.
     //
-    // Copilot, Cursor, Pi, and Antigravity are such identities. Adding any of
-    // them upstream is a cross-system change (Worker and Bridge resolve
-    // against the same rows); until that lands, Orbit can dispatch them while
-    // Worker correctly refuses them — which is what
+    // Copilot, Cursor, Pi, Antigravity, and OpenCode are such identities.
+    // Adding any of them upstream is a cross-system change (Worker and Bridge
+    // resolve against the same rows); until that lands, Orbit can dispatch them
+    // while Worker correctly refuses them — which is what
     // `is_worker_executable() == false` encodes.
-    // [ORB-10946] [ORB-10945] [ORB-11296] [ORB-11299]
-    const ORBIT_ONLY_PROVIDERS: &[&str] = &["copilot", "cursor", "pi", "antigravity"];
+    // [ORB-10946] [ORB-10945] [ORB-11296] [ORB-11299] [ORB-11295]
+    const ORBIT_ONLY_PROVIDERS: &[&str] = &["copilot", "cursor", "pi", "antigravity", "opencode"];
 
     for name in &known {
         assert!(

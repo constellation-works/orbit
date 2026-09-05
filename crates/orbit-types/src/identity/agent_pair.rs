@@ -75,7 +75,8 @@ impl ReasoningEffort {
     ///
     /// Grok's published contract is model-specific, so unknown models fail
     /// closed instead of accepting a setting the CLI might silently
-    /// reinterpret.
+    /// reinterpret. OpenCode is narrower still: see
+    /// [`Self::validate_opencode_effort`]. [ORB-11295]
     pub fn validate_for_provider_model(
         self,
         provider: &str,
@@ -85,8 +86,27 @@ impl ReasoningEffort {
             "claude" | "codex" | "pi" => Ok(()),
             "grok" => Self::validate_grok_model_effort(self, model),
             "antigravity" => Self::validate_antigravity_effort(self, model),
+            "opencode" => Self::validate_opencode_effort(self),
             other => Err(format!(
                 "provider '{other}' does not support configured reasoning effort"
+            )),
+        }
+    }
+
+    /// OpenCode renders effort as `--variant`, documented as "model variant
+    /// (provider-specific reasoning effort, e.g., high, max, minimal)". The
+    /// value is forwarded verbatim to whichever model provider `--model`
+    /// selected, and OpenCode publishes no provider-independent vocabulary, so
+    /// only the two spellings its own help text names *and* that exist in
+    /// Orbit's crew vocabulary are accepted. `low`, `medium`, and `xhigh` fail
+    /// closed rather than being remapped onto `minimal`/`high`: a variant the
+    /// underlying provider does not define is a configuration error, not
+    /// something Orbit should guess at. [ORB-11295]
+    fn validate_opencode_effort(self) -> Result<(), String> {
+        match self {
+            Self::High | Self::Max => Ok(()),
+            other => Err(format!(
+                "OpenCode CLI supports effort values high, max (`opencode run --variant`); '{other}' is unsupported. Values are not remapped; choose a supported effort or set a model whose provider defines the variant."
             )),
         }
     }

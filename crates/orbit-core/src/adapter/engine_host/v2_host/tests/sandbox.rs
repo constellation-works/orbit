@@ -907,6 +907,97 @@ mod cursor_state_roots {
 }
 
 #[cfg(target_os = "linux")]
+mod opencode_state_roots {
+    use std::path::{Path, PathBuf};
+
+    use crate::adapter::engine_host::v2_host::sandbox::{
+        OpencodeStateEnv, linux_opencode_state_roots_with,
+    };
+
+    #[test]
+    fn active_opencode_gets_its_four_xdg_roots_from_home_defaults() {
+        assert_eq!(
+            linux_opencode_state_roots_with(
+                "opencode",
+                Some(Path::new("/home/test")),
+                OpencodeStateEnv::default(),
+            ),
+            vec![
+                PathBuf::from("/home/test/.local/share/opencode"),
+                PathBuf::from("/home/test/.config/opencode"),
+                PathBuf::from("/home/test/.local/state/opencode"),
+                PathBuf::from("/home/test/.cache/opencode"),
+            ]
+        );
+        assert!(
+            linux_opencode_state_roots_with("opencode", None, OpencodeStateEnv::default())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn xdg_variables_and_the_config_override_replace_the_home_defaults() {
+        assert_eq!(
+            linux_opencode_state_roots_with(
+                "opencode",
+                Some(Path::new("/home/test")),
+                OpencodeStateEnv {
+                    xdg_data_home: Some(PathBuf::from("/srv/data")),
+                    xdg_config_home: Some(PathBuf::from("/srv/config")),
+                    xdg_state_home: Some(PathBuf::from("/srv/state")),
+                    xdg_cache_home: Some(PathBuf::from("/srv/cache")),
+                    opencode_config_dir: None,
+                },
+            ),
+            vec![
+                PathBuf::from("/srv/data/opencode"),
+                PathBuf::from("/srv/config/opencode"),
+                PathBuf::from("/srv/state/opencode"),
+                PathBuf::from("/srv/cache/opencode"),
+            ]
+        );
+
+        // `OPENCODE_CONFIG_DIR` is the config root itself, not an XDG base, so
+        // it is used verbatim and outranks `XDG_CONFIG_HOME`.
+        let roots = linux_opencode_state_roots_with(
+            "opencode",
+            Some(Path::new("/home/test")),
+            OpencodeStateEnv {
+                xdg_config_home: Some(PathBuf::from("/srv/config")),
+                opencode_config_dir: Some(PathBuf::from("/srv/opencode-config")),
+                ..OpencodeStateEnv::default()
+            },
+        );
+        assert_eq!(roots[1], PathBuf::from("/srv/opencode-config"));
+    }
+
+    #[test]
+    fn other_and_unknown_providers_get_nothing() {
+        for provider in [
+            "claude",
+            "codex",
+            "gemini",
+            "grok",
+            "copilot",
+            "cursor",
+            "pi",
+            "ollama",
+            "not-a-provider",
+        ] {
+            assert!(
+                linux_opencode_state_roots_with(
+                    provider,
+                    Some(Path::new("/home/test")),
+                    OpencodeStateEnv::default(),
+                )
+                .is_empty(),
+                "{provider} must not inherit OpenCode state roots",
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
 mod pi_state_roots {
     use std::path::{Path, PathBuf};
 

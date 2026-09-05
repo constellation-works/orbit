@@ -358,6 +358,7 @@ fn append_linux_provider_state_roots(
     directories.extend(linux_copilot_state_roots(provider, home.as_deref()));
     directories.extend(linux_cursor_state_roots_with(provider, home.as_deref()));
     directories.extend(linux_pi_state_roots(provider, home.as_deref()));
+    directories.extend(linux_opencode_state_roots(provider, home.as_deref()));
     for directory in directories {
         ensure_owned_directory(&directory)?;
         let canonical = directory.canonicalize().map_err(|error| {
@@ -418,6 +419,76 @@ pub(super) fn linux_pi_state_roots_with(
         Some(path) => vec![path.to_path_buf()],
         None => home.map(|home| vec![home.join(".pi")]).unwrap_or_default(),
     }
+}
+
+/// Process-env wrapper around [`linux_opencode_state_roots_with`].
+#[cfg(target_os = "linux")]
+fn linux_opencode_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
+    let env_path = |name: &str| std::env::var_os(name).map(PathBuf::from);
+    linux_opencode_state_roots_with(
+        provider,
+        home,
+        OpencodeStateEnv {
+            xdg_data_home: env_path("XDG_DATA_HOME"),
+            xdg_config_home: env_path("XDG_CONFIG_HOME"),
+            xdg_state_home: env_path("XDG_STATE_HOME"),
+            xdg_cache_home: env_path("XDG_CACHE_HOME"),
+            opencode_config_dir: env_path("OPENCODE_CONFIG_DIR"),
+        },
+    )
+}
+
+/// XDG roots that locate OpenCode's writable state on Linux.
+#[cfg(target_os = "linux")]
+#[derive(Default, Clone)]
+pub(super) struct OpencodeStateEnv {
+    pub(super) xdg_data_home: Option<PathBuf>,
+    pub(super) xdg_config_home: Option<PathBuf>,
+    pub(super) xdg_state_home: Option<PathBuf>,
+    pub(super) xdg_cache_home: Option<PathBuf>,
+    pub(super) opencode_config_dir: Option<PathBuf>,
+}
+
+/// Writable state roots for an active OpenCode executor on Linux.
+///
+/// OpenCode resolves every root through `xdg-basedir` and creates its data,
+/// config, and state directories at startup, before it reads Orbit's envelope.
+/// The data root holds `auth.json` from `opencode auth login`, the session and
+/// message stores, and logs. No other provider receives this grant — every
+/// entry in the caller's list is *created* by `ensure_owned_directory`, so an
+/// unconditional entry would mkdir an `~/.local/share/opencode` on hosts that
+/// never installed OpenCode. [ORB-11295]
+#[cfg(target_os = "linux")]
+pub(super) fn linux_opencode_state_roots_with(
+    provider: &str,
+    home: Option<&Path>,
+    env: OpencodeStateEnv,
+) -> Vec<PathBuf> {
+    if orbit_types::workflow::Provider::parse(provider).ok()
+        != Some(orbit_types::workflow::Provider::Opencode)
+    {
+        return Vec::new();
+    }
+    let scoped = |xdg_base: Option<PathBuf>, home_relative_default: &[&str]| -> Option<PathBuf> {
+        let base = xdg_base.or_else(|| {
+            home.map(|home| {
+                home_relative_default
+                    .iter()
+                    .fold(home.to_path_buf(), |path, segment| path.join(segment))
+            })
+        })?;
+        Some(base.join("opencode"))
+    };
+    [
+        scoped(env.xdg_data_home, &[".local", "share"]),
+        env.opencode_config_dir
+            .or_else(|| scoped(env.xdg_config_home, &[".config"])),
+        scoped(env.xdg_state_home, &[".local", "state"]),
+        scoped(env.xdg_cache_home, &[".cache"]),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Process-env wrapper around [`linux_copilot_state_roots_with`].

@@ -122,6 +122,22 @@ pub const PI_DEFAULT_MODEL: &str = "sonnet";
 /// wants a cheaper tier names one explicitly in `[crews.system]`.
 pub const PI_CREW_MODEL: &str = PI_DEFAULT_MODEL;
 
+/// Default model for the OpenCode execution lane.
+///
+/// OpenCode addresses models as a `provider/model` coordinate, where the
+/// leading segment names the *model vendor* inside the OpenCode lane — never
+/// the Orbit executor, which stays `opencode` whichever vendor is selected.
+/// The coordinate must be fully qualified: OpenCode splits on the first `/`
+/// and looks the vendor up in its provider catalog, so a bare model id does
+/// not resolve. [ORB-11295]
+pub const OPENCODE_DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-5";
+
+/// Model used for OpenCode's bounded system crew. OpenCode publishes no
+/// vendor-independent cheap tier, so this names the cheap tier of the same
+/// vendor as [`OPENCODE_DEFAULT_MODEL`]; an operator who prefers another
+/// vendor names one explicitly in `[crews.system]`.
+pub const OPENCODE_CREW_MODEL: &str = "anthropic/claude-haiku-4-5";
+
 /// Cheap Claude model used by the orbit-agent HTTP examples.
 ///
 /// Version pinned like [`ANTHROPIC_HTTP_DEFAULT_MODEL`] because the examples

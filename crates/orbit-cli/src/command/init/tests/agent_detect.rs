@@ -65,6 +65,7 @@ fn default_provider_prefers_cli_in_documented_order() {
         copilot_cli: true,
         cursor_cli: true,
         pi_cli: true,
+        opencode_cli: true,
         ollama_cli: true,
     };
     assert_eq!(default_provider(&detected), "claude");
@@ -140,6 +141,23 @@ fn default_provider_prefers_cli_in_documented_order() {
         ..DetectedAgents::default()
     };
     assert_eq!(default_provider(&detected), "pi");
+
+    // opencode wins over ollama when the earlier agent families are absent, and
+    // an installed opencode does not displace pi. [ORB-11295]
+    let detected = DetectedAgents {
+        pi_cli: true,
+        opencode_cli: true,
+        ollama_cli: true,
+        ..DetectedAgents::default()
+    };
+    assert_eq!(default_provider(&detected), "pi");
+
+    let detected = DetectedAgents {
+        opencode_cli: true,
+        ollama_cli: true,
+        ..DetectedAgents::default()
+    };
+    assert_eq!(default_provider(&detected), "opencode");
 
     // ollama wins when nothing else
     let detected = DetectedAgents {

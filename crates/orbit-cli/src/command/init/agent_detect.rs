@@ -93,6 +93,11 @@ pub struct DetectedAgents {
     /// run, so a detected `pi` is evidence of the Pi execution lane only, never
     /// of an Anthropic/OpenAI/Google lane. [ORB-11296]
     pub pi_cli: bool,
+    /// The OpenCode CLI, whose binary is `opencode`. OpenCode's own
+    /// `--model provider/model` names the model vendor behind a run, so a
+    /// detected `opencode` is evidence of the OpenCode execution lane only,
+    /// never of an Anthropic/OpenAI/Google lane. [ORB-11295]
+    pub opencode_cli: bool,
     pub ollama_cli: bool,
 }
 
@@ -108,6 +113,7 @@ pub fn detect(probe: &dyn AgentEnvProbe) -> DetectedAgents {
         copilot_cli: probe.binary_on_path("copilot"),
         cursor_cli: probe.binary_on_path("cursor-agent"),
         pi_cli: probe.binary_on_path("pi"),
+        opencode_cli: probe.binary_on_path("opencode"),
         ollama_cli: probe.binary_on_path("ollama"),
     }
 }
@@ -143,6 +149,9 @@ pub fn available_crew_families(detected: &DetectedAgents) -> Vec<&'static str> {
     if detected.pi_cli {
         families.push("pi");
     }
+    if detected.opencode_cli {
+        families.push("opencode");
+    }
     families
 }
 
@@ -159,10 +168,12 @@ pub fn default_model_for(provider: &str) -> Option<&'static str> {
 /// Pick a default provider for the role given a detection snapshot.
 ///
 /// Preference order: first detected CLI in [claude, codex, antigravity,
-/// gemini, grok, copilot, cursor, pi, ollama], else `claude` as a last
-/// resort. Antigravity (`agy`) occupies Gemini CLI's previous slot so a host
-/// with both prefers the current Google terminal CLI. [ORB-10946] [ORB-10945]
-/// [ORB-11296] [ORB-11299]
+/// gemini, grok, copilot, cursor, pi, opencode, ollama], else `claude` as a
+/// last resort. Antigravity (`agy`) occupies Gemini CLI's previous slot so a
+/// host with both prefers the current Google terminal CLI. OpenCode is
+/// appended after the existing lanes so adding it cannot change what an
+/// already-provisioned host would pick. [ORB-10946] [ORB-10945] [ORB-11296]
+/// [ORB-11299] [ORB-11295]
 pub fn default_provider(detected: &DetectedAgents) -> &'static str {
     if detected.claude_cli {
         return "claude";
@@ -187,6 +198,9 @@ pub fn default_provider(detected: &DetectedAgents) -> &'static str {
     }
     if detected.pi_cli {
         return "pi";
+    }
+    if detected.opencode_cli {
+        return "opencode";
     }
     if detected.ollama_cli {
         return "ollama";

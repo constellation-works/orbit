@@ -79,7 +79,7 @@ fn detected_agents_lists_every_family_when_only_copilot_is_present() {
 
     assert_eq!(result.provider.as_deref(), Some("copilot"));
     assert!(prompter.transcript().contains(
-        "Detected agents:\n  Claude CLI         not found\n  Codex CLI          not found\n  Antigravity CLI    not found\n  Gemini CLI         not found\n  Grok CLI           not found\n  Copilot CLI        found\n  Cursor Agent CLI   not found\n  Pi CLI             not found\n  Ollama CLI         not found"
+        "Detected agents:\n  Claude CLI         not found\n  Codex CLI          not found\n  Antigravity CLI    not found\n  Gemini CLI         not found\n  Grok CLI           not found\n  Copilot CLI        found\n  Cursor Agent CLI   not found\n  Pi CLI             not found\n  OpenCode CLI       not found\n  Ollama CLI         not found"
     ));
 }
 
