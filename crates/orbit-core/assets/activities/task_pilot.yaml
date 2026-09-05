@@ -1,3 +1,4 @@
+# Mirror paths: source-tree/orbit-core/assets/activities/task_pilot.yaml and .orbit/resources/activities/task_pilot.yaml; guarded by scripts/sync-activity-assets.sh --check.
 schemaVersion: 2
 kind: Activity
 metadata:
