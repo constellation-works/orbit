@@ -192,6 +192,23 @@ impl TaskV2Store {
             let mut bundle = self.read_existing_bundle(id)?;
             let now = Utc::now();
             let current_status = bundle.envelope.status;
+            // [ORB-11305] Compare-and-set, evaluated against the bundle we just
+            // re-read under the exclusive lock. A caller that decided this write
+            // was allowed from an earlier read loses here rather than silently
+            // overwriting whatever landed in between.
+            if let Some(expected) = &fields.expected_status
+                && !expected.contains(&current_status)
+            {
+                return Err(OrbitError::InvalidInput(format!(
+                    "task '{id}' status changed to '{current_status}' before this write; \
+                     expected one of [{}]",
+                    expected
+                        .iter()
+                        .map(TaskStatus::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
             let target_status = fields.status.unwrap_or(current_status);
             let status_transition =
                 (target_status != current_status).then_some((current_status, target_status));

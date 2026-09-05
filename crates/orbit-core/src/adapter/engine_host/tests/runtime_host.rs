@@ -141,6 +141,14 @@ fn git(current_dir: &Path, args: &[&str]) {
 }
 
 fn run_worktree_setup(runtime: &OrbitRuntime, task_ids: &[String], run_id: &str) -> Value {
+    try_worktree_setup(runtime, task_ids, run_id).expect("run worktree setup")
+}
+
+fn try_worktree_setup(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+    run_id: &str,
+) -> Result<Value, orbit_common::OrbitError> {
     orbit_engine::execute_deterministic_action(
         runtime,
         "worktree_setup",
@@ -156,7 +164,6 @@ fn run_worktree_setup(runtime: &OrbitRuntime, task_ids: &[String], run_id: &str)
         &HashMap::new(),
         None,
     )
-    .expect("run worktree setup")
 }
 
 /// ORB-10602: worktree setup no longer materializes sandbox mount anchors.
@@ -343,19 +350,18 @@ fn automation_can_restamp_in_progress_task_without_plan() {
     assert_eq!(updated.job_run_id.as_deref(), Some("jrun-test"));
 }
 
+/// [ORB-11305] Workflow admission accepts `backlog` (fresh authorized work)
+/// and `in-progress` (idempotent retry) and nothing else.
+///
+/// The statuses it refuses are all somebody's decision that the task should not
+/// be running. A bundle containing one refuses as a whole, before the worktree
+/// exists, so nothing is half-started.
 #[test]
-fn worktree_setup_admits_unplanned_workflow_statuses() {
+fn worktree_setup_admits_backlog_and_refuses_withdrawn_statuses() {
     let (root, runtime) = test_runtime();
     let repo = root.path().join("repo");
     init_git_repo(&repo);
-    let proposed = runtime
-        .add_task(TaskAddParams {
-            title: "Proposed workflow task".to_string(),
-            description: "Starts from proposed without a plan.".to_string(),
-            workspace_path: Some(".".to_string()),
-            ..Default::default()
-        })
-        .expect("create proposed task");
+
     let backlog = approve_for_execution(
         &runtime,
         &runtime
@@ -367,53 +373,95 @@ fn worktree_setup_admits_unplanned_workflow_statuses() {
             })
             .expect("create backlog candidate"),
     );
-    let rejected = runtime
-        .add_task(TaskAddParams {
-            title: "Rejected workflow task".to_string(),
-            description: "Starts from rejected without a plan.".to_string(),
-            workspace_path: Some(".".to_string()),
-            ..Default::default()
-        })
-        .expect("create rejected candidate");
-    let rejected = runtime
+
+    // A plan is still not a prerequisite for a workflow start: backlog alone is
+    // the authorization.
+    let output = run_worktree_setup(&runtime, std::slice::from_ref(&backlog.id), "jrun-admit");
+    assert!(
+        !output["workspace_path"]
+            .as_str()
+            .expect("workspace path output")
+            .is_empty()
+    );
+    let admitted = runtime.get_task(&backlog.id).expect("reload admitted task");
+    assert_eq!(admitted.status, TaskStatus::InProgress);
+    assert_eq!(admitted.job_run_id.as_deref(), Some("jrun-admit"));
+
+    // Re-running the same setup over an already-admitted task is the retry
+    // path and must stay a no-op rather than a second start.
+    let admitted_again = runtime
+        .admit_task_for_workflow_as_system(&backlog.id, "worktree_setup")
+        .expect("idempotent workflow admission");
+    assert_eq!(admitted_again.status, TaskStatus::InProgress);
+
+    for (label, task_id) in withdrawn_task_fixtures(&runtime) {
+        let error = try_worktree_setup(
+            &runtime,
+            std::slice::from_ref(&task_id),
+            &format!("jrun-{label}"),
+        )
+        .expect_err(&format!("{label} must not be admitted into a workflow"));
+        let message = error.to_string();
+        assert!(
+            message.contains(&task_id) && message.contains("workflow admission"),
+            "{label}: unexpected refusal message: {message}"
+        );
+
+        let after = runtime.get_task(&task_id).expect("reload refused task");
+        assert_ne!(
+            after.status,
+            TaskStatus::InProgress,
+            "{label} must keep its pre-run status"
+        );
+        assert_eq!(
+            after.job_run_id, None,
+            "{label} must not be coupled to the refused run"
+        );
+    }
+}
+
+/// Every status a human parks work in, each built through the same public
+/// transition a human would use.
+fn withdrawn_task_fixtures(runtime: &OrbitRuntime) -> Vec<(&'static str, String)> {
+    let create = |title: &str| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.to_string(),
+                description: "Exercises a status workflow admission must refuse.".to_string(),
+                workspace_path: Some(".".to_string()),
+                ..Default::default()
+            })
+            .expect("create admission fixture")
+    };
+
+    let proposed = create("Proposed workflow task");
+    let rejected = create("Rejected workflow task");
+    runtime
         .reject_task(
             &rejected.id,
             "exercise workflow admission".to_string(),
             None,
         )
         .expect("reject task");
-    let archived = runtime
-        .add_task(TaskAddParams {
-            title: "Archived workflow task".to_string(),
-            description: "Starts from archived without a plan.".to_string(),
-            workspace_path: Some(".".to_string()),
-            ..Default::default()
-        })
-        .expect("create archived candidate");
+    let archived = create("Archived workflow task");
     runtime.archive_task(&archived.id).expect("archive task");
-    let task_ids = vec![
-        proposed.id.clone(),
-        backlog.id.clone(),
-        rejected.id.clone(),
-        archived.id.clone(),
-    ];
-    let output = run_worktree_setup(&runtime, &task_ids, "jrun-admit");
-    let workspace_path = output["workspace_path"]
-        .as_str()
-        .expect("workspace path output")
-        .to_string();
-    assert!(!workspace_path.is_empty());
+    let someday = approve_for_execution(runtime, &create("Someday workflow task"));
+    runtime
+        .update_task(
+            &someday.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Someday),
+                ..Default::default()
+            },
+        )
+        .expect("park task in someday");
 
-    for task_id in &task_ids {
-        let task = runtime.get_task(task_id).expect("reload admitted task");
-        assert_eq!(task.status, TaskStatus::InProgress, "{task_id}");
-        assert_eq!(task.job_run_id.as_deref(), Some("jrun-admit"));
-    }
-
-    let admitted_again = runtime
-        .admit_task_for_workflow_as_system(&proposed.id, "worktree_setup")
-        .expect("idempotent workflow admission");
-    assert_eq!(admitted_again.status, TaskStatus::InProgress);
+    vec![
+        ("proposed", proposed.id),
+        ("rejected", rejected.id),
+        ("archived", archived.id),
+        ("someday", someday.id),
+    ]
 }
 
 #[test]

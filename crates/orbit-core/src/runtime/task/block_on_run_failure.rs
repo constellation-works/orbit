@@ -12,7 +12,8 @@
 //! `blocked` is a deliberate dead end for automation: `Blocked` is not in the
 //! workflow-admission allowlist, so the ship
 //! sweep skips these tasks. The only way out is a human/orchestrator decision
-//! (the `orbit.task.start` tool, which accepts `Blocked`, or moving it back
+//! (the `orbit.task.start` tool, which accepts `Blocked` and leaves the task
+//! `in-progress` — a status workflow admission does accept — or moving it back
 //! to backlog with `orbit task update <id> --status backlog`).
 
 use orbit_common::OrbitError;
@@ -37,6 +38,14 @@ pub(crate) fn is_workflow_failure_state(state: JobRunState) -> bool {
 /// failure: `Done`/`Archived`/`Rejected` are terminal or human decisions,
 /// `Review` was already shipped (don't clobber it), and `Blocked` is already
 /// where we want it (keeps the transition idempotent).
+///
+/// [ORB-11305] `Proposed` and `Someday` join them. Both are withdrawals — the
+/// way a human takes work back out of the backlog — and a withdrawal is
+/// routinely what *causes* the run to be cancelled. Cleanup that ran after it
+/// would replace the human's decision with `blocked`, so the withdrawal would
+/// have to be re-applied by hand once the run finished unwinding. Only a task
+/// that is still `in-progress` (or already `backlog`) under the failed run is
+/// this transition's business.
 fn task_is_blockable_on_run_failure(status: TaskStatus) -> bool {
     !matches!(
         status,
@@ -45,6 +54,8 @@ fn task_is_blockable_on_run_failure(status: TaskStatus) -> bool {
             | TaskStatus::Blocked
             | TaskStatus::Rejected
             | TaskStatus::Archived
+            | TaskStatus::Proposed
+            | TaskStatus::Someday
     )
 }
 

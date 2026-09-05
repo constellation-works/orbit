@@ -34,6 +34,10 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) append_history: Vec<TaskHistoryEntry>,
     pub(crate) append_comments: Vec<TaskComment>,
     pub(crate) upsert_artifacts: Vec<TaskArtifact>,
+    /// [ORB-11305] Forwarded to the store as a compare-and-set on the task's
+    /// persisted status. Setting it does not itself constitute a history
+    /// change — it only constrains one.
+    pub(crate) expected_status: Option<Vec<TaskStatus>>,
 }
 
 impl TaskRecordUpdateParams {

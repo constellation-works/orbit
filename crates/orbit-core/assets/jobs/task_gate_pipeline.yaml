@@ -30,12 +30,18 @@
 # - The dispatched child pipeline runs while the reservation is still valid;
 #   a fresh `orbit.task.locks.reserve` call from another bundle will either
 #   wait or surface `task.locks.reserve.denied`. `invoke_and_wait` re-checks
-#   worktree workflow admission immediately before child dispatch; stale
+#   worktree workflow admission immediately before child dispatch, because a
+#   gate can sit in `wait_for_window` for its whole budget and the admission
+#   that queued it is a snapshot, not standing approval (ORB-11305). Stale
 #   `review` / `done` tasks return a succeeded no-op output so the reservation
-#   can be released without launching a child run. After `invoke_and_wait`
-#   returns a terminal child-run status, `release_reservation` frees the
-#   reservation immediately before `require_child_success` fails the gate on
-#   a non-succeeded child. TTL remains the fallback for abandoned/crashed runs.
+#   can be released without launching a child run; a task a human withdrew
+#   during the wait (`proposed`, `someday`, `archived`, `rejected`, `blocked`)
+#   returns a non-succeeded output instead, so the reservation is still
+#   released and the gate then fails naming the task and its status. After
+#   `invoke_and_wait` returns a terminal child-run status,
+#   `release_reservation` frees the reservation immediately before
+#   `require_child_success` fails the gate on a non-succeeded child. TTL
+#   remains the fallback for abandoned/crashed runs.
 
 schemaVersion: 2
 kind: Job

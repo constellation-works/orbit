@@ -90,6 +90,14 @@ pub struct TaskHistoryUpdateParams {
     pub status_note: Option<String>,
     pub append_history: Vec<TaskHistoryEntry>,
     pub append_comments: Vec<TaskComment>,
+    /// [ORB-11305] Compare-and-set guard: when `Some`, the write is applied
+    /// only if the task's *persisted* status at write time is one of these.
+    ///
+    /// The check runs inside the per-task exclusive file lock, after the
+    /// bundle is re-read, so a status a caller observed before calling cannot
+    /// go stale in the gap. `None` keeps the unconditional last-writer-wins
+    /// behavior every other caller relies on.
+    pub expected_status: Option<Vec<TaskStatus>>,
 }
 
 #[derive(Debug, Default, Clone)]

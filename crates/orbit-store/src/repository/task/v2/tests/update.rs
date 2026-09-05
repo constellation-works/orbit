@@ -312,3 +312,130 @@ fn document_update_on_readonly_bundle_dir_names_lock_path_and_hints_sandbox() {
         .expect_err("update must fail on a read-only bundle dir");
     assert_sandbox_write_io(&err, &lock_path.display().to_string());
 }
+
+/// [ORB-11305] `expected_status` is a compare-and-set: the write is applied
+/// against the status persisted at write time, not the one its caller read.
+///
+/// The caller this exists for is workflow admission, which decides "this task
+/// is `backlog`, start it" and can then be overtaken by a human withdrawal
+/// before the write lands. Without the guard the withdrawal is overwritten and
+/// automation starts work its owner already took back.
+#[test]
+fn history_update_refuses_a_status_write_whose_expectation_no_longer_holds() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    store
+        .create_task(create_params(
+            "Withdrawn under a stale read",
+            TaskStatus::Backlog,
+        ))
+        .expect("create task");
+
+    // The human withdrawal lands first.
+    store
+        .update_task_history(
+            "ORB-00000",
+            &TaskHistoryUpdateParams {
+                actor: "daniel".to_string(),
+                status: Some(TaskStatus::Archived),
+                ..Default::default()
+            },
+        )
+        .expect("archive task");
+
+    let events_before = store
+        .get_task_history("ORB-00000")
+        .expect("read history")
+        .expect("history exists")
+        .len();
+
+    // The admission write, still holding its `backlog` snapshot, loses.
+    let error = store
+        .update_task_history(
+            "ORB-00000",
+            &TaskHistoryUpdateParams {
+                actor: "system".to_string(),
+                status: Some(TaskStatus::InProgress),
+                status_event: Some("started".to_string()),
+                expected_status: Some(vec![TaskStatus::Backlog, TaskStatus::InProgress]),
+                ..Default::default()
+            },
+        )
+        .expect_err("a stale expectation must not overwrite the newer status");
+    let message = error.to_string();
+    assert!(
+        message.contains("archived"),
+        "names what it found: {message}"
+    );
+    assert!(
+        message.contains("backlog"),
+        "names what it expected: {message}"
+    );
+
+    let task = store
+        .get_task("ORB-00000")
+        .expect("get task")
+        .expect("task exists");
+    assert_eq!(task.status, TaskStatus::Archived);
+    assert_eq!(
+        store
+            .get_task_history("ORB-00000")
+            .expect("read history")
+            .expect("history exists")
+            .len(),
+        events_before,
+        "a refused write must not leave a partial history entry behind"
+    );
+}
+
+/// The same guard applied to a status that still holds is transparent, and a
+/// write with no expectation keeps the unconditional behavior every other
+/// caller relies on.
+#[test]
+fn history_update_applies_when_the_expectation_holds_or_is_absent() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    store
+        .create_task(create_params("Still wanted", TaskStatus::Backlog))
+        .expect("create task");
+
+    store
+        .update_task_history(
+            "ORB-00000",
+            &TaskHistoryUpdateParams {
+                actor: "system".to_string(),
+                status: Some(TaskStatus::InProgress),
+                status_event: Some("started".to_string()),
+                expected_status: Some(vec![TaskStatus::Backlog, TaskStatus::InProgress]),
+                ..Default::default()
+            },
+        )
+        .expect("a satisfied expectation applies");
+    assert_eq!(
+        store
+            .get_task("ORB-00000")
+            .expect("get task")
+            .expect("task exists")
+            .status,
+        TaskStatus::InProgress
+    );
+
+    store
+        .update_task_history(
+            "ORB-00000",
+            &TaskHistoryUpdateParams {
+                actor: "daniel".to_string(),
+                status: Some(TaskStatus::Archived),
+                ..Default::default()
+            },
+        )
+        .expect("an unguarded write is still unconditional");
+    assert_eq!(
+        store
+            .get_task("ORB-00000")
+            .expect("get task")
+            .expect("task exists")
+            .status,
+        TaskStatus::Archived
+    );
+}

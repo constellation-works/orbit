@@ -630,6 +630,9 @@ impl HubCoordinationExecutor {
                     status_note: None,
                     append_history: Vec::new(),
                     append_comments,
+                    // A human/agent update is authoritative by itself; it has no
+                    // earlier read to guard against [ORB-11305].
+                    expected_status: None,
                 },
             )?;
         }

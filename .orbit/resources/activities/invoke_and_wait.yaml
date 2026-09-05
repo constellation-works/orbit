@@ -8,7 +8,16 @@ spec:
     Submit a named v2 Job and block until its Run reaches a terminal
     state, then return the wait entry as data. Internally chains
     `orbit.pipeline.invoke` (to submit the child Run) and
-    `orbit.pipeline.wait` (to block on completion). Workflows that require
+    `orbit.pipeline.wait` (to block on completion). Submission and waiting
+    are separate observable phases: the child's exact run ID is persisted
+    into the parent Run's state, and audited, before the wait begins, so
+    CLI, MCP, API, and dashboard readers can name the child for the whole
+    duration of the block. A submission that cannot produce a durable
+    child Run fails this activity immediately with the invocation error
+    rather than idling until `timeout_seconds`. Cancelling the parent
+    while it waits keeps the child link, marks the wait terminal, and
+    cancels the child (an `invoke_detached` child is left running instead).
+    Workflows that require
     a successful child Run should follow this activity with
     `pipeline_success_guard` after any cleanup that depends on the raw
     child status. The returned `status` mirrors the child Run's terminal state:
@@ -18,9 +27,14 @@ spec:
     Run itself may still be running — callers that care must inspect
     `run_id` to decide follow-up. Gate workflows may pass
     `admission_task_ids` and `admission_workflow` to re-check workflow
-    admission immediately before dispatch; stale `review` / `done` tasks
-    return a succeeded no-op output with `skipped: true` and do not submit a
-    child Run.
+    admission immediately before dispatch, so an admission granted before a
+    long gate wait cannot dispatch work whose status has since changed.
+    Neither case submits a child Run: stale `review` / `done`
+    tasks return a succeeded no-op output with `skipped: true`, while a task
+    withdrawn during the wait returns `skipped: true` with a non-succeeded
+    `status` and an `error` naming the task and its status, so a following
+    release step still runs and `pipeline_success_guard` then fails the
+    parent. A task id that resolves to no task at all fails the activity.
   input_schema_json:
     type: object
     required: [job_name, run_input]
