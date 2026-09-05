@@ -23,7 +23,7 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/rustc" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "${FAKE_RUSTC_LOG}"
-exit 0
+exit "${FAKE_RUSTC_EXIT_STATUS:-0}"
 EOF
 chmod +x "$TMP/bin/rustc"
 
@@ -36,6 +36,12 @@ printf '%s\n' "$@" > "${FAKE_SCCACHE_LOG}"
   printf 'SCCACHE_BASEDIRS=%s\n' "${SCCACHE_BASEDIRS-}"
   printf 'SCCACHE_CLIENT_SIDE=%s\n' "${SCCACHE_CLIENT_SIDE-}"
 } > "${FAKE_SCCACHE_ENV:-/dev/null}"
+printf '%s' "${CACHE_ENV_SPACES-}" > "${FAKE_SCCACHE_SPACES:-/dev/null}"
+printf '%s' "${CACHE_ENV_EQUALS-}" > "${FAKE_SCCACHE_EQUALS:-/dev/null}"
+printf '%s' "${CACHE_ENV_MULTILINE-}" > "${FAKE_SCCACHE_MULTILINE:-/dev/null}"
+printf '%s' "${CACHE_ENV_EMPTY-}" > "${FAKE_SCCACHE_EMPTY:-/dev/null}"
+printf '%s' "${CACHE_ENV_BOUNDARY-}" > "${FAKE_SCCACHE_BOUNDARY:-/dev/null}"
+printf '%s' "${CACHE_ENV_SOURCE_BOUNDARY-}" > "${FAKE_SCCACHE_SOURCE_BOUNDARY:-/dev/null}"
 exec "$@"
 EOF
 chmod +x "$TMP/sccache"
@@ -110,6 +116,46 @@ rm -f "$FAKE_SCCACHE_LOG" "$FAKE_SCCACHE_ENV" "$FAKE_RUSTC_LOG"
 "$WRAPPER" "$TMP/bin/rustc" --out-dir "$fake_tgt/debug" "$ROOT/crates/orbit-types/src/lib.rs"
 grep -Fq "$stable_tgt/debug" "$FAKE_SCCACHE_LOG" || fail "out-dir should rewrite onto the stable build mount"
 grep -Fq "$stable_src/crates/orbit-types/src/lib.rs" "$FAKE_SCCACHE_LOG" || fail "source path should rewrite onto the stable workspace mount"
+
+# Environment values are read without splitting, and only paths rooted at the
+# checkout or target directory are rewritten. Keep expected files in TMP so
+# this remains fully disposable under Bash 3.2 and current Linux Bash.
+export CACHE_ENV_SPACES='value with spaces = preserved'
+export CACHE_ENV_EQUALS='left=middle=right'
+export CACHE_ENV_MULTILINE="$fake_tgt/debug
+last line"
+export CACHE_ENV_EMPTY=''
+export CACHE_ENV_BOUNDARY="$fake_tgt-sibling"
+export CACHE_ENV_SOURCE_BOUNDARY="$ROOT-sibling"
+export FAKE_SCCACHE_SPACES="$TMP/env-spaces.actual"
+export FAKE_SCCACHE_EQUALS="$TMP/env-equals.actual"
+export FAKE_SCCACHE_MULTILINE="$TMP/env-multiline.actual"
+export FAKE_SCCACHE_EMPTY="$TMP/env-empty.actual"
+export FAKE_SCCACHE_BOUNDARY="$TMP/env-boundary.actual"
+export FAKE_SCCACHE_SOURCE_BOUNDARY="$TMP/env-source-boundary.actual"
+printf '%s' "$CACHE_ENV_SPACES" > "$TMP/env-spaces.expected"
+printf '%s' "$CACHE_ENV_EQUALS" > "$TMP/env-equals.expected"
+printf '%s\nlast line' "$stable_tgt/debug" > "$TMP/env-multiline.expected"
+: > "$TMP/env-empty.expected"
+printf '%s' "$CACHE_ENV_BOUNDARY" > "$TMP/env-boundary.expected"
+printf '%s' "$CACHE_ENV_SOURCE_BOUNDARY" > "$TMP/env-source-boundary.expected"
+"$WRAPPER" "$TMP/bin/rustc" --out-dir "$fake_tgt/debug" "$ROOT/crates/orbit-types/src/lib.rs" "$fake_tgt-sibling" "$ROOT-sibling"
+grep -Fq "$fake_tgt-sibling" "$FAKE_SCCACHE_LOG" || fail "target path-prefix boundary should remain unchanged in argv"
+grep -Fq "$ROOT-sibling" "$FAKE_SCCACHE_LOG" || fail "source path-prefix boundary should remain unchanged in argv"
+cmp "$TMP/env-spaces.expected" "$FAKE_SCCACHE_SPACES" || fail "spaces in environment value were not preserved"
+cmp "$TMP/env-equals.expected" "$FAKE_SCCACHE_EQUALS" || fail "equals signs in environment value were not preserved"
+cmp "$TMP/env-multiline.expected" "$FAKE_SCCACHE_MULTILINE" || fail "multiline environment value was not rewritten exactly"
+cmp "$TMP/env-empty.expected" "$FAKE_SCCACHE_EMPTY" || fail "empty environment value was not preserved"
+cmp "$TMP/env-boundary.expected" "$FAKE_SCCACHE_BOUNDARY" || fail "target path-prefix boundary was rewritten unexpectedly"
+cmp "$TMP/env-source-boundary.expected" "$FAKE_SCCACHE_SOURCE_BOUNDARY" || fail "source path-prefix boundary was rewritten unexpectedly"
+
+# sccache must return the compiler's status unchanged.
+export FAKE_RUSTC_EXIT_STATUS=23
+set +e
+"$WRAPPER" "$TMP/bin/rustc" --crate-name status-check
+status=$?
+set -e
+assert_eq "$status" "23" "compiler exit status"
 unset CARGO_TARGET_DIR
 unset ORBIT_COMPILER_CACHE_STABLE_SRC ORBIT_COMPILER_CACHE_STABLE_TGT
 

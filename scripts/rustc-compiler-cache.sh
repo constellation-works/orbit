@@ -79,11 +79,11 @@ fi
 # paths so sccache keys do not include the jrun worktree prefix.
 rewrite_value() {
   local s="$1"
-  if [[ -n "$target_real" && "$s" == "$target_real"* ]]; then
+  if [[ -n "$target_real" && ( "$s" == "$target_real" || "$s" == "$target_real/"* ) ]]; then
     printf '%s%s' "$STABLE_TGT" "${s#"$target_real"}"
     return
   fi
-  if [[ "$s" == "$repo_root"* ]]; then
+  if [[ "$s" == "$repo_root" || "$s" == "$repo_root/"* ]]; then
     printf '%s%s' "$STABLE_SRC" "${s#"$repo_root"}"
     return
   fi
@@ -112,17 +112,17 @@ if same_inode "$STABLE_SRC/Cargo.toml" "$repo_root/Cargo.toml" && same_inode "$S
     rewritten+=("$(rewrite_value "$arg")")
   done
   set -- "${rewritten[@]}"
-  local_env=()
-  mapfile -d '' -t local_env < <(env -0)
-  for entry in "${local_env[@]}"; do
-    name="${entry%%=*}"
-    value="${entry#*=}"
+  # Bash 3.2 has no mapfile, and macOS env does not provide GNU env -0.
+  # compgen emits exported names without touching their values, so indirect
+  # expansion keeps spaces, equals signs, newlines, and empty values intact.
+  while IFS= read -r name; do
+    value="${!name}"
     [[ -n "$name" ]] || continue
     new="$(rewrite_value "$value")"
     if [[ "$new" != "$value" ]]; then
       export "${name}=${new}"
     fi
-  done
+  done < <(compgen -e)
 fi
 
 export SCCACHE_DIR="$cache_dir"
