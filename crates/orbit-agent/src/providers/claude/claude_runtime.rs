@@ -24,12 +24,13 @@ impl ClaudeRuntime {
     pub(crate) fn new(
         command: String,
         model: Option<String>,
+        reasoning_effort: Option<orbit_types::identity::ReasoningEffort>,
         runtime_key: &'static str,
         required_env_vars: &'static [&'static str],
     ) -> Self {
         Self {
             command,
-            cli: ClaudeCliTransport::new(model),
+            cli: ClaudeCliTransport::new(model, reasoning_effort),
             runtime_key,
             required_env_vars,
         }
@@ -57,6 +58,7 @@ impl AgentRuntimeFactory for ClaudeFactory {
             ProviderOptions::Claude => Ok(Box::new(ClaudeRuntime::new(
                 cfg.command.clone(),
                 cfg.model.clone(),
+                cfg.reasoning_effort,
                 self.key(),
                 self.required_env_vars(),
             ))),

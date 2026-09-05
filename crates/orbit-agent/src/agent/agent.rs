@@ -63,17 +63,16 @@ impl AgentConfig {
         self
     }
 
-    /// Attach the effort resolved from a crew after verifying the selected
-    /// provider owns the corresponding CLI contract.
+    /// Attach effort resolved from a crew after verifying the provider-model
+    /// CLI contract that will receive it.
     pub fn with_reasoning_effort(
         mut self,
         reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Self, OrbitError> {
-        if reasoning_effort.is_some() && self.provider_key != "codex" {
-            return Err(OrbitError::InvalidInput(format!(
-                "provider '{}' does not support configured reasoning effort",
-                self.provider_key
-            )));
+        if let Some(effort) = reasoning_effort {
+            effort
+                .validate_for_provider_model(self.provider_key, self.model.as_deref())
+                .map_err(OrbitError::InvalidInput)?;
         }
         self.reasoning_effort = reasoning_effort;
         Ok(self)
