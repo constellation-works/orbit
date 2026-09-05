@@ -10,6 +10,7 @@ use crate::context::RuntimeHost;
 use crate::executor::automation::vcs::failure::pr_failure_handoff;
 use crate::executor::automation::vcs::freshness::{prepare_pr_handoff, rebase_pr_branch};
 use crate::executor::automation::vcs::push::push_batch_changes;
+use orbit_common::OrbitError;
 use orbit_types::task::TaskStatus;
 
 #[test]
@@ -343,6 +344,12 @@ fn conflicting_rebase_publishes_clean_pre_rebase_branch_and_blocks_task() {
     let pre_rebase_sha = git(&workspace.repo, &["rev-parse", "HEAD"]);
     let error = rebase_pr_branch(&host, &rebase_input(&common, &prepared))
         .expect_err("rebase must stop on the fixture conflict");
+    let OrbitError::RecoverableVcsConflict(conflict) = &error else {
+        panic!("rebase conflict must retain typed recovery evidence: {error}");
+    };
+    assert_eq!(conflict.operation, "git_rebase");
+    assert_eq!(conflict.target_base_sha, prepared["base_sha"]);
+    assert_eq!(conflict.conflicting_paths, ["src/lib.rs"]);
 
     let recovered = pr_failure_handoff(
         &host,
@@ -386,7 +393,7 @@ fn conflicting_rebase_publishes_clean_pre_rebase_branch_and_blocks_task() {
     );
     let body = host.pr_create_body();
     for expected in [
-        "Manual resolution required",
+        "Automatic conflict recovery exhausted",
         "Original base:",
         "Target base:",
         "`src/lib.rs`",
@@ -407,6 +414,60 @@ fn conflicting_rebase_publishes_clean_pre_rebase_branch_and_blocks_task() {
     assert_eq!(
         update.1.status_event.as_deref(),
         Some("pr_conflict_blocked")
+    );
+}
+
+#[test]
+fn base_advancement_after_prepare_is_preserved_without_starting_stale_recovery() {
+    let workspace = rebase_conflict_pr_workspace();
+    let task_id = "ORB-BASE-RACE";
+    let host = PrOpenTestHost::new(
+        vec![batch_task(
+            task_id,
+            "Preserve concurrent base advancement",
+            "Outcome: success\nChanges:\n- Candidate is complete.",
+        )],
+        workspace.repo.clone(),
+    );
+    let common = json!({
+        "workspace_path": workspace.repo,
+        "job_run_id": "batch-1",
+        "completed_task_ids": [task_id],
+        "base": "agent-main",
+        "base_sync": "local",
+    });
+    let prepared = prepare_pr_handoff(&host, &common).expect("prepare pinned base");
+    git(&workspace.repo, &["checkout", "agent-main"]);
+    fs::write(workspace.repo.join("race.txt"), "concurrent base change\n")
+        .expect("write concurrent base change");
+    git(&workspace.repo, &["add", "race.txt"]);
+    git(
+        &workspace.repo,
+        &["commit", "-m", "advance base during handoff"],
+    );
+    let advanced_base = git(&workspace.repo, &["rev-parse", "agent-main"]);
+    git(&workspace.repo, &["checkout", "orbit/test-batch"]);
+
+    let error = rebase_pr_branch(&host, &rebase_input(&common, &prepared))
+        .expect_err("stale prepared base must fail closed");
+
+    assert!(
+        matches!(error, OrbitError::Execution(_)),
+        "base movement is not an unmerged-index conflict: {error}"
+    );
+    assert!(error.to_string().contains(&advanced_base), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("refusing to lose concurrent base changes")
+    );
+    assert!(
+        !workspace.repo.join("race.txt").exists(),
+        "candidate branch must not silently absorb or overwrite the newly observed base"
+    );
+    assert!(
+        git(&workspace.repo, &["status", "--porcelain"]).is_empty(),
+        "stale checkpoint refusal must not start a rebase"
     );
 }
 

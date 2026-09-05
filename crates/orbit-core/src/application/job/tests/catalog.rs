@@ -347,22 +347,32 @@ fn dependabot_sweep_pipeline_is_two_deterministic_steps_and_single_flight() {
 }
 
 #[test]
-fn seeded_step_failure_recovery_asset_stays_aligned_without_retired_role() {
-    let seeded = DEFAULT_ACTIVITY_FILES
-        .iter()
-        .find_map(|(name, yaml)| (*name == "step_failure_recovery").then_some(*yaml))
-        .expect("seeded step failure recovery activity");
-    assert_eq!(
-        seeded,
-        include_str!("../../../../../../.orbit/resources/activities/step_failure_recovery.yaml"),
-        "dogfood and seeded recovery activity assets must remain behaviorally aligned"
-    );
+fn seeded_recovery_assets_stay_aligned_without_retired_role() {
+    for name in ["step_failure_recovery", "pr_conflict_recovery"] {
+        let seeded = DEFAULT_ACTIVITY_FILES
+            .iter()
+            .find_map(|(activity_name, yaml)| (*activity_name == name).then_some(*yaml))
+            .unwrap_or_else(|| panic!("seeded {name} activity"));
+        let dogfood = match name {
+            "step_failure_recovery" => include_str!(
+                "../../../../../../.orbit/resources/activities/step_failure_recovery.yaml"
+            ),
+            "pr_conflict_recovery" => include_str!(
+                "../../../../../../.orbit/resources/activities/pr_conflict_recovery.yaml"
+            ),
+            _ => unreachable!("fixed recovery activity list"),
+        };
+        assert_eq!(
+            seeded, dogfood,
+            "dogfood and seeded {name} assets must remain behaviorally aligned"
+        );
 
-    let asset = load_activity_asset(seeded).expect("parse recovery activity");
-    let ActivityV2Spec::AgentLoop(_) = asset.spec.spec else {
-        panic!("step_failure_recovery must remain an agent loop");
-    };
-    assert!(!seeded.contains("\n  role:"));
+        let asset = load_activity_asset(seeded).expect("parse recovery activity");
+        let ActivityV2Spec::AgentLoop(_) = asset.spec.spec else {
+            panic!("{name} must remain an agent loop");
+        };
+        assert!(!seeded.contains("\n  role:"));
+    }
 }
 
 fn assert_condition_tokens_are_paths(condition: &str) {
@@ -996,7 +1006,7 @@ fn pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints() {
             (
                 "sync_base",
                 "activity:git_rebase",
-                Some("step_failure_recovery")
+                Some("pr_conflict_recovery")
             ),
             ("push", "activity:git_push", Some("step_failure_recovery")),
             ("pr_open", "activity:pr_open", Some("step_failure_recovery")),
@@ -1616,9 +1626,14 @@ fn task_shipment_jobs_resolve_default_recovery_activity() {
             "default job {job_name} should wire recovery on direct shipment steps"
         );
         for (step_id, recovery_activity, resolved) in recovery_steps {
+            let expected = if job_name == "task_pr_pipeline" && step_id == "sync_base" {
+                "pr_conflict_recovery"
+            } else {
+                "step_failure_recovery"
+            };
             assert_eq!(
                 recovery_activity.as_deref(),
-                Some("step_failure_recovery"),
+                Some(expected),
                 "step {step_id} should use default recovery activity"
             );
             assert!(

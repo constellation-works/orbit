@@ -26,6 +26,13 @@ fn dispatch_error_retryability_classification_table() {
             code: "worktree_escape",
             diagnostic: r#"{"task_id":"ORB-1"}"#.into(),
         },
+        DispatchError::RecoverableVcsConflict {
+            operation: "git_rebase".into(),
+            original_base_sha: "base-before".into(),
+            target_base_sha: "base-target".into(),
+            conflicting_paths: vec!["src/lib.rs".into()],
+            diagnostic: "stopped on unmerged index entries".into(),
+        },
     ];
     for err in &permanent {
         assert!(err.is_non_retryable(), "expected non-retryable: {err:?}");
@@ -62,5 +69,21 @@ fn dispatch_error_to_orbit_keeps_validation_variant_and_buckets_the_rest() {
     assert!(matches!(
         dispatch_error_to_orbit(other),
         OrbitError::InvalidInput(m) if m == expected
+    ));
+
+    let conflict = DispatchError::RecoverableVcsConflict {
+        operation: "git_rebase".into(),
+        original_base_sha: "base-before".into(),
+        target_base_sha: "base-target".into(),
+        conflicting_paths: vec!["src/lib.rs".into()],
+        diagnostic: "stopped on unmerged index entries".into(),
+    };
+    assert!(matches!(
+        dispatch_error_to_orbit(conflict),
+        OrbitError::RecoverableVcsConflict(details)
+            if details.operation == "git_rebase"
+                && details.original_base_sha == "base-before"
+                && details.target_base_sha == "base-target"
+                && details.conflicting_paths == ["src/lib.rs"]
     ));
 }

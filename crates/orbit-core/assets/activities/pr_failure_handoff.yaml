@@ -7,8 +7,9 @@ spec:
   description: >
     Terminal task-PR recovery hook. Before publication it commits any dirty
     candidate, restores and pushes the pre-rebase branch, and opens or reuses a
-    blocked PR. After publication it preserves the existing PR and review state
-    with truthful merge diagnostics for a safe completion retry.
+    blocked PR after bounded conflict recovery is exhausted. After publication
+    it preserves the existing PR and review state with truthful merge
+    diagnostics for a safe completion retry.
   input_schema_json:
     type: object
     additionalProperties: false

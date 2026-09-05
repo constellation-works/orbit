@@ -28,7 +28,8 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::{
-    ArtifactOrigin, DependencyNotDelivered, FrictionNotLocal, OrbitError, WorkspaceClaimHeld,
+    ArtifactOrigin, DependencyNotDelivered, FrictionNotLocal, OrbitError, RecoverableVcsConflict,
+    WorkspaceClaimHeld,
 };
 
 const REDACTED_ENV_VALUE: &str = "[REDACTED_ENV]";
@@ -195,6 +196,9 @@ pub fn redact_sensitive_env_error(error: OrbitError) -> OrbitError {
             payload: redact_sensitive_env_json(payload),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact_sensitive_env_text(&m)),
+        OrbitError::RecoverableVcsConflict(conflict) => OrbitError::RecoverableVcsConflict(
+            redact_recoverable_vcs_conflict(*conflict, redact_sensitive_env_text),
+        ),
         OrbitError::RunCancellationIncomplete {
             pid,
             pgid,
@@ -335,6 +339,9 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
             payload: redact_json_with(payload, redact_all),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact_all(&m)),
+        OrbitError::RecoverableVcsConflict(conflict) => OrbitError::RecoverableVcsConflict(
+            redact_recoverable_vcs_conflict(*conflict, redact_all),
+        ),
         OrbitError::RunCancellationIncomplete {
             pid,
             pgid,
@@ -418,6 +425,23 @@ fn redact_dependency_not_delivered(
         base_ref: redact(&diagnostic.base_ref),
         base_sha: redact(&diagnostic.base_sha),
         detail: redact(&diagnostic.detail),
+    })
+}
+
+fn redact_recoverable_vcs_conflict(
+    conflict: RecoverableVcsConflict,
+    redact: fn(&str) -> String,
+) -> Box<RecoverableVcsConflict> {
+    Box::new(RecoverableVcsConflict {
+        operation: redact(&conflict.operation),
+        original_base_sha: redact(&conflict.original_base_sha),
+        target_base_sha: redact(&conflict.target_base_sha),
+        conflicting_paths: conflict
+            .conflicting_paths
+            .into_iter()
+            .map(|path| redact(&path))
+            .collect(),
+        diagnostic: redact(&conflict.diagnostic),
     })
 }
 

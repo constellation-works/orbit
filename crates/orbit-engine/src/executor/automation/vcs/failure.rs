@@ -11,7 +11,7 @@ use crate::executor::automation::input::{
 };
 
 use super::commit::commit_failure_candidate;
-use super::freshness::commit_sha;
+use super::freshness::{commit_sha, original_base_sha};
 use super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
@@ -279,21 +279,6 @@ fn unmerged_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
     )
 }
 
-fn original_base_sha(
-    workspace_path: &Path,
-    head_sha: &str,
-    target_base_sha: &str,
-) -> Result<String, OrbitError> {
-    match git_output(workspace_path, &["merge-base", head_sha, target_base_sha]) {
-        Ok(sha) if !sha.trim().is_empty() => Ok(sha.trim().to_string()),
-        _ => Ok(
-            git_output(workspace_path, &["rev-parse", &format!("{head_sha}^")])?
-                .trim()
-                .to_string(),
-        ),
-    }
-}
-
 fn conflicts_from_error(error: &str) -> Vec<String> {
     let Some((_, paths)) = error.split_once("conflicting paths: ") else {
         return Vec::new();
@@ -330,9 +315,11 @@ fn blocked_pr_body(
             .join("\n")
     };
     format!(
-        "## Manual resolution required\n\n\
+        "## Automatic conflict recovery exhausted\n\n\
          Orbit preserved and pushed this task's pre-rebase candidate after the shipment pipeline \
-         stopped. This PR is intentionally blocked and must be reconciled manually before merge.\n\n\
+         exhausted its single system-crew conflict-recovery attempt. This PR is intentionally \
+         blocked; inspect the recorded attempt and reconcile the named conflict before retrying \
+         delivery.\n\n\
          - Task: `{task_id}`\n\
          - Run: `{run_id}`\n\
          - Failed step: `{failed_step_id}`\n\

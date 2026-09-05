@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, RecoverableVcsConflict};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
@@ -132,8 +132,18 @@ fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Val
         &["rev-parse", "--abbrev-ref", "HEAD"],
     )?;
     if rebase_in_progress(&context.workspace_path)? {
+        let conflicting_paths = unmerged_paths(&context.workspace_path)?;
+        if conflicting_paths.is_empty() {
+            return Err(OrbitError::Execution(
+                "git_rebase: rebase remains in progress without unresolved conflict entries"
+                    .to_string(),
+            ));
+        }
         return Err(rebase_conflict_error(
             &context.workspace_path,
+            head_sha_before,
+            base_sha,
+            conflicting_paths,
             "rebase remains stopped with unresolved conflicts",
         )?);
     }
@@ -149,12 +159,27 @@ fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Val
     )? {
         return Err(rebase_conflict_error(
             &context.workspace_path,
+            head_sha_before,
+            base_sha,
+            unmerged_paths(&context.workspace_path)?,
             "unresolved merge conflicts remain",
         )?);
     }
 
+    let observed_base_sha = commit_sha(&context.workspace_path, base_ref)?;
+    if observed_base_sha != base_sha {
+        return Err(OrbitError::Execution(format!(
+            "git_rebase: prepared base ref '{base_ref}' moved from checkpoint '{base_sha}' to '{observed_base_sha}'; refusing to lose concurrent base changes — prepare a fresh handoff checkpoint"
+        )));
+    }
+
     let current_sha = commit_sha(&context.workspace_path, head)?;
     let current = branch_freshness_against_ref(&context.workspace_path, head, base_ref, base_sha)?;
+    if current.commits_ahead == 0 {
+        return Err(OrbitError::Execution(format!(
+            "git_rebase: recovered branch '{head}' no longer contains a candidate ahead of target base '{base_sha}'"
+        )));
+    }
     let (decision, rewritten, head_sha) = if current.commits_behind == 0 {
         if current_sha == head_sha_before {
             if sync_required {
@@ -179,8 +204,17 @@ fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Val
             ));
         }
         if !git_command_success(&context.workspace_path, &["rebase", base_sha])? {
+            let conflicting_paths = unmerged_paths(&context.workspace_path)?;
+            if conflicting_paths.is_empty() {
+                return Err(OrbitError::Execution(format!(
+                    "git_rebase: rebase of '{head}' onto checkpoint '{base_sha}' failed without unresolved conflict entries"
+                )));
+            }
             return Err(rebase_conflict_error(
                 &context.workspace_path,
+                head_sha_before,
+                base_sha,
+                conflicting_paths,
                 &format!("rebase of '{head}' onto checkpoint '{base_sha}' stopped with conflicts"),
             )?);
         }
@@ -212,16 +246,48 @@ fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Val
     }))
 }
 
-fn rebase_conflict_error(repo_root: &Path, context: &str) -> Result<OrbitError, OrbitError> {
-    let paths = git_output(repo_root, &["diff", "--name-only", "--diff-filter=U"])?
-        .lines()
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .collect::<Vec<_>>()
-        .join(", ");
-    Ok(OrbitError::Execution(format!(
-        "git_rebase: {context}; conflicting paths: {paths}"
+fn unmerged_paths(repo_root: &Path) -> Result<Vec<String>, OrbitError> {
+    Ok(
+        git_output(repo_root, &["diff", "--name-only", "--diff-filter=U"])?
+            .lines()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+    )
+}
+
+fn rebase_conflict_error(
+    repo_root: &Path,
+    head_sha_before: &str,
+    target_base_sha: &str,
+    conflicting_paths: Vec<String>,
+    diagnostic: &str,
+) -> Result<OrbitError, OrbitError> {
+    Ok(OrbitError::RecoverableVcsConflict(Box::new(
+        RecoverableVcsConflict {
+            operation: "git_rebase".to_string(),
+            original_base_sha: original_base_sha(repo_root, head_sha_before, target_base_sha)?,
+            target_base_sha: target_base_sha.to_string(),
+            conflicting_paths,
+            diagnostic: diagnostic.to_string(),
+        },
     )))
+}
+
+pub(super) fn original_base_sha(
+    workspace_path: &Path,
+    head_sha: &str,
+    target_base_sha: &str,
+) -> Result<String, OrbitError> {
+    match git_output(workspace_path, &["merge-base", head_sha, target_base_sha]) {
+        Ok(sha) if !sha.trim().is_empty() => Ok(sha.trim().to_string()),
+        _ => Ok(
+            git_output(workspace_path, &["rev-parse", &format!("{head_sha}^")])?
+                .trim()
+                .to_string(),
+        ),
+    }
 }
 
 pub(super) fn ensure_branch_fresh_against_base(
