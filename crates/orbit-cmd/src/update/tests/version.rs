@@ -27,8 +27,35 @@ fn a_prerelease_sorts_below_the_release_it_leads_to() {
 }
 
 #[test]
+fn prerelease_numbers_compare_numerically_not_lexically() {
+    assert!(parse("0.19.0-rc.2") < parse("0.19.0-rc.10"));
+    assert!(parse("0.19.0-rc.10") < parse("0.19.0"));
+    assert!(parse("0.19.0-rc.10") > parse("0.18.9"));
+    assert_eq!(parse("0.19.0-rc.10").to_string(), "0.19.0-rc.10");
+}
+
+#[test]
 fn rejects_input_that_is_not_a_release_version() {
     for value in ["", "latest", "0.18", "0.18.0.1", "0.18.x", "v"] {
+        let error = ReleaseVersion::parse(value).expect_err("should reject");
+        assert!(
+            error.to_string().contains("MAJOR.MINOR.PATCH"),
+            "{value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn rejects_malformed_or_unsupported_prerelease_identifiers() {
+    for value in [
+        "0.19.0-",
+        "0.19.0-rc.",
+        "0.19.0-rc..1",
+        "0.19.0-rc.01",
+        "0.19.0-rc.1+build",
+        "0.19.0-rc_1",
+        "0.19.0-rc.1_2",
+    ] {
         let error = ReleaseVersion::parse(value).expect_err("should reject");
         assert!(
             error.to_string().contains("MAJOR.MINOR.PATCH"),
