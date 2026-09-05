@@ -10,6 +10,11 @@ Reference for Orbit's runtime config — the `config.toml` consumed by `orbit ru
 
 This doc focuses on the user-facing knobs: `[workflow]` and `[crews.*]`. Other sections are summarized at the end.
 
+Contributors adding a new execution lane or deterministic command executor should
+use the [executor onboarding runbook](runbooks/executor-onboarding.md). It
+documents the v2 seams and validation obligations; this reference remains the
+operator contract for configuring an already shipped lane.
+
 ## Where config lives
 
 Two paths are consulted, in order:
