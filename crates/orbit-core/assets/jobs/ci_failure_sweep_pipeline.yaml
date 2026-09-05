@@ -41,6 +41,12 @@
 #   excerpt is formed. The extractor scans no more than 8 MiB per log and
 #   marks the identity incomplete if that hard limit is reached; it never
 #   substitutes an event or PR head SHA as checkout evidence.
+# - Ongoing checks: a queued or in-progress successor does not suppress an
+#   observed failure. Failed jobs inside an in-flight workflow are current
+#   once evidence is complete; a pending check alone is never filed. Freshness
+#   is scoped to workflow/ref/check identity so unrelated pull-request activity
+#   cannot erase a landing-branch failure, while a genuinely newer successful
+#   relevant check still suppresses the resolved case.
 #
 # Overlap safety
 # - `max_active_runs: 1` makes the sweep single-flight, and the seeded routine

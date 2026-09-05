@@ -15,14 +15,23 @@ spec:
     less. Checkout identity is extracted while the full runner-log stream is
     drained, before the human excerpt is truncated; extraction scans at most
     8 MiB per log and records incomplete evidence rather than guessing.
-    Workflow runs are listed repository-wide in one query and exactly
-    the latest run of each workflow is authoritative, ordered by creation time
-    then run ID. Discovery or investigation failures are bounded, redacted,
-    and emitted in `retryable_errors`; the filing step rejects such a snapshot
-    so it cannot be mistaken for a clean result. When no GitHub client is
-    available or authenticated the snapshot carries `collected: false` and
-    gathers nothing further, so a caller can never mistake it for a clean CI
-    result.
+    Workflow runs are listed repository-wide in one query. `latest_runs`
+    records the newest run of each workflow for audit, ordered by creation
+    time then run ID. Current failures are selected by relevant identity
+    (workflow, ref, and observed failed jobs): a queued or in-progress
+    successor is not evidence that an observed failure is resolved, an
+    unrelated pull-request run cannot erase a landing-branch failure, and a
+    genuinely newer completed non-unsuccessful check of the same identity
+    (or a landing-branch success, for non-landing noise) does suppress it.
+    Already-failed jobs inside an in-flight workflow become current once
+    their evidence is complete; a pending check alone is never a repair
+    task. Incomplete mixed-state logs stay in `retryable_errors` until a
+    later sweep can finish them. Discovery or investigation failures are
+    bounded, redacted, and emitted in `retryable_errors`; the filing step
+    rejects such a snapshot so it cannot be mistaken for a clean result.
+    When no GitHub client is available or authenticated the snapshot carries
+    `collected: false` and gathers nothing further, so a caller can never
+    mistake it for a clean CI result.
   input_schema_json:
     type: object
     properties:

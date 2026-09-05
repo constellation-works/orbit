@@ -1,7 +1,25 @@
 use serde_json::{Value, json};
 
 use super::super::collect::collect;
-use super::support::{FakeQueries, run, run_on_branch};
+use super::support::{FakeQueries, failed_job, run, run_on_branch};
+
+fn current_ids(evidence: &Value) -> Vec<u64> {
+    evidence["current_failures"]
+        .as_array()
+        .expect("current failures")
+        .iter()
+        .filter_map(|run| run["run_id"].as_u64())
+        .collect()
+}
+
+fn in_flight_ids(evidence: &Value) -> Vec<u64> {
+    evidence["in_flight"]
+        .as_array()
+        .expect("in flight")
+        .iter()
+        .filter_map(|run| run["run_id"].as_u64())
+        .collect()
+}
 
 const HEAD: &str = "1111111111111111111111111111111111111111";
 const OLD: &str = "2222222222222222222222222222222222222222";
@@ -275,11 +293,11 @@ fn latest_non_failing_run_supersedes_older_failures_on_the_same_head() {
         .iter()
         .filter_map(|entry| entry["superseded_by"]["run_id"].as_u64())
         .collect();
-    assert_eq!(superseding_ids, [30, 40]);
+    assert_eq!(superseding_ids, [25, 40]);
 }
 
 #[test]
-fn newer_repository_wide_success_suppresses_an_older_integration_failure() {
+fn unrelated_pull_request_success_does_not_suppress_an_integration_failure() {
     let queries = FakeQueries::authenticated()
         .with_head("topic", HEAD)
         .with_head("main", HEAD)
@@ -290,8 +308,8 @@ fn newer_repository_wide_success_suppresses_an_older_integration_failure() {
             "reported_head_sha": OLD,
         }))
         .with_runs(vec![vec![
-            // The pull-request run of `ci` is the latest repository-wide run
-            // of this workflow, so it supersedes every older failure.
+            // Newest repository-wide `ci` run is an unrelated pull request.
+            // That cannot erase the landing-branch failure on `topic`.
             run_on_branch(
                 40,
                 "ci",
@@ -302,15 +320,6 @@ fn newer_repository_wide_success_suppresses_an_older_integration_failure() {
                 "2026-08-30T04:00:00Z",
             ),
             run_on_branch(
-                30,
-                "ci",
-                "main",
-                OLD,
-                "completed",
-                Some("success"),
-                "2026-08-30T03:00:00Z",
-            ),
-            run_on_branch(
                 20,
                 "ci",
                 "topic",
@@ -319,28 +328,31 @@ fn newer_repository_wide_success_suppresses_an_older_integration_failure() {
                 Some("failure"),
                 "2026-08-30T02:00:00Z",
             ),
-        ]]);
+        ]])
+        .with_run_view("20", json!({"failed_jobs": [failed_job(5, "build")]}))
+        .with_log("20", false, "ci\tbuild\tassertion failed\n")
+        .with_log(
+            "20",
+            true,
+            "ci\tCheckout\tHEAD is now at 3333333333333333333333333333333333333333\n",
+        );
 
     let evidence = collect(&queries, &input()).expect("collect");
 
-    assert_eq!(evidence["current_failures"], json!([]));
-    assert_eq!(evidence["outcome_hint"], json!("no_current_failure"));
+    assert_eq!(current_ids(&evidence), [20]);
+    assert_eq!(evidence["outcome_hint"], json!("current_failures"));
     assert_eq!(evidence["latest_runs"][0]["run_id"], json!(40));
-    assert_eq!(evidence["stale_or_superseded"][0]["run_id"], json!(20));
-    assert_eq!(
-        evidence["stale_or_superseded"][0]["superseded_by"]["run_id"],
-        json!(40)
-    );
+    assert_eq!(evidence["stale_or_superseded"], json!([]));
 }
 
 #[test]
-fn latest_repository_wide_failure_is_current_even_when_its_ref_is_not_scanned() {
+fn distinct_workflow_refs_keep_independent_failures() {
     let queries = FakeQueries::authenticated()
         .with_head("topic", HEAD)
         .with_head("main", HEAD)
         .with_runs(vec![vec![
-            // Eligibility is workflow-wide, not branch-by-branch. Ref
-            // metadata can be absent without reviving the older run.
+            // A newer unsuccessful run on an unscanned ref must not hide the
+            // landing-branch failure. Distinct refs stay independently current.
             run_on_branch(
                 50,
                 "ci",
@@ -363,24 +375,22 @@ fn latest_repository_wide_failure_is_current_even_when_its_ref_is_not_scanned() 
 
     let evidence = collect(&queries, &input()).expect("collect");
 
-    let current_ids: Vec<u64> = evidence["current_failures"]
-        .as_array()
-        .expect("current failures")
-        .iter()
-        .filter_map(|run| run["run_id"].as_u64())
-        .collect();
     assert_eq!(
-        current_ids,
-        [50],
-        "exactly the repository-wide latest workflow run must be current: {evidence}"
+        current_ids(&evidence),
+        [20, 50],
+        "landing and unrelated-ref failures stay independently current: {evidence}"
     );
-    assert_eq!(evidence["current_failures"][0]["ref_kind"], json!("other"));
-    assert_eq!(evidence["stale_or_superseded"][0]["run_id"], json!(20));
+    assert_eq!(
+        evidence["current_failures"][0]["ref_kind"],
+        json!("integration")
+    );
+    assert_eq!(evidence["current_failures"][1]["ref_kind"], json!("other"));
+    assert_eq!(evidence["stale_or_superseded"], json!([]));
     assert_eq!(evidence["in_flight"], json!([]));
 }
 
 #[test]
-fn latest_in_flight_run_does_not_resurrect_an_older_failure() {
+fn queued_or_running_successor_does_not_suppress_an_observed_failure() {
     let queries = FakeQueries::authenticated()
         .with_head("topic", HEAD)
         .with_head("main", HEAD)
@@ -403,29 +413,32 @@ fn latest_in_flight_run_does_not_resurrect_an_older_failure() {
                 Some("failure"),
                 "2026-08-30T04:30:00Z",
             ),
-        ]]);
+        ]])
+        .with_run_view("30", json!({"failed_jobs": [failed_job(7, "build")]}))
+        .with_log("30", false, "ci\tbuild\tassertion failed\n")
+        .with_log(
+            "30",
+            true,
+            "ci\tCheckout\tHEAD is now at 3333333333333333333333333333333333333333\n",
+        )
+        .with_run_view("45", json!({"failed_jobs": [failed_job(8, "lint")]}))
+        .with_log("45", false, "lint\tlint\tlint failed\n")
+        .with_log(
+            "45",
+            true,
+            "lint\tCheckout\tHEAD is now at 3333333333333333333333333333333333333333\n",
+        );
 
-    let evidence = collect(&queries, &input()).expect("collect");
+    let evidence = collect(
+        &queries,
+        &json!({"integration_branch": "topic", "max_checkout_log_reads": 2}),
+    )
+    .expect("collect");
 
-    assert_eq!(evidence["current_failures"], json!([]));
-    let in_flight_ids: Vec<u64> = evidence["in_flight"]
-        .as_array()
-        .expect("in flight")
-        .iter()
-        .filter_map(|run| run["run_id"].as_u64())
-        .collect();
-    assert_eq!(in_flight_ids, [40, 50]);
-    let stale_ids: Vec<u64> = evidence["stale_or_superseded"]
-        .as_array()
-        .expect("stale")
-        .iter()
-        .filter_map(|run| run["run_id"].as_u64())
-        .collect();
-    assert_eq!(stale_ids, [30, 45]);
-    assert_eq!(
-        evidence["stale_or_superseded"][0]["superseded_by"]["status"],
-        json!("in_progress")
-    );
+    assert_eq!(current_ids(&evidence), [45, 30]);
+    assert_eq!(in_flight_ids(&evidence), [40, 50]);
+    assert_eq!(evidence["stale_or_superseded"], json!([]));
+    assert_eq!(evidence["outcome_hint"], json!("current_failures"));
 }
 
 #[test]
@@ -983,4 +996,201 @@ fn live_failure_fixture_is_latest_current_and_evidence_complete() {
         json!([33_358_160_088_u64])
     );
     assert_eq!(evidence["summary"]["retryable_errors"], json!(0));
+}
+
+/// ORB-11278: a failed job inside an in-progress workflow is current once
+/// evidence is complete. A still-running sibling check is not a repair task.
+#[test]
+fn failed_job_with_running_siblings_is_current_and_pending_sibling_is_not() {
+    const EVENT_SHA: &str = "8b0a760bae17b6f0aeee9eab47840684697fa812";
+    let queries = FakeQueries::authenticated()
+        .with_head("agent-main", EVENT_SHA)
+        .with_head("main", OLD)
+        .with_runs(vec![vec![run_on_branch(
+            33_979_680_684,
+            "CI",
+            "agent-main",
+            EVENT_SHA,
+            "in_progress",
+            None,
+            "2026-09-05T16:00:00Z",
+        )]])
+        .with_run_view(
+            "33979680684",
+            json!({"failed_jobs": [{
+                "job_id": 11,
+                "name": "Linux tests",
+                "conclusion": "failure",
+                "url": "https://github.com/danieljhkim/orbit/actions/runs/33979680684/job/11",
+                "failed_steps": [{"name": "Run tests", "conclusion": "failure"}],
+            }]}),
+        )
+        .with_log(
+            "33979680684",
+            false,
+            "CI\tLinux tests\tRun tests assertion failed in collect.rs\n",
+        )
+        .with_log(
+            "33979680684",
+            true,
+            "CI\tCheckout\tHEAD is now at 8b0a760bae17b6f0aeee9eab47840684697fa812\n",
+        );
+
+    let evidence = collect(
+        &queries,
+        &json!({"integration_branch": "agent-main", "max_checkout_log_reads": 1}),
+    )
+    .expect("collect");
+    let failure = &evidence["current_failures"][0];
+
+    assert_eq!(current_ids(&evidence), [33_979_680_684_u64]);
+    assert_eq!(failure["status"], json!("in_progress"));
+    assert_eq!(failure["failed_jobs"].as_array().map(Vec::len), Some(1));
+    assert_eq!(failure["failed_jobs"][0]["name"], json!("Linux tests"));
+    assert_eq!(failure["investigated"], json!(true));
+    assert_eq!(evidence["outcome_hint"], json!("current_failures"));
+    assert_eq!(in_flight_ids(&evidence), [33_979_680_684_u64]);
+    assert_eq!(evidence["retryable_errors"], json!([]));
+}
+
+#[test]
+fn pending_in_flight_check_alone_is_not_a_repair_task() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![run(
+            40,
+            "ci",
+            HEAD,
+            "in_progress",
+            None,
+            "2026-08-30T04:00:00Z",
+        )]]);
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    assert_eq!(evidence["current_failures"], json!([]));
+    assert_eq!(in_flight_ids(&evidence), [40]);
+    assert_eq!(evidence["retryable_errors"], json!([]));
+    assert_eq!(evidence["outcome_hint"], json!("no_current_failure"));
+}
+
+#[test]
+fn incomplete_mixed_state_evidence_stays_retryable_until_logs_are_available() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![run(
+            40,
+            "ci",
+            HEAD,
+            "in_progress",
+            None,
+            "2026-08-30T04:00:00Z",
+        )]])
+        .with_run_view("40", json!({"failed_jobs": [failed_job(5, "build")]}))
+        .with_log_error("40", false, "logs are not available until the job finishes");
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    assert_eq!(
+        current_ids(&evidence),
+        Vec::<u64>::new(),
+        "incomplete mixed-state evidence must not become a repair task: {evidence}"
+    );
+    assert_eq!(in_flight_ids(&evidence), [40]);
+    assert_eq!(evidence["outcome_hint"], json!("retryable_error"));
+    let errors = evidence["retryable_errors"]
+        .as_array()
+        .expect("retryable_errors");
+    assert!(
+        errors.iter().any(|error| {
+            error["operation"] == json!("run_logs")
+                && error["retryable"] == json!(true)
+                && error["run_id"] == json!(40)
+        }),
+        "missing in-flight logs must stay retryable: {errors:?}"
+    );
+}
+
+#[test]
+fn unrelated_pull_request_in_flight_does_not_suppress_an_integration_failure() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_pull_request(json!({
+            "number": 12,
+            "url": "https://github.com/acme/orbit/pull/12",
+            "head_branch": "feature-x",
+            "reported_head_sha": OLD,
+        }))
+        .with_runs(vec![vec![
+            run_on_branch(
+                40,
+                "ci",
+                "feature-x",
+                OLD,
+                "in_progress",
+                None,
+                "2026-08-30T04:00:00Z",
+            ),
+            run_on_branch(
+                20,
+                "ci",
+                "topic",
+                HEAD,
+                "completed",
+                Some("failure"),
+                "2026-08-30T02:00:00Z",
+            ),
+        ]])
+        .with_run_view("20", json!({"failed_jobs": [failed_job(5, "build")]}))
+        .with_log("20", false, "ci\tbuild\tassertion failed\n")
+        .with_log(
+            "20",
+            true,
+            "ci\tCheckout\tHEAD is now at 3333333333333333333333333333333333333333\n",
+        );
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    assert_eq!(current_ids(&evidence), [20]);
+    assert_eq!(in_flight_ids(&evidence), [40]);
+    assert_eq!(evidence["stale_or_superseded"], json!([]));
+    assert_eq!(evidence["outcome_hint"], json!("current_failures"));
+}
+
+#[test]
+fn same_ref_rerun_success_suppresses_the_resolved_failure() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![
+            run(
+                40,
+                "ci",
+                HEAD,
+                "completed",
+                Some("success"),
+                "2026-08-30T04:00:00Z",
+            ),
+            run(
+                30,
+                "ci",
+                HEAD,
+                "completed",
+                Some("failure"),
+                "2026-08-30T03:00:00Z",
+            ),
+        ]]);
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    assert_eq!(evidence["current_failures"], json!([]));
+    assert_eq!(evidence["outcome_hint"], json!("no_current_failure"));
+    assert_eq!(evidence["stale_or_superseded"][0]["run_id"], json!(30));
+    assert_eq!(
+        evidence["stale_or_superseded"][0]["superseded_by"]["run_id"],
+        json!(40)
+    );
 }

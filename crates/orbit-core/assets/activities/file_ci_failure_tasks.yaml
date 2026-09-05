@@ -10,7 +10,9 @@ spec:
     (workflow, failing job, failing step, normalized error signature, and the
     commit the runner actually tested) so one regression repeated across a push
     run and a pull-request run of the same commit becomes one task rather than
-    several. Each surviving cluster is filed at `status: proposed` with the
+    several. Current failures may include already-failed jobs from an
+    in-flight workflow when that evidence is complete; a pending check is
+    never present in the snapshot as a current failure and must not be filed. Each surviving cluster is filed at `status: proposed` with the
     collected evidence rendered inline in the description, so the implementing
     agent never needs a GitHub credential; no `required_tools` are attached and
     the task can later ship through the ordinary pull-request route only after

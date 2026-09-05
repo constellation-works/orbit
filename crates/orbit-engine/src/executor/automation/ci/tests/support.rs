@@ -207,3 +207,13 @@ pub(super) fn run_on_branch(
     value["head_branch"] = json!(branch);
     value
 }
+
+pub(super) fn failed_job(job_id: u64, name: &str) -> Value {
+    json!({
+        "job_id": job_id,
+        "name": name,
+        "conclusion": "failure",
+        "url": format!("https://github.com/acme/orbit/actions/runs/1/job/{job_id}"),
+        "failed_steps": [{"name": name, "conclusion": "failure"}],
+    })
+}
