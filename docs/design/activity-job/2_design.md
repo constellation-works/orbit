@@ -625,7 +625,17 @@ The remote-mode refusal remains part of `git_merge`: a caller that requests remo
 
 ### 8.10 Workflow task admission
 
-After [T20260428-8], task-starting workflows own explicit admission instead of relying on generic task updates. `worktree_setup` accepts `proposed`, `backlog`, `rejected`, and `archived` tasks into `in-progress`; existing `in-progress` tasks are idempotent retry inputs.
+After [T20260428-8], task-starting workflows own explicit admission instead of relying on generic task updates. After [ORB-11305] the admissible set is exactly `backlog` and `in-progress`: `backlog` is fresh authorized work, and `in-progress` is either this run's own idempotent retry or work a human explicitly restarted through `orbit.task.start`. `worktree_setup` moves the former into `in-progress` and leaves the latter alone.
+
+Everything else is refused, because every other status is somebody's decision that the task should not be running: `proposed` and `someday` are unapproved or withdrawn, `archived` and `rejected` are closed, `review` and `done` already landed, and `blocked` is a failed run nobody has looked at yet. The set previously included `proposed`, `rejected`, and `archived`, which let admission silently overturn a withdrawal — the production incident [ORB-11305] investigated, where a bundle admitted while its task was `backlog` waited an hour on locks, the owner withdrew and then archived the task during that wait, and the gate dispatched anyway on its stale snapshot: `worktree_setup` moved the archived task to `in-progress` and launched a provider against withdrawn work.
+
+The repair is that eligibility is re-asked at the boundaries where it is consequential, not just where dispatch was first decided, and that the answer cannot go stale between the check and the write:
+
+- `invoke_and_wait` re-checks live admission for `admission_task_ids` immediately before submitting the child run. Already-shipped tasks (`review`/`done`) return the pre-existing succeeded no-op; a withdrawn task returns a non-success synthetic child result carrying the reason, so the gate's `release_reservation` step still frees the reservation before `require_child_success` fails the run. Both are audited (`gate.stale_noop`, `gate.withdrawn`). A task id that resolves to no task at all remains a hard activity failure — that is a malformed bundle, not a lifecycle decision.
+- `admit_task_for_workflow_as_system` writes its `in-progress` transition under a store-level compare-and-set (`TaskHistoryUpdateParams::expected_status`), evaluated inside the per-task exclusive file lock after the bundle is re-read. A withdrawal landing between the predicate and the write loses the write rather than being overwritten.
+- Symmetrically, the failure/cancellation cleanup in `block_on_run_failure` no longer blocks a task that is `proposed` or `someday`, joining `done`/`review`/`blocked`/`rejected`/`archived`. A withdrawal is routinely what *causes* the cancellation, and cleanup that ran after it would replace the owner's newer decision with `blocked`.
+
+Recovery paths are unchanged: `orbit.task.start` still accepts `blocked` and leaves the task `in-progress`, which admission accepts, and a resumed run's `reclaim_task_for_resumed_run` restoration is a separate lineage-proven path that does not go through this predicate.
 
 This path stays separate from `orbit.task.update` and generic deterministic metadata stamping. Direct task updates keep the non-empty-plan guard, and workflow admission records system-actor lifecycle history.
 

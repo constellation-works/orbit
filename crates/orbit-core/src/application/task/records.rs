@@ -88,6 +88,7 @@ impl TaskRecordService<'_> {
                     status_note: params.status_note.clone(),
                     append_history: params.append_history.clone(),
                     append_comments: params.append_comments.clone(),
+                    expected_status: params.expected_status.clone(),
                 },
             )?;
         }

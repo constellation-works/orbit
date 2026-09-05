@@ -27,9 +27,14 @@ spec:
     Run itself may still be running — callers that care must inspect
     `run_id` to decide follow-up. Gate workflows may pass
     `admission_task_ids` and `admission_workflow` to re-check workflow
-    admission immediately before dispatch; stale `review` / `done` tasks
-    return a succeeded no-op output with `skipped: true` and do not submit a
-    child Run.
+    admission immediately before dispatch, so an admission granted before a
+    long gate wait cannot dispatch work whose status has since changed.
+    Neither case submits a child Run: stale `review` / `done`
+    tasks return a succeeded no-op output with `skipped: true`, while a task
+    withdrawn during the wait returns `skipped: true` with a non-succeeded
+    `status` and an `error` naming the task and its status, so a following
+    release step still runs and `pipeline_success_guard` then fails the
+    parent. A task id that resolves to no task at all fails the activity.
   input_schema_json:
     type: object
     required: [job_name, run_input]
