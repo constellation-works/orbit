@@ -219,6 +219,7 @@ Retired features stay listed with their `_archive/` path as a historical record.
 | Knowledge graph | [docs/design/_archive/knowledge-graph/](./_archive/knowledge-graph/) | claude |
 | MCP Bridge | [docs/design/mcp-bridge/](./mcp-bridge/) | claude |
 | MCP Session Context | [docs/design/mcp-session-context/](./mcp-session-context/) | codex |
+| Operation Mode | [docs/design/operation-mode/](./operation-mode/) | codex |
 | Orbit Core | [docs/design/orbit-core/](./orbit-core/) | claude |
 | Orbit Docs | [docs/design/orbit-docs/](./orbit-docs/) | claude |
 | Orbit Graph | [docs/design/_archive/orbit-graph/](./_archive/orbit-graph/) | claude |
