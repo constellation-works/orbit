@@ -275,3 +275,58 @@ fn task_context_for_agent_input_truncates_oldest_comments_over_the_count_cap() {
         (POSTED - MAX_KEPT) as u64
     );
 }
+
+/// [ORB-11338]: comment creation imposes no size limit, so the newest retained
+/// comment can exceed the envelope's byte budget on its own. Dropping older
+/// entries cannot help there — the projection has to cut the body itself
+/// rather than hand the agent an unbounded prompt.
+#[test]
+fn task_context_for_agent_input_truncates_a_single_oversized_comment_body() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "One enormous comment".to_string(),
+            description: "Task description for agent context.".to_string(),
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("add task");
+
+    const MAX_BYTES: usize = 16 * 1024;
+    let oversized = format!("HEAD MARKER {}", "x".repeat(MAX_BYTES * 2));
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                comment: Some(oversized),
+                ..Default::default()
+            },
+            Some("codex".to_string()),
+            None,
+        )
+        .expect("post oversized comment");
+
+    let context = runtime
+        .task_context_for_agent_input(&json!({ "task_id": task.id.clone() }))
+        .expect("build task context")
+        .expect("task context present");
+
+    let comments = context["comments"]
+        .as_array()
+        .expect("comments is an array");
+    // The comment is retained, not dropped: it is the newest one.
+    assert_eq!(comments.len(), 1);
+    let message = comments[0]["message"]
+        .as_str()
+        .expect("comment message is a string");
+    assert!(
+        message.len() <= MAX_BYTES,
+        "projected comment body is {} bytes, over the {MAX_BYTES}-byte budget",
+        message.len()
+    );
+    assert!(message.starts_with("HEAD MARKER "));
+    assert!(message.ends_with("[comment truncated to fit the envelope byte budget]"));
+    // Truncation is reported, and no whole entry was omitted.
+    assert_eq!(context["comments_truncated"], true);
+    assert!(context.get("comments_omitted_count").is_none());
+}
