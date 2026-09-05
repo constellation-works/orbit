@@ -231,10 +231,22 @@ fn dispatch_binds_native_reads_envelope_and_cwd_but_retains_task_authority() {
         &script,
         r#"#!/bin/sh
 envelope=$(cat)
-[ "$(cat target.txt)" = pinned ] || exit 11
-[ "$ORBIT_WORKSPACE" = ws_owner ] || exit 12
-[ "$ORBIT_REGISTRY_ROOT" = /authoritative/registry ] || exit 13
-printf '%s' "$envelope" | rg -F "$(pwd)" >/dev/null || exit 14
+if [ "$(cat target.txt)" != pinned ]; then
+  echo "native source read did not use the pinned checkout" >&2
+  exit 11
+fi
+if [ "$ORBIT_WORKSPACE" != ws_owner ]; then
+  echo "managed workspace identity was not retained" >&2
+  exit 12
+fi
+if [ "$ORBIT_REGISTRY_ROOT" != /authoritative/registry ]; then
+  echo "managed registry identity was not retained" >&2
+  exit 13
+fi
+if ! printf '%s' "$envelope" | grep -F "$(pwd)" >/dev/null; then
+  echo "envelope did not retain the dispatched cwd" >&2
+  exit 14
+fi
 printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
 "#,
     );
@@ -254,7 +266,17 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
         Some("reviewer"),
     )
     .unwrap();
-    assert!(outcome.success);
+    let stderr = outcome
+        .output
+        .get("stderr_blob_ref")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|reference| sink.blob(reference))
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+    assert!(
+        outcome.success,
+        "dispatch failed: message={:?}, stderr={stderr:?}",
+        outcome.message
+    );
     let events = audit.events_snapshot().unwrap();
     let cwd = events
         .iter()
