@@ -7,17 +7,19 @@ status: Draft
 feature: operation-mode
 doc_role: design
 type: design
-summary: Source-verified existing controls and gaps that a proposed operation mode would compose.
-tags: [operation-mode, pipelines, configuration]
+summary: Source-verified operation controls, PR delivery and review sweep seams, and gaps for the proposed review policy.
+tags: [operation-mode, pipelines, configuration, review-policy]
 paths: ["crates/orbit-core/assets/jobs/**", "crates/orbit-core/src/adapter/engine_host/v2_host/**", "crates/orbit-config/src/**"]
 related_features: [activity-job, routines, auditability]
-related_artifacts: [ORB-11314]
+related_artifacts: [ORB-11314, ORB-11316]
 ---
 
 # Operation Mode — Design
 
 **Proposed feature; documentation only.** This file describes existing seams
 verified at checkout `8da5a925f313ac9ae8ac29f8dcf0b9c56c869656` on 2026-09-05.
+The review/delivery inventory in section 5 was verified for [ORB-11316] at
+`32da9a9e57a7912fa71c665b0bdecde8fc014bf4` on the same date.
 There is no implemented global operation-mode setting. New behavior belongs
 in [the proposal](./3_vision.md). Versioned workspace resources are evidence of
 this checkout's configuration, not proof that a host clock is currently running.
@@ -122,7 +124,50 @@ populates read-token/double-read gauges for new runs. None of these measures
 alone identifies an external Astra session's mechanical turns or proves total
 cost per accepted change.
 
-## 5. Concerns & Honest Limitations
+## 5. Existing review and delivery evidence
+
+The [PR pipeline](../../../crates/orbit-core/assets/jobs/task_pr_pipeline.yaml)
+currently runs implementation → commit → prepare branch → synchronize base →
+push → open/reuse PR → promote tasks, followed by optional completion. It has
+no fresh code-review/repair stage. `completion: review` stops at handoff; the
+word `review` is not a reviewer verdict. The
+[completion implementation](../../../crates/orbit-engine/src/executor/automation/vcs/pr/complete.rs)
+checks GitHub's merged state before completing tasks, but that is not a
+certificate of reviewed content. Base synchronization and conflict recovery can
+change the candidate after implementation. The new gate must therefore cover
+delivery transformations as well as the initial implementation diff.
+
+The [existing review instructions](../../../crates/orbit-core/assets/skills/orbit/references/task-review.md)
+are read-only: check spec compliance before quality, report findings, and do not
+approve or transition the task. A reviewer allowed to repair is a **new bounded
+activity contract**, not permission implied by today's reviewer label/profile.
+Existing `allowed_crews` propagation in the PR job is a constraint to preserve;
+it does not select a distinct review crew today.
+
+The seeded [code-review auto-task](../../../crates/orbit-core/assets/auto_tasks/code-review.yaml)
+is disabled, scheduled by cron, and assigned to `system`. Its prompt finds the
+newest completed current/legacy sweep, reads the cursor from its execution
+summary, reviews the integration-branch range, and files confirmed findings.
+With no prior sweep it seeds current HEAD and stops. It examines interactions
+across merged changes; it neither directly repairs them nor filters by a
+before-PR coverage record. These are portable defaults, not a claim about live
+workspace enablement or user-edited definitions.
+
+The [auto-task scheduler](../../../crates/orbit-core/src/application/auto_tasks/scheduler.rs)
+mints tasks when the [time schedule](../../../crates/orbit-core/src/application/auto_tasks/schedule.rs)
+is due, with `skip_if_open` dedupe. Its
+[cursor state](../../../crates/orbit-core/src/application/auto_tasks/state.rs)
+records baseline, last slot/fire, and last minted task. A fire checkpoint is
+not successful review coverage; task creation and cursor update are separate
+operations, with checkpoint errors reported. Delivery thresholds, immutable
+review batches, and atomic review-coverage acceptance are proposed work.
+
+The independently seeded [QA sweep](../../../crates/orbit-core/assets/auto_tasks/qa-sweep.yaml)
+is also disabled and time-scheduled. It asks workers to build/run affected user
+paths and file real issues; rerunning existing tests alone is insufficient.
+Review coverage must not suppress that distinct integrated-behavior check.
+
+## 6. Concerns & Honest Limitations
 
 This inspection reads source and checked-in resources, not live host telemetry.
 It establishes extension seams, not that enabling a preset is already safe.
@@ -130,9 +175,12 @@ General grant enforcement, comprehensive preparation freshness, an admission
 policy snapshot, and cross-retry budgets still need implementation. Scheduler
 timing depends on the external sweep clock, host role/pin, and capacity.
 Current numeric defaults describe this revision and may change independently.
+Neither the inspected PR job nor the auto-task scheduler enforces the proposed
+review policy, repair budget, or revision-specific exclusion from later sweeps.
 
 ## Task References
 
 - [ORB-11314] — verifies current controls to ground the operation-mode proposal.
+- [ORB-11316] — verifies review, delivery, scheduler, and QA extension seams.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
