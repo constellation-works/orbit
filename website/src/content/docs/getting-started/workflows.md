@@ -1,19 +1,33 @@
 ---
-title: Default Workflows
-description: "Built-in workflows under orbit run."
+title: Delivery Workflows
+description: "The orbit run surface: shipping one task, draining a backlog, sweeping workspaces, triaging failures, and inspecting runs."
 sidebar:
   order: 4
 ---
 
-Orbit ships a default workflow under `orbit run`. It wraps a seeded job pipeline under `crates/orbit-core/assets/jobs/`; the same pipeline is runnable directly via `orbit run job <name>`.
+Everything Orbit executes is a job run. `orbit run` gives the common ones names
+so you do not have to remember job IDs.
 
-The workflow defaults `--base` to `[workflow].base_branch` from
-`config.toml`, or `main` when it is unset. Pass `--base <branch>` to target a
-different branch.
+| Command | What it does |
+|---|---|
+| [`orbit run ship`](#orbit-run-ship) | Ship selected tasks, or the ready backlog, through the gated pipeline. |
+| [`orbit run auto`](#orbit-run-auto) | Drain the backlog for a time window, several tasks at a time. |
+| [`orbit run readiness`](#orbit-run-readiness) | Explain why backlog tasks can or cannot start. |
+| [`orbit run triage`](#orbit-run-triage) | Re-backlog tasks blocked by environmental run failures. |
+| [`orbit run ship-sweep`](#orbit-run-ship-sweep) | Dispatch ship runs across every opted-in workspace. |
+| [`orbit run job`](#direct-job-execution) | Run any job definition directly. |
+
+Every one of these is **asynchronous**. The command prints a durable run ID and
+returns; it does not know the eventual outcome. Follow up with
+[`orbit run show`](#inspecting-runs).
+
+Ship workflows default `--base` to `[workflow] base_branch` from `config.toml`,
+or `main` when unset. Pass `--base <branch>` to target a different branch.
 
 ## `orbit run ship`
 
-Submit backlog tasks or one or more named tasks through the gated shipment pipeline. The default mode opens PRs; `--mode local` uses the local-only delivery path. The command returns a run ID immediately, while dependency and lock waits happen inside the job.
+Submit one or more named tasks — or, with no arguments, the ready backlog —
+through the gated shipment pipeline.
 
 ```bash
 orbit run ship
@@ -22,97 +36,70 @@ orbit run ship "$TASK_ID" "$SECOND_TASK_ID" --mode local
 orbit run ship "$TASK_ID" --base main
 ```
 
-Underlying job: `task_auto_pipeline`, which fans into `task_gate_pipeline` and then routes to `task_pr_pipeline` or `task_local_pipeline` from `--mode`.
+`--mode pr` (the default) opens or updates a pull request. `--mode local`
+delivers in place. When you omit `--mode`, the mode comes from the workspace's
+registry entry, falling back to `pr`.
 
-## Restricting a drain to some crews
+Underlying job: `task_auto_pipeline`, which fans into `task_gate_pipeline` and
+then routes to `task_pr_pipeline` or `task_local_pipeline`.
 
-`orbit run auto --allow-crew` limits one drain to the crews you name. Reach for it
-when a provider is down, rate-limited, or out of budget and you want the rest of
-the backlog to keep moving:
+## `orbit run auto`
 
-```bash
-orbit run auto --for 4h --allow-crew opus,sonnet
-orbit run readiness --allow-crew opus,sonnet    # preview what that would skip
-```
-
-It is opt-in — omit it and the drain runs every crew, exactly as before — and it
-is scoped to that one run:
-
-- **Validated up front.** Every name must be a crew this workspace configures.
-  An unknown or empty one fails the command before anything is dispatched. No
-  configuration file is written or changed.
-- **Inherited by the whole run.** The leaf and epic pipelines the drain starts
-  carry the same restriction, and it is re-checked at each activity against the
-  crew that actually resolved — including an activity that uses
-  `[workflow].system_crew`. An excluded provider cannot be reached by naming a
-  different alias for it. The check compares effective configured identity, so a
-  crew resolving to the same provider and model as a permitted one is permitted;
-  naming a wrapper is not by itself provider usage. Crew precedence is unchanged
-  (explicit, then `task.crew`, then `[workflow].default_crew`) — the allowlist
-  gates the winner rather than picking one.
-- **Skips, never remaps.** A backlog task whose crew is excluded stays in
-  `backlog` on its own crew; the drain simply does not start it, and
-  `orbit run readiness --allow-crew ...` reports it as `crew_not_allowed` along
-  with the crew it would have run as. To actually move that work, reassign the
-  task's crew yourself. There is no automatic fallback to another provider.
-- **Only affects what this run starts.** Work another invocation already has in
-  flight keeps running; nothing is cancelled. Permitted tasks keep filling the
-  free slots at the usual rate.
-
-## Changing a running drain's worker count
-
-`orbit run auto --concurrency N` sets how many tasks a drain keeps in flight. To
-change that number on a drain that is already running, retune it rather than
-cancelling it:
+Drain the workspace backlog for a window, keeping several tasks in flight at
+once:
 
 ```bash
-orbit run show "$RUN_ID"                       # current ceiling and who last set it
-orbit run concurrency "$RUN_ID" --set 7
-orbit run concurrency "$RUN_ID" --set 3 --reason 'provider rate limited'
+orbit run auto                                  # one tick, then stop
+orbit run auto --for 4h
+orbit run auto --for 4h --concurrency 8
 ```
 
-Cancelling and resubmitting looks equivalent and is not: it mints a new run ID,
-restarts the window, and makes you re-state `--complete` and `--allow-crew`.
-Retuning keeps all of them, and keeps the children the drain already started.
+The drain re-lists the whole backlog every pass and keeps `--concurrency` tasks
+in flight (default 5), starting a replacement as each one finishes rather than
+waiting for a batch to drain. An epic root runs alongside the leaves, one at a
+time. `--for` bounds only the *start* of new work: a task already being shipped
+when the window expires still finishes.
 
-- **Raising** it fills the extra slots from the same backlog on the next
-  admission pass, usually within a poll interval.
-- **Lowering** it stops new admissions until enough children finish. Tasks
-  already in flight are never cancelled or shortened.
-- The ceiling is bounded by the leaf pipeline's own active-run limit, and a run
-  that is not a drain, has not started, or has already finished is refused with
-  the reason.
-- `--if-revision N` applies the change only while the ceiling is still the one
-  you read, so two operators cannot silently overwrite each other.
-  `orbit run readiness` and `orbit run show` both report the value in force.
+Running a real delivery window — preparing work, choosing concurrency,
+restricting crews, retuning, stopping, and recovering — is covered end to end in
+[Run a Continuous Delivery Window](../../how-to/continuous-delivery/).
 
-## Stopping a running drain
+## `orbit run readiness`
 
-`orbit run auto --stop` ends **new admissions** for this workspace's active auto
-coordinator. You do not look up a run ID. Children the drain already started
-keep running under the completion authority they were admitted with, and the
-coordinator is not cancelled.
+A read-only snapshot explaining why backlog tasks are or are not eligible right
+now. It reserves nothing, submits nothing, and mutates nothing:
 
 ```bash
-orbit run auto --stop
-orbit run auto --stop --json
-orbit run show "$RUN_ID"                 # Admissions: stopped by ...
+orbit run readiness
+orbit run readiness "$TASK_ID" "$SECOND_TASK_ID"
+orbit run readiness --concurrency 8 --json
 ```
 
-A second `--stop`, or `--stop` with no active coordinator, is a no-op. Other
-workspaces and other jobs are untouched. `--stop` cannot be combined with the
-flags that start a drain (`--for`, `--concurrency`, `--complete`, `--allow-crew`).
+## `orbit run triage`
 
-This is not cancellation. To stop workers that are already running, cancel each
-child explicitly:
+Scan tasks that a failed job run left `blocked`, and re-backlog the ones whose
+failure was environmental:
 
 ```bash
-orbit run cancel "$CHILD_RUN_ID" --confirm
+orbit run triage
+orbit run triage "$TASK_ID"
 ```
 
-Parent cancellation of the coordinator is the wrong tool for this job: auto
-children are detached so they outlive the parent step, and cancelling a parent
-that *was* blocking would cascade.
+Tasks a human blocked by hand are never touched, and a non-environmental
+diagnosis stays blocked for an operator decision. An empty candidate set is a
+clean no-op.
+
+## `orbit run ship-sweep`
+
+Dispatch a ship run in every registered workspace that has ready backlog tasks.
+Only workspaces with `[workflow] auto_ship = true` are swept; everything else is
+reported as skipped. This is the unattended entry point, intended for a
+scheduler:
+
+```bash
+orbit run ship-sweep --dry-run
+orbit run ship-sweep --json
+```
 
 ## Completing work with `--complete`
 
@@ -126,7 +113,7 @@ orbit run auto --for 4h --complete
 ```
 
 It is off unless you pass it. No workspace setting, environment variable, or
-unattended routine (including `orbit run ship-sweep`) turns it on.
+unattended routine — including `orbit run ship-sweep` — turns it on.
 
 What the run then does depends on the mode:
 
@@ -140,30 +127,25 @@ What the run then does depends on the mode:
   success on its own. The task moves to `done` only after the PR is verified
   merged. A closed or blocked PR, a refused auto-merge, or an expired wait
   budget fails the run and leaves the task in `review`.
-- **`no-diff-expected` work** — validated work that produced no diff completes
+- **Work that produced no diff** — validated `no-diff-expected` work completes
   without needing a PR.
 
 Two limits are worth knowing:
 
-- `orbit run auto --complete` is *blanket* authorization. It covers every task
+- **`orbit run auto --complete` is blanket authorization.** It covers every task
   the drain admits for its whole window, including work that reaches the backlog
-  after the run starts — not only what is visible when you submit.
-- `--complete` authorizes delivery completion and the `review -> done`
-  transition only. It never approves `proposed` work into the backlog, and it
-  does not stand in for an independent review verdict; the transition is
-  recorded against the authorizing run and operator in the task's history.
+  *after* the run starts — not only what is visible when you submit. Work the
+  drain never admits does not inherit it, and neither does any other run.
+- **It authorizes completion only.** `--complete` grants the `review → done`
+  transition and the delivery that precedes it. It never approves `proposed`
+  work into the backlog — that is a separate human step,
+  `orbit task update <id> --approve` — and it does not stand in for an
+  independent review verdict. The transition is recorded in the task's history
+  against the authorizing run and operator.
 
-Submission stays asynchronous either way: the command prints the durable run ID
-and returns without knowing the eventual outcome. Follow it with
-`orbit run show <RUN_ID>`.
+## Direct job execution
 
-For an operator workflow that prepares pilot context, explicitly authorizes
-backlog work, runs a bounded drain, and handles recovery, see [Run a Continuous
-Delivery Window](../how-to/continuous-delivery/).
-
-## Direct Job Execution
-
-For schemaVersion 2 jobs without a workflow alias, invoke them directly:
+For jobs without a workflow alias, invoke them by ID:
 
 ```bash
 orbit job list
@@ -172,17 +154,32 @@ orbit run job task_auto_pipeline --input mode=local
 orbit run job task_auto_pipeline --wait
 ```
 
-A job run is submitted to a detached worker: the command prints the run ID and
-returns as soon as the run is durable, without claiming its eventual outcome.
-Pass `--wait` to block on the submitted run instead — it exits nonzero unless
-the run succeeded.
+`--wait` blocks on the submitted run instead of returning immediately, and exits
+nonzero unless the run succeeded.
 
-## Inspecting Runs
+## Inspecting runs
 
-Every workflow run is durable. Inspect with:
+Every run is durable and inspectable:
 
 ```bash
-orbit run history -j task_auto_pipeline
-orbit run show <RUN_ID>
-orbit run logs <RUN_ID>
+orbit run history                        # recent runs
+orbit run history -j task_auto_pipeline  # one job's runs
+orbit run show "$RUN_ID"                 # state and step summary
+orbit run logs "$RUN_ID"                 # raw stdout/stderr
+orbit run events "$RUN_ID"               # audit events
+orbit run trace "$RUN_ID"                # parent/child run tree
 ```
+
+`orbit run show` with no run ID shows the most recently scheduled run. Add
+`-s <step_id>` to any of these to narrow to a single step.
+
+To stop a run that has not reached a terminal state:
+
+```bash
+orbit run cancel "$RUN_ID" --confirm
+```
+
+Cancellation signals the owner process (TERM, then KILL), releases the run's
+task reservations, and finalizes the run as `cancelled`. It is also the
+remediation for a stuck `pending` run with no live worker. A run that already
+finished returns `already_terminal` without replacing its outcome.

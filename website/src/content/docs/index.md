@@ -10,7 +10,7 @@ next: false
 
 <section class="orbit-hero">
   <div class="orbit-hero-copy">
-    <div class="orbit-hero-eyebrow">v0.9.2 · early access</div>
+    <div class="orbit-hero-eyebrow">early access</div>
     <h1 class="orbit-hero-headline">The audit log for your AI coding agents.</h1>
     <p class="orbit-hero-lede">Durable task lifecycle, task-attributed workflow commits, and structured audit records for agent workflows. Local-first, bring your own model provider.</p>
     <div class="orbit-hero-install">
@@ -110,7 +110,7 @@ next: false
     <div class="orbit-docs-group-title">Getting Started</div>
     <a href="/getting-started/install/">Install Orbit</a>
     <a href="/getting-started/first-task/">First Task</a>
-    <a href="/getting-started/workflows/">Default Workflows</a>
+    <a href="/getting-started/workflows/">Delivery Workflows</a>
   </div>
   <div class="orbit-docs-group">
     <div class="orbit-docs-group-title">Concepts</div>
@@ -122,6 +122,9 @@ next: false
   <div class="orbit-docs-group">
     <div class="orbit-docs-group-title">How-to Guides</div>
     <a href="/how-to/task-lifecycle/">Run a Task Lifecycle</a>
+    <a href="/how-to/continuous-delivery/">Run Continuous Delivery</a>
+    <a href="/how-to/recurring-work/">Schedule Recurring Work</a>
+    <a href="/how-to/task-publication/">Publish and Restore Tasks</a>
     <a href="/how-to/write-activity/">Write an Activity</a>
     <a href="/how-to/scoping-rules/">Choose Scopes</a>
     <a href="/how-to/mcp-integration/">Set Up MCP</a>
@@ -133,10 +136,6 @@ next: false
     <a href="/reference/policy-format/">Policy Format</a>
     <a href="/reference/config/">Configuration</a>
     <a href="/reference/scoping/">Scoping Rules</a>
-  </div>
-  <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">Architecture</div>
-    <a href="/architecture/">Overview</a>
   </div>
   <div class="orbit-docs-group">
     <div class="orbit-docs-group-title">Contributing</div>

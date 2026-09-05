@@ -48,12 +48,45 @@ spec:
 structured error for the agent to handle. Under agent dispatch, tool allowlist
 enforcement is delegated to the harness and recorded in the audit trail.
 
+## Crews
+
+A **crew** is one named provider-model assignment. Activities do not carry a
+model-selection role: a task names a crew, and a run resolves it at dispatch —
+an explicit crew on the activity input first, then the task's `crew` field, then
+`[workflow] default_crew`.
+
+```toml
+[crews.sol]
+provider = "codex"
+model = "gpt-5.6-sol"
+effort = "high"
+```
+
+`effort` is an optional reasoning-budget request, forwarded through each
+provider's own argument and validated against the provider and model at config
+load. Claude and Codex accept `low` through `max`; Grok's accepted set depends
+on the model; other providers reject it. See
+[Configuration](../../reference/config/#reasoning-effort).
+
+Reassigning work between providers is always explicit — `orbit task update <id>
+--crew <name>`. Nothing in Orbit silently moves a task to a different provider.
+
 ## Platform Support
 
-Bundled agent executors (`claude`, `codex`, `gemini`, `grok`) declare
-`sandbox: macos-sandbox-exec`, so the spawned subprocess is wrapped in macOS
-`sandbox-exec` with the activity's resolved `FsProfile` compiled to SBPL.
-**This OS-level isolation is macOS only.** On Linux and Windows, Orbit's process
-supervision and tool allowlist still apply, but the agent subprocess itself runs
-without a kernel-level sandbox. The bundled `local-shell` executor has no
-sandbox declaration on any platform by design.
+Orbit wraps the spawned agent subprocess in an OS-level sandbox scoped by the
+activity's resolved `FsProfile`. `orbit init` persists the host-appropriate
+backend into the shipped executor assets:
+
+- **macOS** — `sandbox-exec`, with the profile compiled to SBPL.
+- **Linux** — Bubblewrap via a trusted `/usr/bin/bwrap`. Writes are confined to
+  the resolved profile; host filesystem reads and host network access remain
+  available, so read rules and network egress stay delegated. Dispatch **fails
+  closed** if `bwrap` is missing or its namespace-and-mount probe fails, unless
+  the executor explicitly sets `allow_fallback: true`.
+- **Windows and other platforms** — no OS-level wrapper. Process supervision,
+  tool allowlists, and in-process guards for Orbit's own built-in tools still
+  apply.
+
+The bundled `local-shell` executor declares no sandbox on any platform, by
+design. See [Install Orbit](../../getting-started/install/#prepare-the-sandbox)
+for the Linux prerequisites.

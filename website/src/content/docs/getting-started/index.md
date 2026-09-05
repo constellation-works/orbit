@@ -16,18 +16,27 @@ Use this section when you are setting up Orbit for the first time.
   </a>
   <a class="orbit-card" href="./first-task/">
     <h3>First Task</h3>
-    <p>Create a task, inspect it, and ship it.</p>
+    <p>Create a task, approve it, and ship it.</p>
   </a>
   <a class="orbit-card" href="./workflows/">
-    <h3>Default Workflows</h3>
-    <p>Run the built-in ship workflow.</p>
+    <h3>Delivery Workflows</h3>
+    <p>The <code>orbit run</code> surface: shipping, backlog drains, and run inspection.</p>
   </a>
 </div>
 
 ## Prerequisites
 
-You need an authenticated supported provider CLI: agent activities dispatch through it.
-PR mode also requires the GitHub CLI to be authenticated in the environment
-where Orbit runs.
+You need an authenticated supported provider CLI — `claude`, `codex`, `gemini`,
+or `grok` — because agent activities dispatch through it. PR mode also requires
+the GitHub CLI to be authenticated in the environment where Orbit runs.
 
 Orbit itself can be installed without Rust. You only need a Rust toolchain if you build from source or contribute to the Rust workspace.
+
+## Then what
+
+Once one task ships end to end, the next steps are running a whole backlog and
+letting Orbit schedule its own work:
+
+- [Run a Continuous Delivery Window](../how-to/continuous-delivery/)
+- [Schedule Recurring Work](../how-to/recurring-work/)
+- [Publish and Restore Tasks](../how-to/task-publication/)
