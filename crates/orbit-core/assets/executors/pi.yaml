@@ -1,0 +1,37 @@
+schemaVersion: 2
+kind: Executor
+metadata:
+  name: pi
+spec:
+  executor_type: direct_agent
+  command: pi
+  # Static flags only. The prompt is NOT passed here: Pi merges piped stdin
+  # into the initial prompt in every non-interactive mode, which keeps the
+  # Orbit execution envelope out of argv and therefore out of process
+  # listings and audit records. [ORB-11296]
+  args:
+    # Non-interactive JSON event stream, one JSON object per line. Orbit reads
+    # the terminal `message_end` frame; see the `pi` stdout adapter for why the
+    # rest of the stream is dropped rather than searched.
+    - --mode
+    - json
+    # Session isolation: every Orbit invocation is a fresh ephemeral session.
+    # Without this, Pi writes a session JSONL under its agent directory per run
+    # and a later `--continue` could resurrect one run's context inside another.
+    - --no-session
+    # Project trust stays denied for the run rather than being inherited from
+    # ambient `~/.pi/agent/trust.json` state or `defaultProjectTrust`. Pi
+    # executes project-local `.pi` extensions once a checkout is trusted, and a
+    # managed worktree is repository content Orbit does not vouch for. Context
+    # files (AGENTS.md / CLAUDE.md) load before the trust decision and are
+    # unaffected. An operator who wants project-local Pi resources overrides
+    # this on their own executor definition.
+    - --no-approve
+    # No startup network calls: no version check against pi.dev, no package
+    # update check, no install/update telemetry ping. Model API traffic is
+    # unaffected.
+    - --offline
+  stdout_format: envelope
+  sandbox: macos-sandbox-exec
+  model_flag: "--model"
+  env: {}

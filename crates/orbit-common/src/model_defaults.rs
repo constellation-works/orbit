@@ -99,6 +99,20 @@ pub const CURSOR_DEFAULT_MODEL: &str = "gpt-5";
 /// stable cheap-tier alias, so the known-good default is reused.
 pub const CURSOR_CREW_MODEL: &str = CURSOR_DEFAULT_MODEL;
 
+/// Default model for the Pi execution lane.
+///
+/// Pi routes to many model vendors and resolves `--model` as a *pattern*
+/// against a catalog it refreshes on its own schedule, so a version-pinned id
+/// would rot faster than the alias does. `sonnet` is the unversioned pattern
+/// Pi's own documented examples use. The persisted provider identity stays
+/// `pi` whichever vendor the pattern resolves to. [ORB-11296]
+pub const PI_DEFAULT_MODEL: &str = "sonnet";
+
+/// Model used for Pi's bounded system crew. Pi publishes no stable cheap-tier
+/// alias of its own, so the known-good default is reused; an operator who
+/// wants a cheaper tier names one explicitly in `[crews.system]`.
+pub const PI_CREW_MODEL: &str = PI_DEFAULT_MODEL;
+
 /// Cheap Claude model used by the orbit-agent HTTP examples.
 ///
 /// Version pinned like [`ANTHROPIC_HTTP_DEFAULT_MODEL`] because the examples
@@ -109,7 +123,7 @@ pub const ANTHROPIC_EXAMPLE_MODEL: &str = "claude-haiku-4-5-20251001";
 ///
 /// Mirrors the historical `agent_detect::default_model_for` map; `claude` now
 /// resolves to the unversioned [`CLAUDE_DEFAULT_STRONG`] alias. codex/gemini/
-/// grok/copilot/cursor use their provider-specific defaults.
+/// grok/copilot/cursor/pi use their provider-specific defaults.
 pub fn default_model_for_provider(provider: &str) -> Option<&'static str> {
     match provider {
         "claude" => Some(CLAUDE_DEFAULT_STRONG),
@@ -118,6 +132,7 @@ pub fn default_model_for_provider(provider: &str) -> Option<&'static str> {
         "grok" => Some(GROK_DEFAULT_MODEL),
         "copilot" => Some(COPILOT_DEFAULT_MODEL),
         "cursor" => Some(CURSOR_DEFAULT_MODEL),
+        "pi" => Some(PI_DEFAULT_MODEL),
         _ => None,
     }
 }

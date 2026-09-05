@@ -31,13 +31,13 @@ fn built_in_crews_use_standard_model_specific_names() {
     // lane. [ORB-10877] It is built in because shipped job steps name it
     // directly, so a config with no `[crews]` table must still resolve it.
     //
-    // `copilot` and `cursor` are provider-lane exceptions: each can route to
-    // models supplied by several vendors, so the crew names retain the
-    // execution provider identity. [ORB-10946] [ORB-10945]
+    // `copilot`, `cursor`, and `pi` are provider-lane exceptions: each can
+    // route to models supplied by several vendors, so the crew names retain the
+    // execution provider identity. [ORB-10946] [ORB-10945] [ORB-11296]
     assert_eq!(
         crews.keys().map(String::as_str).collect::<Vec<_>>(),
         vec![
-            "astra", "copilot", "cursor", "fable", "gemini", "grok", "luna", "opus", "sol",
+            "astra", "copilot", "cursor", "fable", "gemini", "grok", "luna", "opus", "pi", "sol",
             "sonnet", "system", "terra"
         ]
     );
@@ -53,6 +53,7 @@ fn built_in_crews_use_standard_model_specific_names() {
         ("grok", "grok", "grok-4.6"),
         ("copilot", "copilot", "claude-sonnet-4.5"),
         ("cursor", "cursor", "gpt-5"),
+        ("pi", "pi", "sonnet"),
         ("system", "claude", "sonnet"),
     ] {
         let assignment = &crews.get(name).expect("built-in crew").assignment;

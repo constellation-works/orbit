@@ -135,6 +135,19 @@ pub(crate) fn cursor_state_dir(home: Option<&OsStr>) -> Option<PathBuf> {
     non_empty_env_path(home).map(|path| path.join(".cursor"))
 }
 
+/// Pi CLI stores login credentials, settings, trust decisions, packages, and
+/// session state under its agent directory: `$PI_CODING_AGENT_DIR` when set,
+/// otherwise `$HOME/.pi` (whose `agent/` subdirectory is the documented
+/// default). The caller gates this directory on an active Pi executor so other
+/// providers do not receive Pi-specific write access. [ORB-11296]
+pub(crate) fn pi_state_dir(
+    home: Option<&OsStr>,
+    pi_coding_agent_dir: Option<&OsStr>,
+) -> Option<PathBuf> {
+    non_empty_env_path(pi_coding_agent_dir)
+        .or_else(|| non_empty_env_path(home).map(|path| path.join(".pi")))
+}
+
 pub(super) fn non_empty_env_path(value: Option<&OsStr>) -> Option<PathBuf> {
     let value = value?;
     if value.to_string_lossy().is_empty() {

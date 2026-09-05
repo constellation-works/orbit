@@ -45,6 +45,7 @@ fn seeded_crew_availability_requires_a_detected_cli() {
         ("grok", "grok"),
         ("copilot", "copilot"),
         ("cursor-agent", "cursor"),
+        ("pi", "pi"),
     ] {
         let detected = detect(&MockAgentEnvProbe::new().with_binary(binary));
         assert_eq!(available_crew_families(&detected), vec![family]);
@@ -61,6 +62,7 @@ fn default_provider_prefers_cli_in_documented_order() {
         grok_cli: true,
         copilot_cli: true,
         cursor_cli: true,
+        pi_cli: true,
         ollama_cli: true,
     };
     assert_eq!(default_provider(&detected), "claude");
@@ -110,6 +112,23 @@ fn default_provider_prefers_cli_in_documented_order() {
     };
     assert_eq!(default_provider(&detected), "cursor");
 
+    // pi wins over ollama when the earlier agent families are absent, and an
+    // installed pi does not displace cursor. [ORB-11296]
+    let detected = DetectedAgents {
+        cursor_cli: true,
+        pi_cli: true,
+        ollama_cli: true,
+        ..DetectedAgents::default()
+    };
+    assert_eq!(default_provider(&detected), "cursor");
+
+    let detected = DetectedAgents {
+        pi_cli: true,
+        ollama_cli: true,
+        ..DetectedAgents::default()
+    };
+    assert_eq!(default_provider(&detected), "pi");
+
     // ollama wins when nothing else
     let detected = DetectedAgents {
         ollama_cli: true,
@@ -127,7 +146,7 @@ fn default_provider_last_resort_is_claude() {
 fn model_registry_returns_expected_defaults() {
     use orbit_common::model_defaults::{
         CLAUDE_DEFAULT_STRONG, CODEX_DEFAULT_MODEL, COPILOT_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL,
-        GEMINI_DEFAULT_MODEL, GROK_DEFAULT_MODEL,
+        GEMINI_DEFAULT_MODEL, GROK_DEFAULT_MODEL, PI_DEFAULT_MODEL,
     };
     assert_eq!(default_model_for("claude"), Some(CLAUDE_DEFAULT_STRONG));
     assert_eq!(default_model_for("codex"), Some(CODEX_DEFAULT_MODEL));
@@ -135,6 +154,7 @@ fn model_registry_returns_expected_defaults() {
     assert_eq!(default_model_for("grok"), Some(GROK_DEFAULT_MODEL));
     assert_eq!(default_model_for("copilot"), Some(COPILOT_DEFAULT_MODEL));
     assert_eq!(default_model_for("cursor"), Some(CURSOR_DEFAULT_MODEL));
+    assert_eq!(default_model_for("pi"), Some(PI_DEFAULT_MODEL));
     assert_eq!(default_model_for("ollama"), None);
     assert_eq!(default_model_for("unknown"), None);
 }

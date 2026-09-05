@@ -20,6 +20,7 @@ pub enum ProviderOptions {
     Copilot,
     Cursor,
     Ollama,
+    Pi,
     Mock,
 }
 

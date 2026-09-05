@@ -84,6 +84,11 @@ pub struct DetectedAgents {
     /// control surface is separate and is not evidence that this executable is
     /// installed. [ORB-10945]
     pub cursor_cli: bool,
+    /// The Pi coding agent CLI (npm `@earendil-works/pi-coding-agent`), whose
+    /// binary is `pi`. Pi's own `--provider` names the model vendor behind a
+    /// run, so a detected `pi` is evidence of the Pi execution lane only, never
+    /// of an Anthropic/OpenAI/Google lane. [ORB-11296]
+    pub pi_cli: bool,
     pub ollama_cli: bool,
 }
 
@@ -97,6 +102,7 @@ pub fn detect(probe: &dyn AgentEnvProbe) -> DetectedAgents {
         grok_cli: probe.binary_on_path("grok"),
         copilot_cli: probe.binary_on_path("copilot"),
         cursor_cli: probe.binary_on_path("cursor-agent"),
+        pi_cli: probe.binary_on_path("pi"),
         ollama_cli: probe.binary_on_path("ollama"),
     }
 }
@@ -126,6 +132,9 @@ pub fn available_crew_families(detected: &DetectedAgents) -> Vec<&'static str> {
     if detected.cursor_cli {
         families.push("cursor");
     }
+    if detected.pi_cli {
+        families.push("pi");
+    }
     families
 }
 
@@ -142,9 +151,9 @@ pub fn default_model_for(provider: &str) -> Option<&'static str> {
 /// Pick a default provider for the role given a detection snapshot.
 ///
 /// Preference order: first detected CLI in [claude, codex, gemini, grok,
-/// copilot, cursor, ollama], else `claude` as a last resort. New families are
-/// appended after the original four so installing them never changes an
-/// existing host's default provider. [ORB-10946] [ORB-10945]
+/// copilot, cursor, pi, ollama], else `claude` as a last resort. New families
+/// are appended after the original four so installing them never changes an
+/// existing host's default provider. [ORB-10946] [ORB-10945] [ORB-11296]
 pub fn default_provider(detected: &DetectedAgents) -> &'static str {
     if detected.claude_cli {
         return "claude";
@@ -163,6 +172,9 @@ pub fn default_provider(detected: &DetectedAgents) -> &'static str {
     }
     if detected.cursor_cli {
         return "cursor";
+    }
+    if detected.pi_cli {
+        return "pi";
     }
     if detected.ollama_cli {
         return "ollama";

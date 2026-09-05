@@ -46,6 +46,7 @@ pub fn compile_macos_sandbox_profile(
     let grok_home = std::env::var_os("GROK_HOME");
     let copilot_home = std::env::var_os("COPILOT_HOME");
     let xdg_cache_home = std::env::var_os("XDG_CACHE_HOME");
+    let pi_coding_agent_dir = std::env::var_os("PI_CODING_AGENT_DIR");
     compile_macos_sandbox_profile_with_env(
         rules,
         provider,
@@ -56,6 +57,7 @@ pub fn compile_macos_sandbox_profile(
             grok_home: grok_home.as_deref(),
             copilot_home: copilot_home.as_deref(),
             xdg_cache_home: xdg_cache_home.as_deref(),
+            pi_coding_agent_dir: pi_coding_agent_dir.as_deref(),
         },
     )
 }
@@ -71,6 +73,7 @@ pub(super) struct SandboxCompileEnv<'a> {
     pub(super) grok_home: Option<&'a OsStr>,
     pub(super) copilot_home: Option<&'a OsStr>,
     pub(super) xdg_cache_home: Option<&'a OsStr>,
+    pub(super) pi_coding_agent_dir: Option<&'a OsStr>,
 }
 
 pub(super) fn compile_macos_sandbox_profile_with_env(
@@ -85,6 +88,7 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
         grok_home,
         copilot_home,
         xdg_cache_home,
+        pi_coding_agent_dir,
     } = env;
     let mut out = String::new();
     out.push_str("(version 1)\n");
@@ -166,6 +170,18 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
     // an explicit environment opt-in and needs no additional path. [ORB-10945]
     if Provider::parse(provider).ok() == Some(Provider::Cursor)
         && let Some(state_dir) = super::provider_dirs::cursor_state_dir(home)
+    {
+        out.push_str(&format!(
+            "(allow file-write* (subpath \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&state_dir.display().to_string())
+        ));
+    }
+    // Pi's agent directory holds `/login` credentials, settings, saved project
+    // trust decisions, installed packages, and sessions. Grant it only to the
+    // active Pi executor; API-key auth is an explicit environment opt-in and
+    // needs no additional path. [ORB-11296]
+    if Provider::parse(provider).ok() == Some(Provider::Pi)
+        && let Some(state_dir) = super::provider_dirs::pi_state_dir(home, pi_coding_agent_dir)
     {
         out.push_str(&format!(
             "(allow file-write* (subpath \"{}\"))\n",
