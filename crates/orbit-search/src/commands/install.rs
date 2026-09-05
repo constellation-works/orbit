@@ -18,12 +18,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use orbit_common::OrbitError;
+use orbit_common::security::release::{
+    RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME, TRUSTED_RELEASE_KEYS,
+};
 use reqwest::Url;
-use rsa::RsaPublicKey;
-use rsa::pkcs1v15::{Signature as RsaSignature, VerifyingKey};
-use rsa::pkcs8::DecodePublicKey;
-use rsa::sha2::Sha256 as RsaSha256;
-use rsa::signature::Verifier;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -37,21 +35,6 @@ use crate::{CompanionPaths, platform_companion_filename};
 
 const COMPANION_URL_ENV: &str = "ORBIT_SEARCH_COMPANION_URL";
 const COMPANION_SHA256_ENV: &str = "ORBIT_SEARCH_COMPANION_SHA256";
-const RELEASE_CHECKSUMS_FILENAME: &str = "orbit-checksums.txt";
-const RELEASE_CHECKSUMS_SIGNATURE_FILENAME: &str = "orbit-checksums.txt.sig";
-// Matches the release checksum signing key shipped by install.sh / npm installers.
-// L-0044: Keep this key aligned with every release checksum-signature consumer.
-const RELEASE_CHECKSUM_PUBLIC_KEY_PEM: &str = r#"-----BEGIN PUBLIC KEY-----
-MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAoQGLKOvvsvXriGIQ0oxA
-PcDyVHLM1iqXBCYXg+blQU41haEkG1eYabvDfeGcyGaC4awW7Q2uCZK05+/Hdjpe
-cRUVxP+QWKCAHyretQwOsoXzutZjJgId/ZRiUJPS/FeJOSv0xrayaol0tmfeJ4mH
-gFseCLq+mIIWIPRvXmYiKaUB//bjF79w/m4VXlyBhfi6n+f6x2UPG+gjjsjwG6mn
-Orec31AAFCIIX69YAd21D3MBc4S89/LoYZCq3neDscZ09Y+e6Jg2HpoBstvqSnq/
-3s34unLuIRlyB8jyK8CrdzT1E6YVB7+riAjycE9XMlLOQ2xA4tl6CKIx5YTKHyeW
-npMLlbzNaVfFT7p3IPTxsoEI0SB3ZtO7/XhzuOvOpklYcqjW2DGw/yzr2epAqHE/
-y4rLO3hkxWhxfgF5KPSR2iftc3LMONRGWELK6jpD5KB7No5vwIvjpVPUc5xA45Xw
-tT/bo0mm4TvrumxYr1xyEHrdum+ej/WYz/0BZQlwDOtXAgMBAAE=
------END PUBLIC KEY-----"#;
 
 #[derive(Debug, Clone)]
 pub struct SemanticInstallParams {
@@ -335,85 +318,35 @@ fn verify_download_integrity(
 }
 
 fn verify_release_checksum_signature(manifest: &[u8], signature: &[u8]) -> Result<(), OrbitError> {
-    verify_release_checksum_signature_with_key(manifest, signature, RELEASE_CHECKSUM_PUBLIC_KEY_PEM)
-}
-
-pub(crate) fn verify_release_checksum_signature_with_key(
-    manifest: &[u8],
-    signature: &[u8],
-    public_key_pem: &str,
-) -> Result<(), OrbitError> {
-    let public_key = RsaPublicKey::from_public_key_pem(public_key_pem).map_err(|error| {
-        OrbitError::Execution(format!(
-            "failed to load trusted companion checksum signing key: {error}"
-        ))
-    })?;
-    let signature = RsaSignature::try_from(signature).map_err(|error| {
-        OrbitError::Execution(format!(
-            "release checksum signature verification failed for {RELEASE_CHECKSUMS_FILENAME}: {error}"
-        ))
-    })?;
-    let verifying_key = VerifyingKey::<RsaSha256>::new(public_key);
-    verifying_key
-        .verify(manifest, &signature)
-        .map_err(|error| {
-            OrbitError::Execution(format!(
-                "release checksum signature verification failed for {RELEASE_CHECKSUMS_FILENAME}: {error}"
-            ))
-        })
+    // L-0044: the trusted key set and the verification itself belong to
+    // `orbit_common::security::release`, shared with `orbit update`, so a
+    // rotation is one edit rather than one per release-artifact consumer.
+    orbit_common::security::release::verify_checksum_signature(
+        manifest,
+        signature,
+        TRUSTED_RELEASE_KEYS,
+        chrono::Utc::now().date_naive(),
+    )
+    .map(|_key_id| ())
 }
 
 pub(crate) fn checksum_from_manifest(
     manifest: &str,
     asset_name: &str,
 ) -> Result<String, OrbitError> {
-    for line in manifest.lines() {
-        let mut fields = line.split_whitespace();
-        let Some(checksum) = fields.next() else {
-            continue;
-        };
-        let Some(name) = fields.next() else {
-            continue;
-        };
-        if checksum_manifest_name_matches(name, asset_name) {
-            return normalize_sha256(checksum);
-        }
-    }
-    Err(OrbitError::Execution(format!(
-        "checksum entry for companion asset `{asset_name}` was not found in {RELEASE_CHECKSUMS_FILENAME}"
-    )))
-}
-
-fn checksum_manifest_name_matches(name: &str, asset_name: &str) -> bool {
-    name == asset_name
-        || Path::new(name)
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name == asset_name)
+    orbit_common::security::release::checksum_for_asset(manifest, asset_name)
 }
 
 fn verify_sha256_digest(actual: &str, expected: &str) -> Result<(), OrbitError> {
-    let expected = normalize_sha256(expected)?;
-    if actual != expected {
-        return Err(OrbitError::Execution(format!(
-            "companion checksum verification failed (expected {expected}, got {actual})"
-        )));
-    }
-    Ok(())
+    orbit_common::security::release::verify_sha256_digest(actual, expected, "companion")
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    orbit_common::security::release::sha256_hex(bytes)
 }
 
 fn normalize_sha256(value: &str) -> Result<String, OrbitError> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if normalized.len() != 64 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(OrbitError::InvalidInput(format!(
-            "{COMPANION_SHA256_ENV} must be a 64-character hex SHA-256 digest"
-        )));
-    }
-    Ok(normalized)
+    orbit_common::security::release::normalize_sha256(value, COMPANION_SHA256_ENV)
 }
 
 fn env_var_non_empty(name: &str) -> Option<String> {

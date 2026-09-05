@@ -314,6 +314,16 @@ impl Commands {
                 false,
                 dispatch_migrate,
             ),
+            Commands::Update(_) => CommandOperation::new(
+                // Forbidden, not merely unused: opening a workspace here would
+                // auto-apply *this* binary's migrations, when the whole point
+                // is to let the replacement binary apply its own.
+                RuntimeNeed::Forbidden,
+                Some(admin_meta("update", None, Some("installation"), None)),
+                None,
+                false,
+                dispatch_update,
+            ),
             Commands::Run(command) => {
                 use super::run::RunSubcommand;
                 let (subcommand, target_type, target_id, runtime_need) = match &command.command {
@@ -977,6 +987,13 @@ fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) -> CommandO
         }
         Commands::Migrate(command) => command.execute(context.runtime()?),
         _ => dispatch_mismatch("Migrate"),
+    }
+}
+
+fn dispatch_update(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+    match command {
+        Commands::Update(command) => command.execute_without_runtime(context.root_override),
+        _ => dispatch_mismatch("Update"),
     }
 }
 
