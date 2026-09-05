@@ -57,30 +57,35 @@ pub(crate) fn normalize_pi_stdout(stdout: &[u8]) -> Vec<u8> {
         if value.get("type").and_then(Value::as_str) != Some("message_end") {
             continue;
         }
-        if let Some(rendered) = assistant_text(value.get("message")) {
-            latest = Some(rendered);
+        if let Some(outcome) = assistant_terminal_outcome(value.get("message")) {
+            latest = Some(outcome);
         }
     }
-    latest.map_or_else(Vec::new, String::into_bytes)
+    latest.flatten().map_or_else(Vec::new, String::into_bytes)
 }
 
-/// Concatenate the `text` content blocks of one completed assistant message.
+/// Record the completion evidence from one terminal assistant message.
 ///
-/// Returns `None` unless the frame is a genuine assistant message that stopped
-/// cleanly. `thinking` and `toolCall` blocks are deliberately skipped: they are
-/// not the model's answer, and reasoning text in particular may quote the
-/// prompt's example envelope verbatim.
-fn assistant_text(message: Option<&Value>) -> Option<String> {
+/// `None` means this is not an assistant message and must not affect the
+/// current outcome. `Some(None)` means it is the latest assistant terminal
+/// frame but cannot provide completion evidence. That distinction prevents an
+/// earlier response envelope from surviving a later failed or malformed turn.
+fn assistant_terminal_outcome(message: Option<&Value>) -> Option<Option<String>> {
     let message = message?.as_object()?;
     if message.get("role").and_then(Value::as_str) != Some("assistant") {
         return None;
     }
-    let stop_reason = message.get("stopReason").and_then(Value::as_str)?;
+    let Some(stop_reason) = message.get("stopReason").and_then(Value::as_str) else {
+        return Some(None);
+    };
     if FAILED_STOP_REASONS.contains(&stop_reason) {
-        return None;
+        return Some(None);
     }
     let mut rendered = String::new();
-    for block in message.get("content")?.as_array()? {
+    let Some(content) = message.get("content").and_then(Value::as_array) else {
+        return Some(None);
+    };
+    for block in content {
         if block.get("type").and_then(Value::as_str) != Some("text") {
             continue;
         }
@@ -88,9 +93,9 @@ fn assistant_text(message: Option<&Value>) -> Option<String> {
             // A `text` block whose `text` is absent or not a string is a
             // malformed frame, not an empty answer. Refuse the whole message
             // rather than silently returning the blocks that did parse.
-            return None;
+            return Some(None);
         };
         rendered.push_str(text);
     }
-    (!rendered.is_empty()).then_some(rendered)
+    Some((!rendered.is_empty()).then_some(rendered))
 }

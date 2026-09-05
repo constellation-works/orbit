@@ -522,9 +522,11 @@ The shipped direct-agent executor uses
 The Orbit prompt travels on standard input, never as a positional argument: Pi
 merges piped stdin into the initial prompt in every non-interactive mode.
 
-Orbit reads only the terminal `message_end` frame — the event Pi documents as
-"the final authoritative message" — and takes the `text` content blocks of that
-assistant message. Everything else is dropped before any protocol read. That
+Orbit reads only terminal assistant `message_end` frames — the event Pi documents
+as the final authoritative message. The latest such frame controls completion:
+Orbit takes its `text` content blocks only when it is a clean answer, while a
+later failed, empty, or malformed assistant terminal frame invalidates earlier
+completion evidence. Everything else is dropped before any protocol read. That
 reduction is a correctness requirement, not tidying: Pi's `agent_end` frame
 replays the entire conversation including the user turn, and every Orbit prompt
 embeds a literal example response envelope, so a reverse envelope scan over the

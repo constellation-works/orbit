@@ -257,6 +257,19 @@ fn non_zero_exit_fails_even_with_a_success_frame() {
 }
 
 #[test]
+fn later_failed_assistant_terminal_frame_cannot_report_success() {
+    let body = format!(
+        "{}\nprintf '%s\\n' '{{\"type\":\"message_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{SUCCESS_ENVELOPE}\"}}],\"stopReason\":\"aborted\"}}}}'\nexit 0",
+        success_body().replace("exit 0", ""),
+    );
+    let outcome = dispatch(&Harness::new(&body), spec(60));
+    assert!(
+        !outcome.success,
+        "a later aborted assistant terminal frame must invalidate prior completion evidence",
+    );
+}
+
+#[test]
 fn malformed_or_incomplete_output_never_succeeds() {
     for body in [
         // Not JSONL at all.
