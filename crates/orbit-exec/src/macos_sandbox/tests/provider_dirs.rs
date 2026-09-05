@@ -353,6 +353,7 @@ fn compiled_profile_allows_writes_to_provider_state_dirs() {
         SandboxCompileEnv {
             home: Some(synthetic_home.path().as_os_str()),
             codex_home: None,
+            pi_coding_agent_dir: None,
             claude_config_dir: None,
             grok_home: None,
             copilot_home: None,
@@ -424,6 +425,7 @@ fn compiled_profile_allows_writes_to_grok_json_lock_and_tmp_files() {
         SandboxCompileEnv {
             home: Some(synthetic_home.path().as_os_str()),
             codex_home: None,
+            pi_coding_agent_dir: None,
             claude_config_dir: None,
             grok_home: None,
             copilot_home: None,
@@ -509,6 +511,7 @@ fn compiled_profile_allows_writes_to_claude_home_json_siblings() {
         SandboxCompileEnv {
             home: Some(synthetic_home.path().as_os_str()),
             codex_home: None,
+            pi_coding_agent_dir: None,
             claude_config_dir: None,
             grok_home: None,
             copilot_home: None,
