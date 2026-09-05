@@ -144,6 +144,53 @@ fn failed_stop_reasons_never_normalize_to_success() {
 }
 
 #[test]
+fn a_later_failed_or_malformed_assistant_terminal_frame_invalidates_prior_text() {
+    let successful = json!({
+        "type":"message_end",
+        "message":assistant_message(json!([text_block(ORBIT_SUCCESS)]), "stop"),
+    });
+    let failed = |stop_reason| {
+        json!({
+            "type":"message_end",
+            "message":assistant_message(json!([text_block("later text")]), stop_reason),
+        })
+    };
+
+    for terminal in [
+        failed("error"),
+        failed("aborted"),
+        json!({
+            "type":"message_end",
+            "message":{"role":"assistant","content":[text_block("later text")]},
+        }),
+        json!({
+            "type":"message_end",
+            "message":assistant_message(json!([]), "stop"),
+        }),
+    ] {
+        let stdout = format!("{successful}\n{terminal}");
+        assert!(
+            normalize_cli_stdout("pi", stdout.as_bytes()).is_empty(),
+            "later assistant terminal outcome must invalidate prior evidence: {terminal}",
+        );
+    }
+}
+
+#[test]
+fn later_non_assistant_and_control_frames_do_not_replace_an_assistant_outcome() {
+    let stdout = format!(
+        "{}\n{}\n{}\n{}",
+        json!({"type":"message_end","message":assistant_message(json!([text_block(ORBIT_SUCCESS)]), "stop")}),
+        json!({"type":"message_end","message":{"role":"user","content":[text_block("prompt echo")],"stopReason":"stop"}}),
+        json!({"type":"message_end","message":{"role":"tool","content":[text_block("tool output")],"stopReason":"stop"}}),
+        json!({"type":"agent_end","messages":[]}),
+    );
+
+    let normalized = normalize_cli_stdout("pi", stdout.as_bytes());
+    assert_eq!(String::from_utf8_lossy(&normalized), ORBIT_SUCCESS);
+}
+
+#[test]
 fn malformed_or_incomplete_frames_yield_no_completion_evidence() {
     for stdout in [
         String::new(),
