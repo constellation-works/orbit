@@ -595,7 +595,7 @@
         "required": false
       },
       {
-        "description": "Optional named crew responsible for orchestration attribution; does not select execution",
+        "description": "Optional named crew responsible for orchestration attribution; does not select execution. Defaults to the MCP session's `orbit mcp serve --orchestrator` crew when omitted",
         "name": "orchestrator",
         "param_type": "string",
         "required": false
