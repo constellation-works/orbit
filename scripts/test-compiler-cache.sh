@@ -84,7 +84,7 @@ rm -f "$FAKE_SCCACHE_LOG" "$FAKE_RUSTC_LOG"
 [[ ! -f "$FAKE_SCCACHE_LOG" ]] || fail "unwritable cache must not exec sccache"
 chmod u+w "$HOME/.orbit/cache/compiler"
 
-# 4. Writable cache + sccache -> sccache then rustc, with path-stripping basedirs.
+# 4. Writable cache + sccache -> sccache then rustc.
 export FAKE_SCCACHE_LOG="$TMP/sccache-hit.log"
 export FAKE_SCCACHE_ENV="$TMP/sccache-hit.env"
 export FAKE_RUSTC_LOG="$TMP/rustc-hit.log"
