@@ -363,6 +363,37 @@ fn live_run_fixture_files_once_with_complete_actionable_evidence() {
 }
 
 #[test]
+fn mixed_state_in_progress_failure_files_once_and_repeat_names_the_owner() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut mixed = failure(
+        33_979_680_684,
+        "CI",
+        "Linux tests",
+        "Run tests",
+        "CI\tLinux tests\tassertion failed in collect.rs\n",
+        "8b0a760bae17b6f0aeee9eab47840684697fa812",
+    );
+    mixed["status"] = json!("in_progress");
+    mixed["conclusion"] = Value::Null;
+    mixed["url"] = json!("https://github.com/danieljhkim/orbit/actions/runs/33979680684");
+    let evidence = snapshot(vec![mixed]);
+
+    let first = file(&runtime, json!({"ci_evidence": evidence.clone()}));
+    assert_eq!(first["outcome"], json!("current_failures"));
+    assert_eq!(first["filed_count"], json!(1));
+    let task_id = filed_task_ids(&first).remove(0);
+    let task = runtime.get_task(&task_id).expect("read filed task");
+    assert!(task.description.contains("Linux tests"));
+    assert!(task.description.contains("33979680684"));
+
+    let second = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(second["outcome"], json!("current_failures"));
+    assert_eq!(second["filed_count"], json!(0));
+    assert_eq!(second["skipped_existing"][0]["task_id"], json!(task_id));
+    assert_eq!(second["audit"]["existing_task_owners"], json!([task_id]));
+}
+
+#[test]
 fn task_add_failure_is_retryable_and_cannot_persist_a_handled_state() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let evidence = snapshot(vec![failure(
