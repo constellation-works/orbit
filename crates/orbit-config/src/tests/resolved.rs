@@ -291,14 +291,46 @@ fn crew_effort_fails_closed_for_invalid_values_and_unsupported_providers() {
     );
 
     let unsupported = load_config(
-        "[crews.sonnet]\nmodel = \"sonnet\"\nprovider = \"claude\"\neffort = \"high\"\n\n[workflow]\ndefault_crew = \"sonnet\"\n",
+        "[crews.gemini]\nmodel = \"gemini\"\nprovider = \"gemini\"\neffort = \"high\"\n\n[workflow]\ndefault_crew = \"gemini\"\n",
     )
     .expect_err("unsupported provider must not silently ignore effort");
     assert!(
         unsupported
             .to_string()
-            .contains("supported only for provider = \"codex\"")
+            .contains("does not support configured reasoning effort")
     );
+}
+
+#[test]
+fn claude_crew_effort_accepts_every_supported_value() {
+    for raw in ["low", "medium", "high", "xhigh", "max"] {
+        load_config(&format!(
+            "[crews.opus]\nmodel = \"opus\"\nprovider = \"claude\"\neffort = \"{raw}\"\n\n[workflow]\ndefault_crew = \"opus\"\n"
+        ))
+        .unwrap_or_else(|error| panic!("Claude effort {raw} should load: {error}"));
+    }
+}
+
+#[test]
+fn grok_crew_effort_enforces_the_verified_model_contract() {
+    for raw in ["low", "medium", "high", "xhigh"] {
+        load_config(&format!(
+            "[crews.grok]\nmodel = \"grok-4.6\"\nprovider = \"grok\"\neffort = \"{raw}\"\n\n[workflow]\ndefault_crew = \"grok\"\n"
+        ))
+        .unwrap_or_else(|error| panic!("Grok 4.6 effort {raw} should load: {error}"));
+    }
+
+    for (model, effort, expected) in [
+        ("grok-4.6", "max", "low, medium, high, xhigh"),
+        ("grok-4.5", "xhigh", "low, medium, high"),
+        ("grok-unknown", "high", "verified only"),
+    ] {
+        let error = load_config(&format!(
+            "[crews.grok]\nmodel = \"{model}\"\nprovider = \"grok\"\neffort = \"{effort}\"\n\n[workflow]\ndefault_crew = \"grok\"\n"
+        ))
+        .expect_err("unsupported Grok model-effort pair must fail config admission");
+        assert!(error.to_string().contains(expected), "{error}");
+    }
 }
 
 #[test]

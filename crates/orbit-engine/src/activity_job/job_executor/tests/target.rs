@@ -212,9 +212,9 @@ fn system_crew_marker_routes_to_the_configured_system_crew() {
         (
             "system",
             CrewConfig {
-                provider: Some(Provider::Codex),
+                provider: Some(Provider::Claude),
                 model: Some("system-model".to_string()),
-                reasoning_effort: Some(ReasoningEffort::Max),
+                reasoning_effort: Some(ReasoningEffort::Xhigh),
             },
         ),
     ])
@@ -225,9 +225,9 @@ fn system_crew_marker_routes_to_the_configured_system_crew() {
     let overridden = crew_overridden_spec(&target, &ctx, &json!({ "system_crew": true }))
         .expect("resolve injected system crew")
         .expect("configured host returns an override");
-    assert_eq!(overridden.provider, Provider::Codex);
+    assert_eq!(overridden.provider, Provider::Claude);
     assert_eq!(overridden.model.as_deref(), Some("system-model"));
-    assert_eq!(overridden.reasoning_effort, Some(ReasoningEffort::Max));
+    assert_eq!(overridden.reasoning_effort, Some(ReasoningEffort::Xhigh));
     assert_eq!(host.observed(), vec!["system"]);
 }
 

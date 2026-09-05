@@ -35,7 +35,7 @@ fn static_args(executor_yaml: &str) -> Vec<String> {
 /// the envelope frame has to reach the CLI as a machine constraint.
 #[test]
 fn transport_constrains_every_invocation_with_the_protocol_schema() {
-    let args = ClaudeCliTransport::new(Some("sonnet".to_string())).args(false);
+    let args = ClaudeCliTransport::new(Some("sonnet".to_string()), None).args(false);
     let schema = schema_arg(&args);
 
     assert_eq!(schema["properties"]["schemaVersion"]["const"], 1);
@@ -62,7 +62,7 @@ fn transport_constrains_every_invocation_with_the_protocol_schema() {
 /// API — the most expensive place to learn about a schema mistake.
 #[test]
 fn protocol_schema_avoids_the_conditional_subschema_keywords_the_provider_rejects() {
-    let args = ClaudeCliTransport::new(None).args(false);
+    let args = ClaudeCliTransport::new(None, None).args(false);
     let schema = schema_arg(&args);
     let object = schema.as_object().expect("schema is an object");
 
@@ -79,7 +79,7 @@ fn protocol_schema_avoids_the_conditional_subschema_keywords_the_provider_reject
 /// reader from "fixing" the omission and reintroducing the 400.
 #[test]
 fn protocol_schema_leaves_the_status_error_correlation_to_the_rust_parser() {
-    let args = ClaudeCliTransport::new(None).args(false);
+    let args = ClaudeCliTransport::new(None, None).args(false);
     let schema = schema_arg(&args);
 
     assert_eq!(
@@ -123,7 +123,7 @@ fn neither_packaged_executor_copy_declares_the_flag_the_transport_owns() {
 
 #[test]
 fn per_request_toggles_still_compose_with_the_schema_flag() {
-    let args = ClaudeCliTransport::new(Some("opus-5".to_string())).args(true);
+    let args = ClaudeCliTransport::new(Some("opus-5".to_string()), None).args(true);
 
     assert!(args.iter().any(|arg| arg == "--json-schema"));
     assert!(args.iter().any(|arg| arg == "--verbose"));
@@ -146,11 +146,27 @@ fn short_model_forms_expand_to_claude_cli_ids_for_every_tier() {
         ("fable", "fable"),
         ("claude-fable-5-1", "claude-fable-5-1"),
     ] {
-        let args = ClaudeCliTransport::new(Some(short.to_string())).args(false);
+        let args = ClaudeCliTransport::new(Some(short.to_string()), None).args(false);
         let model_index = args
             .iter()
             .position(|arg| arg == "--model")
             .expect("model flag");
         assert_eq!(args[model_index + 1], expanded, "{short}");
+    }
+}
+
+#[test]
+fn effort_reaches_claude_cli_for_every_supported_crew_value() {
+    use orbit_types::identity::ReasoningEffort;
+
+    for (effort, expected) in [
+        (ReasoningEffort::Low, "low"),
+        (ReasoningEffort::Medium, "medium"),
+        (ReasoningEffort::High, "high"),
+        (ReasoningEffort::Xhigh, "xhigh"),
+        (ReasoningEffort::Max, "max"),
+    ] {
+        let args = ClaudeCliTransport::new(Some("opus".to_string()), Some(effort)).args(false);
+        assert_eq!(args[args.len() - 2..], ["--effort", expected], "{expected}");
     }
 }

@@ -67,7 +67,7 @@ A **crew** is one provider-model assignment. Activities do not carry a model-sel
 |---|---|---|
 | `model` | Model identifier passed to the provider CLI | Provider-specific (e.g. `opus`, `sonnet`, `gpt-6-astra`, `gemini-3.8-flash`, `grok-4.6`) |
 | `provider` | Agent family | `claude`, `codex`, `gemini`, `grok`, `copilot`, `cursor` (the CLI-executable crew families; see [Provider identity and resolution](#provider-identity-and-resolution) for the full canonical set) |
-| `effort` | Optional Codex reasoning effort | `low`, `medium`, `high`, `xhigh`, or `max` (Codex crews only) |
+| `effort` | Optional provider reasoning effort | Claude/Codex: `low`, `medium`, `high`, `xhigh`, or `max`; Grok: verified per model below |
 | `description` | Optional human-facing crew summary | Any non-empty string after trimming |
 | `tags` | Optional discovery labels | Array of strings; normalized, sorted, and deduplicated |
 
@@ -84,16 +84,24 @@ tags = ["implementation", "review"]
 
 `effort` is omitted by default, which leaves the provider's existing model
 default unchanged. When set, Orbit validates it while loading `config.toml`
-and passes the selected Codex crew's value to the executor as
-`model_reasoning_effort`. Only Codex documents this exact argument contract;
-configuring `effort` on Claude, Gemini, Grok, Copilot, Cursor, or another
-provider fails clearly instead of being ignored or translated to a different
-setting. A selected activity crew (including `workflow.system_crew`) supplies
-its effort together with its provider and model, so it takes precedence over
-an activity's inline baseline in the same way as the rest of that assignment.
-For the standard Codex tiers, use the model-specific crew to choose capability
-first: Terra (`gpt-5.6-terra`) is the medium-low crew; `effort` adjusts the
-reasoning budget inside the chosen Codex model.
+and passes it through the provider's documented argv: Codex receives
+`model_reasoning_effort`, Claude receives `--effort`, and Grok receives
+`--reasoning-effort`. The installed Claude CLI (2.1.261, checked September
+2026) advertises all five values, so Orbit forwards `low`, `medium`, `high`,
+`xhigh`, and `max` exactly; [Claude's effort documentation](https://code.claude.com/docs/en/model-config)
+notes that availability can still depend on the selected model. Grok Build
+1.0.13 advertises `--reasoning-effort` (with `--effort` as an alias), and
+`grok models` currently lists `grok-4.6` and `grok-4.5`. Orbit accepts `low`,
+`medium`, `high`, and `xhigh` for `grok-4.6`, and `low`, `medium`, and `high`
+for `grok-4.5`, matching [xAI's reasoning contract](https://docs.x.ai/developers/model-capabilities/text/reasoning).
+It rejects `max`, unsupported Grok model/effort pairs, and effort on other
+providers clearly rather than silently downgrading or ignoring a request. A
+selected activity crew (including `workflow.system_crew`) supplies its effort
+together with its provider and model, so it takes precedence over an activity's
+inline baseline in the same way as the rest of that assignment. For the
+standard Codex tiers, use the model-specific crew to choose capability first:
+Terra (`gpt-5.6-terra`) is the medium-low crew; `effort` adjusts the reasoning
+budget inside the chosen Codex model.
 
 Example — the standard Grok crew:
 

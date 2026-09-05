@@ -1,12 +1,17 @@
 use crate::providers::common::render_prompt_with_embedded_envelope;
+use orbit_types::identity::ReasoningEffort;
 
 pub(crate) struct GrokCliTransport {
     model: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl GrokCliTransport {
-    pub(crate) fn new(model: Option<String>) -> Self {
-        Self { model }
+    pub(crate) fn new(model: Option<String>, reasoning_effort: Option<ReasoningEffort>) -> Self {
+        Self {
+            model,
+            reasoning_effort,
+        }
     }
 
     // Static Grok CLI flags live in the executor definition; this transport
@@ -17,6 +22,10 @@ impl GrokCliTransport {
         if let Some(model) = &self.model {
             args.push("--model".to_string());
             args.push(model.clone());
+        }
+        if let Some(effort) = self.reasoning_effort {
+            args.push("--reasoning-effort".to_string());
+            args.push(effort.to_string());
         }
 
         args

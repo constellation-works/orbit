@@ -42,12 +42,12 @@ impl AgentModelPair {
 pub struct CrewAssignment {
     pub model: String,
     pub provider: String,
-    /// Optional Codex reasoning effort selected for this crew.
+    /// Optional provider-specific reasoning effort selected for this crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffort>,
 }
 
-/// The reasoning effort values accepted by the Codex CLI.
+/// The shared crew effort vocabulary accepted by supported provider CLIs.
 ///
 /// This closed set is shared by config admission and CLI argument rendering so
 /// an unsupported value cannot make it past config loading and then be
@@ -64,6 +64,46 @@ pub enum ReasoningEffort {
 
 impl ReasoningEffort {
     pub const VALUES: &'static str = "low, medium, high, xhigh, max";
+
+    /// Validates the provider-model contract before an effort reaches argv.
+    ///
+    /// Claude and Codex expose the complete crew vocabulary. Grok's published
+    /// contract is model-specific, so unknown models fail closed instead of
+    /// accepting a setting the CLI might silently reinterpret.
+    pub fn validate_for_provider_model(
+        self,
+        provider: &str,
+        model: Option<&str>,
+    ) -> Result<(), String> {
+        match provider {
+            "claude" | "codex" => Ok(()),
+            "grok" => Self::validate_grok_model_effort(self, model),
+            other => Err(format!(
+                "provider '{other}' does not support configured reasoning effort"
+            )),
+        }
+    }
+
+    fn validate_grok_model_effort(self, model: Option<&str>) -> Result<(), String> {
+        let model = model.map(str::trim).filter(|model| !model.is_empty());
+        match (model, self) {
+            (Some("grok-4.6"), Self::Low | Self::Medium | Self::High | Self::Xhigh) => Ok(()),
+            (Some("grok-4.5"), Self::Low | Self::Medium | Self::High) => Ok(()),
+            (Some("grok-4.6"), effort) => Err(format!(
+                "Grok model 'grok-4.6' supports effort values low, medium, high, xhigh; '{effort}' is unsupported"
+            )),
+            (Some("grok-4.5"), effort) => Err(format!(
+                "Grok model 'grok-4.5' supports effort values low, medium, high; '{effort}' is unsupported"
+            )),
+            (Some(model), _) => Err(format!(
+                "Grok effort support is verified only for models 'grok-4.5' and 'grok-4.6'; model '{model}' is unsupported"
+            )),
+            (None, _) => Err(
+                "Grok effort requires an explicit model; supported models are 'grok-4.5' and 'grok-4.6'"
+                    .to_string(),
+            ),
+        }
+    }
 }
 
 impl fmt::Display for ReasoningEffort {

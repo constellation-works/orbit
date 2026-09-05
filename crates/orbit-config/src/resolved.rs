@@ -394,20 +394,21 @@ fn crew_assignment_from_raw(crew: &str, raw: &RawCrewEntry) -> Result<CrewAssign
     Ok(CrewAssignment {
         model: required_crew_field(crew, "model", raw.model.as_deref())?,
         provider: required_crew_field(crew, "provider", raw.provider.as_deref())?,
-        effort: crew_effort_from_raw(crew, raw.effort.as_deref(), raw.provider.as_deref())?,
+        effort: crew_effort_from_raw(
+            crew,
+            raw.effort.as_deref(),
+            raw.provider.as_deref(),
+            raw.model.as_deref(),
+        )?,
     })
 }
 
-/// Validate the one provider-specific crew setting at config admission.
-///
-/// Codex maps these values directly to its documented
-/// `model_reasoning_effort` config key. Other Orbit CLI providers do not share
-/// that argument contract, so accepting the key for them would silently
-/// downgrade a configured request.
+/// Validate the provider-model-specific crew setting at config admission.
 fn crew_effort_from_raw(
     crew: &str,
     raw_effort: Option<&str>,
     raw_provider: Option<&str>,
+    raw_model: Option<&str>,
 ) -> Result<Option<ReasoningEffort>, OrbitError> {
     let Some(raw_effort) = raw_effort else {
         return Ok(None);
@@ -418,15 +419,12 @@ fn crew_effort_from_raw(
     let provider = required_crew_field(crew, "provider", raw_provider)?;
     let provider = Provider::resolve_name(&provider).map_err(|_| {
         OrbitError::InvalidInput(format!(
-            "[crews.{crew}].effort requires provider = \"codex\"; provider '{provider}' is unsupported"
+            "[crews.{crew}].effort requires a supported effort provider; provider '{provider}' is unsupported"
         ))
     })?;
-    if provider.provider != Provider::Codex {
-        return Err(OrbitError::InvalidInput(format!(
-            "[crews.{crew}].effort is supported only for provider = \"codex\"; '{}' cannot receive effort '{effort}'",
-            provider.provider
-        )));
-    }
+    effort
+        .validate_for_provider_model(provider.provider.as_str(), raw_model)
+        .map_err(|error| OrbitError::InvalidInput(format!("[crews.{crew}].effort {error}")))?;
     Ok(Some(effort))
 }
 
