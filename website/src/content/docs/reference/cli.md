@@ -23,6 +23,7 @@ sidebar:
 | `orbit run ship [task_id ...]` | Submit backlog or explicitly selected tasks through the gated shipment pipeline and return a run ID immediately. |
 | `orbit run ship --mode local [task_id ...]` | Run the local-only task path for backlog or explicitly selected tasks. |
 | `orbit run auto [--for <duration>]` | Drain the workspace backlog for a window (loose leaves, plus one epic) and return a run ID immediately. |
+| `orbit run auto --stop` | Stop new admissions for this workspace's active auto coordinator. Already admitted workers keep running; this is not cancellation. |
 | `orbit run ship --complete` / `orbit run auto --complete` | Additionally authorize the submitted run to finish delivery and move the tasks it ships from `review` to `done`. Off by default. |
 | `orbit task` | Create, update, and manage tasks. |
 | `orbit task artifact put <task_id> <source_path>` | Store a UTF-8 file under a task's artifacts directory. |

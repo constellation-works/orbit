@@ -9,6 +9,20 @@ use crate::workflow::child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
 };
 
+/// A live operator request to stop a bounded drain's new admissions [ORB-11283].
+///
+/// This is not cancellation. The coordinator stays the same run, already
+/// admitted children keep their completion authority, and the admission path
+/// treats the flag as "offer nothing" on the next pass. Cancellation of those
+/// children is a separate, explicit `orbit run cancel` of each child run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrainAdmissionsStop {
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub stopped_at: DateTime<Utc>,
+}
+
 /// A live operator adjustment to a bounded drain's worker ceiling [ORB-11253].
 ///
 /// The ceiling a drain was submitted with lives in its immutable
@@ -91,6 +105,12 @@ pub struct PipelineState {
     /// the evidence of what the run was actually admitting under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain_worker_limit: Option<DrainWorkerLimit>,
+    /// Operator stop of *new* admissions on a bounded auto drain [ORB-11283].
+    /// Absent means the drain is still admitting under its window and ceiling.
+    /// Like `drain_worker_limit` this survives terminalization: it is how a
+    /// finished coordinator is distinguished from cancellation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_admissions_stop: Option<DrainAdmissionsStop>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -112,6 +132,7 @@ impl PipelineState {
             waiting_on_locks: None,
             child_dispatches: Vec::new(),
             drain_worker_limit: None,
+            drain_admissions_stop: None,
             updated_at: Utc::now(),
         }
     }
@@ -159,6 +180,26 @@ impl PipelineState {
             actor,
             reason,
             updated_at: Utc::now(),
+        });
+        self.updated_at = Utc::now();
+        true
+    }
+
+    /// Whether this drain has been told to stop offering new work.
+    pub fn admissions_stopped(&self) -> bool {
+        self.drain_admissions_stop.is_some()
+    }
+
+    /// Record an admissions stop. Idempotent: a drain that is already stopped
+    /// keeps the original actor and timestamp and returns `false`.
+    pub fn set_drain_admissions_stop(&mut self, actor: String, reason: Option<String>) -> bool {
+        if self.drain_admissions_stop.is_some() {
+            return false;
+        }
+        self.drain_admissions_stop = Some(DrainAdmissionsStop {
+            actor,
+            reason,
+            stopped_at: Utc::now(),
         });
         self.updated_at = Utc::now();
         true

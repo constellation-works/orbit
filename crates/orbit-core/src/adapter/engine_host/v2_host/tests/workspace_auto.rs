@@ -914,6 +914,28 @@ fn a_stamped_window_answers_expiry_against_its_own_deadline() {
 }
 
 #[test]
+fn a_stopped_drain_expires_the_window_without_waiting_for_the_deadline() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let drain_run_id = seed_running_drain(&runtime, 5);
+    runtime
+        .stop_workspace_auto_admissions(crate::application::job::DrainAdmissionsStopRequest {
+            actor: "tester",
+            source: "unit",
+            reason: None,
+            claim_token: None,
+        })
+        .expect("stop drain");
+
+    let stamped = drain_window(
+        &runtime,
+        json!({ "run_id": drain_run_id, "for_seconds": 600 }),
+    );
+    assert_eq!(stamped["expired"], true);
+    assert_eq!(stamped["expired_reason"], "admissions_stopped");
+    assert_eq!(stamped["remaining_seconds"], 0.0);
+}
+
+#[test]
 fn a_drain_window_rejects_an_unparseable_deadline_or_an_oversize_request() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
 
@@ -1311,6 +1333,66 @@ fn seed_backlog_leaves(runtime: &OrbitRuntime, count: usize) -> Vec<String> {
             .id
         })
         .collect()
+}
+
+#[test]
+fn a_stopped_drain_admits_no_leaves_or_epics_and_leaves_live_children() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "crates/leaf_0/src/lib.rs");
+    seed_backlog_leaves(&runtime, 1);
+    let epic = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Epic root".to_string(),
+            description: "fixture".to_string(),
+            acceptance_criteria: vec!["fixture".to_string()],
+            plan: "fixture".to_string(),
+            tags: vec!["epic".to_string()],
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("seed epic");
+    let drain_run_id = seed_running_drain(&runtime, 5);
+    let live = seed_live_leaf_run(&runtime, &["CARRIED"]);
+
+    runtime
+        .stop_workspace_auto_admissions(crate::application::job::DrainAdmissionsStopRequest {
+            actor: "tester",
+            source: "unit",
+            reason: None,
+            claim_token: None,
+        })
+        .expect("stop drain");
+
+    let output = classify_with(
+        &runtime,
+        json!({ "run_id": drain_run_id, "max_active_leaf_runs": 5 }),
+    );
+    assert_eq!(output["admissions_stopped"], true);
+    assert_eq!(output["free_slots"], 0);
+    assert!(
+        output["loose_task_ids"]
+            .as_array()
+            .expect("admitted")
+            .is_empty(),
+        "a stopped drain admits no leaves: {output}"
+    );
+    assert_eq!(output["epic_task_id"], Value::Null);
+    assert_eq!(output["has_epic"], false);
+    assert_eq!(output["has_leaves"], false);
+    let child = runtime.show_job_run(&live).expect("show child");
+    assert!(
+        !child.state.is_terminal(),
+        "stop must not cancel an already admitted child"
+    );
+    assert_ne!(
+        output["epic_task_id"],
+        json!(epic.id),
+        "a stopped drain must not start an admissible epic"
+    );
+
+    let readiness = readiness(&runtime, &[], None);
+    assert_eq!(readiness["capacity"]["admissions_stopped"], true);
+    assert_eq!(readiness["capacity"]["free_slots"], 0);
 }
 
 #[test]

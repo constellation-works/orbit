@@ -233,7 +233,9 @@ pub(crate) fn run_deterministic(
         // Stamp a drain deadline, or answer whether a stamped one has passed
         // [ORB-10819]. Gates the start of the next iteration only; nothing
         // here cancels or shortens an in-flight child run.
-        CoreDeterministicAction::DrainWindow => workspace_auto::drain_window(action, input),
+        CoreDeterministicAction::DrainWindow => {
+            workspace_auto::drain_window(runtime, action, input)
+        }
         // ADR-0223: scheduled shipment resolves only the active runtime's
         // canonical ship input; cross-workspace enumeration stays in the
         // legacy CLI sweep and `workflow.auto_ship` is deliberately ignored.

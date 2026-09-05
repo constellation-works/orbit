@@ -62,6 +62,7 @@ pub(crate) fn format_waiting_line(
 /// the whole point of the dispatch checkpoint is that an operator staring at a
 /// stalled — or cancelled — parent can name its child immediately, so the
 /// lineage is printed for terminal runs too.
+///
 /// [ORB-11253] The worker ceiling in force on a drain, and who last moved it.
 ///
 /// Printed only when an operator has retuned the run: an untouched drain is
@@ -77,6 +78,24 @@ pub(crate) fn format_worker_limit_line(state: Option<&PipelineState>) -> Option<
         limit.actor,
     );
     if let Some(reason) = &limit.reason {
+        line.push_str(&format!(" reason={reason}"));
+    }
+    Some(line)
+}
+
+/// [ORB-11283] Whether this drain was told to stop new admissions.
+///
+/// Printed whenever the control is present, including on a finished run: that
+/// is how an operator distinguishes a drain that wound down after `--stop`
+/// from one that was cancelled.
+pub(crate) fn format_admissions_stop_line(state: Option<&PipelineState>) -> Option<String> {
+    let stop = state?.drain_admissions_stop.as_ref()?;
+    let mut line = format!(
+        "Admissions: stopped by {} at {}",
+        stop.actor,
+        stop.stopped_at.format("%Y-%m-%dT%H:%M:%SZ"),
+    );
+    if let Some(reason) = &stop.reason {
         line.push_str(&format!(" reason={reason}"));
     }
     Some(line)

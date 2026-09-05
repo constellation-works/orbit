@@ -86,6 +86,34 @@ Retuning keeps all of them, and keeps the children the drain already started.
   you read, so two operators cannot silently overwrite each other.
   `orbit run readiness` and `orbit run show` both report the value in force.
 
+## Stopping a running drain
+
+`orbit run auto --stop` ends **new admissions** for this workspace's active auto
+coordinator. You do not look up a run ID. Children the drain already started
+keep running under the completion authority they were admitted with, and the
+coordinator is not cancelled.
+
+```bash
+orbit run auto --stop
+orbit run auto --stop --json
+orbit run show "$RUN_ID"                 # Admissions: stopped by ...
+```
+
+A second `--stop`, or `--stop` with no active coordinator, is a no-op. Other
+workspaces and other jobs are untouched. `--stop` cannot be combined with the
+flags that start a drain (`--for`, `--concurrency`, `--complete`, `--allow-crew`).
+
+This is not cancellation. To stop workers that are already running, cancel each
+child explicitly:
+
+```bash
+orbit run cancel "$CHILD_RUN_ID" --confirm
+```
+
+Parent cancellation of the coordinator is the wrong tool for this job: auto
+children are detached so they outlive the parent step, and cancelling a parent
+that *was* blocking would cascade.
+
 ## Completing work with `--complete`
 
 By default a successful task ends in `review`, and a separate operator action

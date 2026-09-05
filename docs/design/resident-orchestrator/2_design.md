@@ -1,8 +1,8 @@
 ---
 title: Resident Orchestrator — Design
 owner: codex, grok, claude
-last_updated: 2026-08-15
-last_validated: 2026-08-15
+last_updated: 2026-09-05
+last_validated: 2026-09-05
 status: Draft
 feature: resident-orchestrator
 doc_role: design
@@ -190,6 +190,16 @@ next admission pass.
   compare-and-set. The engine's own state writes — step checkpoints and child-dispatch records —
   go through the same transactional path, so a checkpoint cannot discard a control written between
   its read and its write.
+
+**Stopping admissions is a live control, not cancellation** ([ORB-11283]). `orbit run auto --stop`
+resolves this workspace's live `workspace_auto_pipeline` coordinator without a run id and writes
+`drain_admissions_stop` onto the same `PipelineState`. Classify then offers no leaves and no epic;
+`drain_window` expires for the stop rather than the deadline so the loop winds down; `invoke_detached`
+re-checks at submit time and skips a child that classify offered before the stop landed. Already
+admitted children stay detached and keep their completion authority. A queued coordinator that has
+not started is cancelled so it cannot admit later; that is reported as `cancelled_queued`, not as a
+stopped drain. Repeated `--stop` and `--stop` with no coordinator are idle successes. Cancellation
+of already-running workers remains `orbit run cancel <child-run-id> --confirm`.
 
 **Conflict admission replaces `hold`.** An `epic`-tagged root holds one reservation covering the
 union of its descendants' `context_files`. That union is live since [ORB-10816]:

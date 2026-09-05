@@ -54,6 +54,12 @@ spec:
     # next admission pass — same run id, same deadline, same completion
     # authorization, same children. Lowering it stops new admissions until
     # enough children finish; it cancels nothing.
+    #
+    # ORB-11283: `orbit run auto --stop` records `drain_admissions_stop` on
+    # this same state. Classify then offers nothing, `drain_window` expires
+    # for the stop rather than the deadline, and `invoke_detached` skips a
+    # child that was offered before the stop landed. Children already
+    # submitted keep running; this is not `orbit run cancel`.
     max_active_leaf_runs: 5
     # Waited when the backlog has work but no slot is free: the latency a
     # freed slot sits idle before it is refilled.

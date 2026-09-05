@@ -200,5 +200,54 @@ fn state_written_before_the_control_existed_still_loads() {
     });
     let decoded: PipelineState = serde_json::from_value(legacy).expect("deserialize legacy state");
     assert!(decoded.drain_worker_limit.is_none());
+    assert!(decoded.drain_admissions_stop.is_none());
+    assert!(!decoded.admissions_stopped());
     assert_eq!(decoded.effective_max_active_leaf_runs(5), 5);
+}
+
+// [ORB-11283] Stop new admissions without cancelling the coordinator.
+
+#[test]
+fn an_absent_stop_means_the_drain_is_still_admitting() {
+    let state = state();
+    assert!(!state.admissions_stopped());
+    assert!(state.drain_admissions_stop.is_none());
+}
+
+#[test]
+fn setting_the_stop_records_the_actor_and_is_idempotent() {
+    let mut state = state();
+    assert!(state.set_drain_admissions_stop(
+        "operator".to_string(),
+        Some("window closed early".to_string()),
+    ));
+    let first = state.drain_admissions_stop.clone().expect("stop recorded");
+    assert_eq!(first.actor, "operator");
+    assert_eq!(first.reason.as_deref(), Some("window closed early"));
+    assert!(state.admissions_stopped());
+
+    assert!(!state.set_drain_admissions_stop("second".to_string(), None));
+    let second = state
+        .drain_admissions_stop
+        .clone()
+        .expect("original stop kept");
+    assert_eq!(second.actor, "operator");
+    assert_eq!(second.stopped_at, first.stopped_at);
+}
+
+#[test]
+fn the_stop_survives_a_state_round_trip_and_is_omitted_when_absent() {
+    let encoded = serde_json::to_value(state()).expect("encode");
+    assert!(
+        !encoded
+            .as_object()
+            .expect("object")
+            .contains_key("drain_admissions_stop")
+    );
+
+    let mut state = state();
+    state.set_drain_admissions_stop("cli".to_string(), None);
+    let encoded = serde_json::to_string(&state).expect("serialize state");
+    let decoded: PipelineState = serde_json::from_str(&encoded).expect("deserialize state");
+    assert_eq!(decoded.drain_admissions_stop, state.drain_admissions_stop);
 }

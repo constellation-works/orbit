@@ -133,9 +133,51 @@ fn parses_workspace_auto_defaults() {
             assert_eq!(args.for_duration, None);
             // No crew restriction is the pre-ORB-11242 behavior: every crew.
             assert!(args.allow_crew.is_empty());
+            assert!(!args.stop);
         }
         _ => panic!("expected auto"),
     }
+}
+
+#[test]
+fn parses_workspace_auto_stop() {
+    let command = parse_run(&["orbit", "run", "auto", "--stop"]);
+    match command.command {
+        RunSubcommand::Auto(args) => {
+            assert!(args.stop);
+            assert_eq!(args.for_duration, None);
+            assert!(!args.complete);
+        }
+        _ => panic!("expected auto"),
+    }
+}
+
+#[test]
+fn workspace_auto_stop_conflicts_with_start_flags() {
+    for args in [
+        ["orbit", "run", "auto", "--stop", "--for", "30m"].as_slice(),
+        ["orbit", "run", "auto", "--stop", "--concurrency", "3"].as_slice(),
+        ["orbit", "run", "auto", "--stop", "--complete"].as_slice(),
+        ["orbit", "run", "auto", "--stop", "--allow-crew", "luna"].as_slice(),
+    ] {
+        assert_cli_rejects(args, ErrorKind::ArgumentConflict, "--stop");
+    }
+}
+
+#[test]
+fn auto_stop_with_no_coordinator_is_idle() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    super::auto::AutoCommand {
+        for_duration: None,
+        concurrency: None,
+        complete: false,
+        allow_crew: Vec::new(),
+        json: true,
+        claim_token: None,
+        stop: true,
+    }
+    .execute(&runtime)
+    .expect("idle stop succeeds");
 }
 
 #[test]

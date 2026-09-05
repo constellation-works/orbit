@@ -68,6 +68,7 @@ fn active_run_projects_waiting_reasons_and_child_dispatches() {
         value["child_dispatches"][0]["child_run_id"],
         json!("jrun-child")
     );
+    assert_eq!(value["drain_admissions_stop"], Value::Null);
 }
 
 #[test]
