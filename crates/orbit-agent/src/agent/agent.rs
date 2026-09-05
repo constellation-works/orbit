@@ -26,6 +26,30 @@ pub enum ProviderOptions {
     Mock,
 }
 
+impl ProviderOptions {
+    /// The canonical provider identity used for cross-provider validation
+    /// (e.g. [`ReasoningEffort::validate_for_provider_model`]), independent
+    /// of `AgentConfig::provider_key` — the registry dispatch key, which is
+    /// derived from the CLI executable name and can diverge from it (the
+    /// Antigravity executable is `agy`, but its canonical identity is
+    /// `antigravity`).
+    fn canonical_provider_name(&self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex { .. } => "codex",
+            Self::Gemini => "gemini",
+            Self::Antigravity => "antigravity",
+            Self::Grok => "grok",
+            Self::Copilot => "copilot",
+            Self::Cursor => "cursor",
+            Self::Ollama => "ollama",
+            Self::Pi => "pi",
+            Self::Opencode => "opencode",
+            Self::Mock => "mock",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentConfig {
     pub command: String,
@@ -74,7 +98,10 @@ impl AgentConfig {
     ) -> Result<Self, OrbitError> {
         if let Some(effort) = reasoning_effort {
             effort
-                .validate_for_provider_model(self.provider_key, self.model.as_deref())
+                .validate_for_provider_model(
+                    self.provider_options.canonical_provider_name(),
+                    self.model.as_deref(),
+                )
                 .map_err(OrbitError::InvalidInput)?;
         }
         self.reasoning_effort = reasoning_effort;
