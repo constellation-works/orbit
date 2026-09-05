@@ -4,7 +4,7 @@ use orbit_types::workflow::activity_job::V2AuditEventKind;
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, DeterministicSpec};
 
 use crate::context::RuntimeHost;
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, RecoverableVcsConflict};
 use orbit_tools::{FsAuditLogger, FsCallEvent, FsCallEventKind};
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::telemetry::InvocationTrace;
@@ -118,6 +118,22 @@ pub enum DispatchError {
         diagnostic: String,
     },
 
+    /// A deterministic VCS action proved that it stopped on actual unmerged
+    /// index entries and supplied the pinned base evidence needed for one
+    /// bounded repair. This bypasses ordinary retry so the configured conflict
+    /// recovery agent is the only additional attempt.
+    #[error(
+        "recoverable VCS conflict during '{operation}': original base '{original_base_sha}', target base '{target_base_sha}'; {diagnostic}; conflicting paths: {}",
+        conflicting_paths.join(", ")
+    )]
+    RecoverableVcsConflict {
+        operation: String,
+        original_base_sha: String,
+        target_base_sha: String,
+        conflicting_paths: Vec<String>,
+        diagnostic: String,
+    },
+
     /// Tool-allowlist denial (§6). Non-retryable — the retry wrapper must not
     /// re-attempt a denied call. Phase 2 formerly translated this to
     /// `Ok(terminated)`; Phase 3 surfaces it structurally so the DAG executor
@@ -173,6 +189,7 @@ impl DispatchError {
                 | DispatchError::HostRequired(_)
                 | DispatchError::CliInvocationPermanent(_)
                 | DispatchError::WorktreeIntegrity { .. }
+                | DispatchError::RecoverableVcsConflict { .. }
         )
     }
 
@@ -183,7 +200,10 @@ impl DispatchError {
     /// recovery agent needs to establish whether reconciliation is safe. All
     /// other non-retryable classes retain their fail-fast behavior.
     pub fn allows_recovery(&self) -> bool {
-        matches!(self, DispatchError::WorktreeIntegrity { .. })
+        matches!(
+            self,
+            DispatchError::WorktreeIntegrity { .. } | DispatchError::RecoverableVcsConflict { .. }
+        )
     }
 }
 
@@ -203,6 +223,19 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
         unavailable @ DispatchError::DeterministicActionUnavailable { .. } => {
             OrbitError::JobValidation(unavailable.to_string())
         }
+        DispatchError::RecoverableVcsConflict {
+            operation,
+            original_base_sha,
+            target_base_sha,
+            conflicting_paths,
+            diagnostic,
+        } => OrbitError::RecoverableVcsConflict(Box::new(RecoverableVcsConflict {
+            operation,
+            original_base_sha,
+            target_base_sha,
+            conflicting_paths,
+            diagnostic,
+        })),
         other => OrbitError::InvalidInput(format!("{other}")),
     }
 }
@@ -358,9 +391,20 @@ fn run_deterministic(
                 input,
                 Some(&state_context),
             )
-            .map_err(|error| DispatchError::DeterministicActionFailed {
-                action: spec.action.clone(),
-                message: error.to_string(),
+            .map_err(|error| match error {
+                OrbitError::RecoverableVcsConflict(conflict) => {
+                    DispatchError::RecoverableVcsConflict {
+                        operation: conflict.operation,
+                        original_base_sha: conflict.original_base_sha,
+                        target_base_sha: conflict.target_base_sha,
+                        conflicting_paths: conflict.conflicting_paths,
+                        diagnostic: conflict.diagnostic,
+                    }
+                }
+                error => DispatchError::DeterministicActionFailed {
+                    action: spec.action.clone(),
+                    message: error.to_string(),
+                },
             })?
         }
         Some(DeterministicAction::Core(_)) | None => host.run_deterministic(

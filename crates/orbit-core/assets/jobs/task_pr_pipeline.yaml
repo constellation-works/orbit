@@ -95,7 +95,10 @@ spec:
 
     - id: sync_base
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
-      recovery_activity: step_failure_recovery
+      # Only the typed unmerged-index conflict emitted by git_rebase may
+      # dispatch this leaf. Other VCS failures preserve the original error and
+      # fall through to the terminal candidate handoff without an agent.
+      recovery_activity: pr_conflict_recovery
       target: activity:git_rebase
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"

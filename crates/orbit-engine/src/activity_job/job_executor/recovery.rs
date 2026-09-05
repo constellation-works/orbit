@@ -1,5 +1,7 @@
 use super::*;
 
+const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
+
 pub(super) fn recover_or_return_original(
     step: &JobV2Step,
     ctx: &ExecCtx<'_>,
@@ -46,6 +48,12 @@ pub(super) fn attempt_recovery_activity(
     attempt: u32,
     max_attempts: u32,
 ) -> bool {
+    if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
+        && !matches!(original_err, DispatchError::RecoverableVcsConflict { .. })
+    {
+        return false;
+    }
+
     let mut input = serde_json::json!({
         "failed_step_id": step.id,
         "activity_name": step_activity_name(step),
@@ -53,8 +61,44 @@ pub(super) fn attempt_recovery_activity(
         "attempt": attempt,
         "max_attempts": max_attempts,
     });
-    if recovery.name == "step_failure_recovery"
+    if let DispatchError::RecoverableVcsConflict {
+        operation,
+        original_base_sha,
+        target_base_sha,
+        conflicting_paths,
+        diagnostic,
+    } = original_err
         && let Some(object) = input.as_object_mut()
+    {
+        object.insert(
+            "recovery_kind".to_string(),
+            Value::String("vcs_conflict".to_string()),
+        );
+        object.insert("operation".to_string(), Value::String(operation.clone()));
+        object.insert(
+            "original_base_sha".to_string(),
+            Value::String(original_base_sha.clone()),
+        );
+        object.insert(
+            "target_base_sha".to_string(),
+            Value::String(target_base_sha.clone()),
+        );
+        object.insert(
+            "conflicting_paths".to_string(),
+            Value::Array(
+                conflicting_paths
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
+        object.insert("diagnostic".to_string(), Value::String(diagnostic.clone()));
+    }
+    if matches!(
+        recovery.name.as_str(),
+        "step_failure_recovery" | PR_CONFLICT_RECOVERY_ACTIVITY
+    ) && let Some(object) = input.as_object_mut()
     {
         object.insert("system_crew".to_string(), Value::Bool(true));
     }
@@ -167,6 +211,7 @@ pub(super) fn attempt_failure_activity(
     );
     let error_code = match original_err {
         DispatchError::WorktreeIntegrity { code, .. } => *code,
+        DispatchError::RecoverableVcsConflict { .. } => "recoverable_vcs_conflict",
         _ => "pipeline_step_failed",
     };
     let input = serde_json::json!({

@@ -7,11 +7,10 @@
 #   failure that the run recovers from does not block anything. Commit, branch
 #   preparation, base synchronization, push, PR creation/reuse, and promotion
 #   are independent durable steps, so recovery resumes at the failed phase.
-# - When the run itself terminalizes as `failed` (also `cancelled`/`timeout`),
-#   every task coupled to it (stamped with its `job_run_id` by `worktree_setup`)
-#   is moved to `blocked` with a `workflow_run_failed` status event — a dead end
-#   for automation that requires a human/orchestrator decision to clear. Tasks
-#   already in `review`/`done` are left untouched.
+# - When the run itself terminalizes before PR completion, its recoverable
+#   candidate is published and the task is blocked for reconciliation. Once a
+#   PR was published and the task promoted to review, a completion-stage merge
+#   failure preserves that exact candidate and review state for a safe retry.
 #
 schemaVersion: 2
 kind: Job
@@ -21,8 +20,9 @@ spec:
   state: enabled
   kind: workflow
   max_active_runs: 10
-  # ADR-0246: preserve and publish recoverable work after any terminal step
-  # failure while keeping the original failure authoritative.
+  # Preserve recoverable work after terminal failures while keeping the
+  # original error authoritative. Completion-stage failures retain the
+  # already-published PR instead of fabricating a conflict handoff.
   failure_activity: pr_failure_handoff
   default_input:
     task_ids: []
@@ -95,7 +95,10 @@ spec:
 
     - id: sync_base
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
-      recovery_activity: step_failure_recovery
+      # Only the typed unmerged-index conflict emitted by git_rebase may
+      # dispatch this leaf. Other VCS failures preserve the original error and
+      # fall through to the terminal candidate handoff without an agent.
+      recovery_activity: pr_conflict_recovery
       target: activity:git_rebase
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"

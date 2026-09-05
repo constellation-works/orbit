@@ -109,6 +109,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/pr_failure_handoff.yaml"),
     ),
     (
+        "pr_conflict_recovery",
+        include_str!("../../assets/activities/pr_conflict_recovery.yaml"),
+    ),
+    (
         "pr_prepare",
         include_str!("../../assets/activities/pr_prepare.yaml"),
     ),
@@ -246,6 +250,10 @@ backend = "cli"
                 "step_failure_recovery",
                 ("codex", "gpt-5.6-luna".to_string()),
             ),
+            (
+                "pr_conflict_recovery",
+                ("codex", "gpt-5.6-luna".to_string()),
+            ),
             ("task_pilot", ("codex", "gpt-5.6-luna".to_string())),
             ("triage_failed_runs", ("codex", "gpt-5.6-luna".to_string())),
         ]);
@@ -262,7 +270,10 @@ backend = "cli"
             // crew literally, so none of them depend on a family-specific
             // `[crews]` entry existing on the machine that runs it.
             let activity_input = match *name {
-                "task_pilot" | "step_failure_recovery" | "triage_failed_runs" => {
+                "task_pilot"
+                | "step_failure_recovery"
+                | "pr_conflict_recovery"
+                | "triage_failed_runs" => {
                     inject_system_crew_input(&runtime, &json!({ "system_crew": true }))
                         .expect("inject configured system crew")
                 }
