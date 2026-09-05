@@ -31,6 +31,7 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.workflow.run.list", McpToolClass::Execute),
     ("orbit.workflow.run.resume", McpToolClass::Execute),
     ("orbit.workflow.run.show", McpToolClass::Execute),
+    ("orbit.workflow.run.workers", McpToolClass::Execute),
     ("orbit.workflow.ship", McpToolClass::ControlPlane),
     ("orbit.workspace.list", McpToolClass::Unclassified),
 ];
@@ -58,7 +59,7 @@ fn the_locked_mapping_covers_exactly_the_advertised_surface() {
         .collect::<std::collections::BTreeSet<_>>();
 
     assert_eq!(advertised, locked);
-    assert_eq!(advertised.len(), 20);
+    assert_eq!(advertised.len(), 21);
 }
 
 #[test]
@@ -66,6 +67,10 @@ fn classification_accepts_the_advertised_spelling() {
     assert_eq!(mcp_tool_class("orbit_task_add"), McpToolClass::ControlPlane);
     assert_eq!(
         mcp_tool_class("orbit_workflow_run_show"),
+        McpToolClass::Execute
+    );
+    assert_eq!(
+        mcp_tool_class("orbit_workflow_run_workers"),
         McpToolClass::Execute
     );
 }
@@ -84,7 +89,11 @@ fn a_replica_refuses_control_plane_and_runs_execute_class_tools() {
         "{refused}"
     );
 
-    for allowed in ["orbit.workflow.run.show", "orbit.command.exec"] {
+    for allowed in [
+        "orbit.workflow.run.show",
+        "orbit.workflow.run.workers",
+        "orbit.command.exec",
+    ] {
         ensure_tool_class_held(allowed, held).expect(allowed);
     }
 }
@@ -134,8 +143,8 @@ fn an_absent_checkout_role_is_treated_as_owner() {
 fn a_control_plane_that_does_not_run_work_refuses_execute_class_tools() {
     let held = CapabilityClasses::new(true, false);
 
-    let refused =
-        ensure_tool_class_held("orbit.workflow.run.resume", held).expect_err("execute is not held");
+    let refused = ensure_tool_class_held("orbit.workflow.run.workers", held)
+        .expect_err("execute is not held");
     assert!(
         matches!(&refused, OrbitError::CapabilityRefused(message) if message.contains("execute")),
         "{refused}"
