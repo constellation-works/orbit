@@ -45,6 +45,11 @@ the packaged narrow Bubblewrap profile. Complete the [Linux sandbox setup](linux
 before dispatch. Do not disable host protection or enable sandbox fallback to hide
 a failed probe.
 
+To add a provider or deterministic executor to Orbit itself, work in a source
+checkout and follow the [executor onboarding runbook](https://github.com/danieljhkim/orbit/blob/main/docs/runbooks/executor-onboarding.md).
+Do not change a production login or workspace configuration merely to test a
+new executor.
+
 ## Step 3 — Initialize the machine
 
 ```bash

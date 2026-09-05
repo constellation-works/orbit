@@ -6,6 +6,11 @@ checkout. This reference covers operating choices; for additional prose see
 the [published configuration reference](https://github.com/danieljhkim/orbit/blob/main/docs/CONFIG.md),
 checking its release against `orbit --version`.
 
+Contributors adding an executor should use the source checkout's
+[executor onboarding runbook](https://github.com/danieljhkim/orbit/blob/main/docs/runbooks/executor-onboarding.md).
+It covers the v2 integration and test seams; this reference is for configuring
+an existing lane.
+
 ## Where config lives
 
 | Path | Scope | Created by |
