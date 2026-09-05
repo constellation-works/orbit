@@ -139,7 +139,7 @@ open_window(input.for_seconds)          # stamps a deadline; absent/zero = one t
 loop
     admissible = backlog leaves whose context_files do not overlap a live holder
                + one backlog epic root, when no epic_pipeline run is live
-    ship leaves      -> invoke_and_wait task_auto_pipeline
+    ship leaves      -> invoke_detached task_auto_pipeline
     start epic root  -> invoke_detached epic_pipeline
     re-read the window
     sleep when nothing was admissible and the window is still open
@@ -153,9 +153,9 @@ artifact, and re-reading the window is a pure function of a value the run alread
 `break_when` is evaluated after the loop body, a zero window still yields exactly one iteration,
 which is why `orbit run auto` with no `--for` behaves exactly as it did before the window existed.
 
-- The deadline gates **starting** new work. In-flight children finish because `invoke_and_wait`
-  blocks on them — that is what makes "the window does not affect tasks already in progress" true
-  by construction rather than by special-casing.
+- The deadline gates **starting** new work. Leaf and epic children are detached and durably linked;
+  the coordinator re-observes their run rows to refill capacity but does not cancel them when its
+  window closes.
 - Each iteration **re-lists** the backlog, so a task created after the run started still ships.
 - Epic dispatch is **detached** (`invoke_detached`). Waiting on a multi-hour epic would consume the
   rest of the window and starve conflict-free leaves behind it, which is the v1 failure mode with a
@@ -166,8 +166,8 @@ which is why `orbit run auto` with no `--for` behaves exactly as it did before t
   window between a detached submit and the child's `worktree_setup` moving that root to
   `in-progress`.
 - An expired window with nothing left is a plain success. Fail-closed lives at the epic gate (§3),
-  not here. A failed **leaf** ship still fails the drain: `pipeline_success_guard` follows the wait,
-  as it did in v1, and the resulting `blocked` task is the triage pipeline's input.
+  not here. Detached leaf results belong to their own runs; the drain records their durable links
+  and keeps filling available slots.
 
 **The worker ceiling is a live control, not a submission-time constant** ([ORB-11253]). The
 `max_active_leaf_runs` a drain is submitted with lands in the run's immutable `initial_input`, so
@@ -191,13 +191,19 @@ next admission pass.
   go through the same transactional path, so a checkpoint cannot discard a control written between
   its read and its write.
 
-**Stopping admissions is a live control, not cancellation** ([ORB-11283]). `orbit run auto --stop`
-resolves this workspace's live `workspace_auto_pipeline` coordinator without a run id and writes
-`drain_admissions_stop` onto the same `PipelineState`. Classify then offers no leaves and no epic;
-`drain_window` expires for the stop rather than the deadline so the loop winds down; `invoke_detached`
-re-checks at submit time and skips a child that classify offered before the stop landed. Already
-admitted children stay detached and keep their completion authority. A queued coordinator that has
-not started is cancelled so it cannot admit later; that is reported as `cancelled_queued`, not as a
+**Stopping admissions is a live control, not cancellation** ([ORB-11283], [ORB-11310]). `orbit run
+auto --stop` resolves this workspace's live `workspace_auto_pipeline` coordinator without a run id
+and writes `drain_admissions_stop` onto the same `PipelineState`. Classify then offers no leaves and
+no epic, and `drain_window` expires for the stop rather than the deadline so the loop winds down.
+
+The authoritative admission check is the SQLite `IMMEDIATE` transaction that also inserts and seeds
+the child run and writes its first parent `child_dispatches` link. The transaction commit is the
+cross-process linearization point shared with stop: if stop commits first, both blocking and detached
+child submissions return an idempotent `admissions_stopped` skip; if admission commits first, stop
+waits and then acknowledges with that child already linked. The lock is released before worker spawn
+or any child wait, so child completion cannot deadlock the control path. Already admitted children
+keep their original completion authority and are not cancelled. A queued coordinator that has not
+started is cancelled so it cannot admit later; that is reported as `cancelled_queued`, not as a
 stopped drain. Repeated `--stop` and `--stop` with no coordinator are idle successes. Cancellation
 of already-running workers remains `orbit run cancel <child-run-id> --confirm`.
 
@@ -369,5 +375,6 @@ child. The banner table at the top says which rows below are already true of the
 - **[ORB-10818]** — §3 completion gate and delivery.
 - **[ORB-10819]** — §4 drain window and detached dispatch.
 - **[ORB-11253]** — §4 live worker ceiling for a running drain.
+- **[ORB-11310]** — Atomic admissions-stop and child creation boundary.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

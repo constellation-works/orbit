@@ -11,7 +11,8 @@ use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
-    AuditEventInsertParams, JobRunStepParams, TaskReservationReleaseReason,
+    AuditEventInsertParams, ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams,
+    JobRunStepParams, TaskReservationReleaseReason,
 };
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
@@ -57,6 +58,19 @@ struct PipelineSubmission<'a> {
     input: Value,
     resume: Option<&'a ResumePlan>,
     actor: Option<&'a str>,
+}
+
+/// Trusted context for a pipeline child submitted by a running v2 activity.
+///
+/// The parent run id comes from the engine-owned [`orbit_tools::ToolContext`],
+/// never from tool input. The remaining fields make the parent link complete
+/// at the same atomic boundary that creates the child.
+#[derive(Debug, Clone)]
+pub(crate) struct ChildPipelineAdmission {
+    pub parent_run_id: String,
+    pub parent_step_id: Option<String>,
+    pub action: String,
+    pub blocking: bool,
 }
 
 /// How a submitted run's definition reaches its worker.
@@ -400,6 +414,62 @@ impl OrbitRuntime {
         result
     }
 
+    /// Submit a v2 activity's child through the parent's durable admission
+    /// boundary [ORB-11310].
+    ///
+    /// `Ok(None)` is the benign, idempotent result when the parent auto drain
+    /// has already acknowledged an admissions stop. Direct/non-child callers
+    /// continue to use [`Self::submit_pipeline_run`] and are unchanged.
+    pub(crate) fn submit_child_pipeline_run(
+        &self,
+        job_name: &str,
+        input: Value,
+        priority: Option<&str>,
+        actor: Option<&str>,
+        admission: &ChildPipelineAdmission,
+    ) -> Result<Option<PipelineInvokeResult>, OrbitError> {
+        let result = self.submit_persisted_pipeline_run_with_admission(
+            PipelineSubmission {
+                job_name,
+                definition: SubmittedDefinition::Catalog,
+                input: input.clone(),
+                resume: None,
+                actor,
+            },
+            Some(admission),
+        );
+
+        self.record_pipeline_audit(
+            "pipeline.invoke",
+            result
+                .as_ref()
+                .ok()
+                .and_then(|value| value.as_ref())
+                .map(|value| value.run_id.as_str()),
+            actor,
+            match &result {
+                Ok(_) => AuditEventStatus::Success,
+                Err(_) => AuditEventStatus::Failure,
+            },
+            json!({
+                "actor": actor,
+                "job_name": job_name,
+                "priority": priority,
+                "parent_run_id": admission.parent_run_id,
+                "outcome": if matches!(&result, Ok(None)) { "admissions_stopped" } else { "submitted" },
+                "run_id": result
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.as_ref())
+                    .map(|value| value.run_id.clone()),
+                "input_hash": input_hash(&input),
+            }),
+            result.as_ref().err().map(|error| error.to_string()),
+        )?;
+
+        result
+    }
+
     /// Record the `pipeline.invoke` audit for a direct-path submission, which
     /// does not route through [`Self::submit_pipeline_run`].
     fn record_submission_audit(
@@ -438,6 +508,19 @@ impl OrbitRuntime {
         &self,
         submission: PipelineSubmission<'_>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.submit_persisted_pipeline_run_with_admission(submission, None)?
+            .ok_or_else(|| {
+                OrbitError::Execution(
+                    "unconditional pipeline submission was refused as stopped".to_string(),
+                )
+            })
+    }
+
+    fn submit_persisted_pipeline_run_with_admission(
+        &self,
+        submission: PipelineSubmission<'_>,
+        admission: Option<&ChildPipelineAdmission>,
+    ) -> Result<Option<PipelineInvokeResult>, OrbitError> {
         let PipelineSubmission {
             job_name,
             definition,
@@ -457,14 +540,34 @@ impl OrbitRuntime {
             }
 
             let submitted_at = Utc::now();
-            let run = self.stores().jobs().insert_job_run(
-                job_name,
-                resume.map_or(1, |plan| plan.attempt),
-                submitted_at,
-                Some(input.clone()),
-                resume.map(|plan| plan.source.run_id.clone()),
-            )?;
-            self.seed_v2_pipeline_run(&run, &input, resume)?;
+            let run = if let Some(admission) = admission {
+                match self
+                    .stores()
+                    .jobs()
+                    .admit_child_job_run(&ChildJobRunAdmissionParams {
+                        parent_run_id: admission.parent_run_id.clone(),
+                        parent_step_id: admission.parent_step_id.clone(),
+                        job_id: job_name.to_string(),
+                        action: admission.action.clone(),
+                        blocking: admission.blocking,
+                        attempt: 1,
+                        scheduled_at: submitted_at,
+                        input: Some(input.clone()),
+                    })? {
+                    ChildJobRunAdmissionOutcome::Admitted(run) => *run,
+                    ChildJobRunAdmissionOutcome::AdmissionsStopped => return Ok(None),
+                }
+            } else {
+                let run = self.stores().jobs().insert_job_run(
+                    job_name,
+                    resume.map_or(1, |plan| plan.attempt),
+                    submitted_at,
+                    Some(input.clone()),
+                    resume.map(|plan| plan.source.run_id.clone()),
+                )?;
+                self.seed_v2_pipeline_run(&run, &input, resume)?;
+                run
+            };
 
             // Pin the definition before the worker can exist. A direct-path
             // submission must not depend on the source file surviving
@@ -497,18 +600,22 @@ impl OrbitRuntime {
                 return Err(error);
             }
 
-            Ok(PipelineInvokeResult {
+            Ok(Some(PipelineInvokeResult {
                 run_id: run.run_id,
                 job_name: job_name.to_string(),
                 submitted_at: submitted_at.to_rfc3339(),
                 queued,
-            })
+            }))
         })();
 
         if let Some(plan) = resume {
             self.record_pipeline_audit(
                 "pipeline.resume",
-                result.as_ref().ok().map(|value| value.run_id.as_str()),
+                result
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.as_ref())
+                    .map(|value| value.run_id.as_str()),
                 actor,
                 match &result {
                     Ok(_) => AuditEventStatus::Success,
@@ -521,7 +628,11 @@ impl OrbitRuntime {
                     "attempt": plan.attempt,
                     "resumed_from_checkpoints": plan.resume_state.is_some(),
                     "checkpoint_batch_id": plan.checkpoint_batch_id,
-                    "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
+                    "run_id": result
+                        .as_ref()
+                        .ok()
+                        .and_then(|value| value.as_ref())
+                        .map(|value| value.run_id.clone()),
                 }),
                 result.as_ref().err().map(|error| error.to_string()),
             )?;

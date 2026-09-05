@@ -91,12 +91,12 @@ pub struct PipelineState {
     pub waiting_on_locks: Option<Vec<String>>,
     /// Child Runs this run dispatched, in submission order.
     ///
-    /// Written the moment `orbit.pipeline.invoke` returns a durable child run
-    /// id — before a blocking parent enters its wait — so parent/child lineage
-    /// is observable for the whole life of the dispatch rather than only after
-    /// the step's output is finally persisted. Unlike the waiting reasons
-    /// above, this survives terminalization: a cancelled parent must still
-    /// name the child it left behind.
+    /// For auto children, written in the same durable admission transaction
+    /// that creates the child run [ORB-11310]. Other child callers checkpoint
+    /// it the moment `orbit.pipeline.invoke` returns. Parent/child lineage is
+    /// therefore observable before a blocking wait and survives
+    /// terminalization: a cancelled parent must still name the child it left
+    /// behind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub child_dispatches: Vec<ChildDispatch>,
     /// Live worker ceiling for a bounded auto drain, when an operator has
