@@ -1068,12 +1068,13 @@ fn workspace_init_under_home_with_global_orbit_creates_repo_orbit() {
     std::fs::write(&managed_registry_path, "managed registry sentinel\n")
         .expect("seed managed registry");
 
-    let previous_registry_root = std::env::var_os("ORBIT_REGISTRY_ROOT");
-    let previous_managed_context = std::env::var_os("ORBIT_MANAGED_RUN_CONTEXT");
-    let previous_run_id = std::env::var_os("ORBIT_RUN_ID");
-
     {
-        let env = EnvGuard::acquire().managed_registry_root(managed_registry.path());
+        let mut env = EnvGuard::acquire();
+        let previous_registry_root = std::env::var_os("ORBIT_REGISTRY_ROOT");
+        let previous_managed_context = std::env::var_os("ORBIT_MANAGED_RUN_CONTEXT");
+        let previous_run_id = std::env::var_os("ORBIT_RUN_ID");
+
+        env = env.managed_registry_root(managed_registry.path());
 
         assert_eq!(
             orbit_core::runtime::resolve_global_root().expect("resolve managed registry root"),
@@ -1081,7 +1082,7 @@ fn workspace_init_under_home_with_global_orbit_creates_repo_orbit() {
             "a trusted managed child must retain registry-root precedence"
         );
 
-        let _env = env.home(home.path()).cwd(&workspace);
+        env = env.home(home.path()).cwd(&workspace);
 
         assert_eq!(
             orbit_core::runtime::resolve_global_root().expect("resolve fixture registry root"),
@@ -1120,17 +1121,18 @@ fn workspace_init_under_home_with_global_orbit_creates_repo_orbit() {
             orbit_gitignore_block()
         );
         assert!(!orbit_gitignore_block().contains(".orbit/adrs"));
-    }
 
-    assert_eq!(
-        std::env::var_os("ORBIT_REGISTRY_ROOT"),
-        previous_registry_root
-    );
-    assert_eq!(
-        std::env::var_os("ORBIT_MANAGED_RUN_CONTEXT"),
-        previous_managed_context
-    );
-    assert_eq!(std::env::var_os("ORBIT_RUN_ID"), previous_run_id);
+        env.restore_now();
+        assert_eq!(
+            std::env::var_os("ORBIT_REGISTRY_ROOT"),
+            previous_registry_root
+        );
+        assert_eq!(
+            std::env::var_os("ORBIT_MANAGED_RUN_CONTEXT"),
+            previous_managed_context
+        );
+        assert_eq!(std::env::var_os("ORBIT_RUN_ID"), previous_run_id);
+    }
 }
 
 #[test]

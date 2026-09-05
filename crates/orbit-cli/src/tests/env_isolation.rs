@@ -180,12 +180,27 @@ impl EnvGuard {
         let _scope = HomeScope::set(home);
         f()
     }
+
+    /// Restore all captured state while retaining the crate-wide lock.
+    ///
+    /// This lets tests verify restoration before another env-mutating test can
+    /// acquire the lock. `Drop` calls the same implementation for panic-safe
+    /// cleanup.
+    pub(crate) fn restore_now(&mut self) {
+        self.restore();
+    }
 }
 
 impl Drop for EnvGuard {
     fn drop(&mut self) {
-        // Restore cwd before HOME so nothing observes a mismatched pair, then
-        // let `_lock` release the crate-wide lock via its own drop.
+        self.restore();
+    }
+}
+
+impl EnvGuard {
+    fn restore(&mut self) {
+        // Restore cwd before HOME so nothing observes a mismatched pair. The
+        // `_lock` field remains held until EnvGuard itself drops.
         if let Some(previous) = self.cwd.take() {
             let _ = std::env::set_current_dir(previous);
         }
