@@ -27,6 +27,14 @@ pub enum MemberOutcome {
     Failed(String),
 }
 
+pub enum MemberAdmission {
+    Admit,
+    /// The member is still authoritative, but cannot be admitted yet.
+    Withhold(String),
+    /// The member no longer describes authoritative source state.
+    Retire(String),
+}
+
 pub trait MemberHost {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError>;
 
@@ -36,7 +44,7 @@ pub trait MemberHost {
         now: DateTime<Utc>,
     ) -> Result<MemberPage, AutomationError>;
 
-    fn admission_deferral(&self, member: &StateMember) -> Result<Option<String>, AutomationError>;
+    fn admission(&self, member: &StateMember) -> Result<MemberAdmission, AutomationError>;
 
     fn lookup(&self, attempt: &MemberAttempt) -> Result<Option<String>, AutomationError>;
 
@@ -140,6 +148,9 @@ pub fn evaluate(
         }
 
         members.withheld.remove(&member.key);
+        for task_id in &member.task_ids {
+            members.withheld.remove(task_id);
+        }
 
         // Already assessed at exactly this fingerprint: nothing left to apply.
         if members
@@ -241,20 +252,25 @@ pub fn evaluate(
         return diagnostic(store, consumer, reason, Some(state));
     }
 
-    // Take the first due member Core will admit; each refusal is recorded as withheld.
+    // Take the first due member Core will admit. Temporary refusals remain
+    // visible, while obsolete source identities are retired from durable state.
     let mut candidate = None;
     let mut next = state.clone();
 
     for member in candidates.into_iter().take(trigger.max_items) {
-        if let Some(reason) = host.admission_deferral(&member)? {
-            let members = member_state(&mut next)?;
-            if reason == "task_ineligible" {
-                members.pending.remove(&member.key);
+        match host.admission(&member)? {
+            MemberAdmission::Admit => {
+                candidate = Some(member);
+                break;
             }
-            members.withheld.insert(member.key, reason);
-        } else {
-            candidate = Some(member);
-            break;
+            MemberAdmission::Withhold(reason) => {
+                member_state(&mut next)?.withheld.insert(member.key, reason);
+            }
+            MemberAdmission::Retire(_) => {
+                let members = member_state(&mut next)?;
+                members.pending.remove(&member.key);
+                members.withheld.remove(&member.key);
+            }
         }
     }
 
@@ -316,8 +332,11 @@ fn admit(
         .and_then(|members| members.active.as_ref())
         .ok_or_else(|| AutomationError::Deferred("claim_missing".into()))?;
 
-    if let Some(reason) = host.admission_deferral(&active.member)? {
-        return diagnostic(store, &consumer, &reason, Some(state));
+    match host.admission(&active.member)? {
+        MemberAdmission::Admit => {}
+        MemberAdmission::Withhold(reason) | MemberAdmission::Retire(reason) => {
+            return diagnostic(store, &consumer, &reason, Some(state));
+        }
     }
 
     if dry_run {
@@ -366,15 +385,21 @@ fn reconcile(
             return commit(store, &state, next, None);
         }
 
-        if now >= active.deadline || host.admission_deferral(&active.member)?.is_some() {
+        let admission = host.admission(&active.member)?;
+        if now >= active.deadline || !matches!(&admission, MemberAdmission::Admit) {
             let mut next = state.clone();
             let members = member_state(&mut next)?;
             if let Some(mut expired) = members.active.take() {
                 expired.exhausted = true;
-                members.withheld.insert(
-                    expired.member.key.clone(),
-                    "input_stale_or_deadline_expired".into(),
-                );
+                if matches!(&admission, MemberAdmission::Retire(_)) {
+                    members.pending.remove(&expired.member.key);
+                    members.withheld.remove(&expired.member.key);
+                } else {
+                    members.withheld.insert(
+                        expired.member.key.clone(),
+                        "input_stale_or_deadline_expired".into(),
+                    );
+                }
                 members.failed.insert(expired.member.key.clone(), expired);
             }
 

@@ -1,6 +1,6 @@
 use super::*;
 use orbit_store::{Store, compose};
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::BTreeSet};
 
 struct Host {
     fingerprint: RefCell<String>,
@@ -51,8 +51,13 @@ impl MemberHost for Host {
         })
     }
 
-    fn admission_deferral(&self, _: &StateMember) -> Result<Option<String>, AutomationError> {
-        Ok(self.deferral.borrow().clone())
+    fn admission(&self, _: &StateMember) -> Result<MemberAdmission, AutomationError> {
+        Ok(self
+            .deferral
+            .borrow()
+            .clone()
+            .map(MemberAdmission::Withhold)
+            .unwrap_or(MemberAdmission::Admit))
     }
 
     fn lookup(&self, attempt: &MemberAttempt) -> Result<Option<String>, AutomationError> {
@@ -81,6 +86,109 @@ impl MemberHost for Host {
             Ok(MemberOutcome::Pending)
         }
     }
+}
+
+struct SchedulerHost {
+    candidates: RefCell<Vec<StateMember>>,
+    withheld: RefCell<BTreeMap<String, String>>,
+    retired: RefCell<BTreeSet<String>>,
+    admission_checks: RefCell<Vec<String>>,
+    admitted: RefCell<Vec<String>>,
+}
+
+impl SchedulerHost {
+    fn new(candidates: Vec<StateMember>) -> Self {
+        Self {
+            candidates: RefCell::new(candidates),
+            withheld: RefCell::new(BTreeMap::new()),
+            retired: RefCell::new(BTreeSet::new()),
+            admission_checks: RefCell::new(Vec::new()),
+            admitted: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl MemberHost for SchedulerHost {
+    fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
+        Ok(("repo".into(), source()))
+    }
+
+    fn observe(&self, _: Option<&str>, _: DateTime<Utc>) -> Result<MemberPage, AutomationError> {
+        Ok(MemberPage {
+            candidates: self.candidates.borrow().clone(),
+            withheld: self.withheld.borrow().clone(),
+            next: None,
+        })
+    }
+
+    fn admission(&self, member: &StateMember) -> Result<MemberAdmission, AutomationError> {
+        self.admission_checks.borrow_mut().push(member.key.clone());
+        if self.retired.borrow().contains(&member.key) {
+            Ok(MemberAdmission::Retire("incident_changed".into()))
+        } else {
+            Ok(MemberAdmission::Admit)
+        }
+    }
+
+    fn lookup(&self, _: &MemberAttempt) -> Result<Option<String>, AutomationError> {
+        Ok(None)
+    }
+
+    fn admit(&self, attempt: &MemberAttempt) -> Result<String, AutomationError> {
+        self.admitted.borrow_mut().push(attempt.member.key.clone());
+        Ok(format!("run-{}", attempt.member.key))
+    }
+
+    fn outcome(&self, _: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {
+        Ok(MemberOutcome::Pending)
+    }
+}
+
+fn source() -> SourceRevision {
+    SourceRevision {
+        commit: "source".into(),
+        tree: "tree".into(),
+    }
+}
+
+fn state_member(key: &str, task_ids: &[&str], first_seen_minute: i64) -> StateMember {
+    StateMember {
+        key: key.into(),
+        task_ids: task_ids.iter().map(|id| (*id).into()).collect(),
+        fingerprint: key.into(),
+        source: source(),
+        evidence: serde_json::json!({}),
+        first_seen: DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+            + Duration::minutes(first_seen_minute),
+        changed_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+            + Duration::minutes(first_seen_minute),
+    }
+}
+
+fn execution_tick(
+    store: &dyn AutomationStoreBackend,
+    host: &SchedulerHost,
+    minute: i64,
+) -> AutomationDiagnostic {
+    let trigger = StateTrigger {
+        kind: StateTriggerKind::ExecutionFailed,
+        max_items: 2,
+        ..trigger()
+    };
+
+    evaluate(
+        store,
+        host,
+        MemberEvaluation {
+            consumer: "host/ws/routine/triage",
+            epoch: "epoch",
+            trigger: &trigger,
+            enabled: true,
+            dry_run: false,
+            now: DateTime::from_timestamp(1_700_000_000, 0).unwrap() + Duration::minutes(minute),
+        },
+    )
+    .unwrap()
 }
 
 fn trigger() -> StateTrigger {
@@ -145,6 +253,76 @@ fn fresh_unready_post_apply_does_not_loop_and_new_material_debounces() {
     *host.evidence.borrow_mut() = None;
     assert_eq!(tick(store.as_ref(), &host, 61).reason, "debouncing");
     assert_eq!(tick(store.as_ref(), &host, 63).reason, "fired");
+}
+
+#[test]
+fn execution_failed_retires_stale_prefix_without_losing_current_diagnostics() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = SchedulerHost::new(vec![
+        state_member("old-incident-a", &["task-a"], 0),
+        state_member("old-incident-b", &["task-b"], 0),
+    ]);
+
+    assert_eq!(
+        execution_tick(store.as_ref(), &host, 0).reason,
+        "debouncing"
+    );
+
+    *host.candidates.borrow_mut() = vec![state_member("new-incident", &["task-new"], 1)];
+    *host.withheld.borrow_mut() = BTreeMap::from([
+        ("task-a".into(), "recovery_pending".into()),
+        ("task-b".into(), "human_block".into()),
+    ]);
+    host.retired
+        .borrow_mut()
+        .extend(["old-incident-a".into(), "old-incident-b".into()]);
+
+    assert_eq!(
+        execution_tick(store.as_ref(), &host, 1).reason,
+        "debouncing"
+    );
+
+    let pruned = execution_tick(store.as_ref(), &host, 3);
+    assert_eq!(pruned.reason, "work_withheld");
+    assert_eq!(
+        host.admission_checks.borrow().as_slice(),
+        ["old-incident-a", "old-incident-b"]
+    );
+    let members = pruned.state.unwrap().members.unwrap();
+    assert_eq!(
+        members.pending.keys().cloned().collect::<Vec<_>>(),
+        ["new-incident"]
+    );
+    assert_eq!(
+        members.withheld,
+        BTreeMap::from([
+            ("task-a".into(), "recovery_pending".into()),
+            ("task-b".into(), "human_block".into()),
+        ])
+    );
+
+    let admitted = execution_tick(store.as_ref(), &host, 4);
+    assert_eq!(admitted.reason, "fired");
+    assert_eq!(
+        host.admission_checks.borrow().as_slice(),
+        [
+            "old-incident-a",
+            "old-incident-b",
+            "new-incident",
+            "new-incident"
+        ]
+    );
+    assert_eq!(host.admitted.borrow().as_slice(), ["new-incident"]);
+
+    *host.candidates.borrow_mut() = vec![state_member("recovered-incident", &["task-a"], 5)];
+    *host.withheld.borrow_mut() = BTreeMap::from([("task-b".into(), "human_block".into())]);
+
+    let refreshed = execution_tick(store.as_ref(), &host, 5);
+    assert_eq!(refreshed.reason, "batch_pending");
+    assert_eq!(
+        refreshed.state.unwrap().members.unwrap().withheld,
+        BTreeMap::from([("task-b".into(), "human_block".into())])
+    );
 }
 
 #[test]
