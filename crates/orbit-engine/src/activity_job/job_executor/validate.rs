@@ -41,6 +41,13 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
 /// nested in a `parallel:`, `fan_out:`, or `loop:` block under a
 /// `when:`-carrying ancestor is skipped with it and records nothing, however
 /// unguarded the nested step looks on its own.
+///
+/// [ORB-11361] Shared-guard membership is not enough: `when:` is evaluated
+/// before the body, so a step does not yet sit under its own id. A container
+/// `when:` that reads a nested output, or a step `when:` that reads its own
+/// output, is therefore unsafe even though `record_step_guards` stored the
+/// reader id on the referenced step. `break_when` is the opposite — it runs
+/// after the loop body — so the loop's own guard *is* covering there.
 fn validate_step_output_readiness(job: &JobV2) -> Result<(), DispatchError> {
     let mut guards = HashMap::new();
     for step in &job.steps {
@@ -94,7 +101,11 @@ fn check_step_output_refs(
 ) -> Result<(), DispatchError> {
     let chain = guard_chain(step, inherited);
     if let Some(expr) = &step.when {
-        check_expr_output_refs(&step.id, expr, &chain, guards)?;
+        // `when:` is evaluated before the body (`step.rs`), so this step's
+        // own id is not yet a covering guard: nested outputs have not run,
+        // and the step cannot read its own output. Only enclosing guards
+        // skip the reader together with the referenced step.
+        check_expr_output_refs(&step.id, expr, inherited, guards)?;
     }
     match &step.body {
         JobV2StepBody::Parallel { parallel } => {
@@ -107,9 +118,10 @@ fn check_step_output_refs(
         }
         JobV2StepBody::Loop { loop_ } => {
             if let Some(expr) = &loop_.break_when {
-                // `break_when` is evaluated between iterations of the loop
-                // body, so it reads under the loop's own guards — the same
-                // ones its body steps inherit.
+                // `break_when` is evaluated after the loop body
+                // (`loop_block.rs`), so nested body outputs exist whenever
+                // the loop itself ran. The loop's own `when:` is a covering
+                // guard here — unlike the pre-body `when:` check above.
                 check_expr_output_refs(&step.id, expr, &chain, guards)?;
             }
             for body in &loop_.steps {

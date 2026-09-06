@@ -592,9 +592,10 @@ fn validate_job_accepts_when_reading_a_step_under_an_always_run_ancestor_chain()
 
 #[test]
 fn validate_job_accepts_a_reader_that_shares_every_guard_with_the_step_it_reads() {
-    // `break_when` is only evaluated while the loop is running, and the body
-    // reader only runs when the same guard passed: a guard both sides sit
-    // under skips them together and can never strand the reader.
+    // [ORB-11346] / [ORB-11361] `break_when` is evaluated after the body, so
+    // it may read an earlier body step; a later sibling `when:` only runs
+    // when the same enclosing guard passed. A guard both sides sit under
+    // skips them together and can never strand the reader.
     let mut gate = loop_step(
         "gate",
         None,
@@ -615,4 +616,110 @@ fn validate_job_accepts_a_reader_that_shares_every_guard_with_the_step_it_reads(
         validate_job(&job_with_steps(vec![gate])).is_ok(),
         "a guard shared by reader and referenced step must stay valid"
     );
+}
+
+// --------------------------------------------------------------------------
+// [ORB-11361] A step's `when:` runs before its body, so it cannot read an
+// output that only that body produces — including a nested child or the
+// step's own output. `break_when` stays after-body (covered above).
+// --------------------------------------------------------------------------
+
+fn container_when_reading_nested(parent: JobV2Step) -> JobV2Step {
+    JobV2Step {
+        when: Some("{{ steps.produce.output.done }} == true".to_string()),
+        ..parent
+    }
+}
+
+#[test]
+fn validate_job_rejects_container_when_reading_a_nested_parallel_output() {
+    let gate = container_when_reading_nested(parallel_step(
+        "gate",
+        JoinMode::All,
+        vec![target_step("produce", "produce_action")],
+    ));
+
+    let err = validate_job(&job_with_steps(vec![gate]))
+        .expect_err("a container when: must not read a nested output");
+
+    match &err {
+        DispatchError::JobValidation(message) => {
+            assert!(
+                message.contains("gate"),
+                "message must name the reading step: {message}"
+            );
+            assert!(
+                message.contains("produce"),
+                "message must name the referenced step: {message}"
+            );
+        }
+        other => panic!("expected JobValidation, got {other:?}"),
+    }
+}
+
+#[test]
+fn validate_job_rejects_container_when_reading_a_nested_loop_output() {
+    let gate = container_when_reading_nested(loop_step(
+        "gate",
+        None,
+        3,
+        None,
+        vec![target_step("produce", "produce_action")],
+    ));
+
+    let err = validate_job(&job_with_steps(vec![gate]))
+        .expect_err("a loop when: must not read a nested output");
+
+    assert!(
+        matches!(&err, DispatchError::JobValidation(message)
+            if message.contains("gate") && message.contains("produce")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn validate_job_rejects_container_when_reading_a_nested_fan_out_worker_output() {
+    let gate = container_when_reading_nested(fanout_step(
+        "gate",
+        "{{ input.items }}",
+        2,
+        target_step("produce", "produce_action"),
+        JoinMode::All,
+        None,
+    ));
+
+    let err = validate_job(&job_with_steps(vec![gate]))
+        .expect_err("a fan-out when: must not read a worker output");
+
+    assert!(
+        matches!(&err, DispatchError::JobValidation(message)
+            if message.contains("gate") && message.contains("produce")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn validate_job_rejects_when_reading_the_same_step_own_output() {
+    let self_reader = step_with_when(
+        "reader",
+        "{{ steps.reader.output.done }} == true",
+        "reader_action",
+    );
+
+    let err = validate_job(&job_with_steps(vec![self_reader]))
+        .expect_err("a step when: must not read its own output");
+
+    match &err {
+        DispatchError::JobValidation(message) => {
+            assert!(
+                message.contains("reader"),
+                "message must name the reading step: {message}"
+            );
+            assert!(
+                message.contains("steps.reader.output"),
+                "message must name the referenced output: {message}"
+            );
+        }
+        other => panic!("expected JobValidation, got {other:?}"),
+    }
 }
