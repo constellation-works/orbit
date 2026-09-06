@@ -73,7 +73,7 @@ pub(crate) fn normalize_copilot_stdout(stdout: &[u8]) -> Vec<u8> {
 /// can supply Orbit response/status fields. [ORB-11348]
 pub(crate) fn project_copilot_response(stdout: &[u8]) -> Vec<u8> {
     let text = String::from_utf8_lossy(stdout);
-    let mut answer = String::new();
+    let mut terminal_answer = None;
     for line in text.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
             continue;
@@ -81,17 +81,28 @@ pub(crate) fn project_copilot_response(stdout: &[u8]) -> Vec<u8> {
         if value.get("type").and_then(serde_json::Value::as_str) != Some("assistant.message") {
             continue;
         }
-        let Some(content) = value
+
+        // Tool-only messages are intermediate turns, not answers. Every
+        // other assistant message is terminal answer evidence, including an
+        // empty or malformed content field: a later invalid answer must not
+        // let an earlier envelope remain authoritative.
+        if has_tool_requests(&value) {
+            continue;
+        }
+        let content = value
             .pointer("/data/content")
             .and_then(serde_json::Value::as_str)
-            .filter(|content| !content.is_empty())
-        else {
-            continue;
-        };
-        answer.push_str(content);
-        answer.push('\n');
+            .unwrap_or_default();
+        terminal_answer = Some(content.as_bytes().to_vec());
     }
-    answer.into_bytes()
+    terminal_answer.unwrap_or_default()
+}
+
+fn has_tool_requests(value: &serde_json::Value) -> bool {
+    value
+        .pointer("/data/toolRequests")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|requests| !requests.is_empty())
 }
 
 fn is_model_output_frame(value: &serde_json::Value) -> bool {

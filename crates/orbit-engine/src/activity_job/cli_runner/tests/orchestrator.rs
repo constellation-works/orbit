@@ -341,6 +341,102 @@ fn run_cli_backend_projects_copilot_final_answer_and_keeps_usage() {
 }
 
 #[test]
+fn run_cli_backend_rejects_copilot_terminal_failed_or_timeout_after_commentary() {
+    let temp = tempdir().expect("tempdir");
+
+    for status in ["failed", "timeout"] {
+        let script = temp.path().join("copilot");
+        let commentary = serde_json::json!({
+            "type": "assistant.message",
+            "data": {"content": "Commentary: I updated the files."},
+        });
+        let envelope = serde_json::json!({
+            "schemaVersion": 1,
+            "status": status,
+            "result": {},
+            "error": {"code": "fixture", "message": status},
+        });
+        let terminal = serde_json::json!({
+            "type": "assistant.message",
+            "data": {"content": envelope.to_string()},
+        });
+        write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{commentary}'\nprintf '%s\\n' '{terminal}'\n"
+            ),
+        );
+
+        let sink = Arc::new(RecordingSink::default());
+        let sink_for_writer: Arc<dyn AuditSink> = sink;
+        let audit = Arc::new(V2AuditWriter::new(
+            format!("job-copilot-{status}-after-commentary"),
+            "copilot:gpt-5.5",
+            sink_for_writer,
+        ));
+        let host = TestHost::with_command(script.display().to_string());
+        let mut spec = test_agent_loop_spec(Duration::from_secs(5));
+        spec.provider = orbit_types::workflow::activity_job::Provider::Copilot;
+
+        let outcome = run_cli_backend(
+            &host,
+            &spec,
+            &format!("job-copilot-{status}-after-commentary"),
+            audit,
+            &serde_json::json!({"prompt": "answer after progress"}),
+            None,
+        )
+        .expect("run cli backend");
+
+        assert!(
+            !outcome.success,
+            "{status} terminal envelope must fail the step"
+        );
+        assert_eq!(outcome.output["response_envelope_status"], status);
+        assert_eq!(outcome.output["completion_envelope_satisfied"], true);
+    }
+}
+
+#[test]
+fn run_cli_backend_rejects_copilot_trailing_terminal_prose() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("copilot");
+    write_executable(
+        &script,
+        concat!(
+            "#!/bin/sh\ncat > /dev/null\n",
+            "printf '%s\\n' '{\"type\":\"assistant.message\",\"data\":{\"content\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{},\\\"error\\\":null}\"}}'\n",
+            "printf '%s\\n' '{\"type\":\"assistant.message\",\"data\":{\"content\":\"Courtesy: the run is complete.\"}}'\n",
+        ),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-copilot-trailing-prose",
+        "copilot:gpt-5.5",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let mut spec = test_agent_loop_spec(Duration::from_secs(5));
+    spec.provider = orbit_types::workflow::activity_job::Provider::Copilot;
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "job-copilot-trailing-prose",
+        audit,
+        &serde_json::json!({"prompt": "answer then add courtesy prose"}),
+        None,
+    )
+    .expect("run cli backend");
+
+    assert!(!outcome.success);
+    assert!(outcome.output["response_envelope_status"].is_null());
+    assert_eq!(outcome.output["completion_envelope_satisfied"], false);
+}
+
+#[test]
 fn run_cli_backend_projects_prose_prefixed_claude_envelope_result() {
     let temp = tempdir().expect("tempdir");
     let script = temp.path().join("claude");
