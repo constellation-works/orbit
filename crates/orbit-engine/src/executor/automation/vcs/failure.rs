@@ -305,6 +305,19 @@ fn blocked_pr_body(
     target_base_sha: &str,
     conflicting_paths: &[String],
 ) -> String {
+    let (heading, summary) = if conflicting_paths.is_empty() {
+        (
+            "Delivery failure handoff",
+            "Orbit preserved and pushed this task's candidate after the shipment pipeline failed. \
+             This PR is intentionally blocked; inspect the recorded failure before retrying delivery.",
+        )
+    } else {
+        (
+            "Merge conflict handoff",
+            "Orbit preserved and pushed this task's candidate after a merge conflict stopped delivery. \
+             This PR is intentionally blocked; reconcile the named paths before retrying delivery.",
+        )
+    };
     let conflicts = if conflicting_paths.is_empty() {
         "- None reported; inspect the failed pipeline step before merging.".to_string()
     } else {
@@ -315,11 +328,7 @@ fn blocked_pr_body(
             .join("\n")
     };
     format!(
-        "## Automatic conflict recovery exhausted\n\n\
-         Orbit preserved and pushed this task's pre-rebase candidate after the shipment pipeline \
-         exhausted its single system-crew conflict-recovery attempt. This PR is intentionally \
-         blocked; inspect the recorded attempt and reconcile the named conflict before retrying \
-         delivery.\n\n\
+        "## {heading}\n\n{summary}\n\n\
          - Task: `{task_id}`\n\
          - Run: `{run_id}`\n\
          - Failed step: `{failed_step_id}`\n\
