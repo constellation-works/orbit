@@ -160,6 +160,7 @@ where
             "clusters": 0,
             "filed_count": 0,
             "filed": [],
+            "pilot_candidate_count": 0,
             "pilot_candidates": [],
             "skipped_existing": [],
             "skipped_over_cap": [],
@@ -309,6 +310,7 @@ where
             "clusters": 0,
             "filed_count": 0,
             "filed": [],
+            "pilot_candidate_count": 0,
             "pilot_candidates": [],
             "skipped_existing": [],
             "skipped_over_cap": [],
@@ -491,6 +493,7 @@ where
         "clusters": clusters.len(),
         "filed_count": filed.len(),
         "filed": filed,
+        "pilot_candidate_count": pilot_candidates.len(),
         "pilot_candidates": pilot_candidates,
         "skipped_existing": skipped_existing,
         "skipped_over_cap": skipped_over_cap,
@@ -764,8 +767,23 @@ impl FailureCluster {
             "job": self.job,
             "step": self.step,
             "tested_commit": self.tested_commit,
+            "run_ids": self.run_ids(),
             "run_urls": self.run_urls(),
+            "ref_kinds": self.distinct_run_strings("ref_kind"),
+            "head_branches": self.distinct_run_strings("head_branch"),
         })
+    }
+
+    fn distinct_run_strings(&self, field: &str) -> Vec<String> {
+        self.runs
+            .iter()
+            .filter_map(|run| run.get(field).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     fn title(&self) -> String {

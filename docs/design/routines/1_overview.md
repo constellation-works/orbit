@@ -119,8 +119,9 @@ fragmentation this feature exists to end.
 - [ORB-10739] — added the disabled `task_pilot` default routine; its zero-input target
   leaves eligibility and bounded partitioning to `prepare_task_pilot`.
 - [ORB-11107] — added the disabled `ci_failure_sweep` default routine, hourly at `5 * * * *`.
-  It targets `job:ci_failure_sweep_pipeline`, whose two deterministic steps collect CI
-  evidence on the host and file each current failure cluster as an ordinary backlog task.
+  It targets `job:ci_failure_sweep_pipeline`, which collects CI evidence on the host,
+  files current failure clusters into proposed quarantine, pilots them independently,
+  and fails visibly if any nonempty pilot batch contains a failed child result.
 - [ORB-00374] — removed the `shell` activity variant and `run_shell` dispatch (fail-closed);
   routines inherit this constraint.
 

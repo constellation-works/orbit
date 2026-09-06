@@ -224,7 +224,7 @@ fn ci_failure_sweep_pipeline_pilots_proposed_findings_before_authorized_admissio
         .collect();
     assert_eq!(
         step_ids,
-        ["collect", "file", "pilots"],
+        ["collect", "file", "pilots", "require_pilot_success"],
         "proposed filing must precede pilot admission"
     );
 
@@ -262,6 +262,21 @@ fn ci_failure_sweep_pipeline_pilots_proposed_findings_before_authorized_admissio
     );
     assert_eq!(input["run_input"]["ci_sweep_filing"], "{{ item }}");
     assert_eq!(input["run_input"]["promotion_authorized"], true);
+
+    let JobV2StepBody::TargetRef(require_success) = &asset.spec.steps[3].body else {
+        panic!("CI sweep must guard collected pilot child results");
+    };
+    assert_eq!(require_success.target, "activity:pipeline_success_guard");
+    assert_eq!(
+        asset.spec.steps[3].when.as_deref(),
+        Some("{{ steps.file.output.pilot_candidate_count }} != 0")
+    );
+    let guard_input = require_success
+        .default_input
+        .as_ref()
+        .expect("pilot success guard input");
+    assert_eq!(guard_input["results"], "{{ steps.pilot_results.output }}");
+    assert_eq!(guard_input["context"], "ci-failure sweep pilot child");
 
     let mut resolved = asset.clone();
     resolve_job_target_refs(&mut resolved.spec, &catalog).expect("resolve sweep target refs");

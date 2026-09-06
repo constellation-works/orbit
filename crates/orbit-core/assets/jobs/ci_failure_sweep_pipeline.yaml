@@ -20,6 +20,10 @@
 #   assesses current integration relevance, and promotes only warning-free actionable
 #   repairs. A failed pilot, invalid/missing selectors, duplicate or
 #   already-landed finding remains proposed without holding independent pilots.
+# - `require_pilot_success` (deterministic): checks every collected child
+#   result after the all-join. A failed, stale, cancelled, or unavailable pilot
+#   therefore makes the sweep visibly fail after independent successful pilots
+#   have already applied. An empty candidate list remains a successful no-op.
 #
 # Filing by itself carries no promotion authority. This named pipeline passes a
 # literal authorization only after it has selected the exact filed task for its
@@ -120,3 +124,10 @@ spec:
         join:
           mode: all
         collect: pilot_results
+
+    - id: require_pilot_success
+      when: "{{ steps.file.output.pilot_candidate_count }} != 0"
+      target: activity:pipeline_success_guard
+      default_input:
+        context: ci-failure sweep pilot child
+        results: "{{ steps.pilot_results.output }}"

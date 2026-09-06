@@ -162,6 +162,7 @@ fn a_snapshot_that_could_not_look_reports_capability_unavailable_and_files_nothi
 
     assert_eq!(output["outcome"], json!("capability_unavailable"));
     assert_eq!(output["filed_count"], json!(0));
+    assert_eq!(output["pilot_candidate_count"], json!(0));
     assert_eq!(output["filed"], json!([]));
     assert_eq!(output["clusters"], json!(0));
     // The distinction that matters: this must never read as a clean CI result.
@@ -183,6 +184,7 @@ fn no_current_failure_is_a_clean_no_op_and_not_a_capability_problem() {
 
     assert_eq!(output["outcome"], json!("no_current_failure"));
     assert_eq!(output["filed_count"], json!(0));
+    assert_eq!(output["pilot_candidate_count"], json!(0));
     assert_ne!(output["outcome"], json!("capability_unavailable"));
     assert_eq!(output["capability"]["authenticated"], json!(true));
     assert!(
@@ -363,6 +365,16 @@ fn a_filed_task_is_a_proposed_bug_carrying_usable_evidence() {
         .first()
         .cloned()
         .expect("one filed task");
+    assert_eq!(output["pilot_candidate_count"], json!(1));
+    assert_eq!(output["pilot_candidates"][0]["run_ids"], json!([10]));
+    assert_eq!(
+        output["pilot_candidates"][0]["ref_kinds"],
+        json!(["integration"])
+    );
+    assert_eq!(
+        output["pilot_candidates"][0]["head_branches"],
+        json!(["agent-main"])
+    );
     let task = runtime.get_task(&task_id).expect("read filed task");
 
     assert_eq!(task.status, TaskStatus::Proposed);
