@@ -29,7 +29,7 @@ export default defineConfig({
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/danieljhkim/orbit',
+          href: 'https://github.com/constellation-works/orbit',
         },
       ],
       tableOfContents: {

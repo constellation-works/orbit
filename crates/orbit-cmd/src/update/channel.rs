@@ -99,8 +99,8 @@ impl InstallChannel {
                     .to_string()
             }
             Self::Cargo => format!(
-                "cargo owns this installation; run `cargo install --git https://github.com/danieljhkim/orbit --tag v{target_version} --locked orbit-cli`, \
-                 or reinstall through the managed installer with `curl -sSf https://raw.githubusercontent.com/danieljhkim/orbit/main/install.sh | sh`"
+                "cargo owns this installation; run `cargo install --git https://github.com/constellation-works/orbit --tag v{target_version} --locked orbit-cli`, \
+                 or reinstall through the managed installer with `curl -sSf https://raw.githubusercontent.com/constellation-works/orbit/main/install.sh | sh`"
             ),
             Self::LocalBuild => {
                 "this is a local build inside a checkout; update the checkout and rebuild \
@@ -110,7 +110,7 @@ impl InstallChannel {
             Self::Unknown => format!(
                 "Orbit does not recognize the installer that owns this path; \
                  install through the managed installer with \
-                 `curl -sSf https://raw.githubusercontent.com/danieljhkim/orbit/main/install.sh | sh`, \
+                 `curl -sSf https://raw.githubusercontent.com/constellation-works/orbit/main/install.sh | sh`, \
                  or set {INSTALL_DIR_ENV} to the directory it owns"
             ),
         };

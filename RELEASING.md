@@ -55,6 +55,56 @@ ORB-10429 executed this archive ahead of `0.10.0` and produced a validated, work
 - The live `## Unreleased` section never moves; only already-released `## <X.Y.Z>` sections are archived.
 - Cross-link the two locations so neither reads as a dead end: the archive file links back to `CHANGELOG.md`, and `CHANGELOG.md` links forward to `docs/changelogs/` once that directory exists.
 
+## Ownership cutover checklist
+
+This checklist prepares the distribution surface for the transfer; it does not
+authorize a repository transfer, remote mutation, release, npm publication,
+merge, tag, or credential change. Complete it only after the reviewable PR is
+approved and the source-identity migration in ORB-11426 is complete.
+
+1. **Confirm repository availability and identity.** Verify that
+   `https://github.com/constellation-works/orbit` is the canonical repository,
+   that its `agent-main` and `main` branches are available, and that
+   `git remote get-url origin` resolves to the transferred repository. Run
+   `orbit workspace list --all --format json` and confirm that every registered
+   Orbit workspace reports the same canonical source identity after ORB-11426.
+   Do not alter workspace or registry state from this checklist.
+2. **Verify release credentials in their new owner boundary.** An authorized
+   maintainer must confirm Actions access to `ORBIT_RELEASE_SIGNING_KEY_PEM`
+   and `TAP_GITHUB_TOKEN`, write access to
+   `constellation-works/homebrew-tap`, npm publish access plus the required
+   OTP for `@orbit-tools`, and the GitHub permissions needed to create a
+   release. Never paste, log, or rotate those credentials in a PR.
+3. **Validate the checked-in distribution contract before publication.** Run
+   `make release-check`, `./scripts/smoke-npm-install.sh --dry-run-version-assertion`,
+   `./scripts/smoke-plugin-install.sh`, and the managed-asset mirror checks.
+   After the repository is available, explicitly verify the transfer-bound
+   endpoints with:
+
+   ```sh
+   curl --fail --silent --show-error \
+     https://raw.githubusercontent.com/constellation-works/orbit/main/install.sh >/dev/null
+   gh api repos/constellation-works/orbit --jq .full_name
+   gh api repos/constellation-works/homebrew-tap --jq .full_name
+   ```
+
+4. **Publish only immutable release artifacts in order.** Merge the approved
+   preparation PR to `agent-main`, tag that exact merged commit, wait for the
+   release workflow and Homebrew update, then publish the matching npm version
+   once. Tags and npm versions are immutable: never retag, overwrite a release
+   asset, or republish a version to repair a failure. Re-run the versioned npm
+   smoke only after publication as documented in `docs/runbooks/release.md`.
+5. **Rollback by moving forward.** If any post-cutover verification fails,
+   pause promotion and publication where possible, restore the previous source
+   owner only through an authorized transfer decision, and cut a new patch for
+   any already-published artifact. Do not force-push, rewrite tags, delete
+   immutable releases, or modify the personal `danieljhkim/homebrew-tap`.
+
+Historical GitHub URLs in learning records, incident evidence, and completed
+workflow examples intentionally retain their original owner because they name
+immutable provenance. Active installer, release, npm, plugin, MCP, website,
+and current documentation references use `constellation-works`.
+
 ## Release checklist
 
 ### 1. Survey commits since last tag
@@ -222,9 +272,9 @@ Merge with a **merge commit** (`gh pr merge <N> --merge --admin`), not squash or
 If `gh pr merge --merge` errors with `Merge commits are not allowed on this repository`, the repo's `allow_merge_commit` setting is off. Flip it on, merge, restore:
 
 ```sh
-gh api -X PATCH repos/danieljhkim/orbit -f allow_merge_commit=true
+gh api -X PATCH repos/constellation-works/orbit -f allow_merge_commit=true
 gh pr merge <N> --merge --admin
-gh api -X PATCH repos/danieljhkim/orbit -f allow_merge_commit=false
+gh api -X PATCH repos/constellation-works/orbit -f allow_merge_commit=false
 ```
 
 ### 10c. Post-merge: back-merge to `agent-main`
@@ -243,7 +293,7 @@ git push origin agent-main
 
 ```sh
 git push origin origin/main:refs/heads/agent-main
-cat <<'EOF' | gh api -X PUT repos/danieljhkim/orbit/branches/agent-main/protection --input -
+cat <<'EOF' | gh api -X PUT repos/constellation-works/orbit/branches/agent-main/protection --input -
 {
   "required_status_checks": null,
   "enforce_admins": false,
@@ -281,7 +331,7 @@ Pushing a `v*` tag triggers `.github/workflows/release.yml`:
 
 - **`build-release`** — `cargo build -p orbit-cli --release --locked` against four targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`. Tarballs uploaded as workflow artifacts.
 - **`publish-release`** — generates `orbit-checksums.txt` (SHA256) and creates the GitHub Release with the four tarballs + checksum file attached. Release notes are auto-generated by `softprops/action-gh-release`.
-- **`bump-homebrew-tap`** — rewrites `Formula/orbit.rb` in the `danieljhkim/homebrew-tap` repo with the new version and the two macOS SHAs, then pushes via `secrets.TAP_GITHUB_TOKEN`. The formula is **macOS-only**; Linux users go through `install.sh`.
+- **`bump-homebrew-tap`** — rewrites `Formula/orbit.rb` in the `constellation-works/homebrew-tap` repo with the new version and the two macOS SHAs, then pushes via `secrets.TAP_GITHUB_TOKEN`. The formula is **macOS-only**; Linux users go through `install.sh`.
 - **`smoke-install-macos`** / **`smoke-install-ubuntu`** — fetches `install.sh` from the tagged ref (`raw.githubusercontent.com/.../<tag>/install.sh`) and verifies `orbit --version`. Note: `install.sh` rides with the release commit — changes land in the same tag.
 
 The npm publish step was removed from the tag workflow in v0.3.1; the npm proxy package is published manually if needed.

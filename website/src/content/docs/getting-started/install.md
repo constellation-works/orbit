@@ -140,7 +140,7 @@ test -x /usr/bin/bwrap
 A run failing with `bwrap: setting up uid map: Permission denied` is this
 prerequisite, not your task. The full procedure, including loading the
 `bwrap-userns-restrict` AppArmor profile, is in the
-[Linux sandbox runbook](https://github.com/danieljhkim/orbit/blob/main/docs/runbooks/linux-sandbox.md).
+[Linux sandbox runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/linux-sandbox.md).
 
 ## Configure Orbit
 

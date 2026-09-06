@@ -23,7 +23,7 @@ fn private_vcs_boundary_normalizes_repository_and_branch_merge_policy() {
                 }
             }
         }),
-        "danieljhkim/orbit",
+        "constellation-works/orbit",
     )
     .expect("normalize capability response");
 
@@ -31,7 +31,7 @@ fn private_vcs_boundary_normalizes_repository_and_branch_merge_policy() {
         output,
         json!({
             "repository": {
-                "name_with_owner": "danieljhkim/orbit",
+                "name_with_owner": "constellation-works/orbit",
                 "base_branch": "agent-main",
                 "allow_squash_merge": false,
                 "allow_rebase_merge": true,
@@ -58,7 +58,7 @@ fn private_vcs_boundary_fails_closed_on_incomplete_capability_data() {
                 }
             }
         }),
-        "danieljhkim/orbit",
+        "constellation-works/orbit",
     )
     .expect_err("missing mergeCommitAllowed must not be guessed");
 
@@ -78,7 +78,7 @@ fn private_vcs_boundary_does_not_guess_when_base_policy_data_is_missing() {
                 }
             }
         }),
-        "danieljhkim/orbit",
+        "constellation-works/orbit",
     )
     .expect_err("missing baseRef policy data must not imply no protection");
 

@@ -245,7 +245,7 @@ jobs:
       - name: Checkout tap repo
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          repository: danieljhkim/homebrew-tap
+          repository: constellation-works/homebrew-tap
           token: ${{ secrets.TAP_GITHUB_TOKEN }}
           path: tap
 
@@ -257,14 +257,14 @@ jobs:
           ARM_SHA="${{ needs.publish-release.outputs.darwin_arm_sha }}"
           INTEL_ASSET="${{ needs.publish-release.outputs.darwin_intel_asset }}"
           INTEL_SHA="${{ needs.publish-release.outputs.darwin_intel_sha }}"
-          BASE_URL="https://github.com/danieljhkim/orbit/releases/download/v${VERSION}"
+          BASE_URL="https://github.com/constellation-works/orbit/releases/download/v${VERSION}"
           FORMULA="tap/Formula/orbit.rb"
 
           mkdir -p tap/Formula
           cat > "$FORMULA" <<RUBY
           class Orbit < Formula
             desc "Local-first agentic workflow engine for agent-driven software delivery"
-            homepage "https://github.com/danieljhkim/orbit"
+            homepage "https://github.com/constellation-works/orbit"
             version "${VERSION}"
             license "MIT"
 
