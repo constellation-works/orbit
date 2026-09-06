@@ -245,6 +245,134 @@ fn an_unscrubbed_child_routes_its_write_into_the_ambient_authority() {
     );
 }
 
+/// An explicit data root is a complete authority boundary even inside a
+/// managed executor. The task-local `--workspace` remains task metadata; the
+/// inherited managed selector must not be resolved in the scratch registry
+/// before the command can use its explicitly selected root and cwd.
+#[test]
+fn explicit_root_allows_a_managed_child_to_round_trip_a_scratch_task_artifact() {
+    let sentinel = Sentinel::new();
+    let before = sentinel.snapshot();
+
+    let scratch = tempdir().expect("scratch tempdir");
+    let home = scratch.path().join("home");
+    let root = scratch.path().join("root");
+    let work = scratch.path().join("work");
+    std::fs::create_dir_all(&home).expect("create scratch home");
+    std::fs::create_dir_all(&work).expect("create scratch workspace");
+
+    let root_arg = root.to_string_lossy().into_owned();
+    let work_arg = work.to_string_lossy().into_owned();
+    let mut command = managed_orbit(&work, &home, &sentinel);
+    run_ok(
+        &mut command,
+        &[
+            "--root",
+            &root_arg,
+            "init",
+            "--non-interactive",
+            "--host-name",
+            "scratch-host",
+            "--task-prefix",
+            "SCR",
+        ],
+        "initialize scratch root",
+    );
+
+    let mut command = managed_orbit(&work, &home, &sentinel);
+    run_ok(
+        &mut command,
+        &[
+            "--root",
+            &root_arg,
+            "workspace",
+            "init",
+            "--name",
+            "scratch-workspace",
+            "--ship-mode",
+            "local",
+        ],
+        "initialize scratch workspace",
+    );
+
+    let mut command = managed_orbit(&work, &home, &sentinel);
+    let created = run_ok(
+        &mut command,
+        &[
+            "--root",
+            &root_arg,
+            "task",
+            "add",
+            "--title",
+            "Scratch artifact round trip",
+            "--description",
+            "Must stay inside the explicit scratch root.",
+            "--complexity",
+            "low",
+            "--workspace",
+            &work_arg,
+            "--json",
+        ],
+        "add scratch task",
+    );
+    let created: Value = serde_json::from_slice(&created.stdout).expect("task add JSON");
+    let task_id = created["id"].as_str().expect("task id");
+
+    let source = work.join("summary.txt");
+    let round_trip = work.join("round-trip.txt");
+    std::fs::write(&source, "stored in scratch\n").expect("write source artifact");
+
+    let source_arg = source.to_string_lossy().into_owned();
+    let mut command = managed_orbit(&work, &home, &sentinel);
+    run_ok(
+        &mut command,
+        &[
+            "--root",
+            &root_arg,
+            "task",
+            "artifact",
+            "put",
+            task_id,
+            &source_arg,
+            "--path",
+            "reports/summary.txt",
+            "--json",
+        ],
+        "store scratch task artifact",
+    );
+
+    let round_trip_arg = round_trip.to_string_lossy().into_owned();
+    let mut command = managed_orbit(&work, &home, &sentinel);
+    run_ok(
+        &mut command,
+        &[
+            "--root",
+            &root_arg,
+            "task",
+            "artifact",
+            "get",
+            task_id,
+            "reports/summary.txt",
+            "--out",
+            &round_trip_arg,
+            "--json",
+        ],
+        "read scratch task artifact",
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&round_trip).expect("read round-trip artifact"),
+        "stored in scratch\n"
+    );
+    assert!(
+        root.join("tasks/workspaces/ws_scratch-workspace")
+            .join(task_id)
+            .is_dir(),
+        "task must be stored in the scratch workspace partition"
+    );
+    sentinel.assert_unchanged(&before);
+}
+
 /// Initialization, creation, and mutation all route to the fixture's own
 /// authority and leave the ambient sentinel byte-for-byte unchanged.
 #[test]
@@ -319,6 +447,20 @@ fn isolated_orbit(cwd: &Path, home: &Path) -> Command {
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
+    command
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env("USERPROFILE", home);
+    command
+}
+
+/// A child with a complete, controlled managed-run authority envelope.
+fn managed_orbit(cwd: &Path, home: &Path, sentinel: &Sentinel) -> Command {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    sentinel.export_authority(&mut command);
     command
         .current_dir(cwd)
         .env("HOME", home)
