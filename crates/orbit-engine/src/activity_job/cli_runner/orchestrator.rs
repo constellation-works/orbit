@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use orbit_agent::{
     Agent, AgentConfig, AgentOperation, AgentRequest, antigravity_terminal_error_diagnostic,
-    normalize_cli_stdout, peek_response_status, project_cli_response,
-    provider_invocation_diagnostic, response_envelope_protocol_check,
+    normalize_cli_stdout, peek_declared_response_failure, peek_response_status,
+    project_cli_response, provider_invocation_diagnostic, response_envelope_protocol_check,
 };
 use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_text};
@@ -511,7 +511,11 @@ pub fn run_cli_backend(
     let answer_stdout = project_cli_response(&provider, stdout.protocol_bytes());
     let answer_text = String::from_utf8_lossy(answer_stdout.as_ref());
     let trace_stdout_text = String::from_utf8_lossy(trace_stdout.as_ref());
-    let envelope_status = peek_response_status(answer_text.as_ref());
+    let declared_failure = peek_declared_response_failure(answer_text.as_ref());
+    let envelope_status = declared_failure
+        .as_ref()
+        .map(|failure| failure.status.clone())
+        .or_else(|| peek_response_status(answer_text.as_ref()));
     // The operator-facing preview stays on the *raw* capture: normalization
     // drops the session control plane, and that is where a provider puts the
     // policy and authentication failures an operator needs to see.
@@ -622,9 +626,10 @@ pub fn run_cli_backend(
         && matches!(envelope_status.as_deref(), Some("failed") | Some("timeout"))
     {
         Some(with_sandbox_write_attribution(
-            format!(
-                "cli subprocess reported declared envelope status={:?} despite exit 0",
-                envelope_status.as_deref().unwrap_or("unknown")
+            declared_failure_diagnostic(
+                envelope_status.as_deref().unwrap_or("unknown"),
+                declared_failure.as_ref(),
+                &redaction,
             ),
             sandbox_write_diagnostic.as_deref(),
         ))
@@ -818,6 +823,24 @@ fn completion_diagnostic(error: &str, redactor: &PatternRedactor) -> String {
          contract — typically an agent that yielded mid-work — so this step's work is incomplete \
          and only what it persisted before stopping is durable.",
         bounded_diagnostic(error, redactor)
+    )
+}
+
+fn declared_failure_diagnostic(
+    status: &str,
+    failure: Option<&orbit_agent::DeclaredResponseFailure>,
+    redactor: &PatternRedactor,
+) -> String {
+    let prefix =
+        format!("cli subprocess reported declared envelope status={status:?} despite exit 0");
+    let Some(error) = failure.and_then(|failure| failure.error.as_ref()) else {
+        return format!("{prefix}: declared envelope error details unavailable");
+    };
+
+    format!(
+        "{prefix}: error.code={}; error.message={}",
+        bounded_diagnostic(&error.code, redactor),
+        bounded_diagnostic(&error.message, redactor),
     )
 }
 

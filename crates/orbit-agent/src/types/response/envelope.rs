@@ -9,6 +9,12 @@ use super::protocol_schema::{RESPONSE_ENVELOPE_SCHEMA_VERSION, RESPONSE_ENVELOPE
 use super::wrapper::wrapper_signals;
 use super::{AgentResponseStatus, ResponseParseResult, trace::extract_invocation_trace};
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeclaredResponseFailure {
+    pub status: String,
+    pub error: Option<AgentRunError>,
+}
+
 pub fn parse_and_validate_response(exec_result: &ExecutionResult) -> ResponseParseResult {
     match parse_json_envelope(exec_result) {
         Ok(parsed) => Ok(parsed),
@@ -39,6 +45,21 @@ pub fn peek_response_status(stdout: &str) -> Option<String> {
         .rev()
         .find_map(find_agent_response_envelope)?;
     Some(envelope.status)
+}
+
+/// Best-effort lookup of a terminal failure declaration in provider stdout.
+///
+/// Unlike full response validation, this preserves the status when its error
+/// object is absent or malformed. The dispatcher uses that status to fail
+/// closed, while treating unavailable error details as a generic diagnostic.
+/// The returned error is present only when both its code and message are
+/// non-empty strings.
+pub fn peek_declared_response_failure(stdout: &str) -> Option<DeclaredResponseFailure> {
+    let documents = parse_json_documents(stdout).ok()?;
+    documents
+        .iter()
+        .rev()
+        .find_map(find_declared_response_failure)
 }
 
 /// Content-blind check that a provider's stdout *terminated with* a well-formed
@@ -362,6 +383,82 @@ fn find_agent_response_envelope(value: &Value) -> Option<AgentResponseEnvelope> 
         }
         _ => None,
     }
+}
+
+fn find_declared_response_failure(value: &Value) -> Option<DeclaredResponseFailure> {
+    if let Some(failure) = declared_response_failure(value) {
+        return Some(failure);
+    }
+
+    match value {
+        Value::String(raw) => find_declared_response_failure_in_string(raw),
+        Value::Array(items) => items.iter().rev().find_map(find_declared_response_failure),
+        Value::Object(map) => {
+            for key in [
+                "structured_output",
+                "result",
+                "response",
+                "message",
+                "messages",
+                "content",
+                "final",
+                "final_message",
+                "output",
+            ] {
+                if let Some(found) = map.get(key).and_then(find_declared_response_failure) {
+                    return Some(found);
+                }
+            }
+
+            map.values().find_map(find_declared_response_failure)
+        }
+        _ => None,
+    }
+}
+
+fn find_declared_response_failure_in_string(raw: &str) -> Option<DeclaredResponseFailure> {
+    if let Ok(nested) = serde_json::from_str::<Value>(raw)
+        && let Some(failure) = find_declared_response_failure(&nested)
+    {
+        return Some(failure);
+    }
+
+    raw.match_indices('{').find_map(|(start, _)| {
+        let mut deserializer = Deserializer::from_str(&raw[start..]);
+        let nested = Value::deserialize(&mut deserializer).ok()?;
+        find_declared_response_failure(&nested)
+    })
+}
+
+fn declared_response_failure(value: &Value) -> Option<DeclaredResponseFailure> {
+    let object = value.as_object()?;
+    let schema_version = object.get("schemaVersion")?.as_u64()?;
+    if schema_version != RESPONSE_ENVELOPE_SCHEMA_VERSION as u64 {
+        return None;
+    }
+
+    let status = object.get("status")?.as_str()?;
+    if !matches!(status, "failed" | "timeout") {
+        return None;
+    }
+
+    let error = object
+        .get("error")
+        .and_then(Value::as_object)
+        .and_then(|error| {
+            let code = error.get("code")?.as_str()?.trim();
+            let message = error.get("message")?.as_str()?.trim();
+            (!code.is_empty() && !message.is_empty()).then(|| AgentRunError {
+                code: code.to_string(),
+                message: message.to_string(),
+                details: Value::Null,
+            })
+        });
+
+    Some(DeclaredResponseFailure {
+        status: status.to_string(),
+        error,
+    })
 }
 
 fn find_agent_response_envelope_in_string(raw: &str) -> Option<AgentResponseEnvelope> {

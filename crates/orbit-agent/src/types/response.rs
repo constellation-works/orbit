@@ -24,7 +24,8 @@ use orbit_types::telemetry::ToolCallTrace;
 use serde_json::Value;
 
 pub use envelope::{
-    is_timeout, parse_and_validate_response, peek_response_status, response_envelope_protocol_check,
+    DeclaredResponseFailure, is_timeout, parse_and_validate_response,
+    peek_declared_response_failure, peek_response_status, response_envelope_protocol_check,
 };
 pub use protocol_schema::{response_envelope_json_schema, response_envelope_json_schema_arg};
 pub use wrapper::provider_invocation_diagnostic;
