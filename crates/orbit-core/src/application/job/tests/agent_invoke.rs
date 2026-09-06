@@ -138,10 +138,11 @@ fn a_federated_operator_cannot_admit_an_invocation() {
         .expect_err("a federated caller must not admit an unsandboxed process");
     match error {
         OrbitError::CapabilityDenied(message) => {
-            assert!(message.contains("hm_remote"), "{message}");
-            assert!(
-                message.contains("only to an operator on the machine"),
-                "{message}"
+            assert_eq!(
+                message,
+                "operation 'orbit.agent.invoke' admits an unsandboxed host process and \
+                 is available only to an operator on the machine that would run it; caller \
+                 'hm_remote' was resolved through mcp-callers.toml"
             );
         }
         other => panic!("expected a capability denial, got {other:?}"),
@@ -278,8 +279,13 @@ fn ordinary_job_input_cannot_carry_a_trusted_host_admission() {
         .expect_err("run input must not be able to manufacture the mode");
     match error {
         OrbitError::InvalidInput(message) => {
-            assert!(message.contains(TRUSTED_HOST_ADMISSION_KEY), "{message}");
-            assert!(message.contains("orbit.agent.invoke"), "{message}");
+            assert_eq!(
+                message,
+                "run input for job 'agent_invoke_pipeline' set the reserved \
+                 `trusted_host_admission` field; trusted host execution is admitted per \
+                 invocation by the governed `orbit.agent.invoke` operation and cannot \
+                 be requested through ordinary job input"
+            );
         }
         other => panic!("expected invalid input, got {other:?}"),
     }
@@ -464,8 +470,15 @@ fn an_admitted_run_cannot_be_resumed() {
         .expect_err("an admission covers one invocation only");
     match error {
         OrbitError::JobValidation(message) => {
-            assert!(message.contains("cannot be resumed"), "{message}");
-            assert!(message.contains("orbit.agent.invoke"), "{message}");
+            assert_eq!(
+                message,
+                format!(
+                    "job run '{}' was an operator-admitted trusted host invocation \
+                     and cannot be resumed; its admission covered that invocation only. \
+                     Submit a new `orbit.agent.invoke` to authorize another one",
+                    run.run_id
+                )
+            );
         }
         other => panic!("expected a job validation refusal, got {other:?}"),
     }
