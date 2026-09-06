@@ -10,6 +10,9 @@
 # primary HEAD, index, or working files. An unfetchable remote fails before
 # any agent call. Each read-only pilot receives at most five tasks and runs
 # in an invocation-owned checkout at that pinned revision.
+# The base branch is deliberately omitted from the job defaults: an absent or
+# empty input resolves through the owning workspace's `workflow.base_branch`.
+# A non-empty run input remains an explicit override.
 # Agent dispatch failures still stop at the
 # all-join. Apply isolates stale or malformed assessments by partition, applies
 # every independently valid partition, then a guard fails the total run when
@@ -42,7 +45,6 @@ spec:
   default_input:
     task_ids: []
     workspace_path: .
-    base_branch: agent-main
     max_tasks: 50
     max_partition_size: 5
     promotion_authorized: false

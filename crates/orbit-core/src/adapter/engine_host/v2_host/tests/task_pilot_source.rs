@@ -10,7 +10,9 @@ use tempfile::TempDir;
 
 use super::super::task_pilot::{apply, prepare};
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
+use crate::adapter::engine_host::v2_host::test_support::{
+    runtime_with_workspace_config, runtime_with_workspace_layout,
+};
 use crate::application::task::TaskAddParams;
 
 const LANDING: &str = "agent-main";
@@ -118,12 +120,18 @@ fn commit_file(repo: &Path, relative: &str, contents: &str) -> String {
     git(repo, &["rev-parse", "HEAD"])
 }
 
-fn remote_landing_fixture() -> RemoteLandingFixture {
-    let (root, runtime, repo) = runtime_with_workspace_layout();
+fn remote_landing_fixture_with_workspace_config(
+    branch: &str,
+    config_toml: Option<&str>,
+) -> RemoteLandingFixture {
+    let (root, runtime, repo) = match config_toml {
+        Some(config_toml) => runtime_with_workspace_config(Some(config_toml)),
+        None => runtime_with_workspace_layout(),
+    };
     let remote = root.path().join("remote.git");
     let seed = root.path().join("seed");
     git(root.path(), &["init", "--bare", remote.to_str().unwrap()]);
-    init_repo(&repo, LANDING);
+    init_repo(&repo, branch);
     fs::create_dir_all(repo.join("src")).expect("src dir");
     fs::write(repo.join(".gitignore"), ".orbit/\n").expect("ignore orbit store");
     fs::write(repo.join("src/existing.rs"), "existing\n").expect("write existing");
@@ -133,7 +141,7 @@ fn remote_landing_fixture() -> RemoteLandingFixture {
         &repo,
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
-    git(&repo, &["push", "-u", "origin", LANDING]);
+    git(&repo, &["push", "-u", "origin", branch]);
     let stale_sha = git(&repo, &["rev-parse", "HEAD"]);
 
     git(
@@ -141,7 +149,7 @@ fn remote_landing_fixture() -> RemoteLandingFixture {
         &[
             "clone",
             "--branch",
-            LANDING,
+            branch,
             remote.to_str().unwrap(),
             seed.to_str().unwrap(),
         ],
@@ -150,7 +158,7 @@ fn remote_landing_fixture() -> RemoteLandingFixture {
     git(&seed, &["config", "user.email", "orbit-test@example.com"]);
     git(&seed, &["config", "commit.gpgsign", "false"]);
     let current_sha = commit_file(&seed, "src/merged.rs", "newly merged\n");
-    git(&seed, &["push", "origin", LANDING]);
+    git(&seed, &["push", "origin", branch]);
 
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), stale_sha);
     assert!(!repo.join("src/merged.rs").exists());
@@ -167,6 +175,14 @@ fn remote_landing_fixture() -> RemoteLandingFixture {
     }
 }
 
+fn remote_landing_fixture_for(branch: &str) -> RemoteLandingFixture {
+    remote_landing_fixture_with_workspace_config(branch, None)
+}
+
+fn remote_landing_fixture() -> RemoteLandingFixture {
+    remote_landing_fixture_for(LANDING)
+}
+
 fn prepare_landing(fixture: &RemoteLandingFixture) -> Result<Value, String> {
     prepare(
         &fixture.runtime,
@@ -178,6 +194,66 @@ fn prepare_landing(fixture: &RemoteLandingFixture) -> Result<Value, String> {
         }),
     )
     .map_err(|error| error.to_string())
+}
+
+fn prepare_with_base_branch(
+    fixture: &RemoteLandingFixture,
+    base_branch: Option<&str>,
+) -> Result<Value, String> {
+    let mut input = json!({
+        "task_ids": [fixture.task.id.clone()],
+        "workspace_path": fixture.repo,
+    });
+    if let Some(base_branch) = base_branch {
+        input["base_branch"] = json!(base_branch);
+    }
+    prepare(&fixture.runtime, "prepare_task_pilot", &input).map_err(|error| error.to_string())
+}
+
+#[test]
+fn zero_input_preparation_uses_the_owning_workspace_main_branch() {
+    let fixture = remote_landing_fixture_for("main");
+
+    let prepared = prepare_with_base_branch(&fixture, None)
+        .expect("zero-input preparation must use the default workspace branch");
+
+    assert_eq!(prepared["source"]["base_branch"], "main");
+    assert_eq!(prepared["source"]["source_revision"], fixture.current_sha);
+}
+
+#[test]
+fn zero_input_preparation_uses_a_configured_agent_main_branch() {
+    let fixture = remote_landing_fixture_with_workspace_config(
+        LANDING,
+        Some("[workflow]\nbase_branch = \"agent-main\"\n"),
+    );
+
+    let prepared = prepare_with_base_branch(&fixture, None)
+        .expect("zero-input preparation must use the configured agent-main branch");
+
+    assert_eq!(prepared["source"]["base_branch"], LANDING);
+    assert_eq!(prepared["source"]["source_revision"], fixture.current_sha);
+}
+
+#[test]
+fn explicit_base_branch_overrides_the_owning_workspace_default() {
+    let fixture = remote_landing_fixture();
+
+    let prepared = prepare_with_base_branch(&fixture, Some(LANDING))
+        .expect("an explicit task-pilot branch must remain authoritative");
+
+    assert_eq!(prepared["source"]["base_branch"], LANDING);
+    assert_eq!(prepared["source"]["source_revision"], fixture.current_sha);
+}
+
+#[test]
+fn explicit_missing_base_branch_fails_before_pilot_dispatch() {
+    let fixture = remote_landing_fixture_for("main");
+
+    let error = prepare_with_base_branch(&fixture, Some("missing-branch"))
+        .expect_err("an unavailable explicit branch must fail closed");
+
+    assert!(error.contains("could not fetch"), "{error}");
 }
 
 #[test]

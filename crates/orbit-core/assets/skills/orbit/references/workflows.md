@@ -66,7 +66,7 @@ not a rewrite of failed history.
 | `task_local_pipeline` | Implement in a worktree and merge to the configured local base without a PR; optional push. |
 | `task_auto_pipeline` | Discover ready backlog tasks and ship them. |
 | `task_gate_pipeline` | Gated shipment with windowing and starvation handling. |
-| `task_pilot_pipeline` | Read-only agent preflight plus deterministic validated-selector apply; it defaults to no lifecycle promotion. |
+| `task_pilot_pipeline` | Read-only agent preflight plus deterministic validated-selector apply; it defaults to no lifecycle promotion. Its zero-input source snapshot uses the owning workspace's `[workflow] base_branch`; pass a non-empty `base_branch` run input to inspect another branch. |
 | `task_triage_pipeline` | Diagnose tasks blocked by failed runs. |
 | `epic_pipeline` | Ship an epic and its descendants against one worktree. |
 | `workspace_ship_pipeline` / `workspace_auto_pipeline` | Workspace-scoped wrappers that resolve mode and base branch, then invoke the pipelines above. |
