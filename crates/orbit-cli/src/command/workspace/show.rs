@@ -3,7 +3,9 @@ use std::path::Path;
 use clap::Args;
 use orbit_core::OrbitRuntime;
 use orbit_registry::workspace_registry;
-use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry};
+use orbit_types::workspace::{
+    Workspace, WorkspaceCheckout, WorkspaceRegistry, git_remote_identity, redact_git_remote,
+};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -78,6 +80,11 @@ pub(super) fn workspace_show_json(workspace: &Workspace, checkout: &WorkspaceChe
             "ship_mode": orbit_core::resolved_ship_mode(workspace).as_input_value(),
             "status": workspace.status.to_string(),
             "owner_machine_id": workspace.owner_machine_id,
+            "git_remote": workspace.git_remote.as_deref().map(redact_git_remote),
+            "source_repository_identity": workspace
+                .git_remote
+                .as_deref()
+                .and_then(|remote| git_remote_identity(remote).ok()),
         },
         "checkout": {
             "repo_root": checkout.repo_root.to_string_lossy(),
@@ -111,7 +118,10 @@ pub(super) fn format_workspace_show(workspace: &Workspace, checkout: &WorkspaceC
         output.push_str(&format!("owner_mirror: {replica_owner}\n"));
     }
     if let Some(remote) = &workspace.git_remote {
-        output.push_str(&format!("git_remote:  {remote}\n"));
+        output.push_str(&format!("git_remote:  {}\n", redact_git_remote(remote)));
+        if let Ok(identity) = git_remote_identity(remote) {
+            output.push_str(&format!("source_id:   {identity}\n"));
+        }
     }
     output.push_str(&format!(
         "created_at:  {}\nupdated_at:  {}\n",
