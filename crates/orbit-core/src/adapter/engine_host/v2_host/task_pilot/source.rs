@@ -183,6 +183,25 @@ pub(super) fn resolve_source_snapshot(
 
     let base_branch = requested_base_branch(runtime, input);
     let base_branch = normalize_base_branch(action, &base_branch)?;
+    if let Some(revision) = input
+        .get("source_revision")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        if !is_commit_id(revision) {
+            return Err(action_failed(
+                action,
+                "source_revision must be a full commit ID",
+            ));
+        }
+        let resolved = rev_parse_commit(action, workspace_root, revision)?;
+        return Ok(Some(SourceSnapshot {
+            base_branch,
+            source_ref: revision.into(),
+            source_revision: resolved,
+            fast_forwarded: false,
+        }));
+    }
     let has_origin = has_origin_remote(action, workspace_root)?;
 
     // Serialize fetch + resolution across linked checkouts sharing refs. Git's

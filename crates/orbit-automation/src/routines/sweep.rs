@@ -186,6 +186,23 @@ pub fn run_sweep_core_with_registry(
                 eligible: false,
                 diagnostics: Vec::new(),
             });
+        let same_target = collection
+            .routines
+            .iter()
+            .filter(|other| {
+                other.source_orbit_dir == routine.source_orbit_dir
+                    && other.definition.target == routine.definition.target
+                    && other.definition.enabled
+            })
+            .collect::<Vec<_>>();
+        if same_target.len() > 1
+            && same_target
+                .iter()
+                .any(|other| other.definition.trigger.state.is_some())
+        {
+            reports.push(skipped(routine, &validation, "duplicate_routine_ownership"));
+            continue;
+        }
         let report = sweep_routine(
             store,
             routine,
@@ -222,21 +239,31 @@ fn sweep_routine(
 ) -> Result<RoutineSweepReport, OrbitError> {
     let definition = &routine.definition;
     let name = &definition.name;
-    if definition.trigger.deliveries_landed.is_some()
+    if (definition.trigger.deliveries_landed.is_some() || definition.trigger.state.is_some())
         && validation.eligible
         && !pauses.contains_key(name)
     {
         let diagnostic = dispatch.evaluate_delivery(routine, options.dry_run, now_utc)?;
-        let run_id = diagnostic
-            .state
-            .as_ref()
-            .and_then(|s| s.active.as_ref())
-            .and_then(|a| a.action_id.clone());
+        let run_id = diagnostic.state.as_ref().and_then(|s| {
+            s.active
+                .as_ref()
+                .and_then(|a| a.action_id.clone())
+                .or_else(|| {
+                    s.members
+                        .as_ref()
+                        .and_then(|m| m.active.as_ref())
+                        .and_then(|a| a.action_id.clone())
+                })
+        });
         return Ok(RoutineSweepReport {
             routine: name.clone(),
             source: routine.source_workspace.clone(),
             origin: routine.origin.as_str(),
-            action: "delivery",
+            action: if definition.trigger.state.is_some() {
+                "state"
+            } else {
+                "delivery"
+            },
             reason: Some(diagnostic.reason),
             slot: None,
             run_id,

@@ -21,6 +21,9 @@ spec:
   input_schema_json:
     type: object
     properties:
+      state_automation: {}
+      source_revision:
+        type: string
       task_ids:
         type: array
         items:

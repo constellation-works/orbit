@@ -21,6 +21,7 @@ spec:
   input_schema_json:
     type: object
     properties:
+      state_automation: {}
       max_tasks:
         type: number
         minimum: 1

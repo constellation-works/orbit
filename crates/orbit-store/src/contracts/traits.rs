@@ -368,6 +368,16 @@ pub trait TaskReservationStoreBackend: Send + Sync {
 }
 
 pub trait JobRunStoreBackend: Send + Sync {
+    /// Exact retry children; missing evidence cannot be replaced by a time-window scan.
+    fn job_run_retries(&self, _run_id: &str, _limit: usize) -> Result<Vec<JobRun>, OrbitError> {
+        Err(OrbitError::Store("retry lineage lookup unavailable".into()))
+    }
+
+    fn automation_job_for_key(&self, _key: &str) -> Result<Option<String>, OrbitError> {
+        Err(OrbitError::Store(
+            "automation action lookup unavailable".into(),
+        ))
+    }
     fn insert_automation_job_run(
         &self,
         _job_id: &str,

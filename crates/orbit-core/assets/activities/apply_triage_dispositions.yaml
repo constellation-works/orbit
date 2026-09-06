@@ -21,6 +21,7 @@ spec:
     type: object
     required: [dispositions, candidates]
     properties:
+      state_automation: {}
       dispositions:
         type: array
         items:

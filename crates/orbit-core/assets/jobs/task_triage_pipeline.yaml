@@ -44,11 +44,13 @@ spec:
     task_ids: []
     max_tasks: 20
     max_rebacklogs: 2
+    state_automation: null
 
   steps:
     - id: list_candidates
       target: activity:list_triage_candidates
       default_input:
+        state_automation: "{{ input.state_automation }}"
         task_ids: "{{ input.task_ids }}"
         max_tasks: "{{ input.max_tasks }}"
         max_rebacklogs: "{{ input.max_rebacklogs }}"
@@ -69,6 +71,7 @@ spec:
       when: "{{ steps.list_candidates.output.candidate_count }} != 0"
       target: activity:apply_triage_dispositions
       default_input:
+        state_automation: "{{ steps.list_candidates.output.state_automation }}"
         dispositions: "{{ steps.triage.output.dispositions }}"
         candidates: "{{ steps.list_candidates.output.candidates }}"
         max_rebacklogs: "{{ input.max_rebacklogs }}"

@@ -159,6 +159,7 @@ fn candidate_json(task: &Task, run: &JobRun, rebacklog_count: u64, max_rebacklog
     json!({
         "task_id": task.id,
         "title": task.title,
+        "task_revision": task.updated_at,
         "run_id": run.run_id,
         "job_id": run.job_id,
         "run_state": run.state.to_string(),
@@ -188,6 +189,8 @@ pub(super) fn list_triage_candidates(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
+    let claim = crate::application::automation::members::claim(runtime, input)
+        .map_err(|error| action_failed(action, error.to_string()))?;
     let max_rebacklogs = rebacklog_budget(input);
     let max_tasks = input
         .get("max_tasks")
@@ -244,6 +247,12 @@ pub(super) fn list_triage_candidates(
         if !is_workflow_failure_state(run.state) {
             continue;
         }
+        if claim.is_some() {
+            match crate::application::automation::incidents::observe(runtime, task) {
+                Ok((key, _)) if claim.as_ref().is_some_and(|claim| claim.member.key == key) => {}
+                _ => continue,
+            }
+        }
         let history = runtime
             .get_task_history(&task.id)
             .map_err(|error| action_failed(action, format!("history for {}: {error}", task.id)))?;
@@ -274,6 +283,7 @@ pub(super) fn list_triage_candidates(
     // Keep this Rust serialization contract in sync with
     // crates/orbit-core/assets/activities/list_triage_candidates.yaml.
     Ok(json!({
+        "state_automation": claim,
         "candidates": candidates,
         "candidate_count": task_ids.len(),
         "task_ids": task_ids,
@@ -283,6 +293,12 @@ pub(super) fn list_triage_candidates(
 }
 
 const CLASSIFICATIONS: &[&str] = &["environmental", "task_defect", "code_defect", "unknown"];
+
+struct CandidateSnapshot {
+    run_id: String,
+    revision: Option<String>,
+    incident: Option<String>,
+}
 
 struct DispositionOutcome {
     action: &'static str,
@@ -325,6 +341,8 @@ pub(super) fn apply_triage_dispositions(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
+    let claim = crate::application::automation::members::claim(runtime, input)
+        .map_err(|error| action_failed(action, error.to_string()))?;
     let dispositions = input
         .get("dispositions")
         .and_then(Value::as_array)
@@ -335,15 +353,41 @@ pub(super) fn apply_triage_dispositions(
         .ok_or_else(|| action_failed(action, "missing `candidates` array"))?;
     let max_rebacklogs = rebacklog_budget(input);
 
-    let candidate_run_by_task: BTreeMap<String, String> = candidates
+    let candidate_run_by_task: BTreeMap<String, CandidateSnapshot> = candidates
         .iter()
         .filter_map(|candidate| {
             Some((
                 candidate.get("task_id")?.as_str()?.to_string(),
-                candidate.get("run_id")?.as_str()?.to_string(),
+                CandidateSnapshot {
+                    run_id: candidate.get("run_id")?.as_str()?.to_string(),
+                    revision: candidate
+                        .get("task_revision")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    incident: claim.as_ref().map(|claim| claim.member.key.clone()),
+                },
             ))
         })
         .collect();
+
+    if let Some(claim) = &claim {
+        let expected = claim
+            .member
+            .task_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let actual = dispositions
+            .iter()
+            .filter_map(|v| v.get("task_id").and_then(Value::as_str))
+            .collect::<BTreeSet<_>>();
+        if actual != expected || dispositions.len() != expected.len() {
+            return Err(action_failed(
+                action,
+                "state triage requires exactly one disposition per captured task",
+            ));
+        }
+    }
 
     let mut results = Vec::new();
     let mut counts: BTreeMap<&'static str, u64> = BTreeMap::new();
@@ -366,7 +410,21 @@ pub(super) fn apply_triage_dispositions(
         record(&mut results, &mut counts, task_id, outcome);
     }
 
+    let member_evidence = claim
+        .filter(|_| results.iter().all(|r| r["action"] != "skipped") && !results.is_empty())
+        .map(
+            |claim| orbit_types::workflow::automation::members::MemberEvidence {
+                action_id: claim.action_id.unwrap_or_default(),
+                attempt_id: claim.id,
+                member_key: claim.member.key,
+                input_fingerprint: claim.member.fingerprint.clone(),
+                resulting_fingerprint: claim.member.fingerprint,
+                ready: false,
+                result: json!(results),
+            },
+        );
     Ok(json!({
+        "member_evidence": member_evidence,
         "results": results,
         "rebacklogged_count": counts.get("rebacklogged").copied().unwrap_or(0),
         "diagnosed_count": counts.get("diagnosed").copied().unwrap_or(0),
@@ -393,18 +451,50 @@ fn apply_one_disposition(
     runtime: &OrbitRuntime,
     task_id: &str,
     disposition: &Value,
-    candidate_run_by_task: &BTreeMap<String, String>,
+    candidate_run_by_task: &BTreeMap<String, CandidateSnapshot>,
+    seen_task_ids: &mut BTreeSet<String>,
+    max_rebacklogs: u64,
+) -> DispositionOutcome {
+    let mut outcome = None;
+    let mut apply = || {
+        outcome = Some(apply_one_disposition_locked(
+            runtime,
+            task_id,
+            disposition,
+            candidate_run_by_task,
+            seen_task_ids,
+            max_rebacklogs,
+        ));
+        Ok(())
+    };
+    match runtime
+        .stores()
+        .tasks()
+        .with_task_write_lock(task_id, &mut apply)
+    {
+        Ok(()) => outcome.unwrap_or_else(|| DispositionOutcome::skipped("task write did not run")),
+        Err(error) => DispositionOutcome::skipped(error.to_string()),
+    }
+}
+
+fn apply_one_disposition_locked(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    disposition: &Value,
+    candidate_run_by_task: &BTreeMap<String, CandidateSnapshot>,
     seen_task_ids: &mut BTreeSet<String>,
     max_rebacklogs: u64,
 ) -> DispositionOutcome {
     if !seen_task_ids.insert(task_id.to_string()) {
         return DispositionOutcome::skipped("duplicate disposition for this task");
     }
-    let Some(expected_run_id) = candidate_run_by_task.get(task_id) else {
+    let Some(candidate) = candidate_run_by_task.get(task_id) else {
         // Structural bound: the agent may only dispose of tasks the
         // deterministic listing produced.
         return DispositionOutcome::skipped("task is not a triage candidate of this run");
     };
+    let expected_run_id = &candidate.run_id;
+    let expected_revision = &candidate.revision;
     let classification = disposition
         .get("classification")
         .and_then(Value::as_str)
@@ -441,6 +531,48 @@ fn apply_one_disposition(
     }
     if task.job_run_id.as_deref() != Some(expected_run_id.as_str()) {
         return DispositionOutcome::skipped("task run coupling changed since listing");
+    }
+
+    if expected_revision.as_ref().is_some_and(|revision| {
+        &task
+            .updated_at
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+            != revision
+    }) {
+        return DispositionOutcome::skipped("task changed since candidate capture");
+    }
+    match crate::application::automation::incidents::failure_coupled(
+        runtime,
+        &task,
+        expected_run_id,
+    ) {
+        Ok(true) => {}
+        _ => return DispositionOutcome::skipped("failure coupling or human intent changed"),
+    }
+    if runtime
+        .get_job_run_backend(expected_run_id)
+        .ok()
+        .flatten()
+        .is_none_or(|run| {
+            !matches!(
+                run.state,
+                orbit_types::workflow::JobRunState::Failed
+                    | orbit_types::workflow::JobRunState::Timeout
+            ) || run.job_id == "task_triage_pipeline"
+        })
+    {
+        return DispositionOutcome::skipped("run is no longer an eligible execution failure");
+    }
+
+    if let Some(expected) = &candidate.incident {
+        match crate::application::automation::incidents::members(runtime) {
+            Ok(inventory) if inventory.contains_key(expected) => {}
+            _ => return DispositionOutcome::skipped("incident recovery or membership changed"),
+        }
+        match crate::application::automation::incidents::observe(runtime, &task) {
+            Ok((key, _)) if &key == expected => {}
+            _ => return DispositionOutcome::skipped("incident recovery or eligibility changed"),
+        }
     }
 
     if requested_rebacklog && classification == "environmental" {

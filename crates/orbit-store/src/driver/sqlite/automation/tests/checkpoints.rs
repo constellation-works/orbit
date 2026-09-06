@@ -6,6 +6,7 @@ fn state() -> AutomationState {
         tree: "tree-a".into(),
     };
     AutomationState {
+        members: None,
         consumer: "owner/ws/qa".into(),
         epoch: "epoch".into(),
         repository: "repo".into(),

@@ -13,8 +13,8 @@
 # The base branch is deliberately omitted from the job defaults: an absent or
 # empty input resolves through the owning workspace's `workflow.base_branch`.
 # A non-empty run input remains an explicit override.
-# Agent dispatch failures still stop at the
-# all-join. Apply isolates stale or malformed assessments by partition, applies
+# Any successful partition reaches apply even if another agent failed.
+# Apply isolates stale or malformed assessments by partition, applies
 # every independently valid partition, then a guard fails the total run when
 # any partition did not apply. Selector existence is validated against the
 # prepared source revision, not a later checkout. Apply normally changes only context_files. A CI sweep may pass its exact filing record plus
@@ -49,11 +49,15 @@ spec:
     max_partition_size: 5
     promotion_authorized: false
     ci_sweep_filing: null
+    state_automation: null
+    source_revision: ""
 
   steps:
     - id: prepare
       target: activity:prepare_task_pilot
       default_input:
+        state_automation: "{{ input.state_automation }}"
+        source_revision: "{{ input.source_revision }}"
         task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ input.workspace_path }}"
         base_branch: "{{ input.base_branch }}"
@@ -78,7 +82,7 @@ spec:
             crew: system
       fan_in:
         join:
-          mode: all
+          mode: any
         collect: pilot_results
 
     - id: apply

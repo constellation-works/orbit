@@ -110,7 +110,7 @@ local merge delivery instead of opening PRs. For another host's workspace, use
 `--role replica --owner <owner-machine-id>` rather than creating another owner.
 See [multi-host.md](multi-host.md).
 
-Two things to know about what it seeded:
+Three things to know about what it seeded and how to finalize:
 
 - **Every routine and auto-task ships disabled.** The automation layer is
   installed but dark until someone reviews and opts in. Do not assume a fresh
@@ -118,6 +118,17 @@ Two things to know about what it seeded:
 - **Definitions belong in git; state does not.** `orbit workspace init` seeds a
   `.gitignore` pattern that ignores `.orbit/` and then re-includes the versioned
   definition directories. Keep it.
+- **Finalize generated files before local shipping.** `orbit workspace init`
+  updates `.gitignore` and creates untracked definitions in `.orbit/auto_tasks/`
+  and `.orbit/routines/`. Orbit intentionally does not auto-commit, stash, or
+  discard operator modifications. When using local delivery (`--ship-mode local`),
+  the landing base checkout must be clean before running workflows. Review and
+  commit the generated onboarding files to finalize setup safely:
+
+  ```bash
+  git add .gitignore .orbit/auto_tasks .orbit/routines
+  git commit -m "chore: initialize Orbit workspace definitions"
+  ```
 
 Ordinary `orbit mcp init` installs agent-only authority, unlike the operator
 bootstrap above. Re-registering a client is not a way to preserve or grant

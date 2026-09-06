@@ -220,7 +220,7 @@ fn load_routine_file(
 
     // Load-time cron validation: a routine with an unparsable trigger never
     // reaches the due computation.
-    if definition.trigger.deliveries_landed.is_none() {
+    if definition.trigger.deliveries_landed.is_none() && definition.trigger.state.is_none() {
         parse_cron(&definition.trigger.cron).map_err(|error| error.to_string())?;
     }
 

@@ -1,4 +1,5 @@
 //! Shared delivery-trigger, batch and coverage contracts [ORB-11330].
+pub mod members;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -133,6 +134,8 @@ pub struct BatchAttempt {
 /// Small current scheduler state; completed batches/receipts are separate rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutomationState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<members::MemberState>,
     pub consumer: String,
     pub epoch: String,
     pub repository: String,

@@ -183,6 +183,8 @@ impl OrbitRuntime {
     /// carries no task ids at all. The claim check is keyed on neither, so both
     /// gaps close. `claim_token` is the holder's minted token; `None` falls back
     /// to [`CLAIM_TOKEN_ENV`](crate::runtime::workspace_claim::CLAIM_TOKEN_ENV).
+    // Existing public positional API; keep callers stable while submission is composed internally.
+    #[allow(clippy::too_many_arguments)]
     pub fn submit_ship_run(
         &self,
         mode: crate::application::workflow::ShipMode,

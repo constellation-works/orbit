@@ -8,6 +8,8 @@ use orbit_types::task::{
 /// Predicates answered by envelope metadata. `None` statuses means all statuses.
 #[derive(Debug, Clone, Default)]
 pub struct TaskListFilter {
+    /// Continue the canonical created-descending, ID-ascending scan.
+    pub scan_before: Option<(chrono::DateTime<chrono::Utc>, String)>,
     pub statuses: Option<Vec<TaskStatus>>,
     pub priority: Option<TaskPriority>,
     pub task_type: Option<TaskType>,
@@ -27,7 +29,10 @@ impl TaskListFilter {
     }
 
     pub(crate) fn matches(&self, task: &TaskEnvelopeV2) -> bool {
-        self.statuses
+        self.scan_before.as_ref().is_none_or(|(at, id)| {
+            task.created_at < *at || (task.created_at == *at && task.id > *id)
+        }) && self
+            .statuses
             .as_ref()
             .is_none_or(|values| values.contains(&task.status))
             && self.priority.is_none_or(|value| task.priority == value)

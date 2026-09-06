@@ -1976,3 +1976,34 @@ async fn response_body(response: Response) -> String {
         Err(error) => panic!("response body is not UTF-8: {error}"),
     }
 }
+
+#[test]
+fn state_automation_renders_unready_withheld_and_absolute_deadline() {
+    run_dashboard_javascript_test(
+        r#"
+import assert from 'node:assert/strict';
+class Element {
+  constructor(tag) { this.tag = tag; this.children = []; this.textContent = ''; this.dataset = {}; this.style = {}; }
+  appendChild(child) { this.children.push(child); return child; }
+  setAttribute(key, value) { this[key] = value; }
+  addEventListener() {}
+}
+globalThis.document = {createElement: tag => new Element(tag), createTextNode: text => ({textContent:text})};
+globalThis.window = {location: {search:''}};
+const {renderAutomation} = await import('./automation.js');
+const panel = renderAutomation({reason:'fresh_unready',state:{consumer:'host/ws/routine/pilot',members:{
+  pending:{}, assessed:{task:{ready:false,resulting_fingerprint:'f'}},withheld:{other:'human_block'},failed:{},
+  active:{member:{key:'task'},attempt:2,max_attempts:2,deadline:'2026-09-06T12:00:00Z',action_id:'run'}
+},unresolved:{}},receipts:[],waivers:[]});
+function text(node) { return [node.textContent,...(node.children||[]).map(text)].join(' '); }
+const rendered=text(panel);
+assert.match(rendered,/State automation/);
+assert.match(rendered,/fresh_unready/);
+assert.match(rendered,/human_block/);
+assert.match(rendered,/2026-09-06T12:00:00Z/);
+assert.match(rendered,/Unknown/);
+assert.match(rendered,/does not authorize promotion/);
+assert.doesNotMatch(rendered,/Examined through/);
+"#,
+    );
+}

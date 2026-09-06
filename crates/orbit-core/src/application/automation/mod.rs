@@ -7,7 +7,10 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
 mod direct;
+pub(crate) mod incidents;
 mod inspect;
+pub(crate) mod members;
+pub(crate) mod preparation;
 mod provider;
 pub(crate) use direct::record_direct_landing_intent;
 mod source;
@@ -67,6 +70,9 @@ pub fn evaluate_routine(
     dry_run: bool,
     now: DateTime<Utc>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
+    if definition.trigger.state.is_some() {
+        return members::evaluate(runtime, definition, dry_run, now);
+    }
     let trigger = definition
         .trigger
         .deliveries_landed

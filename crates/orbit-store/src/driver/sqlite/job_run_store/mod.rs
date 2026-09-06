@@ -76,6 +76,31 @@ impl SqliteJobRunStore {
 }
 
 impl JobRunStoreBackend for SqliteJobRunStore {
+    fn job_run_retries(&self, run_id: &str, limit: usize) -> Result<Vec<JobRun>, OrbitError> {
+        self.store.with_read_connection(|conn| {
+            let mut statement = conn.prepare("SELECT run_id FROM job_runs WHERE workspace_id=?1 AND retry_source_run_id=?2 ORDER BY created_at,run_id LIMIT ?3")
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            let ids = statement.query_map(rusqlite::params![self.workspace_id,run_id,limit.min(1000)], |row|row.get::<_,String>(0))
+                .map_err(|error| OrbitError::Store(error.to_string()))?
+                .collect::<Result<Vec<_>,_>>().map_err(|error| OrbitError::Store(error.to_string()))?;
+            ids.into_iter().map(|id| get_job_run_for_workspace_conn(conn, &self.workspace_id, &id)?
+                .ok_or_else(|| OrbitError::Store("retry run disappeared".into()))).collect()
+        })
+    }
+
+    fn automation_job_for_key(&self, key: &str) -> Result<Option<String>, OrbitError> {
+        use rusqlite::OptionalExtension;
+        self.store.with_read_connection(|conn| {
+            conn.query_row(
+                "SELECT run_id FROM automation_job_keys WHERE workspace_id=?1 AND action_key=?2",
+                rusqlite::params![self.workspace_id, key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| OrbitError::Store(error.to_string()))
+        })
+    }
+
     fn insert_automation_job_run(
         &self,
         job_id: &str,

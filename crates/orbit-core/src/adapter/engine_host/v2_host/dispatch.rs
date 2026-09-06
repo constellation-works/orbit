@@ -54,6 +54,32 @@ pub(crate) fn run_deterministic(
         .session_context
         .effective_capabilities
         .insert(McpCapability::Runner);
+    if matches!(
+        deterministic_action,
+        CoreDeterministicAction::PrepareTaskPilot
+            | CoreDeterministicAction::ApplyTaskPilotResults
+            | CoreDeterministicAction::ListTriageCandidates
+            | CoreDeterministicAction::ApplyTriageDispositions
+    ) {
+        let claim_input = input.get("prepared").unwrap_or(input);
+        if let Some(claim) = crate::application::automation::members::claim(runtime, claim_input)
+            .map_err(|error| DispatchError::DeterministicActionFailed {
+                action: action.into(),
+                message: error.to_string(),
+            })?
+        {
+            let owner = tool_context
+                .reservation_owner
+                .as_ref()
+                .map(|owner| owner.owner_run_id.as_str());
+            if owner.is_none() || owner != claim.action_id.as_deref() {
+                return Err(DispatchError::DeterministicActionFailed {
+                    action: action.into(),
+                    message: "state claim belongs to another run".into(),
+                });
+            }
+        }
+    }
     match deterministic_action {
         CoreDeterministicAction::OrbitToolCall => {
             // The `config` block shape (see deterministic_reference.yaml):

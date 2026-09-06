@@ -267,6 +267,18 @@ impl OrbitRuntime {
                 &dropped_context_files,
             )]
         };
+        // An explicit block is current intent even when the failure already
+        // parked the task. Triage must not mistake this for its old coupling.
+        if task.status == TaskStatus::Blocked && params.status == Some(TaskStatus::Blocked) {
+            append_history.push(TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: effective_label.clone(),
+                event: "block_confirmed".into(),
+                note: params.comment.clone(),
+                from_status: Some(TaskStatus::Blocked),
+                to_status: Some(TaskStatus::Blocked),
+            });
+        }
         if let Some(replacement) = source_task_id_replacement {
             // ORB-10311: record the explicit previous and replacement source
             // ids (with a clear marker for the unset case) so the change is

@@ -10,13 +10,31 @@ const revision = value => value ? `${value.commit} (tree ${value.tree})` : 'Not 
 export function renderAutomation(diagnostic) {
   if (!diagnostic) return null;
   const panel = el('details', { class: 'automation-diagnostic' });
-  panel.appendChild(el('summary', { text: `Delivery coverage · ${diagnostic.reason || 'unknown'}` }));
+  panel.appendChild(el('summary', { text: `${diagnostic.state?.members ? 'State automation' : 'Delivery coverage'} · ${diagnostic.reason || 'unknown'}` }));
   if (diagnostic.error) panel.appendChild(el('p', { text: diagnostic.error }));
   const state = diagnostic.state;
   if (!state) {
     panel.appendChild(el('p', { text: 'No baseline recorded. Preview before enabling this consumer.' }));
     return panel;
   }
+  const members = state.members;
+  if (members) {
+    const assessed = Object.entries(members.assessed || {}).filter(([key, value]) => !members.pending?.[key] || members.pending[key].fingerprint === value.resulting_fingerprint).map(([, value]) => value);
+    panel.appendChild(el('div', { class: 'operation-grid' }, [
+      field('Owner / definition', state.consumer),
+      field('Pending members', Object.keys(members.pending || {}).length),
+      field('Fresh / ready', `${assessed.length} / ${assessed.filter(value => value.ready).length}`),
+      field('Withheld members', Object.keys(members.withheld || {}).length),
+      field('Exhausted inputs', Object.keys(members.failed || {}).length),
+      field('Scan continuation', members.scan_after || 'Inventory complete'),
+      field('Usage', 'Unknown'),
+    ]));
+    const active = members.active;
+    if (active) panel.appendChild(el('p', { text: `Member ${active.member.key} · attempt ${active.attempt}/${active.max_attempts} · deadline ${active.deadline} · action ${active.action_id || 'awaiting acknowledgement'}` }));
+    const withheld = Object.entries(members.withheld || {}).slice(0, 20);
+    if (withheld.length) panel.appendChild(el('pre', { text: withheld.map(([key, reason]) => `${key}: ${reason}`).join('\n') }));
+    panel.appendChild(el('p', { text: 'Readiness evidence does not authorize promotion or execution.' }));
+  } else {
   panel.appendChild(el('div', { class: 'operation-grid' }, [
     field('Owner / definition', state.consumer),
     field('Baseline exclusion', revision(state.baseline)),
@@ -27,6 +45,7 @@ export function renderAutomation(diagnostic) {
     field('Unresolved evidence', Object.keys(state.unresolved).length),
     field('Usage', 'Unknown'),
   ]));
+  }
   const attempt = state.active;
   if (attempt) {
     panel.appendChild(el('p', { text: `Batch ${attempt.batch.id} · attempt ${attempt.attempt}/${attempt.batch.max_attempts} · ${attempt.state} · action ${attempt.action_id || 'awaiting acknowledgement'}` }));
