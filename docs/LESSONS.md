@@ -73,13 +73,15 @@ an owner-process fixture in
 while [ ! -f "$ORBIT_TEST_OWNER_RELEASE" ]; do sleep 0.01; done
 ```
 
-The agent triggered an ordinary validation run. The fixture then created the
-runaway processes: it spawned the waiter before a sequence of assertions and
-wrote the release file only on the normal success path. If an assertion
-panicked or the test timed out first, no guard killed the child. Dropping the
-test's temporary directory also removed the location where the release file
-could have been created, so the orphaned waiter could never satisfy its exit
-condition.
+The agent triggered an ordinary validation run. A workflow-tool test submitted
+real pipeline runs without the test-only worker override, causing the
+`orbit_core` test binary to re-execute as a worker and recurse through libtest.
+The recursively reached fixture then created the runaway processes: it spawned
+the waiter before a sequence of assertions and wrote the release file only on
+the normal success path. If an assertion panicked or the test timed out first,
+no guard killed the child. Dropping the test's temporary directory also removed
+the location where the release file could have been created, so the orphaned
+waiter could never satisfy its exit condition.
 
 The ten-millisecond interval made this much worse. `sleep` is an external
 process, so every leaked waiter attempted roughly 100 process launches per
@@ -88,7 +90,8 @@ second. The pipeline sandbox then failed to contain the defect: its descendant
 tree survived after the task completed and accumulated across repeated tests.
 Cancelling the stale run removed the tree; blocked processes fell to zero and
 the host returned to 90--96% CPU idle. The incident is recorded as
-F2026-09-042.
+F2026-09-042; the full causal account is in the
+[incident RCA](rca/2026-09-06-recursive-test-worker-fork-storm.md).
 
 **Lesson**: Test synchronization must be bounded and preferably in-process,
 not a short-interval shell loop that repeatedly forks. Every fixture that
