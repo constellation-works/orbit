@@ -563,6 +563,14 @@ The executor emits `StepJoin` with per-branch outcomes. If the join policy fails
 
 `fan_out.items` is template-rendered into an array. Workers run concurrently behind a counting semaphore, so `max_workers` is a true concurrency bound, not just metadata. `fan_in.collect` can persist the ordered worker outputs under a separate pipeline key in addition to the step id itself.
 
+Collection does not itself interpret a successful activity call whose payload
+reports a failed child run. A parent that waits on child workflows must pass
+the collected wait entries to `pipeline_success_guard` after fan-in. The CI
+failure sweep does this only when its filer reports a nonzero pilot-candidate
+count: independent successful pilots finish and apply before the guard makes a
+failed, stale, cancelled, interrupted, or timed-out pilot visible as a failed
+sweep, while a genuinely empty candidate list remains a successful no-op.
+
 Workers use isolated pipeline/session maps. The validator rejects any worker template with `session:` because concurrent workers would otherwise share one mutable `Session`.
 
 ### 8.5 `loop`

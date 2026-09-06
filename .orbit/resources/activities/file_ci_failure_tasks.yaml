@@ -44,8 +44,9 @@ spec:
     successful output includes an `audit` object with counts and identities for
     latest runs, current and investigated failures, created tasks, existing
     dedupe owners, and the findings deferred for incomplete evidence, so
-    partial registration is legible to an operator rather than inferred. The filing entries retain workflow, job, step, runner-tested
-    commit, and source run URLs for the later pilot/admission audit.
+    partial registration is legible to an operator rather than inferred. The
+    filing entries retain workflow, job, step, runner-tested commit, source run
+    IDs/URLs, and ref kinds/branches for the later pilot/admission audit.
   input_schema_json:
     type: object
     required: [ci_evidence]
@@ -64,7 +65,7 @@ spec:
           in `skipped_over_cap` rather than dropped silently.
   output_schema_json:
     type: object
-    required: [outcome, clusters, filed_count, filed, pilot_candidates, skipped_existing, skipped_over_cap, deferred, audit]
+    required: [outcome, clusters, filed_count, filed, pilot_candidate_count, pilot_candidates, skipped_existing, skipped_over_cap, deferred, audit]
     properties:
       outcome:
         type: string
@@ -78,6 +79,8 @@ spec:
       clusters:
         type: number
       filed_count:
+        type: number
+      pilot_candidate_count:
         type: number
       max_tasks:
         type: number
@@ -101,7 +104,17 @@ spec:
               type: string
             tested_commit:
               type: string
+            run_ids:
+              type: array
             run_urls:
+              type: array
+              items:
+                type: string
+            ref_kinds:
+              type: array
+              items:
+                type: string
+            head_branches:
               type: array
               items:
                 type: string
@@ -113,7 +126,7 @@ spec:
           sweep provenance used by the pilot/admission boundary.
         items:
           type: object
-          required: [task_id, failure_key, workflow, job, step, tested_commit, run_urls]
+          required: [task_id, failure_key, workflow, job, step, tested_commit, run_ids, run_urls, ref_kinds, head_branches]
       skipped_existing:
         type: array
         items:

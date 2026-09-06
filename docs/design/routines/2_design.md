@@ -155,11 +155,23 @@ user-authored and is still reported and preserved in place.
 
 The seeded `ci_failure_sweep` targets `job:ci_failure_sweep_pipeline` hourly at
 `5 * * * *` — deliberately clear of the other defaults' minutes — with `missed_run: skip`
-and `overlap: forbid`. Its two deterministic steps run every GitHub query on the host and
-then file each current, non-stale failure cluster as an ordinary backlog bug task carrying
-that evidence inline, deduped against still-open tasks by failure key. The routine is a
-scheduling surface only: an operator-triggered run of the job behaves identically to a
-scheduled fire.
+and `overlap: forbid`. The pipeline runs every GitHub query on the host, files each
+current, non-stale failure cluster as a proposed bug task carrying that evidence inline,
+dedupes against still-open owners by failure key, and pilots each candidate through the
+existing task-pilot job. The all-join lets independently valid pilots apply even when a
+sibling is stale or fails; a following `pipeline_success_guard` then fails the parent from
+the collected child statuses. The guard is skipped only for a filer-reported zero-candidate
+result, so empty clean/deduped sweeps remain no-ops without hiding failed work.
+
+A release-head failure remains current even when the same workflow is green on the
+integration head: freshness is scoped to workflow and ref for both landing branches. If a
+pilot proves the repair already landed on integration, admission leaves the deduped task in
+proposed quarantine and reports `release_promotion_or_hotfix_needed` with the red release
+SHA/run and the pilot's covering repair evidence. The sweep performs neither release
+promotion nor hotfix dispatch. A no-diff assessment without concrete covering proof is
+reported as `covering_proof_missing` and remains proposed for a later bounded pilot instead
+of being treated as already landed. The routine is a scheduling surface only: an
+operator-triggered run of the job behaves identically to a scheduled fire.
 
 The seeded `ship_sweep` targets `job:workspace_ship_pipeline` with `missed_run: skip` and
 `overlap: forbid`. The wrapper resolves the source runtime's ship mode and configured base

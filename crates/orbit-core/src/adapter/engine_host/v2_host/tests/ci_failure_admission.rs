@@ -72,6 +72,17 @@ impl<'a> Assessment<'a> {
             authorized: true,
         }
     }
+
+    fn unproven_no_diff() -> Self {
+        Self {
+            selectors: Vec::new(),
+            disposition: "verified_no_diff",
+            duplicate_of: Value::Null,
+            already_landed: Value::Null,
+            warnings: Vec::new(),
+            authorized: true,
+        }
+    }
 }
 
 fn apply_pilot(
@@ -209,17 +220,18 @@ fn already_landed_release_stays_proposed_but_distinct_current_regression_advance
             ..TaskAddParams::default()
         })
         .expect("seed completed repair");
-    let old = file(
-        &runtime,
-        vec![failure(
-            10,
-            "release",
-            "homebrew",
-            "on arm",
-            "release\thomebrew\terror: old arm formula\n",
-            CHECKOUT,
-        )],
+    let mut red_main = failure(
+        10,
+        "release",
+        "homebrew",
+        "on arm",
+        "release\thomebrew\terror: old arm formula\n",
+        CHECKOUT,
     );
+    red_main["head_branch"] = json!("main");
+    red_main["ref_kind"] = json!("release");
+    let red_main_snapshot = vec![red_main];
+    let old = file(&runtime, red_main_snapshot.clone());
     let old_filing = &old["filed"][0];
     let result = apply_pilot(
         &runtime,
@@ -233,7 +245,24 @@ fn already_landed_release_stays_proposed_but_distinct_current_regression_advance
     .expect("classify already-landed release failure");
     assert_eq!(
         result["ci_sweep_admission"][0]["classification"],
-        "already_landed"
+        "release_promotion_or_hotfix_needed"
+    );
+    let disposition = &result["ci_sweep_admission"][0];
+    assert_eq!(disposition["source"]["ref_kinds"], json!(["release"]));
+    assert_eq!(disposition["source"]["head_branches"], json!(["main"]));
+    assert_eq!(
+        disposition["evidence"]["red_release"]["tested_commit"],
+        CHECKOUT
+    );
+    assert!(
+        disposition["evidence"]["covering_repair"]["evidence"]
+            .as_str()
+            .is_some_and(|evidence| evidence.contains(&prior.id) && evidence.contains("49740da"))
+    );
+    assert!(
+        disposition["evidence"]["required_action"]
+            .as_str()
+            .is_some_and(|action| action.contains("release branch") && action.contains("hotfix"))
     );
     assert_eq!(
         runtime
@@ -241,6 +270,22 @@ fn already_landed_release_stays_proposed_but_distinct_current_regression_advance
             .expect("old task")
             .status,
         TaskStatus::Proposed
+    );
+    assert!(
+        !backlog_task_ids(&runtime).contains(
+            &old_filing["task_id"]
+                .as_str()
+                .expect("release task id")
+                .to_string()
+        )
+    );
+
+    let repeated = file(&runtime, red_main_snapshot);
+    assert_eq!(repeated["filed_count"], json!(0));
+    assert_eq!(repeated["pilot_candidate_count"], json!(1));
+    assert_eq!(
+        repeated["pilot_candidates"][0]["task_id"],
+        old_filing["task_id"]
     );
 
     let current = file(
@@ -269,6 +314,56 @@ fn already_landed_release_stays_proposed_but_distinct_current_regression_advance
             .status,
         TaskStatus::Backlog
     );
+}
+
+#[test]
+fn verified_no_diff_without_covering_proof_stays_uncertain_and_retryable() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let filed = file(
+        &runtime,
+        vec![failure(
+            10,
+            "ci",
+            "build",
+            "cargo build",
+            "ci\tbuild\terror: current regression\n",
+            CHECKOUT,
+        )],
+    );
+    let filing = &filed["filed"][0];
+    let task_id = filing["task_id"].as_str().expect("task id");
+
+    let result = apply_pilot(&runtime, &repo_root, filing, Assessment::unproven_no_diff())
+        .expect("retain an unproven no-diff assessment");
+
+    assert_eq!(
+        result["ci_sweep_admission"][0]["classification"],
+        "covering_proof_missing"
+    );
+    assert!(
+        result["ci_sweep_admission"][0]["evidence"]["required_action"]
+            .as_str()
+            .is_some_and(|action| action.contains("covering task and commit evidence"))
+    );
+    assert_eq!(
+        runtime.get_task(task_id).expect("task").status,
+        TaskStatus::Proposed
+    );
+
+    let repeated = file(
+        &runtime,
+        vec![failure(
+            11,
+            "ci",
+            "build",
+            "cargo build",
+            "ci\tbuild\terror: current regression\n",
+            NEXT_HEAD,
+        )],
+    );
+    assert_eq!(repeated["filed_count"], json!(0));
+    assert_eq!(repeated["pilot_candidate_count"], json!(1));
+    assert_eq!(repeated["pilot_candidates"][0]["task_id"], task_id);
 }
 
 #[test]

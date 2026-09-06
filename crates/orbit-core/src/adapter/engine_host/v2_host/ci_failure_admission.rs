@@ -96,12 +96,52 @@ pub(super) fn assess(
         })
         .collect::<Vec<_>>();
 
-    let (decision, classification, evidence) = if !already_landed.is_null() {
+    // A release failure may share a cluster with a pull-request run of the
+    // same commit. It is release-only for remediation purposes as long as no
+    // integration-head run is in that cluster.
+    let ref_kinds = filing.get("ref_kinds").and_then(Value::as_array);
+    let release_head_failure = ref_kinds.is_some_and(|kinds| {
+        kinds.iter().any(|kind| kind.as_str() == Some("release"))
+            && !kinds
+                .iter()
+                .any(|kind| kind.as_str() == Some("integration"))
+    });
+    let head_branches = filing
+        .get("head_branches")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+
+    let (decision, classification, evidence) = if !already_landed.is_null() && release_head_failure
+    {
+        (
+            "withhold",
+            "release_promotion_or_hotfix_needed",
+            json!({
+                "red_release": {
+                    "head_branches": head_branches,
+                    "tested_commit": tested_commit,
+                    "run_urls": run_urls,
+                },
+                "covering_repair": already_landed,
+                "required_action": "promote the verified integration repair to the release branch or prepare an authorized hotfix",
+                "automatic_action": "none",
+            }),
+        )
+    } else if !already_landed.is_null() {
         ("withhold", "already_landed", already_landed.clone())
     } else if !duplicate_of.is_null() {
         ("withhold", "duplicate", duplicate_of.clone())
     } else if !warnings.is_empty() {
         ("withhold", "warnings", json!(warnings))
+    } else if disposition == "verified_no_diff" {
+        (
+            "withhold",
+            "covering_proof_missing",
+            json!({
+                "pilot_evidence": assessment.get("evidence").cloned().unwrap_or(Value::Null),
+                "required_action": "provide concrete covering task and commit evidence or return actionable selectors",
+            }),
+        )
     } else if disposition != "selectors" || selectors.is_empty() {
         (
             "withhold",
@@ -138,6 +178,8 @@ pub(super) fn assess(
             "step": step,
             "tested_commit": tested_commit,
             "run_urls": run_urls,
+            "ref_kinds": filing.get("ref_kinds").cloned().unwrap_or_else(|| json!([])),
+            "head_branches": filing.get("head_branches").cloned().unwrap_or_else(|| json!([])),
         },
         "evidence": evidence,
     }))
