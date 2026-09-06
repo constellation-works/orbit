@@ -434,7 +434,7 @@ fn compiled_codex_profile_reads_public_ca_material_but_not_private_credentials()
     );
 
     assert!(
-        can_read_under_profile(&profile_text, public_ca),
+        can_read_under_profile(&profile_text, &public_ca),
         "Codex must be able to read the public CA file selected by its child environment"
     );
     for private in [&fixture.credential, &private_key] {
@@ -459,7 +459,7 @@ fn compiled_codex_profile_reads_public_ca_material_but_not_private_credentials()
         },
     );
     assert!(
-        !can_read_under_profile(&denied_profile, public_ca),
+        !can_read_under_profile(&denied_profile, &public_ca),
         "an explicit denyRead must still outrank the public CA default"
     );
 }
