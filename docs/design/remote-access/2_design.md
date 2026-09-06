@@ -31,13 +31,13 @@ The Web tunnel is not shared with MCP. MCP remote mode is direct ssh -T stdio ow
 
 ## 2. orbit web serve
 
-orbit web serve always builds registry-backed multi-workspace state and may run from any directory. The accepted --global flag is a compatibility no-op. A top-level --root influences only the initially selected workspace; it does not narrow the set served or register a workspace.
+orbit web serve always builds registry-backed multi-workspace state and may run from any directory. The accepted --global flag is a compatibility no-op. A top-level --root selects which registry is served, exactly as it does for every other root-aware command: the server enumerates <root>/workspaces.json and never reads the machine-global registry. It does not register a workspace. Which workspace the dashboard opens on is a separate option, --workspace.
 
 Startup:
 
-1. orbit-registry locates and loads the machine's workspace registry.
+1. orbit-registry loads the registry under the resolved Orbit root: <--root>/workspaces.json when the flag is given, the machine-global ~/.orbit/workspaces.json otherwise. orbit-cmd global_root_for owns that resolution for every command, Web included.
 2. Local workspace checkouts become dashboard entries. Invalid paths remain visible as inactive entries and are not opened.
-3. With --root, its matching workspace becomes the default; an unmatched value opens aggregate mode rather than falling back to cwd. Without --root, the workspace containing cwd becomes the default when one matches.
+3. With --workspace, the workspace it names becomes the default; the selector is a registered name or ws_* ID first and a checkout path when it is path-shaped, and an unmatched value opens aggregate mode rather than falling back to cwd. Without --workspace, the workspace containing cwd becomes the default when one matches.
 4. Orbit Web refuses a non-loopback bind before opening the listener.
 
 ### Request state
@@ -73,7 +73,7 @@ The Web-owned tunnel then follows an attach-first lifecycle:
 
 In spawn mode, the forced PTY makes connection teardown deliver SIGHUP to the remote serve process started by this session. In attach mode there is no remote command, so teardown closes only the forward and leaves the pre-existing dashboard running.
 
---root is POSIX-quoted and forwarded only in spawn mode. --global is also forwarded only in spawn mode and remains useful only for older remote binaries. Attach mode sends no remote command, so neither option can change an existing server.
+connect's --workspace is POSIX-quoted and forwarded to the remote serve as --workspace, only in spawn mode. It is not forwarded as --root: on the remote that would choose a registry rather than preselect a workspace. connect rejects a top-level --root outright, since it reads no local Orbit data directory. --global is also forwarded only in spawn mode and remains useful only for older remote binaries. Attach mode sends no remote command, so no option can change an existing server.
 
 ## 4. Security
 

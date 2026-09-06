@@ -36,6 +36,7 @@ use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use clap::Args;
+use orbit_cmd::registry_runtime;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{WorkspaceRegistry, WorkspaceStatus};
@@ -101,6 +102,13 @@ pub struct ServeArgs {
     /// — removing it would break tunnels against an old/new binary mix.
     #[arg(long)]
     pub global: bool,
+
+    /// Preselect this workspace in the dashboard, by registered name, logical
+    /// ID (`ws_*`), or local checkout path. Defaults to the workspace
+    /// containing the current directory. Distinct from `--root`, which
+    /// chooses which registry is served.
+    #[arg(long, value_name = "SELECTOR")]
+    pub workspace: Option<String>,
 }
 
 /// Boot the dashboard for a single, already-built runtime and block until
@@ -118,42 +126,51 @@ pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> 
 /// Unlike [`serve`], this needs no pre-built runtime, so it works from any
 /// directory — the entry point for `orbit web serve` (dispatched before the
 /// CLI's eager workspace initialization, which would otherwise fail outside a
-/// workspace). Always serves in global mode: every registered workspace is
-/// selectable via the dropdown, regardless of cwd (`args.global` is accepted
-/// but ignored — see [`ServeArgs::global`]).
+/// workspace). Always serves in global mode: every workspace registered in the
+/// served registry is selectable via the dropdown, regardless of cwd
+/// (`args.global` is accepted but ignored — see [`ServeArgs::global`]).
 ///
-/// `root_override` is the top-level `--root <path>` flag, if given; it picks
-/// the dropdown's default-preselected workspace ahead of the process cwd (see
-/// `build_state`). This matters for `orbit web connect`: the remote `orbit
-/// web serve` it launches over `ssh` runs non-interactively with cwd set to
-/// the remote user's home directory, so `--root` is the only signal available
-/// to hint which workspace should be preselected there.
+/// `root_override` is the top-level `--root <path>` flag, if given. It means
+/// here exactly what it means everywhere else in the CLI: the Orbit data
+/// directory to read, so the dashboard serves `<root>/workspaces.json` and
+/// nothing from the machine-global registry (ORB-11388). Which workspace the
+/// dropdown opens on is a separate question, answered by `--workspace`.
 pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(), OrbitError> {
-    let state = build_state(root_override)?;
+    let state = build_state(root_override, args.workspace.as_deref())?;
     run_server(&args, state)
 }
 
 /// Resolve dashboard state from the environment: registry-backed global mode
-/// over every registered workspace (stale-path entries are listed but marked
-/// inactive and never built). The servable set is reloaded from
-/// `~/.orbit/workspaces.json` on every request boundary (see
+/// over every workspace registered in the served registry (stale-path entries
+/// are listed but marked inactive and never built). The registry is
+/// `<root>/workspaces.json` for an explicit `--root`, and the machine-global
+/// `~/.orbit/workspaces.json` otherwise — the same resolution every other
+/// root-aware command performs, via
+/// [`orbit_cmd::registry_runtime::global_root_for`]. The servable set is
+/// reloaded from that same path on every request boundary (see
 /// [`state::DashboardState::refresh`]), so a native `orbit workspace
 /// init/remove` or binding change becomes visible without restarting the
 /// server. The dropdown's default selection is, in priority order: the
-/// registered/active workspace matching `root_override` (an explicit `--root
-/// <path>`), else the registered workspace containing the cwd (see
+/// registered/active workspace matching `workspace_selector` (an explicit
+/// `--workspace`), else the registered workspace containing the cwd (see
 /// [`default_workspace_for_cwd`]), else "All workspaces". See
 /// [`default_workspace_selection`] for the precedence logic.
 ///
 /// The initial load is eager: a malformed registry at startup is fatal, exactly
 /// as before this became refreshable. A malformed *refresh* after a good
 /// startup retains the last valid snapshot instead (see `refresh`).
-fn build_state(root_override: Option<&Path>) -> Result<state::DashboardState, OrbitError> {
-    let global_root = workspace_registry::global_orbit_dir()?;
-    let registry_path = workspace_registry::registry_path()?;
+fn build_state(
+    root_override: Option<&Path>,
+    workspace_selector: Option<&str>,
+) -> Result<state::DashboardState, OrbitError> {
+    let global_root = registry_runtime::global_root_for(root_override)?;
+    let registry_path = workspace_registry::registry_path_for(&global_root);
     let cwd = std::env::current_dir().ok();
-    let source =
-        state::RegistrySource::new(registry_path, root_override.map(Path::to_path_buf), cwd);
+    let source = state::RegistrySource::new(
+        registry_path,
+        workspace_selector.map(ToOwned::to_owned),
+        cwd,
+    );
     state::DashboardState::from_registry(global_root, source)
 }
 
@@ -176,45 +193,58 @@ fn default_workspace_for_cwd(registry: &WorkspaceRegistry, cwd: &Path) -> Option
 }
 
 /// Precedence logic for the dropdown's default-preselected workspace: an
-/// explicit `root_override` (the top-level `--root <path>` flag) always wins
-/// over `cwd` when given, even if it does not resolve to any registered/active
+/// explicit `workspace_selector` (the `--workspace` flag) always wins over
+/// `cwd` when given, even if it does not resolve to any registered/active
 /// workspace — in that case the result is `None` ("All workspaces"), not a
 /// fallback to the cwd-based default. This matches [`default_workspace_for_cwd`]:
 /// don't error, don't auto-register, just prefer the aggregate view.
 ///
-/// `root_override` not being given falls back to the existing cwd-based
-/// behavior unchanged.
+/// The selector is a registered name or logical `ws_*` ID first, and a local
+/// checkout path when it is path-shaped
+/// ([`registry_runtime::selector_looks_like_path`]); a path is matched the
+/// same way a cwd is (longest registered prefix), which is what `orbit web
+/// connect` forwards for a remote workspace directory. An unknown bare name is
+/// never joined to cwd — that would preselect the cwd's workspace for a
+/// selector that matched nothing. `workspace_selector` not being given falls
+/// back to the existing cwd-based behavior unchanged.
 fn default_workspace_selection(
     registry: &WorkspaceRegistry,
-    root_override: Option<&Path>,
+    workspace_selector: Option<&str>,
     cwd: Option<&Path>,
 ) -> Option<String> {
-    match root_override {
-        Some(root) => {
-            let resolved = resolve_root_override(root, cwd);
-            default_workspace_for_cwd(registry, &resolved)
-        }
+    match workspace_selector {
+        Some(selector) => workspace_registry::resolve_logical_workspace(registry, selector)
+            .ok()
+            .filter(|workspace| workspace.status == WorkspaceStatus::Active)
+            .map(|workspace| workspace.id.clone())
+            .or_else(|| {
+                if !registry_runtime::selector_looks_like_path(selector) {
+                    return None;
+                }
+                let path = resolve_selector_path(Path::new(selector), cwd);
+                default_workspace_for_cwd(registry, &path)
+            }),
         None => cwd.and_then(|cwd| default_workspace_for_cwd(registry, cwd)),
     }
 }
 
-/// Normalize a `--root <path>` value so it can be prefix-matched against
-/// registered workspace roots (which are canonical absolute paths after the
-/// pipeline's canonicalization; see `orbit-runtime/src/builder.rs`).
+/// Normalize a path-shaped `--workspace <selector>` value so it can be
+/// prefix-matched against registered workspace roots (which are canonical
+/// absolute paths after the pipeline's canonicalization; see
+/// `orbit-runtime/src/builder.rs`).
 ///
-/// Relative paths are resolved against `cwd` before canonicalization — mirrors
-/// the pre-ORB-10029 single-mode `--root` behavior. If canonicalization fails
-/// (path may not exist, or symlink resolution errors), return the pre-canonical
-/// absolute path so behavior for nonexistent paths is preserved: a raw
-/// lexical prefix comparison against a stale/nonexistent path just misses,
-/// which is the existing "All workspaces" fallback.
-fn resolve_root_override(root: &Path, cwd: Option<&Path>) -> PathBuf {
-    let absolute = if root.is_absolute() {
-        root.to_path_buf()
+/// Relative paths are resolved against `cwd` before canonicalization. If
+/// canonicalization fails (path may not exist, or symlink resolution errors),
+/// return the pre-canonical absolute path so behavior for nonexistent paths is
+/// preserved: a raw lexical prefix comparison against a stale/nonexistent path
+/// just misses, which is the existing "All workspaces" fallback.
+fn resolve_selector_path(selector: &Path, cwd: Option<&Path>) -> PathBuf {
+    let absolute = if selector.is_absolute() {
+        selector.to_path_buf()
     } else {
         match cwd {
-            Some(cwd) => cwd.join(root),
-            None => root.to_path_buf(),
+            Some(cwd) => cwd.join(selector),
+            None => selector.to_path_buf(),
         }
     };
     absolute.canonicalize().unwrap_or(absolute)

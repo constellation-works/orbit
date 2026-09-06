@@ -26,7 +26,7 @@ It is not used by MCP. MCP remote mode uses direct ssh -T stdio with no -L forwa
 
        ssh -tt -o ExitOnForwardFailure=yes -L 127.0.0.1:<local>:localhost:<remote> <host> "<remote command>"
 
-6. The remote command is orbit web serve --no-open --port <remote>. It may include a POSIX-quoted --root and the compatibility --global flag.
+6. The remote command is orbit web serve --no-open --port <remote>. It may include a POSIX-quoted --workspace and the compatibility --global flag.
 7. Poll /healthz for up to 30 seconds. Once ready, open the local URL unless local --no-open was requested.
 
 A forward can exist while no service listens behind it, so SSH startup alone never proves readiness.
@@ -39,7 +39,7 @@ A forward can exist while no service listens behind it, so SSH startup alone nev
 - The dashboard API includes writes. Access to the forwarded local port carries the remote Web process's authority.
 - ExitOnForwardFailure=yes prevents the remote command from continuing when SSH cannot establish the forward.
 - The remote command always includes --no-open.
-- Every shell-interpolated root is POSIX-quoted.
+- Every shell-interpolated selector is POSIX-quoted.
 
 The explicit 127.0.0.1 listener keeps the local forward loopback-only independently of the OpenSSH GatewayPorts default.
 
@@ -57,11 +57,11 @@ SshTunnel owns the child through RAII. Drop or explicit shutdown sends SIGTERM, 
 
 - --port selects the local forwarded port.
 - --remote-port selects the remote Web port and forward target.
-- --root affects the remote server's default workspace only, and only when this invocation spawns it.
+- --workspace affects the remote server's default workspace only, and only when this invocation spawns it. A top-level --root is rejected: connect reads no local Orbit data directory.
 - --global is forwarded in spawn mode for compatibility with older remote binaries; current Web serving is always multi-workspace.
 - --no-open controls only the local browser.
 
-Attach mode sends no remote command, so --root and --global cannot reconfigure an existing server.
+Attach mode sends no remote command, so --workspace and --global cannot reconfigure an existing server.
 
 ## Failures and accepted races
 

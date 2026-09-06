@@ -11,6 +11,8 @@ mod operation;
 mod operation_args;
 mod sweep;
 
+use std::path::Path;
+
 use clap::{Command, CommandFactory, Parser, error::ErrorKind};
 
 use super::{
@@ -277,6 +279,53 @@ fn cli_parses_web_serve_global_as_deprecated_noop() {
         Commands::Web(command) => match command.command {
             WebSubcommand::Serve(args) => assert!(args.global),
             WebSubcommand::Connect(_) => panic!("expected serve"),
+        },
+        _ => panic!("expected top-level web command"),
+    }
+}
+
+#[test]
+fn cli_parses_web_serve_workspace_preselection() {
+    // ORB-11388: `--root` is the data-directory override on `web serve` like
+    // everywhere else; the dashboard's preselection hint is `--workspace`.
+    let cli = Cli::parse_from([
+        "orbit",
+        "--root",
+        "/tmp/scratch-root",
+        "web",
+        "serve",
+        "--workspace",
+        "ws_repo",
+    ]);
+    assert_eq!(cli.root.as_deref(), Some(Path::new("/tmp/scratch-root")));
+    match cli.command {
+        Commands::Web(command) => match command.command {
+            WebSubcommand::Serve(args) => assert_eq!(args.workspace.as_deref(), Some("ws_repo")),
+            WebSubcommand::Connect(_) => panic!("expected serve"),
+        },
+        _ => panic!("expected top-level web command"),
+    }
+}
+
+#[test]
+fn cli_parses_web_connect_workspace() {
+    // ORB-11388: the remote workspace to preselect is `--workspace`; a
+    // top-level `--root` reaches the global flag, which `orbit web connect`
+    // rejects rather than silently ignores.
+    let cli = Cli::parse_from([
+        "orbit",
+        "web",
+        "connect",
+        "my-host",
+        "--workspace",
+        "/srv/ws",
+    ]);
+    match cli.command {
+        Commands::Web(command) => match command.command {
+            WebSubcommand::Connect(args) => {
+                assert_eq!(args.workspace.as_deref(), Some("/srv/ws"));
+            }
+            WebSubcommand::Serve(_) => panic!("expected connect"),
         },
         _ => panic!("expected top-level web command"),
     }
