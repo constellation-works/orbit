@@ -1,4 +1,5 @@
 //! Authorized direct delivery intents are retained before Git mutates the branch.
+
 use super::source::Source;
 use crate::OrbitRuntime;
 use orbit_automation::{AutomationError, automation_error_to_orbit, delivery::digest};
@@ -20,12 +21,16 @@ pub(crate) fn record_direct_landing_intent(
     let after = source
         .revision(&request.after_commit)
         .map_err(automation_error_to_orbit)?;
+
+    // A landing that changed no tree is not a delivery.
     if before.tree == after.tree {
         return Ok(());
     }
+
     source
         .git(&["merge-base", "--is-ancestor", &before.commit, &after.commit])
         .map_err(automation_error_to_orbit)?;
+
     let range = format!("{}..{}", before.commit, after.commit);
     let commits = source
         .git(&["rev-list", "--first-parent", "--reverse", &range])
@@ -33,11 +38,12 @@ pub(crate) fn record_direct_landing_intent(
         .lines()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+
     let run = runtime.show_job_run(&request.run_id)?;
     let task_ids = run
         .input
         .as_ref()
-        .and_then(|v| v.get("task_ids"))
+        .and_then(|input| input.get("task_ids"))
         .and_then(serde_json::Value::as_array)
         .map(|ids| {
             ids.iter()
@@ -46,8 +52,10 @@ pub(crate) fn record_direct_landing_intent(
                 .collect()
         })
         .unwrap_or_default();
+
     let evidence_digest =
         digest(&serde_json::to_vec(request).map_err(|e| OrbitError::InvalidInput(e.to_string()))?);
+
     runtime
         .automation_store()?
         .automation_record_delivery_intent(&Delivery {
@@ -70,27 +78,32 @@ pub(super) fn observe(
     state: &AutomationState,
     page: &mut SourcePage,
 ) -> Result<(), AutomationError> {
+    // This page's commits plus a rotating slice of the still-unresolved ones.
     let mut candidates = page.commits.iter().take(100).cloned().collect::<Vec<_>>();
     let unresolved = state.unresolved.keys().collect::<Vec<_>>();
+
     candidates.extend(
         unresolved
             .iter()
             .cycle()
             .skip((state.generation as usize) % unresolved.len().max(1))
             .take(unresolved.len().min(100))
-            .map(|s| (*s).clone()),
+            .map(|sha| (*sha).clone()),
     );
+
     let available = state
         .pending_commits
         .iter()
         .chain(page.commits.iter())
         .collect::<Vec<_>>();
+
     for delivery in
         store.automation_delivery_intents(&state.repository, &state.branch, &candidates)?
     {
         if !delivery.commits.iter().all(|sha| available.contains(&sha)) {
             continue;
         }
+
         // An intent is not a landing: only exact, reachable source objects qualify.
         if source
             .git(&[
@@ -103,34 +116,42 @@ pub(super) fn observe(
         {
             continue;
         }
+
         if source.revision(&delivery.before.commit)? != delivery.before
             || source.revision(&delivery.after.commit)? != delivery.after
         {
             continue;
         }
+
         let range = format!("{}..{}", delivery.before.commit, delivery.after.commit);
         let actual = source
             .git(&["rev-list", "--first-parent", "--reverse", &range])?
             .lines()
             .map(str::to_owned)
             .collect::<Vec<_>>();
+
         if actual != delivery.commits {
             continue;
         }
+
         for sha in &delivery.commits {
             page.unresolved.remove(sha);
         }
+
         // Two authorities claiming overlapping units are unresolved, never counted twice.
-        if page
-            .deliveries
-            .iter()
-            .any(|d| d.commits.iter().any(|sha| delivery.commits.contains(sha)))
-        {
+        if page.deliveries.iter().any(|other| {
+            other
+                .commits
+                .iter()
+                .any(|sha| delivery.commits.contains(sha))
+        }) {
             return Err(AutomationError::Deferred(
                 "delivery_grouping_ambiguous".into(),
             ));
         }
+
         page.deliveries.push(delivery);
     }
+
     Ok(())
 }

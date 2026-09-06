@@ -1,4 +1,5 @@
 //! State-member invariants use the same transaction and receipt tables.
+
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::{
     AcceptedCoverage, AutomationState, members::MemberEvidence,
@@ -13,6 +14,9 @@ pub(super) fn validate(
     let invalid = || OrbitError::InvalidInput("invalid member checkpoint transition".into());
     let old = previous.members.as_ref().ok_or_else(invalid)?;
     let new = next.members.as_ref().ok_or_else(invalid)?;
+
+    // A member checkpoint touches member state only; the delivery projection and
+    // its cursors must come through untouched.
     if previous.active.is_some()
         || next.active.is_some()
         || previous.covered != next.covered
@@ -25,6 +29,9 @@ pub(super) fn validate(
     {
         return Err(invalid());
     }
+
+    // A failed record is permanent, except for the one the active attempt just
+    // exhausted itself into.
     for (key, failed) in &old.failed {
         if new.failed.get(key) != Some(failed)
             && !old.active.as_ref().is_some_and(|active| {
@@ -39,6 +46,8 @@ pub(super) fn validate(
             return Err(invalid());
         }
     }
+
+    // An in-flight attempt keeps its identity and may only advance by one retry.
     if let Some(active) = &old.active {
         if let Some(updated) = &new.active {
             if active.consumer != updated.consumer
@@ -61,35 +70,42 @@ pub(super) fn validate(
                 return Err(invalid());
             }
         } else if receipt.is_none()
-            && !new.failed.get(&active.member.key).is_some_and(|a| {
-                a.exhausted
-                    && a.id == active.id
-                    && a.member == active.member
-                    && a.attempt == active.attempt
-                    && a.deadline == active.deadline
+            && !new.failed.get(&active.member.key).is_some_and(|retired| {
+                retired.exhausted
+                    && retired.id == active.id
+                    && retired.member == active.member
+                    && retired.attempt == active.attempt
+                    && retired.deadline == active.deadline
             })
         {
             return Err(invalid());
         }
     }
+
+    // A newly claimed attempt starts at attempt 1, unadmitted, over a pending member.
     if old.active.is_none()
         && let Some(active) = &new.active
         && (active.consumer != previous.consumer
             || active.attempt != 1
             || active.max_attempts == 0
             || active.max_attempts > 6
-            || !new.pending.values().any(|m| m == &active.member)
+            || !new
+                .pending
+                .values()
+                .any(|pending| pending == &active.member)
             || active.action_id.is_some()
             || active.exhausted
             || active.deadline <= active.retry_after)
     {
         return Err(invalid());
     }
+
     if let Some(receipt) = receipt {
         let active = old.active.as_ref().ok_or_else(invalid)?;
         let evidence: MemberEvidence =
             serde_json::from_slice(&receipt.evidence).map_err(|_| invalid())?;
         let bytes = serde_json::to_vec(active).map_err(|_| invalid())?;
+
         if receipt.batch_id != active.id
             || active.action_id.as_ref() != Some(&receipt.action_id)
             || receipt.input_digest != format!("{:x}", Sha256::digest(bytes))
@@ -105,6 +121,8 @@ pub(super) fn validate(
         {
             return Err(invalid());
         }
+
+        // The receipt may add exactly one assessment: the member it just applied.
         let mut expected_assessments = old.assessed.clone();
         expected_assessments.insert(
             active.member.key.clone(),
@@ -113,9 +131,11 @@ pub(super) fn validate(
                 .ok_or_else(invalid)?
                 .clone(),
         );
+
         if expected_assessments != new.assessed {
             return Err(invalid());
         }
+
         let assessment = new.assessed.get(&active.member.key).ok_or_else(invalid)?;
         if assessment.input_fingerprint != evidence.input_fingerprint
             || assessment.resulting_fingerprint != evidence.resulting_fingerprint
@@ -127,5 +147,6 @@ pub(super) fn validate(
     } else if old.assessed != new.assessed {
         return Err(invalid());
     }
+
     Ok(())
 }

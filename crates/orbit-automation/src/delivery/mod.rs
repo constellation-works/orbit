@@ -1,10 +1,12 @@
 //! One bounded delivery evaluator shared by task and job consumers.
+
 use crate::AutomationError;
 use crate::checkpoint::{commit, diagnostic};
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::*;
 use sha2::{Digest, Sha256};
+
 pub mod evidence;
 mod observe;
 #[cfg(test)]
@@ -15,13 +17,18 @@ pub trait DeliveryHost {
     fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
         Ok(None)
     }
+
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError>;
+
     fn observe(&self, branch: &str, state: &AutomationState)
     -> Result<SourcePage, AutomationError>;
+
     /// Canonical action admission must resolve the same durable key on replay.
     fn admit(&self, attempt: &BatchAttempt) -> Result<String, AutomationError>;
+
     fn outcome(&self, attempt: &BatchAttempt) -> Result<ActionOutcome, AutomationError>;
 }
+
 /// Core's authoritative observation of an admitted task/job.
 pub enum ActionOutcome {
     Pending,
@@ -32,19 +39,23 @@ pub enum ActionOutcome {
         reason: String,
     },
 }
+
 pub fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
+
 pub fn input_digest(batch: &CoverageBatch) -> Result<String, AutomationError> {
     serde_json::to_vec(batch)
         .map(|bytes| digest(&bytes))
         .map_err(|e| AutomationError::Evidence(e.to_string()))
 }
+
 pub fn definition_epoch<T: serde::Serialize>(definition: &T) -> Result<String, AutomationError> {
     serde_json::to_vec(definition)
         .map(|bytes| digest(&bytes))
         .map_err(|e| AutomationError::Evidence(e.to_string()))
 }
+
 /// Inputs supplied by the existing sweep clock.
 pub struct Evaluation<'a> {
     pub consumer: &'a str,
@@ -54,6 +65,7 @@ pub struct Evaluation<'a> {
     pub dry_run: bool,
     pub now: DateTime<Utc>,
 }
+
 /// Evaluate explicit configuration without another scheduler or ticking loop.
 pub fn evaluate(
     store: &dyn AutomationStoreBackend,
@@ -68,13 +80,17 @@ pub fn evaluate(
         dry_run,
         now,
     } = request;
+
     trigger.validate().map_err(orbit_common::OrbitError::from)?;
+
+    // The first evaluation pins a baseline at the branch head; nothing before it is debt.
     let mut state = match store.automation_state(consumer)? {
         Some(state) => state,
         None => {
             if !enabled && !dry_run {
                 return diagnostic(store, consumer, "disabled", None);
             }
+
             let (repository, head) = host.head(&trigger.branch)?;
             let state = AutomationState {
                 members: None,
@@ -93,9 +109,11 @@ pub fn evaluate(
                 associations: Default::default(),
                 active: None,
             };
+
             if !dry_run {
                 store.automation_initialize(&state)?;
             }
+
             return diagnostic(
                 store,
                 consumer,
@@ -108,16 +126,26 @@ pub fn evaluate(
             );
         }
     };
+
     // Reconcile admitted work even when disabled or a definition was edited.
-    if !dry_run && state.active.as_ref().is_some_and(|a| a.action_id.is_some()) {
+    if !dry_run
+        && state
+            .active
+            .as_ref()
+            .is_some_and(|attempt| attempt.action_id.is_some())
+    {
         state = reconcile(store, host, state, now)?;
     }
+
     if state.epoch != epoch || state.branch != trigger.branch {
         return diagnostic(store, consumer, "definition_changed", Some(state));
     }
+
     if !enabled {
         return diagnostic(store, consumer, "disabled", Some(state));
     }
+
+    // A claim that never reached admission resumes here, subject to its retry budget.
     if let Some(active) = &state.active
         && active.action_id.is_none()
         && active.state == BatchState::Claimed
@@ -125,24 +153,23 @@ pub fn evaluate(
     {
         if active.attempt > 1 && now > active.batch.retry_until {
             let mut next = state.clone();
-            if let Some(a) = &mut next.active {
-                a.state = BatchState::Exhausted;
-                a.reason = Some("retry_deadline_expired".into());
+            if let Some(attempt) = &mut next.active {
+                attempt.state = BatchState::Exhausted;
+                attempt.reason = Some("retry_deadline_expired".into());
             }
+
             state = commit(store, &state, next, None)?;
+
             return diagnostic(store, consumer, "retry_deadline_expired", Some(state));
         }
+
         if active.retry_after.is_some_and(|at| now < at) {
             return diagnostic(store, consumer, "retry_backoff", Some(state));
         }
-        let id = host.admit(active)?;
-        let mut next = state.clone();
-        if let Some(attempt) = &mut next.active {
-            attempt.action_id = Some(id);
-            attempt.state = BatchState::Admitted;
-        }
-        state = commit(store, &state, next, None)?;
+
+        state = admit_active(store, host, &state)?;
     }
+
     // Backpressure pauses observation, never admission of already retained debt.
     if state.pending.len() < 950 && state.pending_commits.len() <= 4800 {
         let page = host.observe(&trigger.branch, &state)?;
@@ -153,6 +180,7 @@ pub fn evaluate(
             commit(store, &state, next, None)?
         };
     }
+
     if let Some(active) = &state.active {
         let reason = match active.state {
             BatchState::Failed => "batch_failed",
@@ -161,10 +189,12 @@ pub fn evaluate(
         };
         return diagnostic(store, consumer, reason, Some(state));
     }
+
     let due_count = state.pending.len() >= trigger.threshold;
     let due_age = state.pending.first().is_some_and(|d| {
         now.signed_duration_since(d.landed_at).num_minutes() >= i64::from(trigger.max_wait_minutes)
     });
+
     if !due_count && !due_age {
         return diagnostic(
             store,
@@ -177,9 +207,11 @@ pub fn evaluate(
             Some(state),
         );
     }
+
     if let Some(reason) = host.admission_deferral()? {
         return diagnostic(store, consumer, &reason, Some(state));
     }
+
     if dry_run {
         return diagnostic(
             store,
@@ -192,6 +224,7 @@ pub fn evaluate(
             Some(state),
         );
     }
+
     // Freeze an oldest prefix. Unattributed neighbors remain explicit obligations.
     let deliveries = state
         .pending
@@ -199,6 +232,7 @@ pub fn evaluate(
         .take(trigger.max_items)
         .cloned()
         .collect::<Vec<_>>();
+
     let through = if state.pending.len() > deliveries.len() {
         deliveries
             .last()
@@ -208,21 +242,25 @@ pub fn evaluate(
     } else {
         state.observed.clone()
     };
+
     let end = state
         .pending_commits
         .iter()
         .position(|sha| sha == &through.commit)
         .ok_or_else(|| AutomationError::Deferred("delivery_boundary_missing".into()))?
         + 1;
+
     let commits = state.pending_commits[..end].to_vec();
+
     if deliveries
         .iter()
-        .any(|d| !d.commits.iter().all(|sha| commits.contains(sha)))
+        .any(|delivery| !delivery.commits.iter().all(|sha| commits.contains(sha)))
     {
         return Err(AutomationError::Deferred(
             "delivery_crosses_boundary".into(),
         ));
     }
+
     let mut batch = CoverageBatch {
         schema_version: 1,
         id: String::new(),
@@ -239,8 +277,12 @@ pub fn evaluate(
         max_attempts: trigger.retries + 1,
         retry_until: now + chrono::Duration::hours(24),
     };
+
+    // The identity digest covers the batch before it carries an id; the frozen input
+    // digest then covers the identified batch that evidence must be checked against.
     batch.id = input_digest(&batch)?;
-    let input_digest = input_digest(&batch)?;
+    let frozen_input_digest = input_digest(&batch)?;
+
     if serde_json::to_vec(&batch)
         .map_err(|e| AutomationError::Evidence(e.to_string()))?
         .len()
@@ -248,30 +290,24 @@ pub fn evaluate(
     {
         return diagnostic(store, consumer, "batch_too_large", Some(state));
     }
+
     let attempt = BatchAttempt {
         action_key: format!("automation:{}:1", batch.id),
         batch,
-        input_digest,
+        input_digest: frozen_input_digest,
         attempt: 1,
         action_id: None,
         state: BatchState::Claimed,
         reason: None,
         retry_after: None,
     };
+
     let mut next = state.clone();
     next.active = Some(attempt);
     state = commit(store, &state, next, None)?;
-    let active = state
-        .active
-        .as_ref()
-        .ok_or_else(|| AutomationError::Deferred("missing_claim".into()))?;
-    let id = host.admit(active)?;
-    let mut next = state.clone();
-    if let Some(attempt) = &mut next.active {
-        attempt.action_id = Some(id);
-        attempt.state = BatchState::Admitted;
-    }
-    state = commit(store, &state, next, None)?;
+
+    state = admit_active(store, host, &state)?;
+
     diagnostic(
         store,
         consumer,
@@ -283,6 +319,28 @@ pub fn evaluate(
         Some(state),
     )
 }
+
+/// Hand the claimed attempt to Core and record the durable action id it resolved.
+fn admit_active(
+    store: &dyn AutomationStoreBackend,
+    host: &dyn DeliveryHost,
+    state: &AutomationState,
+) -> Result<AutomationState, AutomationError> {
+    let active = state
+        .active
+        .as_ref()
+        .ok_or_else(|| AutomationError::Deferred("missing_claim".into()))?;
+    let id = host.admit(active)?;
+
+    let mut next = state.clone();
+    if let Some(attempt) = &mut next.active {
+        attempt.action_id = Some(id);
+        attempt.state = BatchState::Admitted;
+    }
+
+    commit(store, state, next, None)
+}
+
 fn reconcile(
     store: &dyn AutomationStoreBackend,
     host: &dyn DeliveryHost,
@@ -292,12 +350,14 @@ fn reconcile(
     let Some(active) = &state.active else {
         return Ok(state);
     };
+
     if matches!(
         active.state,
         BatchState::Exhausted | BatchState::Failed | BatchState::Waived
     ) {
         return Ok(state);
     }
+
     match host.outcome(active)? {
         ActionOutcome::Pending => Ok(state),
         ActionOutcome::Evidence(facts) => {
@@ -305,22 +365,28 @@ fn reconcile(
                 Ok(receipt) => receipt,
                 Err(error) => {
                     let mut next = state.clone();
-                    if let Some(a) = &mut next.active {
-                        a.reason = Some(error.to_string());
+                    if let Some(attempt) = &mut next.active {
+                        attempt.reason = Some(error.to_string());
                     }
+
                     return commit(store, &state, next, None);
                 }
             };
+
+            // Accepted evidence retires the batch: its commits and every fact keyed to
+            // them leave the pending window, and the covered cursor advances.
             let mut next = state.clone();
             next.covered = active.batch.through_inclusive.clone();
             next.pending_commits = next.pending_commits[active.batch.commits.len()..].to_vec();
-            next.waived.retain(|d| {
-                !d.commits
+            next.waived.retain(|delivery| {
+                !delivery
+                    .commits
                     .iter()
                     .all(|sha| active.batch.commits.contains(sha))
             });
-            next.pending.retain(|d| {
-                !d.commits
+            next.pending.retain(|delivery| {
+                !delivery
+                    .commits
                     .iter()
                     .all(|sha| active.batch.commits.contains(sha))
             });
@@ -329,30 +395,39 @@ fn reconcile(
             next.associations
                 .retain(|sha, _| !active.batch.commits.contains(sha));
             next.active = None;
+
             commit(store, &state, next, Some(&receipt))
         }
         ActionOutcome::Failed { retryable, reason } => {
             let mut next = state.clone();
-            if let Some(a) = &mut next.active {
-                a.reason = Some(reason);
-                if retryable && a.attempt < a.batch.max_attempts && now < a.batch.retry_until {
-                    a.attempt += 1;
-                    a.retry_after = Some(now + chrono::Duration::minutes(5));
-                    a.action_key = format!("automation:{}:{}", a.batch.id, a.attempt);
-                    a.action_id = None;
-                    a.state = BatchState::Claimed;
+            if let Some(attempt) = &mut next.active {
+                attempt.reason = Some(reason);
+
+                let retry_budget_remains = retryable
+                    && attempt.attempt < attempt.batch.max_attempts
+                    && now < attempt.batch.retry_until;
+
+                if retry_budget_remains {
+                    attempt.attempt += 1;
+                    attempt.retry_after = Some(now + chrono::Duration::minutes(5));
+                    attempt.action_key =
+                        format!("automation:{}:{}", attempt.batch.id, attempt.attempt);
+                    attempt.action_id = None;
+                    attempt.state = BatchState::Claimed;
                 } else {
-                    a.state = if retryable {
+                    attempt.state = if retryable {
                         BatchState::Exhausted
                     } else {
                         BatchState::Failed
                     };
                 }
             }
+
             commit(store, &state, next, None)
         }
     }
 }
+
 /// Waive only settled failed/exhausted work; retain its code as a coverage gap.
 pub fn waive(
     store: &dyn AutomationStoreBackend,
@@ -366,6 +441,8 @@ pub fn waive(
             "waiver requires a reason and actor".into(),
         ));
     }
+
+    // Waiving is idempotent: a batch already recorded as waived needs no second write.
     if store
         .automation_waivers(consumer, 100)?
         .iter()
@@ -373,13 +450,16 @@ pub fn waive(
     {
         return Ok(());
     }
+
     let previous = store
         .automation_state(consumer)?
         .ok_or_else(|| AutomationError::Evidence("consumer not found".into()))?;
+
     let active = previous
         .active
         .as_ref()
         .ok_or_else(|| AutomationError::Evidence("no active batch".into()))?;
+
     if active.batch.id != request.batch_id
         || !matches!(active.state, BatchState::Failed | BatchState::Exhausted)
     {
@@ -387,28 +467,32 @@ pub fn waive(
             "only the current settled failed or exhausted batch can be waived".into(),
         ));
     }
+
     let mut next = previous.clone();
     next.generation = previous
         .generation
         .checked_add(1)
         .ok_or_else(|| AutomationError::Deferred("generation_exhausted".into()))?;
     next.active = None;
-    next.pending.retain(|d| {
+    next.pending.retain(|delivery| {
         !active
             .batch
             .deliveries
             .iter()
-            .any(|member| member.key == d.key)
+            .any(|member| member.key == delivery.key)
     });
     next.waived.extend(active.batch.deliveries.clone());
+
     let waiver = BatchWaiver {
         batch_id: request.batch_id.clone(),
         reason: request.reason.clone(),
         by: by.into(),
         at: now,
     };
+
     if !store.automation_waive(&previous, &next, &waiver)? {
         return Err(AutomationError::Deferred("concurrent_evaluation".into()));
     }
+
     Ok(())
 }

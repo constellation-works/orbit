@@ -1,7 +1,9 @@
 //! One generation-fenced checkpoint and receipt projection for all consumers.
+
 use crate::AutomationError;
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::*;
+
 pub(crate) fn commit(
     store: &dyn AutomationStoreBackend,
     old: &AutomationState,
@@ -12,9 +14,11 @@ pub(crate) fn commit(
         .generation
         .checked_add(1)
         .ok_or_else(|| AutomationError::Deferred("generation_exhausted".into()))?;
+
     if !store.automation_commit(old, &next, receipt)? {
         return Err(AutomationError::Deferred("concurrent_evaluation".into()));
     }
+
     Ok(next)
 }
 

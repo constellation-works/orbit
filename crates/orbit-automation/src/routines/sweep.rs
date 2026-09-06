@@ -1,4 +1,5 @@
 //! Deterministic routine evaluation, retry and overlap coordination.
+
 use super::due::{DueDecision, due_decision, parse_cron};
 use super::loader::{LoadedRoutine, RoutineCollection, RoutineLoadError};
 #[cfg(test)]
@@ -15,6 +16,7 @@ use orbit_store::contracts::{
 use orbit_types::workflow::{JobRunState, OverlapPolicy};
 use std::collections::BTreeMap;
 use std::path::Path;
+
 /// Core-supplied owner facts, independent of persisted run status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOwnerLiveness {
@@ -22,6 +24,7 @@ pub enum RunOwnerLiveness {
     Stopped,
     Unknown,
 }
+
 /// Dispatch seam for the sweep. The production impl
 /// (in Core) wraps one `OrbitRuntime` per source workspace and
 /// dispatches through `submit_pipeline_run` / `show_job_run`; tests supply a
@@ -604,6 +607,7 @@ fn sync_unresolved_fires(
                     // policy timeout, otherwise leave for a later pass.
                     _ => timed_out(),
                 };
+
                 if let Some((state, detail)) = outcome {
                     store.routine_mark_fire_outcome(
                         &fire.routine_name,
@@ -617,6 +621,7 @@ fn sync_unresolved_fires(
             _ => {}
         }
     }
+
     Ok(())
 }
 

@@ -1,4 +1,5 @@
 //! Atomic scheduler checkpoints and immutable accepted coverage.
+
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::{AcceptedCoverage, AutomationState, BatchWaiver, Delivery};
 
@@ -13,6 +14,7 @@ pub trait AutomationStoreBackend: Send + Sync {
             "batch waiver persistence unavailable".into(),
         ))
     }
+
     fn automation_waivers(
         &self,
         _consumer: &str,
@@ -37,6 +39,7 @@ pub trait AutomationStoreBackend: Send + Sync {
             "delivery intent persistence unavailable".into(),
         ))
     }
+
     fn automation_delivery_intents(
         &self,
         _repository: &str,

@@ -1,4 +1,5 @@
 //! Auto-task scheduling policy with an explicit clock and Core lifecycle adapter.
+
 use super::loader::{AutoTaskLoadError, collect_auto_tasks};
 use super::schedule::{AutoTaskDueDecision, decide_due};
 use chrono::{DateTime, Utc};
@@ -6,6 +7,7 @@ use orbit_common::OrbitError;
 use orbit_store::compose::auto_task::{cursor_state_path, load_cursor_state, upsert_cursor};
 use orbit_types::workflow::{AutoTaskCursor, AutoTaskDefinition, DedupePolicy};
 use std::path::PathBuf;
+
 /// Lifecycle adapter. Core retains task creation, authorization and audit.
 pub trait AutoTaskDispatch {
     fn evaluate_delivery(
@@ -14,11 +16,16 @@ pub trait AutoTaskDispatch {
         dry_run: bool,
         now: DateTime<Utc>,
     ) -> Result<orbit_types::workflow::automation::AutomationDiagnostic, OrbitError>;
+
     fn definition_root(&self) -> PathBuf;
+
     fn state_dir(&self) -> PathBuf;
+
     fn has_open_instance(&self, definition: &AutoTaskDefinition) -> Result<bool, OrbitError>;
+
     fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError>;
 }
+
 /// Per-definition outcome of one scheduler pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutoTaskFireReport {
@@ -107,8 +114,9 @@ fn fire_definition(
         let task_id = diagnostic
             .state
             .as_ref()
-            .and_then(|s| s.active.as_ref())
-            .and_then(|a| a.action_id.clone());
+            .and_then(|state| state.active.as_ref())
+            .and_then(|attempt| attempt.action_id.clone());
+
         return Ok(AutoTaskFireReport {
             name: definition.name.clone(),
             action: "delivery",
@@ -118,6 +126,7 @@ fn fire_definition(
             automation: Some(diagnostic),
         });
     }
+
     if !definition.enabled {
         return Ok(skipped(definition, "disabled"));
     }
@@ -187,6 +196,7 @@ fn fire_definition(
             .map(|error| {
                 format!("cursor not advanced; the next pass may fire this slot again: {error}")
             });
+
             Ok(AutoTaskFireReport {
                 name: definition.name.clone(),
                 action: "fired",

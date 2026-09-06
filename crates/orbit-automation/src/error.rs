@@ -1,5 +1,7 @@
 //! Typed failures from deterministic automation rules.
+
 use orbit_common::OrbitError;
+
 #[derive(Debug, thiserror::Error)]
 pub enum AutomationError {
     #[error("invalid coverage evidence: {0}")]
@@ -9,6 +11,7 @@ pub enum AutomationError {
     #[error(transparent)]
     Boundary(#[from] OrbitError),
 }
+
 /// Translate once at the Core boundary, preserving invalid evidence as input errors.
 pub fn automation_error_to_orbit(error: AutomationError) -> OrbitError {
     match error {

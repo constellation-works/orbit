@@ -1,8 +1,10 @@
 //! Shared delivery-trigger, batch and coverage contracts [ORB-11330].
-pub mod members;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+pub mod members;
 
 /// Supported examination contracts; QA and review never share acceptance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,9 +30,11 @@ pub struct DeliveryTrigger {
     #[serde(default)]
     pub retries: u32,
 }
+
 fn default_batch_size() -> usize {
     50
 }
+
 impl DeliveryTrigger {
     pub fn validate(&self) -> Result<(), super::error::WorkflowError> {
         if self.branch.is_empty()
@@ -42,8 +46,11 @@ impl DeliveryTrigger {
             || self.max_wait_minutes == 0
             || self.retries > 5
         {
-            return Err(super::error::WorkflowError::Invalid("delivery trigger requires a branch, 1 <= threshold <= max_items <= 50, positive max_wait_minutes and retries <= 5".into()));
+            return Err(super::error::WorkflowError::Invalid(
+                "delivery trigger requires a branch, 1 <= threshold <= max_items <= 50, positive max_wait_minutes and retries <= 5".into(),
+            ));
         }
+
         Ok(())
     }
 }
@@ -175,6 +182,7 @@ pub struct CoverageEvidence {
     pub checks: Vec<ExaminationCheck>,
     pub findings: Vec<String>,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExaminationCheck {
@@ -274,6 +282,7 @@ pub struct CoverageReceiptSummary {
     pub submitted_by: String,
     pub accepted_at: DateTime<Utc>,
 }
+
 impl From<AcceptedCoverage> for CoverageReceiptSummary {
     fn from(receipt: AcceptedCoverage) -> Self {
         Self {
@@ -296,6 +305,7 @@ pub struct BatchWaiver {
     pub by: String,
     pub at: DateTime<Utc>,
 }
+
 /// Existing definition-update surface accepts this administrative request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

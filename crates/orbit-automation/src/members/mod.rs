@@ -1,4 +1,5 @@
 //! State consumers share the sweep, generation-fenced Store and receipt path.
+
 use crate::AutomationError;
 use crate::checkpoint::{commit, diagnostic};
 use crate::delivery::{definition_epoch, digest};
@@ -6,6 +7,7 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::{members::*, *};
 use std::collections::BTreeMap;
+
 pub mod incidents;
 pub mod preparation;
 #[cfg(test)]
@@ -16,6 +18,7 @@ pub struct MemberPage {
     pub withheld: BTreeMap<String, String>,
     pub next: Option<String>,
 }
+
 pub enum MemberOutcome {
     Pending,
     /// Only deterministic apply output with host-verified origin is admissible.
@@ -23,18 +26,25 @@ pub enum MemberOutcome {
     /// Failed requires proof the owner and all applicable recoveries stopped.
     Failed(String),
 }
+
 pub trait MemberHost {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError>;
+
     fn observe(
         &self,
         after: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<MemberPage, AutomationError>;
+
     fn admission_deferral(&self, member: &StateMember) -> Result<Option<String>, AutomationError>;
+
     fn lookup(&self, attempt: &MemberAttempt) -> Result<Option<String>, AutomationError>;
+
     fn admit(&self, attempt: &MemberAttempt) -> Result<String, AutomationError>;
+
     fn outcome(&self, attempt: &MemberAttempt) -> Result<MemberOutcome, AutomationError>;
 }
+
 pub struct MemberEvaluation<'a> {
     pub consumer: &'a str,
     pub epoch: &'a str,
@@ -57,13 +67,16 @@ pub fn evaluate(
         dry_run,
         now,
     } = request;
+
     trigger.validate().map_err(orbit_common::OrbitError::from)?;
+
     let mut state = match store.automation_state(consumer)? {
         Some(state) => state,
         None => {
             if !enabled && !dry_run {
                 return diagnostic(store, consumer, "disabled", None);
             }
+
             let (repository, head) = host.head(&trigger.branch)?;
             let state = AutomationState {
                 members: Some(MemberState::default()),
@@ -82,99 +95,132 @@ pub fn evaluate(
                 associations: BTreeMap::new(),
                 active: None,
             };
+
             if !dry_run && !store.automation_initialize(&state)? {
                 return Err(AutomationError::Deferred("concurrent_evaluation".into()));
             }
+
             state
         }
     };
+
     if state.members.is_none() {
         return diagnostic(store, consumer, "definition_changed", Some(state));
     }
+
     if !dry_run {
         state = reconcile(store, host, state, now)?;
     }
+
     if state.epoch != epoch || state.branch != trigger.branch {
         return diagnostic(store, consumer, "definition_changed", Some(state));
     }
+
     if !enabled {
         return diagnostic(store, consumer, "disabled", Some(state));
     }
+
+    // Absorb one observation page into the pending/withheld working set.
     let mut next = state.clone();
     let members = member_state(&mut next)?;
     let page = host.observe(members.scan_after.as_deref(), now)?;
+
     if page.candidates.len() + page.withheld.len() > 50 {
         return Err(AutomationError::Deferred("source_page_invalid".into()));
     }
+
     for (key, reason) in page.withheld {
         members.pending.remove(&key);
         members.withheld.insert(key, reason);
     }
+
     for mut member in page.candidates {
         if member.key.is_empty() || member.fingerprint.is_empty() || member.task_ids.is_empty() {
             return Err(AutomationError::Deferred("source_page_invalid".into()));
         }
+
         members.withheld.remove(&member.key);
+
+        // Already assessed at exactly this fingerprint: nothing left to apply.
         if members
             .assessed
             .get(&member.key)
-            .is_some_and(|a| a.resulting_fingerprint == member.fingerprint)
+            .is_some_and(|assessed| assessed.resulting_fingerprint == member.fingerprint)
         {
             members.pending.remove(&member.key);
             continue;
         }
+
+        // Re-seeing a member preserves how long it has waited, and an unchanged
+        // fingerprint also preserves when it last changed.
         if let Some(old) = members.pending.get(&member.key) {
             member.first_seen = old.first_seen;
             if old.fingerprint == member.fingerprint {
                 member.changed_at = old.changed_at;
             }
         }
+
         members.pending.insert(member.key.clone(), member);
     }
+
     members.scan_after = page.next;
+
     if members.pending.len() + members.assessed.len() + members.withheld.len() > 1000 {
         return diagnostic(store, consumer, "source_backpressure", Some(state));
     }
+
     state = if dry_run {
         next
     } else {
         commit(store, &state, next, None)?
     };
+
     let members = state
         .members
         .as_ref()
         .ok_or_else(|| AutomationError::Deferred("state_missing".into()))?;
+
+    // An attempt already in flight owns the slot; resume or report it, never start another.
     if let Some(active) = &members.active {
         if active.action_id.is_some() {
             return diagnostic(store, consumer, "batch_pending", Some(state));
         }
+
         if now >= active.deadline {
             return diagnostic(store, consumer, "retry_deadline_expired", Some(state));
         }
+
         if now < active.retry_after {
             return diagnostic(store, consumer, "retry_backoff", Some(state));
         }
+
         return admit(store, host, state, dry_run);
     }
+
+    // A member is due once it has settled for the debounce window, or waited out
+    // the maximum; a member that already failed at this fingerprint is not retried.
     let mut candidates = members
         .pending
         .values()
-        .filter(|m| {
+        .filter(|member| {
             if members
                 .failed
-                .get(&m.key)
-                .is_some_and(|a| a.member.fingerprint == m.fingerprint)
+                .get(&member.key)
+                .is_some_and(|failed| failed.member.fingerprint == member.fingerprint)
             {
                 return false;
             }
-            now.signed_duration_since(m.changed_at).num_minutes()
+
+            now.signed_duration_since(member.changed_at).num_minutes()
                 >= i64::from(trigger.debounce_minutes)
-                || now.signed_duration_since(m.first_seen).num_minutes()
+                || now.signed_duration_since(member.first_seen).num_minutes()
                     >= i64::from(trigger.max_wait_minutes)
         })
         .cloned()
         .collect::<Vec<_>>();
+
     candidates.sort_by(|a, b| a.first_seen.cmp(&b.first_seen).then(a.key.cmp(&b.key)));
+
     if candidates.is_empty() {
         let reason = if members.failed.iter().any(|(key, failed)| {
             members
@@ -187,15 +233,18 @@ pub fn evaluate(
             "debouncing"
         } else if !members.withheld.is_empty() {
             "work_withheld"
-        } else if members.assessed.values().any(|a| !a.ready) {
+        } else if members.assessed.values().any(|assessed| !assessed.ready) {
             "fresh_unready"
         } else {
             "fresh"
         };
         return diagnostic(store, consumer, reason, Some(state));
     }
+
+    // Take the first due member Core will admit; each refusal is recorded as withheld.
     let mut candidate = None;
     let mut next = state.clone();
+
     for member in candidates.into_iter().take(trigger.max_items) {
         if let Some(reason) = host.admission_deferral(&member)? {
             let members = member_state(&mut next)?;
@@ -208,6 +257,7 @@ pub fn evaluate(
             break;
         }
     }
+
     if next != state {
         state = if dry_run {
             next
@@ -215,12 +265,15 @@ pub fn evaluate(
             commit(store, &state, next, None)?
         };
     }
+
     let Some(member) = candidate else {
         return diagnostic(store, consumer, "work_withheld", Some(state));
     };
+
     if dry_run {
         return diagnostic(store, consumer, "would_fire", Some(state));
     }
+
     let id = definition_epoch(&(consumer, epoch, &member, now))?;
     let attempt = MemberAttempt {
         consumer: consumer.into(),
@@ -235,17 +288,21 @@ pub fn evaluate(
         action_id: None,
         exhausted: false,
     };
+
     let mut next = state.clone();
     member_state(&mut next)?.active = Some(attempt);
     state = commit(store, &state, next, None)?;
+
     admit(store, host, state, false)
 }
+
 fn member_state(state: &mut AutomationState) -> Result<&mut MemberState, AutomationError> {
     state
         .members
         .as_mut()
         .ok_or_else(|| AutomationError::Deferred("state_missing".into()))
 }
+
 fn admit(
     store: &dyn AutomationStoreBackend,
     host: &dyn MemberHost,
@@ -256,42 +313,59 @@ fn admit(
     let active = state
         .members
         .as_ref()
-        .and_then(|m| m.active.as_ref())
+        .and_then(|members| members.active.as_ref())
         .ok_or_else(|| AutomationError::Deferred("claim_missing".into()))?;
+
     if let Some(reason) = host.admission_deferral(&active.member)? {
         return diagnostic(store, &consumer, &reason, Some(state));
     }
+
     if dry_run {
         return diagnostic(store, &consumer, "would_fire", Some(state));
     }
+
     let id = host.admit(active)?;
+
     let mut next = state.clone();
     if let Some(active) = &mut member_state(&mut next)?.active {
         active.action_id = Some(id);
     }
+
     let next = commit(store, &state, next, None)?;
+
     diagnostic(store, &consumer, "fired", Some(next))
 }
+
 fn reconcile(
     store: &dyn AutomationStoreBackend,
     host: &dyn MemberHost,
     state: AutomationState,
     now: DateTime<Utc>,
 ) -> Result<AutomationState, AutomationError> {
-    let Some(active) = state.members.as_ref().and_then(|m| m.active.as_ref()) else {
+    let Some(active) = state
+        .members
+        .as_ref()
+        .and_then(|members| members.active.as_ref())
+    else {
         return Ok(state);
     };
+
     if active.exhausted {
         return Ok(state);
     }
+
+    // Before an action id exists the claim is unresolved: adopt one Core already
+    // created, otherwise retire the claim once its input or deadline went stale.
     if active.action_id.is_none() {
         if let Some(id) = host.lookup(active)? {
             let mut next = state.clone();
             if let Some(active) = &mut member_state(&mut next)?.active {
                 active.action_id = Some(id);
             }
+
             return commit(store, &state, next, None);
         }
+
         if now >= active.deadline || host.admission_deferral(&active.member)?.is_some() {
             let mut next = state.clone();
             let members = member_state(&mut next)?;
@@ -303,10 +377,13 @@ fn reconcile(
                 );
                 members.failed.insert(expired.member.key.clone(), expired);
             }
+
             return commit(store, &state, next, None);
         }
+
         return Ok(state);
     }
+
     match host.outcome(active)? {
         MemberOutcome::Pending => Ok(state),
         MemberOutcome::Applied(evidence) => {
@@ -321,8 +398,10 @@ fn reconcile(
                     "member_provenance_mismatch".into(),
                 ));
             }
+
             let bytes = serde_json::to_vec(&evidence)
                 .map_err(|e| AutomationError::Evidence(e.to_string()))?;
+
             let receipt = AcceptedCoverage {
                 batch_id: active.id.clone(),
                 action_id: evidence.action_id.clone(),
@@ -336,6 +415,7 @@ fn reconcile(
                 submitted_by: "system".into(),
                 accepted_at: now,
             };
+
             let mut next = state.clone();
             let members = member_state(&mut next)?;
             members.assessed.insert(
@@ -347,22 +427,31 @@ fn reconcile(
                     receipt_id: receipt.batch_id.clone(),
                 },
             );
+
+            // Only drop the pending entry the evidence actually covers; a newer
+            // fingerprint arrived while this attempt ran and still needs applying.
             if members
                 .pending
                 .get(&active.member.key)
-                .is_some_and(|m| m.fingerprint == active.member.fingerprint)
+                .is_some_and(|pending| pending.fingerprint == active.member.fingerprint)
             {
                 members.pending.remove(&active.member.key);
             }
+
             members.active = None;
+
             commit(store, &state, next, Some(&receipt))
         }
         MemberOutcome::Failed(reason) => {
             let mut next = state.clone();
             let members = member_state(&mut next)?;
             members.withheld.insert(active.member.key.clone(), reason);
+
             if let Some(active) = &mut members.active {
-                if active.attempt < active.max_attempts && now < active.deadline {
+                let retry_budget_remains =
+                    active.attempt < active.max_attempts && now < active.deadline;
+
+                if retry_budget_remains {
                     active.attempt += 1;
                     active.action_id = None;
                     active.action_key = format!("automation:{}:{}", active.id, active.attempt);
@@ -371,13 +460,18 @@ fn reconcile(
                     active.exhausted = true;
                 }
             }
-            if members.active.as_ref().is_some_and(|a| a.exhausted)
+
+            if members
+                .active
+                .as_ref()
+                .is_some_and(|active| active.exhausted)
                 && let Some(exhausted) = members.active.take()
             {
                 members
                     .failed
                     .insert(exhausted.member.key.clone(), exhausted);
             }
+
             commit(store, &state, next, None)
         }
     }

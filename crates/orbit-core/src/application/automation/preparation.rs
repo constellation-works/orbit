@@ -1,4 +1,5 @@
 //! Authoritative task/source inputs for the shared material fingerprint.
+
 use super::source::Source;
 use crate::OrbitRuntime;
 use orbit_automation::{AutomationError, members::preparation};
@@ -11,7 +12,9 @@ pub(crate) fn fingerprint(
     revision: &str,
 ) -> Result<String, AutomationError> {
     let source = Source::new(&runtime.paths().repo_root);
+
     let mut dependencies = Vec::new();
+
     for id in task.dependencies().iter().take(51) {
         if dependencies.len() == 50 {
             return Err(AutomationError::Deferred("dependency_scan_budget".into()));
@@ -22,11 +25,15 @@ pub(crate) fn fingerprint(
             "description": dependency.description, "plan": dependency.plan,
             "refs": dependency.external_refs, "pr_status": dependency.pr_status}));
     }
+
     dependencies.sort_by_key(|value| value["id"].as_str().unwrap_or_default().to_string());
+
     // The pinned tree includes every repository instruction, including nested
     // selectors. Dirty local instructions cannot certify this pinned source.
     let paths = source.git(&["ls-tree", "-r", "--name-only", revision])?;
+
     let mut instructions = Vec::new();
+
     for path in paths
         .lines()
         .filter(|path| matches!(path.rsplit('/').next(), Some("AGENTS.md" | "CLAUDE.md")))
@@ -39,9 +46,12 @@ pub(crate) fn fingerprint(
             source.git(&["show", &format!("{revision}:{path}")])?,
         ));
     }
+
+    // The crew a task would actually run under is part of its material input.
     let assignment = runtime.resolve_crew_for_task(None, task.crew.as_deref())?;
     dependencies.push(json!({"effective_assignment": {"crew": assignment.name,
         "model": assignment.assignment.model, "provider": assignment.assignment.provider}}));
+
     preparation::fingerprint(
         task,
         revision,

@@ -1,5 +1,6 @@
 use crate::{Store, compose};
 use orbit_types::workflow::automation::*;
+
 fn state() -> AutomationState {
     let head = SourceRevision {
         commit: "a".into(),
@@ -23,6 +24,7 @@ fn state() -> AutomationState {
         active: None,
     }
 }
+
 #[test]
 fn compare_exchange_survives_reopen_and_fences_stale_writers() {
     let dir = tempfile::tempdir().unwrap();
@@ -46,6 +48,7 @@ fn compare_exchange_survives_reopen_and_fences_stale_writers() {
         Some(next)
     );
 }
+
 #[test]
 fn observation_cannot_advance_coverage() {
     let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();

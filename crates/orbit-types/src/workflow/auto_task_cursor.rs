@@ -1,6 +1,8 @@
 //! Legacy auto-task scheduling cursor contracts.
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
 /// On-disk shape of `<orbit_dir>/state/auto-tasks.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AutoTaskCursorState {

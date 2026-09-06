@@ -1,4 +1,5 @@
 //! State-trigger inputs and durable per-member scheduling [ORB-11331].
+
 use super::SourceRevision;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ pub enum StateTriggerKind {
     PreparationEligible,
     ExecutionFailed,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateTrigger {
@@ -22,6 +24,7 @@ pub struct StateTrigger {
     pub retries: u32,
     pub deadline_minutes: u32,
 }
+
 impl StateTrigger {
     pub fn validate(&self) -> Result<(), super::super::error::WorkflowError> {
         if self.owner_machine.trim().is_empty()
@@ -39,8 +42,10 @@ impl StateTrigger {
                 "state trigger requires owner, branch, positive debounce <= max wait, 1..50 members, retries <= 5 and deadline 1..1440 minutes".into(),
             ));
         }
+
         Ok(())
     }
+
     pub fn job_name(&self) -> &'static str {
         match self.kind {
             StateTriggerKind::PreparationEligible => "task_pilot_pipeline",
@@ -60,6 +65,7 @@ pub struct StateMember {
     pub first_seen: DateTime<Utc>,
     pub changed_at: DateTime<Utc>,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberAttempt {
     pub consumer: String,
@@ -74,6 +80,7 @@ pub struct MemberAttempt {
     pub action_id: Option<String>,
     pub exhausted: bool,
 }
+
 /// A single-member action is deliberately also a valid pilot partition. This
 /// makes independently accepted results durable before any other member fails.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +92,7 @@ pub struct MemberState {
     pub withheld: BTreeMap<String, String>,
     pub scan_after: Option<String>,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberAssessment {
     pub input_fingerprint: String,
@@ -92,6 +100,7 @@ pub struct MemberAssessment {
     pub ready: bool,
     pub receipt_id: String,
 }
+
 /// Deterministic apply evidence, never an agent-authored promotion grant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberEvidence {

@@ -1,4 +1,5 @@
 //! Real Git + task registry + artifact tool consumer tests, without provider/network I/O.
+
 use super::super::{COVERAGE_ARTIFACT, evaluate_auto_task, record_direct_landing_intent};
 use crate::{
     OrbitRuntime,
@@ -28,12 +29,14 @@ fn git(root: &Path, args: &[&str]) -> String {
     );
     String::from_utf8(result.stdout).unwrap().trim().into()
 }
+
 fn commit(root: &Path, text: &str) -> String {
     std::fs::write(root.join("sample.txt"), text).unwrap();
     git(root, &["add", "sample.txt"]);
     git(root, &["commit", "-m", "fixture change"]);
     git(root, &["rev-parse", "HEAD"])
 }
+
 fn runtime() -> OrbitRuntime {
     let runtime = OrbitRuntime::in_memory()
         .unwrap()
@@ -47,6 +50,7 @@ fn runtime() -> OrbitRuntime {
     commit(root, "baseline");
     runtime
 }
+
 fn definition(
     runtime: &OrbitRuntime,
     name: &str,
@@ -84,6 +88,7 @@ fn definition(
     d.enabled = true;
     d
 }
+
 fn attach(
     runtime: &OrbitRuntime,
     attempt: &BatchAttempt,
@@ -116,6 +121,7 @@ fn attach(
         )
         .unwrap();
 }
+
 #[test]
 fn qa_and_review_accept_only_assigned_artifact_evidence_once() {
     let runtime = runtime();
@@ -237,6 +243,7 @@ fn qa_and_review_accept_only_assigned_artifact_evidence_once() {
         "accepted bytes outlive artifact replacement"
     );
 }
+
 #[test]
 fn direct_intent_does_not_count_before_actual_landing() {
     let runtime = runtime();

@@ -20,9 +20,11 @@ fn revision(n: usize) -> SourceRevision {
         tree: format!("t{n}"),
     }
 }
+
 fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 6, 0, 0, 0).unwrap()
 }
+
 fn trigger() -> DeliveryTrigger {
     DeliveryTrigger {
         owner_machine: Some("fixture-machine".into()),
@@ -34,6 +36,7 @@ fn trigger() -> DeliveryTrigger {
         retries: 1,
     }
 }
+
 fn landing(n: usize) -> Delivery {
     Delivery {
         key: format!("pr:owner/repo:{n}"),
@@ -48,6 +51,7 @@ fn landing(n: usize) -> Delivery {
         landed_at: now(),
     }
 }
+
 struct Host {
     page: Mutex<SourcePage>,
     actions: Mutex<BTreeMap<String, String>>,
@@ -56,6 +60,7 @@ struct Host {
     failed: AtomicBool,
     admission_deferred: AtomicBool,
 }
+
 impl Host {
     fn new() -> Self {
         Self {
@@ -75,6 +80,7 @@ impl Host {
             admission_deferred: AtomicBool::new(false),
         }
     }
+
     fn page(&self, from: usize, to: usize) {
         let commits = (from + 1..=to).map(|n| revision(n).commit).collect();
         *self.page.lock().unwrap() = SourcePage {
@@ -87,6 +93,7 @@ impl Host {
             complete: true,
         };
     }
+
     fn evidence(&self, attempt: &BatchAttempt) {
         let batch = &attempt.batch;
         *self.evidence.lock().unwrap() = Some(CoverageEvidence {
@@ -112,6 +119,7 @@ impl Host {
         });
     }
 }
+
 impl DeliveryHost for Host {
     fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
         Ok(self
@@ -123,9 +131,11 @@ impl DeliveryHost for Host {
     fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
         Ok(("owner/repo".into(), revision(0)))
     }
+
     fn observe(&self, _: &str, _: &AutomationState) -> Result<SourcePage, AutomationError> {
         Ok(self.page.lock().unwrap().clone())
     }
+
     fn admit(&self, a: &BatchAttempt) -> Result<String, AutomationError> {
         let mut actions = self.actions.lock().unwrap();
         let len = actions.len();
@@ -138,6 +148,7 @@ impl DeliveryHost for Host {
         }
         Ok(id)
     }
+
     fn outcome(&self, _: &BatchAttempt) -> Result<ActionOutcome, AutomationError> {
         if self.failed.load(Ordering::SeqCst) {
             return Ok(ActionOutcome::Failed {
@@ -161,6 +172,7 @@ impl DeliveryHost for Host {
         })
     }
 }
+
 fn evaluate(
     store: &dyn AutomationStoreBackend,
     host: &Host,
@@ -181,6 +193,7 @@ fn evaluate(
     )
     .unwrap()
 }
+
 fn setup() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
     let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
     let host = Host::new();
@@ -260,6 +273,7 @@ fn frozen_batch_receipt_once_and_later_arrivals_pending() {
     assert_eq!(replay.state.unwrap().covered, revision(2));
     assert_eq!(host.actions.lock().unwrap().len(), 1);
 }
+
 #[test]
 fn bounded_batch_leaves_excess_debt_and_disabled_reconciles() {
     let (store, host, trigger) = setup();
@@ -279,6 +293,7 @@ fn bounded_batch_leaves_excess_debt_and_disabled_reconciles() {
     assert!(state.active.is_none());
     assert_eq!(host.actions.lock().unwrap().len(), 1);
 }
+
 #[test]
 fn crash_after_mint_replays_same_action_key() {
     let (store, host, trigger) = setup();
@@ -315,6 +330,7 @@ fn crash_after_mint_replays_same_action_key() {
     );
     assert_eq!(host.actions.lock().unwrap().len(), 1);
 }
+
 #[test]
 fn retries_exhaust_frozen_budget_without_covering() {
     let (store, host, trigger) = setup();
@@ -355,6 +371,7 @@ fn retries_exhaust_frozen_budget_without_covering() {
     assert_eq!(state.pending.len(), 2);
     assert_eq!(host.actions.lock().unwrap().len(), 2);
 }
+
 #[test]
 fn adversarial_evidence_cannot_manufacture_coverage() {
     let (store, host, trigger) = setup();
@@ -414,6 +431,7 @@ fn adversarial_evidence_cannot_manufacture_coverage() {
     facts.bytes = b"{}".to_vec();
     assert!(delivery::evidence::validate(&attempt, &facts, now()).is_err());
 }
+
 #[test]
 fn no_diff_and_unavailable_provider_do_not_count() {
     let (store, host, trigger) = setup();
@@ -434,6 +452,7 @@ fn no_diff_and_unavailable_provider_do_not_count() {
     assert_eq!(state.unresolved.len(), 1);
     assert_eq!(state.covered, revision(0));
 }
+
 #[test]
 fn concurrent_evaluators_admit_one_action() {
     let (store, host, trigger) = setup();
@@ -476,13 +495,16 @@ struct ReceiptFailure {
     inner: Arc<dyn AutomationStoreBackend>,
     fail: AtomicBool,
 }
+
 impl AutomationStoreBackend for ReceiptFailure {
     fn automation_state(&self, c: &str) -> Result<Option<AutomationState>, OrbitError> {
         self.inner.automation_state(c)
     }
+
     fn automation_initialize(&self, s: &AutomationState) -> Result<bool, OrbitError> {
         self.inner.automation_initialize(s)
     }
+
     fn automation_commit(
         &self,
         a: &AutomationState,
@@ -494,10 +516,12 @@ impl AutomationStoreBackend for ReceiptFailure {
         }
         self.inner.automation_commit(a, b, r)
     }
+
     fn automation_receipts(&self, c: &str, n: usize) -> Result<Vec<AcceptedCoverage>, OrbitError> {
         self.inner.automation_receipts(c, n)
     }
 }
+
 #[test]
 fn receipt_failure_recovers_atomically() {
     let (store, host, trigger) = setup();

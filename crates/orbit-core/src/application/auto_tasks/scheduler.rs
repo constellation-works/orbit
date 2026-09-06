@@ -1,4 +1,5 @@
 //! Core task lifecycle adapter and scheduler JSON projection.
+
 use crate::OrbitRuntime;
 use crate::application::task::TaskAddParams;
 use chrono::{DateTime, Utc};
@@ -25,9 +26,11 @@ impl AutoTaskDispatch for OrbitRuntime {
     fn definition_root(&self) -> PathBuf {
         self.paths().local_dir.clone()
     }
+
     fn state_dir(&self) -> PathBuf {
         self.paths().state_dir.clone()
     }
+
     fn has_open_instance(&self, definition: &AutoTaskDefinition) -> Result<bool, OrbitError> {
         let tasks = self.list_tasks_by_tags(&[auto_task_tag(&definition.name)])?;
         Ok(tasks.iter().any(|task| {
@@ -37,6 +40,7 @@ impl AutoTaskDispatch for OrbitRuntime {
             )
         }))
     }
+
     fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
         mint_task(self, definition).map(|task| task.id)
     }
