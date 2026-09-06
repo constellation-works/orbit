@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.19.0
+
+### Breaking Changes
+
+- **Task-pilot activity schemas migrated**: custom `prepare_task_pilot`, `task_pilot`, and `apply_task_pilot_results` payloads must use the current required fields and `succeeded|failed` status contract. ([ORB-11330], [ORB-11331])
+- **CI-failure filing schema migrated**: custom `file_ci_failure_tasks` producers must supply pilot partitions and match evidence under the current activity contract. ([ORB-11331])
+
+### Highlights
+
+- **More provider lanes and effort controls**: crews can forward validated effort settings, and Pi, OpenCode, and Antigravity join the supported executor catalog. ([ORB-11279], [ORB-11286], [ORB-11295], [ORB-11296], [ORB-11299])
+- **Task artifacts render safely**: retrieve task attachments through the new read-only tool, with bounded presentation for validated raster images. ([ORB-11413])
+- **Safer source-remote changes**: inspect or rebind a workspace source remote while preserving workspace, task, and checkout identity. ([ORB-11426])
+- **Operator-controlled agent investigation**: authorized operators can invoke a bounded host-side agent run for diagnostics without changing task delivery state. ([ORB-11354])
+- **Constellation-works distribution cutover**: active distribution references and the pre-release checklist now point to the current project owner. ([ORB-11427])
+
 ## 0.18.0
 
 ### Breaking Changes
