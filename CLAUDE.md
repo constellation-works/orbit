@@ -4,7 +4,14 @@ Project instructions for agents working on Orbit (loaded as both `AGENTS.md` and
 
 ## Rules
 
-- **Don't commit** until the Orbit task has been explicitly approved by the human.
+- Orbit supports many kinds of work and users. Keep shared agent activities
+  domain-neutral; put code-, language-, and repository-specific instructions
+  in the owning workspace's AGENTS.md.
+
+- Work only on authorized scope. In a managed implementation activity, leave
+  commits and delivery transitions to the pipeline. In explicitly authorized
+  direct work, commit validated, task-scoped changes and open a PR when asked.
+  Neither implementation nor a PR request authorizes merging.
 - **Don't invent task IDs** — get them from `orbit.task.add`. Don't edit task files directly — use `orbit.task.update`.
 - **Don't add cross-crate dependencies** without checking and updating [`ARCHITECTURE.md`](ARCHITECTURE.md). If a new edge is genuinely needed, make its ownership and direction explicit in the same change.
 - Historical ADRs are being retired and are not an authority. Do not search for,
@@ -31,6 +38,21 @@ Reusable codebase-specific patterns (Command, RAII guard, newtype, crate-boundar
 
 ## Simplicity and ownership
 
+- Correctness, readability, and maintainability are equal parts of completion.
+  Code aesthetics are not optional polish: a reader should be able to locate a
+  rule, follow the normal path, and recognize the failure paths without decoding
+  dense expressions or jumping through unrelated helpers.
+- Separate module documentation, imports, and top-level declarations with blank
+  lines. Within functions, use blank lines between logical phases; keep closely
+  related statements together. Do not compress a file into an uninterrupted wall
+  of code or add a blank line after every statement. Formatters do not supply
+  this organization for you.
+- Prefer descriptive domain names, straightforward control flow, and consistent
+  ordering of related operations. Follow sound neighboring conventions so
+  similar work looks similar; do not copy a confusing pattern merely for
+  consistency. Name a complex condition when its meaning is clearer than its
+  expression. Comments explain intent, constraints, and non-obvious tradeoffs,
+  not a narration of the syntax.
 - Optimize first for clarity and the fewest moving parts. Do not preserve a
   wrapper, compatibility layer, abstraction, or configuration path merely
   because it already exists. Keep compatibility only when an external contract
@@ -67,7 +89,28 @@ Reusable codebase-specific patterns (Command, RAII guard, newtype, crate-boundar
 
 ## CHANGELOG entries
 
-Don't modify `CHANGELOG.md` during task execution — it is compiled at release time from merged work, not accumulated per-PR. The task ID is the record of what changed; cite it in your commit message and let the release drafter pull from `git log` and Orbit task history. `scripts/check-changelog-style.sh` still lints any entries that do exist (harmless under this convention, and useful at release time). Full rule: [`RELEASING.md`](RELEASING.md) step 2.
+Do not modify `CHANGELOG.md` during task execution; it is compiled at release
+time from merged work. See [`RELEASING.md`](RELEASING.md).
+
+## Evidence and handoff
+
+- Inspect the owning implementation, callers, and tests before changing code.
+  Use the repository's language toolchain, package scripts, and lockfiles.
+- For regressions, demonstrate that a test detects the original fault when
+  feasible. Run the applicable formatter and linter before handoff.
+
+- Test observable behavior at the boundary that owns it, including relevant
+  failure and edge cases. Prefer assertions that would fail if the behavior
+  regressed over source-text checks that merely prove a phrase exists.
+- Exercise the actual affected environment when behavior depends on an OS,
+  browser, filesystem, or external tool. A mock or a passing Linux test does not
+  establish macOS behavior; state what each check does and does not prove.
+- Before handoff, read the whole diff as a maintainer: check naming, logical
+  grouping, consistency, error paths, stale comments, and unnecessary machinery.
+  Fix readability problems in the changed code, not just formatter complaints.
+- Report commands and outcomes, not just "tested." Distinguish passed, failed,
+  and not run, with reasons and remaining risk. Never describe a skipped check
+  as passing or silently weaken a test to obtain a green result.
 
 ## Rust Practices
 
@@ -81,16 +124,16 @@ Lint-enforced rules (full set in `[workspace.lints]`; key implications below):
 
 Conventions (not lint-enforced):
 
+- Remove code made obsolete by a change instead of suppressing warnings or
+  keeping an unused alternate path. Preserve required compatibility and explain
+  its concrete consumer.
+- Register third-party dependencies in root `[workspace.dependencies]` and
+  consume them with `.workspace = true`.
+
 - **Errors:** reach for typed `thiserror` variants over ad-hoc strings when translating into `OrbitError`.
 - **Visibility:** default to `pub(crate)`; reserve `pub` for items in the crate's documented public surface (see `ARCHITECTURE.md`). Re-export at the crate root only for types genuinely part of the API.
 - **Channels:** bounded channels by default.
 - **Tests:** unit tests live in a *sibling* `tests/` directory mirroring source filenames (`src/command/skill.rs` → `src/command/tests/skill.rs`). The sibling layout structurally enforces public-surface testing. Crate-root `tests/` is for integration tests only. See [`docs/design-patterns/test_layout.md`](docs/design-patterns/test_layout.md). Don't introduce a new test harness when an existing one fits.
-
-## Commits & Authorship
-
-- Use the agent commit identity (e.g. `codex`, `claude`) as author/committer.
-- Include the Orbit task ID in commit messages when applicable (e.g. `[ORB-00042]`). Task IDs are allocation-authority search keys (`git log --grep '[ORB-00042]'`); when a task has a linked `external_ref`, include that tag too (`[ORB-00042] [ENG-1234] ...`) — cross-engineer reviewers resolve the external tag, not the Orbit one.
-- Use your agent family (`codex`, `claude`, `gemini`, `grok`) for the `model` field when authoring tasks or docs — not a full model string. Full model strings are accepted and auto-normalized, but the family is the canonical identity. Cite relevant task IDs in any doc you write.
 
 ## Orbit Workflow
 
