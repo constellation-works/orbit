@@ -1,6 +1,6 @@
 {
   "name": "orbit",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "Task and activity orchestration for AI coding agents. Adds Orbit's MCP task and knowledge surface plus workflow skills to Codex.",
   "author": {
     "name": "danieljhkim",
