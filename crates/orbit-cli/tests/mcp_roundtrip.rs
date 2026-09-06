@@ -1956,7 +1956,7 @@ fn uninitialized_unbound_mcp_launch_gives_setup_guidance_without_operator_author
         &std::fs::read_to_string(&registry_metadata).expect("read checked-in registry metadata"),
     )
     .expect("parse checked-in registry metadata");
-    assert_eq!(registry["name"], "io.github.danieljhkim/orbit");
+    assert_eq!(registry["name"], "io.github.constellation-works/orbit");
     assert_eq!(registry["packages"][0]["identifier"], "@orbit-tools/cli");
     assert_eq!(
         registry["packages"][0]["packageArguments"],

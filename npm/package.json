@@ -1,7 +1,7 @@
 {
   "name": "@orbit-tools/cli",
   "version": "0.18.0",
-  "mcpName": "io.github.danieljhkim/orbit",
+  "mcpName": "io.github.constellation-works/orbit",
   "description": "npm proxy for the Orbit CLI. Downloads the matching native binary from GitHub Releases on install and forwards all invocations.",
   "bin": {
     "orbit": "bin/orbit.js"
@@ -30,11 +30,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/danieljhkim/orbit.git",
+    "url": "git+https://github.com/constellation-works/orbit.git",
     "directory": "npm"
   },
-  "homepage": "https://github.com/danieljhkim/orbit",
-  "bugs": "https://github.com/danieljhkim/orbit/issues",
+  "homepage": "https://github.com/constellation-works/orbit",
+  "bugs": "https://github.com/constellation-works/orbit/issues",
   "license": "MIT",
   "keywords": [
     "orbit",
@@ -44,7 +44,7 @@
   ],
   "config": {
     "orbit": {
-      "binaryRepo": "danieljhkim/orbit"
+      "binaryRepo": "constellation-works/orbit"
     }
   }
 }

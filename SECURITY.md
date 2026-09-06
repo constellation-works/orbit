@@ -12,7 +12,7 @@ Orbit is pre-1.0 and ships from `main`. Security fixes land on `main` and the mo
 
 ## Reporting a Vulnerability
 
-Please report security issues privately via GitHub: open the repository's **Security** tab and choose **Report a vulnerability** ([private vulnerability reporting](https://github.com/danieljhkim/orbit/security/advisories/new)).
+Please report security issues privately via GitHub: open the repository's **Security** tab and choose **Report a vulnerability** ([private vulnerability reporting](https://github.com/constellation-works/orbit/security/advisories/new)).
 
 Do **not** open a public issue, pull request, or discussion for suspected vulnerabilities.
 

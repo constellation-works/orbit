@@ -35,7 +35,7 @@ use crate::vector::{DocEmbeddingSource, VectorStore};
 use crate::{CompanionPaths, ModelSpec, default_model};
 
 pub(crate) const DEFAULT_RELEASE_BASE_URL: &str =
-    "https://github.com/danieljhkim/orbit/releases/latest/download";
+    "https://github.com/constellation-works/orbit/releases/latest/download";
 
 pub(crate) fn parse_model(model: Option<&str>) -> Result<ModelSpec, OrbitError> {
     match model {

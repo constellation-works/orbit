@@ -14,7 +14,7 @@ use std::time::Duration;
 use orbit_common::OrbitError;
 
 /// Repository the HTTP source reads releases from unless overridden.
-pub const DEFAULT_RELEASE_REPO: &str = "danieljhkim/orbit";
+pub const DEFAULT_RELEASE_REPO: &str = "constellation-works/orbit";
 
 /// Environment variable naming a local release mirror directory.
 pub const RELEASE_DIR_ENV: &str = "ORBIT_UPDATE_RELEASE_DIR";

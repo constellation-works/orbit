@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.danieljhkim/orbit",
+  "name": "io.github.constellation-works/orbit",
   "description": "Orbit's local-first task and workflow registry for coding agents.",
   "repository": {
-    "url": "https://github.com/danieljhkim/orbit",
+    "url": "https://github.com/constellation-works/orbit",
     "source": "github"
   },
   "version": "0.18.0",

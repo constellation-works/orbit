@@ -70,8 +70,8 @@ if [[ -z "$npm_package_version" || "$npm_package_version" == "null" ]]; then
   echo "release-check: $NPM_PACKAGE_JSON has no .version field" >&2
   exit 2
 fi
-if [[ "$mcp_name" != "io.github.danieljhkim/orbit" || "$server_name" != "$mcp_name" ]]; then
-  echo "DRIFT: npm mcpName and server.json name must be io.github.danieljhkim/orbit" >&2
+if [[ "$mcp_name" != "io.github.constellation-works/orbit" || "$server_name" != "$mcp_name" ]]; then
+  echo "DRIFT: npm mcpName and server.json name must be io.github.constellation-works/orbit" >&2
   exit 1
 fi
 if [[ "$server_package" != "$NPM_PKG" || "$server_version" != "$npm_package_version" || "$server_package_version" != "$server_version" ]]; then

@@ -5,7 +5,7 @@ this when `.orbit/` is absent, when the user is still deciding whether to adopt
 Orbit, or when a second machine or repository needs onboarding.
 
 This reference works without an Orbit source checkout. For release-specific
-installation details, consult the [published README](https://github.com/danieljhkim/orbit#quick-start)
+installation details, consult the [published README](https://github.com/constellation-works/orbit#quick-start)
 and compare the version with `orbit --version`. Do not assume a newer website
 or a locally modified resource catalog matches the installed binary.
 
@@ -26,7 +26,7 @@ Report all three before proposing any install.
 A prebuilt CLI gives you setup, dashboard, and administration commands:
 
 ```bash
-curl -sSf https://raw.githubusercontent.com/danieljhkim/orbit/main/install.sh | sh
+curl -sSf https://raw.githubusercontent.com/constellation-works/orbit/main/install.sh | sh
 # Alternative when Homebrew is the chosen package manager:
 brew install danieljhkim/tap/orbit
 ```
@@ -46,7 +46,7 @@ before dispatch. Do not disable host protection or enable sandbox fallback to hi
 a failed probe.
 
 To add a provider or deterministic executor to Orbit itself, work in a source
-checkout and follow the [executor onboarding runbook](https://github.com/danieljhkim/orbit/blob/main/docs/runbooks/executor-onboarding.md).
+checkout and follow the [executor onboarding runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/executor-onboarding.md).
 Do not change a production login or workspace configuration merely to test a
 new executor.
 

@@ -72,8 +72,8 @@ npm_package_version="$(node -p "JSON.parse(require('fs').readFileSync('$NPM_PACK
 registry_version="$(node -p "JSON.parse(require('fs').readFileSync('$REGISTRY_METADATA', 'utf8')).version")"
 registry_package_version="$(node -p "JSON.parse(require('fs').readFileSync('$REGISTRY_METADATA', 'utf8')).packages?.[0]?.version ?? ''")"
 
-if [[ "$registry_name" != "io.github.danieljhkim/orbit" || "$npm_mcp_name" != "$registry_name" ]]; then
-  echo "FAIL: registry name and npm mcpName must both be io.github.danieljhkim/orbit" >&2
+if [[ "$registry_name" != "io.github.constellation-works/orbit" || "$npm_mcp_name" != "$registry_name" ]]; then
+  echo "FAIL: registry name and npm mcpName must both be io.github.constellation-works/orbit" >&2
   exit 1
 fi
 if [[ -z "$NPM_PKG" || "$registry_version" != "$npm_package_version" || "$registry_package_version" != "$registry_version" ]]; then

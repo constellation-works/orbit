@@ -37,8 +37,8 @@ Everything is incremental: the task layer and audit log work on day one; the doc
 **Prerequisites:** at least one supported agent CLI (Claude Code, Codex, Cursor, or Gemini CLI), authenticated. `orbit run ship` in its default `--mode pr` needs `gh` authenticated; otherwise use `--mode local`. On Linux, complete the [Linux sandbox runbook](docs/runbooks/linux-sandbox.md) after `orbit init`.
 
 ```bash
-curl -sSf https://raw.githubusercontent.com/danieljhkim/orbit/main/install.sh | sh
-# or: brew install danieljhkim/tap/orbit
+curl -sSf https://raw.githubusercontent.com/constellation-works/orbit/main/install.sh | sh
+# or: brew install constellation-works/tap/orbit
 
 orbit init                                 # global state (~/.orbit)
 cd <repo> && orbit workspace init --mcp    # workspace state + operator-authorized MCP integration
@@ -61,11 +61,11 @@ Use a plugin to attach Orbit's MCP tools and `orbit` skill to one agent without 
 
 ```bash
 # Claude Code
-/plugin marketplace add danieljhkim/orbit
+/plugin marketplace add constellation-works/orbit
 /plugin install orbit
 
 # Codex CLI
-codex plugin marketplace add danieljhkim/orbit --ref main
+codex plugin marketplace add constellation-works/orbit --ref main
 codex plugin add orbit@orbit
 
 # Cursor (local plugin from a checkout)
@@ -83,7 +83,7 @@ Cloning gives you a framework to mold to your team's conventions; everything und
 >
 > 1. Ask me where to clone the Orbit repository (suggest `~/code/orbit`).
 > 2. Verify the Rust toolchain: Orbit's MSRV is `rust-version = "1.89"`. If cargo is missing or older, **stop and ask me before installing anything** (`rustup` modifies the shell profile).
-> 3. Clone `https://github.com/danieljhkim/orbit` into that location and run `make install` (copies `orbit` to `$INSTALL_BIN_DIR`, default `~/.cargo/bin`). Confirm the install path with me first. Verify with `orbit --version`.
+> 3. Clone `https://github.com/constellation-works/orbit` into that location and run `make install` (copies `orbit` to `$INSTALL_BIN_DIR`, default `~/.cargo/bin`). Confirm the install path with me first. Verify with `orbit --version`.
 > 4. Run `orbit init` for global state at `~/.orbit`. On Linux, follow `docs/runbooks/linux-sandbox.md` and require its probe to pass before dispatching agents.
 > 5. From *this* repository, run `orbit workspace init --mcp`. It creates `.orbit/` and registers an **operator-authorized** MCP server with installed agent CLIs. Tell me first if you'd rather it stay agent-only (`orbit mcp init`).
 > 6. Ask me whether to enable semantic search (optional): `orbit semantic install` downloads an embedder companion plus the default model under `~/.orbit/embed/` (macOS arm64 or Linux x86_64/aarch64 with glibc >= 2.38). If I accept and tasks already exist, run `orbit semantic index`.
