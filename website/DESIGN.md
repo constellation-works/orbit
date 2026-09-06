@@ -150,7 +150,11 @@ Each section has an index page that lists its children with one-line description
 - **Search:** Pagefind (built into Starlight, static, offline, no third-party account)
 - **Content:** MDX in `src/content/docs/`
 - **Styling:** Starlight's CSS custom properties, overridden in a single `custom.css`
-- **Hosting:** TBD (Cloudflare Pages, Vercel, or GitHub Pages — all work with Astro's static output)
+- **Hosting:** The public edge and DNS are on Cloudflare. The repository-supported
+  path directly uploads to the existing Pages project identified by the protected
+  production environment, and publishes only from the release/production `main`
+  branch. The `orbit-cli.com` DNS remains externally managed; publication neither
+  provisions hosting nor edits DNS. See ORB-11379.
 - **Repo layout:** new top-level `website/` directory, independent of the Rust workspace
 
 ### 5.1 Why Starlight over Nextra
@@ -177,11 +181,10 @@ Nextra is reserved for a future scenario where interactive React widgets become 
 
 ## 7. Open Questions
 
-1. **Domain name.** `orbit.dev`, `orbitcli.dev`, subdomain of an existing property? orbit-cli.com
-2. **Versioning.** Starlight supports versioned docs via directory structure. Add it when release-specific documentation becomes necessary.
-3. **Architecture detail.** Crate boundaries and dependency direction are contributor material, not published here; they live in the repository's `ARCHITECTURE.md`. Revisit only if a public extension surface makes them user-facing.
-4. **Logo design.** Ring-with-offset-dot concept agreed; actual SVG not yet drawn.
-5. **Analytics.** Plausible (privacy-respecting) or none at all? Default to none unless there's a decision to measure something specific.
+1. **Versioning.** Starlight supports versioned docs via directory structure. Add it when release-specific documentation becomes necessary.
+2. **Architecture detail.** Crate boundaries and dependency direction are contributor material, not published here; they live in the repository's `ARCHITECTURE.md`. Revisit only if a public extension surface makes them user-facing.
+3. **Logo design.** Ring-with-offset-dot concept agreed; actual SVG not yet drawn.
+4. **Analytics.** Plausible (privacy-respecting) or none at all? Default to none unless there's a decision to measure something specific.
 
 ---
 
