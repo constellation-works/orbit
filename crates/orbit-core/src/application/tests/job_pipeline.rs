@@ -18,7 +18,7 @@ use crate::application::job::JobRunListParams;
 use crate::application::job::pipeline::{
     configure_pipeline_worker_command, configure_pipeline_worker_stdio, pipeline_worker_log_path,
     pipeline_worker_profile_file, pipeline_worker_root_override,
-    resolve_pipeline_worker_executable,
+    resolve_pipeline_worker_executable, worker_command_override,
 };
 use crate::application::task::TaskAddParams;
 use crate::application::workflow::{CompletionPolicy, ShipMode};
@@ -66,6 +66,21 @@ model = "sol-model"
     let runtime =
         OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build test runtime");
     (root, runtime)
+}
+
+struct WorkerOverride;
+
+impl WorkerOverride {
+    fn shell(script: &str) -> Self {
+        worker_command_override::set(["sh", "-c", script]);
+        Self
+    }
+}
+
+impl Drop for WorkerOverride {
+    fn drop(&mut self) {
+        worker_command_override::clear();
+    }
 }
 
 fn add_backlog_task(runtime: &OrbitRuntime) -> String {
@@ -461,6 +476,7 @@ spec:
 #[test]
 fn explicit_ship_crew_allowlist_admits_only_configured_permitted_crews() {
     let (_root, runtime) = test_runtime_with_named_crews();
+    let _worker = WorkerOverride::shell("exit 0");
     let jobs_dir = runtime.paths().global_dir.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
     std::fs::write(

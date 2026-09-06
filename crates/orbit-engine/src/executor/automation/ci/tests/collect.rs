@@ -1649,6 +1649,7 @@ fn current_heads_and_verified_open_prs_retain_priority_over_other_refs() {
             "integration_branch": "topic",
             "max_investigated_runs": 3,
             "max_checkout_log_reads": 3,
+            "investigation_cursor": 0,
         }),
     )
     .expect("collect");
@@ -1846,6 +1847,7 @@ fn comprehensive_fixture_classifies_merged_prs_unprobed_live_refs_transient_prob
             "max_retired_ref_probes": 2,
             "max_investigated_runs": 5,
             "max_checkout_log_reads": 5,
+            "investigation_cursor": 0,
         }),
     )
     .expect("collect");
