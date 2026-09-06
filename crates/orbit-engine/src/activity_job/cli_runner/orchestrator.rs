@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use orbit_agent::{
     Agent, AgentConfig, AgentOperation, AgentRequest, antigravity_terminal_error_diagnostic,
-    normalize_cli_stdout, peek_response_status, provider_invocation_diagnostic,
-    response_envelope_protocol_check,
+    normalize_cli_stdout, peek_response_status, project_cli_response,
+    provider_invocation_diagnostic, response_envelope_protocol_check,
 };
 use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_text};
@@ -436,16 +436,16 @@ pub fn run_cli_backend(
     // from its diagnostic prefix. Protocol parsing must use that tail so a
     // verbose provider's final Orbit envelope remains authoritative.
     //
-    // [ORB-10946] Reduce the capture to the bytes this provider's protocol
-    // contract may be read from, once, so every check below agrees on what the
-    // agent actually emitted. For all providers but `copilot` this borrows the
-    // capture unchanged; `copilot` streams JSONL agent events that replay
-    // Orbit's own prompt — example envelope included — back as a `user.message`
-    // frame, which the reverse envelope scan would otherwise be free to read as
-    // completion evidence.
-    let protocol_stdout = normalize_cli_stdout(&provider, stdout.protocol_bytes());
-    let stdout_text = String::from_utf8_lossy(protocol_stdout.as_ref());
-    let envelope_status = peek_response_status(stdout_text.as_ref());
+    // Keep invocation telemetry distinct from answer projection. Provider
+    // JSONL carries usage, tool traffic, failures, reasoning, and command
+    // output; those frames belong in the trace and diagnostics, but only
+    // provider-attributed assistant answer content may supply Orbit response
+    // fields or completion status. [ORB-10946] [ORB-11348]
+    let trace_stdout = normalize_cli_stdout(&provider, stdout.protocol_bytes());
+    let answer_stdout = project_cli_response(&provider, stdout.protocol_bytes());
+    let answer_text = String::from_utf8_lossy(answer_stdout.as_ref());
+    let trace_stdout_text = String::from_utf8_lossy(trace_stdout.as_ref());
+    let envelope_status = peek_response_status(answer_text.as_ref());
     // The operator-facing preview stays on the *raw* capture: normalization
     // drops the session control plane, and that is where a provider puts the
     // policy and authentication failures an operator needs to see.
@@ -454,7 +454,7 @@ pub fn run_cli_backend(
         stdout_text_preview(raw_stdout_text.as_ref(), &redaction, stdout.truncated());
     let parsed_result = exit_success.then(|| {
         parse_cli_response_result(
-            protocol_stdout.as_ref(),
+            answer_stdout.as_ref(),
             stderr.protocol_bytes(),
             exit_code,
             duration.as_millis() as u64,
@@ -476,7 +476,7 @@ pub fn run_cli_backend(
     // Only meaningful on an otherwise-clean exit: a timeout or nonzero exit
     // already fails the step with a more specific message.
     let completion_envelope_error = exit_success
-        .then(|| response_envelope_protocol_check(stdout_text.as_ref()))
+        .then(|| response_envelope_protocol_check(answer_text.as_ref()))
         .and_then(Result::err)
         .map(|error| completion_diagnostic(&error.to_string(), &redaction));
     let completion_protocol_violation =
@@ -497,7 +497,7 @@ pub fn run_cli_backend(
         && !completion_status_failure
         && (!spec.require_response_envelope || response_envelope_valid);
     let trace = parse_cli_invocation_trace(
-        protocol_stdout.as_ref(),
+        trace_stdout.as_ref(),
         stderr.protocol_bytes(),
         exit_code,
         duration.as_millis() as u64,
@@ -523,7 +523,7 @@ pub fn run_cli_backend(
                     macos_keychain_auth_diagnostic(
                         &provider,
                         sandbox,
-                        &format!("{stdout_text}\n{stderr_text}"),
+                        &format!("{trace_stdout_text}\n{stderr_text}"),
                     )
                     .map(|diagnostic| format!("{} {diagnostic}", exit_message()))
                 })
@@ -532,7 +532,7 @@ pub fn run_cli_backend(
                 // schema" from any other nonzero exit, and the first two are
                 // configuration faults an operator can act on immediately.
                 .or_else(|| {
-                    provider_invocation_diagnostic(stdout_text.as_ref(), stderr_text.as_ref())
+                    provider_invocation_diagnostic(trace_stdout_text.as_ref(), stderr_text.as_ref())
                         .map(|diagnostic| bounded_diagnostic(&diagnostic, &redaction))
                 })
                 // Antigravity writes terminal `ERROR` on stdout and often
