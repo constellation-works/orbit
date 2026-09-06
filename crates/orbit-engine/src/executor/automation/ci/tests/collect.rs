@@ -1001,6 +1001,55 @@ fn live_failure_fixture_is_latest_current_and_evidence_complete() {
     assert_eq!(evidence["summary"]["retryable_errors"], json!(0));
 }
 
+/// The 2026-09-06 current-main macOS failure logged `git log -1 --format=%H`
+/// under `UNKNOWN STEP`. Its command/output pair is still runner evidence, so
+/// collection must pass the complete failure to the filing sweep instead of
+/// deferring it as missing checkout identity.
+#[test]
+fn unknown_step_git_log_checkout_is_investigated_for_filing() {
+    const CHECKOUT: &str = "9a611e053bb440451cdfb5468749327853b12ff9";
+    let queries = FakeQueries::authenticated()
+        .with_head("agent-main", CHECKOUT)
+        .with_head("main", OLD)
+        .with_runs(vec![vec![run_on_branch(
+            33_948_877_857,
+            "macOS Platform",
+            "agent-main",
+            CHECKOUT,
+            "completed",
+            Some("failure"),
+            "2026-09-06T06:07:50Z",
+        )]])
+        .with_run_view(
+            "33948877857",
+            json!({"failed_jobs": [{
+                "job_id": 101_260_058_863_u64,
+                "name": "macOS tests",
+                "conclusion": "failure",
+            }]}),
+        )
+        .with_log("33948877857", false, "macOS Platform\tmacOS tests\tassertion failed\n")
+        .with_log(
+            "33948877857",
+            true,
+            "macOS Platform\tUNKNOWN STEP\t2026-09-06T06:07:50.4897836Z [command]/usr/bin/git log -1 --format=%H\n\
+             macOS Platform\tUNKNOWN STEP\t2026-09-06T06:07:50.4927165Z 9a611e053bb440451cdfb5468749327853b12ff9\n",
+        );
+
+    let evidence = collect(
+        &queries,
+        &json!({"integration_branch": "agent-main", "max_checkout_log_reads": 1}),
+    )
+    .expect("collect");
+    let failure = &evidence["current_failures"][0];
+
+    assert_eq!(failure["actual_checkout_shas"], json!([CHECKOUT]));
+    assert_eq!(failure["checkout_identity"]["state"], json!("observed"));
+    assert_eq!(failure["investigated"], json!(true));
+    assert_eq!(evidence["outcome_hint"], json!("current_failures"));
+    assert_eq!(evidence["retryable_errors"], json!([]));
+}
+
 /// ORB-11278: a failed job inside an in-progress workflow is current once
 /// evidence is complete. A still-running sibling check is not a repair task.
 #[test]

@@ -438,6 +438,10 @@ struct CheckoutEvidenceCollector {
     /// that was checked out — as opposed to a merge parent or a fetched ref
     /// that happened to share the line.
     named_commits: HashSet<String>,
+    /// A recognized command whose immediately following output line may name
+    /// the checkout. Keep only one bounded line: an unrelated intervening
+    /// line consumes it instead of letting a later SHA inherit its authority.
+    pending_checkout_command: Option<String>,
     lines: Vec<String>,
     complete: bool,
     display_truncated: bool,
@@ -455,6 +459,7 @@ impl CheckoutEvidenceCollector {
             commits: Vec::new(),
             seen_commits: HashSet::new(),
             named_commits: HashSet::new(),
+            pending_checkout_command: None,
             lines: Vec::new(),
             complete: true,
             display_truncated: false,
@@ -480,6 +485,10 @@ impl CheckoutEvidenceCollector {
                 let identity_bearing = overlong_line_is_identity_bearing(&self.pending_line, part);
                 self.pending_line.clear();
                 self.dropping_line = !part.ends_with('\n');
+                // A dropped physical line still consumes a preceding
+                // `git log` command. Otherwise a later unrelated SHA could
+                // inherit authority that belonged only to this line.
+                self.pending_checkout_command = None;
                 if identity_bearing {
                     self.complete = false;
                 } else {
@@ -516,15 +525,25 @@ impl CheckoutEvidenceCollector {
             .iter()
             .any(|marker| lowered.contains(marker));
         let in_checkout_step = step.to_ascii_lowercase().contains("checkout");
-        if !(marked || in_checkout_step && is_bare_commit_sha(payload)) {
+        let command_output = self
+            .pending_checkout_command
+            .take()
+            .filter(|_| is_bare_commit_sha(payload));
+        let command = checkout_identity_command(payload);
+        if !(marked || in_checkout_step && is_bare_commit_sha(payload) || command_output.is_some())
+        {
+            self.pending_checkout_command = command;
             return;
         }
-        if self.lines.len() < self.max_lines {
-            self.lines.push(redact_all(payload.trim()));
-        } else {
-            self.display_truncated = true;
+        if let Some(command) = &command_output {
+            self.record_evidence_line(&command);
         }
-        let named = named_checkout_commit(payload, &lowered, in_checkout_step);
+        self.record_evidence_line(payload);
+        let named = named_checkout_commit(
+            payload,
+            &lowered,
+            in_checkout_step || command_output.is_some(),
+        );
         for token in commit_sha_tokens(payload) {
             if named == Some(token) {
                 self.named_commits.insert(token.to_string());
@@ -539,6 +558,15 @@ impl CheckoutEvidenceCollector {
             let token = token.to_string();
             self.seen_commits.insert(token.clone());
             self.commits.push(token);
+        }
+        self.pending_checkout_command = command;
+    }
+
+    fn record_evidence_line(&mut self, payload: &str) {
+        if self.lines.len() < self.max_lines {
+            self.lines.push(redact_all(payload.trim()));
+        } else {
+            self.display_truncated = true;
         }
     }
 }
@@ -600,6 +628,25 @@ fn is_hex(byte: u8) -> bool {
 fn is_bare_commit_sha(payload: &str) -> bool {
     let trimmed = payload.trim();
     trimmed.len() == MAX_SHA_LEN && trimmed.bytes().all(is_hex)
+}
+
+/// Recognize the runner command that prints the checked-out `HEAD` as its
+/// next line. This intentionally accepts only `git log -1 --format=%H`, not
+/// a generic bare SHA after any command: ordinary test output and arbitrary
+/// repository probes must not become checkout identity.
+fn checkout_identity_command(payload: &str) -> Option<String> {
+    let command = payload.strip_prefix("[command]")?.trim();
+    let mut words = command.split_ascii_whitespace();
+    let program = words.next()?;
+    if program.rsplit('/').next()? != "git"
+        || !matches!(words.next(), Some("log"))
+        || !matches!(words.next(), Some("-1"))
+        || !matches!(words.next(), Some("--format=%H"))
+        || words.next().is_some()
+    {
+        return None;
+    }
+    Some(command.to_string())
 }
 
 /// The prose `actions/checkout` prints in front of the commit it landed on.
