@@ -71,7 +71,8 @@ pub use providers::{
 pub use runtime::AgentRuntime;
 pub use types::{AgentInvocationSpec, AgentOperation, AgentRequest, AgentResponseStatus};
 pub use types::{
-    is_timeout, parse_and_validate_response, peek_response_status, response_envelope_protocol_check,
+    DeclaredResponseFailure, is_timeout, parse_and_validate_response,
+    peek_declared_response_failure, peek_response_status, response_envelope_protocol_check,
 };
 pub use types::{
     provider_invocation_diagnostic, response_envelope_json_schema,
