@@ -80,8 +80,18 @@ pub struct UpdateEnvironment {
     pub trusted_keys: &'static [TrustedReleaseKey],
     /// Today's date, for signing-key expiry.
     pub today: NaiveDate,
-    /// An initialized Orbit workspace to converge, when the caller is in one.
-    pub workspace_cwd: Option<PathBuf>,
+    /// The initialized Orbit workspace selected for convergence, if any.
+    pub workspace: Option<UpdateWorkspace>,
+}
+
+/// The process location and resolved root that update subprocesses must retain.
+pub struct UpdateWorkspace {
+    /// Working directory inherited by the replacement executable.
+    pub cwd: PathBuf,
+    /// Authoritative `.orbit` root selected by `--root`, `ORBIT_ROOT`, or cwd discovery.
+    pub root: PathBuf,
+    /// Root argument to forward when selection was explicit rather than cwd-based.
+    pub root_argument: Option<PathBuf>,
 }
 
 impl UpdateEnvironment {
@@ -92,9 +102,16 @@ impl UpdateEnvironment {
                 OrbitError::Io(format!("cannot locate the running orbit: {error}"))
             })?);
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
-        let workspace_cwd =
-            RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?
-                .map(|_| cwd);
+        let root_was_explicit = root_override.is_some()
+            || std::env::var("ORBIT_ROOT").is_ok_and(|root| !root.trim().is_empty());
+        let workspace =
+            RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?.map(
+                |roots| UpdateWorkspace {
+                    cwd,
+                    root_argument: root_was_explicit.then(|| roots.shared_root.clone()),
+                    root: roots.shared_root,
+                },
+            );
         Ok(Self {
             install_channel: InstallChannel::detect(
                 &executable,
@@ -106,7 +123,7 @@ impl UpdateEnvironment {
             source: release_source_from_env(),
             trusted_keys: TRUSTED_RELEASE_KEYS,
             today: chrono::Utc::now().date_naive(),
-            workspace_cwd,
+            workspace,
         })
     }
 }
@@ -162,6 +179,9 @@ pub struct UpdateReport {
     pub backup_path: Option<PathBuf>,
     /// Post-replacement convergence steps, in the order they ran.
     pub steps: Vec<ConvergenceStep>,
+    /// Workspace root selected for convergence, when one was found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<PathBuf>,
     /// What the operator must do to finish, when the run did not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery: Option<String>,
@@ -209,6 +229,10 @@ pub fn run_update(
         signing_key_id: None,
         backup_path: None,
         steps: Vec::new(),
+        workspace_root: environment
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.root.clone()),
         recovery: None,
     };
 
@@ -351,14 +375,21 @@ fn finish(
         return report;
     }
     report.outcome = UpdateOutcome::NeedsRecovery;
-    report.recovery = Some(recovery_text(&report, &failed));
+    report.recovery = Some(recovery_text(
+        &report,
+        &failed,
+        environment
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.root_argument.as_deref()),
+    ));
     report
 }
 
 /// Migrate `.orbit/` state, then reconcile managed assets — in that order.
 fn converge_workspace(environment: &UpdateEnvironment, executable: &Path) -> Vec<ConvergenceStep> {
     const STEPS: [&[&str]; 2] = [&["migrate", "--confirm"], &["workspace", "sync"]];
-    let Some(cwd) = environment.workspace_cwd.as_deref() else {
+    let Some(workspace) = environment.workspace.as_ref() else {
         return STEPS
             .iter()
             .map(|args| {
@@ -372,7 +403,12 @@ fn converge_workspace(environment: &UpdateEnvironment, executable: &Path) -> Vec
     };
     let mut steps = Vec::new();
     for args in STEPS {
-        let step = run_step(executable, cwd, args);
+        let step = run_step(
+            executable,
+            &workspace.cwd,
+            workspace.root_argument.as_deref(),
+            args,
+        );
         let stop = step.failed();
         steps.push(step);
         if stop {
@@ -385,14 +421,24 @@ fn converge_workspace(environment: &UpdateEnvironment, executable: &Path) -> Vec
     steps
 }
 
-fn recovery_text(report: &UpdateReport, failed: &[&str]) -> String {
+fn recovery_text(report: &UpdateReport, failed: &[&str], root_argument: Option<&Path>) -> String {
+    let command = |args: &str| {
+        root_argument.map_or_else(
+            || format!("`orbit {args}`"),
+            |root| format!("`orbit --root {} {args}`", root.display()),
+        )
+    };
+    let retry = command("update");
+    let direct = failed
+        .iter()
+        .map(|args| command(args))
+        .collect::<Vec<_>>()
+        .join(" and ");
     let mut text = format!(
-        "orbit {} is installed, but `orbit {}` did not finish. \
-         Re-run `orbit update` from this workspace to retry — every step is idempotent — \
-         or run `orbit {}` directly and read its diagnostics.",
+        "orbit {} is installed, but {direct} did not finish. \
+         Re-run {retry} from this workspace to retry — every step is idempotent — \
+         or run {direct} directly and read its diagnostics.",
         report.target_version,
-        failed.join("` and `orbit "),
-        failed.join("` and `orbit "),
     );
     if let Some(backup) = &report.backup_path {
         text.push_str(&format!(
@@ -417,10 +463,15 @@ fn assert_downgrade_is_compatible(
     current: &ReleaseVersion,
     target: &ReleaseVersion,
 ) -> Result<(), OrbitError> {
-    let Some(cwd) = environment.workspace_cwd.as_deref() else {
+    let Some(workspace) = environment.workspace.as_ref() else {
         return Ok(());
     };
-    let probe = run_step(staged, cwd, &["migrate", "--dry-run"]);
+    let probe = run_step(
+        staged,
+        &workspace.cwd,
+        workspace.root_argument.as_deref(),
+        &["migrate", "--dry-run"],
+    );
     if !probe.failed() {
         return Ok(());
     }

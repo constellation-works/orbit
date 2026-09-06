@@ -29,10 +29,11 @@ fn updating_to_latest_replaces_the_binary_then_migrates_before_syncing_assets() 
     assert_eq!(
         fixture.invocations(),
         vec![
-            "0.19.0: migrate --confirm".to_string(),
-            "0.19.0: workspace sync".to_string(),
+            fixture.invocation("0.19.0", "migrate --confirm"),
+            fixture.invocation("0.19.0", "workspace sync"),
         ]
     );
+    assert_eq!(report.workspace_root, Some(fixture.workspace_root()));
     assert!(report.steps.iter().all(|step| !step.failed()));
 }
 
@@ -126,8 +127,8 @@ fn rerunning_at_the_installed_version_reconverges_without_replacing_anything() {
     assert_eq!(
         fixture.invocations(),
         vec![
-            "0.19.0: migrate --confirm".to_string(),
-            "0.19.0: workspace sync".to_string(),
+            fixture.invocation("0.19.0", "migrate --confirm"),
+            fixture.invocation("0.19.0", "workspace sync"),
         ]
     );
 }
@@ -168,7 +169,11 @@ fn an_incompatible_downgrade_is_caught_before_the_binary_is_replaced() {
 
     let mut requested = request();
     requested.allow_downgrade = true;
-    let error = run_update(&fixture.environment(), &requested).expect_err("incompatible downgrade");
+    let cwd_b = fixture.workspace.join("checkout-b");
+    let root_a = fixture.workspace.join("root-a");
+    std::fs::create_dir_all(&cwd_b).expect("create alternate cwd");
+    let environment = fixture.environment_for_workspace(cwd_b.clone(), root_a.clone());
+    let error = run_update(&environment, &requested).expect_err("incompatible downgrade");
 
     assert!(
         error.to_string().contains("cannot open this workspace"),
@@ -179,6 +184,21 @@ fn an_incompatible_downgrade_is_caught_before_the_binary_is_replaced() {
         "{error}"
     );
     assert_eq!(fixture.installed_reports(), "orbit 0.19.0");
+    assert_eq!(
+        fixture.invocations(),
+        vec![format!(
+            "0.18.0: --root {} migrate --dry-run",
+            root_a.display()
+        )]
+    );
+    assert!(
+        fixture
+            .invocations()
+            .iter()
+            .all(|invocation| !invocation.contains(&cwd_b.display().to_string())),
+        "downgrade probe leaked the caller cwd into root selection: {:?}",
+        fixture.invocations()
+    );
     assert_eq!(
         fixture.install_dir_entries(),
         vec!["orbit".to_string(), ".orbit-update.lock".to_string()]
@@ -210,7 +230,7 @@ fn an_incompatible_prerelease_downgrade_runs_the_compatibility_preflight() {
     assert_eq!(fixture.installed_reports(), "orbit 0.19.0-rc.10");
     assert_eq!(
         fixture.invocations(),
-        vec!["0.19.0-rc.2: migrate --dry-run".to_string()]
+        vec![fixture.invocation("0.19.0-rc.2", "migrate --dry-run")]
     );
 }
 
@@ -330,8 +350,12 @@ fn a_failed_migration_is_reported_as_needing_recovery_not_as_success() {
         report.steps[0].detail
     );
     let recovery = report.recovery.expect("recovery guidance");
-    assert!(recovery.contains("Re-run `orbit update`"), "{recovery}");
+    assert!(recovery.contains("Re-run `orbit --root"), "{recovery}");
     assert!(recovery.contains("migrate --confirm"), "{recovery}");
+    assert!(
+        recovery.contains(&fixture.workspace_root().display().to_string()),
+        "{recovery}"
+    );
     assert!(
         recovery.contains(&fixture.backup_path().display().to_string()),
         "{recovery}"
@@ -459,7 +483,7 @@ fn a_stale_writer_reconverges_when_the_lock_already_holds_the_target() {
     let migrate = fixture
         .invocations()
         .iter()
-        .filter(|line| line.as_str() == "0.19.0: migrate --confirm")
+        .filter(|line| *line == &fixture.invocation("0.19.0", "migrate --confirm"))
         .count();
     assert_eq!(migrate, 2, "{:?}", fixture.invocations());
 }
@@ -522,7 +546,7 @@ fn a_stale_permitted_downgrade_still_preflights_the_workspace() {
         fixture
             .invocations()
             .iter()
-            .any(|line| line.as_str() == "0.18.0: migrate --dry-run"),
+            .any(|line| line == &fixture.invocation("0.18.0", "migrate --dry-run")),
         "{:?}",
         fixture.invocations()
     );
