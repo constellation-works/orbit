@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use orbit_automation::{
     AutomationError, automation_error_to_orbit,
     delivery::definition_epoch,
-    members::{self, MemberEvaluation, MemberHost, MemberOutcome, MemberPage},
+    members::{self, MemberAdmission, MemberEvaluation, MemberHost, MemberOutcome, MemberPage},
 };
 use orbit_common::OrbitError;
 use orbit_store::contracts::TaskListFilter;
@@ -200,11 +200,13 @@ impl MemberHost for Host<'_> {
         })
     }
 
-    fn admission_deferral(&self, member: &StateMember) -> Result<Option<String>, AutomationError> {
+    fn admission(&self, member: &StateMember) -> Result<MemberAdmission, AutomationError> {
         if self.trigger.kind == StateTriggerKind::ExecutionFailed
             && super::incidents::members(self.runtime)?.get(&member.key) != Some(&member.task_ids)
         {
-            return Ok(Some("incident_membership_or_recovery_changed".into()));
+            return Ok(MemberAdmission::Retire(
+                "incident_membership_or_recovery_changed".into(),
+            ));
         }
 
         // Re-derive the material now: a member whose input moved may not be admitted.
@@ -213,7 +215,7 @@ impl MemberHost for Host<'_> {
             let current = match self.trigger.kind {
                 StateTriggerKind::PreparationEligible => {
                     if !orbit_automation::members::preparation::eligible(&task) {
-                        return Ok(Some("task_ineligible".into()));
+                        return Ok(MemberAdmission::Retire("task_ineligible".into()));
                     }
                     let (_, source) = self.head(&self.trigger.branch)?;
                     preparation::fingerprint(self.runtime, &task, &source.commit)?
@@ -221,17 +223,19 @@ impl MemberHost for Host<'_> {
                 StateTriggerKind::ExecutionFailed => {
                     match super::incidents::observe(self.runtime, &task) {
                         Ok((key, _)) => key,
-                        Err(error) => return Ok(Some(error.to_string())),
+                        Err(error) => {
+                            return Ok(MemberAdmission::Retire(error.to_string()));
+                        }
                     }
                 }
             };
 
             if current != member.fingerprint {
-                return Ok(Some("material_changed".into()));
+                return Ok(MemberAdmission::Retire("material_changed".into()));
             }
         }
 
-        Ok(None)
+        Ok(MemberAdmission::Admit)
     }
 
     fn lookup(&self, attempt: &MemberAttempt) -> Result<Option<String>, AutomationError> {
