@@ -144,9 +144,11 @@ fn a_declared_mode_without_an_admission_fails_closed() {
     .expect_err("an unadmitted invocation must not run");
 
     match error {
-        DispatchError::CliInvocationPermanent(message) => assert!(
-            message.contains("no operator admission"),
-            "the refusal must name the missing admission: {message}"
+        DispatchError::CliInvocationPermanent(message) => assert_eq!(
+            message,
+            "activity `agent_invoke` declares trusted host execution but this run carries \
+             no operator admission; submit it through the governed `orbit.agent.invoke` \
+             operation"
         ),
         other => panic!("expected a permanent refusal, got {other:?}"),
     }

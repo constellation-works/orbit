@@ -65,7 +65,9 @@ const SHIP_IN_FLIGHT_SCAN_LIMIT: usize = 200;
 /// YAML path, a resume, or a tool call.
 pub(crate) fn reserved_trusted_host_key_error(job_name: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
-        "run input for job '{job_name}' set the reserved `{TRUSTED_HOST_ADMISSION_KEY}` field;          trusted host execution is admitted per invocation by the governed `orbit.agent.invoke`          operation and cannot be requested through ordinary job input"
+        "run input for job '{job_name}' set the reserved `{TRUSTED_HOST_ADMISSION_KEY}` field; \
+         trusted host execution is admitted per invocation by the governed `orbit.agent.invoke` \
+         operation and cannot be requested through ordinary job input"
     ))
 }
 

@@ -151,7 +151,9 @@ impl OrbitRuntime {
             CallerCapabilities::resolve(&CallerEnvelope::from_process_env(session_context));
         if let Some(grant) = caller.remote_caller_grant() {
             let message = format!(
-                "operation '{AGENT_INVOKE_OPERATION_ID}' admits an unsandboxed host process and                  is available only to an operator on the machine that would run it; caller '{}'                  was resolved through {}",
+                "operation '{AGENT_INVOKE_OPERATION_ID}' admits an unsandboxed host process and \
+                 is available only to an operator on the machine that would run it; caller '{}' \
+                 was resolved through {}",
                 grant.caller_machine_id, grant.source,
             );
             tracing::warn!(

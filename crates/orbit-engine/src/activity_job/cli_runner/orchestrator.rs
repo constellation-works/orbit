@@ -62,7 +62,9 @@ pub fn run_cli_backend(
     let trusted_host = if spec.trusted_host_execution {
         Some(TrustedHostAdmission::from_run_input(input).ok_or_else(|| {
             DispatchError::CliInvocationPermanent(format!(
-                "activity `{activity_name}` declares trusted host execution but this run carries                  no operator admission; submit it through the governed `orbit.agent.invoke`                  operation"
+                "activity `{activity_name}` declares trusted host execution but this run carries \
+                 no operator admission; submit it through the governed `orbit.agent.invoke` \
+                 operation"
             ))
         })?)
     } else {
