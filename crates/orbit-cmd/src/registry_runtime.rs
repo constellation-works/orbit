@@ -75,7 +75,7 @@ impl RegisteredRuntimeFactory {
         cwd: &Path,
         root_override: Option<&Path>,
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
-        let hint = workspace_root_hint(cwd);
+        let hint = bootstrap_workspace_root_hint(cwd);
         OrbitRuntime::resolve_bootstrap_roots_for_cwd_with_hint(cwd, root_override, hint.as_ref())
     }
 
@@ -565,6 +565,41 @@ fn workspace_root_hint(cwd: &Path) -> Option<WorkspaceRootHint> {
     Some(WorkspaceRootHint {
         orbit_dir: checkout.orbit_dir.clone(),
     })
+}
+
+/// Resolve a catalog hint for a bootstrap command without crossing into a
+/// nested, independently rooted Git repository.
+///
+/// Ordinary runtime lookup keeps longest-prefix registry semantics. Bootstrap
+/// is different because it is allowed to create a workspace: an ancestor
+/// checkout must not capture a new child repository before Core's Git-bounded
+/// walk-up gets a chance to select `<child>/.orbit`. An explicit path override
+/// rooted inside the child repository remains authoritative.
+fn bootstrap_workspace_root_hint(cwd: &Path) -> Option<WorkspaceRootHint> {
+    let registry = workspace_registry::load_registry().ok()?;
+    let checkout = workspace_registry::find_checkout_by_path(&registry, cwd)?;
+    if checkout_crosses_nested_git_boundary(checkout, cwd) {
+        return None;
+    }
+    Some(WorkspaceRootHint {
+        orbit_dir: checkout.orbit_dir.clone(),
+    })
+}
+
+fn checkout_crosses_nested_git_boundary(checkout: &WorkspaceCheckout, cwd: &Path) -> bool {
+    let cwd = canonical_or_original(cwd);
+    let Some(git_root) = cwd.ancestors().find(|ancestor| {
+        let git_marker = ancestor.join(".git");
+        git_marker.is_dir() || git_marker.is_file()
+    }) else {
+        return false;
+    };
+    let git_root = canonical_or_original(git_root);
+
+    !std::iter::once(&checkout.repo_root)
+        .chain(&checkout.path_overrides)
+        .map(|root| canonical_or_original(root))
+        .any(|root| cwd.starts_with(&root) && root.starts_with(&git_root))
 }
 
 fn binding_for_roots(

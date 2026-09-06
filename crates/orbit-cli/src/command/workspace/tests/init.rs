@@ -1319,6 +1319,137 @@ fn workspace_init_from_git_subdir_gitignores_repo_orbit_dir() {
 }
 
 #[test]
+fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
+    let parent = tempdir().expect("parent workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    let global = home.path().join(".orbit");
+    std::fs::create_dir_all(&global).expect("create global orbit");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_nested_init\"\nhost_id = \"nested-init\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("write host identity");
+    let parent_git = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(parent.path())
+        .status()
+        .expect("run git init for parent");
+    assert!(parent_git.success(), "initialize parent git repository");
+
+    let _env = EnvGuard::acquire().home(home.path()).cwd(parent.path());
+    let init = |name: &str| WorkspaceInitArgs {
+        name: Some(name.to_string()),
+        base_branch: Some("agent-main".to_string()),
+        ship_mode: Some("local".to_string()),
+        role: None,
+        owner: None,
+        task_id_start: None,
+        mcp: false,
+        inject_agent_rules: false,
+        refresh_defaults: false,
+        force: false,
+    };
+    init("registered-parent")
+        .execute_without_runtime(None)
+        .expect("initialize registered parent");
+
+    let registry_path = global.join("workspaces.json");
+    let parent_identity_path = parent.path().join(".orbit/config.yaml");
+    let parent_identity_before =
+        std::fs::read(&parent_identity_path).expect("read parent identity before child init");
+    let parent_gitignore_before =
+        std::fs::read(parent.path().join(".gitignore")).expect("read parent gitignore");
+    let registry_before =
+        workspace_registry::load_registry_from(&registry_path).expect("load parent registry");
+    let parent_id = canonical_workspace_id("registered-parent");
+    let parent_workspace_before = serde_json::to_vec(
+        registry_before
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == parent_id)
+            .expect("parent workspace registration"),
+    )
+    .expect("serialize parent workspace registration");
+    let parent_checkout_before = serde_json::to_vec(
+        workspace_registry::find_checkout(&registry_before, &parent_id)
+            .expect("parent checkout registration"),
+    )
+    .expect("serialize parent checkout registration");
+
+    let child = parent.path().join("codebases/independent-child");
+    let child_git = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(&child)
+        .status()
+        .expect("run git init for child");
+    assert!(child_git.success(), "initialize independent child git repo");
+    std::env::set_current_dir(&child).expect("switch to independent child repo");
+    init("independent-child")
+        .execute_without_runtime(None)
+        .expect("initialize independent child workspace");
+
+    let child_id = canonical_workspace_id("independent-child");
+    let child_orbit = child.join(".orbit");
+    let child_identity =
+        std::fs::read_to_string(child_orbit.join("config.yaml")).expect("read child identity");
+    assert!(
+        child_identity.contains(&format!("workspace_id: {child_id}")),
+        "child repository must own its workspace identity: {child_identity}"
+    );
+    for state_dir in ["resources", "tasks", "state"] {
+        assert!(
+            child_orbit.join(state_dir).is_dir(),
+            "child workspace must own its {state_dir} state"
+        );
+    }
+    assert!(
+        !parent.path().join("codebases/.orbit").exists(),
+        "bootstrap must not create an intermediate shadow store"
+    );
+
+    let registry_after =
+        workspace_registry::load_registry_from(&registry_path).expect("load child registry");
+    let child_workspace = registry_after
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == child_id)
+        .expect("child workspace registration");
+    let child_checkout = workspace_registry::find_checkout(&registry_after, &child_id)
+        .expect("child checkout registration");
+    assert_eq!(child_workspace.name, "independent-child");
+    assert_eq!(
+        std::fs::canonicalize(&child_checkout.repo_root).expect("canonical child checkout"),
+        std::fs::canonicalize(&child).expect("canonical child repo")
+    );
+    assert_eq!(child_checkout.orbit_dir, child_orbit);
+
+    let parent_workspace_after = serde_json::to_vec(
+        registry_after
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == parent_id)
+            .expect("preserved parent workspace registration"),
+    )
+    .expect("serialize preserved parent workspace registration");
+    let parent_checkout_after = serde_json::to_vec(
+        workspace_registry::find_checkout(&registry_after, &parent_id)
+            .expect("preserved parent checkout registration"),
+    )
+    .expect("serialize preserved parent checkout registration");
+    assert_eq!(parent_workspace_after, parent_workspace_before);
+    assert_eq!(parent_checkout_after, parent_checkout_before);
+    assert_eq!(
+        std::fs::read(&parent_identity_path).expect("read parent identity after child init"),
+        parent_identity_before
+    );
+    assert_eq!(
+        std::fs::read(parent.path().join(".gitignore"))
+            .expect("read parent gitignore after child init"),
+        parent_gitignore_before
+    );
+}
+
+#[test]
 fn workspace_init_with_root_override_uses_custom_registry() {
     let workspace = tempdir().expect("workspace tempdir");
     let home = tempdir().expect("home tempdir");
