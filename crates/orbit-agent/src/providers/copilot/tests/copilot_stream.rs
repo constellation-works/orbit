@@ -133,6 +133,46 @@ fn final_message_after_tool_traffic_is_the_only_projected_content() {
 }
 
 #[test]
+fn terminal_assistant_message_replaces_earlier_commentary() {
+    let envelope = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"fixture","message":"failed"}}"#;
+    let stdout = format!(
+        "{}{}",
+        envelope_line("Commentary: I updated the files."),
+        envelope_line(envelope),
+    );
+
+    assert_eq!(projected(&stdout), envelope);
+}
+
+#[test]
+fn trailing_assistant_message_replaces_an_earlier_envelope() {
+    let stdout = format!(
+        "{}{}",
+        envelope_line(r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#),
+        envelope_line("Courtesy: the run is complete."),
+    );
+
+    assert_eq!(projected(&stdout), "Courtesy: the run is complete.");
+}
+
+#[test]
+fn empty_or_missing_terminal_content_replaces_an_earlier_envelope() {
+    let envelope = envelope_line(
+        r#"{"schemaVersion":1,"status":"success","result":{"source":"earlier"},"error":null}"#,
+    );
+
+    for terminal_message in [
+        r#"{"type":"assistant.message","data":{"content":""},"id":"msg-2"}"#,
+        r#"{"type":"assistant.message","data":{},"id":"msg-3"}"#,
+    ] {
+        assert!(
+            projected(&(envelope.clone() + terminal_message + "\n")).is_empty(),
+            "terminal message must replace the earlier envelope: {terminal_message}",
+        );
+    }
+}
+
+#[test]
 fn prompt_echo_is_never_read_as_completion_evidence() {
     // The regression this normalization exists for. Orbit's own prompt embeds
     // the response contract, example envelope included, and Copilot echoes the
