@@ -105,6 +105,201 @@ fn run_cli_backend_finished_audit_event_keeps_stdout_stderr_blob_refs() {
 }
 
 #[test]
+fn run_cli_backend_does_not_project_codex_command_output_as_response() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("codex");
+    write_executable(
+        &script,
+        concat!(
+            "#!/bin/sh\ncat > /dev/null\n",
+            "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}'\n",
+            "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item-0\",\"type\":\"command_execution\",\"command\":\"read fixture\",\"aggregated_output\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{\\\"claimed\\\":\\\"tool-output\\\"},\\\"error\\\":null}\",\"exit_code\":0,\"status\":\"completed\"}}'\n",
+            "printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":17,\"output_tokens\":3}}'\n",
+        ),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-codex-command-only",
+        "codex:gpt-5.5",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let spec = test_agent_loop_spec(Duration::from_secs(5));
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "job-codex-command-only",
+        audit,
+        &serde_json::json!({"prompt": "read the fixture"}),
+        None,
+    )
+    .expect("run cli backend");
+
+    assert!(!outcome.success);
+    assert!(outcome.output["response_envelope_status"].is_null());
+    assert_eq!(outcome.output["response_envelope_valid"], false);
+    assert!(outcome.output.get("claimed").is_none());
+    assert!(
+        outcome.output["stdout_text"]
+            .as_str()
+            .is_some_and(|stdout| stdout.contains("tool-output")),
+        "raw stdout remains available for diagnostics"
+    );
+}
+
+#[test]
+fn run_cli_backend_projects_codex_final_answer_and_keeps_raw_trace() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("codex");
+    write_executable(
+        &script,
+        concat!(
+            "#!/bin/sh\ncat > /dev/null\n",
+            "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item-0\",\"type\":\"command_execution\",\"command\":\"read fixture\",\"aggregated_output\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"failed\\\",\\\"result\\\":{},\\\"error\\\":{\\\"code\\\":\\\"fixture\\\",\\\"message\\\":\\\"tool-output\\\"}}\",\"exit_code\":0,\"status\":\"completed\"}}'\n",
+            "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item-1\",\"type\":\"agent_message\",\"text\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{\\\"source\\\":\\\"assistant\\\"},\\\"error\\\":null}\"}}'\n",
+            "printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":101,\"cached_input_tokens\":11,\"output_tokens\":9}}'\n",
+        ),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-codex-final-answer",
+        "codex:gpt-5.5",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let spec = test_agent_loop_spec(Duration::from_secs(5));
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "job-codex-final-answer",
+        audit,
+        &serde_json::json!({"prompt": "read then answer"}),
+        None,
+    )
+    .expect("run cli backend");
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(outcome.output["source"], "assistant");
+    assert_eq!(outcome.output["response_envelope_status"], "success");
+    let trace = &outcome
+        .invocation
+        .as_ref()
+        .expect("raw invocation trace")
+        .trace;
+    assert_eq!(trace.usage.input, 101);
+    assert_eq!(trace.usage.cache_read, 11);
+    assert_eq!(trace.usage.output, 9);
+    assert_eq!(trace.tool_calls.len(), 1);
+    assert!(
+        outcome.output["stdout_text"]
+            .as_str()
+            .is_some_and(|stdout| stdout.contains("tool-output")),
+        "raw stdout remains available for diagnostics"
+    );
+}
+
+#[test]
+fn run_cli_backend_copilot_cancellation_cannot_project_tool_arguments() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("copilot");
+    write_executable(
+        &script,
+        concat!(
+            "#!/bin/sh\ncat > /dev/null\n",
+            "printf '%s\\n' '{\"type\":\"assistant.reasoning\",\"data\":{\"content\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{\\\"claimed\\\":\\\"reasoning\\\"},\\\"error\\\":null}\"}}'\n",
+            "printf '%s\\n' '{\"type\":\"assistant.message\",\"data\":{\"content\":\"\",\"toolRequests\":[{\"toolCallId\":\"call-1\",\"name\":\"shell\",\"arguments\":{\"command\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{\\\"claimed\\\":\\\"tool-arguments\\\"},\\\"error\\\":null}\"}}]}}'\n",
+            "printf '%s\\n' '{\"type\":\"session.abort\",\"data\":{\"reason\":\"cancelled\"},\"ephemeral\":true}'\n",
+            "exit 130\n",
+        ),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-copilot-cancelled",
+        "copilot:gpt-5.5",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let mut spec = test_agent_loop_spec(Duration::from_secs(5));
+    spec.provider = orbit_types::workflow::activity_job::Provider::Copilot;
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "job-copilot-cancelled",
+        audit,
+        &serde_json::json!({"prompt": "cancel after tool request"}),
+        None,
+    )
+    .expect("run cli backend");
+
+    assert!(!outcome.success);
+    assert!(outcome.output["response_envelope_status"].is_null());
+    assert!(outcome.output.get("claimed").is_none());
+    assert!(
+        outcome.output["stdout_text"]
+            .as_str()
+            .is_some_and(|stdout| stdout.contains("tool-arguments")),
+        "raw stdout remains available for diagnostics"
+    );
+}
+
+#[test]
+fn run_cli_backend_projects_copilot_final_answer_and_keeps_usage() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("copilot");
+    write_executable(
+        &script,
+        concat!(
+            "#!/bin/sh\ncat > /dev/null\n",
+            "printf '%s\\n' '{\"type\":\"assistant.message\",\"data\":{\"content\":\"\",\"toolRequests\":[{\"toolCallId\":\"call-1\",\"name\":\"shell\",\"arguments\":{\"command\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"failed\\\"}\"}}]}}'\n",
+            "printf '%s\\n' '{\"type\":\"assistant.message\",\"data\":{\"content\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{\\\"source\\\":\\\"assistant\\\"},\\\"error\\\":null}\"}}'\n",
+            "printf '%s\\n' '{\"type\":\"assistant.usage\",\"data\":{\"inputTokens\":73,\"outputTokens\":12}}'\n",
+        ),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-copilot-final-answer",
+        "copilot:gpt-5.5",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let mut spec = test_agent_loop_spec(Duration::from_secs(5));
+    spec.provider = orbit_types::workflow::activity_job::Provider::Copilot;
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "job-copilot-final-answer",
+        audit,
+        &serde_json::json!({"prompt": "use a tool then answer"}),
+        None,
+    )
+    .expect("run cli backend");
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(outcome.output["source"], "assistant");
+    assert_eq!(outcome.output["response_envelope_status"], "success");
+    let usage = &outcome
+        .invocation
+        .as_ref()
+        .expect("normalized invocation trace")
+        .trace
+        .usage;
+    assert_eq!(usage.input, 73);
+    assert_eq!(usage.output, 12);
+}
+
+#[test]
 fn run_cli_backend_projects_prose_prefixed_claude_envelope_result() {
     let temp = tempdir().expect("tempdir");
     let script = temp.path().join("claude");
@@ -609,7 +804,7 @@ while [ "$i" -lt 18000 ]; do
   i=$((i + 1))
 done
 printf '%s\n' '"}}'
-printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"workflow":"usable"},"error":null}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"workflow\":\"usable\"},\"error\":null}"}}'
 "#,
     );
 
@@ -662,9 +857,11 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"workflow":"usabl
     assert_eq!(
         documents
             .last()
-            .and_then(|value| value.get("status"))
+            .and_then(|value| value.pointer("/item/text"))
             .and_then(serde_json::Value::as_str),
-        Some("success")
+        Some(
+            r#"{"schemaVersion":1,"status":"success","result":{"workflow":"usable"},"error":null}"#
+        )
     );
 
     let stdout_blob_ref = outcome.output["stdout_blob_ref"]

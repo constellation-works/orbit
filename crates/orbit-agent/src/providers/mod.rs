@@ -55,19 +55,13 @@ pub(crate) fn build_invocation_spec(
     }
 }
 
-/// Reduce a provider's raw stdout to the bytes Orbit's response/envelope
-/// contract may read.
+/// Normalize a provider's raw stdout for invocation tracing and diagnostics.
 ///
 /// Most providers emit their Orbit envelope directly and are returned
-/// borrowed and unchanged. `copilot` streams JSONL agent events that replay
-/// Orbit's own prompt back as a `user.message` frame, so its stream is
-/// reduced to model-authored frames first — see the `copilot::copilot_stream`
-/// module docs for why that reduction is a correctness requirement rather
-/// than tidying. `cursor` wraps the assistant response in a terminal JSON
-/// result object; its adapter validates that wrapper and exposes only the
-/// model-authored `result` string. `opencode` emits NDJSON events whose
-/// `tool_use` and `reasoning` frames can replay Orbit's own prompt, so its
-/// adapter keeps only the assistant `text` parts.
+/// borrowed and unchanged. Provider adapters remove input echoes and
+/// unsupported control-plane frames while retaining the provider-authored
+/// material needed for telemetry. Response/status projection applies the
+/// stricter [`project_cli_response`] boundary afterward.
 /// [ORB-10946] [ORB-10945] [ORB-11295]
 ///
 /// `provider` is the resolved canonical provider id. An unrecognized id is
@@ -81,5 +75,24 @@ pub fn normalize_cli_stdout<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
         "antigravity" | "agy" => Cow::Owned(antigravity::normalize_antigravity_stdout(stdout)),
         "opencode" => Cow::Owned(opencode::normalize_opencode_stdout(stdout)),
         _ => Cow::Borrowed(stdout),
+    }
+}
+
+/// Expose only provider-attributed assistant answer content to Orbit's
+/// response-envelope projection.
+///
+/// Invocation traces and diagnostics continue to use [`normalize_cli_stdout`]
+/// so usage, tool traffic, and provider failures remain observable. Codex and
+/// Copilot need a narrower view because their JSONL streams also contain
+/// reasoning and tool payloads that may quote an unrelated Orbit envelope.
+/// Other providers retain their existing normalized response boundary.
+/// [ORB-11348]
+pub fn project_cli_response<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8]> {
+    match provider {
+        "codex" => {
+            codex::project_codex_response(stdout).map_or_else(|| Cow::Borrowed(stdout), Cow::Owned)
+        }
+        "copilot" => Cow::Owned(copilot::project_copilot_response(stdout)),
+        _ => normalize_cli_stdout(provider, stdout),
     }
 }
