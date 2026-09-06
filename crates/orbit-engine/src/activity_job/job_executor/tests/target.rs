@@ -117,6 +117,7 @@ fn target_step(spec: ActivityV2Spec) -> TargetStep {
     TargetStep {
         spec,
         activity_name: None,
+        input_schema_json: None,
         fs_profile: None,
         default_input: None,
         timeout_seconds: 0,
@@ -422,6 +423,7 @@ fn agent_loop_step_with_system_crew() -> JobV2Step {
         body: JobV2StepBody::Target(TargetStep {
             spec: ActivityV2Spec::AgentLoop(inline_agent_loop_spec()),
             activity_name: None,
+            input_schema_json: None,
             fs_profile: None,
             default_input: Some(system_crew_default_input()),
             timeout_seconds: 0,
@@ -443,6 +445,7 @@ fn deterministic_step_with_system_crew() -> JobV2Step {
                 config: Value::Null,
             }),
             activity_name: None,
+            input_schema_json: None,
             fs_profile: None,
             default_input: Some(system_crew_default_input()),
             timeout_seconds: 0,

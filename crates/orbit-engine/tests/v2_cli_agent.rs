@@ -466,6 +466,7 @@ fn synthetic_loop_session_job() -> JobV2 {
                 trusted_host_execution: false,
             }),
             activity_name: None,
+            input_schema_json: None,
             fs_profile: None,
             default_input: None,
             timeout_seconds: 0,

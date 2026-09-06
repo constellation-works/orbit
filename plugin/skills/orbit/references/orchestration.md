@@ -142,8 +142,8 @@ can inspect new work without repeating the expensive assessment. Explicit
 selectors, but refuses an ID already prepared by an active run; inspect or
 resume the named run instead.
 
-The job carries an empty `base_branch` default so zero-input template rendering
-reaches prepare. Prepare treats an omitted or empty value as
+At the prepare activity boundary, an omitted optional `base_branch` is bound as
+an empty string. Prepare treats an omitted or empty value as
 `workflow.base_branch`, fetches that landing branch, and pins one
 `source_revision` while preserving primary HEAD, index, dirty and untracked
 files. Remote failure stops before an agent call. Each pilot runs in its own

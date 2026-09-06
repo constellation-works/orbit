@@ -10,10 +10,8 @@
 # primary HEAD, index, or working files. An unfetchable remote fails before
 # any agent call. Each read-only pilot receives at most five tasks and runs
 # in an invocation-owned checkout at that pinned revision.
-# The base branch carries an empty sentinel in the job defaults so the prepare
-# template always renders. Prepare resolves that empty value through the owning
-# workspace's `workflow.base_branch`; a non-empty run input remains an explicit
-# override.
+# Prepare resolves an omitted base branch through the owning workspace's
+# `workflow.base_branch`; a non-empty run input remains an explicit override.
 # Any successful partition reaches apply even if another agent failed.
 # Apply isolates stale or malformed assessments by partition, applies
 # every independently valid partition, then a guard fails the total run when
@@ -46,7 +44,6 @@ spec:
   default_input:
     task_ids: []
     workspace_path: .
-    base_branch: ""
     max_tasks: 50
     max_partition_size: 5
     promotion_authorized: false

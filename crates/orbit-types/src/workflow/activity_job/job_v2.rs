@@ -205,6 +205,10 @@ pub struct TargetStep {
     /// `target: activity:<name>`. Inline specs have no catalog name.
     #[serde(skip)]
     pub activity_name: Option<String>,
+    /// Input contract from the resolved catalog activity. Inline specs have no
+    /// catalog contract, so their template rendering remains strictly literal.
+    #[serde(skip)]
+    pub input_schema_json: Option<Value>,
     #[serde(rename = "fsProfile", default, skip_serializing_if = "Option::is_none")]
     pub fs_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
