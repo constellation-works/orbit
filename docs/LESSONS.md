@@ -1,14 +1,14 @@
 ---
 type: context
 summary: Lessons Learned While Building Orbit
-last_validated: 2026-08-23
+last_validated: 2026-09-06
 ---
 
 # Lessons Learned While Building Orbit
 
 **Status:** Draft
 **Owner:** Daniel
-**Last updated:** 2026-05-11
+**Last updated:** 2026-09-06
 
 I am dedicating this place to record some of the lessons we learned along the way. These lessons may not apply to everyone or in every case, but they shaped some of the decisions we made.
 
@@ -54,5 +54,47 @@ The original numbered decision cited for that proposal was among the bodies lost
 This was catastrophic, but also gave us a chance to amend for the sins of our bad design decisions that have been plaguing us for a while now. [docs/design/task-artifacts/4_decisions](design/task-artifacts/4_decisions.md)
 
 **Lesson**: Backup and recovery are not optional for long-lived artifacts.
+
+----
+
+## 3. The September 2026 Test Fixture Fork Storm
+
+On 2026-09-06, the Linux host reached a load average of 393.68 on 14 CPUs. It
+had 831 processes, including 162 in uninterruptible sleep. One Orbit task
+sandbox owned 386 direct children; 382 of them were shell processes left by
+repeated test executions. The task itself was already done, but its pipeline
+run remained alive for about 113 minutes.
+
+The command responsible was not in the compiler-cache operator script. It was
+an owner-process fixture in
+[`job_pipeline.rs`](../crates/orbit-core/src/application/tests/job_pipeline.rs#L326):
+
+```sh
+while [ ! -f "$ORBIT_TEST_OWNER_RELEASE" ]; do sleep 0.01; done
+```
+
+The agent triggered an ordinary validation run. The fixture then created the
+runaway processes: it spawned the waiter before a sequence of assertions and
+wrote the release file only on the normal success path. If an assertion
+panicked or the test timed out first, no guard killed the child. Dropping the
+test's temporary directory also removed the location where the release file
+could have been created, so the orphaned waiter could never satisfy its exit
+condition.
+
+The ten-millisecond interval made this much worse. `sleep` is an external
+process, so every leaked waiter attempted roughly 100 process launches per
+second. With 382 waiters, the fixture could demand about 38,200 launches per
+second. The pipeline sandbox then failed to contain the defect: its descendant
+tree survived after the task completed and accumulated across repeated tests.
+Cancelling the stale run removed the tree; blocked processes fell to zero and
+the host returned to 90--96% CPU idle. The incident is recorded as
+F2026-09-042.
+
+**Lesson**: Test synchronization must be bounded and preferably in-process,
+not a short-interval shell loop that repeatedly forks. Every fixture that
+spawns a child needs panic-safe cleanup that terminates and reaps it on success,
+failure, panic, and timeout. The outer sandbox or pipeline must independently
+terminate remaining descendants when the owning run ends, because fixture
+cleanup and runtime containment are separate safety layers.
 
 ----
