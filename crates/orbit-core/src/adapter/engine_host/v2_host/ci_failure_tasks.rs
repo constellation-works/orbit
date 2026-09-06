@@ -1153,9 +1153,10 @@ const ERROR_MARKERS: &[&str] = &[
 /// again every hour. Prefer an `##[error]`-annotated line over an unanchored
 /// marker substring, except that GitHub's generic runner-completion annotation
 /// yields to a specific unannotated diagnostic immediately before it. Never
-/// sign off runner-bookkeeping (checkout, group headers, `env:`/`with:` dumps).
-/// With no usable line the step name alone is the signature — weaker, but
-/// stable, and still scoped by workflow and job.
+/// sign off runner-bookkeeping (checkout, group headers, `env:`/`with:` dumps)
+/// or libtest success/section lines whose names happen to contain a marker
+/// word. With no usable line the step name alone is the signature — weaker,
+/// but stable, and still scoped by workflow and job.
 fn error_signature(log_excerpt: &str, step: &str) -> ErrorSignature {
     let lines = classify_log_lines(log_excerpt);
     for (kind, line) in &lines {
@@ -1308,7 +1309,7 @@ fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
                 LineKind::ErrorAnnotated
             } else if is_runner_bookkeeping(&lowered) || lowered.contains("##[group]") {
                 LineKind::Bookkeeping
-            } else if ERROR_MARKERS.iter().any(|marker| lowered.contains(marker)) {
+            } else if is_error_marker_line(&lowered) {
                 LineKind::Marker
             } else {
                 LineKind::Content
@@ -1345,6 +1346,38 @@ fn is_run_command_payload(payload: &str) -> bool {
 
 fn is_runner_bookkeeping(lowered: &str) -> bool {
     lowered.starts_with("head is now at") || lowered.starts_with("syncing repository")
+}
+
+/// Unanchored marker hit that is an actual diagnostic, not a passing test or
+/// cargo/libtest section header. Those headers are identical across distinct
+/// panics, and success lines often contain `error`/`failure` in the test name.
+fn is_error_marker_line(lowered: &str) -> bool {
+    if is_libtest_non_diagnostic(lowered) {
+        return false;
+    }
+    ERROR_MARKERS.iter().any(|marker| lowered.contains(marker))
+}
+
+fn is_libtest_non_diagnostic(lowered: &str) -> bool {
+    let trimmed = lowered.trim();
+    matches!(trimmed, "failures:" | "errors:" | "successes:")
+        || trimmed.starts_with("test result:")
+        || is_successful_test_result(trimmed)
+}
+
+/// `test <name> ... ok` / `ignored`, with an optional timing suffix.
+fn is_successful_test_result(lowered: &str) -> bool {
+    let Some(rest) = lowered.strip_prefix("test ") else {
+        return false;
+    };
+    let Some((_, status)) = rest.rsplit_once(" ... ") else {
+        return false;
+    };
+    let status = status.trim();
+    status == "ok"
+        || status.starts_with("ok ")
+        || status == "ignored"
+        || status.starts_with("ignored ")
 }
 
 /// Cap `text` at `max_bytes` while keeping `anchor_line`, not the head.
