@@ -137,7 +137,7 @@ jobs:
           ./mcp-publisher validate server.json >/dev/null
           echo "MCP Registry metadata validated"
 
-      - name: Require an active constellation-works owner grant
+      - name: Require an active constellation-works administrator membership
         shell: bash
         env:
           MCP_REGISTRY_PAT_TOKEN: ${{ secrets.MCP_REGISTRY_PAT_TOKEN }}
@@ -145,7 +145,7 @@ jobs:
           set -euo pipefail
 
           if [[ -z "${MCP_REGISTRY_PAT_TOKEN:-}" ]]; then
-            echo "MCP_REGISTRY_PAT_TOKEN is required; grant its owner Organization permissions: Members read" >&2
+            echo "MCP_REGISTRY_PAT_TOKEN is required; select constellation-works and grant Organization permissions: Members read" >&2
             exit 1
           fi
 
@@ -169,14 +169,14 @@ jobs:
 
           if [[ -z "$membership" ]]; then
             echo "constellation-works membership: state=missing role=missing" >&2
-            echo "MCP_REGISTRY_PAT_TOKEN needs an active constellation-works owner grant; do not broaden permissions automatically" >&2
+            echo "MCP_REGISTRY_PAT_TOKEN needs an active constellation-works admin membership; do not broaden permissions automatically" >&2
             exit 1
           fi
           state="$(jq -er '.[0].state' <<<"$membership")"
           role="$(jq -er '.[0].role' <<<"$membership")"
           echo "constellation-works membership: state=$state role=$role"
-          if [[ "$state" != "active" || "$role" != "owner" ]]; then
-            echo "MCP_REGISTRY_PAT_TOKEN needs an active constellation-works owner grant; do not broaden permissions automatically" >&2
+          if [[ "$state" != "active" || "$role" != "admin" ]]; then
+            echo "MCP_REGISTRY_PAT_TOKEN needs an active constellation-works admin membership; do not broaden permissions automatically" >&2
             exit 1
           fi
 
@@ -190,7 +190,7 @@ jobs:
           publisher_output="$(mktemp)"
           trap 'rm -f "$publisher_output"' EXIT
           if ! ./mcp-publisher login github --token "$MCP_REGISTRY_PAT_TOKEN" >"$publisher_output" 2>&1; then
-            echo "MCP Registry authentication failed; verify the dedicated token's owner grant" >&2
+            echo "MCP Registry authentication failed; verify the dedicated token's active constellation-works admin membership" >&2
             exit 1
           fi
           if ! ./mcp-publisher publish server.json >"$publisher_output" 2>&1; then
