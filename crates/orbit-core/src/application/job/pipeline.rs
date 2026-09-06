@@ -26,7 +26,9 @@ use sha2::{Digest, Sha256};
 
 use orbit_engine::activity_job::load_job_asset;
 use orbit_types::workflow::JobV2;
-use orbit_types::workflow::activity_job::validate_job_retired_sessions;
+use orbit_types::workflow::activity_job::{
+    TRUSTED_HOST_ADMISSION_KEY, run_input_declares_trusted_host, validate_job_retired_sessions,
+};
 
 use crate::OrbitRuntime;
 use crate::application::job::exec::V2RunFinalizationOptions;
@@ -45,10 +47,27 @@ const PIPELINE_WAIT_MAX_TIMEOUT_SECONDS: u64 = 7200;
 const PIPELINE_WAIT_DEFAULT_POLL_SECONDS: u64 = 5;
 const PIPELINE_WAIT_MIN_POLL_SECONDS: u64 = 1;
 const PIPELINE_WORKER_LOG_TAIL_BYTES: u64 = 16 * 1024;
+/// Run-input field carrying a caller's agent-invocation retry key [ORB-11354].
+const AGENT_INVOKE_IDEMPOTENCY_KEY_FIELD: &str = "idempotency_key";
+/// Cap on the run history scanned when matching an agent-invocation retry key.
+const AGENT_INVOKE_IDEMPOTENCY_SCAN_LIMIT: usize = 200;
+
 /// [ORB-10544] Cap on the run history scanned by the in-flight ship guard.
 /// Non-terminal runs are always among the newest rows, so a bounded window is
 /// enough to spot a duplicate dispatch without walking the whole history.
 const SHIP_IN_FLIGHT_SCAN_LIMIT: usize = 200;
+
+/// The refusal for a submission that supplied the reserved trusted-host
+/// admission key it is not entitled to write [ORB-11354].
+///
+/// Shared by every entry point that accepts caller-shaped run input so the
+/// refusal reads identically whether it came from `orbit run job`, a direct
+/// YAML path, a resume, or a tool call.
+pub(crate) fn reserved_trusted_host_key_error(job_name: &str) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "run input for job '{job_name}' set the reserved `{TRUSTED_HOST_ADMISSION_KEY}` field;          trusted host execution is admitted per invocation by the governed `orbit.agent.invoke`          operation and cannot be requested through ordinary job input"
+    ))
+}
 
 /// One durable pipeline submission: what to run, with what input, and how the
 /// detached worker will find the definition again.
@@ -59,6 +78,26 @@ struct PipelineSubmission<'a> {
     resume: Option<&'a ResumePlan>,
     actor: Option<&'a str>,
     action_key: Option<&'a str>,
+    /// Whether this submission is the canonical trusted-host admission
+    /// [ORB-11354]. Only it may carry [`TRUSTED_HOST_ADMISSION_KEY`] in its
+    /// input; every other submission is refused for supplying it.
+    trusted_host: bool,
+}
+
+impl<'a> PipelineSubmission<'a> {
+    /// An ordinary submission: catalog definition, no resume, no idempotency
+    /// key, and no trusted-host admission.
+    fn catalog(job_name: &'a str, input: Value, actor: Option<&'a str>) -> Self {
+        Self {
+            job_name,
+            definition: SubmittedDefinition::Catalog,
+            input,
+            resume: None,
+            actor,
+            action_key: None,
+            trusted_host: false,
+        }
+    }
 }
 
 /// Trusted context for a pipeline child submitted by a running v2 activity.
@@ -286,6 +325,93 @@ impl OrbitRuntime {
         }))
     }
 
+    /// Persist and dispatch one operator-admitted trusted-host invocation
+    /// [ORB-11354].
+    ///
+    /// The only submission permitted to write [`TRUSTED_HOST_ADMISSION_KEY`],
+    /// which is why it is here — on the module that owns the refusal — rather
+    /// than assembling a `PipelineSubmission` from outside.
+    ///
+    /// `idempotency_key` makes a retried submission resolve the run the first
+    /// attempt created instead of starting a second subprocess. Keys are
+    /// matched over a bounded window of this job's recent runs, the same shape
+    /// the ship guard uses: a key older than that window is not recognized and
+    /// submits again, which is why a key is a retry handle rather than a
+    /// permanent uniqueness constraint.
+    pub(super) fn submit_trusted_host_pipeline_run(
+        &self,
+        input: Value,
+        actor: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<(PipelineInvokeResult, bool), OrbitError> {
+        let job_name = crate::application::job::AGENT_INVOKE_JOB_ID;
+        let idempotency_key = idempotency_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let mut input = input;
+        if let Some(key) = idempotency_key {
+            if let Some(existing) = self.agent_invoke_run_for_key(job_name, key)? {
+                return Ok((
+                    PipelineInvokeResult {
+                        run_id: existing.run_id,
+                        job_name: job_name.to_string(),
+                        submitted_at: existing.scheduled_at.to_rfc3339(),
+                        queued: existing.state == JobRunState::Pending,
+                    },
+                    true,
+                ));
+            }
+            if let Some(object) = input.as_object_mut() {
+                object.insert(
+                    AGENT_INVOKE_IDEMPOTENCY_KEY_FIELD.to_string(),
+                    Value::String(key.to_string()),
+                );
+            }
+        }
+        let result = self.submit_persisted_pipeline_run(PipelineSubmission {
+            trusted_host: true,
+            ..PipelineSubmission::catalog(job_name, input.clone(), Some(actor))
+        });
+        self.record_pipeline_audit(
+            "agent.invoke",
+            result.as_ref().ok().map(|value| value.run_id.as_str()),
+            Some(actor),
+            match &result {
+                Ok(_) => AuditEventStatus::Success,
+                Err(_) => AuditEventStatus::Failure,
+            },
+            json!({
+                "actor": actor,
+                "job_name": job_name,
+                "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
+                "idempotency_key": idempotency_key,
+                "input_hash": input_hash(&input),
+            }),
+            result.as_ref().err().map(|error| error.to_string()),
+        )?;
+        result.map(|invoke| (invoke, false))
+    }
+
+    /// The newest recent run of `job_name` submitted under `key`, if any.
+    fn agent_invoke_run_for_key(
+        &self,
+        job_name: &str,
+        key: &str,
+    ) -> Result<Option<JobRun>, OrbitError> {
+        let runs = self.list_job_runs(crate::application::job::JobRunListParams {
+            job_id: Some(job_name.to_string()),
+            limit: Some(AGENT_INVOKE_IDEMPOTENCY_SCAN_LIMIT),
+            ..Default::default()
+        })?;
+        Ok(runs.into_iter().find(|run| {
+            run.input
+                .as_ref()
+                .and_then(|input| input.get(AGENT_INVOKE_IDEMPOTENCY_KEY_FIELD))
+                .and_then(Value::as_str)
+                == Some(key)
+        }))
+    }
+
     /// [ORB-10470] Submit a resume of a terminal run as a detached run.
     ///
     /// The non-blocking counterpart to
@@ -312,12 +438,8 @@ impl OrbitRuntime {
         let plan = self.plan_job_run_resume(source_run_id)?;
         let job_id = plan.source.job_id.clone();
         self.submit_persisted_pipeline_run(PipelineSubmission {
-            job_name: &job_id,
-            definition: SubmittedDefinition::Catalog,
-            input: plan.input.clone(),
             resume: Some(&plan),
-            actor,
-            action_key: None,
+            ..PipelineSubmission::catalog(&job_id, plan.input.clone(), actor)
         })
     }
 
@@ -350,15 +472,11 @@ impl OrbitRuntime {
 
         let (job_name, spec, yaml) = self.load_direct_job_definition(direct_path)?;
         let result = self.submit_persisted_pipeline_run(PipelineSubmission {
-            job_name: &job_name,
             definition: SubmittedDefinition::Snapshot {
                 spec: &spec,
                 yaml: &yaml,
             },
-            input: input.clone(),
-            resume: None,
-            actor,
-            action_key: None,
+            ..PipelineSubmission::catalog(&job_name, input.clone(), actor)
         });
         self.record_submission_audit(&job_name, &input, actor, &result)?;
         result
@@ -388,12 +506,8 @@ impl OrbitRuntime {
         key: &str,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         let result = self.submit_persisted_pipeline_run(PipelineSubmission {
-            job_name,
-            definition: SubmittedDefinition::Catalog,
-            input: input.clone(),
-            resume: None,
-            actor: Some("automation"),
             action_key: Some(key),
+            ..PipelineSubmission::catalog(job_name, input.clone(), Some("automation"))
         });
         self.record_submission_audit(job_name, &input, Some("automation"), &result)?;
         result
@@ -406,14 +520,11 @@ impl OrbitRuntime {
         priority: Option<&str>,
         actor: Option<&str>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
-        let result = self.submit_persisted_pipeline_run(PipelineSubmission {
+        let result = self.submit_persisted_pipeline_run(PipelineSubmission::catalog(
             job_name,
-            definition: SubmittedDefinition::Catalog,
-            input: input.clone(),
-            resume: None,
+            input.clone(),
             actor,
-            action_key: None,
-        });
+        ));
 
         self.record_pipeline_audit(
             "pipeline.invoke",
@@ -451,14 +562,7 @@ impl OrbitRuntime {
         admission: &ChildPipelineAdmission,
     ) -> Result<Option<PipelineInvokeResult>, OrbitError> {
         let result = self.submit_persisted_pipeline_run_with_admission(
-            PipelineSubmission {
-                job_name,
-                definition: SubmittedDefinition::Catalog,
-                input: input.clone(),
-                resume: None,
-                actor,
-                action_key: None,
-            },
+            PipelineSubmission::catalog(job_name, input.clone(), actor),
             Some(admission),
         );
 
@@ -551,7 +655,16 @@ impl OrbitRuntime {
             resume,
             actor,
             action_key,
+            trusted_host,
         } = submission;
+        // [ORB-11354] The reserved admission key is writable by exactly one
+        // caller. Refusing it here — on the single path every submission
+        // surface funnels through — is what stops `orbit run job`, a resume,
+        // an automation key, or a child dispatch from manufacturing an
+        // unsandboxed run out of ordinary job input.
+        if !trusted_host && run_input_declares_trusted_host(&input) {
+            return Err(reserved_trusted_host_key_error(job_name));
+        }
         let result = (|| {
             let spec = match &definition {
                 SubmittedDefinition::Catalog => self.load_v2_job_asset_by_name(job_name)?.1,

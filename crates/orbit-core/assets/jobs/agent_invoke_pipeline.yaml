@@ -1,0 +1,37 @@
+# Operator-only host exploration/debugging run.
+#
+# Submitted exclusively by the governed `orbit.agent.invoke` operation (MCP,
+# or `orbit run agent` on the CLI), which is the only caller that can stamp the
+# `trusted_host_admission` the activity requires. Submitting this job through
+# `orbit run job` produces a run with no admission, and the invocation fails
+# closed rather than running sandboxed.
+#
+# One step on purpose. This is an investigation, not a delivery pipeline: there
+# is no worktree setup, no lock reservation, no task transition, and no PR
+# behavior to sequence. Status, results and cancellation are the ordinary run
+# surfaces — `orbit run show|logs|cancel <RUN_ID>`.
+#
+# The crew comes from the submission (`crew` in the run input) rather than
+# being pinned here, so an operator picks the model per investigation the way
+# they pick the prompt.
+schemaVersion: 2
+kind: Job
+metadata:
+  name: agent_invoke_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  # Exploration runs are operator-initiated and interactive in spirit; several
+  # concurrent investigations are normal, and each is one subprocess.
+  max_active_runs: 8
+
+  steps:
+    - id: invoke
+      target: activity:agent_invoke
+      default_input:
+        prompt: "{{ input.prompt }}"
+        workspace_path: "{{ input.cwd }}"
+        cwd: "{{ input.cwd }}"
+        crew: "{{ input.crew }}"
+        timeout_seconds: "{{ input.timeout_seconds }}"
+        trusted_host_admission: "{{ input.trusted_host_admission }}"

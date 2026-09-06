@@ -1,5 +1,53 @@
 [
   {
+    "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability. Track it with `orbit.workflow.run.show`, read output with `orbit run logs <RUN_ID>`, and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "crew": {
+          "description": "Configured crew selecting the provider, model, and reasoning effort. Defaults to the workspace's default crew.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout; it is never inferred from the caller.",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "description": "Retry handle. A resubmission carrying a key a recent submission already used resolves that run instead of starting a second agent.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "type": "string"
+        },
+        "prompt": {
+          "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change.",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "description": "Wall-clock bound for the invocation. Defaults to 1800 and may not exceed 7200.",
+          "type": "integer"
+        },
+        "workspace": {
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt",
+        "cwd"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_agent_invoke"
+  },
+  {
     "description": "List every auto-task definition in this workspace.",
     "inputSchema": {
       "additionalProperties": true,

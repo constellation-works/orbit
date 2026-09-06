@@ -48,8 +48,12 @@ impl OrbitRuntime {
     ) -> Result<Value, OrbitError> {
         if tool_context.orbit_host.is_none() {
             let task_id = resolve_task_id_from_context(self, &tool_context)?;
-            tool_context.orbit_host =
-                Some(super::tool_host::build_orbit_tool_host(self, task_id, None));
+            tool_context.orbit_host = Some(super::tool_host::build_orbit_tool_host(
+                self,
+                task_id,
+                None,
+                tool_context.session_context.clone(),
+            ));
         }
         self.execute_registered_tool(name, input, tool_context, capability_enforcement)
     }

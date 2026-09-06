@@ -3,6 +3,7 @@ use orbit_core::OrbitRuntime;
 
 use crate::command::{CommandOut, Execute};
 
+use super::agent::RunAgentArgs;
 use super::auto;
 use super::cancel::RunCancelArgs;
 use super::concurrency::RunConcurrencyArgs;
@@ -25,6 +26,7 @@ Workflow entrypoints:
   orbit run ship-sweep [--dry-run] [--json]
   orbit run triage [task_id ...]
   orbit run job <job_id> [--input key=value] [--json] [--debug]
+  orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS]
 
 Run history:
   orbit run history [--limit 50]
@@ -58,6 +60,7 @@ Workflows:
   triage      Triage tasks blocked by failed runs; re-backlog environmental failures
   readiness   Explain why backlog tasks are waiting in auto-drain
   job         Run an arbitrary job by ID
+  agent       Invoke an agent on the host for exploration or debugging (operator only)
 
 Audits:
   history    Show recent job runs, optionally filtered to one job
@@ -117,6 +120,8 @@ pub enum RunSubcommand {
     Concurrency(RunConcurrencyArgs),
     /// Run an arbitrary job by ID
     Job(JobRunArgs),
+    /// Invoke an agent on the host for exploration or debugging (operator only)
+    Agent(RunAgentArgs),
 }
 
 impl Execute for RunSubcommand {
@@ -138,6 +143,7 @@ impl Execute for RunSubcommand {
             RunSubcommand::Cancel(command) => command.execute(runtime),
             RunSubcommand::Concurrency(command) => command.execute(runtime),
             RunSubcommand::Job(command) => command.execute(runtime),
+            RunSubcommand::Agent(command) => command.execute(runtime),
         }
     }
 }

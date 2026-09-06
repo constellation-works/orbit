@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod auto_task;
 pub mod command;
 pub mod docs;
@@ -72,6 +73,9 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.register_inactive(workspace_claim::OrbitWorkspaceClaimAcquireTool);
     registry.register_inactive(workspace_claim::OrbitWorkspaceClaimReleaseTool);
     registry.register_inactive(workspace_claim::OrbitWorkspaceClaimShowTool);
+    // Agent invocation is workspace-scoped: the admission is made against the
+    // checkout that owns it, and Core is where that decision lives.
+    registry.register_mcp(agent::OrbitAgentInvokeTool, McpToolScope::WorkspaceRequired);
     // Command execution is workspace-scoped; Core retains its domain and claim
     // validation.
     registry.register_mcp(

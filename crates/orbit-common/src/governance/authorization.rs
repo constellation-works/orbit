@@ -238,6 +238,17 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "retuning a live drain's worker ceiling changes how much work the workspace starts",
     },
     GovernedOperation {
+        id: "orbit.agent.invoke",
+        surface: OperationSurface::Tool,
+        // Deliberately not `Runner`. Every other run-reachable operation lists
+        // it so a sanctioned run can perform its own work; this one must not,
+        // because the whole point of the mode is to leave the sandbox a managed
+        // run exists to stay inside. A run that could admit itself would be a
+        // sandbox escape wearing an authorization.
+        allowed: &[McpCapability::Operator],
+        rationale: "an agent invocation runs a provider subprocess on the host outside the executor sandbox, so only a present operator may admit one",
+    },
+    GovernedOperation {
         id: "orbit.command.exec",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

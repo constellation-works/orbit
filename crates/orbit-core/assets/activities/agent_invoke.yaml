@@ -1,0 +1,130 @@
+# Operator-only host exploration/debugging invocation.
+#
+# This is the ONLY activity permitted to declare `trustedHostExecution`, and
+# asset load rejects the key anywhere else. Even here the key is inert on its
+# own: the engine also requires a `trusted_host_admission` stamped into the run
+# input by the governed `orbit.agent.invoke` submission, and fails the
+# invocation closed when one is absent.
+#
+# Be clear about what the mode does and does not do:
+#   - It removes Orbit's filesystem sandbox from this one provider subprocess,
+#     which then runs as the same OS user as Orbit and can read and write
+#     anything that user can. It is not an isolation boundary.
+#   - It grants the child no Orbit capability. The subprocess still carries
+#     managed-run provenance, so it resolves as an agent at every capability
+#     chokepoint and cannot perform a governed operation.
+#   - `proc_allowed_programs` below is Orbit's own `proc.spawn` allowlist. The
+#     provider harness owns its native shell tool and Orbit does not enforce
+#     the list against it, so treat the list as documentation of intent rather
+#     than as a control.
+#
+# The activity investigates and reports. It has no task-write, lifecycle,
+# dispatch, commit, or PR grant, and the pipeline performs no task transition
+# on its behalf.
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: agent_invoke
+spec:
+  type: agent_loop
+  trustedHostExecution: true
+  # Completion is enforced, content is advisory: an investigation that exits 0
+  # without terminating its envelope stopped mid-turn and must not checkpoint
+  # as success. What it *concluded* stays advisory — an operator reads the
+  # answer, Orbit does not act on it.
+  require_completion_envelope: true
+  require_response_envelope: false
+  description: >
+    Operator-admitted exploration and debugging invocation. Runs one provider
+    subprocess on the host, outside the executor sandbox, in an explicit
+    working directory, and returns its findings. Read-oriented by contract: it
+    reports to the operator and changes no Orbit record.
+  input_schema_json:
+    type: object
+    required: [prompt, workspace_path, cwd]
+    properties:
+      prompt:
+        type: string
+      # The subprocess cwd. Named `workspace_path` because that is the key the
+      # CLI runner resolves the child's working directory from; the admission
+      # below records the owning checkout separately.
+      workspace_path:
+        type: string
+      cwd:
+        type: string
+      crew:
+        type: string
+      # Shortens the declared `wall_clock_timeout_seconds` below; it can never
+      # raise it, so the asset remains the ceiling.
+      timeout_seconds:
+        type: number
+      trusted_host_admission:
+        type: object
+  output_schema_json:
+    type: object
+    properties:
+      summary:
+        type: string
+      findings:
+        type: array
+        items:
+          type: string
+      next_steps:
+        type: array
+        items:
+          type: string
+  instruction: |
+    You are an operator's exploration and debugging assistant, invoked directly
+    on the host.
+
+    Input contains `prompt` (what the operator wants investigated), `cwd` (the
+    directory you start in, also supplied as `workspace_path`), and the
+    operator's `trusted_host_admission`.
+
+    You are running outside Orbit's filesystem sandbox as the operator's own
+    OS user. Investigate whatever the prompt requires. Prefer read-only
+    inspection; when the prompt asks you to change something, do exactly what
+    was asked and nothing adjacent.
+
+    Hard bounds — these are contract, not preference:
+    - Do not change Orbit task state, promote, dispatch, submit a run, or
+      invoke another agent. You have no lifecycle grant and requesting one is
+      out of scope for this invocation.
+    - Do not commit, push, open, merge, or comment on a pull request.
+    - Do not act on anything outside the operator's prompt because it looked
+      wrong to you. Report it instead.
+
+    Return exactly one Orbit response envelope, whatever the outcome:
+    {"schemaVersion":1,"status":"success","result":{
+      "summary":"one paragraph answering the operator's question",
+      "findings":["concrete finding with its evidence"],
+      "next_steps":["what the operator could do next"]
+    },"error":null}
+
+    If the investigation could not be completed, return the same envelope with
+    `status":"failed"` and a non-empty `error.message` saying what blocked it.
+    Exiting without an envelope is not a valid outcome and is recorded as a
+    failed invocation.
+  tools:
+    - orbit.task.show
+    - orbit.task.list
+    - orbit.search
+    - proc.spawn
+  proc_allowed_programs:
+    - awk
+    - bash
+    - cargo
+    - cat
+    - find
+    - git
+    - grep
+    - jq
+    - ls
+    - make
+    - ps
+    - python3
+    - rg
+    - sed
+    - sh
+  on_denial: terminate
+  wall_clock_timeout_seconds: 1800

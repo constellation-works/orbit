@@ -327,7 +327,14 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::WorkflowShip
         | OrbitBuiltinAction::WorkspaceClaimAcquire
         | OrbitBuiltinAction::WorkspaceClaimRelease
-        | OrbitBuiltinAction::WorkspaceClaimShow => NO_REDACTION,
+        | OrbitBuiltinAction::WorkspaceClaimShow
+        // [ORB-11354] The invocation prompt is free text and *is* persisted on
+        // the run record, but redacting it would change the instruction the
+        // agent receives — an operator debugging an auth failure needs to name
+        // the thing they are debugging. It stays verbatim; the run record is
+        // already operator-only, and the provider argv/stdout paths keep their
+        // own redactors.
+        | OrbitBuiltinAction::AgentInvoke => NO_REDACTION,
     }
 }
 

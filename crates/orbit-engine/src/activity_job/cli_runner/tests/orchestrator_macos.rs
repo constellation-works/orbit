@@ -53,6 +53,7 @@ fn run_cli_backend_audit_argv_starts_with_sandbox_exec_for_each_provider() {
         let outcome = run_cli_backend(
             &host,
             &spec,
+            "test_activity",
             "job-sandbox-shape",
             audit.clone(),
             &serde_json::json!({"prompt": "hi"}),
@@ -129,6 +130,7 @@ fn run_cli_backend_pins_codex_sandbox_under_outer_wrapper() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-codex-pin",
         audit.clone(),
         &serde_json::json!({"prompt": "hi"}),
@@ -204,6 +206,7 @@ fn run_cli_backend_drops_gemini_sandbox_flag_under_outer_wrapper() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-gemini-drop",
         audit.clone(),
         &serde_json::json!({"prompt": "hi"}),
@@ -272,6 +275,7 @@ fn run_cli_backend_drops_grok_sandbox_flag_under_outer_wrapper() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-grok-drop",
         audit.clone(),
         &serde_json::json!({"prompt": "hi"}),
@@ -340,6 +344,7 @@ fn run_cli_backend_leaves_claude_argv_suffix_unchanged_under_sandbox() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-claude-passthrough",
         audit.clone(),
         &serde_json::json!({"prompt": "hi"}),

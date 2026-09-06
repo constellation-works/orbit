@@ -22,7 +22,7 @@ use orbit_types::task::{
     push_external_ref_if_missing,
 };
 use orbit_types::telemetry::InvocationTrace;
-use orbit_types::tool::is_exact_canonical_tool_name;
+use orbit_types::tool::{ToolSessionContext, is_exact_canonical_tool_name};
 use orbit_types::workflow::{ActivityV2, JobRun, JobRunStartOutcome, JobRunState};
 use serde_json::Value;
 
@@ -645,6 +645,7 @@ impl RuntimeHost for OrbitRuntime {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(ToOwned::to_owned),
+                ToolSessionContext::default(),
             )),
             ..Default::default()
         }

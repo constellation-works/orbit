@@ -57,6 +57,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/epic_orchestrator.yaml"),
     ),
     (
+        "agent_invoke",
+        include_str!("../../assets/activities/agent_invoke.yaml"),
+    ),
+    (
         "gate_starvation_fail",
         include_str!("../../assets/activities/gate_starvation_fail.yaml"),
     ),
@@ -245,6 +249,10 @@ backend = "cli"
 
         let expected = BTreeMap::from([
             ("agent_implement", ("codex", "gpt-5.6-sol".to_string())),
+            // The exploration invocation names no crew either: an operator
+            // chooses one per submission, and an omitted choice falls through
+            // to the run's crew exactly like every other activity here.
+            ("agent_invoke", ("codex", "gpt-5.6-sol".to_string())),
             ("epic_orchestrator", ("codex", "gpt-5.6-sol".to_string())),
             (
                 "step_failure_recovery",

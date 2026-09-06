@@ -1,0 +1,340 @@
+//! Operator-only host exploration/debugging invocation [ORB-11354].
+//!
+//! One durable, asynchronous run of one provider subprocess, outside the
+//! executor's filesystem sandbox, in an explicit working directory. It exists
+//! for the question an operator cannot answer from inside a managed run's
+//! sandbox — "why is this host behaving this way" — and it deliberately reuses
+//! the ordinary job machinery rather than adding a second scheduler: the same
+//! run record, the same detached worker, the same supervision, the same
+//! `orbit run show|logs|cancel`.
+//!
+//! # What this module owns
+//!
+//! Exactly the admission and the shape of the submission:
+//!
+//! * the operator check (delegated to
+//!   [`OrbitRuntime::admit_agent_invoke`](crate::OrbitRuntime), the single
+//!   canonical chokepoint),
+//! * validation of the explicit workspace/cwd pair, prompt, crew and timeout,
+//! * stamping the durable [`TrustedHostAdmission`] the engine requires,
+//! * the bounded operator-facing projection of a finished invocation.
+//!
+//! Everything after submission is the existing pipeline: nothing here spawns,
+//! supervises, cancels, or mutates a task.
+//!
+//! # What it is not
+//!
+//! Not a task, and not a delivery pipeline. The run performs no task
+//! transition, opens no PR, and dispatches nothing. The child subprocess
+//! carries managed-run provenance, so it resolves as an *agent* at every
+//! capability chokepoint and cannot admit another invocation of its own.
+
+use std::path::{Path, PathBuf};
+
+use chrono::Utc;
+use orbit_common::OrbitError;
+use orbit_types::tool::ToolSessionContext;
+use orbit_types::workflow::JobRun;
+use orbit_types::workflow::activity_job::{TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission};
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use crate::OrbitRuntime;
+
+/// Catalog job that carries one agent invocation.
+pub const AGENT_INVOKE_JOB_ID: &str = "agent_invoke_pipeline";
+
+/// Wall-clock bound applied when the caller does not name one. The activity
+/// asset's own `wall_clock_timeout_seconds` remains the ceiling; a request may
+/// only shorten it.
+pub const DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS: u64 = 1800;
+
+/// Longest bound a caller may request. Anything above this is refused rather
+/// than silently clamped, so an operator who asked for a day-long unsandboxed
+/// process learns that they did.
+pub const MAX_AGENT_INVOKE_TIMEOUT_SECONDS: u64 = 7200;
+
+/// How much of the provider's captured output the operator-facing projection
+/// inlines. The full capture stays addressable through the durable blob
+/// reference the projection carries alongside it.
+const RESULT_PREVIEW_LIMIT_BYTES: usize = 4096;
+
+/// One operator's request to run an exploration invocation.
+#[derive(Debug, Clone)]
+pub struct AgentInvokeRequest<'a> {
+    /// What the operator wants investigated. Required and non-empty: an
+    /// invocation with nothing to do would still start an unsandboxed process.
+    pub prompt: &'a str,
+    /// Working directory the provider subprocess starts in. Required and
+    /// explicit — never inferred from the caller's cwd, because the caller may
+    /// be an MCP server in an unrelated directory.
+    pub cwd: &'a str,
+    /// Crew selecting provider/model/effort. `None` uses the workspace default.
+    pub crew: Option<&'a str>,
+    /// Requested wall-clock bound, in seconds.
+    pub timeout_seconds: Option<u64>,
+    /// Caller-supplied retry key. Two submissions carrying the same key resolve
+    /// to the same run rather than starting a second subprocess.
+    pub idempotency_key: Option<&'a str>,
+    /// Attribution label for the authorizing operator.
+    pub actor: Option<&'a str>,
+    /// The caller's session, resolved at the admission chokepoint.
+    pub session_context: &'a ToolSessionContext,
+}
+
+/// The durable outcome of a successful submission.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentInvokeSubmission {
+    pub run_id: String,
+    pub job_id: String,
+    pub submitted_at: String,
+    /// Whether the run is waiting on the job's `max_active_runs` ceiling rather
+    /// than already executing.
+    pub queued: bool,
+    /// Whether this submission resolved an existing run through its
+    /// idempotency key instead of creating a new one.
+    pub deduplicated: bool,
+    /// The admission recorded on the run.
+    pub admission: TrustedHostAdmission,
+    /// Effective wall-clock bound for the invocation.
+    pub timeout_seconds: u64,
+}
+
+/// A finished (or running) invocation, rendered for an operator.
+///
+/// Deliberately distinguishes the ways an invocation can end. A provider that
+/// exits 0 without terminating its response envelope did not finish its turn,
+/// and the run records that as a failure — so `outcome` here is never derived
+/// from the exit code alone.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentInvokeResult {
+    /// `running`, `queued`, `succeeded`, `failed`, `timeout`, `cancelled`,
+    /// or `interrupted` — the run's own state, not the subprocess's exit code.
+    pub outcome: String,
+    /// Why a non-success outcome happened, when the run recorded a reason.
+    pub failure_reason: Option<String>,
+    /// The provider's exit code, when the subprocess ran to completion.
+    pub exit_code: Option<i64>,
+    /// Whether the subprocess was killed for exceeding its wall-clock bound.
+    pub timed_out: bool,
+    /// Whether the invocation terminated with a well-formed response envelope.
+    /// `false` on an otherwise-clean exit means the agent stopped mid-turn.
+    pub completed_envelope: bool,
+    /// The agent's own summary, when it returned one.
+    pub summary: Option<String>,
+    /// Bounded preview of the captured output.
+    pub preview: Option<String>,
+    /// Whether `preview` is shorter than what the invocation actually produced.
+    pub preview_truncated: bool,
+    /// Durable reference to the complete captured stdout, readable with
+    /// `orbit run logs <RUN_ID>` after the preview is exhausted.
+    pub stdout_blob_ref: Option<String>,
+}
+
+impl OrbitRuntime {
+    /// Admit and submit one exploration invocation.
+    ///
+    /// Order is the contract: the operator check happens before validation,
+    /// and both happen before anything durable exists. An unauthorized caller
+    /// therefore never creates a run record, a worktree, or a process.
+    pub fn submit_agent_invoke_run(
+        &self,
+        request: AgentInvokeRequest<'_>,
+    ) -> Result<AgentInvokeSubmission, OrbitError> {
+        let provenance = self.admit_agent_invoke(request.session_context)?;
+
+        let prompt = require_non_empty(request.prompt, "prompt")?;
+        let cwd = self.resolve_invocation_cwd(request.cwd)?;
+        let crew = self.canonical_crew_name(request.crew)?;
+        let timeout_seconds = resolve_timeout(request.timeout_seconds)?;
+        let actor = request
+            .actor
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map_or_else(|| self.actor_label().to_string(), ToOwned::to_owned);
+
+        let admission = TrustedHostAdmission {
+            authorized_by: actor.clone(),
+            authorizer_provenance: provenance.to_string(),
+            authorized_at: Utc::now().to_rfc3339(),
+            workspace_path: self.paths().repo_root.display().to_string(),
+            cwd: cwd.display().to_string(),
+        };
+
+        let input = json!({
+            "prompt": prompt,
+            "cwd": cwd.display().to_string(),
+            "crew": crew,
+            "timeout_seconds": timeout_seconds,
+            TRUSTED_HOST_ADMISSION_KEY: serde_json::to_value(&admission)
+                .map_err(|error| OrbitError::Execution(format!("encode admission: {error}")))?,
+        });
+
+        let (invoke, deduplicated) =
+            self.submit_trusted_host_pipeline_run(input, &actor, request.idempotency_key)?;
+
+        tracing::warn!(
+            target: "orbit.trusted_host",
+            run_id = %invoke.run_id,
+            authorized_by = %admission.authorized_by,
+            authorizer_provenance = %admission.authorizer_provenance,
+            cwd = %admission.cwd,
+            deduplicated,
+            "admitted an operator agent invocation outside the executor sandbox"
+        );
+
+        Ok(AgentInvokeSubmission {
+            run_id: invoke.run_id,
+            job_id: invoke.job_name,
+            submitted_at: invoke.submitted_at,
+            queued: invoke.queued,
+            deduplicated,
+            admission,
+            timeout_seconds,
+        })
+    }
+
+    /// Canonicalize and validate the explicit working directory.
+    ///
+    /// The directory must exist and lie inside the runtime's own checkout.
+    /// Containment is what keeps "the owning workspace authorized this" true:
+    /// a caller addressing workspace A must not be able to point an unsandboxed
+    /// subprocess at workspace B's checkout, or anywhere else on the host,
+    /// through the same admission.
+    fn resolve_invocation_cwd(&self, cwd: &str) -> Result<PathBuf, OrbitError> {
+        let requested = require_non_empty(cwd, "cwd")?;
+        let path = Path::new(requested);
+        if !path.is_absolute() {
+            return Err(OrbitError::InvalidInput(format!(
+                "`cwd` must be an absolute path; got '{requested}'"
+            )));
+        }
+        let canonical = path.canonicalize().map_err(|error| {
+            OrbitError::InvalidInput(format!("`cwd` '{requested}' is not readable: {error}"))
+        })?;
+        if !canonical.is_dir() {
+            return Err(OrbitError::InvalidInput(format!(
+                "`cwd` '{requested}' is not a directory"
+            )));
+        }
+        let workspace_root = self.paths().repo_root.canonicalize().map_err(|error| {
+            OrbitError::Execution(format!(
+                "canonicalize workspace root '{}': {error}",
+                self.paths().repo_root.display()
+            ))
+        })?;
+        if !canonical.starts_with(&workspace_root) {
+            return Err(OrbitError::InvalidInput(format!(
+                "`cwd` '{}' is outside this workspace checkout '{}'; an invocation is admitted \
+                 against the workspace that authorizes it, so run it from the owning workspace \
+                 instead",
+                canonical.display(),
+                workspace_root.display()
+            )));
+        }
+        Ok(canonical)
+    }
+}
+
+/// Read a finished or in-flight invocation for an operator [ORB-11354].
+///
+/// Returns `None` for any run that is not an agent invocation, so the ordinary
+/// run projections can call it unconditionally.
+///
+/// Reads the run record and its persisted state rather than the live process:
+/// results survive the submitting client disconnecting, and stay readable long
+/// after the subprocess is gone.
+pub fn agent_invoke_result(
+    run: &JobRun,
+    step_outputs: Option<&std::collections::BTreeMap<u32, Value>>,
+) -> Option<AgentInvokeResult> {
+    if run.job_id != AGENT_INVOKE_JOB_ID {
+        return None;
+    }
+    let output = step_outputs.and_then(|outputs| outputs.values().next_back());
+    let field = |key: &str| output.and_then(|value| value.get(key));
+
+    let timed_out = field("timed_out").and_then(Value::as_bool).unwrap_or(false);
+    let preview = field("stdout_text")
+        .and_then(Value::as_str)
+        .map(bounded_preview);
+    let preview_truncated = field("stdout_text_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || field("stdout_text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.len() > RESULT_PREVIEW_LIMIT_BYTES);
+
+    Some(AgentInvokeResult {
+        outcome: outcome_label(run),
+        failure_reason: run
+            .steps
+            .last()
+            .and_then(|step| step.error_message.clone())
+            .or_else(|| {
+                field("completion_envelope_error")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            }),
+        exit_code: field("exit_code").and_then(Value::as_i64),
+        timed_out,
+        // Absent output means the invocation never reported, which is not the
+        // same as reporting a complete envelope. Default to `false`.
+        completed_envelope: field("completion_envelope_satisfied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        summary: field("summary")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        preview,
+        preview_truncated,
+        stdout_blob_ref: field("stdout_blob_ref")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    })
+}
+
+/// The run state, rendered as the outcome vocabulary an operator reads.
+///
+/// Taken from the run record, never from the provider's exit code: a
+/// subprocess that exits 0 without finishing its turn produces a `failed` run,
+/// and that is the answer to "did the investigation succeed".
+fn outcome_label(run: &JobRun) -> String {
+    run.state.to_string()
+}
+
+fn bounded_preview(text: &str) -> String {
+    if text.len() <= RESULT_PREVIEW_LIMIT_BYTES {
+        return text.to_string();
+    }
+    let mut end = RESULT_PREVIEW_LIMIT_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}
+
+fn require_non_empty<'a>(value: &'a str, field: &str) -> Result<&'a str, OrbitError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(OrbitError::InvalidInput(format!("`{field}` is required")));
+    }
+    Ok(trimmed)
+}
+
+fn resolve_timeout(requested: Option<u64>) -> Result<u64, OrbitError> {
+    let Some(seconds) = requested else {
+        return Ok(DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS);
+    };
+    if seconds == 0 {
+        return Err(OrbitError::InvalidInput(
+            "`timeout_seconds` must be at least 1".to_string(),
+        ));
+    }
+    if seconds > MAX_AGENT_INVOKE_TIMEOUT_SECONDS {
+        return Err(OrbitError::InvalidInput(format!(
+            "`timeout_seconds` must be at most {MAX_AGENT_INVOKE_TIMEOUT_SECONDS}"
+        )));
+    }
+    Ok(seconds)
+}

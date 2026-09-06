@@ -327,6 +327,12 @@ impl Commands {
             Commands::Run(command) => {
                 use super::run::RunSubcommand;
                 let (subcommand, target_type, target_id, runtime_need) = match &command.command {
+                    RunSubcommand::Agent(_) => (
+                        "agent",
+                        Some("workflow"),
+                        Some("agent_invoke"),
+                        RuntimeNeed::Required,
+                    ),
                     RunSubcommand::Auto(_) => (
                         "auto",
                         Some("workflow"),

@@ -65,8 +65,16 @@ fn run_cli_backend_finished_audit_event_keeps_stdout_stderr_blob_refs() {
         "task_id": "TAUDIT"
     });
 
-    let outcome = run_cli_backend(&host, &spec, "job-audit", audit.clone(), &input, None)
-        .expect("run succeeds");
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "test_activity",
+        "job-audit",
+        audit.clone(),
+        &input,
+        None,
+    )
+    .expect("run succeeds");
 
     assert!(outcome.success);
     let stdout = "{\"schemaVersion\":1,\"status\":\"success\",\"result\":{},\"error\":null}\n";
@@ -131,6 +139,7 @@ fn run_cli_backend_does_not_project_codex_command_output_as_response() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-codex-command-only",
         audit,
         &serde_json::json!({"prompt": "read the fixture"}),
@@ -179,6 +188,7 @@ fn run_cli_backend_projects_codex_final_answer_and_keeps_raw_trace() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-codex-final-answer",
         audit,
         &serde_json::json!({"prompt": "read then answer"}),
@@ -233,6 +243,7 @@ fn run_cli_backend_rejects_an_invalid_terminal_codex_answer() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-codex-invalid-terminal-answer",
         audit,
         &serde_json::json!({"prompt": "read then answer"}),
@@ -274,6 +285,7 @@ fn run_cli_backend_copilot_cancellation_cannot_project_tool_arguments() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-copilot-cancelled",
         audit,
         &serde_json::json!({"prompt": "cancel after tool request"}),
@@ -320,6 +332,7 @@ fn run_cli_backend_projects_copilot_final_answer_and_keeps_usage() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-copilot-final-answer",
         audit,
         &serde_json::json!({"prompt": "use a tool then answer"}),
@@ -381,6 +394,7 @@ fn run_cli_backend_rejects_copilot_terminal_failed_or_timeout_after_commentary()
         let outcome = run_cli_backend(
             &host,
             &spec,
+            "test_activity",
             &format!("job-copilot-{status}-after-commentary"),
             audit,
             &serde_json::json!({"prompt": "answer after progress"}),
@@ -424,6 +438,7 @@ fn run_cli_backend_rejects_copilot_trailing_terminal_prose() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-copilot-trailing-prose",
         audit,
         &serde_json::json!({"prompt": "answer then add courtesy prose"}),
@@ -492,6 +507,7 @@ fn run_cli_backend_projects_prose_prefixed_claude_envelope_result() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-claude-envelope-result",
         audit,
         &serde_json::json!({"prompt": "triage failed runs"}),
@@ -542,6 +558,7 @@ fn run_cli_backend_rejects_schema_invalid_success_envelope() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-invalid-envelope",
         audit,
         &serde_json::json!({"prompt": "hi"}),
@@ -594,6 +611,7 @@ fn run_cli_backend_fails_artifact_activity_when_exit_zero_carries_no_envelope() 
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-artifact-response",
         audit,
         &serde_json::json!({"task_id": "ORB-10230"}),
@@ -642,6 +660,7 @@ fn run_cli_backend_keeps_advisory_activity_successful_without_an_envelope() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-advisory-response",
         audit,
         &serde_json::json!({"prompt": "group the backlog"}),
@@ -685,6 +704,7 @@ fn run_cli_backend_keeps_opted_out_declared_failure_advisory() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-advisory-declared-failure",
         audit,
         &serde_json::json!({"prompt": "emit decorative status"}),
@@ -725,6 +745,7 @@ fn run_cli_backend_completion_gate_demotes_a_declared_failure_envelope() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-declared-failure",
         audit,
         &serde_json::json!({"task_id": "ORB-10449"}),
@@ -769,6 +790,7 @@ fn run_cli_backend_completion_gate_demotes_a_declared_timeout_envelope() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-declared-timeout",
         audit,
         &serde_json::json!({"task_id": "ORB-10733"}),
@@ -810,6 +832,7 @@ fn run_cli_backend_completion_check_tolerates_interleaved_non_json_stdout() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-interleaved-stdout",
         audit,
         &serde_json::json!({"task_id": "ORB-10449"}),
@@ -868,6 +891,7 @@ fn run_cli_backend_fails_on_the_jrun_20260726_1758_5_stall_shape() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "jrun-20260726-1758-5",
         audit,
         &serde_json::json!({"task_id": "ORB-10436"}),
@@ -908,6 +932,7 @@ fn run_cli_backend_requires_envelope_when_activity_opts_in() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-required-response",
         audit,
         &serde_json::json!({"prompt": "return structured data"}),
@@ -959,6 +984,7 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{
         run_cli_backend(
             &host,
             &spec,
+            "test_activity",
             "job-verbose-output",
             audit,
             &serde_json::json!({"prompt": "perform verbose work"}),
@@ -1046,6 +1072,7 @@ fn run_cli_backend_bounds_stdout_text_preview_and_keeps_envelope_status_from_ful
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-stdout-preview",
         audit,
         &serde_json::json!({"prompt": "hi"}),
@@ -1107,6 +1134,7 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-stdout-redaction",
         audit,
         &serde_json::json!({"prompt": "hi"}),
@@ -1165,6 +1193,7 @@ fn run_cli_backend_redacts_live_env_values_in_stored_blobs() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-cli-blob-redaction",
         audit,
         &serde_json::json!({"prompt": format!("provider stdin contains {secret}")}),
@@ -1228,8 +1257,16 @@ fn run_cli_backend_returns_error_when_declared_workspace_path_missing() {
         "task_id": "TMISSING"
     });
 
-    let err = run_cli_backend(&host, &spec, "job-missing-cwd", audit.clone(), &input, None)
-        .expect_err("missing declared workspace should fail");
+    let err = run_cli_backend(
+        &host,
+        &spec,
+        "test_activity",
+        "job-missing-cwd",
+        audit.clone(),
+        &input,
+        None,
+    )
+    .expect_err("missing declared workspace should fail");
     match err {
         DispatchError::CliInvocationFailed(message) => {
             assert!(
@@ -1288,6 +1325,7 @@ fn run_cli_backend_records_resolved_cwd_in_started_event() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-cwd-audit",
         audit.clone(),
         &serde_json::json!({ "prompt": "do it", "task_id": "TCWD" }),
@@ -1359,6 +1397,7 @@ fn linux_bwrap_failed_invocation_names_ungranted_write_path_and_deny() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-linux-write-denial",
         audit,
         &serde_json::json!({"prompt": "attempt the write"}),
@@ -1470,6 +1509,7 @@ fn linux_bwrap_exit_zero_without_an_envelope_still_names_the_denied_write() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-linux-exit-zero-denial",
         audit,
         &serde_json::json!({"prompt": "attempt the write"}),
@@ -1540,6 +1580,7 @@ fn run_cli_backend_emits_provider_pid_between_the_started_and_finished_events() 
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-pid-audit",
         audit.clone(),
         &serde_json::json!({ "prompt": "do it" }),
@@ -1632,6 +1673,7 @@ printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{}},"error":null
             let outcome = run_cli_backend(
                 &host,
                 &spec,
+                "test_activity",
                 &format!("run-{pipeline}-{provider}"),
                 audit,
                 &input,
@@ -1686,6 +1728,7 @@ printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{}},"error":null
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "run-epic-finisher",
         test_audit("run-epic-finisher", "codex"),
         &input,
@@ -1727,6 +1770,7 @@ fn epic_orchestrator_declared_root_mismatch_fails_before_provider_spawn() {
     let error = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "run-epic-finisher-mismatch",
         audit.clone(),
         &input,
@@ -1764,6 +1808,7 @@ fn declared_repo_root_mismatch_fails_typed_before_provider_spawn() {
     let error = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-repo-root-mismatch",
         audit.clone(),
         &input,
@@ -1783,6 +1828,7 @@ fn declared_repo_root_mismatch_fails_typed_before_provider_spawn() {
     let null_error = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-null-repo-root",
         audit.clone(),
         &input,
@@ -1824,6 +1870,7 @@ fn declared_non_git_checkout_fails_typed_before_provider_spawn() {
     let error = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-non-git-pair",
         audit.clone(),
         &input,
@@ -1860,6 +1907,7 @@ fn declared_checkout_from_different_repository_fails_before_provider_spawn() {
     let error = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-different-common-dir",
         audit.clone(),
         &worktree_input(&assigned_fixture, "ORB-DIFFERENT-REPO"),
@@ -1900,6 +1948,7 @@ fn declared_checkout_cannot_collapse_to_registered_primary() {
     let error = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-primary-collapse",
         audit.clone(),
         &input,
@@ -1936,6 +1985,7 @@ fn unchanged_pre_dirty_primary_does_not_block_valid_worktree_implementation() {
     let outcome = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-pre-dirty-primary",
         test_audit("run-pre-dirty-primary", "codex"),
         &worktree_input(&fixture, "ORB-PRE-DIRTY"),
@@ -1971,6 +2021,7 @@ fn concurrent_primary_fast_forward_does_not_block_disjoint_worktree_changes() {
     let outcome = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-concurrent-fast-forward",
         test_audit("run-concurrent-fast-forward", "codex"),
         &worktree_input(&fixture, "ORB-CONCURRENT-FF"),
@@ -2219,6 +2270,7 @@ fn failed_auto_task_refresh_preserves_primary_and_audits_definition_and_run() {
     let outcome = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-auto-task-refresh-failed",
         audit.clone(),
         &worktree_input(&fixture, "ORB-AUTO-TASK-REFRESH"),
@@ -2278,6 +2330,7 @@ fn unchanged_pre_dirty_path_is_excluded_from_escape_diagnostic() {
     let error = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-predirty-attribution",
         test_audit("run-predirty-attribution", "codex"),
         &worktree_input(&fixture, "ORB-PREDIRTY-ATTRIBUTION"),
@@ -2322,6 +2375,7 @@ fn staged_only_primary_delta_reports_its_path_and_index_identity() {
     let error = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-staged-only-attribution",
         test_audit("run-staged-only-attribution", "codex"),
         &worktree_input(&fixture, "ORB-STAGED-ONLY"),
@@ -2365,6 +2419,7 @@ fn primary_escape_is_typed_non_retryable_and_preserves_both_checkouts() {
     let error = run_cli_backend(
         &host,
         &test_agent_loop_spec_for("claude", Duration::from_secs(5)),
+        "test_activity",
         "run-deliberate-escape",
         audit.clone(),
         &worktree_input(&fixture, "ORB-ESCAPE"),
@@ -2426,6 +2481,7 @@ fn primary_content_mutation_is_typed_even_when_assigned_content_also_changes() {
     let error = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-ambiguous-integrity",
         test_audit("run-ambiguous-integrity", "codex"),
         &worktree_input(&fixture, "ORB-AMBIGUOUS"),
@@ -2585,6 +2641,7 @@ fn assigned_history_divergence_is_a_typed_worktree_content_conflict() {
     let error = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-assigned-history-change",
         test_audit("run-assigned-history-change", "codex"),
         &worktree_input(&fixture, "ORB-ASSIGNED-HISTORY"),
@@ -2632,6 +2689,7 @@ fn non_fast_forward_primary_move_remains_a_typed_drift_failure() {
     let error = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "run-primary-reset",
         test_audit("run-primary-reset", "codex"),
         &worktree_input(&fixture, "ORB-PRIMARY-RESET"),
@@ -2923,6 +2981,7 @@ fn primary_escape_is_checked_after_nonzero_exit_and_timeout() {
         let error = run_cli_backend(
             &host,
             &test_agent_loop_spec(timeout),
+            "test_activity",
             &run_id,
             test_audit(&run_id, "codex"),
             &worktree_input(&fixture, &task_id),
@@ -3351,6 +3410,7 @@ fn run_cli_backend_passes_provider_config_to_codex_runtime_args() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-config",
         audit.clone(),
         &serde_json::json!({ "prompt": "do it" }),
@@ -3426,6 +3486,7 @@ fn run_cli_backend_passes_model_to_grok_and_captures_well_formed_stdout() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-grok-model",
         audit.clone(),
         &serde_json::json!({"prompt": "hi"}),
@@ -3504,6 +3565,7 @@ fi
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-grok-identity-env",
         audit,
         &serde_json::json!({"prompt": "hi"}),
@@ -3559,6 +3621,7 @@ fi
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-grok-telemetry",
         audit,
         &serde_json::json!({"prompt": "hi", "task_id": "ORB-10342"}),
@@ -3619,6 +3682,7 @@ fi
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-grok-env-allowlist",
         audit,
         &serde_json::json!({"prompt": "hi"}),
@@ -3676,6 +3740,7 @@ fi
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-grok-orbit-root",
         audit,
         &serde_json::json!({"prompt": "hi"}),
@@ -3778,6 +3843,7 @@ printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{"identity":"ok"
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-grok-registry-root",
         audit.clone(),
         &serde_json::json!({"prompt": "hi", "task_id": "ORB-10980"}),
@@ -3923,6 +3989,7 @@ fn run_cli_backend_demotes_success_when_envelope_reports_failed_despite_exit_zer
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-success-demote",
         audit,
         &serde_json::json!({"prompt": "hi"}),
@@ -3967,6 +4034,7 @@ fn run_cli_backend_keeps_success_when_envelope_reports_success() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-success-keep",
         audit,
         &serde_json::json!({"prompt": "hi"}),
@@ -4014,6 +4082,7 @@ fn single_crew_drives_exact_model_to_agent() {
     let _ = run_cli_backend(
         &host_i,
         &spec_i_run,
+        "test_activity",
         "job-crew-impl",
         audit_i.clone(),
         &input_i,
@@ -4080,6 +4149,7 @@ fn run_cli_backend_redacts_token_shaped_argv_in_audit() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-argv-redaction",
         audit,
         &serde_json::json!({"prompt": "hi"}),
@@ -4129,6 +4199,7 @@ fn run_cli_backend_passes_derived_antigravity_print_timeout() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-agy-print-timeout",
         audit,
         &serde_json::json!({"prompt": "do it"}),
@@ -4191,6 +4262,7 @@ fn run_cli_backend_surfaces_antigravity_timeout_terminal_error_when_stderr_empty
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-agy-timeout-error",
         audit,
         &serde_json::json!({"prompt": "do it"}),
@@ -4253,6 +4325,7 @@ fn run_cli_backend_names_the_terminal_reason_on_an_exit_zero_error_ending() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-max-turns",
         audit,
         &serde_json::json!({"task_id": "ORB-10746"}),
@@ -4296,6 +4369,7 @@ fn run_cli_backend_reports_a_missing_json_schema_flag_as_a_capability_failure() 
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-missing-flag",
         audit,
         &serde_json::json!({"task_id": "ORB-10746"}),
@@ -4351,6 +4425,7 @@ fn run_cli_backend_reports_a_rejected_schema_from_the_response_wrapper() {
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-rejected-schema",
         audit,
         &serde_json::json!({"task_id": "ORB-10746"}),
@@ -4424,6 +4499,7 @@ fn run_cli_backend_accepts_a_structured_output_envelope_from_a_tool_using_run() 
     let outcome = run_cli_backend(
         &host,
         &spec,
+        "test_activity",
         "job-structured-output",
         audit,
         &serde_json::json!({"task_id": "ORB-10734"}),

@@ -9,3 +9,4 @@ mod orchestrator_macos;
 mod spawn;
 mod supervisor;
 pub(in crate::activity_job::cli_runner) mod test_support;
+mod trusted_host;
