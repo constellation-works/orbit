@@ -78,6 +78,7 @@ pub(super) fn execute(
         OrbitBuiltinAction::StateSet => super::state_tools::set(task_scope, input),
         OrbitBuiltinAction::TaskAdd => super::task_tools::add(runtime, input, agent, model),
         OrbitBuiltinAction::TaskApprove => super::task_tools::approve(runtime, input, agent, model),
+        OrbitBuiltinAction::TaskArtifactGet => super::task_tools::artifact_get(runtime, input),
         OrbitBuiltinAction::TaskDelete => super::task_tools::delete(runtime, input),
         OrbitBuiltinAction::TaskLint => super::task_tools::lint(runtime, input),
         OrbitBuiltinAction::TaskList => super::task_tools::list(runtime, input),

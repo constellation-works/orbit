@@ -113,6 +113,7 @@ pub enum OrbitBuiltinAction {
     StateSet,
     TaskAdd,
     TaskApprove,
+    TaskArtifactGet,
     TaskDelete,
     TaskLint,
     TaskList,

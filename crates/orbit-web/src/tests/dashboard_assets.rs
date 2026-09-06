@@ -2007,3 +2007,145 @@ assert.doesNotMatch(rendered,/Examined through/);
 "#,
     );
 }
+
+/// The task-detail image preview, driven through the shipped `tasks.js` module
+/// against a DOM double rather than asserted against source text: what matters
+/// is that a PNG artifact renders as an `<img>` a reader can actually see, that
+/// SVG still downloads, and that a decode failure degrades to the bytes.
+#[test]
+fn dashboard_task_detail_renders_image_artifacts_at_desktop_and_narrow_widths() {
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+    // Responsiveness is a stylesheet contract, so it is checked where it lives:
+    // the element scales to its column and keeps its aspect ratio, and narrow
+    // viewports bound the height so a tall screenshot cannot take over the page.
+    assert!(css.contains(".artifact-image"));
+    assert!(css.contains("max-width: 100%"));
+    assert!(css.contains("max-height: 60vh"));
+
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(tag = "") { this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.hidden = false; }
+  appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
+  replaceChildren(...nodes) { this.children = []; this._text = ""; for (const node of nodes) this.appendChild(node); }
+  removeChild(child) { this.children = this.children.filter((c) => c !== child); child.parentNode = null; return child; }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((c) => c.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get classList() { const self = this; return { add: (...c) => { self.className = `${self.className} ${c.join(" ")}`.trim(); }, remove: () => {}, toggle: () => {} }; }
+  querySelectorAll() { return []; }
+}
+const descend = (node, predicate) => {
+  for (const child of node.children || []) {
+    if (predicate(child)) return child;
+    const found = descend(child, predicate);
+    if (found) return found;
+  }
+  return null;
+};
+const byTag = (node, tag) => descend(node, (n) => n.tag === tag);
+globalThis.document = {
+  getElementById: () => new Node(),
+  createElement: (tag) => new Node(tag),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+globalThis.window = { location: new URL("http://dashboard.test/"), innerWidth: 1280 };
+
+const revoked = [];
+globalThis.URL.createObjectURL = (blob) => `blob:${blob.__kind}`;
+globalThis.URL.revokeObjectURL = (url) => revoked.push(url);
+
+// Byte-exact synthetic PNG: signature plus filler, the same fixture shape the
+// Rust tests use. Nothing here comes from a real user image.
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+
+const requested = [];
+function respondWith(kind, contentType) {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (name) => (name.toLowerCase() === "content-type" ? contentType : null) },
+    blob: async () => ({ __kind: kind }),
+    text: async () => "plain body",
+  };
+}
+let nextResponse = respondWith("png", "image/png");
+globalThis.fetch = async (path) => { requested.push(String(path)); return nextResponse; };
+
+const { buildArtifacts } = await import("./tasks.js");
+
+async function renderPreview(artifact, response) {
+  nextResponse = response;
+  const wrap = buildArtifacts({ id: "ORB-00042", artifacts: [artifact] });
+  const row = wrap.children[0];
+  const preview = wrap.children[1];
+  await row.listeners.click({ stopPropagation() {} });
+  return { wrap, row, preview };
+}
+
+// --- A PNG artifact renders as a real image with open/download controls -----
+const png = { path: "diagrams/flow.png", media_type: "image/png", size_bytes: PNG_BYTES.length };
+let { row, preview } = await renderPreview(png, respondWith("png", "image/png"));
+
+if (!requested.includes("/api/tasks/ORB-00042/artifacts/diagrams/flow.png"))
+  throw new Error(`preview did not fetch the artifact route: ${requested}`);
+if (!row.textContent.includes("image/png"))
+  throw new Error(`the metadata row must stay compact and typed: ${row.textContent}`);
+
+const img = byTag(preview, "img");
+if (!img) throw new Error(`a PNG artifact must render an <img>, got: ${preview.textContent}`);
+if (img.src !== "blob:png") throw new Error(`image src was not the fetched blob: ${img.src}`);
+if (img.alt !== "diagrams/flow.png") throw new Error(`image needs descriptive alt text: ${img.alt}`);
+if (!String(img.className).includes("artifact-image"))
+  throw new Error(`image must carry the responsive class: ${img.className}`);
+
+const collectLinks = (node) => {
+  const found = [];
+  const visit = (n) => { for (const c of n.children || []) { if (c.tag === "a") found.push(c); visit(c); } };
+  visit(node);
+  return found;
+};
+let links = collectLinks(preview);
+const open = links.find((a) => a.textContent === "Open");
+const download = links.find((a) => a.textContent === "Download");
+if (!open || open.href !== "blob:png" || open.target !== "_blank")
+  throw new Error("an image preview must offer an Open control in a new tab");
+if (!download || download.download !== "flow.png")
+  throw new Error("an image preview must offer a Download control with the file name");
+
+// --- A decode failure degrades to the bytes instead of a broken image -------
+img.listeners.error();
+if (byTag(preview, "img")) throw new Error("a failed image must be removed, not left broken");
+if (!preview.textContent.includes("could not be decoded"))
+  throw new Error(`a decode failure must be explained: ${preview.textContent}`);
+const fallback = collectLinks(preview).filter((a) => a.download === "flow.png");
+if (fallback.length !== 1)
+  throw new Error(`a failed image must still offer its bytes exactly once, got ${fallback.length}`);
+
+// --- Narrow viewport renders the same image element ------------------------
+window.innerWidth = 420;
+({ preview } = await renderPreview(png, respondWith("png", "image/png")));
+const narrowImg = byTag(preview, "img");
+if (!narrowImg || !String(narrowImg.className).includes("artifact-image"))
+  throw new Error("the narrow-width render lost the responsive image preview");
+
+// --- SVG is an image format that must still download, never render ---------
+window.innerWidth = 1280;
+const svg = { path: "diagrams/active.svg", media_type: "image/svg+xml", size_bytes: 40 };
+({ preview } = await renderPreview(svg, respondWith("svg", "application/octet-stream")));
+if (byTag(preview, "img"))
+  throw new Error("SVG hosts script and must never be rendered inline");
+const svgLink = collectLinks(preview).find((a) => a.download === "active.svg");
+if (!svgLink) throw new Error(`SVG must fall back to a download link: ${preview.textContent}`);
+
+// --- Text artifacts keep working ------------------------------------------
+const md = { path: "notes/summary.md", media_type: "text/markdown", size_bytes: 11 };
+({ preview } = await renderPreview(md, respondWith("md", "text/plain")));
+if (byTag(preview, "img")) throw new Error("a text artifact must not render as an image");
+if (!preview.textContent.includes("plain body"))
+  throw new Error(`text preview regressed: ${preview.textContent}`);
+"#,
+    );
+}

@@ -486,6 +486,9 @@ impl Commands {
                         TaskArtifactSubcommand::Put(args) => {
                             ("artifact-put", Some("task"), Some(args.id.as_str()))
                         }
+                        TaskArtifactSubcommand::Get(args) => {
+                            ("artifact-get", Some("task"), Some(args.id.as_str()))
+                        }
                     },
                     TaskSubcommand::Locks(command) => match &command.command {
                         LocksSubcommand::List(_) => ("locks-list", None, None),

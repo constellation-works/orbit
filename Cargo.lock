@@ -2220,6 +2220,7 @@ dependencies = [
 name = "orbit-core"
 version = "0.18.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "croner",
  "fs2",

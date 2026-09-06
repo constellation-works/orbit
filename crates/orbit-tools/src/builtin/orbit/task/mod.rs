@@ -1,5 +1,6 @@
 pub mod add;
 pub mod approve;
+pub mod artifact_get;
 pub mod artifact_put;
 pub mod delete;
 pub mod lint;

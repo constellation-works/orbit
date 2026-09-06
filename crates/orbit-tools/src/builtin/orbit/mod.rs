@@ -54,6 +54,12 @@ pub fn register(registry: &mut ToolRegistry) {
     // operation registry and registered from there.
     friction::register(registry);
     registry.register_mcp(task::add::OrbitTaskAddTool, McpToolScope::WorkspaceRequired);
+    // Attach and read are the two halves of one artifact surface: without a
+    // read verb an agent can store a reference it can never inspect again.
+    registry.register_mcp(
+        task::artifact_get::OrbitTaskArtifactGetTool,
+        McpToolScope::WorkspaceRequired,
+    );
     registry.register_mcp(
         task::artifact_put::OrbitTaskArtifactPutTool,
         McpToolScope::WorkspaceRequired,

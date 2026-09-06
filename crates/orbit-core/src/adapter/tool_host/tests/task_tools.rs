@@ -2718,3 +2718,280 @@ fn task_tool_rejects_mismatched_agent_and_model() {
 
     assert!(error.to_string().contains("use `model`"));
 }
+
+/// End-to-end coverage for the artifact read surface: attach through the
+/// canonical put tool, list compact metadata, then retrieve the payload.
+mod artifact_get {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+    use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskStatus};
+    use serde_json::{Value, json};
+
+    use super::super::super::test_support::{create_task, run_tool_as_operator, test_runtime};
+    use crate::OrbitRuntime;
+    use crate::application::task::TaskUpdateParams;
+
+    const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+    /// A synthetic PNG: a real signature plus filler. Orbit stores bytes and
+    /// classifies by signature, so no encoder is needed and no user content
+    /// ever has to be copied into the test corpus.
+    fn synthetic_png() -> Vec<u8> {
+        let mut bytes = PNG_SIGNATURE.to_vec();
+        bytes.extend_from_slice(&(0..512_u16).map(|i| (i % 251) as u8).collect::<Vec<_>>());
+        bytes
+    }
+
+    fn synthetic_jpeg() -> Vec<u8> {
+        let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        bytes.extend_from_slice(b"JFIF synthetic body");
+        bytes
+    }
+
+    fn attach(runtime: &OrbitRuntime, task_id: &str, path: &str, content: Vec<u8>) {
+        let source = std::env::temp_dir().join(format!(
+            "orbit-artifact-fixture-{}-{}",
+            std::process::id(),
+            path.replace('/', "_"),
+        ));
+        std::fs::write(&source, &content).expect("write artifact fixture");
+        run_tool_as_operator(
+            runtime,
+            "orbit.task.artifact.put",
+            json!({
+                "id": task_id,
+                "source_path": source.to_string_lossy(),
+                "path": path,
+                "model": "codex",
+            }),
+        )
+        .expect("attach artifact");
+        std::fs::remove_file(&source).ok();
+    }
+
+    fn get(runtime: &OrbitRuntime, task_id: &str, path: &str) -> Value {
+        run_tool_as_operator(
+            runtime,
+            "orbit.task.artifact.get",
+            json!({"id": task_id, "path": path}),
+        )
+        .expect("read artifact")
+    }
+
+    fn seeded_task(runtime: &OrbitRuntime, repo_root: &std::path::Path) -> String {
+        create_task(
+            runtime,
+            repo_root,
+            "artifact fixture",
+            "holds synthetic artifacts",
+            TaskStatus::InProgress,
+            &[],
+        )
+        .id
+        .to_string()
+    }
+
+    #[test]
+    fn raster_images_survive_attach_list_and_read_with_intact_bytes() {
+        let (_root, runtime, repo_root) = test_runtime();
+        let id = seeded_task(&runtime, &repo_root);
+        let png = synthetic_png();
+        let jpeg = synthetic_jpeg();
+        attach(&runtime, &id, "diagrams/flow.png", png.clone());
+        attach(&runtime, &id, "diagrams/shot.jpg", jpeg.clone());
+
+        // Listing stays compact: metadata only, no payload for binary content.
+        let listed = run_tool_as_operator(
+            &runtime,
+            "orbit.task.show",
+            json!({"id": id, "fields": "artifacts"}),
+        )
+        .expect("list artifacts");
+        let rows = listed.as_array().expect("artifact rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["media_type"], "image/png");
+        assert_eq!(rows[0]["size"], png.len());
+        assert!(
+            rows[0].get("content").is_none(),
+            "binary payloads must not ride along in the metadata list"
+        );
+
+        for (path, media_type, expected) in [
+            ("diagrams/flow.png", "image/png", &png),
+            ("diagrams/shot.jpg", "image/jpeg", &jpeg),
+        ] {
+            let read = get(&runtime, &id, path);
+            assert_eq!(read["media_type"], media_type);
+            assert_eq!(read["presentation"], "image");
+            assert_eq!(read["encoding"], "base64");
+            assert_eq!(read["size"], expected.len());
+            let decoded = BASE64_STANDARD
+                .decode(read["content_base64"].as_str().expect("base64 payload"))
+                .expect("payload decodes");
+            assert_eq!(decoded, *expected, "{path} lost byte integrity");
+        }
+    }
+
+    #[test]
+    fn text_artifacts_are_returned_as_utf8_rather_than_base64() {
+        let (_root, runtime, repo_root) = test_runtime();
+        let id = seeded_task(&runtime, &repo_root);
+        attach(&runtime, &id, "notes/summary.md", b"# heading\n".to_vec());
+
+        let read = get(&runtime, &id, "notes/summary.md");
+        assert_eq!(read["presentation"], "text");
+        assert_eq!(read["encoding"], "utf8");
+        assert_eq!(read["content"], "# heading\n");
+        assert!(read.get("content_base64").is_none());
+    }
+
+    #[test]
+    fn svg_stays_a_download_and_is_never_classified_as_a_viewable_image() {
+        let (_root, runtime, repo_root) = test_runtime();
+        let id = seeded_task(&runtime, &repo_root);
+        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>";
+        attach(&runtime, &id, "diagrams/active.svg", svg.to_vec());
+
+        let read = get(&runtime, &id, "diagrams/active.svg");
+        assert_eq!(read["media_type"], "image/svg+xml");
+        assert_eq!(
+            read["presentation"], "opaque",
+            "SVG carries active content and must never be handed to a renderer"
+        );
+        // Still fully retrievable — fail-closed is about rendering, not access.
+        let decoded = BASE64_STANDARD
+            .decode(read["content_base64"].as_str().expect("base64 payload"))
+            .expect("payload decodes");
+        assert_eq!(decoded, svg.to_vec());
+    }
+
+    #[test]
+    fn a_png_whose_bytes_are_markup_is_downgraded_to_opaque() {
+        let (_root, runtime, repo_root) = test_runtime();
+        let id = seeded_task(&runtime, &repo_root);
+        // The media type comes from the extension, so this is the shape a
+        // mislabeled or corrupt upload actually takes.
+        attach(
+            &runtime,
+            &id,
+            "diagrams/lying.png",
+            b"<html><script>alert(1)</script></html>".to_vec(),
+        );
+
+        let read = get(&runtime, &id, "diagrams/lying.png");
+        assert_eq!(read["media_type"], "image/png");
+        assert_eq!(read["presentation"], "opaque");
+    }
+
+    #[test]
+    fn a_missing_artifact_names_the_task_and_path() {
+        let (_root, runtime, repo_root) = test_runtime();
+        let id = seeded_task(&runtime, &repo_root);
+        attach(&runtime, &id, "notes/present.txt", b"here".to_vec());
+
+        let error = run_tool_as_operator(
+            &runtime,
+            "orbit.task.artifact.get",
+            json!({"id": id, "path": "notes/absent.txt"}),
+        )
+        .expect_err("missing artifact is an error");
+        let message = error.to_string();
+        assert!(
+            message.contains(&id),
+            "error should name the task: {message}"
+        );
+        assert!(
+            message.contains("notes/absent.txt"),
+            "error should name the path: {message}"
+        );
+    }
+
+    #[test]
+    fn traversal_and_absolute_paths_are_refused_before_any_read() {
+        let (_root, runtime, repo_root) = test_runtime();
+        let id = seeded_task(&runtime, &repo_root);
+
+        for path in [
+            "../../etc/passwd",
+            "/etc/passwd",
+            "notes/../../escape.txt",
+            "./notes.txt",
+            r"notes\escape.txt",
+        ] {
+            let error = run_tool_as_operator(
+                &runtime,
+                "orbit.task.artifact.get",
+                json!({"id": id, "path": path}),
+            )
+            .expect_err("traversal must be refused");
+            assert!(
+                matches!(error, orbit_common::OrbitError::InvalidInput(_)),
+                "{path} should be rejected as invalid input, got {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_oversize_artifact_is_a_clear_error_rather_than_a_truncated_payload() {
+        let (_root, runtime, repo_root) = test_runtime();
+        let id = seeded_task(&runtime, &repo_root);
+        // `orbit.task.artifact.put` bounds its own source read, so an oversize
+        // artifact can only reach the store through a direct update. It still
+        // must not come back as a half-decodable image.
+        let mut oversize = PNG_SIGNATURE.to_vec();
+        oversize.resize(MAX_TASK_ARTIFACT_CONTENT_BYTES as usize + 1, 0x5A);
+        runtime
+            .update_task_with_identity(
+                &id,
+                TaskUpdateParams {
+                    upsert_artifacts: vec![orbit_types::task::TaskArtifact {
+                        path: "diagrams/huge.png".to_string(),
+                        media_type: "image/png".to_string(),
+                        content: oversize,
+                        created_by: None,
+                    }],
+                    ..Default::default()
+                },
+                None,
+                Some("codex".to_string()),
+            )
+            .expect("store oversize artifact");
+
+        let error = run_tool_as_operator(
+            &runtime,
+            "orbit.task.artifact.get",
+            json!({"id": id, "path": "diagrams/huge.png"}),
+        )
+        .expect_err("oversize read is refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("limit") && message.contains("diagrams/huge.png"),
+            "oversize error should be actionable: {message}"
+        );
+        assert!(
+            message.contains("/api/tasks/"),
+            "oversize error should point at the download route: {message}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_task_fails_closed_before_any_artifact_lookup() {
+        let (_root, runtime, _repo_root) = test_runtime();
+        let error = run_tool_as_operator(
+            &runtime,
+            "orbit.task.artifact.get",
+            json!({"id": "ORB-99999", "path": "diagrams/flow.png"}),
+        )
+        .expect_err("unknown task is refused");
+        assert!(
+            matches!(
+                error,
+                orbit_common::OrbitError::NotFound {
+                    kind: orbit_common::NotFoundKind::Task,
+                    ..
+                }
+            ),
+            "expected a task not-found, got {error}"
+        );
+    }
+}

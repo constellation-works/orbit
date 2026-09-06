@@ -16,6 +16,7 @@ clap = ["orbit-types/clap"]
 
 [dependencies]
 orbit-automation = { path = "../orbit-automation" }
+base64.workspace = true
 chrono.workspace = true
 croner.workspace = true
 fs2.workspace = true

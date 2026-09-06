@@ -48,6 +48,7 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_task_approve"
         | "orbit_task_list"
         | "orbit_task_show"
+        | "orbit_task_artifact_get"
         | "orbit_task_artifact_put"
         | "orbit_friction_add"
         | "orbit_friction_list"
@@ -56,7 +57,11 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_auto_task_mint"
         | "orbit_search"
         | "orbit_workflow_ship" => McpToolClass::ControlPlane,
-        "orbit_command_exec"
+        // Runs a process on the destination host outside Orbit's sandbox, so
+        // the host that would execute it owns the decision — the same reason
+        // `orbit.command.exec` is Execute [ORB-11354].
+        "orbit_agent_invoke"
+        | "orbit_command_exec"
         | "orbit_workflow_run_list"
         | "orbit_workflow_run_show"
         | "orbit_workflow_run_resume"

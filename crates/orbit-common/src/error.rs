@@ -22,6 +22,8 @@ pub struct ArtifactOrigin {
 pub enum NotFoundKind {
     Tool,
     Task,
+    /// One file stored under a task's artifacts directory.
+    Artifact,
     Skill,
     Job,
     JobRun,
@@ -37,6 +39,7 @@ impl std::fmt::Display for NotFoundKind {
         let kind = match self {
             Self::Tool => "tool",
             Self::Task => "task",
+            Self::Artifact => "task artifact",
             Self::Skill => "skill",
             Self::Job => "job",
             Self::JobRun => "job run",
