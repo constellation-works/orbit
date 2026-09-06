@@ -31,8 +31,12 @@ spec:
     `ref_no_longer_exists` rather than current: its pull request merged or
     its branch was deleted, so the landing branch's own runs are the live
     evidence. That probe is authoritative and bounded — one origin query per
-    distinct branch carrying a red run — and a probe that fails leaves the
-    failure current. When candidates outnumber `max_investigated_runs` the
+    distinct branch carrying a red run, rotating through overflow candidates
+    across bounded sweeps by `investigation_cursor` without starvation. A candidate
+    branch whose origin probe is skipped past the probe budget or fails transiently
+    remains in `deferred` with a run-scoped retryable error rather than being
+    listed as current or assumed merged; verified current failures still progress.
+    When candidates outnumber `max_investigated_runs` the
     ranked prefix keeps all but one slot and the last slot rotates through
     the overflow by `investigation_cursor`, so a candidate below the cap is
     investigated within one rotation instead of never. Discovery or investigation failures are
@@ -68,8 +72,9 @@ spec:
         type: number
         description: >
           Cap on origin probes for branches no scanned head covers. Defaults to
-          20, maximum 100. Branches past the cap keep their failures listed as
-          current rather than being assumed merged.
+          20, maximum 100. Branches past the cap keep their failures deferred
+          with retryable errors until relevance is established rather than
+          being assumed merged or current.
       investigation_cursor:
         type: number
         description: >
@@ -109,6 +114,8 @@ spec:
           stale_or_superseded:
             type: array
           in_flight:
+            type: array
+          deferred:
             type: array
           retryable_errors:
             type: array

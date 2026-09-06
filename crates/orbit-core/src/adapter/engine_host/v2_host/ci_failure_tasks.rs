@@ -248,21 +248,30 @@ where
     // of the retryable gap it is: surface it as its own deferred entry so the
     // run ID and reason stay visible for a later sweep.
     let matched_run_ids: BTreeSet<String> = failures.iter().filter_map(run_id_key).collect();
+    let evidence_deferred = evidence
+        .get("deferred")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     for (run_id, reasons) in &run_errors {
         if matched_run_ids.contains(run_id) {
             continue;
         }
+        let from_evidence = evidence_deferred
+            .iter()
+            .find(|entry| run_id_key(entry).as_deref() == Some(run_id));
         let run_id_value = reasons
             .first()
             .and_then(|reason| reason.get("run_id"))
             .cloned()
+            .or_else(|| from_evidence.and_then(|entry| entry.get("run_id")).cloned())
             .unwrap_or(Value::Null);
         deferred.push(json!({
             "run_id": run_id_value,
-            "url": Value::Null,
-            "workflow": Value::Null,
-            "head_branch": Value::Null,
-            "ref_kind": Value::Null,
+            "url": from_evidence.and_then(|entry| entry.get("url")).cloned().unwrap_or(Value::Null),
+            "workflow": from_evidence.and_then(|entry| entry.get("workflow")).cloned().unwrap_or(Value::Null),
+            "head_branch": from_evidence.and_then(|entry| entry.get("head_branch")).cloned().unwrap_or(Value::Null),
+            "ref_kind": from_evidence.and_then(|entry| entry.get("ref_kind")).cloned().unwrap_or(Value::Null),
             "investigated": false,
             "retryable": true,
             "reasons": reasons,
