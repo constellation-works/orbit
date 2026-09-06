@@ -376,3 +376,146 @@ mod relations {
         assert!(validate_task_relations_for_source("ORB-00001", &relations, &existing).is_ok());
     }
 }
+
+mod presentation {
+    use crate::task::{
+        ArtifactPresentation, artifact_presentation, image_bytes_match_media_type,
+        inline_safe_artifact_media_type, is_inline_image_media_type,
+        normalized_artifact_media_type,
+    };
+
+    const PNG_HEADER: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+    fn png_bytes() -> Vec<u8> {
+        let mut bytes = PNG_HEADER.to_vec();
+        bytes.extend_from_slice(b"synthetic pixel payload");
+        bytes
+    }
+
+    #[test]
+    fn media_type_normalization_drops_parameters_and_case() {
+        assert_eq!(
+            normalized_artifact_media_type("image/PNG; charset=binary").as_deref(),
+            Some("image/png")
+        );
+        assert_eq!(normalized_artifact_media_type("   ").as_deref(), None);
+    }
+
+    #[test]
+    fn inline_allowlist_covers_raster_images_and_excludes_active_content() {
+        for media_type in ["image/png", "image/jpeg", "image/gif", "image/webp"] {
+            assert!(
+                is_inline_image_media_type(media_type),
+                "{media_type} should be inline-renderable"
+            );
+        }
+        // Active content: both are viewable formats, both host script.
+        assert_eq!(inline_safe_artifact_media_type("image/svg+xml"), None);
+        assert_eq!(inline_safe_artifact_media_type("text/html"), None);
+        assert!(!is_inline_image_media_type("text/plain"));
+    }
+
+    #[test]
+    fn image_signatures_gate_the_declared_media_type() {
+        assert!(image_bytes_match_media_type("image/png", &png_bytes()));
+        assert!(image_bytes_match_media_type(
+            "image/jpeg",
+            &[0xFF, 0xD8, 0xFF, 0xE0]
+        ));
+        assert!(image_bytes_match_media_type("image/gif", b"GIF89a...."));
+        assert!(image_bytes_match_media_type(
+            "image/webp",
+            b"RIFF\0\0\0\0WEBPVP8 "
+        ));
+        assert!(!image_bytes_match_media_type(
+            "image/webp",
+            b"RIFF\0\0\0\0AVI "
+        ));
+        assert!(!image_bytes_match_media_type("image/svg+xml", b"<svg/>"));
+    }
+
+    #[test]
+    fn presentation_classifies_text_images_and_opaque_payloads() {
+        assert_eq!(
+            artifact_presentation("image/png", &png_bytes()),
+            ArtifactPresentation::Image
+        );
+        assert_eq!(
+            artifact_presentation("text/plain", b"hello"),
+            ArtifactPresentation::Text
+        );
+        // SVG is never rendered inline, however well-formed it is.
+        assert_eq!(
+            artifact_presentation(
+                "image/svg+xml",
+                b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"
+            ),
+            ArtifactPresentation::Opaque
+        );
+        assert_eq!(
+            artifact_presentation("application/octet-stream", &[0x00, 0x01]),
+            ArtifactPresentation::Opaque
+        );
+    }
+
+    #[test]
+    fn a_declared_image_whose_bytes_do_not_match_is_not_presented_as_an_image() {
+        // `payload.png` carrying markup: the extension picked the media type,
+        // so only the signature check stops a renderer from trusting it.
+        assert_eq!(
+            artifact_presentation("image/png", b"<html><script>alert(1)</script></html>"),
+            ArtifactPresentation::Opaque
+        );
+    }
+
+    #[test]
+    fn a_declared_text_artifact_with_invalid_utf8_is_opaque_rather_than_lossy() {
+        assert_eq!(
+            artifact_presentation("text/plain", &[0xFF, 0xFE, 0x00]),
+            ArtifactPresentation::Opaque
+        );
+    }
+}
+
+mod textual_policy {
+    use crate::task::{
+        ArtifactPresentation, artifact_presentation, inline_safe_artifact_media_type,
+        is_textual_artifact_media_type,
+    };
+
+    #[test]
+    fn retrieval_treats_markdown_as_text_even_though_the_http_route_will_not_inline_it() {
+        // Two different questions: "may a browser render this from a URL?" and
+        // "may a caller be handed this as a string?". Markdown answers no and
+        // yes, and conflating them would base64-encode the commonest artifact.
+        assert_eq!(inline_safe_artifact_media_type("text/markdown"), None);
+        assert!(is_textual_artifact_media_type("text/markdown"));
+        assert_eq!(
+            artifact_presentation("text/markdown", b"# heading\n"),
+            ArtifactPresentation::Text
+        );
+    }
+
+    #[test]
+    fn active_content_is_excluded_from_the_textual_set() {
+        for media_type in ["text/html", "image/svg+xml", "application/xhtml+xml"] {
+            assert!(
+                !is_textual_artifact_media_type(media_type),
+                "{media_type} hosts script and must not be classified as plain text"
+            );
+        }
+    }
+
+    #[test]
+    fn structured_text_formats_round_trip_as_text() {
+        for media_type in [
+            "application/json",
+            "application/yaml",
+            "application/toml",
+            "text/csv",
+            "text/plain",
+        ] {
+            assert!(is_textual_artifact_media_type(media_type), "{media_type}");
+        }
+    }
+}

@@ -16,7 +16,7 @@ use orbit_types::identity::{
     agent_family_from_cli, all_agent_families, infer_agent_family_from_model,
 };
 use orbit_types::task::TaskRelation;
-use orbit_types::task::validate_relative_artifact_path;
+use orbit_types::task::{inline_safe_artifact_media_type, validate_relative_artifact_path};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
@@ -545,37 +545,14 @@ pub(super) async fn get_task_artifact(
 }
 
 fn artifact_response_policy(media_type: &str) -> ArtifactResponsePolicy {
-    let content_type = inline_safe_artifact_content_type(media_type);
+    // The inline allowlist is the shared artifact policy, not a web-only rule:
+    // the dashboard and `orbit.task.artifact.get` must agree on which media
+    // types may be rendered rather than downloaded.
+    let content_type = inline_safe_artifact_media_type(media_type);
     ArtifactResponsePolicy {
         content_type: content_type.unwrap_or("application/octet-stream"),
         attachment: content_type.is_none(),
     }
-}
-
-fn inline_safe_artifact_content_type(media_type: &str) -> Option<&'static str> {
-    match normalized_media_type(media_type).as_deref() {
-        Some("application/json") => Some("application/json"),
-        Some("application/toml") => Some("application/toml"),
-        Some("application/yaml") => Some("application/yaml"),
-        Some("image/gif") => Some("image/gif"),
-        Some("image/jpeg") => Some("image/jpeg"),
-        Some("image/png") => Some("image/png"),
-        Some("image/webp") => Some("image/webp"),
-        Some("text/csv") => Some("text/csv"),
-        Some("text/plain") => Some("text/plain"),
-        _ => None,
-    }
-}
-
-fn normalized_media_type(media_type: &str) -> Option<String> {
-    let base = media_type
-        .split_once(';')
-        .map_or(media_type, |(base, _params)| base)
-        .trim();
-    if base.is_empty() {
-        return None;
-    }
-    Some(base.to_ascii_lowercase())
 }
 
 fn validate_artifact_request_path(path: &str) -> Result<String, String> {

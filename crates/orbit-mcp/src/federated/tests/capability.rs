@@ -17,12 +17,14 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.auto_task.mint", McpToolClass::ControlPlane),
     ("orbit.command.exec", McpToolClass::Execute),
     ("orbit.crew.list", McpToolClass::Unclassified),
+    ("orbit.agent.invoke", McpToolClass::Execute),
     ("orbit.friction.add", McpToolClass::ControlPlane),
     ("orbit.friction.list", McpToolClass::ControlPlane),
     ("orbit.friction.update", McpToolClass::ControlPlane),
     ("orbit.search", McpToolClass::ControlPlane),
     ("orbit.task.add", McpToolClass::ControlPlane),
     ("orbit.task.approve", McpToolClass::ControlPlane),
+    ("orbit.task.artifact.get", McpToolClass::ControlPlane),
     ("orbit.task.artifact.put", McpToolClass::ControlPlane),
     ("orbit.task.list", McpToolClass::ControlPlane),
     ("orbit.task.show", McpToolClass::ControlPlane),
@@ -59,7 +61,7 @@ fn the_locked_mapping_covers_exactly_the_advertised_surface() {
         .collect::<std::collections::BTreeSet<_>>();
 
     assert_eq!(advertised, locked);
-    assert_eq!(advertised.len(), 21);
+    assert_eq!(advertised.len(), 23);
 }
 
 #[test]

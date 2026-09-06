@@ -542,8 +542,61 @@ function renderArtifactText(mediaType, text) {
   return el("pre", { text });
 }
 
+// The raster formats the server will serve inline. This mirrors the artifact
+// policy in orbit-types (`inline_safe_artifact_media_type`), which the artifact
+// route enforces with `nosniff`: SVG and HTML are viewable formats that also
+// host script, so they are deliberately absent and fall through to download.
+const INLINE_IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+function artifactFileName(path) {
+  return String(path).split("/").pop() || String(path);
+}
+
+function buildArtifactDownloadLink(artifact, objectUrl, text) {
+  const link = el("a", { text: text || `Download ${artifact.path}` });
+  link.href = objectUrl;
+  link.download = artifactFileName(artifact.path);
+  return link;
+}
+
+function buildArtifactImage(artifact, blob) {
+  const objectUrl = URL.createObjectURL(blob);
+  const figure = el("div", { class: "artifact-image-view" });
+  const image = el("img", { class: "artifact-image" });
+  image.src = objectUrl;
+  // The path is the only description the artifact carries, so it is a more
+  // useful alt text than a generic label for anyone reading without the image.
+  image.alt = String(artifact.path);
+  image.loading = "lazy";
+  // A stored artifact can be truncated or mislabeled. When the browser cannot
+  // decode it, say so and still offer the bytes rather than leaving a broken
+  // image icon behind.
+  image.addEventListener("error", () => {
+    figure.replaceChildren(
+      el("div", {
+        class: "artifact-error",
+        text: `Unable to display ${artifact.path}: the image could not be decoded.`,
+      }),
+      buildArtifactDownloadLink(artifact, objectUrl),
+    );
+  });
+  const open = el("a", { class: "artifact-open", text: "Open" });
+  open.href = objectUrl;
+  open.target = "_blank";
+  open.rel = "noopener";
+  const actions = el("div", { class: "artifact-actions" });
+  actions.appendChild(open);
+  actions.appendChild(buildArtifactDownloadLink(artifact, objectUrl, "Download"));
+  figure.appendChild(image);
+  figure.appendChild(actions);
+  return figure;
+}
+
 function buildArtifactPreview(artifact, response) {
   const mediaType = artifactMediaType(artifact, response);
+  if (INLINE_IMAGE_MEDIA_TYPES.has(mediaType)) {
+    return response.blob().then((blob) => buildArtifactImage(artifact, blob));
+  }
   if (
     mediaType === "text/markdown" ||
     mediaType === "application/json" ||
@@ -553,15 +606,12 @@ function buildArtifactPreview(artifact, response) {
   ) {
     return response.text().then((text) => renderArtifactText(mediaType, text));
   }
-  return response.blob().then((blob) => {
-    const link = el("a", { text: `Download ${artifact.path}` });
-    link.href = URL.createObjectURL(blob);
-    link.download = String(artifact.path).split("/").pop() || artifact.path;
-    return link;
-  });
+  return response.blob().then((blob) =>
+    buildArtifactDownloadLink(artifact, URL.createObjectURL(blob)),
+  );
 }
 
-function buildArtifacts(task) {
+export function buildArtifacts(task) {
   const wrap = el("div", { class: "artifacts" });
   for (const artifact of task.artifacts) {
     const path = String(artifact.path || "");

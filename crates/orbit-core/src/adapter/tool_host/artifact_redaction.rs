@@ -312,6 +312,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::StateGet
         | OrbitBuiltinAction::StateSet
         | OrbitBuiltinAction::TaskApprove
+        | OrbitBuiltinAction::TaskArtifactGet
         | OrbitBuiltinAction::TaskDelete
         | OrbitBuiltinAction::TaskLint
         | OrbitBuiltinAction::TaskList

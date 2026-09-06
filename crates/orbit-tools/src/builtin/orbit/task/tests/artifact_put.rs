@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 
 use orbit_common::OrbitError;
+use orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES;
 use orbit_types::tool::{McpTransport, ToolSessionContext};
 
 use super::super::artifact_put::*;
@@ -129,7 +130,7 @@ fn artifact_put_size_failure_never_calls_host() {
     let source = dir.path().join("large.bin");
     std::fs::write(
         &source,
-        vec![0_u8; (MAX_ARTIFACT_CONTENT_BYTES + 1) as usize],
+        vec![0_u8; (MAX_TASK_ARTIFACT_CONTENT_BYTES + 1) as usize],
     )
     .expect("write oversized source");
     let host = RecordingHost::default();

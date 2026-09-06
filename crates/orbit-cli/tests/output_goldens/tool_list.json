@@ -153,6 +153,52 @@
   {
     "active": true,
     "builtin": true,
+    "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability. Track it with `orbit.workflow.run.show`, read output with `orbit run logs <RUN_ID>`, and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
+    "enabled": true,
+    "name": "orbit.agent.invoke",
+    "parameters": [
+      {
+        "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change.",
+        "name": "prompt",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout; it is never inferred from the caller.",
+        "name": "cwd",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Configured crew selecting the provider, model, and reasoning effort. Defaults to the workspace's default crew.",
+        "name": "crew",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Wall-clock bound for the invocation. Defaults to 1800 and may not exceed 7200.",
+        "name": "timeout_seconds",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Retry handle. A resubmission carrying a key a recent submission already used resolves that run instead of starting a second agent.",
+        "name": "idempotency_key",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "name": "model",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
     "description": "List every auto-task definition in this workspace.",
     "enabled": true,
     "name": "orbit.auto_task.list",
@@ -652,6 +698,46 @@
   {
     "active": true,
     "builtin": true,
+    "description": "Read one stored task artifact by owning task ID and artifact path. Returns `media_type`, `size`, and the bytes: UTF-8 text as `content`, and everything else as base64 in `content_base64`. Supported raster images (PNG, JPEG, GIF, WebP) whose bytes match their declared type are additionally returned as a viewable image on transports that carry image content, so a multimodal client can inspect a stored visual reference directly. SVG, HTML, and any payload whose bytes contradict its media type are returned as opaque base64 and are never rendered. List available artifacts first with `orbit.task.show` and `field: \"artifacts\"`; payloads are fetched only through this call. Reads are bounded to 1048576 bytes.",
+    "enabled": true,
+    "name": "orbit.task.artifact.get",
+    "parameters": [
+      {
+        "description": "Globally unique task ID that owns the artifact.",
+        "name": "id",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit.task.show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected.",
+        "name": "path",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
+        "name": "agent",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+        "name": "model",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Optional explicit workspace filter. `id` is resolved globally by default; when supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed — a valid workspace that does not own the task returns not-found.",
+        "name": "workspace",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
     "description": "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context; malformed, stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage.",
     "enabled": true,
     "name": "orbit.task.artifact.put",
@@ -1140,6 +1226,12 @@
         "description": "Optional base branch override.",
         "name": "base",
         "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation.",
+        "name": "allowed_crews",
+        "param_type": "string_list",
         "required": false
       },
       {

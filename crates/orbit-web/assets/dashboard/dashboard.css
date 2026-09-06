@@ -1088,6 +1088,53 @@
         margin: 8px 0 12px;
         overflow-x: auto;
       }
+      .artifact-image-view {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      /* The preview scales down to the detail column instead of forcing the
+         panel to scroll sideways, and never scales a small image up past its
+         own resolution. `height: auto` keeps the aspect ratio at every width. */
+      .artifact-image {
+        display: block;
+        max-width: 100%;
+        height: auto;
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        /* A checkerboard so a transparent PNG reads as transparent rather than
+           as whatever the panel background happens to be. */
+        background-color: var(--bg);
+        background-image:
+          linear-gradient(45deg, var(--border) 25%, transparent 25%),
+          linear-gradient(-45deg, var(--border) 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, var(--border) 75%),
+          linear-gradient(-45deg, transparent 75%, var(--border) 75%);
+        background-size: 16px 16px;
+        background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      }
+      .artifact-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+      }
+      .artifact-error {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--state-failed);
+      }
+      @media (max-width: 760px) {
+        /* Narrow viewports get the full column width and a bounded height, so
+           a tall screenshot cannot push the rest of the task detail offscreen. */
+        .artifact-image {
+          width: 100%;
+          max-height: 60vh;
+          object-fit: contain;
+        }
+      }
       
       .row-detail .meta-line {
         font-family: var(--font-mono);

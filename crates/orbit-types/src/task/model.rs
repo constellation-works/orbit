@@ -504,6 +504,157 @@ pub fn media_type_for_artifact_path(path: &str) -> &'static str {
     }
 }
 
+/// Largest task artifact payload Orbit will carry inline through a tool call.
+///
+/// One limit governs both directions: `orbit.task.artifact.put` refuses to
+/// read a larger source, and `orbit.task.artifact.get` refuses to return a
+/// larger stored payload. The dashboard's streaming download route has no such
+/// bound, so an oversize artifact is still reachable — just not inline.
+pub const MAX_TASK_ARTIFACT_CONTENT_BYTES: u64 = 1_048_576;
+
+/// How a stored artifact may be handed to a viewer.
+///
+/// This is a *rendering* decision, not an access decision: every artifact
+/// remains downloadable byte-for-byte. `Opaque` only means "do not let a
+/// renderer interpret these bytes", which is what keeps active content such as
+/// SVG and HTML from executing in the dashboard or in an MCP client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactPresentation {
+    /// UTF-8 text safe to show inline.
+    Text,
+    /// Raster image safe to show inline; carries no active content.
+    Image,
+    /// Anything else — offered as a download, never interpreted.
+    Opaque,
+}
+
+impl ArtifactPresentation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::Opaque => "opaque",
+        }
+    }
+}
+
+/// Strip media-type parameters and case so `image/PNG; charset=x` and
+/// `image/png` compare equal. Returns `None` for a blank media type.
+pub fn normalized_artifact_media_type(media_type: &str) -> Option<String> {
+    let base = media_type
+        .split_once(';')
+        .map_or(media_type, |(base, _params)| base)
+        .trim();
+    if base.is_empty() {
+        return None;
+    }
+    Some(base.to_ascii_lowercase())
+}
+
+/// The canonical media type the HTTP artifact route will serve *inline*, or
+/// `None` for a type the browser must be told to download.
+///
+/// This answers one narrow question: may a browser render these bytes from an
+/// artifact URL? The allowlist is therefore deliberately closed —
+/// `image/svg+xml` and `text/html` are an image and text respectively but are
+/// also script hosts, so they are absent and fall through to the download path.
+///
+/// It is *not* the question [`artifact_presentation`] answers. Handing a
+/// caller `text/markdown` as a UTF-8 string renders nothing and is safe even
+/// though serving it inline from a URL is not.
+pub fn inline_safe_artifact_media_type(media_type: &str) -> Option<&'static str> {
+    match normalized_artifact_media_type(media_type).as_deref() {
+        Some("application/json") => Some("application/json"),
+        Some("application/toml") => Some("application/toml"),
+        Some("application/yaml") => Some("application/yaml"),
+        Some("image/gif") => Some("image/gif"),
+        Some("image/jpeg") => Some("image/jpeg"),
+        Some("image/png") => Some("image/png"),
+        Some("image/webp") => Some("image/webp"),
+        Some("text/csv") => Some("text/csv"),
+        Some("text/plain") => Some("text/plain"),
+        _ => None,
+    }
+}
+
+/// Whether this media type names a raster image Orbit will render inline.
+pub fn is_inline_image_media_type(media_type: &str) -> bool {
+    inline_safe_artifact_media_type(media_type)
+        .is_some_and(|media_type| media_type.starts_with("image/"))
+}
+
+/// Whether `content` actually begins with the signature of its declared image
+/// media type.
+///
+/// A stored artifact's media type is derived from its file extension, so a
+/// caller can attach arbitrary bytes as `diagram.png`. Checking the signature
+/// before presenting an image keeps a mislabeled — possibly active — payload
+/// from reaching a renderer that would trust the declared type. Bytes that do
+/// not match are still retrievable; they are just classified [`Opaque`].
+///
+/// [`Opaque`]: ArtifactPresentation::Opaque
+pub fn image_bytes_match_media_type(media_type: &str, content: &[u8]) -> bool {
+    match normalized_artifact_media_type(media_type).as_deref() {
+        Some("image/png") => content.starts_with(b"\x89PNG\r\n\x1a\n"),
+        Some("image/jpeg") => content.starts_with(&[0xFF, 0xD8, 0xFF]),
+        Some("image/gif") => content.starts_with(b"GIF87a") || content.starts_with(b"GIF89a"),
+        // RIFF container with a `WEBP` form type at offset 8.
+        Some("image/webp") => {
+            content.len() >= 12 && content.starts_with(b"RIFF") && &content[8..12] == b"WEBP"
+        }
+        _ => false,
+    }
+}
+
+/// Whether this media type names content a caller can be handed as a UTF-8
+/// string rather than as opaque bytes.
+///
+/// Broader than the inline-HTTP allowlist, because returning text in a string
+/// field is not rendering it — `text/markdown` is the most common artifact
+/// there is, and base64-encoding it would help nobody. Active content is still
+/// excluded: anything ending in `+xml` (which covers `image/svg+xml`) and
+/// `text/html` stay opaque, so no surface downstream can mistake a script host
+/// for prose it may safely display.
+pub fn is_textual_artifact_media_type(media_type: &str) -> bool {
+    let Some(base) = normalized_artifact_media_type(media_type) else {
+        return false;
+    };
+    if base == "text/html" || base.ends_with("+xml") {
+        return false;
+    }
+    base.starts_with("text/")
+        || matches!(
+            base.as_str(),
+            "application/json" | "application/toml" | "application/yaml" | "application/x-yaml"
+        )
+        || base.ends_with("+json")
+        || base.ends_with("+yaml")
+}
+
+/// Classify one stored artifact for retrieval and display.
+///
+/// Both non-opaque outcomes are byte-checked rather than assumed: a declared
+/// image must carry a matching signature, and declared text must hold valid
+/// UTF-8. Anything that fails its own claim falls back to [`Opaque`], so a
+/// caller never receives lossily-decoded content or a mislabeled payload
+/// dressed up as something a renderer may trust. `Opaque` still carries the
+/// complete bytes — it withholds interpretation, not access.
+///
+/// [`Opaque`]: ArtifactPresentation::Opaque
+pub fn artifact_presentation(media_type: &str, content: &[u8]) -> ArtifactPresentation {
+    if is_inline_image_media_type(media_type) {
+        return if image_bytes_match_media_type(media_type, content) {
+            ArtifactPresentation::Image
+        } else {
+            ArtifactPresentation::Opaque
+        };
+    }
+    if is_textual_artifact_media_type(media_type) && std::str::from_utf8(content).is_ok() {
+        return ArtifactPresentation::Text;
+    }
+    ArtifactPresentation::Opaque
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolvedTaskDependency {
     pub id: OrbitId,

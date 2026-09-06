@@ -64,6 +64,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::NotFound { kind, .. } => match kind {
             NotFoundKind::Tool => "tool_not_found",
             NotFoundKind::Task => "task_not_found",
+            NotFoundKind::Artifact => "task_artifact_not_found",
             NotFoundKind::Skill => "skill_not_found",
             NotFoundKind::Job => "job_not_found",
             NotFoundKind::JobRun => "job_run_not_found",
