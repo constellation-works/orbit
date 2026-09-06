@@ -129,6 +129,65 @@ build\tRun tests\t2026-01-01T00:00:00.0000000Z 5dbb8eff6f1ec88a24da618df1962d2c6
     assert!(evidence.lines.is_empty());
 }
 
+/// A macOS runner emitted the command under `UNKNOWN STEP`, so step names
+/// alone could not distinguish the following SHA from ordinary test output.
+#[test]
+fn git_log_head_command_in_an_unknown_step_names_its_following_sha() {
+    let tested = "9a611e053bb440451cdfb5468749327853b12ff9";
+    let log = format!(
+        "macOS Platform\tUNKNOWN STEP\t2026-09-06T06:07:50.4897836Z [command]/usr/bin/git log -1 --format=%H\n\
+         macOS Platform\tUNKNOWN STEP\t2026-09-06T06:07:50.4927165Z {tested}\n"
+    );
+
+    let evidence = scan_checkout_evidence(&log, 40);
+
+    assert_eq!(evidence.commits, [tested]);
+    assert!(evidence.complete);
+    assert!(
+        evidence
+            .lines
+            .iter()
+            .any(|line| line.contains("git log -1 --format=%H")),
+        "the command provenance must be retained: {:?}",
+        evidence.lines
+    );
+}
+
+#[test]
+fn only_the_immediate_output_of_the_recognized_command_is_checkout_evidence() {
+    let unrelated = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let delayed = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let log = format!(
+        "ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git rev-parse HEAD\n\
+         ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0010000Z {unrelated}\n\
+         ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0020000Z [command]/usr/bin/git log -1 --format=%H\n\
+         ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0030000Z not a SHA\n\
+         ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0040000Z {delayed}\n"
+    );
+
+    let evidence = scan_checkout_evidence(&log, 40);
+
+    assert!(evidence.commits.is_empty(), "{:?}", evidence.commits);
+    assert!(evidence.lines.is_empty(), "{:?}", evidence.lines);
+}
+
+#[test]
+fn multiple_recognized_command_outputs_remain_ambiguous() {
+    let first = "cccccccccccccccccccccccccccccccccccccccc";
+    let second = "dddddddddddddddddddddddddddddddddddddddd";
+    let log = format!(
+        "ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\n\
+         ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0010000Z {first}\n\
+         ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0020000Z [command]/usr/bin/git log -1 --format=%H\n\
+         ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0030000Z {second}\n"
+    );
+
+    let evidence = scan_checkout_evidence(&log, 40);
+
+    assert_eq!(evidence.commits, [first, second]);
+    assert!(evidence.complete);
+}
+
 #[test]
 fn checkout_evidence_lines_are_capped_and_redacted() {
     let line = format!(
@@ -230,6 +289,23 @@ fn an_overlong_checkout_line_is_dropped_and_marks_identity_incomplete() {
 }
 
 #[test]
+fn an_overlong_line_consumes_pending_checkout_command_context() {
+    let tested = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let overlong = "x".repeat(20_000);
+    let log = format!(
+        "ci\tUNKNOWN STEP\t[command]/usr/bin/git log -1 --format=%H\n\
+         ci\tUNKNOWN STEP\t{overlong}\n\
+         ci\tUNKNOWN STEP\t{tested}\n"
+    );
+
+    let evidence = scan_checkout_evidence(&log, 40);
+
+    assert!(evidence.commits.is_empty(), "{:?}", evidence.commits);
+    assert!(evidence.complete);
+    assert!(evidence.display_truncated);
+}
+
+#[test]
 fn streaming_log_finds_middle_checkout_without_retaining_it_in_the_excerpt() {
     let sha = "2d773a649844b168c5cfce4c80feadb8b025bb69";
     let mut collector = StreamedLogCollector::new(96, 40);
@@ -257,6 +333,22 @@ fn streaming_log_marks_identity_incomplete_after_the_hard_scan_limit() {
     let mut collector = StreamedLogCollector::new(64, 40);
     collector.push(&vec![b'x'; MAX_CHECKOUT_LOG_SCAN_BYTES]);
     collector.push(format!("\nsetup\tCheckout\tHEAD is now at {sha}\n").as_bytes());
+    let log = collector.finish();
+
+    assert!(log.checkout_evidence.source_truncated);
+    assert!(!log.checkout_evidence.complete);
+    assert!(log.checkout_evidence.commits.is_empty());
+}
+
+#[test]
+fn command_output_past_the_hard_scan_limit_is_not_verified() {
+    let tested = "2d773a649844b168c5cfce4c80feadb8b025bb69";
+    let command = b"ci\tUNKNOWN STEP\t[command]/usr/bin/git log -1 --format=%H\n";
+    let fill = MAX_CHECKOUT_LOG_SCAN_BYTES - command.len();
+    let mut collector = StreamedLogCollector::new(64, 40);
+    collector.push(command);
+    collector.push(&vec![b'x'; fill]);
+    collector.push(format!("\nci\tUNKNOWN STEP\t{tested}\n").as_bytes());
     let log = collector.finish();
 
     assert!(log.checkout_evidence.source_truncated);
