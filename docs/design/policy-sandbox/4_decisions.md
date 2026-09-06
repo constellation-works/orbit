@@ -3,12 +3,12 @@ summary: "Policy & Sandboxing — Decisions"
 type: design
 title: "Policy & Sandboxing — Decisions"
 owner: claude
-last_updated: 2026-08-15
+last_updated: 2026-09-06
 status: Draft
 feature: policy-sandbox
 doc_role: decisions
 tags: ["policy-sandbox"]
-last_validated: 2026-08-15
+last_validated: 2026-09-06
 ---
 
 # Policy & Sandboxing — Decisions
@@ -368,7 +368,7 @@ Creation is confined to the managed worktree: every component that root owns is 
 - Adding a versioned `.orbit` path is now a one-line policy change; no Rust inventory tracks it.
 - The grant set is recomputed per spawn from the enforced profile, so it cannot drift from the kernel's view.
 - A denial is attributable before the provider starts, against a path and a rule, instead of as an EROFS inside an agent turn.
-- Cost: an exact *file* grant that is absent, untracked, and un-ignored leaves an empty anchor in the worktree that `git add -A` would stage. It is empty and therefore visible in review rather than silent. In this repository `.orbit/config.toml` is tracked and `.orbit/config.yaml` is ignored, so no such anchor arises.
+- Cost: an exact *file* grant that is absent, untracked, and un-ignored leaves an empty anchor in the worktree that `git add -A` would stage. Checkout-local `.orbit/config.yaml` is no longer such a grant after [ORB-11376]; repository-versioned exact grants must still account for this behavior.
 - Cost: anchor shape for an absent exact rule is inferred, not declared. Spelling a directory grant as `<path>/**` remains the way to state it unambiguously.
 - Read-only git metadata for linked worktrees is unchanged and still out of scope.
 
@@ -388,6 +388,33 @@ Derive Linux write-grant candidates at every provider spawn from the same ordere
 - Later workspace denies prevent materialization, while narrower denies below a writable subtree preserve the remaining grant.
 - Cost: policy authors must use exact syntax for file anchors and `<root>/**` syntax for directory anchors; an existing target whose filesystem type contradicts that syntax fails closed.
 - Cost: post-invocation attribution depends on the child including the attempted path in its EROFS stderr; failures that omit the path retain the generic nonzero-exit diagnostic.
+
+## Keep checkout identity outside managed-agent write grants
+
+**Recorded:** 2026-09-06 · [ORB-11376]
+**Paths:** `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-cli/src/command/workspace/init.rs`, `docs/runbooks/state-and-backup.md`
+
+### Context
+
+The Linux pre-spawn writer derives every narrow re-allow from the effective policy and creates an absent exact file as a zero-byte Bubblewrap mount anchor. The default policy still re-allowed `.orbit/config.yaml` even though workspace initialization ignores that checkout-local identity rather than versioning it. A worker branch created before the initializer's `.gitignore` landed therefore retained the empty anchor, and its delivery commit introduced a tracked zero-byte identity. Resumed local delivery exposed and merged that already-created artifact; no evidence identifies resume as the writer.
+
+### Decision
+
+Keep `.orbit/config.yaml` beneath the default `.orbit/**` agent-write deny. The initializer remains the authoritative writer. `workspace init --force` may restore a missing or malformed identity only after the global registry supplies both the requested logical workspace and the exact checkout path/data-root binding. It archives malformed bytes under `.orbit/state/recovery/workspace-identity/` before atomically restoring the registered ID. A parseable different workspace ID remains an ownership conflict and is never replaced through this recovery.
+
+### Rejected alternatives
+
+**Delete empty anchors just before commit.** Emptiness is not evidence that a repository file is disposable, and commit-time cleanup would duplicate policy semantics after the writer already ran.
+
+**Relax identity mismatch validation.** A parseable different ID is a competing ownership claim, not corruption. Replacing it would turn `--force` into a registry bypass.
+
+**Require operators to hand-create the YAML.** Manual reconstruction loses the supported ownership proof and makes it easier to bind the child to a parent or invented workspace.
+
+### Consequences
+
+- Managed agents cannot create or modify checkout identity, and Linux launch has no identity anchor to leak into delivery.
+- Exact registered checkouts have a bounded recovery command; corrupt bytes remain available as local evidence.
+- Workspace identity changes remain an operator-owned initializer action rather than ordinary repository editing.
 
 ## Task References
 
@@ -427,5 +454,6 @@ Derive Linux write-grant candidates at every provider spawn from the same ordere
 - **[ORB-10602]** — Derive write-grant anchors from the effective profile at each spawn; remove the hardcoded target inventory and the context-file materialization gate. [Derive Linux sandbox write-grant anchors from the effective profile at each spawn](#derive-linux-sandbox-write-grant-anchors-from-the-effective-profile-at-each-spawn-1)
 - **[ORB-10607]** — Enforce final-policy materialization, canonical/symlink containment, rule-derived anchor types, and production failed-write attribution. [Derive Linux sandbox write-grant anchors from the effective profile at each spawn](#derive-linux-sandbox-write-grant-anchors-from-the-effective-profile-at-each-spawn-1)
 - **[ORB-10833]** — Retire the remaining unregistered `fs.*` builtins and their private policy helpers. [Retire the remaining unregistered fs builtins and their policy helpers](#retire-the-remaining-unregistered-fs-builtins-and-their-policy-helpers)
+- **[ORB-11376]** — Protect checkout-local runtime identity from managed-agent writes and add exact-registration recovery. [Keep checkout identity outside managed-agent write grants](#keep-checkout-identity-outside-managed-agent-write-grants)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
