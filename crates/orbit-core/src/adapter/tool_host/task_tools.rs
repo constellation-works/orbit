@@ -262,6 +262,7 @@ pub(super) fn update(
     input: Value,
     agent: Option<String>,
     model: Option<String>,
+    owner: Option<orbit_tools::ReservationOwnerContext>,
 ) -> Result<Value, OrbitError> {
     if ["required_tools", "requiredTools", "required-tool"]
         .iter()
@@ -273,7 +274,7 @@ pub(super) fn update(
         ));
     }
     let id = required_string(&input, &["id"], "id")?;
-    let task = runtime.update_task_with_identity(
+    let task = runtime.update_task_with_owner(
         &id,
         TaskUpdateParams {
             title: optional_string(&input, "title")?,
@@ -338,6 +339,7 @@ pub(super) fn update(
         },
         agent,
         model,
+        owner.map(|owner| owner.owner_run_id),
     )?;
     serialize_task(runtime, &task)
 }

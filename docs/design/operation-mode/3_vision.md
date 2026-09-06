@@ -631,7 +631,8 @@ invalidation reason, escalation, and coverage mapping. Trigger diagnostics
 consume that evidence to explain each delivery's exclusion, uncovered count,
 pending batch and coverage lag. Retain replayable manifests and source objects
 under an explicit retention policy; missing objects mean unverifiable coverage.
-Keep persistence in existing run/task/store owners and application invariants
+Keep persistence in existing run/task/store owners, scheduling and coverage
+acceptance in orbit-automation [ORB-11330], and authority/lifecycle composition
 in Core, with engine mechanics and thin adapters following
 [Architecture](../../../ARCHITECTURE.md). Exact fields/migrations require later
 review; this proposal adds no persisted artifact or cross-crate dependency.

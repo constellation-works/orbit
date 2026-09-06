@@ -17,6 +17,10 @@ flowchart LR
   Cmd --> Store
   Core --> Config
   Core --> Engine["orbit-engine"]
+  Core --> Automation["orbit-automation"]
+  Automation --> Store
+  Automation --> Common
+  Automation --> Types
   Core --> Store["orbit-store"]
   Core --> Tools["orbit-tools"]
   Core --> Search["orbit-search"]
@@ -99,6 +103,7 @@ feature.
 - **orbit-web**: HTTP API, embedded dashboard UI, and remote web connection. It owns axum handlers/assets, dashboard mutations, and the dashboard-specific SSH local-forward lifecycle. Depends on `orbit-core` for runtime-backed operations and projections and on `orbit-registry` for global workspace discovery; consumed by `orbit-cli` via `web serve` and `web connect`. Public surface is `ServeArgs`, `ConnectArgs`, and their serve/connect entry points.
 - **orbit-agent**: per-provider `AgentRuntime` implementations under `providers/<name>/<name>_runtime.rs` (claude, codex, copilot, cursor, gemini, antigravity, gemini_http, grok, openai_compat, anthropic, ollama, pi, mock_agent). Provides the CLI agent runtimes Orbit dispatches, plus a standalone HTTP `LoopTransport` / `AgentLoop` SDK surface with its own examples — Orbit's job execution no longer reaches that loop ([ORB-10801]). Depends on `orbit-types`, `orbit-common`, and `orbit-tools`.
 - **orbit-engine**: activity/job execution, template rendering, retry logic, subprocess execution, and tool-aware automation. Owns the CLI agent subprocess runner (`activity_job::cli_runner`), which references `orbit-agent::{Agent, AgentConfig}` directly so orbit-core stays clean of orbit-agent types. Depends on `orbit-agent`, `orbit-types`, `orbit-common`, `orbit-exec`, `orbit-store`, and `orbit-tools`.
+- **orbit-automation**: internal scheduling domain for routines and auto-tasks [ORB-11330]. Owns definition discovery/validation, due evaluation, overlap/retry coordination and coverage acceptance. Core supplies explicit sources, catalog resolution, authority and task/job lifecycle adapters; Store owns cursors, claims and receipts. Depends only on Store, Common and Types; never Core or Engine. Uses the existing sweep entry points, with no ticking loop or independent persistence store.
 - **orbit-core**: directional application/runtime composition and metrics. Its
   `runtime` module owns stores, eventing, audit, claims, reservations, tool and
   process execution mechanisms, and construction from an already-resolved
@@ -183,6 +188,7 @@ Each workspace crate declares a stability tier in its `Cargo.toml` under `[packa
 | orbit-cli             | internal     |
 | orbit-cmd             | internal     |
 | orbit-core            | internal     |
+| orbit-automation      | internal     |
 | orbit-search           | internal     |
 | orbit-engine          | internal     |
 | orbit-exec            | internal     |
@@ -192,6 +198,29 @@ Each workspace crate declares a stability tier in its `Cargo.toml` under `[packa
 | orbit-tools           | internal     |
 
 ---
+
+## Automation persistence [ORB-11330]
+
+Cmd runtime composition supplies the registry-derived stable machine identity to
+Core. Enabled delivery definitions explicitly select that owner before baselining
+or admission; Core does not acquire a Registry dependency.
+
+Automation uses the existing host SQLite Store feature migration for consumer
+state, delivery-owner intents and accepted coverage; task action keys live with
+allocation in the existing task registry, and job keys are committed alongside
+ordinary job admission. All checkpoint/receipt changes are generation-fenced.
+The auxiliary task-key table preserves the v5 task/allocator format so older
+readers can ignore it during rollback. Accepted receipt bytes are immutable and
+independent of later artifact replacement.
+
+Task artifacts retain their existing bundle/manifest format. The artifact Store
+reserves `automation-evidence-authority.json`, writing transport-supplied run
+origin and a digest alongside coverage bytes under the existing task lock.
+Neither model attribution nor caller-supplied JSON creates that authority. Core
+checks the owner run's task assignment and the frozen source range; Automation
+owns acceptance rules. The checkoutless hub supplies provenance without loading
+an owner checkout. Source retention uses `refs/orbit/automation/...` in the
+existing Git object store; these refs stay until explicit retention cleanup.
 
 ## Scoping Rules
 

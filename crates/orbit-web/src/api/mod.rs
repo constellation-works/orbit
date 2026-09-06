@@ -21,6 +21,7 @@ use url::Url;
 
 mod audit;
 mod auto_tasks;
+mod automation;
 mod crews;
 mod denials;
 mod diagnostics;
@@ -446,6 +447,10 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
         )
         .route("/crews", get(crews::list_crews))
         .route("/tasks/:id/artifacts/*path", get(tasks::get_task_artifact))
+        .route(
+            "/automation/:kind/:name/coverage/:batch/evidence",
+            get(automation::accepted_evidence),
+        )
         .route("/tasks/:id/comments", post(tasks::add_task_comment_action))
         .route("/tasks/:id/approve", post(tasks::approve_task_action))
         .route("/tasks/:id/reject", post(tasks::reject_task_action))

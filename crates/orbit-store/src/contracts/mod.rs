@@ -23,3 +23,5 @@ pub use task_query::*;
 pub use task_registry::*;
 pub use traits::*;
 pub use v2_audit::*;
+mod automation;
+pub use automation::*;

@@ -2101,6 +2101,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-automation"
+version = "0.18.0"
+dependencies = [
+ "chrono",
+ "croner",
+ "orbit-common",
+ "orbit-store",
+ "orbit-types",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "orbit-cli"
 version = "0.18.0"
 dependencies = [
@@ -2207,6 +2224,7 @@ dependencies = [
  "croner",
  "fs2",
  "libc",
+ "orbit-automation",
  "orbit-common",
  "orbit-config",
  "orbit-engine",

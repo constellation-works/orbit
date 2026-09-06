@@ -2,6 +2,7 @@
 
 import { el, fetchJson, getWorkspace, postJson } from './common.js';
 import { navigateToRun } from './router.js';
+import { renderAutomation } from './automation.js';
 
 const $ = (id) => document.getElementById(id);
 const pendingOperations = new Set();
@@ -132,7 +133,7 @@ function renderOperations(payload) {
       el("div", { class: "operation-target mono", text: routine.target }),
       el("div", { class: "operation-grid" }, [
         field("Source workspace", routine.source),
-        field("Schedule", routine.cron),
+        field("Schedule", routine.trigger?.deliveries_landed ? `${routine.trigger.deliveries_landed.threshold} verified deliveries on ${routine.trigger.deliveries_landed.branch}` : routine.cron),
         field("Host pin", (routine.hosts || []).join(", ") || "Local host"),
         field("Last evaluation", time(routine.last_evaluated_slot || routine.first_observed_at)),
         field("Next evaluation", time(routine.next_due)),
@@ -140,6 +141,8 @@ function renderOperations(payload) {
         field("Linked run / outcome", fire ? `${fire.run_id || "No run"} · ${fire.state}` : "No fire recorded"),
       ]),
     );
+    const automation = renderAutomation(routine.automation);
+    if (automation) card.appendChild(automation);
     if (routine.description) card.appendChild(el("p", { class: "operation-description", text: routine.description }));
     const reason = controlReason(payload, routine);
     if (reason) card.appendChild(el("p", { class: "operation-control-note", text: reason }));
@@ -393,6 +396,8 @@ function renderAutoTasks(payload) {
         field("Open duplicate", definition.open_duplicate ? "Yes — mint will create another" : "No"),
       ]),
     );
+    const automation = renderAutomation(definition.automation);
+    if (automation) card.appendChild(automation);
     if (definition.description) {
       card.appendChild(el("p", { class: "operation-description", text: definition.description }));
     }

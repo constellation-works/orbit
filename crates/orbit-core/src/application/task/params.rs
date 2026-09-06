@@ -6,6 +6,7 @@ use orbit_types::task::{
 
 #[derive(Default, Clone)]
 pub(crate) struct TaskRecordUpdateParams {
+    pub(crate) artifact_owner_run_id: Option<String>,
     pub(crate) actor: String,
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,

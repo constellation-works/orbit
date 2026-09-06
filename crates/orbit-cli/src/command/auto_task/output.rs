@@ -10,6 +10,12 @@ pub(crate) fn definition_to_json(definition: &AutoTaskDefinition) -> Value {
 /// A one-line summary for the plain-text `list` output.
 pub(crate) fn schedule_summary(definition: &AutoTaskDefinition) -> String {
     match &definition.schedule {
+        orbit_core::AutoTaskSchedule::Deliveries {
+            deliveries_landed: t,
+        } => format!(
+            "deliveries={} branch={} coverage={:?}",
+            t.threshold, t.branch, t.coverage
+        ),
         orbit_core::AutoTaskSchedule::Cron { cron } => format!("cron={cron}"),
         orbit_core::AutoTaskSchedule::Interval { every_minutes } => {
             format!("every={every_minutes}m")

@@ -16,11 +16,11 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::RoutineStoreBackend;
 
 pub mod clock;
-pub mod due;
+pub use orbit_automation::routines::due;
 pub mod loader;
 pub mod status;
 pub mod sweep;
-pub mod validation;
+pub use orbit_automation::routines::validation;
 
 pub use clock::{
     ClockInstallReport, ClockSettings, ClockStatus, DEFAULT_CLOCK_CADENCE_SECONDS, clock_status,

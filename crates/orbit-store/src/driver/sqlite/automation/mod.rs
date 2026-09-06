@@ -1,0 +1,245 @@
+//! Automation records in the existing host SQLite database.
+use crate::Store;
+use crate::contracts::AutomationStoreBackend;
+use crate::driver::sqlite::migration::FeatureMigration;
+use orbit_common::OrbitError;
+use orbit_types::workflow::automation::{AcceptedCoverage, AutomationState};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
+
+pub(crate) fn initialize(store: &Store) -> Result<(), OrbitError> {
+    store.apply_feature_migrations("automation", &[FeatureMigration::new(1, "consumer_checkpoints_and_coverage", |conn| {
+            conn.execute_batch("CREATE TABLE automation_consumers (consumer TEXT PRIMARY KEY, generation INTEGER NOT NULL, state_json TEXT NOT NULL);
+            CREATE TABLE automation_coverage (batch_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, batch_json TEXT NOT NULL, receipt_json TEXT NOT NULL, accepted_at TEXT NOT NULL);
+            CREATE INDEX automation_coverage_consumer ON automation_coverage(consumer, accepted_at);
+            CREATE TABLE automation_delivery_intents (record_id TEXT PRIMARY KEY, repository TEXT NOT NULL, branch TEXT NOT NULL, delivery_json TEXT NOT NULL);
+            CREATE TABLE automation_delivery_members (repository TEXT NOT NULL, branch TEXT NOT NULL, commit_id TEXT NOT NULL, record_id TEXT NOT NULL, PRIMARY KEY(repository,branch,commit_id,record_id));
+            CREATE TABLE automation_waivers (batch_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, batch_json TEXT NOT NULL, waiver_json TEXT NOT NULL);
+            CREATE TABLE automation_job_keys (workspace_id TEXT NOT NULL, action_key TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(workspace_id,action_key));")
+                .map_err(|e| OrbitError::Store(e.to_string()))
+        })])
+}
+fn encode<T: serde::Serialize>(value: &T) -> Result<String, OrbitError> {
+    serde_json::to_string(value).map_err(|e| OrbitError::Store(e.to_string()))
+}
+fn decode<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, OrbitError> {
+    serde_json::from_str(raw)
+        .map_err(|e| OrbitError::Store(format!("invalid persisted automation record: {e}")))
+}
+impl AutomationStoreBackend for Store {
+    fn automation_waive(
+        &self,
+        previous: &AutomationState,
+        next: &AutomationState,
+        waiver: &orbit_types::workflow::automation::BatchWaiver,
+    ) -> Result<bool, OrbitError> {
+        waivers::commit(self, previous, next, waiver)
+    }
+    fn automation_waivers(
+        &self,
+        consumer: &str,
+        limit: usize,
+    ) -> Result<Vec<orbit_types::workflow::automation::BatchWaiver>, OrbitError> {
+        waivers::list(self, consumer, limit)
+    }
+
+    fn automation_receipt(
+        &self,
+        consumer: &str,
+        batch: &str,
+    ) -> Result<Option<AcceptedCoverage>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let raw:Option<String>=conn.query_row("SELECT receipt_json FROM automation_coverage WHERE consumer=?1 AND batch_id=?2",params![consumer,batch],|r|r.get(0)).optional().map_err(|e|OrbitError::Store(e.to_string()))?;
+            raw.as_deref().map(decode).transpose()
+        })
+    }
+
+    fn automation_record_delivery_intent(
+        &self,
+        delivery: &orbit_types::workflow::automation::Delivery,
+    ) -> Result<(), OrbitError> {
+        intents::record(self, delivery)
+    }
+    fn automation_delivery_intents(
+        &self,
+        repository: &str,
+        branch: &str,
+        commits: &[String],
+    ) -> Result<Vec<orbit_types::workflow::automation::Delivery>, OrbitError> {
+        intents::lookup(self, repository, branch, commits)
+    }
+
+    fn automation_state(&self, consumer: &str) -> Result<Option<AutomationState>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let raw: Option<String> = conn
+                .query_row(
+                    "SELECT state_json FROM automation_consumers WHERE consumer=?1",
+                    [consumer],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            raw.as_deref().map(decode).transpose()
+        })
+    }
+    fn automation_initialize(&self, state: &AutomationState) -> Result<bool, OrbitError> {
+        if state.generation != 0
+            || state.baseline != state.observed
+            || state.baseline != state.covered
+            || state.active.is_some()
+            || !state.pending.is_empty()
+            || !state.waived.is_empty()
+            || !state.pending_commits.is_empty()
+            || !state.unresolved.is_empty()
+        {
+            return Err(OrbitError::InvalidInput(
+                "invalid automation baseline".into(),
+            ));
+        }
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            tx.connection()
+                .execute(
+                    "INSERT OR IGNORE INTO automation_consumers VALUES (?1,0,?2)",
+                    params![state.consumer, encode(state)?],
+                )
+                .map(|n| n == 1)
+                .map_err(|e| OrbitError::Store(e.to_string()))
+        })
+    }
+    fn automation_commit(
+        &self,
+        previous: &AutomationState,
+        next: &AutomationState,
+        receipt: Option<&AcceptedCoverage>,
+    ) -> Result<bool, OrbitError> {
+        validate_transition(previous, next, receipt)?;
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let conn=tx.connection();
+            let changed=conn.execute("UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",params![next.generation,encode(next)?,previous.consumer,previous.generation,encode(previous)?]).map_err(|e|OrbitError::Store(e.to_string()))?;
+            if changed==0 { return Ok(false); }
+            if let Some(receipt)=receipt {
+                conn.execute("INSERT INTO automation_coverage VALUES (?1,?2,?3,?4,?5)",params![receipt.batch_id, previous.consumer,encode(&previous.active)?,encode(receipt)?,receipt.accepted_at.to_rfc3339()]).map_err(|e|OrbitError::Store(e.to_string()))?;
+            }
+            Ok(true)
+        })
+    }
+    fn automation_receipts(
+        &self,
+        consumer: &str,
+        limit: usize,
+    ) -> Result<Vec<AcceptedCoverage>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let mut stmt=conn.prepare("SELECT receipt_json FROM automation_coverage WHERE consumer=?1 ORDER BY accepted_at DESC,batch_id DESC LIMIT ?2").map_err(|e|OrbitError::Store(e.to_string()))?;
+            let rows=stmt.query_map(params![consumer,limit.min(100)],|r|r.get::<_,String>(0)).map_err(|e|OrbitError::Store(e.to_string()))?;
+            rows.map(|r|decode(&r.map_err(|e|OrbitError::Store(e.to_string()))?)).collect()
+        })
+    }
+}
+fn validate_transition(
+    previous: &AutomationState,
+    next: &AutomationState,
+    receipt: Option<&AcceptedCoverage>,
+) -> Result<(), OrbitError> {
+    let invalid = || OrbitError::InvalidInput("invalid automation checkpoint transition".into());
+    if previous.consumer != next.consumer
+        || previous.epoch != next.epoch
+        || previous.repository != next.repository
+        || previous.branch != next.branch
+        || previous.baseline != next.baseline
+        || previous.generation.checked_add(1) != Some(next.generation)
+        || next.pending.len() > 1000
+        || next.pending_commits.len() > 5000
+    {
+        return Err(invalid());
+    }
+    if let Some(old) = &previous.active {
+        if let Some(new) = &next.active {
+            if old.batch != new.batch
+                || old.input_digest != new.input_digest
+                || new.attempt < old.attempt
+            {
+                return Err(invalid());
+            }
+        } else if receipt.is_none() {
+            return Err(invalid());
+        }
+    }
+    if let Some(receipt) = receipt {
+        let active = previous.active.as_ref().ok_or_else(invalid)?;
+        if active.batch.id != receipt.batch_id
+            || active.action_id.as_deref() != Some(&receipt.action_id)
+            || active.input_digest != receipt.input_digest
+            || next.active.is_some()
+            || next.covered != active.batch.through_inclusive
+            || previous.covered != active.batch.from_exclusive
+            || receipt.evidence.is_empty()
+            || receipt.submitted_by.is_empty()
+        {
+            return Err(invalid());
+        }
+        use sha2::{Digest, Sha256};
+        if receipt.evidence_digest != format!("{:x}", Sha256::digest(&receipt.evidence)) {
+            return Err(invalid());
+        }
+        let remaining = previous
+            .pending
+            .iter()
+            .filter(|d| {
+                !d.commits
+                    .iter()
+                    .all(|sha| active.batch.commits.contains(sha))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let remaining_waived = previous
+            .waived
+            .iter()
+            .filter(|d| {
+                !d.commits
+                    .iter()
+                    .all(|sha| active.batch.commits.contains(sha))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if next.waived != remaining_waived {
+            return Err(invalid());
+        }
+        if next.pending != remaining {
+            return Err(invalid());
+        }
+        if !previous.pending_commits.starts_with(&active.batch.commits)
+            || next.pending_commits != previous.pending_commits[active.batch.commits.len()..]
+        {
+            return Err(invalid());
+        }
+    } else {
+        if previous.waived != next.waived
+            || previous.covered != next.covered
+            || !next.pending_commits.starts_with(&previous.pending_commits)
+            || previous.pending.iter().any(|d| !next.pending.contains(d))
+        {
+            return Err(invalid());
+        }
+        if previous.active.is_none()
+            && let Some(active) = &next.active
+        {
+            let batch = &active.batch;
+            if batch.consumer != next.consumer
+                || batch.epoch != next.epoch
+                || batch.repository != next.repository
+                || batch.branch != next.branch
+                || batch.from_exclusive != next.covered
+                || batch.commits.is_empty()
+                || !next.pending_commits.starts_with(&batch.commits)
+                || batch.commits.last() != Some(&batch.through_inclusive.commit)
+                || batch.deliveries.iter().any(|d| !next.pending.contains(d))
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(())
+}
+mod intents;
+#[cfg(test)]
+mod tests;
+mod waivers;

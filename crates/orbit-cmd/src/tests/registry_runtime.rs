@@ -78,9 +78,13 @@ fn registered_checkout_opens_a_bound_runtime() {
     let workspace = workspace("logical-abc123", "local");
     let checkout = WorkspaceCheckout::owner(workspace.id.clone(), repo.clone(), orbit_dir);
 
+    std::fs::write(global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_local\"\nhost_id = \"local\"\ntask_prefix = \"ORB\"\n")
+        .expect("host identity");
     let runtime =
         RegisteredRuntimeFactory::open_registered_checkout(&global, &workspace, &checkout)
             .expect("bound runtime");
+    assert_eq!(runtime.automation_machine_identity(), Some("hm_local"));
     let binding = runtime
         .workspace_runtime_binding()
         .expect("runtime binding");

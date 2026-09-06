@@ -37,6 +37,7 @@ pub struct AutoTaskAddParams {
 /// `enabled` is patched through [`OrbitRuntime::auto_task_toggle`].
 #[derive(Debug, Clone, Default)]
 pub struct AutoTaskUpdateParams {
+    pub waive_batch: Option<orbit_types::workflow::automation::WaiveBatchRequest>,
     pub description: Option<String>,
     pub schedule: Option<AutoTaskSchedule>,
     pub dedupe: Option<DedupePolicy>,
@@ -57,7 +58,7 @@ impl OrbitRuntime {
             schema_version: AUTO_TASK_SCHEMA_VERSION,
             name: params.name,
             description: params.description,
-            enabled: true,
+            enabled: !matches!(&params.schedule, AutoTaskSchedule::Deliveries { .. }),
             schedule: params.schedule,
             template: params.template,
             dedupe: params.dedupe,
@@ -142,6 +143,28 @@ impl OrbitRuntime {
         params: AutoTaskUpdateParams,
     ) -> Result<AutoTaskDefinition, OrbitError> {
         let mut definition = self.require_auto_task(name)?;
+        if let Some(request) = &params.waive_batch {
+            if params.description.is_some()
+                || params.schedule.is_some()
+                || params.dedupe.is_some()
+                || params.template.is_some()
+            {
+                return Err(OrbitError::InvalidInput(
+                    "waive_batch cannot be combined with a definition edit".into(),
+                ));
+            }
+            let consumer = crate::application::automation::consumer_key(self, "auto-task", name)?;
+            orbit_automation::delivery::waive(
+                self.automation_store()?.as_ref(),
+                &consumer,
+                request,
+                self.actor_label(),
+                chrono::Utc::now(),
+            )
+            .map_err(orbit_automation::automation_error_to_orbit)?;
+            return Ok(definition);
+        }
+
         if let Some(description) = params.description {
             definition.description = description;
         }

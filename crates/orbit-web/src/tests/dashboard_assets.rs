@@ -5,10 +5,10 @@ use std::fs;
 use std::process::Command;
 
 use crate::{
-    DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_common_js, serve_diagnostics_js,
-    serve_index, serve_log_tail_js, serve_markdown_js, serve_marked_js, serve_operations_js,
-    serve_purify_js, serve_reliability_js, serve_router_js, serve_run_detail_js, serve_runs_js,
-    serve_scoreboard_js, serve_tasks_js,
+    DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_automation_js, serve_common_js,
+    serve_diagnostics_js, serve_index, serve_log_tail_js, serve_markdown_js, serve_marked_js,
+    serve_operations_js, serve_purify_js, serve_reliability_js, serve_router_js,
+    serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
 };
 
 // The recent-history, aggregate-request, and route-selection assertions
@@ -69,6 +69,7 @@ async fn dashboard_html_and_js_routes_emit_csp() {
         ("runs", serve_runs_js().await),
         ("run_detail", serve_run_detail_js().await),
         ("operations", serve_operations_js().await),
+        ("automation", serve_automation_js().await),
     ];
 
     for (name, response) in routes {

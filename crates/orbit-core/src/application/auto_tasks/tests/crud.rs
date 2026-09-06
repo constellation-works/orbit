@@ -91,6 +91,7 @@ fn update_patches_present_fields() {
         .auto_task_update(
             "chore",
             AutoTaskUpdateParams {
+                waive_batch: None,
                 description: Some("new body".to_string()),
                 schedule: Some(AutoTaskSchedule::Cron {
                     cron: "0 9 * * *".to_string(),

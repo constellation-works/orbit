@@ -61,7 +61,7 @@ product/architecture choices that materially change the contract.
 | Faster cron plus model inspection | Smallest operational change, but repeated empty runs and prose cursors leave coverage/incident correctness to agents. Retain for genuinely periodic work; not the shared state contract. |
 | Count raw `done` transitions or task markers | Cheap, but epic/bundle/no-diff completions inflate counts and open PRs can look delivered. Reject as the delivery metric. |
 | Dispatch-time cursor as success | Minimal state, but failed sweeps permanently skip content. Reject; immutable batches and receipts cost storage and recovery complexity. |
-| Independent event logic in each scheduler | Avoids a shared module initially, but duplicates identity, retry and coverage invariants. Use one Core evaluator with two small action adapters. |
+| Independent event logic in each scheduler | Avoids a shared module initially, but duplicates identity, retry and coverage invariants. Use one orbit-automation evaluator with Core task/job action adapters [ORB-11330]. |
 | Resident event bus, webhook handlers, arbitrary expressions | Lower latency and broader extensibility, with another service, authorization surface and replay model. Defer: existing clock plus bounded reconciliation can establish correctness first. |
 | Distributed leases across hosts | Enables automatic failover, but requires authority transfer and side-effect fencing beyond current pins. V1 uses one authoritative state-consumer host. |
 | Hash only task `updated_at` / changed paths | Cheap freshness checks, but summary writes cause loops and indirect source/contract changes can be missed. Use material task data and conservative source revision first. |

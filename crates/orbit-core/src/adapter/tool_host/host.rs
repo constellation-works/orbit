@@ -363,6 +363,7 @@ impl HubCoordinationExecutor {
         input: Value,
         agent: Option<String>,
         model: Option<String>,
+        owner: Option<ReservationOwnerContext>,
     ) -> Result<Value, OrbitError> {
         if ["required_tools", "requiredTools", "required-tool"]
             .iter()
@@ -403,7 +404,13 @@ impl HubCoordinationExecutor {
                 &current,
                 &input,
             );
-            let updated = self.update_task_from_snapshot(&id, input.clone(), &actor, &current)?;
+            let updated = self.update_task_from_snapshot(
+                &id,
+                input.clone(),
+                &actor,
+                &current,
+                owner.as_ref(),
+            )?;
             outcome = Some((current, updated));
             Ok(())
         })?;
@@ -419,6 +426,7 @@ impl HubCoordinationExecutor {
         input: Value,
         actor: &str,
         current: &Task,
+        owner: Option<&ReservationOwnerContext>,
     ) -> Result<Task, OrbitError> {
         let status = optional_string(&input, "status")?
             .map(|value| super::input::parse_task_status("status", &value))
@@ -607,6 +615,7 @@ impl HubCoordinationExecutor {
             self.inner.tasks.artifact.upsert_task_artifacts(
                 id,
                 TaskArtifactUpdateParams {
+                    owner_run_id: owner.map(|o| o.owner_run_id.clone()),
                     actor: actor.to_string(),
                     upsert_artifacts: artifacts,
                 },
@@ -728,6 +737,7 @@ impl HubCoordinationExecutor {
                     Value::Object(update),
                     &actor,
                     &current,
+                    None,
                 )?;
                 outcome = Some((current, updated));
                 Ok(())
@@ -992,7 +1002,7 @@ impl OrbitToolHost for HubCoordinationExecutor {
         input: Value,
         agent: Option<String>,
         model: Option<String>,
-        _reservation_owner: Option<ReservationOwnerContext>,
+        reservation_owner: Option<ReservationOwnerContext>,
     ) -> Result<Value, OrbitError> {
         let (input, _redaction_report) =
             super::artifact_redaction::sanitize_tool_input(action, input)?;
@@ -1002,7 +1012,9 @@ impl OrbitToolHost for HubCoordinationExecutor {
             OrbitBuiltinAction::TaskStart => self.transition(input, agent, model, true),
             OrbitBuiltinAction::TaskShow => self.show_task(input),
             OrbitBuiltinAction::TaskList => self.list_tasks(input),
-            OrbitBuiltinAction::TaskUpdate => self.update_task(input, agent, model),
+            OrbitBuiltinAction::TaskUpdate => {
+                self.update_task(input, agent, model, reservation_owner)
+            }
             OrbitBuiltinAction::Friction(verb) => self.friction(verb, input, model),
             _ => Err(OrbitError::InvalidInput(format!(
                 "action {action:?} is outside the checkoutless hub coordination executor"

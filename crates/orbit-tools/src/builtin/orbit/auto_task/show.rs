@@ -10,13 +10,25 @@ impl Tool for OrbitAutoTaskShowTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "orbit.auto_task.show".to_string(),
-            description: "Show a single auto-task definition by name.".to_string(),
-            parameters: vec![ToolParam {
-                name: "name".to_string(),
-                description: "Definition name. Required.".to_string(),
-                param_type: "string".to_string(),
-                required: true,
-            }],
+            description:
+                "Show a single auto-task definition and persisted delivery diagnostics by name."
+                    .to_string(),
+            parameters: vec![
+                ToolParam {
+                    name: "name".to_string(),
+                    description: "Definition name. Required.".to_string(),
+                    param_type: "string".to_string(),
+                    required: true,
+                },
+                ToolParam {
+                    name: "preview".into(),
+                    description:
+                        "Preview delivery baseline/source observations without admitting actions."
+                            .into(),
+                    param_type: "boolean".into(),
+                    required: false,
+                },
+            ],
             builtin: true,
         }
     }

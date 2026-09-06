@@ -87,6 +87,14 @@ fn unsupported_dispatch_capability(capability: &str) -> DispatchError {
 /// Deterministic actions, task/run persistence, environment resolution, agent
 /// dispatch, and audit/checkpoint hooks all cross this boundary exactly once.
 pub trait RuntimeHost: Send + Sync {
+    /// Optional observation hook; execution-only test hosts need no scheduler store.
+    fn record_direct_landing_intent(
+        &self,
+        _request: &orbit_types::workflow::automation::DirectLandingRequest,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
     fn insert_job_run(
         &self,
         job_id: &str,

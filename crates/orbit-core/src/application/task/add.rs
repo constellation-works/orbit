@@ -36,9 +36,19 @@ impl OrbitRuntime {
 
     pub fn add_task_with_identity(
         &self,
+        params: TaskAddParams,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.add_task_admitted(params, agent, model, None)
+    }
+
+    pub(crate) fn add_task_admitted(
+        &self,
         mut params: TaskAddParams,
         agent: Option<String>,
         model: Option<String>,
+        action_key: Option<&str>,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         // [ORB-00417] Redact secrets at the single task-creation choke point
@@ -97,34 +107,37 @@ impl OrbitRuntime {
             prune_missing_context_files(&prune_root, normalized_context_files);
 
         let task = self.with_mutation(|| {
-            let task = self.stores().task_records().create(StoreTaskCreateParams {
-                actor: create_label.clone(),
-                parent_id: params.parent_id.clone(),
-                title: params.title.clone(),
-                description: params.description.clone(),
-                acceptance_criteria: params.acceptance_criteria.clone(),
-                dependencies: dependencies.clone(),
-                relations: params.relations.clone(),
-                tags: normalized_tags.clone(),
-                required_tools: normalize_required_tools(params.required_tools.clone()),
-                plan: params.plan.clone(),
-                execution_summary: String::new(),
-                context_files: kept_context_files.clone(),
-                workspace_path: workspace_path.clone(),
-                repo_root: None,
-                created_by: Some(create_label.clone()),
-                planned_by,
-                implemented_by: None,
-                status: initial_status,
-                priority: params.priority,
-                complexity: Some(params.complexity),
-                task_type,
-                external_refs: params.external_refs.clone(),
-                source_task_id: params.source_task_id.clone(),
-                crew: params.crew.clone(),
-                orchestrator: params.orchestrator.clone(),
-                comments: comments.clone(),
-            })?;
+            let task = self.stores().task_records().create_with_key(
+                StoreTaskCreateParams {
+                    actor: create_label.clone(),
+                    parent_id: params.parent_id.clone(),
+                    title: params.title.clone(),
+                    description: params.description.clone(),
+                    acceptance_criteria: params.acceptance_criteria.clone(),
+                    dependencies: dependencies.clone(),
+                    relations: params.relations.clone(),
+                    tags: normalized_tags.clone(),
+                    required_tools: normalize_required_tools(params.required_tools.clone()),
+                    plan: params.plan.clone(),
+                    execution_summary: String::new(),
+                    context_files: kept_context_files.clone(),
+                    workspace_path: workspace_path.clone(),
+                    repo_root: None,
+                    created_by: Some(create_label.clone()),
+                    planned_by,
+                    implemented_by: None,
+                    status: initial_status,
+                    priority: params.priority,
+                    complexity: Some(params.complexity),
+                    task_type,
+                    external_refs: params.external_refs.clone(),
+                    source_task_id: params.source_task_id.clone(),
+                    crew: params.crew.clone(),
+                    orchestrator: params.orchestrator.clone(),
+                    comments: comments.clone(),
+                },
+                action_key,
+            )?;
             Ok((
                 task.clone(),
                 OrbitEvent::TaskAdded {

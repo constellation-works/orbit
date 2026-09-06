@@ -23,6 +23,9 @@ pub struct AutoTaskAddArgs {
     /// Interval in minutes (mutually exclusive with `--cron`)
     #[arg(long = "every-minutes")]
     pub every_minutes: Option<u64>,
+    /// Delivery trigger JSON: owner_machine, branch, threshold, max_wait_minutes, coverage; optional max_items/retries.
+    #[arg(long)]
+    pub deliveries_landed: Option<String>,
     /// Title of each minted task
     #[arg(long)]
     pub title: String,
@@ -65,7 +68,7 @@ pub struct AutoTaskAddArgs {
 
 impl Execute for AutoTaskAddArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let schedule = require_schedule(self.cron, self.every_minutes)?;
+        let schedule = require_schedule(self.cron, self.every_minutes, self.deliveries_landed)?;
         // Minted tasks receive TaskComplexity::Unassessed (not a real
         // assessment). Definitions do not carry complexity; the mint path
         // stamps the explicit non-answer so create never produces a gap.

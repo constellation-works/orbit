@@ -12,7 +12,7 @@ pub struct WorkspaceConfig {
     pub schema_version: u32,
     pub workspace_id: String,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCreateParams {
     pub actor: String,
     pub parent_id: Option<OrbitId>,
@@ -103,6 +103,8 @@ pub struct TaskHistoryUpdateParams {
 #[derive(Debug, Default, Clone)]
 pub struct TaskArtifactUpdateParams {
     pub actor: String,
+    /// Trusted executor context supplied by Core, never parsed from tool input.
+    pub owner_run_id: Option<String>,
     /// Artifact files to write under the task bundle `artifacts/` directory.
     /// Existing files at the same relative path are overwritten.
     pub upsert_artifacts: Vec<TaskArtifact>,

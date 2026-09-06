@@ -76,6 +76,32 @@ impl SqliteJobRunStore {
 }
 
 impl JobRunStoreBackend for SqliteJobRunStore {
+    fn insert_automation_job_run(
+        &self,
+        job_id: &str,
+        input: serde_json::Value,
+        key: &str,
+    ) -> Result<JobRun, OrbitError> {
+        validate_path_stem(job_id, "job")?;
+        super::automation::initialize(&self.store)?;
+        self.store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let conn=tx.connection();
+            let existing:Option<String>=conn.query_row("SELECT run_id FROM automation_job_keys WHERE workspace_id=?1 AND action_key=?2",rusqlite::params![self.workspace_id,key],|r|r.get(0)).optional().map_err(|e|OrbitError::Store(e.to_string()))?;
+            if let Some(id)=existing {
+                let run=get_job_run_for_workspace_conn(conn,&self.workspace_id,&id)?.ok_or_else(||OrbitError::Store("automation run missing".into()))?;
+                if run.job_id!=job_id || run.input.as_ref()!=Some(&input) {return Err(OrbitError::InvalidInput("automation job key input changed".into()));}
+                return Ok(run);
+            }
+            let now=Utc::now();
+            let id=next_run_id_conn(conn,&self.workspace_id,job_id,now)?;
+            let run=JobRun {run_id:id.clone(),job_id:job_id.into(),attempt:1,state:JobRunState::Pending,scheduled_at:now,started_at:None,finished_at:None,duration_ms:None,created_at:now,pid:None,pid_start_time:None,input:Some(input.clone()),retry_source_run_id:None,knowledge_metrics:None,resolved_crew:None,crew_model:None,steps:Vec::new()};
+            let state=PipelineState::new(id.clone(),job_id.into(),input.clone());
+            upsert_job_run_for_workspace_conn(conn,&self.workspace_id,&run,Some(&state))?;
+            conn.execute("INSERT INTO automation_job_keys VALUES (?1,?2,?3)",rusqlite::params![self.workspace_id,key,id]).map_err(|e|OrbitError::Store(e.to_string()))?;
+            Ok(run)
+        })
+    }
+
     fn list_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError> {
         validate_path_stem(job_id, "job")?;
         self.list_job_runs_filtered(&JobRunQuery {

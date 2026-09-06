@@ -1,0 +1,64 @@
+//! Atomic scheduler checkpoints and immutable accepted coverage.
+use orbit_common::OrbitError;
+use orbit_types::workflow::automation::{AcceptedCoverage, AutomationState, BatchWaiver, Delivery};
+
+pub trait AutomationStoreBackend: Send + Sync {
+    fn automation_waive(
+        &self,
+        _previous: &AutomationState,
+        _next: &AutomationState,
+        _waiver: &BatchWaiver,
+    ) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "batch waiver persistence unavailable".into(),
+        ))
+    }
+    fn automation_waivers(
+        &self,
+        _consumer: &str,
+        _limit: usize,
+    ) -> Result<Vec<BatchWaiver>, OrbitError> {
+        Ok(vec![])
+    }
+
+    fn automation_receipt(
+        &self,
+        consumer: &str,
+        batch: &str,
+    ) -> Result<Option<AcceptedCoverage>, OrbitError> {
+        Ok(self
+            .automation_receipts(consumer, 100)?
+            .into_iter()
+            .find(|r| r.batch_id == batch))
+    }
+
+    fn automation_record_delivery_intent(&self, _delivery: &Delivery) -> Result<(), OrbitError> {
+        Err(OrbitError::Store(
+            "delivery intent persistence unavailable".into(),
+        ))
+    }
+    fn automation_delivery_intents(
+        &self,
+        _repository: &str,
+        _branch: &str,
+        _commits: &[String],
+    ) -> Result<Vec<Delivery>, OrbitError> {
+        Ok(vec![])
+    }
+
+    fn automation_state(&self, consumer: &str) -> Result<Option<AutomationState>, OrbitError>;
+    /// Inserts once; a missing state is never silently substituted for corrupt data.
+    fn automation_initialize(&self, state: &AutomationState) -> Result<bool, OrbitError>;
+    /// Generation-fenced checkpoint and optional receipt commit in one transaction.
+    fn automation_commit(
+        &self,
+        previous: &AutomationState,
+        next: &AutomationState,
+        receipt: Option<&AcceptedCoverage>,
+    ) -> Result<bool, OrbitError>;
+    fn automation_receipts(
+        &self,
+        consumer: &str,
+        limit: usize,
+    ) -> Result<Vec<AcceptedCoverage>, OrbitError>;
+}

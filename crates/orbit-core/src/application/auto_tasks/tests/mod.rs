@@ -5,7 +5,6 @@ use crate::application::auto_tasks::crud::AutoTaskAddParams;
 
 mod crud;
 mod mint;
-mod schedule;
 mod scheduler;
 mod shipped;
 

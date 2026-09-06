@@ -71,6 +71,7 @@ pub struct OrbitRuntime {
     /// stays registry-neutral; it only carries the refusal supplied by that
     /// owner so every task-record writer shares one fail-closed gate.
     coordination_write_owner: Option<Arc<str>>,
+    automation_machine_identity: Option<Arc<str>>,
     /// Supplied by the same registry-owning composition layer, for reads that
     /// span more than one workspace. Absent on a standalone runtime, which
     /// then answers only for its own checkout [ORB-11027].
@@ -141,6 +142,7 @@ impl OrbitRuntime {
             context,
             workspace_binding: binding.map(Arc::new),
             coordination_write_owner: None,
+            automation_machine_identity: None,
             workspace_catalog: None,
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(layout_report),
@@ -173,6 +175,7 @@ impl OrbitRuntime {
             context,
             workspace_binding: Some(Arc::new(binding)),
             coordination_write_owner: None,
+            automation_machine_identity: None,
             workspace_catalog: None,
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(orbit_store::workflow::layout::LayoutUpgradeReport::default()),
@@ -189,6 +192,16 @@ impl OrbitRuntime {
     pub fn with_actor(mut self, actor: ActorIdentity) -> Self {
         self.context.set_actor(actor);
         self
+    }
+
+    /// Registry-owning composition supplies stable machine identity; Core never discovers it.
+    pub fn with_automation_machine_identity(mut self, machine_id: Option<String>) -> Self {
+        self.automation_machine_identity = machine_id.map(Arc::from);
+        self
+    }
+
+    pub fn automation_machine_identity(&self) -> Option<&str> {
+        self.automation_machine_identity.as_deref()
     }
 
     /// Attach the declared remote owner for a replica checkout. This is set by
@@ -284,6 +297,12 @@ impl OrbitRuntime {
 
     pub fn persistence_config_json(&self) -> Value {
         self.context.persistence().as_json_value()
+    }
+
+    pub fn automation_store(
+        &self,
+    ) -> Result<Arc<dyn orbit_store::contracts::AutomationStoreBackend>, OrbitError> {
+        orbit_store::compose::automation_store(Store::open(&self.context.persistence().audit_db)?)
     }
 
     pub fn sqlite_store(&self) -> Result<Store, OrbitError> {

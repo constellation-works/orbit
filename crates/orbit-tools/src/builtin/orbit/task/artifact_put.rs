@@ -38,7 +38,7 @@ impl Tool for OrbitTaskArtifactPutTool {
 
         ToolSchema {
             name: "orbit.task.artifact.put".to_string(),
-            description: "Store a source file under a task's artifacts directory".to_string(),
+            description: "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context; malformed, stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage.".to_string(),
             parameters,
             builtin: true,
         }

@@ -54,3 +54,8 @@ pub use routine::{
 pub use run_state::{DrainAdmissionsStop, DrainWorkerLimit, PipelineState};
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;
+
+mod auto_task_cursor;
+pub use auto_task_cursor::{AutoTaskCursor, AutoTaskCursorState};
+
+pub mod automation;

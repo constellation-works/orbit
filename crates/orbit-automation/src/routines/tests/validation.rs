@@ -8,15 +8,13 @@ use orbit_store::{RoutineFireIntentParams, Store};
 use orbit_types::workflow::{JobRunState, RoutineDefinition};
 use tempfile::tempdir;
 
-use crate::OrbitError;
-use crate::application::job::RunOwnerLiveness;
-use crate::application::routines::loader::{LoadedRoutine, RoutineCollection, RoutineOrigin};
-use crate::application::routines::sweep::{
-    RoutineDispatch, SweepOptions, run_sweep_core_with_registry,
-};
-use crate::application::routines::validation::{
+use crate::routines::loader::{LoadedRoutine, RoutineCollection, RoutineOrigin};
+use crate::routines::sweep::RunOwnerLiveness;
+use crate::routines::sweep::{RoutineDispatch, SweepOptions, run_sweep_core_with_registry};
+use crate::routines::validation::{
     RoutineDiagnosticSeverity, RoutineHostIdentity, RoutineRegistryView, validate_routine_pins,
 };
+use orbit_common::OrbitError;
 
 fn ts(minute: u32, second: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 7, 18, 12, minute, second)
@@ -40,7 +38,7 @@ fn local_view(known_elsewhere: &[&str]) -> RoutineRegistryView {
     }
 }
 
-fn codes(validation: &crate::application::routines::RoutinePinValidation) -> Vec<&'static str> {
+fn codes(validation: &crate::routines::validation::RoutinePinValidation) -> Vec<&'static str> {
     validation
         .diagnostics
         .iter()

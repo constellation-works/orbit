@@ -84,6 +84,43 @@ impl TaskBundleStoreV2 {
             .canonical_task_bundle_path(&self.workspace_id, task_id)
     }
 
+    /// The caller has durably reserved this ID for one action and input digest.
+    /// Re-enter after a crash under the canonical bundle lock. A readable bundle
+    /// wins; unreadable bytes are retained for explicit recovery.
+    pub(crate) fn create_or_recover_action_bundle(
+        &self,
+        proposed: &TaskBundleV2,
+    ) -> Result<TaskBundleV2, OrbitError> {
+        let id = &proposed.envelope.id;
+        let path = self.bundle_path(id)?;
+        with_exclusive_file_lock(&path, "task action admission", || {
+            if let Ok(existing) = read_bundle_at(&path) {
+                self.registry
+                    .register_task_bundle(id, &self.workspace_id, &path)?;
+                if let Some(workspace) = &self.workspace_orbit_dir
+                    && let Err(error) = crate::repository::checkout_projection::rebuild_projection(
+                        &self.registry,
+                        workspace,
+                        &self.workspace_id,
+                    )
+                {
+                    orbit_common::tracing::warn!(task_id=id,error=%error,"recovered action task; checkout projection remains degraded");
+                }
+                remove_task_bundle_lock_sentinel(&task_bundle_lock_sentinel_path(&path)?)?;
+                return Ok(existing);
+            }
+            if path.exists() {
+                return Err(OrbitError::Store(
+                    "action task bundle is unreadable; repair the retained bundle before replay"
+                        .into(),
+                ));
+            }
+            self.create_bundle_locked(id, &path, proposed)?;
+            remove_task_bundle_lock_sentinel(&task_bundle_lock_sentinel_path(&path)?)?;
+            Ok(proposed.clone())
+        })
+    }
+
     pub(crate) fn create_bundle(
         &self,
         bundle: &TaskBundleV2,

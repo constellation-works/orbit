@@ -70,6 +70,7 @@ fn bounded_integrity_is_selected_only_but_direct_unbounded_and_fallback_reads_ar
             .upsert_task_artifacts(
                 &old.id,
                 &TaskArtifactUpdateParams {
+                    owner_run_id: None,
                     actor: "codex".to_string(),
                     upsert_artifacts: vec![TaskArtifact {
                         path: "proof.txt".to_string(),

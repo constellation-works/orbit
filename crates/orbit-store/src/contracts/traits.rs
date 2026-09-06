@@ -55,6 +55,17 @@ pub trait TaskStoreBackend: Send + Sync {
     fn get_task_row(&self, id: &str, list_read: bool)
     -> Result<Option<super::TaskRow>, OrbitError>;
     fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError>;
+    /// Durable key admission for automation, sharing ordinary bundle creation.
+    fn create_task_idempotent(
+        &self,
+        _params: TaskCreateParams,
+        _key: &str,
+    ) -> Result<Task, OrbitError> {
+        Err(OrbitError::Store(
+            "idempotent task creation unavailable".into(),
+        ))
+    }
+
     fn list_tasks(&self) -> Result<Vec<Task>, OrbitError>;
     fn task_status_index(&self) -> Result<BTreeMap<OrbitId, TaskStatus>, OrbitError> {
         Ok(self
@@ -357,6 +368,17 @@ pub trait TaskReservationStoreBackend: Send + Sync {
 }
 
 pub trait JobRunStoreBackend: Send + Sync {
+    fn insert_automation_job_run(
+        &self,
+        _job_id: &str,
+        _input: serde_json::Value,
+        _key: &str,
+    ) -> Result<JobRun, OrbitError> {
+        Err(OrbitError::Store(
+            "automation job admission unavailable".into(),
+        ))
+    }
+
     fn list_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
     fn list_job_runs_filtered(&self, query: &JobRunQuery) -> Result<Vec<JobRun>, OrbitError>;
     /// Number of runs matching `query`, ignoring its `limit`.
