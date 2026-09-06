@@ -4,8 +4,8 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280]
-last_validated: 2026-09-05
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344]
+last_validated: 2026-09-06
 ---
 
 # Upgrade Orbit Safely
@@ -30,16 +30,21 @@ orbit update --json               # machine-readable report
    install`, or checkout build is reported with the command that *does* upgrade it, before
    anything is downloaded.
 3. Take an exclusive lock in the install directory, so two updates cannot interleave.
-4. Download the release archive, authenticate the checksum manifest against the trusted
+4. Re-read the installed binary's version under that lock, and on Linux resolve a replaced
+   running inode (`/path/to/orbit (deleted)`) back to the live install path. Equal, newer,
+   and older installed versions are decided from that evidence — a writer that started on
+   an older snapshot cannot overwrite a newer install that finished while it was discovering
+   a release. `--check` stays read-only and does not take the lock.
+5. Download the release archive, authenticate the checksum manifest against the trusted
    release signing keys, compare the archive's SHA-256, and extract its single `orbit` member
    into a staging file beside the installed one.
-5. Copy the current executable to `<orbit>.previous`, then swap the staged file in with one
+6. Copy the current executable to `<orbit>.previous`, then swap the staged file in with one
    atomic same-directory rename, and confirm the installed binary reports the requested
    version. If it does not, the previous executable is copied into a complete sibling staging
    file and atomically renamed over the replacement, so concurrent launches see either the
    complete replacement or the complete previous executable; the retained backup is not consumed
    and no workspace state is touched.
-6. Run `orbit migrate --confirm`, then `orbit workspace sync` — **using the newly installed
+7. Run `orbit migrate --confirm`, then `orbit workspace sync` — **using the newly installed
    binary**, in the current workspace. Only the new binary carries the migrations and managed
    asset definitions for the version being installed.
 
@@ -68,9 +73,10 @@ replacement build.
 
 ### Downgrades
 
-A release older than the running one is refused unless `--allow-downgrade` is passed. Even
-then, the staged older binary must be able to open this workspace's state — `orbit update` runs
-its `migrate --dry-run` *before* replacing anything and aborts, with that binary's own
+A release older than the **currently installed** binary — re-read under the update lock, not
+the version the running process started with — is refused unless `--allow-downgrade` is passed.
+Even then, the staged older binary must be able to open this workspace's state — `orbit update`
+runs its `migrate --dry-run` *before* replacing anything and aborts, with that binary's own
 diagnostic, when it cannot.
 
 ### Release mirrors
