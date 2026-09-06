@@ -18,9 +18,9 @@ use crate::OrbitRuntime;
 use crate::application::job::JobRunListParams;
 use crate::application::job::pipeline::{run_definition_snapshot_path, worker_command_override};
 
-/// Long enough that the startup observer cannot terminalize the run while the
-/// submission assertions run, short enough not to outlive the test binary.
-const IDLE_WORKER: &str = "sleep 5";
+/// A finite worker for submission-path assertions. The startup observer reaps
+/// it after the one-second bound, so focused test runs leave no fixture child.
+const IDLE_WORKER: &str = "sleep 1";
 
 fn test_runtime() -> (TempDir, OrbitRuntime) {
     let root = TempDir::new().expect("tempdir");
@@ -136,6 +136,36 @@ fn submission_reports_queued_when_the_job_is_at_its_active_run_limit() {
         invoke.queued,
         "the second run of a max_active_runs=1 job must report queued"
     );
+}
+
+#[test]
+fn test_submission_requires_an_explicit_worker_override_before_spawning() {
+    let (_root, runtime) = test_runtime();
+    seed_catalog_job(&runtime, "qa_submit_missing_override", 1);
+
+    let error = runtime
+        .submit_job_run(
+            "qa_submit_missing_override",
+            serde_json::json!({}),
+            Some("test"),
+        )
+        .expect_err("test builds must not re-exec the libtest binary as a pipeline worker");
+    assert!(
+        error
+            .to_string()
+            .contains("requires an explicit worker command override"),
+        "the submission must fail closed before spawning a worker: {error}"
+    );
+
+    let runs = runtime
+        .list_job_runs(JobRunListParams {
+            job_id: Some("qa_submit_missing_override".to_string()),
+            ..Default::default()
+        })
+        .expect("list submitted runs");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].state, JobRunState::Interrupted);
+    assert_eq!(runs[0].pid, None, "no worker process may have started");
 }
 
 /// A worker that cannot start is the *submission's* failure: the caller is
