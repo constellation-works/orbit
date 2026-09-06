@@ -393,7 +393,7 @@ fn conflicting_rebase_publishes_clean_pre_rebase_branch_and_blocks_task() {
     );
     let body = host.pr_create_body();
     for expected in [
-        "Automatic conflict recovery exhausted",
+        "Merge conflict handoff",
         "Original base:",
         "Target base:",
         "`src/lib.rs`",
@@ -403,6 +403,10 @@ fn conflicting_rebase_publishes_clean_pre_rebase_branch_and_blocks_task() {
             "blocked PR body missing {expected:?}: {body}"
         );
     }
+    assert!(
+        !body.contains("Automatic conflict recovery exhausted"),
+        "a conflict alone is not evidence that recovery was attempted"
+    );
     let task = host.get_task(task_id).expect("blocked task");
     assert_eq!(task.status, TaskStatus::Blocked);
     assert_eq!(task.github_pr_number(), Some("42"));
@@ -577,6 +581,16 @@ fn non_fast_forward_drift_handoff_commits_dirty_work_and_raises_pr() {
     assert!(
         host.pr_create_body().contains("primary_checkout_drift"),
         "the blocked PR preserves the typed primary-drift classification"
+    );
+    assert!(
+        host.pr_create_body().contains("Delivery failure handoff"),
+        "non-conflict failures receive the generic handoff"
+    );
+    assert!(
+        !host
+            .pr_create_body()
+            .contains("Automatic conflict recovery exhausted"),
+        "non-conflict failures must not claim an unverified recovery attempt"
     );
     let calls = host.vcs_calls();
     assert!(
