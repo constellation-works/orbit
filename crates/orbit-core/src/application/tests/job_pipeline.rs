@@ -606,6 +606,111 @@ spec:
     );
 }
 
+/// Explicit shipment validates its selected task's effective crew before a
+/// run can be persisted, then carries the canonical restriction into the
+/// child pipeline for the dispatch-time provider gate.
+#[test]
+fn explicit_ship_crew_allowlist_admits_only_configured_permitted_crews() {
+    let (_root, runtime) = test_runtime_with_named_crews();
+    let jobs_dir = runtime.paths().global_dir.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    std::fs::write(
+        jobs_dir.join("task_auto_pipeline.yaml"),
+        r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: task_auto_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: nap
+      spec:
+        type: deterministic
+        action: sleep
+        config: {}
+"#,
+    )
+    .expect("seed task_auto_pipeline definition");
+    let permitted = runtime
+        .add_task(TaskAddParams {
+            title: "Sol shipment".to_string(),
+            description: "Explicit crew allowlist fixture".to_string(),
+            crew: Some("sol".to_string()),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("add permitted task");
+    let excluded = runtime
+        .add_task(TaskAddParams {
+            title: "Primary shipment".to_string(),
+            description: "Explicit crew allowlist fixture".to_string(),
+            crew: Some("primary".to_string()),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("add excluded task");
+
+    let error = runtime
+        .submit_ship_run(
+            ShipMode::Local,
+            Some("main"),
+            std::slice::from_ref(&excluded.id),
+            CompletionPolicy::Review,
+            &["sol".to_string()],
+            Some("test"),
+            None,
+        )
+        .expect_err("an excluded explicit crew must be refused before persistence");
+    assert!(error.to_string().contains("primary"), "{error}");
+    assert!(error.to_string().contains("sol"), "{error}");
+    assert!(
+        runtime
+            .list_job_runs(JobRunListParams::default())
+            .expect("list runs")
+            .is_empty(),
+        "the excluded task must not create a run"
+    );
+
+    let unknown = runtime
+        .submit_ship_run(
+            ShipMode::Local,
+            Some("main"),
+            std::slice::from_ref(&permitted.id),
+            CompletionPolicy::Review,
+            &["unknown".to_string()],
+            Some("test"),
+            None,
+        )
+        .expect_err("an unknown configured crew must fail before run creation");
+    assert!(unknown.to_string().contains("unknown"), "{unknown}");
+    assert!(
+        runtime
+            .list_job_runs(JobRunListParams::default())
+            .expect("list runs")
+            .is_empty(),
+        "an invalid allowlist must not create a run"
+    );
+
+    let admitted = runtime
+        .submit_ship_run(
+            ShipMode::Local,
+            Some("main"),
+            std::slice::from_ref(&permitted.id),
+            CompletionPolicy::Review,
+            &["sol".to_string()],
+            Some("test"),
+            None,
+        )
+        .expect("the explicitly permitted singleton is submitted");
+    let input = runtime
+        .show_job_run(&admitted.run_id)
+        .expect("show admitted run")
+        .input
+        .expect("persisted input");
+    assert_eq!(input["allowed_crews"], serde_json::json!(["sol"]));
+}
+
 fn wait_for_worker_ownership_outcome(
     runtime: &OrbitRuntime,
     run_id: &str,
@@ -844,6 +949,7 @@ fn ship_submission_refuses_a_task_already_carried_by_a_non_terminal_run() {
             Some("main"),
             std::slice::from_ref(&selected_task_id),
             CompletionPolicy::Review,
+            &[],
             Some("test"),
             None,
         )
@@ -904,6 +1010,7 @@ fn ship_submission_guard_is_scoped_to_the_selected_tasks() {
                 Some("main"),
                 &task_ids,
                 CompletionPolicy::Review,
+                &[],
                 Some("test"),
                 None,
             )
@@ -933,6 +1040,7 @@ fn ship_submission_refuses_a_missing_explicit_task_before_persisting_a_run() {
             Some("main"),
             std::slice::from_ref(&missing_id),
             CompletionPolicy::Review,
+            &[],
             Some("test"),
             None,
         )
@@ -980,6 +1088,7 @@ fn ship_submission_refuses_an_epic_root_but_allows_its_child() {
             Some("main"),
             std::slice::from_ref(&epic.id),
             CompletionPolicy::Review,
+            &[],
             Some("test"),
             None,
         )
@@ -999,6 +1108,7 @@ fn ship_submission_refuses_an_epic_root_but_allows_its_child() {
             Some("main"),
             std::slice::from_ref(&child.id),
             CompletionPolicy::Review,
+            &[],
             Some("test"),
             None,
         )
@@ -1021,6 +1131,7 @@ fn ship_submission_mixed_explicit_selection_identifies_the_missing_task() {
             Some("main"),
             &[existing_id, missing_id.clone()],
             CompletionPolicy::Review,
+            &[],
             Some("test"),
             None,
         )

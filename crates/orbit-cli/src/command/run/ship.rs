@@ -32,9 +32,12 @@ impl ShipMode {
 #[command(
     about = "Ship backlog or explicitly selected tasks through the gated task pipeline",
     override_usage = "orbit run ship [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n  orbit run ship T123 --complete\n\n\
+    after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n  orbit run ship T123 --allow-crew sol\n  orbit run ship T123 --complete\n\n\
                   Shipment is asynchronous: this prints the durable run ID and returns. The\n\
                   eventual outcome is not known when it does.\n\n\
+                  `--allow-crew` restricts an explicit shipment to configured crews. It does\n\
+                  not reassign tasks or select a fallback: an excluded current or later-resolved\n\
+                  crew is refused before its provider starts.\n\n\
                   Inspect submitted runs with `orbit run history -j task_auto_pipeline` and\n\
                   `orbit run show <RUN_ID>`."
 )]
@@ -59,6 +62,11 @@ pub struct ShipCommand {
     /// work for the backlog.
     #[arg(long)]
     pub complete: bool,
+    /// Restrict an explicit shipment to these configured crews. Repeatable and
+    /// comma-separated. Every name must be configured; an unknown or empty one
+    /// fails before a run is created. Omitted, shipment remains unrestricted.
+    #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
+    pub allow_crew: Vec<String>,
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
@@ -90,6 +98,7 @@ impl Execute for ShipCommand {
             self.base.as_deref(),
             &self.task_ids,
             self.completion(),
+            &self.allow_crew,
             None,
             self.claim_token.as_deref(),
         )?;
@@ -186,7 +195,13 @@ pub(crate) fn build_ship_run_plan(
     let base = args.base.as_deref().unwrap_or(config_base_branch);
     Ok(WorkflowRunPlan {
         workflow_alias,
-        input: build_ship_input(mode, base, &args.task_ids, args.completion())?,
+        input: build_ship_input(
+            mode,
+            base,
+            &args.task_ids,
+            args.completion(),
+            &args.allow_crew,
+        )?,
     })
 }
 

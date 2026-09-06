@@ -248,6 +248,7 @@ fn sweep_active_workspace(
         // The sweep is an unattended routine: completion is only ever granted by
         // an operator on a single invocation, never implied by a schedule.
         orbit_core::CompletionPolicy::Review,
+        &[],
         Some("ship-sweep"),
         None,
     ) {

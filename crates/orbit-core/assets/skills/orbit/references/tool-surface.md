@@ -112,7 +112,7 @@ Use with `orbit_task_show`. A task title or an agent's narrative is not completi
 evidence; inspect status and the recorded implementation/validation outcome.
 
 ```json
-{"workspace":"<selector>","task_ids":["<task-id>"],"mode":"pr","base":"<integration-branch>","model":"<agent-family>"}
+{"workspace":"<selector>","task_ids":["<task-id>"],"mode":"pr","base":"<integration-branch>","allowed_crews":["<configured-crew>"],"model":"<agent-family>"}
 ```
 
 Use with `orbit_workflow_ship` only when execution is authorized. At least one

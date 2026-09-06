@@ -189,6 +189,7 @@ impl OrbitRuntime {
         base_branch: Option<&str>,
         task_ids: &[String],
         completion: crate::application::workflow::CompletionPolicy,
+        allowed_crews: &[String],
         actor: Option<&str>,
         claim_token: Option<&str>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
@@ -198,8 +199,15 @@ impl OrbitRuntime {
         )
         .ok_or_else(|| OrbitError::InvalidInput("unknown workflow 'ship'".to_string()))?;
         let base = base_branch.unwrap_or_else(|| self.workflow_base_branch());
-        let input =
-            crate::application::workflow::build_ship_input(mode, base, task_ids, completion)?;
+        let allowed_crews = self.canonical_allowed_crews(allowed_crews)?;
+        let allowlist = self.crew_allowlist(&allowed_crews)?;
+        let input = crate::application::workflow::build_ship_input(
+            mode,
+            base,
+            task_ids,
+            completion,
+            &allowed_crews,
+        )?;
         // Validate explicit selections before inspecting runs or creating a
         // pipeline record. Auto mode intentionally carries no task ids: the
         // worker discovers eligible backlog tasks after it starts.
@@ -209,6 +217,14 @@ impl OrbitRuntime {
                 return Err(OrbitError::InvalidInput(format!(
                     "task '{task_id}' is an epic root and cannot be shipped as a leaf; use `orbit run auto` or `orbit run job epic_pipeline`"
                 )));
+            }
+            if let Some(allowlist) = allowlist.as_ref() {
+                let crew = self.effective_task_crew(&task)?;
+                crate::runtime::engine::crew::enforce_crew_allowlist(
+                    Some(allowlist),
+                    &crew,
+                    &format!("explicit ship task '{task_id}'"),
+                )?;
             }
         }
         if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
@@ -255,7 +271,7 @@ impl OrbitRuntime {
             for_seconds,
             max_active_leaf_runs,
             completion,
-            &self.canonical_auto_drain_crews(allowed_crews)?,
+            &self.canonical_allowed_crews(allowed_crews)?,
         )?;
         self.submit_pipeline_run(workflow.job_id, input, None, actor)
     }
@@ -266,7 +282,7 @@ impl OrbitRuntime {
     /// Canonical registry names are persisted rather than the operator's
     /// spelling, so the durable run input says exactly which configured crews
     /// the window permits regardless of the alias that was typed.
-    pub(super) fn canonical_auto_drain_crews(
+    pub(super) fn canonical_allowed_crews(
         &self,
         allowed_crews: &[String],
     ) -> Result<Vec<String>, OrbitError> {
@@ -274,12 +290,12 @@ impl OrbitRuntime {
         for name in allowed_crews {
             if name.trim().is_empty() {
                 return Err(OrbitError::InvalidInput(
-                    "crew name in the auto-drain allowlist must not be empty".to_string(),
+                    "crew name in the allowlist must not be empty".to_string(),
                 ));
             }
             let Some(resolved) = self.canonical_crew_name(Some(name))? else {
                 return Err(OrbitError::InvalidInput(
-                    "crew name in the auto-drain allowlist must not be empty".to_string(),
+                    "crew name in the allowlist must not be empty".to_string(),
                 ));
             };
             canonical.insert(resolved);

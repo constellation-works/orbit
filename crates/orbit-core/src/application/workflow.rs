@@ -47,6 +47,7 @@ pub fn build_ship_input(
     base_branch: &str,
     task_ids: &[String],
     completion: CompletionPolicy,
+    allowed_crews: &[String],
 ) -> Result<Value, OrbitError> {
     if base_branch.trim().is_empty() {
         return Err(OrbitError::InvalidInput(
@@ -88,6 +89,12 @@ pub fn build_ship_input(
             Value::String(completion.as_input_value().to_string()),
         );
     }
+    if !allowed_crews.is_empty() {
+        map.insert(
+            "allowed_crews".to_string(),
+            Value::Array(allowed_crews.iter().cloned().map(Value::String).collect()),
+        );
+    }
     Ok(Value::Object(map))
 }
 
@@ -126,7 +133,7 @@ mod ship_input_tests {
 
     #[test]
     fn build_ship_input_auto_mode_omits_task_ids() {
-        let input = build_ship_input(ShipMode::Pr, "main", &[], CompletionPolicy::Review)
+        let input = build_ship_input(ShipMode::Pr, "main", &[], CompletionPolicy::Review, &[])
             .expect("input builds");
         assert_eq!(input["mode"], "pr");
         assert_eq!(input["base_branch"], "main");
@@ -141,6 +148,7 @@ mod ship_input_tests {
             "agent-main",
             &task_ids,
             CompletionPolicy::Review,
+            &[],
         )
         .expect("builds");
         assert_eq!(input["mode"], "local");
@@ -151,24 +159,28 @@ mod ship_input_tests {
     #[test]
     fn build_ship_input_rejects_duplicates_blank_ids_and_empty_base() {
         let dup = vec!["T1".to_string(), "T1".to_string()];
-        assert!(build_ship_input(ShipMode::Pr, "main", &dup, CompletionPolicy::Review).is_err());
+        assert!(
+            build_ship_input(ShipMode::Pr, "main", &dup, CompletionPolicy::Review, &[]).is_err()
+        );
 
         let blank = vec!["  ".to_string()];
-        assert!(build_ship_input(ShipMode::Pr, "main", &blank, CompletionPolicy::Review).is_err());
+        assert!(
+            build_ship_input(ShipMode::Pr, "main", &blank, CompletionPolicy::Review, &[]).is_err()
+        );
 
-        assert!(build_ship_input(ShipMode::Pr, "  ", &[], CompletionPolicy::Review).is_err());
+        assert!(build_ship_input(ShipMode::Pr, "  ", &[], CompletionPolicy::Review, &[]).is_err());
     }
 
     #[test]
     fn completion_policy_is_written_only_when_authorized() {
-        let default = build_ship_input(ShipMode::Pr, "main", &[], CompletionPolicy::Review)
+        let default = build_ship_input(ShipMode::Pr, "main", &[], CompletionPolicy::Review, &[])
             .expect("default input builds");
         assert!(
             default.get("completion").is_none(),
             "an unauthorized submission must keep the pre-ORB-11187 input verbatim"
         );
 
-        let completing = build_ship_input(ShipMode::Pr, "main", &[], CompletionPolicy::Done)
+        let completing = build_ship_input(ShipMode::Pr, "main", &[], CompletionPolicy::Done, &[])
             .expect("completing input builds");
         assert_eq!(completing["completion"], "done");
     }
@@ -186,6 +198,20 @@ mod ship_input_tests {
         assert!(CompletionPolicy::parse("merged").is_err());
         assert!(!CompletionPolicy::default().completes());
         assert!(CompletionPolicy::Done.completes());
+    }
+
+    #[test]
+    fn allowed_crews_are_persisted_only_when_restricted() {
+        let allowed = build_ship_input(
+            ShipMode::Pr,
+            "main",
+            &["T1".to_string()],
+            CompletionPolicy::Review,
+            &["sol".to_string()],
+        )
+        .expect("input builds");
+
+        assert_eq!(allowed["allowed_crews"], serde_json::json!(["sol"]));
     }
 
     #[test]

@@ -43,14 +43,14 @@ pub(crate) fn select_crew_name<'a>(
     })
 }
 
-/// Run-input key carrying an auto-drain's crew allowlist [ORB-11242].
+/// Run-input key carrying a shipment's crew allowlist [ORB-11242].
 ///
 /// The drain persists it on the run it submits and every pipeline it admits
 /// forwards it, so the *run* input is the authority for the whole window. An
 /// activity input never widens it.
 pub(crate) const ALLOWED_CREWS_INPUT_KEY: &str = "allowed_crews";
 
-/// The configured crews one auto-drain window may launch a provider as
+/// The configured crews one submitted shipment may launch a provider as
 /// [ORB-11242].
 ///
 /// Opt-in and run-scoped: an absent or empty list is no restriction at all, so

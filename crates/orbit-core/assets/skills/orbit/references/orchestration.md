@@ -20,6 +20,7 @@ a filing routine does not itself authorize execution.
 ```bash
 orbit run ship                      # ship ready backlog tasks through the gated pipeline
 orbit run ship <task-id> ...        # ship exactly these
+orbit run ship <task-id> --allow-crew sol # ship exactly these, only on Sol
 orbit run ship --mode local         # implement in a worktree, merge to the base; no PR
 orbit run auto --for 2h             # drain the backlog for a window
 orbit run auto --for 2h --concurrency 8   # ... with 8 tasks in flight at a time
@@ -69,9 +70,10 @@ idempotent when nothing is running. `orbit run show` reports
 already in flight, `orbit run cancel <child-run-id> --confirm` each one —
 do not cancel the coordinator for this.
 
-`--allow-crew` restricts one drain to the crews you name — the lever for a
-provider that is unavailable, rate-limited, or out of budget. It is opt-in and
-scoped to that run's window:
+`--allow-crew` restricts a ship or drain to the crews you name — the lever for
+a provider that is unavailable, rate-limited, or out of budget. For an
+explicit ship it is checked at submission and again before provider dispatch;
+for an auto drain it is opt-in and scoped to that run's window:
 
 - Names must be crews this workspace configures. An unknown or empty one fails
   the command; nothing is dispatched, and no configuration is written.

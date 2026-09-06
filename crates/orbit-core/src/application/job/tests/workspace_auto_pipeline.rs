@@ -518,19 +518,19 @@ fn auto_drain_crew_allowlist_is_validated_and_canonicalized_at_submission() {
 
     assert!(
         runtime
-            .canonical_auto_drain_crews(&["not-a-configured-crew".to_string()])
+            .canonical_allowed_crews(&["not-a-configured-crew".to_string()])
             .is_err(),
         "an unconfigured crew must fail the submission"
     );
     assert!(
         runtime
-            .canonical_auto_drain_crews(&["  ".to_string()])
+            .canonical_allowed_crews(&["  ".to_string()])
             .is_err(),
         "a blank crew name must fail the submission"
     );
     assert_eq!(
         runtime
-            .canonical_auto_drain_crews(&[])
+            .canonical_allowed_crews(&[])
             .expect("omitting the option is valid"),
         Vec::<String>::new()
     );

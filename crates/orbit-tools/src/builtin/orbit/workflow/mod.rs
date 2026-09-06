@@ -67,6 +67,12 @@ impl Tool for OrbitWorkflowShipTool {
                 required: false,
             },
             ToolParam {
+                name: "allowed_crews".to_string(),
+                description: "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation.".to_string(),
+                param_type: "string_list".to_string(),
+                required: false,
+            },
+            ToolParam {
                 name: "claim_token".to_string(),
                 description: "Token for this workspace's exclusive claim, required when another \
                      operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`."
