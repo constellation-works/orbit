@@ -210,12 +210,21 @@ impl Commands {
             ),
             Commands::Workspace(command) => {
                 use super::workspace::WorkspacePublicationSubcommand;
+                use super::workspace::WorkspaceSourceRemoteSubcommand;
                 use super::workspace::WorkspaceSubcommand;
                 let (subcommand, runtime_need, governed) = match &command.command {
                     WorkspaceSubcommand::Init(_) => ("init", RuntimeNeed::Forbidden, false),
                     WorkspaceSubcommand::Sync(_) => ("sync", RuntimeNeed::Forbidden, false),
                     WorkspaceSubcommand::List(_) => ("list", RuntimeNeed::Required, false),
                     WorkspaceSubcommand::Show(_) => ("show", RuntimeNeed::Required, false),
+                    WorkspaceSubcommand::SourceRemote(command) => match &command.command {
+                        WorkspaceSourceRemoteSubcommand::Show(_) => {
+                            ("source-remote-show", RuntimeNeed::Required, false)
+                        }
+                        WorkspaceSourceRemoteSubcommand::Rebind(_) => {
+                            ("source-remote-rebind", RuntimeNeed::Required, false)
+                        }
+                    },
                     WorkspaceSubcommand::Role(_) => ("role", RuntimeNeed::Required, false),
                     WorkspaceSubcommand::Publication(command) => match &command.command {
                         WorkspacePublicationSubcommand::Bind(_) => {

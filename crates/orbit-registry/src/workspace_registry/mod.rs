@@ -5,10 +5,11 @@ mod io;
 mod publication;
 
 pub use catalog::{
-    WorkspaceRegistryHostContext, assign_checkout_role, find_checkout, find_checkout_by_path,
-    find_workspace, find_workspace_by_path, local_workspaces, parse_workspace_registry,
-    register_checkout, register_workspace, remove_workspace, rename_local_owner_host_id,
-    resolve_logical_workspace, set_path_override, validate_workspace_registry, validate_workspaces,
+    WorkspaceRegistryHostContext, WorkspaceSourceRemoteRebind, assign_checkout_role, find_checkout,
+    find_checkout_by_path, find_workspace, find_workspace_by_path, local_workspaces,
+    parse_workspace_registry, rebind_workspace_source_remote, register_checkout,
+    register_workspace, remove_workspace, rename_local_owner_host_id, resolve_logical_workspace,
+    set_path_override, validate_workspace_registry, validate_workspaces,
 };
 pub use io::{
     global_orbit_dir, load_registry, load_registry_from, registry_path, registry_path_for,

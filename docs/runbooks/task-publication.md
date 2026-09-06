@@ -2,9 +2,9 @@
 type: runbook
 summary: Bind, authenticate, publish, verify, inspect, and recover an Orbit task-publication repository.
 tags: [operations, backup, recovery, git, task-publication]
-paths: ["crates/orbit-cli/src/command/task/publication.rs", "crates/orbit-cli/src/command/workspace/publication.rs", "crates/orbit-store/src/workflow/task/**"]
+paths: ["crates/orbit-cli/src/command/task/publication.rs", "crates/orbit-cli/src/command/workspace/publication.rs", "crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-store/src/workflow/task/**"]
 related_features: [task-publication, task-artifacts, host-registry]
-related_artifacts: [ORB-11077, ORB-11142, ORB-11145]
+related_artifacts: [ORB-11077, ORB-11142, ORB-11145, ORB-11426]
 last_validated: 2026-09-04
 ---
 
@@ -63,6 +63,15 @@ orbit --workspace "$ORBIT_WORKSPACE" workspace publication show --json
 The global `--workspace` option must precede `workspace publication` or `task publication`.
 Continue only when the selected registration names the intended owner checkout and source
 remote. A missing binding is expected during first setup.
+
+When the source repository itself moves, do not edit the binding fingerprint or registry by
+hand. `workspace source-remote rebind` refuses a changed source identity while a publication
+binding exists. Capture this command's JSON output, remove the binding explicitly, perform and
+verify the source rebind, then use `workspace publication bind` with the reviewed captured
+remote, branch, and publication ID. The new local binding starts without last-success metadata;
+the operation does not migrate or rewrite any existing publication snapshot. See
+[Rebind the source remote after a repository move](./state-and-backup.md#rebind-the-source-remote-after-a-repository-move)
+for the full inspection, dry-run, verification, and rollback sequence.
 
 ## Choose durable authentication
 

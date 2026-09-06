@@ -2,9 +2,9 @@
 type: runbook
 summary: Locate Orbit state and perform WAL-safe backups, explicit task publication, restores, and task migrations.
 tags: [operations, backup, restore, state, sqlite, task-publication]
-paths: ["crates/orbit-common/src/types/workspace.rs", "crates/orbit-config/src/**", "crates/orbit-registry/**", "crates/orbit-store/**", "crates/orbit-web/src/state.rs"]
+paths: ["crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-config/src/**", "crates/orbit-registry/**", "crates/orbit-store/**", "crates/orbit-web/src/state.rs"]
 related_features: [orbit-core, remote-access, task-publication]
-related_artifacts: [ORB-10014, ORB-10294, ORB-10473, ORB-11077, ORB-11376]
+related_artifacts: [ORB-10014, ORB-10294, ORB-10473, ORB-11077, ORB-11376, ORB-11426]
 last_validated: 2026-09-06
 ---
 
@@ -157,6 +157,68 @@ file) are first archived beneath
 has no bytes to archive. A parseable identity naming another workspace is still refused,
 even with `--force`. Valid identity, parent-workspace identity, and unrelated registry
 records are not recovery inputs and are not rewritten. [ORB-11376]
+
+### Rebind the source remote after a repository move
+
+Use the source-remote command when a Git repository moves to a different owner, name, or
+host but remains the same logical Orbit workspace. Do not rerun `workspace init`, edit
+`workspaces.json`, or perform a broad URL replacement: the supported operation changes only
+the logical workspace's registered `git_remote`. Workspace ID, owner identity, task bundles,
+checkout roles, and checkout/path registrations remain unchanged.
+
+Inspect the current registration and save the old URL for rollback:
+
+```sh
+ORBIT_WORKSPACE=ws_example
+NEW_SOURCE_REMOTE=git@github.com:new-owner/new-repository.git
+
+orbit --workspace "$ORBIT_WORKSPACE" workspace show --format json
+orbit --workspace "$ORBIT_WORKSPACE" workspace source-remote show --json
+orbit --workspace "$ORBIT_WORKSPACE" workspace publication show --json
+```
+
+Only the declared owner machine can rebind the source remote. Replica checkouts fail closed.
+The new value must be a portable Git URL without embedded credentials; local paths and
+checkout-local aliases such as `origin` are refused. First preview the exact old and new
+repository identities without writing:
+
+```sh
+orbit --workspace "$ORBIT_WORKSPACE" workspace source-remote rebind \
+  --remote "$NEW_SOURCE_REMOTE" --dry-run --json
+```
+
+An existing task-publication binding prevents the write because its stored source fingerprint
+is part of that local binding. Orbit does not rewrite publication lineage or old snapshots as
+part of a source move. Record the complete `workspace publication show --json` output, then
+remove the binding explicitly before retrying:
+
+```sh
+orbit --workspace "$ORBIT_WORKSPACE" workspace publication remove --confirm --json
+orbit --workspace "$ORBIT_WORKSPACE" workspace source-remote rebind \
+  --remote "$NEW_SOURCE_REMOTE" --json
+```
+
+After the repository provider transfer succeeds, update the checkout's Git `origin` separately;
+Orbit does not mutate `.git/config`. Verify both identities and normal workspace resolution:
+
+```sh
+git remote set-url origin "$NEW_SOURCE_REMOTE"
+git remote get-url origin
+orbit --workspace "$ORBIT_WORKSPACE" workspace source-remote show --json
+orbit --workspace "$ORBIT_WORKSPACE" workspace show --format json
+orbit --workspace "$ORBIT_WORKSPACE" task list --limit 1 --format json
+```
+
+If publication was previously configured, use `workspace publication bind` with the captured
+remote, branch, and publication ID after reviewing that they still describe the intended
+dedicated publication repository. This creates a fresh local binding and clears local
+last-success metadata; it does not move, rewrite, or delete snapshots in the publication
+repository. Follow the publication runbook's verification procedure before the next publish.
+
+To roll back, run the same source-remote command with the saved old URL, then restore the
+checkout's `origin`. If a publication binding was already recreated, remove it explicitly
+first; source rebinding never changes that binding automatically. Recreate the old binding
+from the captured settings only after the old source identity is restored.
 
 ## Back up Orbit
 
