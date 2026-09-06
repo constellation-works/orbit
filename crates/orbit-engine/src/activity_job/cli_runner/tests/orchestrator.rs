@@ -159,7 +159,9 @@ fn run_cli_backend_projects_codex_final_answer_and_keeps_raw_trace() {
         concat!(
             "#!/bin/sh\ncat > /dev/null\n",
             "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item-0\",\"type\":\"command_execution\",\"command\":\"read fixture\",\"aggregated_output\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"failed\\\",\\\"result\\\":{},\\\"error\\\":{\\\"code\\\":\\\"fixture\\\",\\\"message\\\":\\\"tool-output\\\"}}\",\"exit_code\":0,\"status\":\"completed\"}}'\n",
-            "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item-1\",\"type\":\"agent_message\",\"text\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{\\\"source\\\":\\\"assistant\\\"},\\\"error\\\":null}\"}}'\n",
+            "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item-1\",\"type\":\"agent_message\",\"text\":\"Commentary: I inspected the task.\"}}'\n",
+            "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item-8\",\"type\":\"agent_message\",\"text\":\"Commentary: I updated the files.\"}}'\n",
+            "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item-12\",\"type\":\"agent_message\",\"text\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{\\\"source\\\":\\\"assistant\\\"},\\\"error\\\":null}\"}}'\n",
             "printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":101,\"cached_input_tokens\":11,\"output_tokens\":9}}'\n",
         ),
     );
@@ -202,6 +204,45 @@ fn run_cli_backend_projects_codex_final_answer_and_keeps_raw_trace() {
             .is_some_and(|stdout| stdout.contains("tool-output")),
         "raw stdout remains available for diagnostics"
     );
+}
+
+#[test]
+fn run_cli_backend_rejects_an_invalid_terminal_codex_answer() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("codex");
+    write_executable(
+        &script,
+        concat!(
+            "#!/bin/sh\ncat > /dev/null\n",
+            "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item-1\",\"type\":\"agent_message\",\"text\":\"{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{\\\"source\\\":\\\"earlier\\\"},\\\"error\\\":null}\"}}'\n",
+            "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item-2\",\"type\":\"agent_message\",\"text\":\"not valid JSON\"}}'\n",
+            "printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":21,\"output_tokens\":8}}'\n",
+        ),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-codex-invalid-terminal-answer",
+        "codex:gpt-5.5",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let spec = test_agent_loop_spec(Duration::from_secs(5));
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "job-codex-invalid-terminal-answer",
+        audit,
+        &serde_json::json!({"prompt": "read then answer"}),
+        None,
+    )
+    .expect("run cli backend");
+
+    assert!(!outcome.success);
+    assert_eq!(outcome.output["response_envelope_valid"], false);
+    assert!(outcome.output.get("source").is_none());
 }
 
 #[test]
