@@ -25,7 +25,7 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
 }
 
 /// [ORB-11325] Reject a job whose `when:` / `break_when:` reads
-/// `steps.<id>.output` for a step that itself carries a `when:`.
+/// `steps.<id>.output` for a step that may be skipped.
 ///
 /// `condition::evaluate_bool_expr` renders the whole expression before it
 /// parses it, so both sides of `&&` / `||` render unconditionally; a step
@@ -35,57 +35,85 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
 /// which is the branch an author is least likely to exercise first. See
 /// design doc §8.2 for the working alternative and the workarounds that do
 /// not help.
+///
+/// [ORB-11346] "May be skipped" is inherited, not local: `step::run_step`
+/// returns before running any body when a guard is false, so every step
+/// nested in a `parallel:`, `fan_out:`, or `loop:` block under a
+/// `when:`-carrying ancestor is skipped with it and records nothing, however
+/// unguarded the nested step looks on its own.
 fn validate_step_output_readiness(job: &JobV2) -> Result<(), DispatchError> {
-    let mut carries_when = HashMap::new();
+    let mut guards = HashMap::new();
     for step in &job.steps {
-        record_step_when(step, &mut carries_when);
+        record_step_guards(step, &[], &mut guards);
     }
     for step in &job.steps {
-        check_step_output_refs(step, &carries_when)?;
+        check_step_output_refs(step, &[], &guards)?;
     }
     Ok(())
 }
 
-fn record_step_when(step: &JobV2Step, carries_when: &mut HashMap<String, bool>) {
-    carries_when.insert(step.id.clone(), step.when.is_some());
+/// Every `when:` whose false branch skips this step — the step's own guard
+/// plus each enclosing step's, outermost first.
+fn guard_chain(step: &JobV2Step, inherited: &[String]) -> Vec<String> {
+    let mut chain = inherited.to_vec();
+    if step.when.is_some() {
+        chain.push(step.id.clone());
+    }
+    chain
+}
+
+fn record_step_guards(
+    step: &JobV2Step,
+    inherited: &[String],
+    guards: &mut HashMap<String, Vec<String>>,
+) {
+    let chain = guard_chain(step, inherited);
     match &step.body {
         JobV2StepBody::Parallel { parallel } => {
             for branch in &parallel.branches {
-                record_step_when(branch, carries_when);
+                record_step_guards(branch, &chain, guards);
             }
         }
-        JobV2StepBody::FanOut { fan_out, .. } => record_step_when(&fan_out.worker, carries_when),
+        JobV2StepBody::FanOut { fan_out, .. } => {
+            record_step_guards(&fan_out.worker, &chain, guards);
+        }
         JobV2StepBody::Loop { loop_ } => {
             for body in &loop_.steps {
-                record_step_when(body, carries_when);
+                record_step_guards(body, &chain, guards);
             }
         }
         JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
     }
+    guards.insert(step.id.clone(), chain);
 }
 
 fn check_step_output_refs(
     step: &JobV2Step,
-    carries_when: &HashMap<String, bool>,
+    inherited: &[String],
+    guards: &HashMap<String, Vec<String>>,
 ) -> Result<(), DispatchError> {
+    let chain = guard_chain(step, inherited);
     if let Some(expr) = &step.when {
-        check_expr_output_refs(&step.id, expr, carries_when)?;
+        check_expr_output_refs(&step.id, expr, &chain, guards)?;
     }
     match &step.body {
         JobV2StepBody::Parallel { parallel } => {
             for branch in &parallel.branches {
-                check_step_output_refs(branch, carries_when)?;
+                check_step_output_refs(branch, &chain, guards)?;
             }
         }
         JobV2StepBody::FanOut { fan_out, .. } => {
-            check_step_output_refs(&fan_out.worker, carries_when)?;
+            check_step_output_refs(&fan_out.worker, &chain, guards)?;
         }
         JobV2StepBody::Loop { loop_ } => {
             if let Some(expr) = &loop_.break_when {
-                check_expr_output_refs(&step.id, expr, carries_when)?;
+                // `break_when` is evaluated between iterations of the loop
+                // body, so it reads under the loop's own guards — the same
+                // ones its body steps inherit.
+                check_expr_output_refs(&step.id, expr, &chain, guards)?;
             }
             for body in &loop_.steps {
-                check_step_output_refs(body, carries_when)?;
+                check_step_output_refs(body, &chain, guards)?;
             }
         }
         JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
@@ -96,16 +124,35 @@ fn check_step_output_refs(
 fn check_expr_output_refs(
     referencing_step: &str,
     expr: &str,
-    carries_when: &HashMap<String, bool>,
+    reader_guards: &[String],
+    guards: &HashMap<String, Vec<String>>,
 ) -> Result<(), DispatchError> {
     for referenced_step in output_step_refs(expr) {
-        if carries_when.get(&referenced_step).copied().unwrap_or(false) {
-            return Err(DispatchError::JobValidation(format!(
-                "step `{referencing_step}` reads `steps.{referenced_step}.output`, but step \
-                 `{referenced_step}` carries its own `when:` and may be skipped — a `when:` or \
-                 `break_when:` condition may only read the output of a step that always runs"
-            )));
-        }
+        let Some(referenced_guards) = guards.get(&referenced_step) else {
+            continue;
+        };
+        // A guard the reader itself sits under skips both steps together, so
+        // it can never strand the reader; only a guard outside the reader's
+        // own chain can leave the reader running with nothing recorded.
+        let Some(guard) = referenced_guards
+            .iter()
+            .find(|guard| !reader_guards.contains(guard))
+        else {
+            continue;
+        };
+        let cause = if *guard == referenced_step {
+            format!("step `{referenced_step}` carries its own `when:` and may be skipped")
+        } else {
+            format!(
+                "step `{referenced_step}` runs inside step `{guard}`, which carries a `when:` \
+                 and skips its whole body"
+            )
+        };
+        return Err(DispatchError::JobValidation(format!(
+            "step `{referencing_step}` reads `steps.{referenced_step}.output`, but {cause} — a \
+             `when:` or `break_when:` condition may only read the output of a step that always \
+             runs"
+        )));
     }
     Ok(())
 }

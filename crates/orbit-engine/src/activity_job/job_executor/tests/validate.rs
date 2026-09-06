@@ -418,3 +418,201 @@ fn validate_job_rejects_break_when_reading_output_of_a_conditionally_run_step_in
         "got {err:?}"
     );
 }
+
+// --------------------------------------------------------------------------
+// [ORB-11346] A parent's `when:` skips its whole body, so "always runs" is an
+// ancestor-chain property, not a per-step flag.
+// --------------------------------------------------------------------------
+
+/// The reproducer shape: a container guarded by `when:` whose nested step
+/// carries no guard of its own.
+fn conditional_parent_with_unguarded_child(parent: JobV2Step) -> JobV2Step {
+    JobV2Step {
+        when: Some("{{ input.run }} == true".to_string()),
+        ..parent
+    }
+}
+
+#[test]
+fn a_false_parent_guard_leaves_its_nested_step_with_no_recorded_output() {
+    // The runtime fact the validator has to model: `run_step` returns before
+    // running the body, so `produce` never records anything and a later
+    // reader — here an ordinary input template, which validation does not
+    // inspect — fails on the false branch.
+    let gate = conditional_parent_with_unguarded_child(parallel_step(
+        "gate",
+        JoinMode::All,
+        vec![target_step("produce", "produce_action")],
+    ));
+    let mut reader = target_step("reader", "reader_action");
+    reader.body = JobV2StepBody::Target(TargetStep {
+        default_input: Some(json!({ "done": "{{ steps.produce.output.done }}" })),
+        ..deterministic_target("reader_action")
+    });
+    let job = job_with_steps(vec![gate, reader]);
+    let host = ScriptedHost::new([
+        ("produce_action", vec![Action::Ok(json!({ "done": true }))]),
+        ("reader_action", vec![Action::Ok(json!({}))]),
+    ]);
+    let writer = std::sync::Arc::new(test_writer("run-false-parent"));
+
+    let err = execute_job(
+        &job,
+        json!({ "run": false }),
+        "run-false-parent",
+        writer,
+        &host,
+    )
+    .expect_err("the reader must fail once the parent guard skipped `produce`");
+
+    assert!(
+        err.to_string()
+            .contains("no data recorded for step 'produce'"),
+        "expected the skipped-step template failure, got {err:?}"
+    );
+    assert_eq!(
+        host.call_count("produce_action"),
+        0,
+        "a false parent guard must skip the nested step entirely"
+    );
+}
+
+#[test]
+fn validate_job_rejects_when_reading_a_step_nested_in_a_conditional_parallel() {
+    let gate = conditional_parent_with_unguarded_child(parallel_step(
+        "gate",
+        JoinMode::All,
+        vec![target_step("produce", "produce_action")],
+    ));
+    let reader = step_with_when(
+        "reader",
+        "{{ steps.produce.output.done }} == true",
+        "reader_action",
+    );
+
+    let err = validate_job(&job_with_steps(vec![gate, reader]))
+        .expect_err("reading a step nested under a conditional parallel must be rejected");
+
+    match &err {
+        DispatchError::JobValidation(message) => {
+            assert!(
+                message.contains("reader"),
+                "message must name the reading step: {message}"
+            );
+            assert!(
+                message.contains("produce"),
+                "message must name the referenced step: {message}"
+            );
+            assert!(
+                message.contains("gate"),
+                "message must name the guarding ancestor: {message}"
+            );
+        }
+        other => panic!("expected JobValidation, got {other:?}"),
+    }
+}
+
+#[test]
+fn validate_job_rejects_when_reading_a_step_nested_in_a_conditional_loop() {
+    let gate = conditional_parent_with_unguarded_child(loop_step(
+        "gate",
+        None,
+        3,
+        None,
+        vec![target_step("produce", "produce_action")],
+    ));
+    let reader = step_with_when(
+        "reader",
+        "{{ steps.produce.output.done }} == true",
+        "reader_action",
+    );
+
+    let err = validate_job(&job_with_steps(vec![gate, reader]))
+        .expect_err("reading a step nested under a conditional loop must be rejected");
+
+    assert!(
+        matches!(&err, DispatchError::JobValidation(message)
+            if message.contains("produce") && message.contains("gate")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn validate_job_rejects_when_reading_a_worker_nested_in_a_conditional_fan_out() {
+    let gate = conditional_parent_with_unguarded_child(fanout_step(
+        "gate",
+        "{{ input.items }}",
+        2,
+        target_step("produce", "produce_action"),
+        JoinMode::All,
+        None,
+    ));
+    let reader = step_with_when(
+        "reader",
+        "{{ steps.produce.output.done }} == true",
+        "reader_action",
+    );
+
+    let err = validate_job(&job_with_steps(vec![gate, reader]))
+        .expect_err("reading a worker nested under a conditional fan-out must be rejected");
+
+    assert!(
+        matches!(&err, DispatchError::JobValidation(message)
+            if message.contains("produce") && message.contains("gate")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn validate_job_accepts_when_reading_a_step_under_an_always_run_ancestor_chain() {
+    // No ancestor carries a guard, so `produce` runs whenever the job runs —
+    // the shape every shipped asset relies on.
+    let outer = parallel_step(
+        "outer",
+        JoinMode::All,
+        vec![loop_step(
+            "inner",
+            None,
+            2,
+            None,
+            vec![target_step("produce", "produce_action")],
+        )],
+    );
+    let reader = step_with_when(
+        "reader",
+        "{{ steps.produce.output.done }} == true",
+        "reader_action",
+    );
+
+    assert!(
+        validate_job(&job_with_steps(vec![outer, reader])).is_ok(),
+        "an unguarded ancestor chain must stay valid"
+    );
+}
+
+#[test]
+fn validate_job_accepts_a_reader_that_shares_every_guard_with_the_step_it_reads() {
+    // `break_when` is only evaluated while the loop is running, and the body
+    // reader only runs when the same guard passed: a guard both sides sit
+    // under skips them together and can never strand the reader.
+    let mut gate = loop_step(
+        "gate",
+        None,
+        3,
+        Some("{{ steps.produce.output.done }} == true"),
+        vec![
+            target_step("produce", "produce_action"),
+            step_with_when(
+                "body_reader",
+                "{{ steps.produce.output.done }} == false",
+                "reader_action",
+            ),
+        ],
+    );
+    gate.when = Some("{{ input.run }} == true".to_string());
+
+    assert!(
+        validate_job(&job_with_steps(vec![gate])).is_ok(),
+        "a guard shared by reader and referenced step must stay valid"
+    );
+}

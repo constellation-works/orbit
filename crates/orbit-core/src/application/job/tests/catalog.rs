@@ -816,9 +816,11 @@ fn default_jobs_only_reference_registered_deterministic_actions() {
 }
 
 /// [ORB-11325] No shipped job's `when:` / `break_when:` may read
-/// `steps.<id>.output` for a step that itself carries a `when:` — that step
-/// can be skipped, and `condition::evaluate_bool_expr` renders the whole
-/// expression before parsing it, so the reference fails with
+/// `steps.<id>.output` for a step that may be skipped — by its own `when:`
+/// or, since [ORB-11346], by a `when:` on any enclosing step, whose false
+/// branch skips the whole nested body. A skipped step records nothing, and
+/// `condition::evaluate_bool_expr` renders the whole expression before
+/// parsing it, so the reference fails with
 /// `template.rs`'s "no data recorded for step" error on exactly the branch
 /// where the referenced step would have been skipped. `validate_job` is the
 /// catalog-load gate; no shipped job is exempted from it.
