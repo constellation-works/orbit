@@ -78,7 +78,7 @@ impl Tool for OrbitWorkflowShipTool {
         parameters.extend(super::model_identity_params());
         ToolSchema {
             name: "orbit.workflow.ship".to_string(),
-            description: "Submit an explicit set of tasks to the ship workflow and return its durable run ID."
+            description: "Submit explicit tasks to the review-only ship workflow and return its durable run ID. This MCP tool does not accept completion authorization; an authorized operator on the owning host can use `orbit run ship <task-id> --complete`."
                 .to_string(),
             parameters,
             builtin: true,

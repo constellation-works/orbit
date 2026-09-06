@@ -36,9 +36,13 @@ orbit run ship "$TASK_ID" "$SECOND_TASK_ID" --mode local
 orbit run ship "$TASK_ID" --base main
 ```
 
-`--mode pr` (the default) opens or updates a pull request. `--mode local`
-delivers in place. When you omit `--mode`, the mode comes from the workspace's
-registry entry, falling back to `pr`.
+`--mode pr` (the default) opens or updates a pull request, then stops with the
+task in `review` and the PR unmerged unless you authorize `--complete`.
+`--mode local` delivers in place: it commits and merges to the configured base
+before the task reaches `review`, and may push that base as part of the same
+delivery. `review` is therefore not a pre-merge stop in local mode. When you
+omit `--mode`, the mode comes from the workspace's registry entry, falling back
+to `pr`.
 
 Underlying job: `task_auto_pipeline`, which fans into `task_gate_pipeline` and
 then routes to `task_pr_pipeline` or `task_local_pipeline`.
@@ -117,9 +121,11 @@ unattended routine — including `orbit run ship-sweep` — turns it on.
 
 What the run then does depends on the mode:
 
-- **`--mode local`** — the task reaches `done` only after the bundle has
-  committed, merged, and pushed. A failed merge or push fails the run with the
-  task still in `review`.
+- **`--mode local`** — without `--complete`, the bundle can commit and merge
+  before it reaches `review`; its optional push is still part of delivery, not
+  a review gate. With `--complete`, the task reaches `done` only after the
+  bundle has committed, merged, and pushed. A failed merge or push fails the
+  run with the task still in `review`.
 - **`--mode pr`** — the run opens or reuses the PR as usual, then merges it
   through GitHub. Branch protections and required checks are respected; Orbit
   never uses an administrative bypass. If required checks are still running it

@@ -2,8 +2,10 @@
 
 ## Choose the requested delivery behavior
 
-Default shipping ends in `review`. It prepares a PR in PR mode; submission or
-PR creation does not prove a merge. Use `--complete` only when the user has
+Default shipping ends in `review`. In PR mode it prepares a PR and stops with it
+unmerged; submission or PR creation does not prove a merge. In local mode it
+may commit and merge to the configured base before the task reaches `review`,
+so review is not a pre-merge stop. Use `--complete` only when the user has
 authorized delivery through `done`:
 
 ```bash
@@ -18,9 +20,11 @@ authorization, omit `--complete`. If the user will start the drain themselves,
 prepare work without launching a second coordinator.
 
 Prefer the connected MCP submission tool when it supports the requested
-options. If its schema lacks completion, use an available authorized admin
-command surface on the same host; do not invent a `complete` argument or
-silently submit a review-only run. See
+options. `orbit_workflow_ship` intentionally has no completion input and always
+submits review-only work. If completion is authorized, use `orbit run ship
+<task-id> --complete` through an available authorized operator command surface
+on the owning host; do not invent a `completion` argument, silently submit a
+review-only run, or use a local shadow store. See
 [tool-surface.md](../../orbit/references/tool-surface.md).
 
 `--complete` is default-off and applies to that submitted run:

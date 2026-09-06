@@ -35,7 +35,7 @@ records in a second store merely to get past a connection error.
 | Task attachments | `orbit_task_artifact_put` | Task artifact commands; source path is on the executing host |
 | Retrieval | `orbit_search` | `orbit search`; semantic install/index is separate |
 | Friction | `orbit_friction_add/list/update` | Additional show/stats/tags/resolve commands |
-| Submit explicit tasks | `orbit_workflow_ship` | `orbit run ship`, `run auto` |
+| Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` |
 | Observe/resume workflows | `orbit_workflow_run_show/list/resume` | `orbit run show/history/events/trace/logs/cancel`; job replay/resume |
 | Auto-tasks | `orbit_auto_task_list/mint` | Definition add/show/update/toggle are CLI operations; do not assume they are advertised over MCP |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and working directory, never a shell string |
@@ -80,6 +80,12 @@ evidence; inspect status and the recorded implementation/validation outcome.
 
 Use with `orbit_workflow_ship` only when execution is authorized. At least one
 explicit ID is required; MCP does not offer the CLI's no-ID discovery mode.
+It also intentionally accepts no completion authorization, so it always
+submits review-only work. When an authorized operator has access to the owning
+host, use `orbit run ship <task-id> --complete` there for a one-run completion
+authorization; do not use a local shadow store as a substitute. Otherwise
+report the MCP completion capability gap rather than inventing a `completion`
+argument.
 Read the returned run with `orbit_workflow_run_show` using `id` and `workspace`.
 List bounded history with `limit`, `job_id`, `state` (including `terminal`), and
 RFC3339 `since`. Submission success means a durable run exists, not that the

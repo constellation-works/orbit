@@ -241,11 +241,13 @@ prose. An orchestrator that reads a summary paragraph instead of
 ## Delivery and completion
 
 By default the task pipelines end in `review`. PR mode prepares a source branch
-and opens a PR; that is not evidence it merged. Local mode implements in an
-isolated worktree and fast-forwards the configured local base branch; the leaf
-job's `auto_push` input controls its optional push. Inspect the effective wrapper
-and child job inputs rather than assuming local mode means the current checkout
-was edited or a remote branch was updated.
+and opens a PR, then stops with that PR unmerged unless `--complete` was
+authorized. Local mode implements in an isolated worktree and fast-forwards the
+configured local base branch before the task reaches `review`; the leaf job's
+`auto_push` input controls its optional push. Review is not a pre-merge stop in
+local mode. Inspect the effective wrapper and child job inputs rather than
+assuming local mode means the current checkout was edited or a remote branch was
+updated.
 
 Record validation, commit, branch/PR, and run evidence, then follow the user's
 approval policy for completion. Task snapshot publication is independent of
