@@ -28,7 +28,9 @@ The Orbit website is a **documentation site**, not a marketing site. It exists t
 1. **Reference-heavy, search-first.** Users land via `⌘K` or Google. Every page must be findable and self-contained.
 2. **Minimalism as a feature.** Restraint is the aesthetic. One accent color, one type family per role, no decorative motion in docs content.
 3. **Legibility over personality.** The orbit metaphor shows up structurally (logo, section glyphs) — never at the cost of reading comfort.
-4. **Static and fast.** Zero JS by default. Hundreds of pages should feel identical in performance to ten.
+4. **Static and fast.** Zero JS by default; the homepage's copy controls are the one
+   scripted exception, and every other interaction is CSS. Hundreds of pages should
+   feel identical in performance to ten.
 5. **Dark-default, light-available.** Theme toggle persists per user; neither mode is an afterthought.
 
 ---
@@ -90,15 +92,38 @@ Three-column, fixed:
 
 The homepage uses an in-content hero in place of Starlight's auto-rendered title (which is hidden via a scoped CSS rule on the homepage only):
 
-- **Eyebrow** — mono uppercase tag (`v0.9.2 · early access`).
+- **Eyebrow** — mono uppercase tag (`early access`).
 - **Headline** — 2.75rem display heading. The only heading on the site that exceeds the body type scale.
 - **Lede + install bar + primary/secondary CTAs.** Install bar carries a `$` prompt and a Copy action.
-- **Orbit diagram** — single rotating ring in the hero column. Respects `prefers-reduced-motion`.
+- **Provider strip** — mono uppercase list of the shipped CLI executors, with the
+  legacy Gemini executor named in a footnote rather than implied current.
+- **Transcript** — a `figure` of the task → ship → inspect → commit loop, with a
+  `figcaption` naming it illustrative. Real commands, placeholder identifiers.
 
-Below the hero: a **Start here** 5-card grid (each card carries a mono numbered
-tag `01`–`05` and a thin SVG glyph — the only place glyphs appear in content)
-and a **Why Orbit** 2-column value-prop strip whose columns align to the card
-grid above. Mono uppercase keys, plain prose values.
+Below the hero, in order:
+
+1. **Start here** — a 3-card grid, each card carrying a mono numbered tag
+   `01`–`03` and the command it runs.
+2. **Choose a delivery mode** — a four-mode explorer over `orbit run ship`,
+   `--mode local`, `orbit run auto` and `orbit run ship-sweep`. Each panel
+   states the command, where the run stops, and that `--complete` is a separate
+   explicit authorization. Built as a native radio group switched by CSS
+   `:has()`, so pointer, keyboard and screen-reader support are the platform's
+   and the selected panel still renders without JavaScript.
+3. **Why Orbit** — a 4-card value-prop strip. Each card carries a thin SVG glyph;
+   these and the Start here tags are the only glyphs in content.
+4. **Go further** — a 4-card grid routing to continuous delivery, recurring work,
+   publication and recovery, and the CLI reference.
+5. **Explore the docs** — a flat index of the sidebar groups.
+
+Commands shown on this page must match current CLI behaviour, and illustrative
+output must say that it is illustrative. The page advertises no unlanded feature
+and publishes no live metric.
+
+The only script on the site is a small inline handler for the copy controls.
+Those buttons are served `hidden` and unhidden by that script, so a page without
+JavaScript shows the command text and no dead control; a clipboard that is
+unavailable or refuses the write reports failure rather than a false success.
 
 Other pages keep Starlight's default chrome (auto title, sidebar, TOC) unchanged.
 

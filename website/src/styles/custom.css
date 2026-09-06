@@ -29,6 +29,10 @@
   --sl-color-hairline-light: #26262b;
   --sl-color-hairline: #26262b;
   --sl-color-hairline-shade: #17171a;
+
+  /* Failure state for the copy controls. Not a Starlight role, so it carries
+     the project prefix; tuned for AA contrast on the surface colour above. */
+  --orbit-color-danger: #ff9d9d;
 }
 
 :root[data-theme='light'] {
@@ -52,6 +56,8 @@
   --sl-color-hairline-light: #d8dbe2;
   --sl-color-hairline: #eceef3;
   --sl-color-hairline-shade: #f4f5f8;
+
+  --orbit-color-danger: #b3261e;
 }
 
 html {
@@ -275,21 +281,59 @@ body {
   white-space: nowrap;
 }
 
-.orbit-hero-install-copy {
+/* Copy-to-clipboard control, shared by the hero install bar and the delivery
+   mode commands. It is delivered `hidden` and unhidden by the inline script,
+   so a page without JavaScript shows the command text and no dead button. */
+.orbit-copy {
   background: transparent;
-  border: 0;
-  color: var(--sl-color-gray-4);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--sl-color-gray-3);
   cursor: pointer;
+  flex: 0 0 auto;
   font: inherit;
   font-size: 0.75rem;
-  margin-left: 1rem;
-  padding: 0;
-  flex: 0 0 auto;
-  transition: color 120ms ease;
+  margin-left: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  transition: color 120ms ease, border-color 120ms ease;
+  /* The label swaps between "Copy", "Copied" and "Failed"; reserving the
+     width keeps the surrounding row from reflowing on feedback. */
+  min-width: 3.75rem;
+  text-align: center;
 }
 
-.orbit-hero-install-copy:hover {
+.orbit-copy:hover {
   color: var(--sl-color-text-accent);
+}
+
+.orbit-copy:focus-visible {
+  border-color: var(--sl-color-accent);
+  color: var(--sl-color-text-accent);
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: 2px;
+}
+
+.orbit-copy[data-state='ok'] {
+  color: var(--sl-color-text-accent);
+}
+
+.orbit-copy[data-state='error'] {
+  color: var(--orbit-color-danger);
+}
+
+/* The full success/failure sentence, announced rather than shown: the visible
+   channel is the button label, which cannot carry a sentence without
+   reflowing its row. */
+.orbit-copy-status,
+.orbit-sr-only {
+  border: 0;
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
 }
 
 .orbit-hero-actions {
@@ -350,11 +394,31 @@ body {
   width: 1px;
 }
 
+/* Gemini is still shipped but is no longer the current Google terminal agent,
+   so it is named apart from the strip rather than dropped or implied current. */
+.orbit-landing .orbit-hero-providers-note {
+  color: var(--sl-color-gray-3);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  margin: 0.6rem 0 0;
+  max-width: 32rem;
+}
+
+.orbit-hero-providers-note a {
+  color: var(--sl-color-text-accent);
+}
+
+.orbit-hero-providers-note a:hover,
+.orbit-hero-providers-note a:focus-visible {
+  text-decoration: underline;
+}
+
 /* Hero terminal: a transcript of the task -> ship -> inspect -> commit loop. */
 .orbit-terminal {
   background: var(--sl-color-bg-inline-code);
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 8px;
+  margin: 0;
   min-width: 0;
   overflow: hidden;
 }
@@ -407,6 +471,17 @@ body {
   height: 1.85em;
 }
 
+/* Names the transcript as illustrative. The commands above are real; the
+   identifiers and durations are placeholders, and saying so is the point. */
+.orbit-terminal-caption {
+  border-top: 1px solid var(--sl-color-hairline-light);
+  color: var(--sl-color-gray-3);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0.75rem 1.25rem;
+}
+
 .orbit-section-title {
   align-items: center;
   color: var(--sl-color-gray-4);
@@ -424,6 +499,217 @@ body {
   content: "";
   flex: 1;
   height: 1px;
+}
+
+.orbit-landing .orbit-section-lede {
+  color: var(--sl-color-gray-3);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  margin: 0 0 1.5rem;
+  max-width: 46rem;
+}
+
+/* ------------------------------------------------------------------------
+   Delivery mode explorer
+   ------------------------------------------------------------------------
+   A radio group over four panels, switched entirely in CSS. Native radios do
+   the work: pointer users click the label, keyboard users arrow through the
+   group, and assistive technology reads the checked state without a script.
+   Nothing here depends on JavaScript, so the panel for the checked mode is
+   readable on a static page.
+   ------------------------------------------------------------------------ */
+.orbit-flow {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Same reason as `.orbit-card-grid > *`: Starlight's adjacent-sibling margin
+   would otherwise open gaps between grid and flex children. */
+.orbit-flow-tabs > *,
+.orbit-flow-panels > *,
+.orbit-flow-panel > *,
+.orbit-flow-facts > * {
+  margin-top: 0;
+}
+
+.orbit-flow-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.orbit-flow-tab {
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+  border-right: 1px solid var(--sl-color-hairline-light);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.9rem 1rem;
+  position: relative;
+  transition: background-color 150ms ease;
+}
+
+.orbit-flow-tab:last-child {
+  border-right: 0;
+}
+
+/* Visually hidden, but still focusable and still the accessible control:
+   removing it from the layout would take the keyboard and the screen reader
+   with it. */
+.orbit-flow-tab input {
+  clip-path: inset(50%);
+  height: 1px;
+  margin: 0;
+  position: absolute;
+  width: 1px;
+}
+
+.orbit-flow-tab-name {
+  color: var(--sl-color-gray-3);
+  font-size: 0.92rem;
+  font-weight: 600;
+  transition: color 120ms ease;
+}
+
+.orbit-flow-tab-cmd {
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem;
+}
+
+.orbit-flow-tab:hover {
+  background: var(--sl-color-hairline-shade);
+}
+
+.orbit-flow-tab:hover .orbit-flow-tab-name {
+  color: var(--sl-color-text-accent);
+}
+
+.orbit-flow-tab:has(input:checked) {
+  background: var(--sl-color-accent-low);
+}
+
+.orbit-flow-tab:has(input:checked) .orbit-flow-tab-name {
+  color: var(--sl-color-accent-high);
+}
+
+/* The selected-state marker is a 2px rule, not colour alone, so the choice
+   survives a monochrome or high-contrast rendering. */
+.orbit-flow-tab:has(input:checked)::after {
+  background: var(--sl-color-accent);
+  bottom: -1px;
+  content: "";
+  height: 2px;
+  left: 0;
+  position: absolute;
+  right: 0;
+}
+
+.orbit-flow-tab:has(input:focus-visible) {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: -3px;
+}
+
+.orbit-flow-panel {
+  display: none;
+  gap: 2rem 3rem;
+  padding: 1.5rem;
+}
+
+/* Only the checked mode's panel is laid out. `display: none` also takes the
+   other three out of the accessibility tree, so the group reads as one
+   answer rather than four. */
+.orbit-flow:has(#orbit-flow-pr:checked) .orbit-flow-panel[data-flow='pr'],
+.orbit-flow:has(#orbit-flow-local:checked) .orbit-flow-panel[data-flow='local'],
+.orbit-flow:has(#orbit-flow-auto:checked) .orbit-flow-panel[data-flow='auto'],
+.orbit-flow:has(#orbit-flow-sweep:checked) .orbit-flow-panel[data-flow='sweep'] {
+  display: grid;
+  grid-template-areas:
+    "main facts"
+    "link facts";
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+}
+
+.orbit-flow-main {
+  grid-area: main;
+}
+
+.orbit-flow-main p {
+  color: var(--sl-color-gray-3);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.orbit-flow-cmd {
+  align-items: center;
+  background: var(--sl-color-bg-inline-code);
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 6px;
+  display: flex;
+  font-family: var(--sl-font-mono);
+  font-size: 0.82rem;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.orbit-flow-cmd-prompt {
+  color: var(--sl-color-gray-4);
+  flex: 0 0 auto;
+}
+
+.orbit-flow-cmd code {
+  background: transparent;
+  border: 0;
+  color: var(--sl-color-text);
+  flex: 1 1 auto;
+  font-family: var(--sl-font-mono);
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.orbit-flow-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  grid-area: facts;
+  margin: 0;
+}
+
+.orbit-flow-facts dt {
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+}
+
+.orbit-flow-facts dd {
+  color: var(--sl-color-gray-2);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.orbit-flow-link {
+  align-self: end;
+  color: var(--sl-color-text-accent);
+  font-size: 0.9rem;
+  font-weight: 600;
+  grid-area: link;
+  justify-self: start;
+  margin-top: 1.5rem;
+}
+
+.orbit-flow-link:hover,
+.orbit-flow-link:focus-visible {
+  text-decoration: underline;
 }
 
 .orbit-card-grid {
@@ -471,8 +757,14 @@ body {
 .orbit-card:focus-visible {
   background: var(--sl-color-accent-low);
   border-color: var(--sl-color-accent);
-  outline: none;
   transform: translateY(-1px);
+}
+
+/* The hover treatment alone is not a focus indicator — keyboard users get a
+   real ring on top of it. */
+.orbit-card:focus-visible {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: 2px;
 }
 
 .orbit-card:hover h3,
@@ -618,6 +910,16 @@ body {
     gap: 1.25rem 2rem;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .orbit-flow-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* With two per row, the right-hand border of every second tab is the
+     container edge. */
+  .orbit-flow-tab:nth-child(2n) {
+    border-right: 0;
+  }
 }
 
 @media (max-width: 54rem) {
@@ -641,13 +943,69 @@ body {
     margin-top: 3.25rem;
   }
 
+  /* The hero has already stacked by here, but a tablet still has room for two
+     cards per row; one column this early wastes half the viewport. */
   .orbit-card-grid,
   .orbit-card-grid-3,
-  .orbit-card-grid-4 {
+  .orbit-card-grid-4,
+  .orbit-docs-index {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .orbit-flow-panel,
+  .orbit-flow:has(input:checked) .orbit-flow-panel {
+    padding: 1.25rem;
+  }
+
+  /* One column: the facts follow the command they qualify instead of sitting
+     beside it, and the guide link stays last. */
+  .orbit-flow:has(#orbit-flow-pr:checked) .orbit-flow-panel[data-flow='pr'],
+  .orbit-flow:has(#orbit-flow-local:checked) .orbit-flow-panel[data-flow='local'],
+  .orbit-flow:has(#orbit-flow-auto:checked) .orbit-flow-panel[data-flow='auto'],
+  .orbit-flow:has(#orbit-flow-sweep:checked) .orbit-flow-panel[data-flow='sweep'] {
+    gap: 1.5rem;
+    grid-template-areas:
+      "main"
+      "facts"
+      "link";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+  }
+
+  .orbit-flow-link {
+    margin-top: 0;
+  }
+}
+
+/* Phone widths: everything becomes one column, including the pairs the tablet
+   step above kept side by side. */
+@media (max-width: 34rem) {
+  .orbit-card-grid,
+  .orbit-card-grid-3,
+  .orbit-card-grid-4,
+  .orbit-docs-index,
+  .orbit-flow-tabs {
     grid-template-columns: 1fr;
   }
 
-  .orbit-docs-index {
-    grid-template-columns: 1fr;
+  .orbit-flow-tab {
+    border-right: 0;
+  }
+}
+
+/* Restraint over motion: the only transitions here are hover affordances, and
+   they are dropped entirely when the reader asks for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .orbit-card,
+  .orbit-card h3,
+  .orbit-copy,
+  .orbit-flow-tab,
+  .orbit-flow-tab-name {
+    transition: none;
+  }
+
+  .orbit-card:hover,
+  .orbit-card:focus-visible {
+    transform: none;
   }
 }
