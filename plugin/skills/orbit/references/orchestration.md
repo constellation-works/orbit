@@ -142,10 +142,12 @@ can inspect new work without repeating the expensive assessment. Explicit
 selectors, but refuses an ID already prepared by an active run; inspect or
 resume the named run instead.
 
-The prepare step fetches the landing branch (`base_branch`, defaulting to
-`workflow.base_branch`) and pins one `source_revision`, preserving primary
-HEAD, index, dirty and untracked files. Remote failure stops before an agent
-call. Each pilot runs in its own detached checkout at that revision, with
+The job carries an empty `base_branch` default so zero-input template rendering
+reaches prepare. Prepare treats an omitted or empty value as
+`workflow.base_branch`, fetches that landing branch, and pins one
+`source_revision` while preserving primary HEAD, index, dirty and untracked
+files. Remote failure stops before an agent call. Each pilot runs in its own
+detached checkout at that revision, with
 its cwd, input paths, and read-only filesystem profile bound there. Task tools
 retain the owning logical workspace, and apply still checks task snapshots
 with compare-and-set on that authority. Inspection checkouts use at most 16
