@@ -27,6 +27,9 @@ repo = Path(sys.argv[1]).resolve()
 plugin_root = repo / "plugin"
 manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
 marketplace_path = repo / ".agents" / "plugins" / "marketplace.json"
+EXPECTED_OWNER_NAME = "constellation-works"
+EXPECTED_OWNER_URL = "https://github.com/constellation-works"
+EXPECTED_MCP_COMMAND = "npx"
 
 SEMVER_RE = re.compile(
     r"^(0|[1-9]\d*)\."
@@ -74,6 +77,19 @@ def require_string(payload: dict[str, Any], key: str, label: str) -> str | None:
         errors.append(f"{label}.{key} must be a non-empty string")
         return None
     return value
+
+
+def require_owner(payload: dict[str, Any] | None, label: str) -> None:
+    if payload is None:
+        errors.append(f"{label} must be an object")
+        return
+    if not isinstance(payload, dict):
+        errors.append(f"{label} must be an object")
+        return
+    if payload.get("name") != EXPECTED_OWNER_NAME:
+        errors.append(f"{label}.name must be {EXPECTED_OWNER_NAME!r}")
+    if payload.get("url") != EXPECTED_OWNER_URL:
+        errors.append(f"{label}.url must be {EXPECTED_OWNER_URL!r}")
 
 
 def optional_https(payload: dict[str, Any], key: str, label: str) -> None:
@@ -197,6 +213,7 @@ if manifest is not None:
     else:
         require_string(author, "name", "plugin.json.author")
         optional_https(author, "url", "plugin.json.author")
+        require_owner(author, "plugin.json.author")
 
     if normalize_contract_path(manifest.get("skills")) != "skills":
         errors.append("plugin.json.skills must resolve to ./skills/")
@@ -221,6 +238,23 @@ if manifest is not None:
                 or not all(isinstance(arg, str) and arg.strip() for arg in args)
             ):
                 errors.append(f"plugin.json.mcpServers.{server_name}.args must be an array of strings")
+            elif (
+                version is not None
+                and server_name == "orbit"
+                and isinstance(command, str)
+                and isinstance(args, list)
+            ):
+                expected_args = ["-y", f"@orbit-tools/cli@{version}", "mcp", "serve"]
+                stale = any(
+                    isinstance(arg, str) and ("@latest" in arg or "@0.5.1" in arg)
+                    for arg in args
+                )
+                if command != EXPECTED_MCP_COMMAND or args != expected_args:
+                    prefix = "plugin.json has a stale launch pin; " if stale else ""
+                    errors.append(
+                        f"{prefix}plugin.json.mcpServers.orbit must launch "
+                        f"{EXPECTED_MCP_COMMAND} {' '.join(expected_args)}"
+                    )
 
     interface = manifest.get("interface")
     if not isinstance(interface, dict):
@@ -234,6 +268,11 @@ if manifest is not None:
             "category",
         ):
             require_string(interface, field, "plugin.json.interface")
+        if interface.get("developerName") != EXPECTED_OWNER_NAME:
+            errors.append(
+                "plugin.json.interface.developerName must be "
+                f"{EXPECTED_OWNER_NAME!r}"
+            )
         capabilities = interface.get("capabilities")
         if not isinstance(capabilities, list) or not all(
             isinstance(item, str) and item.strip() for item in capabilities

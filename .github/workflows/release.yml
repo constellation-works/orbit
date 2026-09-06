@@ -235,6 +235,24 @@ jobs:
             dist/orbit-checksums.txt.sig
           generate_release_notes: true
 
+  cursor-marketplace-followup:
+    # Visible reminder only; does not publish the Cursor catalog and must not
+    # block GitHub Release, Homebrew, or installer smokes.
+    name: Cursor marketplace follow-up
+    needs: publish-release
+    if: ${{ !cancelled() && needs.publish-release.result == 'success' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Remind maintainer to update the Cursor listing
+        shell: bash
+        run: ./scripts/cursor-marketplace-followup.sh
+
   bump-homebrew-tap:
     name: Update Homebrew tap
     needs: publish-release
