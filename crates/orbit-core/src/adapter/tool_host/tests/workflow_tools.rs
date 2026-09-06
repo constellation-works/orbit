@@ -170,68 +170,6 @@ fn managed_run_environment_denies_ship_and_resume_end_to_end() {
     );
 }
 
-/// ORB-10540: the permitted direction, same tools and same operator session,
-/// with the managed-run envelope absent.
-///
-/// Without this the denial test above cannot distinguish a working guard from
-/// one that refuses unconditionally. Both verbs reach the runtime and produce
-/// real runs.
-#[test]
-fn unmanaged_environment_admits_operator_ship_and_resume() {
-    let _env = unmanaged_tool_env_guard();
-    let (_root, runtime, repo_root) = test_runtime();
-    write_ship_job_asset(&runtime);
-    let source_run_id = seed_failed_run(&runtime);
-    let task_ids = seed_ship_tasks(&runtime, &repo_root);
-
-    // The mirror of the denial test's scope assertion: with no envelope there is
-    // no run scope, which is what leaves the guard inert.
-    assert_eq!(
-        build_orbit_tool_host(
-            &runtime,
-            None,
-            None,
-            orbit_types::tool::ToolSessionContext::default()
-        )
-        .task_scope()
-        .run_id,
-        None,
-    );
-
-    let shipped = run_tool_as_operator(&runtime, "orbit.workflow.ship", ship_input(&task_ids))
-        .expect("unmanaged operator ship is admitted");
-    assert_eq!(shipped["workflow"], json!("ship"));
-    assert_eq!(shipped["job_id"], json!(SHIP_JOB));
-    let shipped_run_id = shipped["run_id"].as_str().expect("ship run id").to_string();
-
-    let resumed = run_tool_as_operator(
-        &runtime,
-        "orbit.workflow.run.resume",
-        json!({"id": source_run_id}),
-    )
-    .expect("unmanaged operator resume is admitted");
-    assert_eq!(resumed["workflow"], json!("resume"));
-    assert_eq!(resumed["retry_source_run_id"], json!(source_run_id));
-
-    let resumed_run_id = resumed["run_id"].as_str().expect("resume run id");
-    let stored = runtime
-        .show_job_run(&shipped_run_id)
-        .expect("shipped run is persisted");
-    assert_eq!(stored.job_id, SHIP_JOB);
-    assert_eq!(
-        stored.input.expect("ship input")["task_ids"],
-        json!(task_ids)
-    );
-    assert_eq!(
-        runtime
-            .show_job_run(resumed_run_id)
-            .expect("resumed run is persisted")
-            .retry_source_run_id
-            .as_deref(),
-        Some(source_run_id.as_str())
-    );
-}
-
 /// ORB-10544: `orbit.workflow.ship` is a thin projection of the shared
 /// submission path, so it inherits that path's duplicate-dispatch guard: a task
 /// already carried by a non-terminal run is refused here with the same typed

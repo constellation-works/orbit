@@ -1240,20 +1240,28 @@ impl OrbitRuntime {
     fn pipeline_worker_command(&self, run_id: &str) -> Result<Command, OrbitError> {
         let paths = self.paths();
         #[cfg(test)]
-        if let Some(command) = worker_command_override::command(&paths.repo_root, run_id) {
-            return Ok(command);
+        {
+            worker_command_override::command(&paths.repo_root, run_id).ok_or_else(|| {
+                OrbitError::Execution(
+                    "test pipeline worker requires an explicit worker command override".to_string(),
+                )
+            })
         }
-        let current_exe = std::env::current_exe().map_err(|error| {
-            OrbitError::Execution(format!("resolve current orbit executable: {error}"))
-        })?;
-        let mut command = Command::new(resolve_pipeline_worker_executable(current_exe));
-        configure_pipeline_worker_command(
-            &mut command,
-            &paths.repo_root,
-            run_id,
-            pipeline_worker_root_override(paths),
-        );
-        Ok(command)
+
+        #[cfg(not(test))]
+        {
+            let current_exe = std::env::current_exe().map_err(|error| {
+                OrbitError::Execution(format!("resolve current orbit executable: {error}"))
+            })?;
+            let mut command = Command::new(resolve_pipeline_worker_executable(current_exe));
+            configure_pipeline_worker_command(
+                &mut command,
+                &paths.repo_root,
+                run_id,
+                pipeline_worker_root_override(paths),
+            );
+            Ok(command)
+        }
     }
 
     pub(crate) fn spawn_pipeline_worker_process(
