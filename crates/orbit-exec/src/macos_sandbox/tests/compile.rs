@@ -409,7 +409,14 @@ fn compiled_codex_profile_reads_public_ca_material_but_not_private_credentials()
     std::fs::create_dir_all(&ssh).expect("synthetic ssh directory");
     let private_key = ssh.join("id_fixture");
     std::fs::write(&private_key, "private fixture").expect("write synthetic private key");
-    let public_ca = std::path::Path::new("/etc/ssl/cert.pem");
+    // `/etc` is an alias of `/private/etc` on macOS. `sandbox-exec` evaluates
+    // file predicates against the resolved path, so use the same canonical
+    // spelling for the probe and its explicit deny. This direct compiler test
+    // deliberately supplies already-resolved absolute rules, as production's
+    // policy resolver does for workspace-relative policy entries.
+    let public_ca = std::path::Path::new("/etc/ssl/cert.pem")
+        .canonicalize()
+        .expect("canonicalize macOS public CA bundle");
     assert!(public_ca.is_file(), "macOS public CA bundle must exist");
 
     let resolved = ResolvedFsProfile {
@@ -440,7 +447,7 @@ fn compiled_codex_profile_reads_public_ca_material_but_not_private_credentials()
 
     let denied = ResolvedFsProfile {
         name: "deny-public-ca".to_string(),
-        read: vec![fixture.home_text(), "!/etc/ssl/cert.pem".to_string()],
+        read: vec![fixture.home_text(), format!("!{}", public_ca.display())],
         modify: vec![],
     };
     let denied_profile = compile_with_env(
