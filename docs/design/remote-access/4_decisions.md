@@ -22,9 +22,9 @@ These choices describe the current implementation.
 
 **Context.** Web must work outside any one checkout and represent the machine's current workspace catalog.
 
-**Decision.** orbit web serve loads local workspace entries from orbit-registry and exposes them through one workspace-keyed DashboardState. --root chooses a default; it does not scope the server. --global remains a compatibility no-op.
+**Decision.** orbit web serve loads local workspace entries from orbit-registry and exposes them through one workspace-keyed DashboardState. --root scopes the server by choosing which registry is loaded, through the same orbit-cmd resolution every other command uses; --workspace chooses the default selection. --global remains a compatibility no-op.
 
-**Consequences.** One process serves current local workspaces from any launch directory. Cost: each request must select a workspace or use a default, and aggregate work is bounded rather than exhaustive.
+**Consequences.** One process serves current local workspaces from any launch directory, and an explicit root is a real isolation boundary for the dashboard as it is for the CLI. Cost: each request must select a workspace or use a default, aggregate work is bounded rather than exhaustive, and preselection needed its own option once --root stopped doubling as one.
 
 ## Registry snapshots are authoritative; runtimes are cached
 

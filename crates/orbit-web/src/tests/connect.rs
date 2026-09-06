@@ -10,15 +10,17 @@ use std::net::{Ipv4Addr, TcpListener};
 use orbit_core::OrbitError;
 
 use super::super::DEFAULT_DASHBOARD_PORT;
-use super::super::connect::{ConnectArgs, remote_serve_command, select_local_port, tunnel_spec};
+use super::super::connect::{
+    ConnectArgs, reject_root_override, remote_serve_command, select_local_port, tunnel_spec,
+};
 
 /// Minimal args builder so each test states only what it cares about.
-fn args(host: &str, remote_port: u16, root: Option<&str>) -> ConnectArgs {
+fn args(host: &str, remote_port: u16, workspace: Option<&str>) -> ConnectArgs {
     ConnectArgs {
         ssh_host: host.to_string(),
         port: None,
         remote_port,
-        root: root.map(str::to_string),
+        workspace: workspace.map(str::to_string),
         global: false,
         no_open: false,
     }
@@ -47,6 +49,22 @@ fn auto_selection_falls_back_when_default_is_busy() {
     }
 }
 
+// ── root override ─────────────────────────────────────────────────────────
+
+#[test]
+fn root_override_is_rejected_with_the_workspace_flag_in_the_message() {
+    // ORB-11388: `--root` no longer names the remote workspace, and this
+    // command has no local data directory to override, so it must fail loudly
+    // and point at `--workspace` instead of dropping the preselection.
+    assert!(reject_root_override(None).is_ok());
+    let err = reject_root_override(Some(std::path::Path::new("/srv/ws")))
+        .expect_err("--root must be rejected");
+    let OrbitError::InvalidInput(message) = &err else {
+        panic!("expected invalid input, got {err:?}");
+    };
+    assert!(message.contains("--workspace"), "{message}");
+}
+
 // ── remote command construction ───────────────────────────────────────────
 
 #[test]
@@ -61,18 +79,27 @@ fn remote_command_always_passes_no_open() {
 }
 
 #[test]
-fn remote_command_shell_quotes_root() {
+fn remote_command_shell_quotes_workspace() {
     let cmd = remote_serve_command(&args("box", 7878, Some("/srv/my ws")));
     assert!(
-        cmd.contains("--root '/srv/my ws'"),
-        "root with a space must be single-quoted: {cmd}"
+        cmd.contains("--workspace '/srv/my ws'"),
+        "a workspace selector with a space must be single-quoted: {cmd}"
     );
 }
 
 #[test]
-fn remote_command_without_root_has_no_root_flag() {
+fn remote_command_never_forwards_root() {
+    // ORB-11388: `--root` selects the remote's *registry* now. Forwarding a
+    // workspace path there would serve an empty registry instead of
+    // preselecting that workspace.
+    let cmd = remote_serve_command(&args("box", 7878, Some("/srv/ws")));
+    assert!(!cmd.contains("--root"), "{cmd}");
+}
+
+#[test]
+fn remote_command_without_workspace_has_no_workspace_flag() {
     let cmd = remote_serve_command(&args("box", 7878, None));
-    assert!(!cmd.contains("--root"));
+    assert!(!cmd.contains("--workspace"));
 }
 
 #[test]
@@ -88,12 +115,12 @@ fn remote_command_passes_global_when_set() {
 }
 
 #[test]
-fn remote_command_combines_global_and_root() {
+fn remote_command_combines_global_and_workspace() {
     let mut cfg = args("box", 7878, Some("/srv/ws"));
     cfg.global = true;
     let cmd = remote_serve_command(&cfg);
     assert!(cmd.contains("--global"), "{cmd}");
-    assert!(cmd.contains("--root '/srv/ws'"), "{cmd}");
+    assert!(cmd.contains("--workspace '/srv/ws'"), "{cmd}");
 }
 
 // ── tunnel wiring ─────────────────────────────────────────────────────────

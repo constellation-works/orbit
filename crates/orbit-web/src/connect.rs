@@ -23,6 +23,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::path::Path;
 use std::time::Duration;
 
 use clap::Args;
@@ -63,10 +64,12 @@ pub struct ConnectArgs {
     #[arg(long, default_value_t = DEFAULT_DASHBOARD_PORT)]
     pub remote_port: u16,
 
-    /// Remote workspace path, passed through to `orbit web serve --root` on
-    /// the remote host. Omit to use the remote's default workspace resolution.
-    #[arg(long)]
-    pub root: Option<String>,
+    /// Remote workspace to preselect — a registered name, logical ID (`ws_*`),
+    /// or remote checkout path — passed through to `orbit web serve
+    /// --workspace` on the remote host. Omit to use the remote's default
+    /// workspace resolution.
+    #[arg(long, value_name = "SELECTOR")]
+    pub workspace: Option<String>,
 
     /// Serve every workspace registered on the remote host, not just its
     /// default one — passes `--global` through to the remote `orbit web serve`.
@@ -82,7 +85,13 @@ pub struct ConnectArgs {
 /// when one answers, spawning one otherwise — wait for readiness, open the
 /// browser, and block until Ctrl-C / SIGTERM — then tear down only what this
 /// invocation started.
-pub fn connect(args: ConnectArgs) -> Result<(), OrbitError> {
+///
+/// A top-level `--root` is rejected rather than ignored: this command reads no
+/// local `.orbit/` state, so there is no data directory for it to override,
+/// and the flag used to name the *remote* workspace here (ORB-11388). See
+/// [`reject_root_override`].
+pub fn connect(args: ConnectArgs, root_override: Option<&Path>) -> Result<(), OrbitError> {
+    reject_root_override(root_override)?;
     let local_port = select_local_port(args.port)?;
 
     // From here on, every exit path (error, panic, normal) tears the tunnel
@@ -110,6 +119,22 @@ pub fn connect(args: ConnectArgs) -> Result<(), OrbitError> {
 
     wait_for_shutdown(&mut tunnel);
     Ok(())
+}
+
+/// `orbit web connect` overrides no local data directory, so `--root` can only
+/// be a mistake here. Before ORB-11388 this command's own `--root` named the
+/// remote workspace to preselect; that is `--workspace` now, and an invocation
+/// still passing `--root` reaches the top-level flag instead. Failing with
+/// that redirection is the migration: silently ignoring it would drop the
+/// preselection without a word.
+pub(crate) fn reject_root_override(root_override: Option<&Path>) -> Result<(), OrbitError> {
+    match root_override {
+        None => Ok(()),
+        Some(_) => Err(OrbitError::InvalidInput(
+            "orbit web connect does not accept --root; pass --workspace <SELECTOR> to choose the remote workspace"
+                .to_string(),
+        )),
+    }
 }
 
 // Visibility note: the pure helpers below are `pub(crate)` so the sibling
@@ -140,19 +165,24 @@ pub(crate) fn select_local_port(preferred: Option<u16>) -> Result<u16, OrbitErro
 }
 
 /// The remote shell command line:
-/// `orbit web serve --no-open --port N [--global] [--root P]`.
+/// `orbit web serve --no-open --port N [--global] [--workspace S]`.
 ///
 /// `ssh` concatenates trailing args with spaces and re-parses them via the
-/// remote shell, so any value that could contain spaces (`--root`) is
+/// remote shell, so any value that could contain spaces (`--workspace`) is
 /// shell-quoted.
+///
+/// ORB-11388: this forwards `--workspace`, not `--root`. On the remote,
+/// `--root` now selects which registry is served (as it does for every other
+/// command), so sending a workspace path there would serve an empty registry
+/// instead of preselecting that workspace.
 pub(crate) fn remote_serve_command(cfg: &ConnectArgs) -> String {
     let mut cmd = format!("orbit web serve --no-open --port {}", cfg.remote_port);
     if cfg.global {
         cmd.push_str(" --global");
     }
-    if let Some(root) = &cfg.root {
-        cmd.push_str(" --root ");
-        cmd.push_str(&quote_posix_arg(root));
+    if let Some(workspace) = &cfg.workspace {
+        cmd.push_str(" --workspace ");
+        cmd.push_str(&quote_posix_arg(workspace));
     }
     cmd
 }

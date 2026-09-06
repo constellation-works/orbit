@@ -43,9 +43,11 @@ impl Execute for WebSubcommand {
                 Ok(CommandOutput::Silent)
             }
             // `connect` is a client-side tunnel helper; the workspace lives on
-            // the remote, so it needs no local runtime.
+            // the remote, so it needs no local runtime — and no local root
+            // (the `orbit web` dispatch that carries `--root` is
+            // `dispatch_web`, which is the path `orbit web connect` takes).
             WebSubcommand::Connect(args) => {
-                orbit_web::connect(args)?;
+                orbit_web::connect(args, None)?;
                 Ok(CommandOutput::Silent)
             }
         }

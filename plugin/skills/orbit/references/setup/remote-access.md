@@ -103,8 +103,14 @@ orbit web serve --no-open
 orbit web serve --port 8080 --no-open
 orbit web connect <ssh-host>
 orbit web connect <ssh-host> --remote-port 7878 --port 9000
-orbit web connect <ssh-host> --root <remote-workspace-path>
+orbit web connect <ssh-host> --workspace <remote-workspace-selector>
 ```
+
+`orbit --root <ROOT> web serve` serves `<ROOT>/workspaces.json` and nothing from
+the machine-global registry, so an explicit root isolates the dashboard the same
+way it isolates every other command. `--workspace` picks which of the served
+workspaces the dashboard opens on, and is what `connect` forwards to the remote
+server; `connect` itself rejects `--root`.
 
 The default dashboard port is 7878. `connect` reuses an existing remote loopback
 server when available; otherwise it starts one and owns that process's lifetime.

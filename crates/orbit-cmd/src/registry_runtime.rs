@@ -314,7 +314,11 @@ impl RegisteredRuntimeFactory {
 /// one was passed, the trusted managed registry locator for a managed child,
 /// and `~/.orbit` otherwise. Never derived from cwd, so a registry-first
 /// command works from any directory.
-pub(crate) fn global_root_for(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
+///
+/// This is the single answer to "which registry does `--root` select?", shared
+/// by every root-aware surface — including the dashboard, which used to load
+/// the machine-global registry unconditionally (ORB-11388).
+pub fn global_root_for(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
     match root_override {
         Some(root) => Ok(root.to_path_buf()),
         None => orbit_core::runtime::resolve_global_root(),
@@ -499,7 +503,10 @@ fn canonical_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn selector_looks_like_path(selector: &str) -> bool {
+/// Whether a workspace selector is a checkout path rather than a registered
+/// name or logical ID. One owner for that classification: a bare name must
+/// never be silently joined to cwd and prefix-matched (ORB-11388).
+pub fn selector_looks_like_path(selector: &str) -> bool {
     let path = Path::new(selector);
     path.is_absolute()
         || selector == "."

@@ -1034,7 +1034,7 @@ fn dispatch_web(command: Commands, context: DispatchContext<'_>) -> CommandOut {
         Commands::Web(WebCommand {
             command: WebSubcommand::Connect(args),
         }) => {
-            orbit_web::connect(args)?;
+            orbit_web::connect(args, context.root_override)?;
             Ok(CommandOutput::Silent)
         }
         _ => dispatch_mismatch("Web"),

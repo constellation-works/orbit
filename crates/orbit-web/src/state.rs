@@ -96,10 +96,12 @@ pub(crate) struct Snapshot {
 /// and [`DashboardState::global`] leave it `None`, making [`DashboardState::refresh`]
 /// a no-op (their entries are supplied directly and never re-read).
 pub(crate) struct RegistrySource {
-    /// Path to `~/.orbit/workspaces.json` (or a test double).
+    /// Path to the served registry: `<--root>/workspaces.json` when an
+    /// explicit root was given, `~/.orbit/workspaces.json` otherwise (or a
+    /// test double).
     registry_path: PathBuf,
-    /// The top-level `--root <path>` flag, if any, for default re-selection.
-    root_override: Option<PathBuf>,
+    /// The `--workspace <selector>` flag, if any, for default re-selection.
+    workspace_selector: Option<String>,
     /// Process cwd captured at startup, for default re-selection.
     cwd: Option<PathBuf>,
 }
@@ -107,12 +109,12 @@ pub(crate) struct RegistrySource {
 impl RegistrySource {
     pub(crate) fn new(
         registry_path: PathBuf,
-        root_override: Option<PathBuf>,
+        workspace_selector: Option<String>,
         cwd: Option<PathBuf>,
     ) -> Self {
         Self {
             registry_path,
-            root_override,
+            workspace_selector,
             cwd,
         }
     }
@@ -125,7 +127,7 @@ impl RegistrySource {
         workspace_registry::validate_workspaces(&mut registry);
         let default_workspace = crate::default_workspace_selection(
             &registry,
-            self.root_override.as_deref(),
+            self.workspace_selector.as_deref(),
             self.cwd.as_deref(),
         );
         let entries = workspace_registry::local_workspaces(&registry)
@@ -172,8 +174,9 @@ struct CachedRuntime {
 }
 
 struct StateInner {
-    /// Global orbit root (`~/.orbit`); passed as `global_root` when building
-    /// per-workspace runtimes. Unused in single mode.
+    /// The served Orbit root: an explicit `--root`, else `~/.orbit`. Passed as
+    /// `global_root` when building per-workspace runtimes. Unused in single
+    /// mode.
     global_root: PathBuf,
     /// Atomically-swapped registered workspace set + default selection.
     snapshot: Mutex<Arc<Snapshot>>,
