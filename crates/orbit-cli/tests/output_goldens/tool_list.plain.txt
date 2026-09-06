@@ -23,5 +23,5 @@ orbit.workflow.run.list	-	List durable workflow runs newest-first with optional 
 orbit.workflow.run.resume	id:string	Resume a terminal resumable workflow run as a new linked run.
 orbit.workflow.run.show	id:string	Fetch one durable workflow run by ID.
 orbit.workflow.run.workers	id:string, concurrency:integer	Adjust how many tasks a running workspace drain keeps in flight, without replacing its run. The run ID, deadline, completion authorization, and already-dispatched children are preserved; a lower ceiling stops new admissions until enough children finish and cancels nothing.
-orbit.workflow.ship	task_ids:string|string[]	Submit an explicit set of tasks to the ship workflow and return its durable run ID.
+orbit.workflow.ship	task_ids:string|string[]	Submit explicit tasks to the review-only ship workflow and return its durable run ID. This MCP tool does not accept completion authorization; an authorized operator on the owning host can use `orbit run ship <task-id> --complete`.
 proc.spawn	program:string	Spawn a process with timeout and capture output
