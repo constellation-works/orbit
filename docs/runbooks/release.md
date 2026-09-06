@@ -172,13 +172,14 @@ Homebrew TAP token, and never paste the PAT into workflow inputs or logs.
 
 The preflight calls GitHub's active organization-memberships endpoint and
 requires the selected `constellation-works` membership to be `active` with
-role `owner`. Configure the PAT with read-only GitHub access sufficient to
+role `admin` (GitHub's API value for an organization administrator). Configure
+the PAT with read-only GitHub access sufficient to
 read that organization membership: for a fine-grained PAT, select the
 `constellation-works` organization and grant **Organization permissions →
 Members: Read-only**. It needs no write, repository-content, or TAP access;
 the workflow uses its read-only `GITHUB_TOKEN` to inspect the public release.
 Do not broaden the PAT automatically if the preflight fails. A `missing` or
-non-owner result means an organization owner must correct the dedicated
+non-admin result means an organization administrator must correct the dedicated
 token's grant before another manual dispatch. The workflow prints only the
 selected membership state and role, never tokens, authorization headers, raw
 JWTs, or raw authentication responses.
