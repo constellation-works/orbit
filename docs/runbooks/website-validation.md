@@ -4,8 +4,8 @@ summary: Build, preview, and validate Orbit website changes with Playwright insi
 tags: [operations, website, sandbox, playwright, validation]
 paths: ["website/**"]
 related_features: [orbit-docs]
-related_artifacts: ["ORB-11329"]
-last_validated: 2026-09-05
+related_artifacts: ["ORB-11329", "ORB-11379"]
+last_validated: 2026-09-06
 ---
 
 # Validate Website Changes in a Job-Run Sandbox
@@ -201,6 +201,83 @@ Stop the server after validation:
 kill "$PREVIEW_PID" 2>/dev/null || true
 wait "$PREVIEW_PID" 2>/dev/null || true
 ```
+
+## Production publication and evidence
+
+The supported production path is the repository's `Website` GitHub Actions
+workflow. Pull requests run only the `Check and build` job. Publication is
+release-gated: a `main` push that changes `website/**` or the workflow launches
+the distinct `Publish to Cloudflare Pages` job. A maintainer may also dispatch
+the workflow against `main` to recover from a failed or missed publication.
+Selecting another ref builds it but cannot enter the production job.
+
+The checked-in and public evidence identifies Cloudflare as the intended
+publication boundary, but does not expose the current origin project. Public
+responses from `orbit-cli.com` and its authoritative nameservers are
+Cloudflare. Repository history previously used Wrangler direct upload, and
+`website/wrangler.toml` configures Pages static output. However, every one of
+the 26 public GitHub Deployment records from that workflow ended in failure.
+The former hard-coded project name is not trustworthy:
+`https://orbit-website.pages.dev` served an unrelated social-video site when
+ORB-11379 was investigated. The repaired workflow therefore obtains the exact
+existing project name from the protected `production` environment instead of
+guessing it. This evidence supports the repository mechanism; it does not prove
+who currently owns the external account, which project owns the custom domain,
+or that repository secrets exist. Do not create a project, rotate or invent
+credentials, or edit DNS as part of website publication.
+
+ORB-11379 recorded the publication gap on 2026-09-06:
+
+- `.github/workflows/website.yml` had only a pull-request build trigger and no
+  upload step.
+- GitHub's newest deployment record was production deployment `4604816061` for
+  `agent-main` revision `ec8545b4de696a5b714fe344c9d2d1bca9d21f01`.
+  Its build step succeeded, its Cloudflare Pages upload step failed, and its
+  workflow/job log is
+  `https://github.com/danieljhkim/orbit/actions/runs/25479096320/job/74759046156`.
+- The separate deploy workflow that created that record was deleted immediately
+  afterward in `fc2ae9d4ef26c92d0e10dc4aff63934d3c007b09`.
+- The live homepage still contained the old `v0.9.2` headline and Architecture
+  navigation. Successful Website checks on newer commits therefore proved
+  buildability, not publication.
+
+The repaired workflow uploads one immutable build artifact and writes
+`deployment.json` into it with the full source revision, source ref, and Actions
+run URL. Wrangler receives the same revision through `--commit-hash`. Production
+deployments are serialized, use only `contents: read` and `deployments: write`,
+and are recorded in both the Actions run and GitHub Deployments. The final step
+checks the unique homepage headline, the delivery-mode setup explorer, the
+install route, and the expected source revision at both the deployment URL and
+`orbit-cli.com`.
+
+### Operate and recover
+
+1. Open the `Website` workflow run for the `main` revision. Confirm `Check and
+   build` completed before interpreting `Publish to Cloudflare Pages`.
+2. Follow the failed step and GitHub Deployment links. A green build with a red
+   or absent publication job is not a deployed site.
+3. Before the first repaired publication, an authorized Cloudflare account
+   owner must identify the existing Pages project whose custom domains include
+   `orbit-cli.com`. Set that exact name as the production environment variable
+   `CLOUDFLARE_PAGES_PROJECT`. If authentication fails, the owner must restore
+   `CLOUDFLARE_ACCOUNT_ID` and a `CLOUDFLARE_API_TOKEN` scoped to Pages edit
+   access for that same project. Record the external action; do not replace the
+   project or DNS.
+4. After correcting an external cause, dispatch `Website` from the `main` ref.
+   This rebuilds tracked sources and uploads them; no manual or untracked source
+   upload is part of recovery.
+5. Require the verification step to pass, then independently open
+   `https://orbit-cli.com/`, its delivery-mode explorer, and
+   `https://orbit-cli.com/getting-started/install/`. Fetch
+   `https://orbit-cli.com/deployment.json` and compare `sourceRevision` with the
+   workflow's `github.sha` before declaring publication successful.
+
+If the workflow has not yet reached `main`, the exact existing project mapping
+has not been confirmed, or the environment credentials are missing or invalid,
+repository-side validation can still succeed but a real publication is
+externally blocked. Report the precise missing promotion, environment
+ownership, project mapping, or credential repair and never claim that the live
+site was updated.
 
 ## Preferred long-term fix
 

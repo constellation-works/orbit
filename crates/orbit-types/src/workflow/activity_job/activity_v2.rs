@@ -127,6 +127,16 @@ pub struct AgentLoopSpec {
     /// treats `None` as deny-all too. [ORB-10959]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proc_allowed_programs: Option<Vec<String>>,
+    /// Run this activity's provider subprocess directly on the host, outside
+    /// the executor's filesystem sandbox [ORB-11354].
+    ///
+    /// Legal only on the built-in
+    /// [`TRUSTED_HOST_ACTIVITY`](crate::workflow::activity_job::TRUSTED_HOST_ACTIVITY)
+    /// — asset load rejects it anywhere else — and inert without a per-invocation
+    /// operator admission in the run input. The flag names the mode; it never
+    /// grants it. See `crate::workflow::activity_job::trusted_host`.
+    #[serde(rename = "trustedHostExecution", default)]
+    pub trusted_host_execution: bool,
 }
 
 /// Accepted-but-inert value of the retired `backend:` key [ORB-10801].

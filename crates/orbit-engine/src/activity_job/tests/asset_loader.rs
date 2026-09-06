@@ -114,3 +114,63 @@ fn load_activity_asset_accepts_explicit_empty_program_allowlist() {
 
     assert_eq!(asset.name, "deny_all_spawn");
 }
+
+/// [ORB-11354] The unsandboxed execution mode is legal on exactly one built-in
+/// activity name. Asset load is where that is enforced, because activity assets
+/// live in a workspace directory an operator can edit — a key in YAML must
+/// never be able to name a second activity into the mode.
+fn trusted_host_activity_yaml(name: &str) -> String {
+    format!(
+        r#"schemaVersion: 2
+kind: Activity
+metadata:
+  name: {name}
+spec:
+  type: agent_loop
+  trustedHostExecution: true
+  description: Test agent loop.
+  instruction: Test.
+  tools:
+    - orbit.task.show
+"#
+    )
+}
+
+#[test]
+fn load_activity_asset_accepts_trusted_host_execution_on_the_builtin_activity() {
+    let asset = load_activity_asset(&trusted_host_activity_yaml("agent_invoke"))
+        .expect("the built-in exploration activity declares the mode");
+
+    let orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(spec) = asset.spec.spec
+    else {
+        panic!("expected an agent_loop activity");
+    };
+    assert!(spec.trusted_host_execution);
+}
+
+#[test]
+fn load_activity_asset_rejects_trusted_host_execution_on_any_other_activity() {
+    let error = load_activity_asset(&trusted_host_activity_yaml("agent_implement"))
+        .expect_err("no other activity may claim the mode");
+
+    assert!(
+        matches!(error, AssetLoadError::TrustedHostActivity(_)),
+        "expected a trusted-host refusal, got {error:?}"
+    );
+    assert!(error.to_string().contains("agent_implement"));
+}
+
+#[test]
+fn an_activity_that_omits_the_key_does_not_declare_the_mode() {
+    let asset = load_activity_asset(&agent_loop_activity_yaml(
+        "agent_implement",
+        "    - orbit.task.show\n",
+    ))
+    .expect("activity should load");
+
+    let orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(spec) = asset.spec.spec
+    else {
+        panic!("expected an agent_loop activity");
+    };
+    assert!(!spec.trusted_host_execution);
+}

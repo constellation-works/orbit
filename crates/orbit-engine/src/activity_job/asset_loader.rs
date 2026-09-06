@@ -4,7 +4,9 @@ use orbit_types::resource::ResourceKind;
 
 use orbit_types::workflow::JobV2;
 use orbit_types::workflow::SchemaHeader;
-use orbit_types::workflow::activity_job::ActivityV2;
+use orbit_types::workflow::activity_job::{
+    ActivityV2, ActivityV2Spec, TrustedHostActivityError, validate_trusted_host_activity,
+};
 
 fn parse_schema_header(yaml: &str) -> Result<SchemaHeader, serde_yaml::Error> {
     serde_yaml::from_str(yaml)
@@ -49,6 +51,8 @@ pub enum AssetLoadError {
         activity: String,
         source: ToolAllowlistError,
     },
+    #[error(transparent)]
+    TrustedHostActivity(#[from] TrustedHostActivityError),
 }
 
 /// Two-pass activity-asset loader for schemaVersion 2 assets.
@@ -69,6 +73,13 @@ pub fn load_activity_asset(yaml: &str) -> Result<ActivityAsset, AssetLoadError> 
                     source,
                 }
             })?;
+            // The unsandboxed execution mode is legal on exactly one built-in
+            // activity name, so an edited or hand-written asset cannot claim
+            // it. [ORB-11354]
+            validate_trusted_host_activity(
+                &res.metadata.name,
+                matches!(&res.spec.spec, ActivityV2Spec::AgentLoop(spec) if spec.trusted_host_execution),
+            )?;
             Ok(ActivityAsset {
                 name: res.metadata.name,
                 spec: res.spec,

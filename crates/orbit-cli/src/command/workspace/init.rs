@@ -71,6 +71,9 @@ pub struct WorkspaceInitArgs {
     pub force: bool,
 }
 
+pub(crate) const ONBOARDING_FINALIZE_GUIDANCE: &str =
+    "review and commit generated definitions (.gitignore, .orbit/auto_tasks, .orbit/routines) before local workflows (Orbit does not auto-commit or discard operator changes)";
+
 impl WorkspaceInitArgs {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
         let cwd = std::env::current_dir().map_err(|e| OrbitError::Io(e.to_string()))?;
@@ -87,6 +90,7 @@ impl WorkspaceInitArgs {
         println!("  id:        {}", init_result.id);
         println!("  root:      {}", init_result.root.display());
         println!("  orbit_dir: {}", init_result.orbit_dir.display());
+        println!("  onboarding: {ONBOARDING_FINALIZE_GUIDANCE}");
 
         if let Some(start) = task_id_start {
             let outcome =

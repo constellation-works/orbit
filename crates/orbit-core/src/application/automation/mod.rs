@@ -11,7 +11,7 @@ mod inspect;
 mod provider;
 pub(crate) use direct::record_direct_landing_intent;
 mod source;
-pub use inspect::inspect;
+pub use inspect::{inspect_auto_task, inspect_routine};
 mod task;
 #[cfg(test)]
 mod tests;
@@ -95,8 +95,11 @@ fn evaluate(
     action: Action<'_>,
     mut request: delivery::Evaluation<'_>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
+    let owner = request.trigger.owner_machine.as_deref();
     let owned_here =
-        request.trigger.owner_machine.as_deref() == runtime.automation_machine_identity();
+        owner.is_some_and(|owner| Some(owner) == runtime.automation_machine_identity());
+    let owned_elsewhere =
+        owner.is_some_and(|owner| Some(owner) != runtime.automation_machine_identity());
     // Disable admission on another owner, but reconcile previously admitted work.
     // Preview remains read-only and exposes the actual consumer/baseline.
     request.enabled &= owned_here;
@@ -109,7 +112,7 @@ fn evaluate(
     };
     let mut diagnostic =
         delivery::evaluate(store.as_ref(), &host, request).map_err(automation_error_to_orbit)?;
-    if !owned_here && !dry_run {
+    if owned_elsewhere && !dry_run {
         diagnostic.reason = "owned_elsewhere".into();
     }
     Ok(diagnostic)
@@ -125,14 +128,8 @@ struct Host<'a> {
 }
 impl DeliveryHost for Host<'_> {
     fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
-        if let Action::Task(definition) = self.action
-            && definition.dedupe == orbit_types::workflow::DedupePolicy::SkipIfOpen
-            && orbit_automation::auto_tasks::scheduler::AutoTaskDispatch::has_open_instance(
-                self.runtime,
-                definition,
-            )?
-        {
-            return Ok(Some("open_instance".into()));
+        if let Action::Task(definition) = self.action {
+            return auto_task_admission_deferral(self.runtime, definition).map_err(Into::into);
         }
         Ok(None)
     }
@@ -186,4 +183,18 @@ impl DeliveryHost for Host<'_> {
             Action::Job(_) => task::job_outcome(self.runtime, &self.source, attempt),
         }
     }
+}
+
+fn auto_task_admission_deferral(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Result<Option<String>, OrbitError> {
+    if definition.dedupe == orbit_types::workflow::DedupePolicy::SkipIfOpen
+        && orbit_automation::auto_tasks::scheduler::AutoTaskDispatch::has_open_instance(
+            runtime, definition,
+        )?
+    {
+        return Ok(Some("open_instance".into()));
+    }
+    Ok(None)
 }

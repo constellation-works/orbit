@@ -96,6 +96,32 @@ evidence. Treat `checkout_identity.state: incomplete`, `missing`, or
 - **Recovery failure:** the original step failed and `step_failure_recovery` also failed — report both, keep the original step as primary unless recovery caused additional damage.
 - **Parent orchestration failure:** a child run failed and a gate/auto/epic parent is still running or waiting — identify both run ids.
 
+## Operator Agent Invocations
+
+A run of `agent_invoke_pipeline` is not a delivery pipeline. It is one operator
+invocation of an agent for exploration or debugging, submitted with
+`orbit run agent` / `orbit_agent_invoke`, and it changes no task, branch, or
+pull request — so do not look for a worktree, a task lifecycle, or a delivery
+tail when triaging one.
+
+`orbit run show <RUN_ID>` prints an `Invocation:` line for these runs, and
+`--json` carries the same facts under `agent_invocation`:
+
+- `outcome` is the run's own state, never the provider's exit code.
+- `envelope_completed: false` on an otherwise-clean exit means the agent stopped
+  mid-turn: exit zero is not evidence the investigation succeeded.
+- `timed_out: true` means the wall-clock bound killed it — resubmit with a
+  longer `--timeout` (the maximum is 7200s) or a narrower prompt.
+- `summary` and the bounded preview are the answer; `orbit run logs <RUN_ID>`
+  has the complete captured output when the preview is truncated.
+
+These runs execute their provider subprocess outside the executor sandbox by
+explicit per-invocation operator admission, so a sandbox-denial diagnostic is
+never the explanation for one failing. The run trail records the admission as a
+`trusted_host.execution_admitted` audit event naming the authorizing operator
+and the working directory. They are deliberately **not resumable**: the
+admission covered one invocation, so submit a new one rather than resuming.
+
 For recurring signatures and known remedies, read [common-failures.md](common-failures.md) after the initial classification — keep this file focused on investigation flow; add new patterns there.
 
 ## Check Task State

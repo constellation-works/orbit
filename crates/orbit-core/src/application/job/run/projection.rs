@@ -39,6 +39,9 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         .and_then(|state| state.drain_admissions_stop.as_ref())
         .and_then(|stop| serde_json::to_value(stop).ok())
         .unwrap_or(Value::Null);
+    // Read before the terminal filter below: an invocation's result is most
+    // interesting *after* the run finishes.
+    let state_for_agent_result = state;
     let state = (!run.state.is_terminal()).then_some(state).flatten();
     let waiting_on_deps = state
         .and_then(|state| state.waiting_on_deps.as_ref())
@@ -52,7 +55,18 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         .and_then(|input| input.get("crew"))
         .and_then(Value::as_str);
 
+    // [ORB-11354] An agent invocation's answer is the reason its run exists,
+    // so the shared projection carries it rather than making each surface dig
+    // it out of the step output. `None` for every other job.
+    let agent_invocation = crate::application::job::agent_invoke_result(
+        run,
+        state_for_agent_result.map(|state| &state.step_outputs),
+    )
+    .and_then(|result| serde_json::to_value(result).ok())
+    .unwrap_or(Value::Null);
+
     json!({
+        "agent_invocation": agent_invocation,
         "child_dispatches": child_dispatches,
         "drain_worker_limit": drain_worker_limit,
         "drain_admissions_stop": drain_admissions_stop,

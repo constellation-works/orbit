@@ -24,6 +24,7 @@ spec:
     base_branch: main
     base_sync: remote
     landing_branch: ""
+    landing_mode: local
     terminal_status: review
     # `review` (default) ends successful tasks at review. `done` is explicit
     # per-invocation operator authorization to finish delivery.
@@ -46,6 +47,7 @@ spec:
         task_ids: "{{ input.task_ids }}"
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
+        landing_mode: "{{ input.landing_mode }}"
 
     - id: implement_bundle
       loop:

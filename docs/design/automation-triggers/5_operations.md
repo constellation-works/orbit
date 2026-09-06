@@ -148,11 +148,16 @@ input, gaps and validation reason. **Accepted evidence** downloads the accepted
 bytes; replacing the current task artifact does not change that receipt. Usage is
 shown as unknown until an authoritative measurement exists.
 
-Common reasons include `threshold_reached`, `max_wait_reached`, `open_instance`,
-`batch_pending`, `retry_backoff`, `definition_changed`, `history_diverged`,
-`evidence_unavailable`, and validation failures such as `unauthorized_submitter`,
-`batch_or_attempt_mismatch` and `incomplete_examination`. State read failures are
-reported separately; corrupted delivery state is never treated as a new baseline.
+Read-only inspection reports persisted scheduling reasons including
+`awaiting_baseline`, `disabled`, `owned_elsewhere`, `definition_changed`,
+`open_instance`, `threshold_reached`, `max_wait_reached`, `batch_pending`,
+`retry_backoff`, `retry_deadline_expired`, `needs_attention`, and
+`evidence_unavailable`. It does not fetch source or provider evidence: source
+history failures are reported by an evaluation run, not fabricated by inspection.
+Validation failures such as `unauthorized_submitter`, `batch_or_attempt_mismatch`
+and `incomplete_examination` remain attached to the relevant admission or evidence
+operation. State read failures are reported separately; corrupted delivery state is
+never treated as a new baseline.
 
 Observation, admission and coverage are separate durable transitions. A claimed
 batch replays the same task/job action key after a crash. Job admission atomically

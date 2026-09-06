@@ -18,6 +18,10 @@ use crate::bootstrap::activity::DEFAULT_ACTIVITY_FILES;
 
 const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
+        "agent_invoke_pipeline",
+        include_str!("../../../../assets/jobs/agent_invoke_pipeline.yaml"),
+    ),
+    (
         "auto_task_scheduler_pipeline",
         include_str!("../../../../assets/jobs/auto_task_scheduler_pipeline.yaml"),
     ),

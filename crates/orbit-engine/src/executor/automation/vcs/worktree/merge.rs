@@ -149,7 +149,7 @@ fn merge_with_rebase_retry(
 /// to check the same branch out in the primary checkout, so stacked local
 /// pipelines must merge directly in the owning worktree (the epic worktree in
 /// particular).
-fn checkout_holding_branch(repo_root: &Path, base: &str) -> Result<Option<PathBuf>, OrbitError> {
+pub(super) fn checkout_holding_branch(repo_root: &Path, base: &str) -> Result<Option<PathBuf>, OrbitError> {
     let listing = git_output(repo_root, &["worktree", "list", "--porcelain"])?;
     let expected_branch = format!("refs/heads/{base}");
     let mut current_path = None;
@@ -221,7 +221,7 @@ fn parse_divergence_count(
     })
 }
 
-fn ensure_clean_checkout(path: &Path, label: &str) -> Result<(), OrbitError> {
+pub(super) fn ensure_clean_checkout(path: &Path, label: &str) -> Result<(), OrbitError> {
     let status = git_output(path, &["status", "--porcelain"])?;
     if status.trim().is_empty() {
         return Ok(());

@@ -85,6 +85,7 @@ pub(crate) fn run_show_payload(
         header.push('\n');
     }
     header.push_str(&live_provider_process_lines(&provider_processes));
+    header.push_str(&agent_invocation_lines(&doc["run"]["agent_invocation"]));
     header.push('\n');
 
     let steps = run.steps.iter().collect::<Vec<_>>();
@@ -96,6 +97,57 @@ pub(crate) fn run_show_payload(
         ],
     )
     .into())
+}
+
+/// The operator-facing result of an agent invocation run [ORB-11354].
+///
+/// Empty for every other job. The outcome comes from the run record, not the
+/// provider's exit code — an agent that exits 0 without terminating its
+/// envelope stopped mid-turn, and the run says `failed`. The preview is
+/// bounded; the blob reference names where the rest is.
+fn agent_invocation_lines(value: &Value) -> String {
+    let Some(result) = value.as_object() else {
+        return String::new();
+    };
+    let text = |key: &str| result.get(key).and_then(Value::as_str);
+    let mut lines = format!(
+        "\n{} outcome={} envelope_completed={} timed_out={} exit_code={}",
+        crate::output::color::bold("Invocation:"),
+        text("outcome").unwrap_or("-"),
+        result
+            .get("completed_envelope")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        result
+            .get("timed_out")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        result
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .map_or_else(|| "-".to_string(), |code| code.to_string()),
+    );
+    if let Some(reason) = text("failure_reason") {
+        lines.push_str(&format!("\n  reason: {reason}"));
+    }
+    if let Some(summary) = text("summary") {
+        lines.push_str(&format!("\n  summary: {summary}"));
+    }
+    if let Some(blob) = text("stdout_blob_ref") {
+        let truncated = result
+            .get("preview_truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        lines.push_str(&format!(
+            "\n  output: {blob}{} (full text: orbit run logs <RUN_ID>)",
+            if truncated {
+                " — preview truncated"
+            } else {
+                ""
+            }
+        ));
+    }
+    lines
 }
 
 /// One line per provider subprocess that has not reported an exit.

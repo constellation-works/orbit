@@ -11,7 +11,7 @@ use orbit_agent::{
 use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_text};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, V2AuditEventKind};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, TrustedHostAdmission, V2AuditEventKind};
 use serde_json::Value;
 
 use crate::context::{ProvenanceEnv, provenance_env};
@@ -31,8 +31,8 @@ use super::envelope::{
 };
 use super::inspection::SourceInspection;
 use super::spawn::{
-    linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic, orbit_tool_env,
-    prepare_sandbox_for_dispatch, resolve_provider_launcher,
+    PreparedSandbox, linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic,
+    orbit_tool_env, prepare_sandbox_for_dispatch, resolve_provider_launcher,
 };
 use super::supervisor::{
     DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS, SpawnTraceContext, SpawnWithTimeoutRequest,
@@ -47,17 +47,46 @@ const RESPONSE_DIAGNOSTIC_LIMIT_CHARS: usize = 1024;
 pub fn run_cli_backend(
     host: &dyn RuntimeHost,
     spec: &AgentLoopSpec,
+    activity_name: &str,
     run_id: &str,
     audit: Arc<V2AuditWriter>,
     input: &Value,
     fs_profile: Option<&str>,
 ) -> Result<DispatchOutcome, DispatchError> {
     let provider = spec.provider.as_str().to_string();
+    // [ORB-11354] Trusted host execution needs both halves: the built-in
+    // activity declares the mode, and the operator's canonical submission
+    // stamps the admission into the run input. A declaration without an
+    // admission is a broken admission path, not a request for a sandboxed run,
+    // so it fails closed here rather than silently downgrading.
+    let trusted_host = if spec.trusted_host_execution {
+        Some(TrustedHostAdmission::from_run_input(input).ok_or_else(|| {
+            DispatchError::CliInvocationPermanent(format!(
+                "activity `{activity_name}` declares trusted host execution but this run carries                  no operator admission; submit it through the governed `orbit.agent.invoke`                  operation"
+            ))
+        })?)
+    } else {
+        None
+    };
     let mut cli_executor = host.resolve_cli_executor(&provider)?;
-    let timeout_seconds = if spec.wall_clock_timeout_seconds == 0 {
+    let declared_timeout_seconds = if spec.wall_clock_timeout_seconds == 0 {
         DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS
     } else {
         spec.wall_clock_timeout_seconds
+    };
+    // [ORB-11354] An operator submitting an exploration says how long they are
+    // willing to wait. The request can only *shorten* the activity's declared
+    // bound, so the asset stays the ceiling and no run input can extend an
+    // unsandboxed subprocess past it. Only the admitted mode reads the key;
+    // every other activity keeps its declared timeout verbatim.
+    let timeout_seconds = match trusted_host.as_ref().and(
+        input
+            .get("timeout_seconds")
+            .and_then(Value::as_u64)
+            .filter(|seconds| *seconds > 0),
+    ) {
+        Some(requested) => requested.min(declared_timeout_seconds),
+        None => declared_timeout_seconds,
     };
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
 
@@ -115,10 +144,19 @@ pub fn run_cli_backend(
     let subprocess_cwd_string = subprocess_cwd
         .as_ref()
         .map(|path| path.display().to_string());
-    let resolved_sandbox =
-        host.resolve_executor_sandbox(&provider, fs_profile, subprocess_cwd.as_deref())?;
-    let prepared_sandbox = prepare_sandbox_for_dispatch(resolved_sandbox.as_ref())
-        .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
+    // An admitted trusted-host invocation skips sandbox resolution entirely
+    // rather than resolving one and discarding it: there is no profile to
+    // compile, no wrapper to probe, and no inner-sandbox flag to neutralize.
+    // Every other activity, including every managed task job, is unchanged.
+    let resolved_sandbox = match &trusted_host {
+        Some(_) => None,
+        None => host.resolve_executor_sandbox(&provider, fs_profile, subprocess_cwd.as_deref())?,
+    };
+    let prepared_sandbox = match &trusted_host {
+        Some(_) => PreparedSandbox::none_trusted_host(),
+        None => prepare_sandbox_for_dispatch(resolved_sandbox.as_ref())
+            .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?,
+    };
     let sandbox = prepared_sandbox.effective;
 
     let envelope_json = cli_agent_envelope_json(
@@ -222,6 +260,29 @@ pub fn run_cli_backend(
         tool_ctx.workspace_root.as_deref(),
         declared_worktree_pair.as_ref(),
     )?;
+
+    if let Some(admission) = &trusted_host {
+        tracing::warn!(
+            target: "orbit.trusted_host",
+            run_id,
+            activity_name,
+            provider = %provider,
+            authorized_by = %admission.authorized_by,
+            authorizer_provenance = %admission.authorizer_provenance,
+            workspace_path = %admission.workspace_path,
+            cwd = %admission.cwd,
+            "starting an operator-admitted provider subprocess outside the executor sandbox"
+        );
+        audit.emit_lossy(V2AuditEventKind::TrustedHostExecutionAdmitted {
+            provider: provider.clone(),
+            activity_name: activity_name.to_string(),
+            authorized_by: admission.authorized_by.clone(),
+            authorizer_provenance: admission.authorizer_provenance.clone(),
+            authorized_at: admission.authorized_at.clone(),
+            workspace_path: admission.workspace_path.clone(),
+            cwd: admission.cwd.clone(),
+        });
+    }
 
     let model_redacted = agent.model_name().map(|m| redaction.apply_str(m));
     audit.emit_lossy(V2AuditEventKind::CliInvocationStarted {

@@ -1,18 +1,36 @@
 use orbit_common::OrbitError;
 use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, ReservationOwnerContext};
+use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 
+/// Everything the dispatch table knows about *who* is making this call.
+///
+/// Grouped rather than passed as four more parameters because the handlers
+/// consume different subsets of it: attribution for a persisted record, the
+/// reservation owner for a lock write, and the session itself for the one
+/// operation whose decision depends on the caller [ORB-11354].
+pub(super) struct ToolCaller<'a> {
+    pub(super) session_context: &'a ToolSessionContext,
+    pub(super) agent: Option<String>,
+    pub(super) model: Option<String>,
+    pub(super) reservation_owner: Option<ReservationOwnerContext>,
+}
+
 pub(super) fn execute(
     runtime: &OrbitRuntime,
     task_scope: &OrbitTaskScope,
+    caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
     input: Value,
-    agent: Option<String>,
-    model: Option<String>,
-    reservation_owner: Option<ReservationOwnerContext>,
 ) -> Result<Value, OrbitError> {
+    let ToolCaller {
+        session_context,
+        agent,
+        model,
+        reservation_owner,
+    } = caller;
     let (input, redaction_report) = super::artifact_redaction::sanitize_tool_input(action, input)?;
     let agent_for_audit = agent.clone();
     let model_for_audit = model.clone();
@@ -25,6 +43,9 @@ pub(super) fn execute(
         | OrbitBuiltinAction::AdrSupersede => Err(OrbitError::InvalidInput(
             "ADR lifecycle tools have been retired; edit docs/design/**/4_decisions.md".to_string(),
         )),
+        OrbitBuiltinAction::AgentInvoke => {
+            super::agent_tools::invoke(runtime, session_context, input, agent, model)
+        }
         OrbitBuiltinAction::AutoTaskAdd => super::auto_task_tools::add(runtime, input),
         OrbitBuiltinAction::AutoTaskList => super::auto_task_tools::list(runtime, input),
         OrbitBuiltinAction::AutoTaskMint => super::auto_task_tools::mint(runtime, input),
