@@ -145,6 +145,50 @@ date has passed or its `revoked_at` field is set.
    before npm publish and is expected to fail its version assertion; the
    post-publish versioned run must be green.
 
+## Publish the Official MCP Registry record
+
+After the GitHub Release and its matching `@orbit-tools/cli` version are
+public, a repository maintainer may manually dispatch the
+`publish-mcp-registry` workflow. It never runs from a push or tag event.
+
+1. Confirm the release tag is published and non-draft, and that its
+   `server.json`, `npm/package.json`, and public npm metadata all identify
+   `io.github.constellation-works/orbit`, `@orbit-tools/cli`, and the tag
+   version. The registry command remains exactly `mcp serve`; it must not
+   include `--operator`.
+2. In GitHub Actions, select **publish-mcp-registry**, choose a trusted
+   repository ref containing the workflow, and supply the explicit release tag
+   (for example, `v0.19.0`). The workflow resolves that tag to a commit after
+   checking its published, non-draft GitHub Release, then checks out that
+   commit. It does not check out or publish an arbitrary input ref.
+3. Review the public readback step. It verifies the registry name, version,
+   npm package, and fixed `mcp serve` package arguments after publishing.
+
+The workflow's only credential is the repository Actions secret
+`MCP_REGISTRY_PAT_TOKEN`. Keep it dedicated to this purpose: it is used only
+for the GitHub membership preflight and the official `mcp-publisher login
+github --token` exchange. Do not substitute a personal `gh` credential or the
+Homebrew TAP token, and never paste the PAT into workflow inputs or logs.
+
+The preflight calls GitHub's active organization-memberships endpoint and
+requires the selected `constellation-works` membership to be `active` with
+role `admin` (GitHub's API value for an organization administrator). Configure
+the PAT with read-only GitHub access sufficient to
+read that organization membership: for a fine-grained PAT, select the
+`constellation-works` organization and grant **Organization permissions →
+Members: Read-only**. It needs no write, repository-content, or TAP access;
+the workflow uses its read-only `GITHUB_TOKEN` to inspect the public release.
+Do not broaden the PAT automatically if the preflight fails. A `missing` or
+non-admin result means an organization administrator must correct the dedicated
+token's grant before another manual dispatch. The workflow prints only the
+selected membership state and role, never tokens, authorization headers, raw
+JWTs, or raw authentication responses.
+
+The workflow downloads `mcp-publisher` v1.8.1 for Linux amd64 and verifies its
+SHA-256 before validating metadata, authenticating, and publishing. It is safe
+to rerun only after resolving a failed preflight or public-readback error; npm
+versions and release tags are immutable.
+
 ## Continuous npm-install verification
 
 The `smoke-npm-install.yml` workflow runs on macOS and Ubuntu weekly, on every

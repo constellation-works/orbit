@@ -1,0 +1,225 @@
+name: publish-mcp-registry
+
+# Registry publication is deliberately an operator-approved action. A release
+# tag and its public npm package must already exist before this workflow runs.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published release tag to publish (for example, v0.19.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-release:
+    name: Verify published release tag
+    runs-on: ubuntu-22.04
+    outputs:
+      commit_sha: ${{ steps.release.outputs.commit_sha }}
+    steps:
+      - name: Resolve the published immutable release tag
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "tag must be an explicit vMAJOR.MINOR.PATCH release tag" >&2
+            exit 1
+          fi
+
+          tag_path="$(jq -rn --arg value "$RELEASE_TAG" '$value | @uri')"
+          request_json() {
+            curl --fail --location --silent --show-error \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer $GITHUB_TOKEN" \
+              "$1"
+          }
+
+          release_json="$(request_json "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$tag_path")"
+          if ! jq -e --arg tag "$RELEASE_TAG" \
+            '.tag_name == $tag and .draft == false' <<<"$release_json" >/dev/null; then
+            echo "tag must resolve to a published, non-draft GitHub release" >&2
+            exit 1
+          fi
+
+          ref_json="$(request_json "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/git/ref/tags/$tag_path")"
+          object_type="$(jq -er '.object.type' <<<"$ref_json")"
+          commit_sha="$(jq -er '.object.sha' <<<"$ref_json")"
+          if [[ "$object_type" == "tag" ]]; then
+            tag_json="$(request_json "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/git/tags/$commit_sha")"
+            object_type="$(jq -er '.object.type' <<<"$tag_json")"
+            commit_sha="$(jq -er '.object.sha' <<<"$tag_json")"
+          fi
+          if [[ "$object_type" != "commit" || ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release tag must resolve directly to a commit" >&2
+            exit 1
+          fi
+
+          echo "commit_sha=$commit_sha" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish MCP Registry record
+    needs: verify-release
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the verified release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.verify-release.outputs.commit_sha }}
+
+      - name: Verify the registry and npm publication contract
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${RELEASE_TAG#v}"
+          SERVER_NAME="io.github.constellation-works/orbit"
+          NPM_PACKAGE="@orbit-tools/cli"
+          npm_metadata="$(curl --fail --location --silent --show-error \
+            "https://registry.npmjs.org/%40orbit-tools%2Fcli/$VERSION")"
+
+          if ! jq -e \
+            --arg name "$SERVER_NAME" \
+            --arg package "$NPM_PACKAGE" \
+            --arg version "$VERSION" '
+              .name == $name
+              and .version == $version
+              and (.packages | length == 1)
+              and .packages[0].registryType == "npm"
+              and .packages[0].identifier == $package
+              and .packages[0].version == $version
+              and .packages[0].transport.type == "stdio"
+              and ([.packages[0].packageArguments[] | [.type, .value]] == [["positional", "mcp"], ["positional", "serve"]])
+              and ([.. | strings | select(. == "--operator")] | length == 0)
+            ' server.json >/dev/null; then
+            echo "server.json must match the fixed non-operator registry contract" >&2
+            exit 1
+          fi
+          if ! jq -e --arg version "$VERSION" --arg name "$SERVER_NAME" \
+            '.version == $version and .mcpName == $name' <<<"$npm_metadata" >/dev/null; then
+            echo "published npm package lacks the matching version or MCP ownership marker" >&2
+            exit 1
+          fi
+
+      - name: Download and verify the pinned MCP publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive="$(mktemp)"
+          trap 'rm -f "$archive"' EXIT
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            'https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz' \
+            --output "$archive"
+          printf '%s  %s\n' \
+            'a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc' \
+            "$archive" | sha256sum --check --status -
+          tar xzf "$archive" mcp-publisher
+          chmod 755 mcp-publisher
+
+      - name: Validate registry metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mcp-publisher validate server.json >/dev/null
+          echo "MCP Registry metadata validated"
+
+      - name: Require an active constellation-works administrator membership
+        shell: bash
+        env:
+          MCP_REGISTRY_PAT_TOKEN: ${{ secrets.MCP_REGISTRY_PAT_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${MCP_REGISTRY_PAT_TOKEN:-}" ]]; then
+            echo "MCP_REGISTRY_PAT_TOKEN is required; select constellation-works and grant Organization permissions: Members read" >&2
+            exit 1
+          fi
+
+          page=1
+          membership=''
+          while :; do
+            response="$(curl --fail --location --silent --show-error \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer $MCP_REGISTRY_PAT_TOKEN" \
+              "https://api.github.com/user/memberships/orgs?state=active&per_page=100&page=$page")"
+            selected="$(jq -c '[.[] | select(.organization.login == "constellation-works") | {state, role}]' <<<"$response")"
+            if [[ "$selected" != '[]' ]]; then
+              membership="$selected"
+              break
+            fi
+            if [[ "$(jq 'length' <<<"$response")" -lt 100 ]]; then
+              break
+            fi
+            ((page += 1))
+          done
+
+          if [[ -z "$membership" ]]; then
+            echo "constellation-works membership: state=missing role=missing" >&2
+            echo "MCP_REGISTRY_PAT_TOKEN needs an active constellation-works admin membership; do not broaden permissions automatically" >&2
+            exit 1
+          fi
+          state="$(jq -er '.[0].state' <<<"$membership")"
+          role="$(jq -er '.[0].role' <<<"$membership")"
+          echo "constellation-works membership: state=$state role=$role"
+          if [[ "$state" != "active" || "$role" != "admin" ]]; then
+            echo "MCP_REGISTRY_PAT_TOKEN needs an active constellation-works admin membership; do not broaden permissions automatically" >&2
+            exit 1
+          fi
+
+      - name: Authenticate and publish
+        shell: bash
+        env:
+          MCP_REGISTRY_PAT_TOKEN: ${{ secrets.MCP_REGISTRY_PAT_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          publisher_output="$(mktemp)"
+          trap 'rm -f "$publisher_output"' EXIT
+          if ! ./mcp-publisher login github --token "$MCP_REGISTRY_PAT_TOKEN" >"$publisher_output" 2>&1; then
+            echo "MCP Registry authentication failed; verify the dedicated token's active constellation-works admin membership" >&2
+            exit 1
+          fi
+          if ! ./mcp-publisher publish server.json >"$publisher_output" 2>&1; then
+            echo "MCP Registry publication failed; inspect registry availability and validated metadata" >&2
+            exit 1
+          fi
+          echo "MCP Registry publication completed"
+
+      - name: Verify the public registry record
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${RELEASE_TAG#v}"
+          SERVER_NAME="io.github.constellation-works/orbit"
+          server_path="$(jq -rn --arg value "$SERVER_NAME" '$value | @uri')"
+          published="$(curl --fail --location --silent --show-error \
+            "https://registry.modelcontextprotocol.io/v0.1/servers/$server_path/versions/$VERSION")"
+          if ! jq -e --arg name "$SERVER_NAME" --arg version "$VERSION" '
+            .server.name == $name
+            and .server.version == $version
+            and (.server.packages | length == 1)
+            and .server.packages[0].identifier == "@orbit-tools/cli"
+            and .server.packages[0].version == $version
+            and ([.server.packages[0].packageArguments[] | [.type, .value]] == [["positional", "mcp"], ["positional", "serve"]])
+          ' <<<"$published" >/dev/null; then
+            echo "public registry record does not match the expected name, version, and package arguments" >&2
+            exit 1
+          fi
+          echo "Public MCP Registry record matches $SERVER_NAME@$VERSION"
