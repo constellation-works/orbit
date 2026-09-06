@@ -3,8 +3,8 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-09-06
+last_validated: 2026-09-06
 status: Draft
 feature: activity-job
 doc_role: design
@@ -537,6 +537,8 @@ The working alternative is to end the run on the stranding branch instead of ski
 - A single-iteration `loop:` wrapping just the referenced step as a grouping construct — this only renames which id is skippable. If the loop step itself carries the `when:` that used to guard the body step, then when that condition is false the *loop* is skipped, the body step never runs, and a reader outside the loop still finds no data recorded for the body step's id. Wrapping the referenced step *and every reader of its output* together in the same guarded block does work (nothing outside the block needs the skipped id), but wrapping only the referenced step does not.
 
 Catalog load enforces this: `validate_job` (`crates/orbit-engine/src/activity_job/job_executor/validate.rs`) walks every step's `when:` and every loop's `break_when:` for `steps.<id>.output` references and rejects the job, naming both the reading and the referenced step, when the referenced step may be skipped. Skippability is inherited (ORB-11346): `run_step` returns before running any body when a guard is false, so a step nested in a `parallel:`, `fan_out:`, or `loop:` block under a `when:`-carrying ancestor is skipped with that ancestor and records nothing, however unguarded the nested step looks on its own. The validator therefore compares guard *chains* rather than a per-step flag: a guard the reading step itself sits under skips both steps together and can never strand the reader, which is exactly what keeps the admissible shapes above valid — wrapping the referenced step and every reader of its output in the same guarded block, and a guarded loop's `break_when:` reading its own body step.
+
+That shared-guard exemption is relative to execution order, not mere set membership (ORB-11361). `when:` is evaluated before the step body, so a step does not sit under its own guard when its condition is rendered: a container `when:` that reads a nested body or worker output, and a step `when:` that reads that same step's output, are rejected even though the referenced step's recorded chain includes the reader id. `break_when` is the opposite — it is evaluated after the loop body — so a guarded loop may still read an earlier body step. A later sibling `when:` that shares an enclosing guard with the referenced step remains valid.
 
 The retry wrapper re-runs the whole step body up to `max_attempts`, with exponential or linear backoff. Some errors bypass retry:
 
