@@ -38,6 +38,37 @@ fn final_agent_message_after_tool_traffic_is_the_only_projected_content() {
 }
 
 #[test]
+fn terminal_agent_message_replaces_earlier_commentary() {
+    let stdout = concat!(
+        r#"{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"Commentary: I inspected the task."}}"#,
+        "\n",
+        r#"{"type":"item.completed","item":{"id":"item-8","type":"agent_message","text":"Commentary: I updated the files."}}"#,
+        "\n",
+        r#"{"type":"item.completed","item":{"id":"item-12","type":"agent_message","text":"{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"source\":\"terminal\"},\"error\":null}"}}"#,
+        "\n",
+        r#"{"type":"turn.completed","usage":{"input_tokens":21,"output_tokens":8}}"#,
+        "\n",
+    );
+
+    assert_eq!(
+        projected(stdout),
+        r#"{"schemaVersion":1,"status":"success","result":{"source":"terminal"},"error":null}"#
+    );
+}
+
+#[test]
+fn malformed_terminal_agent_message_does_not_retain_an_earlier_envelope() {
+    let stdout = concat!(
+        r#"{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"source\":\"earlier\"},\"error\":null}"}}"#,
+        "\n",
+        r#"{"type":"item.completed","item":{"id":"item-2","type":"agent_message","text":"not valid JSON"}}"#,
+        "\n",
+    );
+
+    assert_eq!(projected(stdout), "not valid JSON");
+}
+
+#[test]
 fn non_event_output_preserves_the_existing_direct_envelope_fallback() {
     let envelope = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
 
