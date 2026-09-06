@@ -750,7 +750,7 @@ impl WsRejection {
     fn inactive(id: &str) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            message: format!("workspace '{id}' is unavailable"),
+            message: format!("workspace '{id}' is inactive; select an active workspace"),
         }
     }
 

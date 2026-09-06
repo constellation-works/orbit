@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use crate::application::job::{DrainWorkerLimitRequest, JobRunListParams};
 use crate::{OrbitRuntime, ShipMode};
 
-use super::input::parse_string_array_field;
+use super::input::{parse_optional_string_array_field, parse_string_array_field};
 use super::json::serialize_error;
 
 const DEFAULT_RUN_LIST_LIMIT: usize = 25;
@@ -36,7 +36,7 @@ pub(super) fn ship(
             .map_or(ShipMode::Pr, |binding| binding.ship_mode),
     };
     let base = optional_string(&input, "base")?;
-    let allowed_crews = parse_string_array_field(&input, "allowed_crews")?;
+    let allowed_crews = parse_optional_string_array_field(&input, "allowed_crews")?;
     let actor = actor(runtime, agent.as_deref(), model.as_deref());
     let claim_token = optional_string(&input, "claim_token")?;
     let invoke = runtime.submit_ship_run(
