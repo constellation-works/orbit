@@ -24,17 +24,17 @@ impl Execute for AutoTaskShowArgs {
         })?;
 
         let mut doc = definition_to_json(&definition);
-        if let orbit_core::AutoTaskSchedule::Deliveries { deliveries_landed } = &definition.schedule
-        {
-            doc["automation"] = serde_json::to_value(orbit_core::application::automation::inspect(
-                runtime,
-                "auto-task",
-                &definition.name,
-                deliveries_landed,
-                definition.enabled,
-                chrono::Utc::now(),
-            )?)
-            .map_err(|e| OrbitError::InvalidInput(e.to_string()))?;
+        if matches!(
+            definition.schedule,
+            orbit_core::AutoTaskSchedule::Deliveries { .. }
+        ) {
+            doc["automation"] =
+                serde_json::to_value(orbit_core::application::automation::inspect_auto_task(
+                    runtime,
+                    &definition,
+                    chrono::Utc::now(),
+                )?)
+                .map_err(|e| OrbitError::InvalidInput(e.to_string()))?;
         }
 
         if self.preview

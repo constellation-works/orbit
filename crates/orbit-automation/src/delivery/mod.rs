@@ -191,6 +191,9 @@ pub fn evaluate(
             Some(state),
         );
     }
+    if let Some(reason) = host.admission_deferral()? {
+        return diagnostic(store, consumer, &reason, Some(state));
+    }
     if dry_run {
         return diagnostic(
             store,
@@ -202,9 +205,6 @@ pub fn evaluate(
             },
             Some(state),
         );
-    }
-    if let Some(reason) = host.admission_deferral()? {
-        return diagnostic(store, consumer, &reason, Some(state));
     }
     // Freeze an oldest prefix. Unattributed neighbors remain explicit obligations.
     let deliveries = state

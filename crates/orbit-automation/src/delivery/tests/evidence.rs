@@ -54,6 +54,7 @@ struct Host {
     evidence: Mutex<Option<CoverageEvidence>>,
     fail_admit: AtomicBool,
     failed: AtomicBool,
+    admission_deferred: AtomicBool,
 }
 impl Host {
     fn new() -> Self {
@@ -71,6 +72,7 @@ impl Host {
             evidence: Mutex::new(None),
             fail_admit: AtomicBool::new(false),
             failed: AtomicBool::new(false),
+            admission_deferred: AtomicBool::new(false),
         }
     }
     fn page(&self, from: usize, to: usize) {
@@ -111,6 +113,13 @@ impl Host {
     }
 }
 impl DeliveryHost for Host {
+    fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
+        Ok(self
+            .admission_deferred
+            .load(Ordering::SeqCst)
+            .then(|| "open_instance".into()))
+    }
+
     fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
         Ok(("owner/repo".into(), revision(0)))
     }
@@ -181,6 +190,32 @@ fn setup() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
         "baselined"
     );
     (store, host, trigger)
+}
+
+#[test]
+fn preview_reports_admission_deferral_without_persisting_observation() {
+    let (store, host, trigger) = setup();
+    let before = store.automation_state("ws/qa").unwrap();
+    host.page(0, 2);
+    host.admission_deferred.store(true, Ordering::SeqCst);
+
+    let diagnostic = delivery::evaluate(
+        store.as_ref(),
+        &host,
+        Evaluation {
+            consumer: "ws/qa",
+            epoch: "v1",
+            trigger: &trigger,
+            enabled: true,
+            dry_run: true,
+            now: now(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(diagnostic.reason, "open_instance");
+    assert_eq!(store.automation_state("ws/qa").unwrap(), before);
+    assert!(host.actions.lock().unwrap().is_empty());
 }
 
 #[test]
