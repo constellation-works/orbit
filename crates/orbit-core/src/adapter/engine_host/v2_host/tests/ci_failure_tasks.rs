@@ -269,6 +269,51 @@ fn a_pending_in_flight_run_with_no_failed_jobs_is_still_a_no_op() {
 }
 
 #[test]
+fn explicit_deferred_evidence_retains_metadata_alongside_filed_tasks() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let log = "ci\ttest\t2026-08-30T01:00:00Z assertion failed: left == right\n";
+    let mut evidence = snapshot(vec![failure(
+        10,
+        "ci",
+        "test (ubuntu)",
+        "cargo test",
+        log,
+        CHECKOUT,
+    )]);
+    evidence["deferred"] = json!([{
+        "run_id": 99,
+        "url": "https://github.com/acme/orbit/actions/runs/99",
+        "workflow": "ci",
+        "head_branch": "feature/unverified",
+        "ref_kind": "other",
+        "investigated": false,
+    }]);
+    evidence["retryable_errors"] = json!([{
+        "stage": "discovery",
+        "operation": "remote_branch_head",
+        "run_id": 99,
+        "retryable": true,
+        "message": "candidate branch 'feature/unverified' could not be checked against origin; its failure remains deferred until verified",
+    }]);
+
+    let output = file(&runtime, json!({"ci_evidence": evidence}));
+
+    assert_eq!(output["filed_count"], json!(1));
+    let deferred = output["deferred"].as_array().expect("deferred entries");
+    assert_eq!(deferred.len(), 1);
+    assert_eq!(deferred[0]["run_id"], json!(99));
+    assert_eq!(
+        deferred[0]["url"],
+        json!("https://github.com/acme/orbit/actions/runs/99")
+    );
+    assert_eq!(deferred[0]["workflow"], json!("ci"));
+    assert_eq!(deferred[0]["head_branch"], json!("feature/unverified"));
+    assert_eq!(deferred[0]["ref_kind"], json!("other"));
+    assert_eq!(deferred[0]["investigated"], json!(false));
+    assert_eq!(deferred[0]["retryable"], json!(true));
+}
+
+#[test]
 fn one_regression_across_push_and_pull_request_runs_becomes_one_task() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let log = "ci\tbuild\t2026-08-30T01:00:00Z error: expected 3 arguments, found 2\n";
