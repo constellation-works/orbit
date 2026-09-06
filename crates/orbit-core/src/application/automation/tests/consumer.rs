@@ -392,7 +392,7 @@ fn no_diff_pr_is_zero_but_distinct_revert_pr_is_new_delivery() {
 }
 
 #[test]
-fn only_explicit_machine_owner_can_establish_baseline_and_preview_is_read_only() {
+fn unowned_delivery_is_disabled_and_preview_is_read_only() {
     let runtime = runtime();
     let mut definition = definition(&runtime, "ownership", CoverageClass::IntegratedQaV1);
     let AutoTaskSchedule::Deliveries { deliveries_landed } = &mut definition.schedule else {
@@ -400,7 +400,7 @@ fn only_explicit_machine_owner_can_establish_baseline_and_preview_is_read_only()
     };
     deliveries_landed.owner_machine = None;
     let diagnostic = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
-    assert_eq!(diagnostic.reason, "owned_elsewhere");
+    assert_eq!(diagnostic.reason, "disabled");
     assert!(diagnostic.state.is_none());
     let preview = evaluate_auto_task(&runtime, &definition, true, Utc::now()).unwrap();
     assert_eq!(preview.reason, "would_baseline");
@@ -433,6 +433,91 @@ fn only_explicit_machine_owner_can_establish_baseline_and_preview_is_read_only()
             .unwrap()
             .reason,
         "baselined"
+    );
+}
+
+#[test]
+fn inspection_reports_delivery_admission_deferrals_without_mutating_state() {
+    let runtime = runtime();
+    let mut inspection_definition =
+        definition(&runtime, "inspection", CoverageClass::IntegratedQaV1);
+    let baseline = evaluate_auto_task(&runtime, &inspection_definition, false, Utc::now())
+        .unwrap()
+        .state
+        .unwrap();
+    let store = runtime.automation_store().unwrap();
+
+    let before = store.automation_state(&baseline.consumer).unwrap();
+    inspection_definition.template.title = "Changed inspection definition".into();
+    assert_eq!(
+        super::super::inspect_auto_task(&runtime, &inspection_definition, Utc::now())
+            .unwrap()
+            .reason,
+        "definition_changed"
+    );
+    assert_eq!(
+        store.automation_state(&baseline.consumer).unwrap(),
+        before,
+        "inspection must not repair a changed definition"
+    );
+
+    inspection_definition.template.title = "Examine batch".into();
+    let mut pending = baseline.clone();
+    pending.generation = 1;
+    pending.pending_commits = vec!["pending-commit".into()];
+    pending.pending = vec![Delivery {
+        key: "direct:inspection".into(),
+        repository: baseline.repository.clone(),
+        branch: baseline.branch.clone(),
+        before: baseline.observed.clone(),
+        after: baseline.observed.clone(),
+        commits: vec!["pending-commit".into()],
+        task_ids: vec![],
+        evidence_reference: "fixture".into(),
+        evidence_digest: "fixture".into(),
+        landed_at: Utc::now(),
+    }];
+    assert!(store.automation_commit(&baseline, &pending, None).unwrap());
+    runtime.auto_task_mint(&inspection_definition.name).unwrap();
+    let before = store.automation_state(&baseline.consumer).unwrap();
+    assert_eq!(
+        super::super::inspect_auto_task(&runtime, &inspection_definition, Utc::now())
+            .unwrap()
+            .reason,
+        "open_instance"
+    );
+    assert_eq!(
+        store.automation_state(&baseline.consumer).unwrap(),
+        before,
+        "inspection must not admit or advance an open-instance deferral"
+    );
+
+    let AutoTaskSchedule::Deliveries { deliveries_landed } = &mut inspection_definition.schedule
+    else {
+        unreachable!()
+    };
+    inspection_definition.enabled = false;
+    deliveries_landed.owner_machine = None;
+    assert_eq!(
+        super::super::inspect_auto_task(&runtime, &inspection_definition, Utc::now())
+            .unwrap()
+            .reason,
+        "definition_changed",
+        "a changed definition takes precedence over the disabled owner state"
+    );
+
+    let baseline_definition = definition(&runtime, "disabled", CoverageClass::IntegratedQaV1);
+    let mut disabled = baseline_definition;
+    disabled.enabled = false;
+    let AutoTaskSchedule::Deliveries { deliveries_landed } = &mut disabled.schedule else {
+        unreachable!()
+    };
+    deliveries_landed.owner_machine = None;
+    assert_eq!(
+        super::super::inspect_auto_task(&runtime, &disabled, Utc::now())
+            .unwrap()
+            .reason,
+        "disabled"
     );
 }
 

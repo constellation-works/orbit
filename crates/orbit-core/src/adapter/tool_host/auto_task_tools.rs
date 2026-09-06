@@ -53,7 +53,7 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
         .auto_task_show(&name)?
         .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
     let mut value = to_json(&definition)?;
-    if let AutoTaskSchedule::Deliveries { deliveries_landed } = &definition.schedule {
+    if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
         let diagnostic = if input
             .get("preview")
             .and_then(Value::as_bool)
@@ -66,12 +66,9 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
                 chrono::Utc::now(),
             )?
         } else {
-            crate::application::automation::inspect(
+            crate::application::automation::inspect_auto_task(
                 runtime,
-                "auto-task",
-                &definition.name,
-                deliveries_landed,
-                definition.enabled,
+                &definition,
                 chrono::Utc::now(),
             )?
         };
