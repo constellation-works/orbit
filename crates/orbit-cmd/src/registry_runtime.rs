@@ -101,10 +101,13 @@ impl RegisteredRuntimeFactory {
     ///
     /// `--workspace` is the workspace selector (name, `ws_*` id, or absolute
     /// checkout path). `--root` stays a data-directory override and is never
-    /// overloaded as a selector. Omitting `--workspace` uses the trusted
-    /// managed `ORBIT_WORKSPACE` envelope when present, otherwise the cwd
-    /// walk. An unknown or mismatched selector fails closed and does not
-    /// fall back to cwd.
+    /// overloaded as a selector. When `--root` is omitted, omitting
+    /// `--workspace` uses the trusted managed `ORBIT_WORKSPACE` envelope when
+    /// present, otherwise the cwd walk. An explicit `--root` instead owns the
+    /// complete registry and workspace-resolution context, so a managed
+    /// selector inherited from the parent cannot escape that root. An unknown
+    /// or mismatched explicit selector fails closed and does not fall back to
+    /// cwd.
     pub fn initialize_with_overrides(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
@@ -126,11 +129,17 @@ impl RegisteredRuntimeFactory {
         workspace_selector: Option<&str>,
         read_only: bool,
     ) -> Result<OrbitRuntime, OrbitError> {
-        let selector = workspace_selector
+        let explicit_selector = workspace_selector
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .or_else(managed_workspace_selector_from_env);
+            .map(ToOwned::to_owned);
+        let selector = explicit_selector.or_else(|| {
+            if root_override.is_some() {
+                None
+            } else {
+                managed_workspace_selector_from_env()
+            }
+        });
         let Some(selector) = selector else {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let roots = Self::resolve_roots_for_cwd(&cwd, root_override)?;
