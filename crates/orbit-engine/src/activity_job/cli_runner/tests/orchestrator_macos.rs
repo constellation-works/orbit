@@ -18,6 +18,82 @@ use super::test_support::{
 
 #[cfg(target_os = "macos")]
 #[test]
+fn sandboxed_codex_loads_the_public_ca_bundle_while_private_keychains_stay_denied() {
+    if !sandbox_exec_can_apply_for_test() {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let keychains = home.join("Library/Keychains");
+    std::fs::create_dir_all(&keychains).expect("create synthetic keychain directory");
+    std::fs::write(keychains.join("login.keychain-db"), "private fixture")
+        .expect("write synthetic private credential");
+    let _environment = orbit_common::test_env::scoped([
+        ("HOME", Some(home.to_string_lossy().as_ref())),
+        ("CODEX_CA_CERTIFICATE", None),
+        ("SSL_CERT_FILE", None),
+    ]);
+
+    let script = temp.path().join("codex");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat > /dev/null
+if [ "$CODEX_CA_CERTIFICATE" != /etc/ssl/cert.pem ]; then
+  echo "unexpected CODEX_CA_CERTIFICATE=$CODEX_CA_CERTIFICATE" >&2
+  exit 31
+fi
+if [ "${SSL_CERT_FILE+x}" = x ]; then
+  echo "SSL_CERT_FILE should remain unset" >&2
+  exit 32
+fi
+if ! /usr/bin/openssl x509 -in "$CODEX_CA_CERTIFICATE" -noout >/dev/null; then
+  echo "could not load a certificate from the public CA bundle" >&2
+  exit 33
+fi
+if /bin/cat "$HOME/Library/Keychains/login.keychain-db" >/dev/null 2>&1; then
+  echo "private keychain unexpectedly readable" >&2
+  exit 34
+fi
+printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
+"#,
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-codex-ca-load",
+        "codex:gpt-5.5",
+        sink_for_writer,
+    ));
+    let host = TestHost {
+        command: script.display().to_string(),
+        executor_args: Vec::new(),
+        provider_config: HashMap::new(),
+        sandbox: Some(sandbox_for_test()),
+        task_context: None,
+        workspace_root: None,
+        orbit_registry_root: None,
+        orbit_workspace_selector: None,
+    };
+
+    let outcome = run_cli_backend(
+        &host,
+        &test_agent_loop_spec_for("codex", Duration::from_secs(5)),
+        "test_activity",
+        "job-codex-ca-load",
+        audit,
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("sandboxed Codex fixture loads public CA material");
+
+    assert!(outcome.success);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn run_cli_backend_audit_argv_starts_with_sandbox_exec_for_each_provider() {
     if !sandbox_exec_can_apply_for_test() {
         return;

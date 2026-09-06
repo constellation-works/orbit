@@ -10,8 +10,9 @@ use super::super::super::dispatcher::ResolvedSandbox;
 use super::super::spawn::{
     SpawnError, SpawnedChild, linux_bwrap_failed_write_diagnostic,
     macos_keychain_auth_diagnostic_with, orbit_tool_env_with,
-    prepare_linux_sandbox_for_dispatch_with_probe, reject_unsatisfiable_managed_grants,
-    resolve_provider_launcher_with, spawn_bare, spawn_macos_sandboxed_with,
+    prepare_linux_sandbox_for_dispatch_with_probe, prepare_macos_codex_ca_environment_with,
+    reject_unsatisfiable_managed_grants, resolve_provider_launcher_with, spawn_bare,
+    spawn_macos_sandboxed_with,
 };
 use super::test_support::{sandbox_for_test, sh_args};
 
@@ -106,6 +107,178 @@ fn spawn_bare_gives_the_child_only_the_supplied_environment() {
             "{leaked} must not reach a bare-exec provider child: {child_env}"
         );
     }
+}
+
+fn env_value<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    env.iter()
+        .rev()
+        .find(|(candidate, _)| candidate == name)
+        .map(|(_, value)| value.as_str())
+}
+
+#[test]
+fn macos_codex_ca_environment_supplies_the_readable_public_bundle_by_default() {
+    let fixture = tempdir().expect("tempdir");
+    let bundle = fixture.path().join("public-ca.pem");
+    std::fs::write(
+        &bundle,
+        "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n",
+    )
+    .expect("write CA fixture");
+    let input = vec![("HOME".to_string(), "/Users/test".to_string())];
+
+    let prepared = prepare_macos_codex_ca_environment_with("codex", &input, None, &bundle)
+        .expect("readable public CA bundle");
+
+    assert_eq!(
+        env_value(&prepared, "CODEX_CA_CERTIFICATE"),
+        Some(bundle.to_string_lossy().as_ref())
+    );
+    assert_eq!(env_value(&prepared, "SSL_CERT_FILE"), None);
+    assert_eq!(env_value(&prepared, "HOME"), Some("/Users/test"));
+}
+
+#[test]
+fn macos_codex_ca_environment_preserves_explicit_override_precedence() {
+    let fixture = tempdir().expect("tempdir");
+    let codex_bundle = fixture.path().join("codex.pem");
+    let ssl_bundle = fixture.path().join("ssl.pem");
+    let default_bundle = fixture.path().join("default.pem");
+    for path in [&codex_bundle, &ssl_bundle, &default_bundle] {
+        std::fs::write(path, "fixture").expect("write CA fixture");
+    }
+    let env = vec![
+        (
+            "SSL_CERT_FILE".to_string(),
+            ssl_bundle.to_string_lossy().into_owned(),
+        ),
+        (
+            "CODEX_CA_CERTIFICATE".to_string(),
+            codex_bundle.to_string_lossy().into_owned(),
+        ),
+    ];
+
+    let prepared = prepare_macos_codex_ca_environment_with("codex", &env, None, &default_bundle)
+        .expect("explicit Codex CA wins");
+
+    assert_eq!(
+        prepared, env,
+        "an explicit environment must not be rewritten"
+    );
+    assert_eq!(
+        env_value(&prepared, "CODEX_CA_CERTIFICATE"),
+        Some(codex_bundle.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        env_value(&prepared, "SSL_CERT_FILE"),
+        Some(ssl_bundle.to_string_lossy().as_ref())
+    );
+}
+
+#[test]
+fn macos_codex_ca_environment_uses_ssl_cert_file_without_injecting_codex_override() {
+    let fixture = tempdir().expect("tempdir");
+    let ssl_bundle = fixture.path().join("ssl.pem");
+    std::fs::write(&ssl_bundle, "fixture").expect("write CA fixture");
+    let env = vec![(
+        "SSL_CERT_FILE".to_string(),
+        ssl_bundle.to_string_lossy().into_owned(),
+    )];
+
+    let prepared = prepare_macos_codex_ca_environment_with(
+        "codex",
+        &env,
+        None,
+        &fixture.path().join("unused-default.pem"),
+    )
+    .expect("explicit SSL bundle wins over Orbit default");
+
+    assert_eq!(prepared, env);
+    assert_eq!(env_value(&prepared, "CODEX_CA_CERTIFICATE"), None);
+}
+
+#[test]
+fn macos_codex_ca_environment_rejects_selected_missing_material() {
+    let fixture = tempdir().expect("tempdir");
+    let default_bundle = fixture.path().join("default.pem");
+    std::fs::write(&default_bundle, "fixture").expect("write CA fixture");
+
+    let env = vec![(
+        "CODEX_CA_CERTIFICATE".to_string(),
+        fixture
+            .path()
+            .join("missing-explicit.pem")
+            .to_string_lossy()
+            .into_owned(),
+    )];
+    let error = prepare_macos_codex_ca_environment_with("codex", &env, None, &default_bundle)
+        .expect_err("invalid explicit material must not fall back");
+
+    assert!(error.permanent);
+    assert!(error.message.contains("CODEX_CA_CERTIFICATE"));
+    assert!(error.message.contains("readable PEM CA bundle"));
+
+    let error = prepare_macos_codex_ca_environment_with(
+        "codex",
+        &[],
+        None,
+        &fixture.path().join("missing-default.pem"),
+    )
+    .expect_err("a missing Orbit default must fail before provider launch");
+    assert!(error.permanent);
+    assert!(error.message.contains("CODEX_CA_CERTIFICATE"));
+    assert!(error.message.contains("missing-default.pem"));
+}
+
+#[test]
+fn macos_codex_ca_environment_treats_empty_overrides_as_unset() {
+    let fixture = tempdir().expect("tempdir");
+    let ssl_bundle = fixture.path().join("ssl.pem");
+    let default_bundle = fixture.path().join("default.pem");
+    std::fs::write(&ssl_bundle, "fixture").expect("write SSL fixture");
+    std::fs::write(&default_bundle, "fixture").expect("write default fixture");
+    let env = vec![
+        ("CODEX_CA_CERTIFICATE".to_string(), String::new()),
+        (
+            "SSL_CERT_FILE".to_string(),
+            ssl_bundle.to_string_lossy().into_owned(),
+        ),
+    ];
+
+    let prepared = prepare_macos_codex_ca_environment_with("codex", &env, None, &default_bundle)
+        .expect("empty Codex override falls back to explicit SSL_CERT_FILE");
+
+    assert_eq!(prepared, env);
+
+    let empty_env = vec![
+        ("CODEX_CA_CERTIFICATE".to_string(), String::new()),
+        ("SSL_CERT_FILE".to_string(), String::new()),
+    ];
+    let prepared =
+        prepare_macos_codex_ca_environment_with("codex", &empty_env, None, &default_bundle)
+            .expect("empty overrides fall back to Orbit public bundle");
+    assert_eq!(
+        env_value(&prepared, "CODEX_CA_CERTIFICATE"),
+        Some(default_bundle.to_string_lossy().as_ref())
+    );
+}
+
+#[test]
+fn macos_codex_ca_environment_does_not_change_other_providers() {
+    let env = vec![(
+        "CODEX_CA_CERTIFICATE".to_string(),
+        "/missing/operator/value.pem".to_string(),
+    )];
+
+    let prepared = prepare_macos_codex_ca_environment_with(
+        "claude",
+        &env,
+        None,
+        std::path::Path::new("/missing/default.pem"),
+    )
+    .expect("Claude CA handling is unchanged");
+
+    assert_eq!(prepared, env);
 }
 
 /// A path the profile *does* grant is not reported as a denial, so the

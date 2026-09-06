@@ -135,6 +135,19 @@ The `Sandbox` trait remains the seam for generic `run_process` callers, but CLI-
 
 The macOS wrapper resolves `sandbox-exec` from trusted absolute locations only, currently `/usr/bin/sandbox-exec`; it does not consult `PATH` for either availability checks or process spawn. If the trusted binary is missing, the runner fails closed unless the executor declares `allow_fallback: true`, and the error names the trusted location that was probed ([T20260509-30]).
 
+The wrapper also prepares Codex's TLS trust input before a sandboxed spawn. Its
+system-Keychain denies prevent Codex's rustls WebSocket transport from
+completing native-root discovery, so the child environment admits explicit
+non-empty `CODEX_CA_CERTIFICATE` and `SSL_CERT_FILE` values for this one provider and
+backend. `CODEX_CA_CERTIFICATE` has precedence, followed by `SSL_CERT_FILE`; if
+neither is present Orbit supplies macOS's public `/etc/ssl/cert.pem` through
+`CODEX_CA_CERTIFICATE`. The selected path must be a readable file or dispatch
+fails permanently with an actionable path-specific error. This changes no TLS
+verification setting and no SBPL credential carve-out: keychain and other
+private-directory denies remain intact, as do later activity-authored
+`denyRead` clauses. Bare Codex, other providers, and Linux retain their prior
+environment and spawn behavior. [ORB-11406]
+
 The compiled macOS profile denies by default, allows broad reads required by agent CLIs and system libraries, allows process/signal/ipc/network/sysctl/iokit operations, and allows writes to:
 
 - scratch/cache roots (`/tmp`, `/private/tmp`, `/private/var/folders`, `/dev`, `$HOME/Library/Caches`)
@@ -277,7 +290,11 @@ Risk-weighted regression tests sit beside the implementations they guard
   (`compiled_profile_denies_reads_to_negated_read_path` and
   `compiled_profile_for_realistic_agent_loop_profile_allows_repo_writes_denies_dotenv`)
   exercise an `agent_loop`-shaped profile end-to-end against the kernel
-  sandbox.
+  sandbox. The Codex CA regression additionally runs a real macOS wrapper,
+  loads one certificate from the injected public PEM bundle, and proves
+  synthetic Keychain material stays unreadable; platform-neutral fixtures pin
+  explicit-variable precedence, missing-path errors, and the exact provider /
+  backend environment boundary ([ORB-11406]).
 - `crates/orbit-store/src/file/policy_def_store/` — policy resource
   name tests reject traversal-shaped names such as `../x` before path
   construction and assert no file is written outside the policy store
