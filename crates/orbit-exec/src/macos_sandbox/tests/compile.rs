@@ -397,6 +397,66 @@ fn compiled_profile_honors_an_activity_keychain_deny_for_claude() {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn compiled_codex_profile_reads_public_ca_material_but_not_private_credentials() {
+    if !sandbox_exec_can_apply() {
+        return;
+    }
+
+    let fixture = SyntheticKeychainHome::create("codex-ca-access");
+    let ssh = fixture.home.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).expect("synthetic ssh directory");
+    let private_key = ssh.join("id_fixture");
+    std::fs::write(&private_key, "private fixture").expect("write synthetic private key");
+    let public_ca = std::path::Path::new("/etc/ssl/cert.pem");
+    assert!(public_ca.is_file(), "macOS public CA bundle must exist");
+
+    let resolved = ResolvedFsProfile {
+        name: "default".to_string(),
+        read: vec![fixture.home_text()],
+        modify: vec![],
+    };
+    let profile_text = compile_with_env(
+        &resolved,
+        "codex",
+        EnvOverrides {
+            home: Some(&fixture.home_text()),
+            ..Default::default()
+        },
+    );
+
+    assert!(
+        can_read_under_profile(&profile_text, public_ca),
+        "Codex must be able to read the public CA file selected by its child environment"
+    );
+    for private in [&fixture.credential, &private_key] {
+        assert!(
+            !can_read_under_profile(&profile_text, private),
+            "private credential must stay denied: {}",
+            private.display()
+        );
+    }
+
+    let denied = ResolvedFsProfile {
+        name: "deny-public-ca".to_string(),
+        read: vec![fixture.home_text(), "!/etc/ssl/cert.pem".to_string()],
+        modify: vec![],
+    };
+    let denied_profile = compile_with_env(
+        &denied,
+        "codex",
+        EnvOverrides {
+            home: Some(&fixture.home_text()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        !can_read_under_profile(&denied_profile, public_ca),
+        "an explicit denyRead must still outrank the public CA default"
+    );
+}
+
 /// A disposable `$HOME` holding a stand-in login keychain, so keychain tests
 /// exercise the real clause set without touching operator credentials.
 #[cfg(target_os = "macos")]

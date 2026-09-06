@@ -26,11 +26,11 @@ use super::super::super::dispatcher::DispatchError;
 use super::super::super::dispatcher::ResolvedSandbox;
 use super::super::super::sqlite_sink::V2SqliteSink;
 use super::super::super::workspace::{WorktreeBoundaryGuard, validate_declared_worktree_pair};
-use super::super::orchestrator::resolved_activity_fs_profile_name;
+use super::super::orchestrator::{provider_child_environment, resolved_activity_fs_profile_name};
 use super::super::run_cli_backend;
 use super::test_support::{
-    RecordingSink, TestHost, capture_events, test_agent_loop_spec, test_agent_loop_spec_for,
-    write_executable,
+    RecordingSink, TestHost, capture_events, sandbox_for_test, test_agent_loop_spec,
+    test_agent_loop_spec_for, write_executable,
 };
 
 #[test]
@@ -40,6 +40,58 @@ fn cli_activity_fs_profile_resolver_preserves_named_profile() {
         resolved_activity_fs_profile_name(Some("implementer")),
         "implementer"
     );
+}
+
+fn child_env_value<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    env.iter()
+        .find(|(candidate, _)| candidate == name)
+        .map(|(_, value)| value.as_str())
+}
+
+#[test]
+fn macos_sandboxed_codex_receives_explicit_ca_overrides_from_the_parent() {
+    let _environment = orbit_common::test_env::scoped([
+        ("CODEX_CA_CERTIFICATE", Some("/operator/codex-ca.pem")),
+        ("SSL_CERT_FILE", Some("/operator/ssl-ca.pem")),
+    ]);
+    let host = TestHost::with_command("codex".to_string());
+    let sandbox = sandbox_for_test();
+
+    let env = provider_child_environment(&host, "codex", Some(&sandbox), &["HOME", "PATH"]);
+
+    assert_eq!(
+        child_env_value(&env, "CODEX_CA_CERTIFICATE"),
+        Some("/operator/codex-ca.pem")
+    );
+    assert_eq!(
+        child_env_value(&env, "SSL_CERT_FILE"),
+        Some("/operator/ssl-ca.pem")
+    );
+}
+
+#[test]
+fn codex_ca_overrides_do_not_expand_other_provider_or_linux_environments() {
+    let _environment = orbit_common::test_env::scoped([
+        ("CODEX_CA_CERTIFICATE", Some("/operator/codex-ca.pem")),
+        ("SSL_CERT_FILE", Some("/operator/ssl-ca.pem")),
+    ]);
+    let host = TestHost::with_command("provider".to_string());
+    let macos_sandbox = sandbox_for_test();
+    let linux_sandbox = super::super::super::dispatcher::ResolvedSandbox {
+        kind: orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap,
+        ..sandbox_for_test()
+    };
+
+    for (provider, sandbox) in [
+        ("claude", Some(&macos_sandbox)),
+        ("codex", Some(&linux_sandbox)),
+        ("codex", None),
+    ] {
+        let env = provider_child_environment(&host, provider, sandbox, &["HOME", "PATH"]);
+
+        assert_eq!(child_env_value(&env, "CODEX_CA_CERTIFICATE"), None);
+        assert_eq!(child_env_value(&env, "SSL_CERT_FILE"), None);
+    }
 }
 
 #[test]

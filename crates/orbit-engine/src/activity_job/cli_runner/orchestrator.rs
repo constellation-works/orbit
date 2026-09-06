@@ -11,6 +11,7 @@ use orbit_agent::{
 use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_text};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
+use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, TrustedHostAdmission, V2AuditEventKind};
 use serde_json::Value;
 
@@ -31,8 +32,9 @@ use super::envelope::{
 };
 use super::inspection::SourceInspection;
 use super::spawn::{
-    PreparedSandbox, linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic,
-    orbit_tool_env, prepare_sandbox_for_dispatch, resolve_provider_launcher,
+    CODEX_CA_CERTIFICATE_ENV, PreparedSandbox, SSL_CERT_FILE_ENV,
+    linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic, orbit_tool_env,
+    prepare_sandbox_for_dispatch, resolve_provider_launcher,
 };
 use super::supervisor::{
     DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS, SpawnTraceContext, SpawnWithTimeoutRequest,
@@ -369,7 +371,8 @@ pub fn run_cli_backend(
     // starts the CLI. `dispatch_env` is appended last and later entries win, so
     // this run's identity and tool pinning override any same-named value the
     // allowlist forwarded from an outer process. [ORB-10917]
-    let mut child_env = host.agent_subprocess_environment(invocation.required_env_vars);
+    let mut child_env =
+        provider_child_environment(host, &provider, sandbox, invocation.required_env_vars);
     if registry_locator_injected {
         // A host process may itself have been launched with an operator
         // `ORBIT_ROOT`. Do not reinterpret that pinned-data-root input as the
@@ -745,6 +748,30 @@ pub fn run_cli_backend(
             trace,
         }),
     })
+}
+
+/// Compose the provider environment while admitting Codex's two documented
+/// CA-bundle overrides only when Orbit's macOS wrapper needs them.
+///
+/// The variables remain outside the general agent baseline: other providers,
+/// bare Codex invocations, and Linux keep their existing environment surface.
+/// The macOS spawn layer supplies a public system bundle only when neither
+/// explicit value is present.
+pub(crate) fn provider_child_environment(
+    host: &dyn RuntimeHost,
+    provider: &str,
+    sandbox: Option<&super::super::dispatcher::ResolvedSandbox>,
+    required_env_vars: &[&str],
+) -> Vec<(String, String)> {
+    let needs_codex_ca_overrides = provider == "codex"
+        && sandbox.is_some_and(|sandbox| sandbox.kind == ExecutorSandboxKind::MacosSandboxExec);
+    if !needs_codex_ca_overrides {
+        return host.agent_subprocess_environment(required_env_vars);
+    }
+
+    let mut env_names = required_env_vars.to_vec();
+    env_names.extend([CODEX_CA_CERTIFICATE_ENV, SSL_CERT_FILE_ENV]);
+    host.agent_subprocess_environment(&env_names)
 }
 
 pub(super) fn resolved_activity_fs_profile_name(fs_profile: Option<&str>) -> &str {
