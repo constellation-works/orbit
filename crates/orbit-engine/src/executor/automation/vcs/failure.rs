@@ -20,6 +20,7 @@ use super::push::push_batch_changes_inner;
 
 const CONFLICT_BLOCKED_EVENT: &str = "pr_conflict_blocked";
 const FAILURE_HANDOFF_EVENT: &str = "pr_failure_handoff";
+const FAILURE_HANDOFF_LINEAGE_MAX_HOPS: usize = 64;
 
 /// Terminal hook for `task_pr_pipeline`.
 ///
@@ -58,12 +59,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         )
     })?;
     let task = host.get_task(task_id)?;
-    if task.job_run_id.as_deref() != Some(run_id) {
-        return Err(OrbitError::Execution(format!(
-            "pr_failure_handoff: task '{}' no longer belongs to run '{}'",
-            task.id, run_id
-        )));
-    }
+    ensure_failure_handoff_ownership(host, input, &task, run_id)?;
 
     if failed_step_id == "complete_pr"
         && let Some(pr_number) = task.github_pr_number().map(ToOwned::to_owned)
@@ -199,6 +195,84 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         "pr_created": pr_created,
         "task_status": "blocked",
     }))
+}
+
+fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+) -> Result<(), OrbitError> {
+    let task_owner = task.job_run_id.as_deref().ok_or_else(|| {
+        OrbitError::Execution(format!(
+            "pr_failure_handoff: task '{}' has no owning run; refusing handoff for run '{}'",
+            task.id, run_id
+        ))
+    })?;
+    if task_owner == run_id {
+        return Ok(());
+    }
+
+    let worktree = pipeline_step(input, "worktree")?;
+    let checkpoint_owner = input_string_field(worktree, "job_run_id")
+        .or_else(|| input_string_field(worktree, "batch_id"))
+        .ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "pr_failure_handoff: resumed run '{run_id}' has no worktree ownership checkpoint"
+            ))
+        })?;
+    if task_owner != checkpoint_owner {
+        return Err(OrbitError::Execution(format!(
+            "pr_failure_handoff: task '{}' belongs to run '{}', not active run '{}' or worktree checkpoint owner '{}'",
+            task.id, task_owner, run_id, checkpoint_owner
+        )));
+    }
+
+    ensure_retry_descends_from_checkpoint(host, &task.id, run_id, &checkpoint_owner)
+}
+
+fn ensure_retry_descends_from_checkpoint<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    run_id: &str,
+    checkpoint_owner: &str,
+) -> Result<(), OrbitError> {
+    let mut current = host.get_job_run(run_id)?.ok_or_else(|| {
+        OrbitError::Execution(format!(
+            "pr_failure_handoff: cannot verify ownership for task '{task_id}'; active run '{run_id}' was not found"
+        ))
+    })?;
+    let job_id = current.job_id.clone();
+
+    for _ in 0..FAILURE_HANDOFF_LINEAGE_MAX_HOPS {
+        let Some(parent_run_id) = current.retry_source_run_id.as_deref() else {
+            return Err(OrbitError::Execution(format!(
+                "pr_failure_handoff: run '{run_id}' is not a retry descendant of worktree checkpoint owner '{checkpoint_owner}' for task '{task_id}'"
+            )));
+        };
+        let parent = host.get_job_run(parent_run_id)?.ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "pr_failure_handoff: cannot verify ownership for task '{task_id}'; retry ancestor '{parent_run_id}' was not found"
+            ))
+        })?;
+        if parent.job_id != job_id {
+            return Err(OrbitError::Execution(format!(
+                "pr_failure_handoff: retry lineage for run '{run_id}' crosses from job '{job_id}' to job '{}' at run '{}'; refusing handoff for task '{task_id}'",
+                parent.job_id, parent.run_id
+            )));
+        }
+        if parent.run_id == checkpoint_owner {
+            return Ok(());
+        }
+        if parent.run_id == current.run_id {
+            break;
+        }
+        current = parent;
+    }
+
+    Err(OrbitError::Execution(format!(
+        "pr_failure_handoff: run '{run_id}' has no bounded retry lineage to worktree checkpoint owner '{checkpoint_owner}' for task '{task_id}'"
+    )))
 }
 
 #[allow(clippy::too_many_arguments)]

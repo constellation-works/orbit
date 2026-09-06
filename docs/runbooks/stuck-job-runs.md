@@ -185,6 +185,13 @@ $ orbit run events jrun-20260704-0928
 │ 2026-07-04T09:28:17Z   run.finished        success                                                         │
 ```
 
+For PR workflows, the reused worktree checkpoint keeps the original run as
+the task/candidate owner. Delivery and terminal failure handoff accept that
+owner only when the active run's durable `retry_source_run_id` chain reaches
+the checkpoint owner. Direct ownership still authorizes the original run.
+An unrelated run, a broken lineage, or a task re-claimed by a superseding run
+fails before Orbit commits, pushes, or updates the task.
+
 Resume needs the job present in the catalog (`orbit job list --all`). A run started from
 a raw YAML path can be resumed only after that YAML is registered under `resources/jobs/`.
 A run with no successful checkpoints degrades to a full replay.

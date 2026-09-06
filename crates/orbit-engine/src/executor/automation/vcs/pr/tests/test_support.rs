@@ -12,6 +12,7 @@ use orbit_types::task::{
     ExternalRef, Task, TaskArtifact, TaskComment, TaskPriority, TaskStatus, TaskType,
     push_external_ref_if_missing,
 };
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
@@ -38,6 +39,7 @@ pub struct VcsCall {
 
 pub struct PrOpenTestHost {
     tasks: Mutex<Vec<Task>>,
+    job_runs: Mutex<Vec<JobRun>>,
     comments: Mutex<HashMap<String, Vec<TaskComment>>>,
     vcs_calls: Mutex<Vec<VcsCall>>,
     automation_updates: Mutex<Vec<(String, TaskAutomationUpdate)>>,
@@ -57,6 +59,7 @@ impl PrOpenTestHost {
         let scoreboard_dir = data_root.join("scoreboard");
         Self {
             tasks: Mutex::new(tasks),
+            job_runs: Mutex::new(Vec::new()),
             comments: Mutex::new(HashMap::new()),
             vcs_calls: Mutex::new(Vec::new()),
             automation_updates: Mutex::new(Vec::new()),
@@ -103,6 +106,30 @@ impl PrOpenTestHost {
 
     pub fn with_existing_pr(self) -> Self {
         *self.pr_exists.lock().expect("pr exists lock") = true;
+        self
+    }
+
+    pub fn with_job_run(self, run_id: &str, retry_source_run_id: Option<&str>) -> Self {
+        let now = Utc::now();
+        self.job_runs.lock().expect("job runs lock").push(JobRun {
+            run_id: run_id.to_string(),
+            job_id: "task_pr_pipeline".to_string(),
+            attempt: 1,
+            state: JobRunState::Failed,
+            scheduled_at: now,
+            started_at: Some(now),
+            finished_at: Some(now),
+            duration_ms: Some(1),
+            created_at: now,
+            pid: None,
+            pid_start_time: None,
+            input: None,
+            retry_source_run_id: retry_source_run_id.map(ToOwned::to_owned),
+            knowledge_metrics: None,
+            resolved_crew: None,
+            crew_model: None,
+            steps: Vec::new(),
+        });
         self
     }
 
@@ -208,6 +235,16 @@ impl PrOpenTestHost {
 }
 
 impl RuntimeHost for PrOpenTestHost {
+    fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
+        Ok(self
+            .job_runs
+            .lock()
+            .expect("job runs lock")
+            .iter()
+            .find(|run| run.run_id == run_id)
+            .cloned())
+    }
+
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         self.tasks
             .lock()
