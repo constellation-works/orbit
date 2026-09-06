@@ -26,6 +26,8 @@ use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(target_os = "linux")]
+const EXEC_BUSY_RETRY_WINDOW: Duration = Duration::from_secs(2);
 
 /// Path of the checked-in `tools/list` snapshot, relative to the crate root.
 const SNAPSHOT_RELATIVE_PATH: &str = "tests/snapshots/mcp_tools_list.json";
@@ -212,8 +214,7 @@ impl McpWorkspace {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let child = command
-            .spawn()
+        let child = retry_executable_busy(|| command.spawn())
             .expect("spawn generated orbit mcp serve command");
         let mut client = McpClient::new(child);
         self.initialize(&mut client);
@@ -994,6 +995,59 @@ struct GeneratedForcedCommand {
     acceptance_token: String,
 }
 
+/// Retry a freshly copied test launcher while another parallel test's child
+/// still has its writable descriptor inherited across `fork`.
+///
+/// The descriptor is close-on-exec, but Linux can reject a concurrent exec
+/// with `ETXTBSY` during that short pre-exec window. This is the same bounded
+/// transient the production updater handles when it launches a newly written
+/// binary; all other errors remain immediate test failures.
+#[cfg(target_os = "linux")]
+fn retry_executable_busy<T>(
+    mut operation: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let deadline = Instant::now() + EXEC_BUSY_RETRY_WINDOW;
+    loop {
+        match operation() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            result => return result,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_fresh_test_launcher_waits_for_a_writer_to_close() {
+    let temp = tempdir().expect("tempdir");
+    let launcher = temp.path().join("launcher");
+    std::fs::copy("/bin/true", &launcher).expect("copy executable fixture");
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&launcher)
+        .expect("hold launcher open for writing");
+    let error = Command::new(&launcher)
+        .spawn()
+        .expect_err("Linux must reject an executable that is open for writing");
+    assert_eq!(error.kind(), std::io::ErrorKind::ExecutableFileBusy);
+    let release_writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(75));
+        drop(writer);
+    });
+
+    let mut command = Command::new(&launcher);
+    let mut child = retry_executable_busy(|| command.spawn())
+        .expect("spawn launcher after transient executable-file-busy errors");
+    let status = child.wait().expect("wait for launcher");
+    release_writer.join().expect("release launcher writer");
+
+    assert!(status.success(), "copied launcher must eventually execute");
+}
+
 /// Install a metadata-valid copy of the tested binary whose setgid exec will
 /// change this account's effective group. Sandboxes that set `NoNewPrivs` or
 /// expose no mapped supplementary group cannot exercise the kernel boundary;
@@ -1269,18 +1323,19 @@ printf 'clear:%s:public=%s\n' "$sweeps" "$saw_public_caller"
     let mut repeated_launches = Vec::new();
     for _ in 0..48 {
         let argv = &generated.argv;
-        let child = McpWorkspace::orbit_program_command(
+        let mut command = McpWorkspace::orbit_program_command(
             Path::new(&argv[0]),
             &workspace.work,
             &workspace.home,
-        )
-        .args(["-c", generated.forced_command.as_str()])
-        .env(orbit_mcp::SSH_ACCEPTANCE_ENV, &generated.acceptance_token)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start repeated legitimate protected destination");
+        );
+        command
+            .args(["-c", generated.forced_command.as_str()])
+            .env(orbit_mcp::SSH_ACCEPTANCE_ENV, &generated.acceptance_token)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = retry_executable_busy(|| command.spawn())
+            .expect("start repeated legitimate protected destination");
         repeated_launches.push(child);
     }
     std::fs::write(&stop, "stop\n").expect("stop proc scanner");
@@ -1413,7 +1468,8 @@ capabilities = ["agent", "operator"]
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let child = command.spawn().expect("spawn destination-issued command");
+    let child =
+        retry_executable_busy(|| command.spawn()).expect("spawn destination-issued command");
     let mut client = McpClient::new(child);
     workspace.initialize(&mut client);
     let listed = client.call_tool_ok("orbit_workflow_run_list", json!({}));
@@ -1497,13 +1553,13 @@ ssh_key_fingerprint = "{OTHER_KEY_FINGERPRINT}"
         return;
     };
     let argv = &generated.argv;
-    let output =
-        McpWorkspace::orbit_program_command(Path::new(&argv[0]), &workspace.work, &workspace.home)
-            .args(["-c", generated.forced_command.as_str()])
-            .env(orbit_mcp::SSH_ACCEPTANCE_ENV, &generated.acceptance_token)
-            .stdin(Stdio::null())
-            .output()
-            .expect("run orbit mcp serve");
+    let mut command =
+        McpWorkspace::orbit_program_command(Path::new(&argv[0]), &workspace.work, &workspace.home);
+    command
+        .args(["-c", generated.forced_command.as_str()])
+        .env(orbit_mcp::SSH_ACCEPTANCE_ENV, &generated.acceptance_token)
+        .stdin(Stdio::null());
+    let output = retry_executable_busy(|| command.output()).expect("run orbit mcp serve");
 
     assert!(!output.status.success(), "a key mismatch must fail closed");
     let stderr = String::from_utf8_lossy(&output.stderr);
