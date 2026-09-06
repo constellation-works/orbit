@@ -4,8 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_agent::{
-    Agent, AgentConfig, AgentOperation, AgentRequest, normalize_cli_stdout, peek_response_status,
-    provider_invocation_diagnostic, response_envelope_protocol_check,
+    Agent, AgentConfig, AgentOperation, AgentRequest, antigravity_terminal_error_diagnostic,
+    normalize_cli_stdout, peek_response_status, provider_invocation_diagnostic,
+    response_envelope_protocol_check,
 };
 use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_text};
@@ -21,7 +22,8 @@ use super::super::workspace::{
     WorktreeBoundaryGuard, resolve_subprocess_cwd, validate_declared_worktree_pair,
 };
 use super::argv::{
-    apply_provider_static_arg_fixups, neutralize_inner_sandbox, try_audit_argv_for_dispatch,
+    apply_provider_runtime_arg_fixups, apply_provider_static_arg_fixups, neutralize_inner_sandbox,
+    try_audit_argv_for_dispatch,
 };
 use super::envelope::{
     cli_agent_envelope_json, parse_cli_invocation_trace, parse_cli_response_result,
@@ -183,6 +185,10 @@ pub fn run_cli_backend(
     let mut subprocess_args = Vec::with_capacity(cli_executor.args.len() + invocation.args.len());
     subprocess_args.extend(cli_executor.args.iter().cloned());
     subprocess_args.extend(invocation.args.iter().cloned());
+    // Combined executor + transport argv is the only place that can honor a
+    // custom `--print-timeout` without duplicating it, and the remaining
+    // spawn deadline is known here. [ORB-11337]
+    apply_provider_runtime_arg_fixups(&provider, &mut subprocess_args, wall_clock_timeout);
 
     // The audit argv reflects what actually runs. Under sandbox-exec the
     // parent is `<trusted sandbox-exec> -f <profile.sb> <program> <args...>`;
@@ -528,6 +534,21 @@ pub fn run_cli_backend(
                 .or_else(|| {
                     provider_invocation_diagnostic(stdout_text.as_ref(), stderr_text.as_ref())
                         .map(|diagnostic| bounded_diagnostic(&diagnostic, &redaction))
+                })
+                // Antigravity writes terminal `ERROR` on stdout and often
+                // leaves stderr empty. Read the raw capture: normalization
+                // drops failed terminals so they cannot satisfy completion.
+                // [ORB-11337]
+                .or_else(|| {
+                    antigravity_terminal_error_diagnostic(&provider, stdout.protocol_bytes()).map(
+                        |diagnostic| {
+                            format!(
+                                "{} {}",
+                                exit_message(),
+                                bounded_diagnostic(&diagnostic, &redaction)
+                            )
+                        },
+                    )
                 })
                 .unwrap_or_else(exit_message),
         )

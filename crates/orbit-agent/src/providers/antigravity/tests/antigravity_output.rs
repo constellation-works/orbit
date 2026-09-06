@@ -2,6 +2,9 @@
 
 use orbit_types::tool::ExecutionResult;
 
+use super::super::antigravity_output::{
+    antigravity_terminal_error, antigravity_terminal_error_diagnostic,
+};
 use crate::providers::normalize_cli_stdout;
 use crate::types::{AgentResponseStatus, parse_and_validate_response};
 
@@ -106,6 +109,58 @@ fn malformed_or_missing_result_yields_no_completion_evidence() {
     ] {
         assert!(normalize_cli_stdout("antigravity", stdout.as_bytes()).is_empty());
     }
+}
+
+#[test]
+fn timeout_terminal_error_is_bounded_and_omits_response_transcript() {
+    let response = format!(
+        r#"{{"schemaVersion":1,"status":"success","result":{{"prompt":"do not leak"}},"error":null}} credential {secret}"#,
+        secret = "agy-tenant-42-authorization-bearer-zzz"
+    );
+    let stdout = serde_json::json!({
+        "event": "result",
+        "result": {
+            "status": "ERROR",
+            "response": response,
+            "error": "timeout waiting for response"
+        }
+    })
+    .to_string();
+
+    let error = antigravity_terminal_error(stdout.as_bytes()).expect("terminal error");
+    assert_eq!(error, "timeout waiting for response");
+    assert!(!error.contains("do not leak"));
+    assert!(!error.contains("agy-tenant-42"));
+
+    let diagnostic = antigravity_terminal_error_diagnostic("antigravity", stdout.as_bytes())
+        .expect("diagnostic");
+    assert!(diagnostic.contains("timeout waiting for response"));
+    assert!(!diagnostic.contains(&response));
+    assert!(antigravity_terminal_error_diagnostic("claude", stdout.as_bytes()).is_none());
+}
+
+#[test]
+fn success_terminal_does_not_yield_an_error_diagnostic() {
+    let stdout = stream_success(ORBIT_SUCCESS);
+    assert!(antigravity_terminal_error(stdout.as_bytes()).is_none());
+}
+
+#[test]
+fn long_terminal_error_is_truncated_without_copying_response() {
+    let error = "x".repeat(500);
+    let stdout = serde_json::json!({
+        "event": "result",
+        "result": {
+            "status": "ERROR",
+            "response": ORBIT_SUCCESS,
+            "error": error
+        }
+    })
+    .to_string();
+    let extracted = antigravity_terminal_error(stdout.as_bytes()).expect("bounded error");
+    assert_eq!(extracted.chars().count(), 401);
+    assert!(extracted.ends_with('…'));
+    assert!(!extracted.contains("edited"));
 }
 
 #[test]

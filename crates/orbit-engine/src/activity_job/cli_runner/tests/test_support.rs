@@ -394,6 +394,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         "codex" => Provider::Codex,
         "gemini" => Provider::Gemini,
         "grok" => Provider::Grok,
+        "antigravity" => Provider::Antigravity,
         other => panic!("unsupported provider for test: {other}"),
     };
     AgentLoopSpec {

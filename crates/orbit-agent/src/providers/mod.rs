@@ -30,6 +30,8 @@ pub mod openai_compat;
 pub(crate) mod opencode;
 pub(crate) mod pi;
 
+pub use antigravity::{antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout};
+
 use std::borrow::Cow;
 
 use crate::types::AgentInvocationSpec;
