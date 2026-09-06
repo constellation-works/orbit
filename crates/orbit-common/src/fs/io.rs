@@ -297,7 +297,8 @@ fn claim_lock_path(path: &Path) -> Option<HeldLockPath> {
 /// The lock is re-entrant per thread: a nested call for the same lock path
 /// runs `op` directly under the outermost acquisition instead of deadlocking
 /// on a second descriptor. Cross-thread and cross-process callers still block
-/// on the flock as before.
+/// on the flock as before, including readers holding
+/// [`with_shared_file_lock`] on the same target.
 ///
 /// The closure returns `Result<T, E>` where any filesystem error hit while
 /// acquiring the lock is folded into `E` via `From<std::io::Error>` —
@@ -354,6 +355,70 @@ where
     })?;
 
     op()
+}
+
+/// Run `op` while holding a *shared* advisory flock on the same sibling lock
+/// file [`with_exclusive_file_lock`] uses, so readers exclude writers of that
+/// target while staying concurrent with each other.
+///
+/// This is the read half of a multi-file critical section (ORB-11349): a task
+/// bundle's transition appends to one file and republishes another, so a
+/// reader that assembles both without coordination can pair a new event log
+/// with an old envelope and report that mismatch as corruption.
+///
+/// Three properties keep this usable from read-only surfaces:
+///
+/// - The parent directory is never created. A read of something that does not
+///   exist must not materialize it, and a missing parent also means no writer
+///   can be holding anything inside it, so `op` runs directly.
+/// - Acquisition is best effort. A store on a read-only mount, or any
+///   filesystem that refuses the lock file, still serves the read unlocked
+///   rather than failing it — the same exposure as before this lock existed.
+/// - Re-entrancy is shared with the exclusive variant, so a read nested inside
+///   a writer's own critical section runs directly instead of deadlocking on a
+///   second descriptor.
+///
+/// Do not take the *write* lock for a target inside a read lock on that same
+/// target. A nested request never upgrades the outer acquisition, so the
+/// mutation would run under a shared lock that concurrent readers also hold.
+pub fn with_shared_file_lock<T, E, F>(target_path: &Path, label: &str, op: F) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    let Some(parent) = target_path.parent() else {
+        return op();
+    };
+    if !parent.is_dir() {
+        return op();
+    }
+    let lock_path = resolved_lock_path(target_path)?;
+    let Some(_held) = claim_lock_path(&lock_path) else {
+        return op();
+    };
+    let _lock_file = match acquire_shared_lock(&lock_path) {
+        Ok(file) => Some(file),
+        Err(error) => {
+            crate::tracing::debug!(
+                target: "orbit.common.fs",
+                lock_path = %lock_path.display(),
+                label,
+                error = %error,
+                "shared lock unavailable; reading without writer coordination",
+            );
+            None
+        }
+    };
+
+    op()
+}
+
+fn acquire_shared_lock(lock_path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true).truncate(false);
+    let lock_file = open_private_file(lock_path, &mut options)?;
+    lock_file.lock_shared()?;
+    Ok(lock_file)
 }
 
 /// The lock path to open and to key re-entrancy on, resolved through symlinks

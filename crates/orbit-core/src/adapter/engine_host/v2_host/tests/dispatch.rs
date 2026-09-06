@@ -549,6 +549,54 @@ fn reserve_locks_publishes_empty_waiting_on_deps_when_dependencies_are_met() {
     assert_eq!(output["reserved"], json!(true));
 }
 
+/// ORB-11349: admission loads every task, so one unrelated task's lifecycle
+/// write used to decide whether this gate ran. A transition is a multi-file
+/// publication held under that task's bundle lock; a gate that read through it
+/// paired the new event log with the not-yet-republished envelope and failed
+/// the whole run as bundle corruption. Hold exactly that critical section on
+/// task A and require B's gate to admit correctly anyway.
+#[test]
+fn reserve_locks_admits_through_an_unrelated_task_mid_transition() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let dependency = seed_task(&runtime, "Dependency", TaskStatus::Done, Vec::new());
+    let blocked = seed_task(
+        &runtime,
+        "Blocked",
+        TaskStatus::Backlog,
+        vec![dependency.clone()],
+    );
+    let unrelated = seed_task(&runtime, "Unrelated", TaskStatus::Backlog, Vec::new());
+
+    let transition_open = std::sync::Barrier::new(2);
+    let transition_closed = std::sync::atomic::AtomicBool::new(false);
+
+    let output = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            runtime
+                .stores()
+                .tasks()
+                .with_task_write_lock(&unrelated, &mut || {
+                    transition_open.wait();
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    transition_closed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                })
+                .expect("hold the unrelated task's write lock");
+        });
+
+        transition_open.wait();
+        let (_, result) = reserve_locks_for(&runtime, vec![blocked.clone()]);
+        result.expect("an unrelated task's transition must not fail this gate")
+    });
+
+    assert!(
+        transition_closed.load(std::sync::atomic::Ordering::SeqCst),
+        "the gate must read the unrelated task as settled, not mid-transition"
+    );
+    assert_eq!(output["reserved"], json!(true));
+    assert_eq!(output["waiting_on_deps"], json!([]));
+}
+
 #[test]
 fn waiting_locks_from_reserve_output_extracts_unique_conflict_files() {
     let locks = waiting_locks_from_reserve_output(&json!({
