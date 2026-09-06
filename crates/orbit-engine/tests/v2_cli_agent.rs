@@ -382,6 +382,7 @@ fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
         require_response_envelope: false,
         require_completion_envelope: true,
         proc_allowed_programs: None,
+        trusted_host_execution: false,
     }
 }
 
@@ -462,6 +463,7 @@ fn synthetic_loop_session_job() -> JobV2 {
                 require_response_envelope: false,
                 require_completion_envelope: true,
                 proc_allowed_programs: None,
+                trusted_host_execution: false,
             }),
             activity_name: None,
             fs_profile: None,

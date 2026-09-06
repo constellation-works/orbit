@@ -39,6 +39,7 @@ records in a second store merely to get past a connection error.
 | Observe/resume workflows | `orbit_workflow_run_show/list/resume` | `orbit run show/history/events/trace/logs/cancel`; job replay/resume |
 | Auto-tasks | `orbit_auto_task_list/mint` | Definition add/show/update/toggle are CLI operations; do not assume they are advertised over MCP |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and working directory, never a shell string |
+| Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; asynchronous, returns a run ID |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, semantic, docs, audit, GC, policy, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
 
 Provider/gateway prefixes are transport wrappers around these names. A connected
@@ -51,6 +52,42 @@ integration. Governed workflow and command operations need operator authority;
 a managed worker cannot dispatch/resume another workflow or use operator command
 execution. An allowlisted tool still has to pass runtime policy, filesystem,
 subprocess, and external authentication checks.
+
+### Host agent invocation
+
+`orbit_agent_invoke` submits one asynchronous agent run for exploration or
+debugging and returns its run ID. It is the surface for a question that cannot
+be answered from inside a managed run's sandbox — why a host is behaving the
+way it is.
+
+Be clear-eyed about what it does. The invoked agent runs **outside Orbit's
+filesystem sandbox**, as the same operating-system user as Orbit, so it can read
+and write anything that user can. Withholding capabilities from the child is not
+an isolation boundary, and neither is the activity's declared program list: the
+provider harness owns its own shell tool. Treat an invocation the way you would
+treat running a command yourself on that machine.
+
+What it is not:
+
+- It is **not** a task, and it performs no task transition. It does not commit,
+  push, open or merge a pull request, or dispatch further work.
+- It is **not** available to a managed run or to a federated caller. Each
+  invocation is admitted separately by an operator present on the machine that
+  will run it, and the admission covers that invocation only.
+- It is **not** resumable. A resumed run would carry an admission nobody granted
+  now; submit a new invocation instead.
+
+Required arguments are the `prompt` and an absolute `cwd` inside the workspace's
+checkout. `crew` selects the provider/model, `timeout_seconds` bounds the run
+(default 1800, maximum 7200), and `idempotency_key` makes a resubmission resolve
+the run the first attempt created rather than starting a second agent.
+
+Track it with the ordinary run surfaces — `orbit_workflow_run_show`, or
+`orbit run show|logs|cancel <RUN_ID>`. `show` carries the invocation's outcome,
+whether it terminated its response envelope, a bounded preview of the answer,
+and a durable reference to the full captured output. A provider that exits zero
+without terminating its envelope stopped mid-turn: the run records `failed`, and
+the exit code alone is never evidence the investigation succeeded.
 
 Remote sessions are additionally capped by the destination's caller policy.
 See [remote-access.md](setup/remote-access.md). Do not relaunch a server with

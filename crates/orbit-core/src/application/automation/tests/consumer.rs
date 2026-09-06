@@ -105,6 +105,7 @@ fn attach(
                     runtime,
                     Some(id.clone()),
                     owner.map(str::to_owned),
+                    orbit_types::tool::ToolSessionContext::default(),
                 )),
                 reservation_owner: owner.map(|id| ReservationOwnerContext {
                     owner_run_id: id.into(),

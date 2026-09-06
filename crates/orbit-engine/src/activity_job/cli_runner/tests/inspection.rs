@@ -260,6 +260,7 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
     let outcome = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
         "inspection-test",
         audit.clone(),
         &json!({"workspace_path": repo.path(), "inspection_revision": revision}),
@@ -331,6 +332,7 @@ fn dispatch_failure_and_timeout_release_the_inspection_checkout() {
         let result = run_cli_backend(
             &host,
             &test_agent_loop_spec(Duration::from_secs(1)),
+            "test_activity",
             "inspection-failure",
             audit.clone(),
             &json!({"workspace_path": repo.path(), "inspection_revision": revision}),

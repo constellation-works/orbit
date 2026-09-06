@@ -19,8 +19,8 @@
 
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
-    CallerCapabilities, CallerEnvelope, GovernedOperation, authorize, governed_command,
-    governed_tool,
+    CallerCapabilities, CallerEnvelope, CallerProvenance, GovernedOperation, authorize,
+    governed_command, governed_tool,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::contracts::AuditEventInsertParams;
@@ -29,6 +29,10 @@ use orbit_types::tool::{McpCapability, ToolSessionContext};
 
 use crate::OrbitRuntime;
 use crate::runtime::tool_exec::CapabilityEnforcement;
+
+/// Canonical tool name of the trusted-host agent invocation, named once so the
+/// admission and the governed-operation registry cannot drift apart.
+pub(crate) const AGENT_INVOKE_OPERATION_ID: &str = "orbit.agent.invoke";
 
 impl OrbitRuntime {
     /// Authorize a governed tool call, then require destination-granted remote
@@ -112,6 +116,61 @@ impl OrbitRuntime {
             Some(message.clone()),
         );
         Err(OrbitError::CapabilityDenied(message))
+    }
+
+    /// Admit one trusted-host agent invocation, returning how the authorizing
+    /// operator was identified [ORB-11354].
+    ///
+    /// The single canonical admission for the unsandboxed execution mode. Every
+    /// surface that can submit one — the `orbit.agent.invoke` tool and the
+    /// `orbit run agent` CLI — calls this before anything durable exists, so a
+    /// refusal happens before a run record and long before a process.
+    ///
+    /// Two rules beyond the ordinary governed-operation check:
+    ///
+    /// * **The process envelope counts.** The tool chokepoint resolves an MCP
+    ///   call session-only, which is right for placement but would let a leaf
+    ///   agent shelling out to the CLI look like nothing at all. Resolving the
+    ///   process envelope here means a managed run's `ORBIT_MANAGED_RUN_CONTEXT`
+    ///   resolves as `agent`, and an agent is refused.
+    /// * **Remote callers are refused outright.** A destination-side grant may
+    ///   legitimately carry `operator` for ordinary operator work, but "an
+    ///   operator is present on this machine" is exactly what admitting an
+    ///   unsandboxed local subprocess requires, and a federated grant cannot
+    ///   assert it. This is narrower than [`authorize`] on purpose.
+    pub(crate) fn admit_agent_invoke(
+        &self,
+        session_context: &ToolSessionContext,
+    ) -> Result<CallerProvenance, OrbitError> {
+        let operation = governed_tool(AGENT_INVOKE_OPERATION_ID).ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "'{AGENT_INVOKE_OPERATION_ID}' is missing from the governed operation registry"
+            ))
+        })?;
+        let caller =
+            CallerCapabilities::resolve(&CallerEnvelope::from_process_env(session_context));
+        if let Some(grant) = caller.remote_caller_grant() {
+            let message = format!(
+                "operation '{AGENT_INVOKE_OPERATION_ID}' admits an unsandboxed host process and                  is available only to an operator on the machine that would run it; caller '{}'                  was resolved through {}",
+                grant.caller_machine_id, grant.source,
+            );
+            tracing::warn!(
+                target: "orbit.authorization",
+                operation = AGENT_INVOKE_OPERATION_ID,
+                provenance = %caller.provenance(),
+                caller_machine_id = grant.caller_machine_id,
+                "trusted host admission denied to a federated caller"
+            );
+            self.record_authorization_event(
+                AGENT_INVOKE_OPERATION_ID,
+                &caller,
+                AuditEventStatus::Denied,
+                Some(message.clone()),
+            );
+            return Err(OrbitError::CapabilityDenied(message));
+        }
+        self.decide_with_envelope(operation, CallerEnvelope::from_process_env(session_context))?;
+        Ok(caller.provenance())
     }
 
     /// Authorize a governed CLI command, or pass an ungoverned one through.

@@ -48,6 +48,7 @@ pub(crate) fn build_orbit_tool_host(
     runtime: &OrbitRuntime,
     task_id: Option<String>,
     run_id: Option<String>,
+    session_context: ToolSessionContext,
 ) -> Arc<dyn OrbitToolHost> {
     Arc::new(RuntimeOrbitToolHost {
         runtime: runtime.clone(),
@@ -56,6 +57,7 @@ pub(crate) fn build_orbit_tool_host(
             task_id,
             run_id: run_id.or_else(trusted_env_run_id),
         },
+        session_context,
     })
 }
 
@@ -63,6 +65,15 @@ pub(crate) fn build_orbit_tool_host(
 struct RuntimeOrbitToolHost {
     runtime: OrbitRuntime,
     task_scope: OrbitTaskScope,
+    /// The calling session's asserted grants, carried so a handler whose
+    /// decision depends on *who is calling* can reach them [ORB-11354].
+    ///
+    /// The tool chokepoint resolves capabilities before dispatch, but its
+    /// answer is a yes/no it does not pass on. `orbit.agent.invoke` needs the
+    /// caller itself, because it records the authorizing operator on a durable
+    /// admission and refuses federated callers the ordinary registry would
+    /// allow.
+    session_context: ToolSessionContext,
 }
 
 /// Checkout-independent executor for coordination-authoritative hub tools.
@@ -1080,11 +1091,14 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         super::dispatch::execute(
             &self.runtime,
             &self.task_scope,
+            super::dispatch::ToolCaller {
+                session_context: &self.session_context,
+                agent,
+                model,
+                reservation_owner,
+            },
             action,
             input,
-            agent,
-            model,
-            reservation_owner,
         )
     }
 

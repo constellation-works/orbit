@@ -10,6 +10,7 @@ pub mod job_v2;
 pub mod retired;
 pub mod schema_header;
 pub mod tool_allowlist;
+pub mod trusted_host;
 
 /// The single declaration of the deterministic action catalog. The generated
 /// typed actions make the core/engine ownership boundary exhaustive at compile
@@ -152,6 +153,11 @@ pub use tool_allowlist::{
     tool_allowed, validate_activity_tool_allowlist,
     validate_activity_tool_allowlist_against_registered_tools, validate_tool_allowlist,
     validate_tool_allowlist_against_registered_tools,
+};
+pub use trusted_host::{
+    TRUSTED_HOST_ACTIVITY, TRUSTED_HOST_ADMISSION_KEY, TrustedHostActivityError,
+    TrustedHostAdmission, run_input_declares_trusted_host, strip_trusted_host_admission,
+    validate_trusted_host_activity,
 };
 
 #[cfg(test)]

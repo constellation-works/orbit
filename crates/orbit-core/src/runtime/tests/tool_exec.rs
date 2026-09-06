@@ -55,6 +55,7 @@ fn run_tool_context_allowlist_honors_task_wildcard() {
                     &runtime,
                     Some(task.id.clone()),
                     None,
+                    orbit_types::tool::ToolSessionContext::default(),
                 )),
                 ..Default::default()
             },

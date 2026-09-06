@@ -1701,13 +1701,12 @@ fn bounded_repeated_sweeps_rotate_probes_without_starvation() {
             }),
         )
         .expect("collect");
-        let retired = evidence["truncation"]["retired_refs"]
+        evidence["truncation"]["retired_refs"]
             .as_array()
             .expect("retired_refs")
             .iter()
             .map(|r| r.as_str().unwrap().to_string())
-            .collect();
-        retired
+            .collect()
     };
 
     // Candidates in order of appearance in runs (newest run first: candidate-branch-3, 2, 1, 0)

@@ -53,6 +53,28 @@ pub(crate) struct PreparedSandbox<'a> {
     pub(crate) metadata: SandboxDispatchMetadata,
 }
 
+impl PreparedSandbox<'_> {
+    /// The deliberate absence of a sandbox for an operator-admitted
+    /// trusted-host invocation [ORB-11354].
+    ///
+    /// Named distinctly from the `None` arm of
+    /// [`prepare_sandbox_for_dispatch`] — which means "this executor declares
+    /// no sandbox" — so a run trail distinguishes an executor that never had
+    /// one from an operator who explicitly removed it.
+    pub(crate) fn none_trusted_host() -> Self {
+        Self {
+            effective: None,
+            metadata: SandboxDispatchMetadata {
+                backend: Some("none-trusted-host".to_string()),
+                trusted_wrapper: None,
+                probe_outcome: None,
+                write_enforcement: "write_unrestricted_trusted_host".to_string(),
+                read_enforcement: "read_unrestricted_trusted_host".to_string(),
+            },
+        }
+    }
+}
+
 /// Resolve availability before provider argv construction. This ordering is
 /// security-sensitive: provider-native flags are neutralized only when the
 /// outer wrapper is actually usable, while an explicitly allowed bare

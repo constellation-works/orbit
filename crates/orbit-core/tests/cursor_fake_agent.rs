@@ -122,6 +122,7 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
         require_response_envelope: true,
         require_completion_envelope: true,
         proc_allowed_programs: None,
+        trusted_host_execution: false,
     }
 }
 

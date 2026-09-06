@@ -131,6 +131,36 @@ orbit run cancel <run_id>
 This terminalizes the run on demand. Do not cancel solely because a legitimate step has
 been `running` longer than expected.
 
+Cancellation is truthful about the race with completion: a run that reached a terminal
+state before the signal landed reports `already_terminal` and keeps its real outcome
+rather than being overwritten with `cancelled`.
+
+## Operator agent invocations
+
+A run of `agent_invoke_pipeline` is one operator invocation of an agent for exploration
+or debugging (`orbit run agent <prompt>`, or the `orbit.agent.invoke` tool). It is a
+single-step run with no worktree, no task ownership, and no delivery tail, so most of
+this runbook's task-recovery steps do not apply to one.
+
+Three differences matter when triaging one:
+
+- **It is unsandboxed by design.** The provider subprocess runs on the host as the same
+  operating-system user as Orbit, admitted per invocation by an operator. A sandbox
+  denial is never the explanation for one failing, and the admission is recorded as a
+  `trusted_host.execution_admitted` audit event naming the authorizing operator, the
+  workspace, and the working directory.
+- **Cancel it the ordinary way.** `orbit run cancel <run_id>` signals the owner process
+  (TERM then KILL) and terminates the process tree, exactly as for any other run.
+- **It cannot be resumed.** `orbit job resume` and `submit_resume_run` refuse a run that
+  carries an admission, because that admission covered one invocation and a resume would
+  reuse it without a new authorization. Submit a fresh invocation instead. `orbit job
+  replay` is likewise not a workaround: the replayed input carries no admission, so the
+  activity fails closed.
+
+Read the outcome with `orbit run show <run_id>` — its `Invocation:` line distinguishes a
+completed answer from a mid-turn stop, a timeout, and a cancellation — and
+`orbit run logs <run_id>` for the full captured output.
+
 ## Resume from checkpoints
 
 The v2 executor checkpoints every completed top-level step into

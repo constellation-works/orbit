@@ -132,10 +132,15 @@ fn managed_run_environment_denies_ship_and_resume_end_to_end() {
     // The step the mock skipped: a host built with no explicit run id still
     // reports one, because the environment supplied it.
     assert_eq!(
-        build_orbit_tool_host(&runtime, None, None)
-            .task_scope()
-            .run_id
-            .as_deref(),
+        build_orbit_tool_host(
+            &runtime,
+            None,
+            None,
+            orbit_types::tool::ToolSessionContext::default()
+        )
+        .task_scope()
+        .run_id
+        .as_deref(),
         Some("jrun-test-managed"),
     );
 
@@ -182,9 +187,14 @@ fn unmanaged_environment_admits_operator_ship_and_resume() {
     // The mirror of the denial test's scope assertion: with no envelope there is
     // no run scope, which is what leaves the guard inert.
     assert_eq!(
-        build_orbit_tool_host(&runtime, None, None)
-            .task_scope()
-            .run_id,
+        build_orbit_tool_host(
+            &runtime,
+            None,
+            None,
+            orbit_types::tool::ToolSessionContext::default()
+        )
+        .task_scope()
+        .run_id,
         None,
     );
 

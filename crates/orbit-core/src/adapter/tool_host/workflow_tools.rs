@@ -228,5 +228,14 @@ fn run_json_with_lineage(runtime: &OrbitRuntime, run: &JobRun) -> Result<Value, 
             .and_then(|state| state.drain_admissions_stop.as_ref()),
     )
     .map_err(serialize_error("serialize drain admissions stop"))?;
+    // [ORB-11354] An operator tracking an agent invocation reads it here, from
+    // the same show/list surface as any other run: its distinguishable outcome,
+    // a bounded preview of the answer, and the durable reference to the full
+    // captured output.
+    value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
+        run,
+        state.as_ref().map(|state| &state.step_outputs),
+    ))
+    .map_err(serialize_error("serialize agent invocation result"))?;
     Ok(value)
 }

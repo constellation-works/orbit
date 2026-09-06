@@ -456,7 +456,7 @@ fn run_agent_loop_activity(
     input: &Value,
     fs_profile: Option<&str>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    run_cli_backend(host, spec, run_id, audit, input, fs_profile)
+    run_cli_backend(host, spec, activity_name, run_id, audit, input, fs_profile)
         .map(|outcome| label_failure_with_step(activity_name, outcome))
 }
 
