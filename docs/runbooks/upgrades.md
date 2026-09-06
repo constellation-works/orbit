@@ -35,8 +35,10 @@ orbit update --json               # machine-readable report
    into a staging file beside the installed one.
 5. Copy the current executable to `<orbit>.previous`, then swap the staged file in with one
    atomic same-directory rename, and confirm the installed binary reports the requested
-   version. If it does not, the previous executable is restored and no workspace state is
-   touched.
+   version. If it does not, the previous executable is copied into a complete sibling staging
+   file and atomically renamed over the replacement, so concurrent launches see either the
+   complete replacement or the complete previous executable; the retained backup is not consumed
+   and no workspace state is touched.
 6. Run `orbit migrate --confirm`, then `orbit workspace sync` — **using the newly installed
    binary**, in the current workspace. Only the new binary carries the migrations and managed
    asset definitions for the version being installed.

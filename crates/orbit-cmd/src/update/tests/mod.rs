@@ -3,4 +3,5 @@
 mod channel;
 mod fixture;
 mod flow;
+mod stage;
 mod version;

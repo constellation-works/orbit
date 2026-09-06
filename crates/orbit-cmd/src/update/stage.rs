@@ -84,15 +84,64 @@ impl Drop for StagedRelease {
 /// state; once migrations have been attempted the caller must resume forward
 /// instead.
 pub fn restore_backup(destination: &Path, backup: &Path) -> Result<(), OrbitError> {
-    std::fs::copy(backup, destination)
-        .map(|_| ())
-        .map_err(|error| {
-            OrbitError::Io(format!(
-                "failed to restore '{}' from '{}': {error}; the backup is still on disk",
-                destination.display(),
-                backup.display()
-            ))
-        })
+    restore_backup_with_rename(destination, backup, |from, to| std::fs::rename(from, to))
+}
+
+/// Stage a complete copy of `backup`, then atomically replace `destination`.
+///
+/// Keeping the replace operation injectable lets the sibling tests exercise
+/// the recovery evidence and cleanup path without depending on filesystem
+/// permission behavior.
+pub(super) fn restore_backup_with_rename(
+    destination: &Path,
+    backup: &Path,
+    replace: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), OrbitError> {
+    let staging = sibling_staging_path(destination, ".orbit-update-restore")?;
+    if let Err(error) = std::fs::copy(backup, &staging) {
+        return Err(restore_failure(
+            destination,
+            backup,
+            &staging,
+            "stage the previous executable",
+            error,
+        ));
+    }
+    if let Err(error) = replace(&staging, destination) {
+        return Err(restore_failure(
+            destination,
+            backup,
+            &staging,
+            "atomically replace the installed executable",
+            error,
+        ));
+    }
+    Ok(())
+}
+
+fn restore_failure(
+    destination: &Path,
+    backup: &Path,
+    staging: &Path,
+    action: &str,
+    error: std::io::Error,
+) -> OrbitError {
+    let cleanup = match std::fs::remove_file(staging) {
+        Ok(()) => "the incomplete restore staging file was removed".to_string(),
+        Err(cleanup_error) if cleanup_error.kind() == std::io::ErrorKind::NotFound => {
+            "no restore staging file was left behind".to_string()
+        }
+        Err(cleanup_error) => format!(
+            "cleanup also failed for restore staging file '{}': {cleanup_error}; remove it before retrying",
+            staging.display()
+        ),
+    };
+    OrbitError::Io(format!(
+        "failed to {action} at '{}': {error}; the installed executable at '{}' was left intact, the backup remains at '{}', and {cleanup}",
+        staging.display(),
+        destination.display(),
+        backup.display()
+    ))
 }
 
 /// Download `asset` for `version`, authenticate it, and stage the executable
@@ -196,13 +245,7 @@ fn extract_release_executable(archive: &[u8], asset: &str) -> Result<Vec<u8>, Or
 /// Write the staged executable beside `destination` so the swap is a
 /// same-directory rename.
 fn write_staging_file(destination: &Path, executable: &[u8]) -> Result<PathBuf, OrbitError> {
-    let directory = destination.parent().ok_or_else(|| {
-        OrbitError::InvalidInput(format!(
-            "'{}' has no parent directory to stage into",
-            destination.display()
-        ))
-    })?;
-    let path = directory.join(format!(".orbit-update-staged.{}", std::process::id()));
+    let path = sibling_staging_path(destination, ".orbit-update-staged")?;
     std::fs::write(&path, executable).map_err(|error| {
         OrbitError::Io(format!(
             "failed to stage the replacement executable at '{}': {error}",
@@ -211,6 +254,16 @@ fn write_staging_file(destination: &Path, executable: &[u8]) -> Result<PathBuf, 
     })?;
     set_executable_mode(&path)?;
     Ok(path)
+}
+
+fn sibling_staging_path(destination: &Path, prefix: &str) -> Result<PathBuf, OrbitError> {
+    let directory = destination.parent().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "'{}' has no parent directory to stage into",
+            destination.display()
+        ))
+    })?;
+    Ok(directory.join(format!("{prefix}.{}", std::process::id())))
 }
 
 #[cfg(unix)]
