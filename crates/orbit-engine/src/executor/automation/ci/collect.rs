@@ -221,7 +221,13 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
     }
     let probes = probe_branches(queries, &refs, &runs, &bounds, &mut notes);
     let mut partition = RunPartition::default();
-    partition_runs(&refs, &runs, &probes.retired, &probes.unverified, &mut partition);
+    partition_runs(
+        &refs,
+        &runs,
+        &probes.retired,
+        &probes.unverified,
+        &mut partition,
+    );
     let RunPartition {
         latest,
         mut current,
@@ -603,11 +609,7 @@ fn probe_branches<Q: CiQueries + ?Sized>(
 /// newest candidates while the final slot rotates through overflow candidates
 /// with each advancing cursor so all candidates eventually get probed without
 /// starvation.
-fn probe_slots(
-    candidates: usize,
-    budget: usize,
-    cursor: u64,
-) -> std::collections::BTreeSet<usize> {
+fn probe_slots(candidates: usize, budget: usize, cursor: u64) -> std::collections::BTreeSet<usize> {
     let attempted = candidates.min(budget);
     let mut slots: std::collections::BTreeSet<usize> = (0..attempted).collect();
     if candidates <= attempted || attempted == 0 {

@@ -1553,7 +1553,10 @@ fn unprobed_branches_past_probe_budget_remain_deferred_without_consuming_investi
     // The integration failure consumes the 1 investigation slot and is current and investigated
     assert_eq!(current_ids(&evidence), [10]);
     assert_eq!(evidence["summary"]["investigated_failures"], 1);
-    assert_eq!(evidence["summary"]["investigated_failure_run_ids"], json!([10]));
+    assert_eq!(
+        evidence["summary"]["investigated_failure_run_ids"],
+        json!([10])
+    );
 
     // The candidate branch was past the probe budget (0) so it was deferred without probing
     assert_eq!(deferred_ids(&evidence), [20]);
@@ -1659,7 +1662,9 @@ fn current_heads_and_verified_open_prs_retain_priority_over_other_refs() {
     );
     assert_eq!(evidence["summary"]["investigated_failures"], 3);
 
-    let current = evidence["current_failures"].as_array().expect("current array");
+    let current = evidence["current_failures"]
+        .as_array()
+        .expect("current array");
     let other_run = current.iter().find(|r| r["run_id"] == 40).expect("run 40");
     assert_eq!(other_run["investigated"], false);
 }
@@ -1730,7 +1735,8 @@ fn bounded_repeated_sweeps_rotate_probes_without_starvation() {
 }
 
 #[test]
-fn comprehensive_fixture_classifies_merged_prs_unprobed_live_refs_transient_probe_failures_and_pending_successors() {
+fn comprehensive_fixture_classifies_merged_prs_unprobed_live_refs_transient_probe_failures_and_pending_successors()
+ {
     let checkout = "ci\tCheckout\tHEAD is now at 3333333333333333333333333333333333333333\n";
     let queries = FakeQueries::authenticated()
         .with_head("agent-main", HEAD)
@@ -1745,7 +1751,10 @@ fn comprehensive_fixture_classifies_merged_prs_unprobed_live_refs_transient_prob
         }))
         // orbit/ORB-200-merged has no head on origin (returns None) -> retired
         // orbit/ORB-300-transient has probe error -> deferred
-        .with_branch_head_error("orbit/ORB-300-transient", "network timeout contacting origin")
+        .with_branch_head_error(
+            "orbit/ORB-300-transient",
+            "network timeout contacting origin",
+        )
         // orbit/ORB-400-overflow is past max_retired_ref_probes -> deferred
         .with_runs(vec![vec![
             // 1. Integration failure (agent-main)
@@ -1855,7 +1864,9 @@ fn comprehensive_fixture_classifies_merged_prs_unprobed_live_refs_transient_prob
     // Merged PR is retired (in stale_or_superseded)
     let stale = evidence["stale_or_superseded"].as_array().expect("stale");
     assert!(
-        stale.iter().any(|entry| entry["run_id"] == 1005 && entry["reason"] == "ref_no_longer_exists"),
+        stale
+            .iter()
+            .any(|entry| entry["run_id"] == 1005 && entry["reason"] == "ref_no_longer_exists"),
         "merged PR is retired: {evidence}"
     );
 
@@ -1867,13 +1878,19 @@ fn comprehensive_fixture_classifies_merged_prs_unprobed_live_refs_transient_prob
     assert_eq!(deferred[1]["investigated"], false);
 
     // Retryable errors carry the run-scoped discovery errors for deferred runs
-    let retryable = evidence["retryable_errors"].as_array().expect("retryable_errors");
+    let retryable = evidence["retryable_errors"]
+        .as_array()
+        .expect("retryable_errors");
     assert!(
-        retryable.iter().any(|err| err["operation"] == "remote_branch_head" && err["run_id"] == 1006),
+        retryable
+            .iter()
+            .any(|err| err["operation"] == "remote_branch_head" && err["run_id"] == 1006),
         "transient probe error is attached to run 1006: {evidence}"
     );
     assert!(
-        retryable.iter().any(|err| err["operation"] == "retired_ref_budget" && err["run_id"] == 1007),
+        retryable
+            .iter()
+            .any(|err| err["operation"] == "retired_ref_budget" && err["run_id"] == 1007),
         "budget exhaustion error is attached to run 1007: {evidence}"
     );
 }
