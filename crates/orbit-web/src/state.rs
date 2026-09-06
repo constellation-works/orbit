@@ -152,11 +152,6 @@ impl RegistrySource {
     fn load(&self) -> Result<SnapshotData, OrbitError> {
         let mut registry = workspace_registry::load_registry_from(&self.registry_path)?;
         workspace_registry::validate_workspaces(&mut registry);
-        let default_workspace = crate::default_workspace_selection(
-            &registry,
-            self.workspace_selector.as_deref(),
-            self.cwd.as_deref(),
-        );
         let mut unavailable = HashSet::new();
         let entries: Vec<WsEntry> = workspace_registry::local_workspaces(&registry)
             .map(|(workspace, checkout)| {
@@ -187,7 +182,7 @@ impl RegistrySource {
         self.report_unavailable(unavailable);
         let default_workspace = crate::default_workspace_selection(
             &registry,
-            self.root_override.as_deref(),
+            self.workspace_selector.as_deref(),
             self.cwd.as_deref(),
         )
         .filter(|id| entries.iter().any(|entry| entry.id == *id && entry.active));
