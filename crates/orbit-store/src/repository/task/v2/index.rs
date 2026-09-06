@@ -210,11 +210,15 @@ impl TaskV2Store {
         })
     }
 
+    /// Run `op` under this task's exclusive bundle lock.
+    ///
+    /// The lock target belongs to the bundle store, which hands the same file
+    /// to the shared lock its full-bundle reads take, so a write and a
+    /// concurrent read cannot disagree about what coordinates them.
     pub(crate) fn with_task_lock<T, F>(&self, id: &str, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
-        let lock_target = self.bundle_store.bundle_path(id)?.join("task.yaml");
-        with_exclusive_file_lock(&lock_target, "task artifact v2", op)
+        self.bundle_store.with_bundle_write_lock(id, op)
     }
 }

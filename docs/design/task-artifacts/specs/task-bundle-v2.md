@@ -235,7 +235,7 @@ The file bundle does not provide all-or-nothing transactions across Markdown sid
 
 - `task.yaml` remains canonical for structured metadata.
 - JSONL tail corruption is repaired only at the final partial row; corruption before the tail is an error.
-- The last event with `to_status` must match `task.yaml.status`; mismatches are corruption and must fail reads.
+- The last event with `to_status` must match `task.yaml.status`; a mismatch on a *settled* bundle is corruption and must fail reads. A mismatch observed while a writer is mid-publication is not corruption and must not be observable at all — see [Concurrent reads and lifecycle writes](#concurrent-reads-and-lifecycle-writes).
 - Generated indexes are invalid when count or `updated_at` stamps differ from registered bundle envelopes and must be rebuilt from bundles.
 - Artifact manifest entries must reference existing relative files with matching size and SHA-256; unmanifested files are ignored until a future compaction/prune command removes them.
 
@@ -244,6 +244,39 @@ diagnostic containing the task ID, canonical path, and reason. Direct lookup of
 another ID and allocation/publication of a new task must not scan the malformed
 bundle. List and search remain fail-loud and return that diagnostic. None of
 these query paths may delete, move, repair, or quarantine bundle bytes.
+
+### Concurrent reads and lifecycle writes
+
+A lifecycle write publishes across more than one file — a status transition
+appends to `events.jsonl` and then republishes `task.yaml` — so between those
+two steps the bundle on disk has an event log the envelope does not yet agree
+with. That intermediate state is indistinguishable on inspection from the
+settled mismatch the rule above calls corruption.
+
+Readers must therefore observe the writer's coordination rather than infer
+intent from bytes:
+
+- A writer holds that task's exclusive bundle lock (`<bundle>/task.yaml`, via
+  its sibling lock file) for the whole multi-file publication.
+- A reader that assembles a **complete** bundle must hold the same lock in
+  shared mode. It then observes only settled bundles, so a genuine mismatch
+  still fails the read (`task_bundle_corrupt`) with no tolerance widened.
+- The lock is per bundle: one task's transition must never block, fail, or
+  delay a read of any other task.
+- Reads of the **envelope alone** need no lock. `task.yaml` is renamed into
+  place atomically, so a single file is always self-consistent; the index
+  freshness scan every listing performs stays lock-free.
+- The read lock is not the create/delete sentinel, which keys on the bundle
+  directory. Readers never block a task's creation or removal, and those
+  transient states stay governed by the existing skip tolerance
+  (missing directory or sentinel held).
+- Acquisition is re-entrant per thread, so a writer that reads the bundle it
+  is about to modify from inside its own critical section does not deadlock,
+  and it is best effort, so a store on a read-only mount still serves reads.
+
+This is coordination between live processes, not a file-format transaction: it
+adds no on-disk state and changes nothing about post-crash recovery, which
+remains detect-and-repair. [ORB-11349]
 
 ## Artifacts
 
@@ -263,7 +296,9 @@ files:
 
 Artifact paths must be relative, UTF-8, slash-separated, canonical paths and must not contain `.`, `..`, or leading `./` components. Writers that ingest hand-authored manifests should normalize leading `./` before validation. `sha256` must be a 64-character lowercase hex SHA-256 digest; writer code should format digest bytes with lowercase hex (`{:x}`), not uppercase.
 
-The bundle format does not guarantee cross-file transactions. Writers must keep single-file updates atomic and keep partial multi-file states readable; generated repair/indexing commands reconcile cases such as appended events before envelope status rewrite or artifact files written before manifest rewrite.
+The bundle format does not guarantee cross-file transactions *across a crash*. Writers must keep single-file updates atomic and keep post-crash partial multi-file states readable; generated repair/indexing commands reconcile cases such as appended events before envelope status rewrite or artifact files written before manifest rewrite.
+
+A *live* writer is a different case, and readers must not be exposed to its intermediate states. See [Concurrent reads and lifecycle writes](#concurrent-reads-and-lifecycle-writes).
 
 ## Cutover
 
