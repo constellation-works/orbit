@@ -24,6 +24,7 @@ fn merge_batch_pr_preserves_task_attribution_per_task() {
         merge_batch_pr(&host, &merge_batch_pr_input(&workspace.repo)).expect("merge batch pr");
 
     assert_eq!(result["merged"], json!(true));
+    assert_eq!(result["strategy"], json!("squash"));
     for (task_id, expected) in cases {
         let task = host.get_task(task_id).expect("updated task");
         assert_eq!(task.status, TaskStatus::Done, "{task_id}");
@@ -98,4 +99,25 @@ fn merge_batch_pr_propagates_private_vcs_failure_before_task_updates() {
         host.get_task("T-MERGE-FAILURE").expect("task").status,
         TaskStatus::Review
     );
+}
+
+#[test]
+fn merge_batch_pr_uses_the_repository_permitted_strategy() {
+    let workspace = pr_workspace();
+    let host = PrOpenTestHost::new(
+        vec![review_batch_task("T-REBASE", Some("codex"), None)],
+        workspace.repo.clone(),
+    );
+    host.queue_merge_capabilities(false, true, true, true);
+
+    let result =
+        merge_batch_pr(&host, &merge_batch_pr_input(&workspace.repo)).expect("merge batch PR");
+
+    assert_eq!(result["strategy"], "rebase");
+    let request = host
+        .vcs_calls()
+        .into_iter()
+        .find(|call| call.operation == PR_MERGE_OPERATION)
+        .expect("merge request");
+    assert_eq!(request.input["strategy"], "rebase");
 }

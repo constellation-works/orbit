@@ -159,7 +159,9 @@ fn every_fleet_model_string_is_priced() {
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
+        "gpt-6-astra",
         "gemini-3.5-flash",
+        "gemini-3.8-flash",
         "grok-build",
         "grok-4.5",
         "grok-4.6",
@@ -171,11 +173,10 @@ fn every_fleet_model_string_is_priced() {
         output: 1_000,
         ..TokenUsage::default()
     };
-    // 2026-09-01: must be on/after the newest effective_from in the table
-    // (claude-fable-5-1) so its row is in range too, while still covering
-    // every other open-ended row (claude-opus-5 from 07-24, grok-4.5 from
-    // 08-12, grok-4.6 from 08-13).
-    let at = dt("2026-09-01T00:00:00Z");
+    // 2026-09-03: must be on/after the newest effective_from in the table
+    // (gpt-6-astra and gemini-3.8-flash) while still covering every other
+    // open-ended row.
+    let at = dt("2026-09-03T00:00:00Z");
     for model in FLEET_MODELS {
         assert!(
             derive_cost_usd(model, at, &usage).is_some(),
@@ -320,27 +321,40 @@ fn gpt_5_6_rates_change_at_the_exclusive_july_30_boundary_without_overlap() {
     }
 }
 
+#[test]
+fn gpt_6_astra_uses_official_standard_rates() {
+    let rows = covering_rows("gpt-6-astra", dt("2026-09-03T00:00:00Z"));
+    assert_eq!(rows.len(), 1, "astra has one current price row");
+    let row = rows[0];
+    assert_eq!(row.input_token_basis, InputTokenBasis::GrossIncludesCache);
+    assert_eq!(row.input_per_million_usd, 10.0);
+    assert_eq!(row.cache_read_per_million_usd, 1.0);
+    assert_eq!(row.cache_create_per_million_usd, 12.5);
+    assert_eq!(row.cache_create_1h_per_million_usd, 12.5);
+    assert_eq!(row.output_per_million_usd, 50.0);
+}
+
 /// Gemini's `promptTokenCount` is the total effective prompt including the
 /// cached content (ai.google.dev/api/generate-content, UsageMetadata), so the
 /// cached share must come out of the input bucket before the input rate
 /// applies; the old exclusive rows billed it twice.
 #[test]
 fn gemini_prompt_total_is_gross_of_cached_content() {
-    let at = dt("2026-08-14T00:00:00Z");
+    let at = dt("2026-09-03T00:00:00Z");
     let usage = TokenUsage {
         input: 100_000,
         cache_read: 90_000,
         output: 1_000,
         ..TokenUsage::default()
     };
-    // gemini-3.7-flash introductory: 10k uncached @ 0.75 + 90k cached @ 0.075
+    // gemini-3.8-flash introductory: 10k uncached @ 0.75 + 90k cached @ 0.075
     // + 1k output @ 3.75 = 0.0075 + 0.00675 + 0.00375 = 0.018.
-    let cost = derive_cost_usd("gemini-3.7-flash", at, &usage).expect("priced");
+    let cost = derive_cost_usd("gemini-3.8-flash", at, &usage).expect("priced");
     assert!((cost - 0.018).abs() < 1e-9, "cost was {cost}");
-    let normalized = normalize_token_usage("gemini-3.7-flash", at, &usage).expect("normalized");
+    let normalized = normalize_token_usage("gemini-3.8-flash", at, &usage).expect("normalized");
     assert_eq!(normalized.input, 10_000);
     assert_eq!(normalized.cache_read, 90_000);
-    for model in ["gemini-3.5-flash", "gemini-3.7-flash"] {
+    for model in ["gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.8-flash"] {
         for row in covering_rows(model, at) {
             assert_eq!(
                 row.input_token_basis,

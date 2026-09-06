@@ -4,7 +4,7 @@ type: design
 title: "Semantic Search — Design"
 owner: claude
 last_updated: 2026-08-24
-last_validated: 2026-08-09
+last_validated: 2026-09-05
 status: Accepted
 feature: orbit-search
 doc_role: design
@@ -71,8 +71,8 @@ orbit (main binary)                          orbit-search-companion (installed b
 Lifecycle:
 
 - `SubprocessEmbedder::new()` resolves the companion path under `~/.orbit/embed/bin/orbit-search-companion-<platform>` and starts the subprocess. ~100–300ms cold-start latency for ORT init.
-- The subprocess stays alive for the duration of the parent process or until explicitly dropped. Indexing batches and multi-query interactive sessions reuse the same subprocess.
-- On process exit, the parent sends an `exit` RPC and waits up to 1s; if unresponsive, sends SIGTERM.
+- The subprocess stays alive for the duration of the parent process or until explicitly dropped. Callers that retain the embedder, including the background indexing worker, reuse the same subprocess.
+- On process exit, the parent sends an `exit` RPC, reads the response, and waits for the child to exit.
 
 ### 2.3 RPC protocol
 
@@ -99,7 +99,7 @@ The protocol is intentionally minimal — four methods, no streaming, no auth. T
 
 ### 2.4 Default model and install-time model selection
 
-`orbit semantic install` accepts `--model {bge-small | minilm-l6 | nomic-v1.5}`; default is `bge-small`. The install command probes an existing companion with `--version-info` and replaces it when the reported companion version differs from the current Orbit package version; `--force` replaces it even when the probe says it is current. Model files are downloaded into `~/.orbit/embed/models/<model_id>/`. Switching model means running `orbit semantic install --model OTHER`, which downloads the new model alongside the existing one (so the embeddings under the old `model_id` keep working until reindexed; see [§7.2](#72-backfill-and-migration)).
+`orbit semantic install` accepts `--model {bge-small | minilm-l6 | nomic-v1.5}`; default is `bge-small`. The install command validates the existing managed companion's integrity metadata and reinstalls it when the metadata is missing or stale; `--force` reinstalls it unconditionally. Model files are downloaded into `~/.orbit/embed/models/<model_id>/`. Switching model means running `orbit semantic install --model OTHER`, which downloads the new model alongside the existing one (so the embeddings under the old `model_id` keep working until reindexed; see [§7.2](#72-backfill-and-migration)).
 
 The three supported models per [3_vision.md §1](./3_vision.md):
 
@@ -116,7 +116,7 @@ On first use of any embedder-touching path, `SubprocessEmbedder::new()` checks:
 1. `~/.orbit/embed/bin/orbit-search-companion-<platform>` → standard managed-install path.
 2. `$ORBIT_SEARCH_COMPANION` → developer-only absolute path override when the explicit unsafe override gate is enabled.
 
-If none resolve, the embedder returns `OrbitError::CompanionNotInstalled` with a remediation message: `"Run \`orbit semantic install\` to enable semantic search."` Indexing-path callers log and skip (semantic search is not on the critical path of task mutation; see [§7.1](#71-on-mutation-indexing)). Query-path callers surface the error directly to the user.
+If none resolve, the embedder returns `OrbitError::CompanionNotInstalled` with the remediation message: `"Semantic search not enabled. Run \`orbit semantic install\` to download the inference companion."` Indexing-path callers log and skip (semantic search is not on the critical path of task mutation; see [§7.1](#71-on-mutation-indexing)). Query-path callers surface the error directly to the user.
 
 ### 2.6 Alternative backends
 
@@ -259,13 +259,13 @@ orbit docs index         [--force] [--model MODEL]
 orbit semantic stats
 ```
 
-`install` is the gate that enables every other subcommand. It downloads the platform-appropriate `orbit-search-companion` binary from the published release URL and the chosen model from HuggingFace, both into `~/.orbit/embed/`. Default model is `bge-small`; users can override per [§2.4](#24-default-model-and-install-time-model-selection). Re-running `install` with a different `--model` adds that model alongside the existing ones. Re-running `install` after an Orbit upgrade also refreshes a stale companion automatically because the existing binary's `--version-info` output is compared to the current package version; `--force` is the explicit override for reinstalling the current version.
+`install` is the gate that enables every other subcommand. It downloads the platform-appropriate `orbit-search-companion` binary from the published release URL and the chosen model through the companion, both into `~/.orbit/embed/`. Default model is `bge-small`; users can override per [§2.4](#24-default-model-and-install-time-model-selection). Re-running `install` with a different `--model` adds that model alongside the existing ones. Re-running `install` after an Orbit upgrade refreshes a companion whose integrity metadata is missing or stale; `--force` is the explicit override for reinstalling regardless of the existing metadata.
 
 `uninstall` removes the companion binary and (by default) the currently active model. `--model M` removes only model M. `--all` removes the companion plus every installed model.
 
 `orbit search` defaults to lexical matching across tasks and docs; ADR content participates through indexed design docs. `--hybrid` blends lexical scoring with cosine over the selected corpus; `orbit search similar <task-id>` embeds the target task and runs cosine-neighbor lookup against other tasks; `orbit search path <path>` performs applicability lookup over path-scoped artifacts. `orbit semantic index` rebuilds the selected corpus (`tasks` by default, or `docs` and `all` via `--kind`); `orbit docs index` is the docs-specific alias and sweeps stale doc paths. `--force` ignores `content_hash` and re-embeds everything. `stats` reports row counts, model distribution, stale-row count, and companion-install status. The retired `learning` kind is rejected.
 
-If the companion is not installed, task-hybrid search, `orbit search similar <task-id>`, `orbit semantic index`, and `orbit docs index` exit non-zero with: `"Semantic search not enabled. Run \`orbit semantic install\` to download the inference companion."` Doc-hybrid search is softer: it emits a warning/note and falls back to lexical doc results.
+If the companion is not installed, `orbit search similar <task-id>`, `orbit semantic index`, and `orbit docs index` exit non-zero with: `"Semantic search not enabled. Run \`orbit semantic install\` to download the inference companion."` Hybrid task and doc search are softer: they emit a warning/note and fall back to lexical results.
 
 `--workspace` and `--all-workspaces` select the federated scope described in [§6.4](#64-cross-workspace-federated-search). They apply to the free-text form only; `similar` and `path` are single-workspace by construction.
 
@@ -376,7 +376,7 @@ Users who want semantic search must run two commands instead of one: install `or
 
 ### 8.2 Subprocess overhead
 
-The companion lives in a separate process and inference happens via stdio JSON-RPC. Cold-start latency is ~100–300ms (ORT init + model load). The subprocess is reused across a batch (`reindex`) and across a multi-query interactive session, so the cost is amortized for indexing and after the first search; it is fully visible on the first interactive query of a fresh `orbit` invocation. RPC serialization itself is sub-millisecond at phase-1 batch sizes (≤16 texts × ~512 tokens each); not a measurable contributor.
+The companion lives in a separate process and inference happens via stdio JSON-RPC. Cold-start latency is ~100–300ms (ORT init + model load). The background task-indexing worker reuses the subprocess across its batches, so the cost is amortized for indexing; a fresh `orbit` invocation pays the startup cost again. RPC serialization itself is sub-millisecond at phase-1 batch sizes (≤16 texts × ~512 tokens each); not a measurable contributor.
 
 ### 8.3 Default model quality is unmeasured for Orbit specifically
 

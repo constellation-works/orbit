@@ -470,6 +470,10 @@ mod artifacts {
             keys.contains(&"orbit/references/setup/first-run.md"),
             "references nest, so a manifest key is a full relative path: {keys:?}"
         );
+        assert!(
+            keys.contains(&"orbit/references/setup/linux-sandbox.md"),
+            "Linux sandbox setup is an embedded managed reference: {keys:?}"
+        );
     }
 
     /// A freshly initialized workspace is clean on every artifact kind.
@@ -538,8 +542,8 @@ mod artifacts {
             .expect("inspect artifacts");
         let skill_health = health_of(&report, ArtifactKind::Skill);
         assert_eq!(
-            skill_health.scanned, 3,
-            "one healthy skill plus two residues"
+            skill_health.scanned, 4,
+            "two healthy skills plus two residues"
         );
         for residue in [&untracked_dir, &tracked_dir] {
             let name = residue

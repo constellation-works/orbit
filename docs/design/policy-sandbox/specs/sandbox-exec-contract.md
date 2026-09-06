@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Sandboxed Exec Contract"
 tags: ["policy-sandbox"]
-last_validated: 2026-08-11
+last_validated: 2026-09-05
 ---
 
 # Spec: Sandboxed Exec Contract
@@ -28,7 +28,7 @@ Process supervision is full of subtle deadlocks (full pipe buffers, orphan grand
 - **Background drains.** `wait_with_optional_timeout` spawns reader threads for stdout and stderr immediately after spawn. The child must never block on a full pipe buffer because the parent is not reading.
 - **Stdin writer thread.** When `StdinMode::Bytes` is set, a writer thread copies the payload to the child's stdin. A failed write terminates the child via `terminate_process_group` and surfaces as `OrbitError::Execution(<message>)`.
 - **Poll interval.** The wait loop polls with `WAIT_POLL_INTERVAL = 100ms` (or the remaining deadline, whichever is smaller). The interval is global and not per-request configurable.
-- **Signal handler installation (Unix).** A `SignalHandlerGuard` installs SIGINT and SIGTERM handlers for the duration of the wait loop. Installation acquires a process-global `Mutex` so concurrent calls cannot race. Drop restores the previous handlers in reverse order.
+- **Signal handler installation (Unix).** A `SignalHandlerGuard` installs SIGINT and SIGTERM handlers for the duration of the wait loop. Installation acquires a process-global `Mutex`; the guard holds it until drop, so concurrent supervised waits are serialized. Drop restores the previous handlers and closes the signal pipe.
 - **Timeout escalation.** When the deadline expires, `terminate_process_group(child, SIGTERM, poll_interval)` is called. If the group does not exit within `TERMINATION_GRACE_PERIOD = 5 seconds`, `kill_process_group` (SIGKILL) is invoked plus a direct `child.kill()`/`child.wait()`.
 - **Parent-signal escalation.** When the parent receives SIGINT or SIGTERM during the wait, the same termination path runs with the received signal. The result reports `exit_code = Some(128 + signal)` and `success = false`.
 - **Clean-exit reaping.** When the child exits cleanly, the wait loop calls `kill_process_group(child.id())` to reap any orphan subprocesses still holding pipe write ends, then joins the reader threads. Without this, an orphan grandchild can keep the pipes open and block reader-thread completion indefinitely.
@@ -56,7 +56,7 @@ Process supervision is full of subtle deadlocks (full pipe buffers, orphan grand
 
 ## Concurrency Constraints
 
-- **Single signal-handler install at a time.** The global `Mutex` in `SignalHandlerGuard` serializes installs. Two concurrent `run_process` calls in the same process must take turns at install/drop boundaries; the wait loops themselves run concurrently once the handlers are active.
+- **Single signal-handler install at a time.** The global `Mutex` in `SignalHandlerGuard` serializes the complete guarded wait on Unix. Two concurrent `run_process` calls in the same process take turns from install through drop; their wait loops do not overlap.
 - **No assumption about thread-local state.** Reader threads, writer threads, and the signal handler are spawned with `'static` requirements; callers must not rely on thread-local data from the spawning thread.
 - **No retry inside `run_process`.** The runner does not retry spawn failures, wait errors, or signal-install failures. Retry policy belongs to the caller.
 

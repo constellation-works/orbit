@@ -1,7 +1,8 @@
 # CI-failure sweep pipeline [ORB-11107].
 #
-# Two deterministic steps and nothing else. This pipeline looks and files; it
-# never repairs, so it launches no agent and builds no worktree.
+# Safe intake pipeline. It looks and files into proposed quarantine, then runs
+# the existing read-only task-pilot pipeline before any task can enter backlog.
+# It never implements a repair and builds no worktree.
 #
 # Shape
 # - `collect` (deterministic, host-owned): runs the GitHub capability preflight
@@ -9,15 +10,22 @@
 #   bounded, redacted evidence snapshot. The credential never has to cross into
 #   a sandbox, because the looking happens before any task exists.
 # - `file` (deterministic): clusters the snapshot's current, non-stale failures
-#   by root cause and files each surviving cluster as an ordinary `backlog` bug
-#   task carrying that evidence inline. Filing is deduped against still-open
-#   tasks by failure key.
+#   by root cause and files each surviving cluster as a `proposed` bug task
+#   carrying that evidence inline. Filing is deduped against still-open tasks
+#   by failure key. Proposed is the quarantine boundary: an active auto-drain
+#   cannot see the finding yet.
+# - `pilots` (bounded fan-out): invokes the existing task_pilot_pipeline once
+#   for each newly filed task and each still-proposed matching task from an
+#   earlier failed or withheld pilot. The child applies validated selectors,
+#   assesses current integration relevance, and promotes only warning-free actionable
+#   repairs. A failed pilot, invalid/missing selectors, duplicate or
+#   already-landed finding remains proposed without holding independent pilots.
 #
-# Filed tasks are unremarkable: they ship through `task_pr_pipeline` on the
-# ordinary `agent_implement` baseline with no `required_tools`, because the
-# evidence they need is already in the description. Verification needs no extra
-# stage — the fix opens a normal pull request, CI runs on it, and if the failure
-# is still current the next sweep observes it again.
+# Filing by itself carries no promotion authority. This named pipeline passes a
+# literal authorization only after it has selected the exact filed task for its
+# pilot; task_pilot_pipeline defaults that authority to false for every other
+# caller. Enabling the shipped CI routine or invoking this job is therefore the
+# explicit sweep-admission decision. It is not completion authorization.
 #
 # Empty and unavailable behavior
 # - No current failure: `file` reports `no_current_failure` and the run succeeds
@@ -26,9 +34,28 @@
 # - No GitHub client or no credentials on this host: `collect` reports
 #   `capability_unavailable` and `file` passes that through unchanged. That is
 #   never reported as a no-current-failure and is never a CI pass.
-# - A discovery, investigation, registration, dedupe, or task-creation error
-#   fails `file` with a bounded `retryable_error` payload. The job retry wrapper
-#   retries the handoff; no current failure is consumed as a clean result.
+# - Errors are separated by blast radius. One that names a run defers only that
+#   finding: it is reported in `file`'s `deferred` list with its reasons and
+#   left for a later sweep, while every complete finding in the same snapshot
+#   still files, dedupes, and pilots. One that names no run — a repository or
+#   listing read, a registration, dedupe, or task-creation failure — or a
+#   snapshot in which nothing was complete enough to file, fails `file` with a
+#   bounded `retryable_error` payload. The job retry wrapper retries the
+#   handoff; no current failure is consumed as a clean result.
+# - Bounded investigation makes progress across sweeps rather than re-spending
+#   its budget on the same refs: red runs on branches origin no longer has are
+#   reported as `ref_no_longer_exists` instead of current, and the last
+#   investigation slot rotates through whatever the cap left over.
+# - Checkout identity is read from the runner-log stream before the bounded
+#   excerpt is formed. The extractor scans no more than 8 MiB per log and
+#   marks the identity incomplete if that hard limit is reached; it never
+#   substitutes an event or PR head SHA as checkout evidence.
+# - Ongoing checks: a queued or in-progress successor does not suppress an
+#   observed failure. Failed jobs inside an in-flight workflow are current
+#   once evidence is complete; a pending check alone is never filed. Freshness
+#   is scoped to workflow/ref/check identity so unrelated pull-request activity
+#   cannot erase a landing-branch failure, while a genuinely newer successful
+#   relevant check still suppresses the resolved case.
 #
 # Overlap safety
 # - `max_active_runs: 1` makes the sweep single-flight, and the seeded routine
@@ -54,6 +81,7 @@ spec:
     integration_branch: ""
     max_tasks: 5
     max_investigated_runs: 6
+    workspace_path: .
 
   steps:
     - id: collect
@@ -67,3 +95,28 @@ spec:
       default_input:
         ci_evidence: "{{ steps.collect.output.ci_evidence }}"
         max_tasks: "{{ input.max_tasks }}"
+
+    - id: pilots
+      fan_out:
+        items: "{{ steps.file.output.pilot_candidates }}"
+        max_workers: 3
+        worker:
+          id: pilot
+          target: activity:invoke_and_wait
+          default_input:
+            job_name: task_pilot_pipeline
+            run_input:
+              task_ids:
+                - "{{ item.task_id }}"
+              workspace_path: "{{ input.workspace_path }}"
+              base_branch: "{{ input.integration_branch }}"
+              max_tasks: 1
+              max_partition_size: 1
+              ci_sweep_filing: "{{ item }}"
+              # Explicit authority belongs to this intake pipeline, not to the
+              # filing activity or generic task-pilot callers.
+              promotion_authorized: true
+      fan_in:
+        join:
+          mode: all
+        collect: pilot_results

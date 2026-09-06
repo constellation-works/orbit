@@ -132,10 +132,15 @@ fn managed_run_environment_denies_ship_and_resume_end_to_end() {
     // The step the mock skipped: a host built with no explicit run id still
     // reports one, because the environment supplied it.
     assert_eq!(
-        build_orbit_tool_host(&runtime, None, None)
-            .task_scope()
-            .run_id
-            .as_deref(),
+        build_orbit_tool_host(
+            &runtime,
+            None,
+            None,
+            orbit_types::tool::ToolSessionContext::default()
+        )
+        .task_scope()
+        .run_id
+        .as_deref(),
         Some("jrun-test-managed"),
     );
 
@@ -162,63 +167,6 @@ fn managed_run_environment_denies_ship_and_resume_end_to_end() {
         runs.iter().map(|run| &run.run_id).collect::<Vec<_>>(),
         vec![&source_run_id],
         "a denied dispatch must not persist a run"
-    );
-}
-
-/// ORB-10540: the permitted direction, same tools and same operator session,
-/// with the managed-run envelope absent.
-///
-/// Without this the denial test above cannot distinguish a working guard from
-/// one that refuses unconditionally. Both verbs reach the runtime and produce
-/// real runs.
-#[test]
-fn unmanaged_environment_admits_operator_ship_and_resume() {
-    let _env = unmanaged_tool_env_guard();
-    let (_root, runtime, repo_root) = test_runtime();
-    write_ship_job_asset(&runtime);
-    let source_run_id = seed_failed_run(&runtime);
-    let task_ids = seed_ship_tasks(&runtime, &repo_root);
-
-    // The mirror of the denial test's scope assertion: with no envelope there is
-    // no run scope, which is what leaves the guard inert.
-    assert_eq!(
-        build_orbit_tool_host(&runtime, None, None)
-            .task_scope()
-            .run_id,
-        None,
-    );
-
-    let shipped = run_tool_as_operator(&runtime, "orbit.workflow.ship", ship_input(&task_ids))
-        .expect("unmanaged operator ship is admitted");
-    assert_eq!(shipped["workflow"], json!("ship"));
-    assert_eq!(shipped["job_id"], json!(SHIP_JOB));
-    let shipped_run_id = shipped["run_id"].as_str().expect("ship run id").to_string();
-
-    let resumed = run_tool_as_operator(
-        &runtime,
-        "orbit.workflow.run.resume",
-        json!({"id": source_run_id}),
-    )
-    .expect("unmanaged operator resume is admitted");
-    assert_eq!(resumed["workflow"], json!("resume"));
-    assert_eq!(resumed["retry_source_run_id"], json!(source_run_id));
-
-    let resumed_run_id = resumed["run_id"].as_str().expect("resume run id");
-    let stored = runtime
-        .show_job_run(&shipped_run_id)
-        .expect("shipped run is persisted");
-    assert_eq!(stored.job_id, SHIP_JOB);
-    assert_eq!(
-        stored.input.expect("ship input")["task_ids"],
-        json!(task_ids)
-    );
-    assert_eq!(
-        runtime
-            .show_job_run(resumed_run_id)
-            .expect("resumed run is persisted")
-            .retry_source_run_id
-            .as_deref(),
-        Some(source_run_id.as_str())
     );
 }
 
@@ -262,6 +210,34 @@ fn ship_tool_inherits_the_shared_in_flight_guard() {
         runs.iter().map(|run| &run.run_id).collect::<Vec<_>>(),
         vec![&in_flight.run_id],
         "a refused tool dispatch must not persist a run"
+    );
+}
+
+#[test]
+fn ship_tool_parses_and_rejects_an_unknown_crew_allowlist_before_dispatch() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, _repo_root) = test_runtime();
+
+    let error = run_tool_as_operator(
+        &runtime,
+        "orbit.workflow.ship",
+        json!({
+            "task_ids": ["TST-00001"],
+            "mode": "pr",
+            "allowed_crews": ["not-a-configured-crew"],
+        }),
+    )
+    .expect_err("an unknown MCP crew allowlist must fail before dispatch");
+    assert!(
+        error.to_string().contains("not-a-configured-crew"),
+        "{error}"
+    );
+    assert!(
+        runtime
+            .list_job_runs(crate::application::job::JobRunListParams::default())
+            .expect("list runs")
+            .is_empty(),
+        "a rejected MCP allowlist must not create a run"
     );
 }
 

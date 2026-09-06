@@ -28,6 +28,12 @@ spec:
         enum: [remote, local]
       branch_prefix:
         type: string
+      landing_mode:
+        type: string
+        enum: [local, pr]
+      ship_mode:
+        type: string
+        enum: [local, pr]
   output_schema_json:
     type: object
     properties:

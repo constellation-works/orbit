@@ -144,3 +144,33 @@ fn identical_refinalization_is_not_a_conflict() {
         "an idempotent replay is not a conflicting outcome"
     );
 }
+
+/// A cancellation request can lose the terminalization race after its final
+/// state snapshot. That is an already-terminal result, not evidence that the
+/// worker produced two contradictory outcomes.
+#[test]
+fn cancelled_report_after_worker_terminalization_is_not_a_conflict() {
+    let (_root, runtime) = test_runtime();
+    let run = insert_pending_run(&runtime, "qa_cancel_lost_race");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .expect("mark running");
+
+    let finished_at = Utc::now();
+    finalize(&runtime, &run, JobRunState::Success, finished_at);
+    finalize(
+        &runtime,
+        &run,
+        JobRunState::Cancelled,
+        finished_at + Duration::milliseconds(1),
+    );
+
+    let shown = runtime.show_job_run(&run.run_id).expect("show run");
+    assert_eq!(shown.state, JobRunState::Success);
+    assert!(
+        conflict_step(&runtime, &run.run_id).is_none(),
+        "a losing cancellation request must not manufacture a conflict"
+    );
+}

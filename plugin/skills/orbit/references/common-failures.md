@@ -10,7 +10,8 @@ Symptoms:
 
 - A gate, auto, or task run repeatedly emits `task.locks.reserve.denied`.
 - Conflicts name `held_by: "reservation"` with the same `held_by_id` on each retry.
-- CLI-only `orbit task locks list` or reservation-store inspection shows the blocking reservation belongs to a different task that is already `done`, `failed`, or otherwise no longer active.
+- CLI-only `orbit task locks list` or reservation-store inspection shows the blocking reservation belongs to a different task that is already `done`, `rejected`, `archived`, or otherwise no longer active.
+  `failed` is a run state, not a task lifecycle status.
 - The reservation has `owner_run_id: null`, so terminal run cleanup cannot release it by owner.
 
 Confirm:
@@ -48,7 +49,7 @@ Symptoms:
 
 - A workflow fails in a deterministic step with a template error such as `missing input value for <field>`.
 - Explicit CLI inputs are present in the run bundle but ignored by the activity.
-- The repo asset has the expected fields, but an installed global or workspace job definition is stale.
+- The expected released behavior is absent from the effective global or workspace job definition.
 
 Confirm:
 
@@ -62,7 +63,9 @@ find .orbit/resources/jobs ~/.orbit/resources/jobs -name '*<job>*' -print
 
 Solution:
 
-- Prefer refreshing/removing the stale installed job resource before retrying.
+- Start with `orbit workspace sync --check`; use `orbit workspace sync` for
+  managed defaults. Locally edited overrides are preserved and require deliberate
+  reconciliation. See [maintenance.md](setup/maintenance.md).
 - If a workspace `.orbit/resources` job shadows the global job, remove or update the workspace override.
 - If the already-loaded run cannot recover because it captured the stale definition, start a fresh run after the catalog is corrected.
 
@@ -87,7 +90,9 @@ Solution:
 
 - Treat this as a handoff-shape problem, not necessarily failed implementation.
 - Preserve the execution summary and artifacts.
-- If the work is intentionally outside repo diff, use the no-diff/artifact handoff path or rerun in local mode rather than retrying PR open unchanged.
+- If the work is intentionally outside repo diff, verify the installed pipeline's no-diff/artifact contract and choose an
+  authorized handoff that supports it. Switching to local mode alone does not
+  establish that a no-diff task succeeded.
 
 ## Sandboxed Child Tool Cannot Write Required Orbit Store
 
@@ -143,7 +148,7 @@ Confirm:
 
 ```bash
 ps -axo pid,ppid,stat,etime,command | rg 'orbit|mcp|semantic|docs index'
-rg -n 'database is locked|embedded_chunks|skipped_fields' .orbit/state/logs .orbit/state/audit
+rg -n 'database is locked|embedded_chunks|skipped_fields' ~/.orbit/state/logs .orbit/state/audit
 ```
 
 Solution:

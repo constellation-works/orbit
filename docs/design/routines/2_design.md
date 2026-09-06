@@ -1,8 +1,8 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-08-29
-last_validated: 2026-08-29
+last_updated: 2026-09-05
+last_validated: 2026-09-05
 status: Accepted
 feature: routines
 doc_role: design
@@ -11,7 +11,7 @@ summary: Proposed contract for routine definitions, sweep dispatch, host-local s
 tags: [routines, scheduler]
 paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
 related_features: [routines, activity-job, host-registry]
-related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082]
+related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082, ORB-11315]
 ---
 
 # Routines — Design
@@ -59,6 +59,11 @@ provenance. Aggregate workspace views are read-only; stale expected state return
 conflict so delayed or duplicate submissions cannot overwrite newer state.
 
 ---
+
+The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
+from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
+immutable batches and separate successful-coverage checkpoints. It is proposed
+and unimplemented; existing scheduling and action semantics remain current.
 
 ## 1. Routine Definition
 
@@ -350,6 +355,8 @@ out of v1 scope for this reason.
 ---
 
 ## Task References
+
+- [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
 
 - [ORB-10001] — authored this design-doc folder (proposal; no implementation).
 - [ORB-10021] — implemented routines v1 (types, store, sweep, CLI, clock units).

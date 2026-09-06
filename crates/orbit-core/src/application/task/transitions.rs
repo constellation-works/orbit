@@ -403,27 +403,44 @@ impl OrbitRuntime {
     /// and is answered there before the worktree is created (ORB-10464,
     /// `orbit-engine`'s `vcs::worktree::dependency_delivery`). Both halves
     /// must hold for a task to be genuinely ready.
+    ///
+    /// [ORB-11305] The set is exactly `backlog` (fresh authorized work) and
+    /// `in-progress` (this run's own idempotent retry, or work a human
+    /// explicitly restarted through `orbit.task.start`). Every other status is
+    /// somebody's decision that this task should not be running right now, and
+    /// automation must not overturn it:
+    ///
+    /// - `proposed` / `someday` — not approved, or withdrawn from the backlog.
+    /// - `archived` / `rejected` — a human closed it.
+    /// - `review` / `done` — the work already landed.
+    /// - `blocked` — a run failed on it and a human has not looked yet.
+    ///
+    /// This matters most for queued work: a gate that was admitted while the
+    /// task was `backlog` can sit in `wait_for_window` for the better part of
+    /// an hour, and the dispatch decision it made back then is a snapshot, not
+    /// standing approval. Callers re-ask this question at the dispatch and
+    /// start boundaries so a withdrawal that lands during the wait wins.
     pub(crate) fn ensure_task_can_enter_workflow_as_system(
         &self,
         id: &str,
         workflow: &str,
     ) -> Result<Task, OrbitError> {
         let task = self.get_task(id)?;
-        if matches!(
-            task.status,
-            TaskStatus::Proposed
-                | TaskStatus::Backlog
-                | TaskStatus::Rejected
-                | TaskStatus::Archived
-                | TaskStatus::InProgress
-        ) {
+        if Self::workflow_admissible_statuses().contains(&task.status) {
             return Ok(task);
         }
 
         Err(OrbitError::InvalidInput(format!(
-            "task '{id}' is in status '{}'; workflow admission for '{workflow}' requires 'proposed', 'backlog', 'rejected', 'archived', or 'in-progress'",
+            "task '{id}' is in status '{}'; workflow admission for '{workflow}' requires 'backlog' or 'in-progress'. \
+             Move it back to the backlog (or start it explicitly) before automation may run it.",
             task.status
         )))
+    }
+
+    /// The single spelling of the admissible set, shared by the read-only gate
+    /// and the compare-and-set the mutating admission writes with.
+    fn workflow_admissible_statuses() -> [TaskStatus; 2] {
+        [TaskStatus::Backlog, TaskStatus::InProgress]
     }
 
     pub(crate) fn admit_task_for_workflow_as_system(
@@ -445,20 +462,10 @@ impl OrbitRuntime {
         }
 
         let note = Some(format!("workflow admission: {workflow}"));
-        let append_history = if task.status == TaskStatus::Proposed {
-            vec![TaskHistoryEntry {
-                at: chrono::Utc::now(),
-                by: SYSTEM_ACTOR_LABEL.to_string(),
-                event: "proposal_approved".to_string(),
-                note: note.clone(),
-                from_status: Some(task.status),
-                to_status: Some(TaskStatus::Backlog),
-            }]
-        } else {
-            Vec::new()
-        };
-
-        let approved_from_proposed = task.status == TaskStatus::Proposed;
+        // [ORB-11305] The predicate above read the status; this write re-checks
+        // it under the store's per-task lock. Without the compare-and-set a
+        // withdrawal landing in that gap would be overwritten by a `backlog`
+        // snapshot taken before it — exactly how an archived task was restarted.
         let updated = self.with_mutation(|| {
             let task = self.stores().task_records().update(
                 id,
@@ -466,7 +473,7 @@ impl OrbitRuntime {
                     actor: SYSTEM_ACTOR_LABEL.to_string(),
                     status_event: Some("started".to_string()),
                     status_note: note.clone(),
-                    append_history: append_history.clone(),
+                    expected_status: Some(Self::workflow_admissible_statuses().to_vec()),
                     ..StoreTaskUpdateParams::from(TaskUpdateParams {
                         status: Some(TaskStatus::InProgress),
                         ..Default::default()
@@ -478,7 +485,7 @@ impl OrbitRuntime {
                 OrbitEvent::TaskStarted {
                     id: id.to_string(),
                     started_by: SYSTEM_ACTOR_LABEL.to_string(),
-                    approved_from_proposed,
+                    approved_from_proposed: false,
                 },
             ))
         })?;

@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use crate::OrbitError;
 
-pub use orbit_types::workflow::{ShipMode, resolved_ship_mode};
+pub use orbit_types::workflow::{CompletionPolicy, ShipMode, resolved_ship_mode};
 
 pub struct Workflow {
     pub alias: &'static str,
@@ -37,10 +37,17 @@ pub const AUTO_WORKFLOW_ALIAS: &str = "auto";
 /// An empty `task_ids` slice selects auto mode (the pipeline discovers
 /// backlog tasks itself). Explicit ids are validated for duplicates and
 /// emptiness so every submission surface rejects the same malformed input.
+///
+/// [ORB-11187] `completion` is only written when it departs from the `review`
+/// default, so an ordinary submission's persisted input is unchanged and the
+/// presence of the key is itself the durable record that an operator granted
+/// this run completion authority.
 pub fn build_ship_input(
     mode: ShipMode,
     base_branch: &str,
     task_ids: &[String],
+    completion: CompletionPolicy,
+    allowed_crews: &[String],
 ) -> Result<Value, OrbitError> {
     if base_branch.trim().is_empty() {
         return Err(OrbitError::InvalidInput(
@@ -74,6 +81,18 @@ pub fn build_ship_input(
         map.insert(
             "task_ids".to_string(),
             Value::Array(task_ids.iter().cloned().map(Value::String).collect()),
+        );
+    }
+    if completion.completes() {
+        map.insert(
+            "completion".to_string(),
+            Value::String(completion.as_input_value().to_string()),
+        );
+    }
+    if !allowed_crews.is_empty() {
+        map.insert(
+            "allowed_crews".to_string(),
+            Value::Array(allowed_crews.iter().cloned().map(Value::String).collect()),
         );
     }
     Ok(Value::Object(map))
@@ -114,7 +133,8 @@ mod ship_input_tests {
 
     #[test]
     fn build_ship_input_auto_mode_omits_task_ids() {
-        let input = build_ship_input(ShipMode::Pr, "main", &[]).expect("input builds");
+        let input = build_ship_input(ShipMode::Pr, "main", &[], CompletionPolicy::Review, &[])
+            .expect("input builds");
         assert_eq!(input["mode"], "pr");
         assert_eq!(input["base_branch"], "main");
         assert!(input.get("task_ids").is_none());
@@ -123,7 +143,14 @@ mod ship_input_tests {
     #[test]
     fn build_ship_input_explicit_tasks_and_local_mode() {
         let task_ids = vec!["T1".to_string(), "T2".to_string()];
-        let input = build_ship_input(ShipMode::Local, "agent-main", &task_ids).expect("builds");
+        let input = build_ship_input(
+            ShipMode::Local,
+            "agent-main",
+            &task_ids,
+            CompletionPolicy::Review,
+            &[],
+        )
+        .expect("builds");
         assert_eq!(input["mode"], "local");
         assert_eq!(input["base_branch"], "agent-main");
         assert_eq!(input["task_ids"], serde_json::json!(["T1", "T2"]));
@@ -132,12 +159,59 @@ mod ship_input_tests {
     #[test]
     fn build_ship_input_rejects_duplicates_blank_ids_and_empty_base() {
         let dup = vec!["T1".to_string(), "T1".to_string()];
-        assert!(build_ship_input(ShipMode::Pr, "main", &dup).is_err());
+        assert!(
+            build_ship_input(ShipMode::Pr, "main", &dup, CompletionPolicy::Review, &[]).is_err()
+        );
 
         let blank = vec!["  ".to_string()];
-        assert!(build_ship_input(ShipMode::Pr, "main", &blank).is_err());
+        assert!(
+            build_ship_input(ShipMode::Pr, "main", &blank, CompletionPolicy::Review, &[]).is_err()
+        );
 
-        assert!(build_ship_input(ShipMode::Pr, "  ", &[]).is_err());
+        assert!(build_ship_input(ShipMode::Pr, "  ", &[], CompletionPolicy::Review, &[]).is_err());
+    }
+
+    #[test]
+    fn completion_policy_is_written_only_when_authorized() {
+        let default = build_ship_input(ShipMode::Pr, "main", &[], CompletionPolicy::Review, &[])
+            .expect("default input builds");
+        assert!(
+            default.get("completion").is_none(),
+            "an unauthorized submission must keep the pre-ORB-11187 input verbatim"
+        );
+
+        let completing = build_ship_input(ShipMode::Pr, "main", &[], CompletionPolicy::Done, &[])
+            .expect("completing input builds");
+        assert_eq!(completing["completion"], "done");
+    }
+
+    #[test]
+    fn completion_policy_parses_external_strings() {
+        assert_eq!(
+            CompletionPolicy::parse("review").expect("review"),
+            CompletionPolicy::Review
+        );
+        assert_eq!(
+            CompletionPolicy::parse("done").expect("done"),
+            CompletionPolicy::Done
+        );
+        assert!(CompletionPolicy::parse("merged").is_err());
+        assert!(!CompletionPolicy::default().completes());
+        assert!(CompletionPolicy::Done.completes());
+    }
+
+    #[test]
+    fn allowed_crews_are_persisted_only_when_restricted() {
+        let allowed = build_ship_input(
+            ShipMode::Pr,
+            "main",
+            &["T1".to_string()],
+            CompletionPolicy::Review,
+            &["sol".to_string()],
+        )
+        .expect("input builds");
+
+        assert_eq!(allowed["allowed_crews"], serde_json::json!(["sol"]));
     }
 
     #[test]

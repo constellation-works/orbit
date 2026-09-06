@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
+use super::super::pipeline::workspace_auto_run_input;
 use super::exec::{seed_default_catalogs, test_runtime, try_execute_named_job};
 
 #[derive(Clone, Copy)]
@@ -25,6 +26,9 @@ enum WorkspaceAutoScenario {
     KeepsDispatching,
     /// `invoke_detached` fails before a durable child exists.
     DispatchFailure,
+    /// One iteration offering a single leaf *and* an epic root, so both
+    /// detached dispatch shapes can be inspected in one run [ORB-11242].
+    LeafAndEpic,
     /// The classifier itself fails.
     ClassifierFailure,
 }
@@ -70,6 +74,7 @@ impl<'a> ScriptedWorkspaceAutoHost<'a> {
             }
             WorkspaceAutoScenario::KeepsDispatching => vec!["ORB-LATER"],
             WorkspaceAutoScenario::DispatchFailure => vec!["ORB-DISPATCH-BROKEN"],
+            WorkspaceAutoScenario::LeafAndEpic => vec!["ORB-LEAF"],
             WorkspaceAutoScenario::ClassifierFailure => {
                 unreachable!("classifier failure returns before building a classification")
             }
@@ -81,8 +86,9 @@ impl<'a> ScriptedWorkspaceAutoHost<'a> {
                 .map(|task_id| json!({ "task_ids": [task_id] }))
                 .collect::<Vec<_>>(),
             "has_leaves": true,
-            "epic_task_id": null,
-            "has_epic": false,
+            "epic_task_id": matches!(self.scenario, WorkspaceAutoScenario::LeafAndEpic)
+                .then_some("ORB-EPIC"),
+            "has_epic": matches!(self.scenario, WorkspaceAutoScenario::LeafAndEpic),
             "idle": false,
             "sleep_seconds": 0,
             "pending_backlog": task_ids.len(),
@@ -134,6 +140,7 @@ impl<'a> ScriptedWorkspaceAutoHost<'a> {
     fn detached_result(&self, input: &Value) -> Result<Value, DispatchError> {
         let task_id = input["run_input"]["task_ids"][0]
             .as_str()
+            .or_else(|| input["run_input"]["epic_task_id"].as_str())
             .expect("scripted task id");
         if task_id == "ORB-DISPATCH-BROKEN" {
             return Err(DispatchError::DeterministicActionFailed {
@@ -145,7 +152,7 @@ impl<'a> ScriptedWorkspaceAutoHost<'a> {
         self.record_submitted_child(input, &child_run_id);
         Ok(json!({
             "run_id": child_run_id,
-            "job_name": "task_auto_pipeline",
+            "job_name": input["job_name"].as_str().unwrap_or("task_auto_pipeline"),
             "queued": false,
         }))
     }
@@ -178,7 +185,8 @@ impl RuntimeHost for ScriptedWorkspaceAutoHost<'_> {
                 let expired = match self.scenario {
                     WorkspaceAutoScenario::KeepsDispatching => reread >= 1,
                     WorkspaceAutoScenario::DispatchFailure
-                    | WorkspaceAutoScenario::ClassifierFailure => true,
+                    | WorkspaceAutoScenario::ClassifierFailure
+                    | WorkspaceAutoScenario::LeafAndEpic => true,
                 };
                 Ok(json!({
                     "deadline": "2099-01-01T00:00:00Z",
@@ -271,6 +279,17 @@ fn workspace_auto_keeps_dispatching_while_earlier_leaves_are_still_running() {
 
     assert!(outcome.success);
     assert_eq!(host.classify_calls.load(Ordering::SeqCst), 2);
+
+    // [ORB-11253] The classifier's only handle on the drain whose live worker
+    // ceiling it must read is the run id the engine injects into every activity
+    // input. Pinned here, where the real engine renders the step, because
+    // nothing in the asset itself passes it.
+    for input in host.inputs_for("classify_workspace_auto_tasks") {
+        assert_eq!(
+            input["run_id"], run.run_id,
+            "the classifier must be told which run it is admitting for: {input}"
+        );
+    }
 
     let dispatched: Vec<Value> = host
         .inputs_for("invoke_detached")
@@ -378,4 +397,141 @@ fn workspace_auto_preserves_concrete_workspace_step_failure() {
     );
     assert_eq!(host.classify_calls.load(Ordering::SeqCst), 1);
     assert!(host.inputs_for("invoke_detached").is_empty());
+}
+
+/// [ORB-11242] The allowlist is only useful if it survives the hand-off: the
+/// drain dispatches its leaves and its epic root *detached*, so a restriction
+/// that stopped at this run's own input would leave every child unrestricted.
+/// Driven through the shipped YAML so what is pinned is the forwarding the
+/// job declares, not a Rust helper.
+#[test]
+fn workspace_auto_forwards_its_crew_allowlist_to_every_detached_child() {
+    let (_root, runtime, repo_root, global_root) = test_runtime();
+    seed_default_catalogs(&global_root);
+    let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::LeafAndEpic);
+    let input = json!({
+        "max_tasks": 50,
+        "for_seconds": 10,
+        "poll_sleep_seconds": 0,
+        "idle_sleep_seconds": 0,
+        "allowed_crews": ["opus", "sonnet"],
+    });
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "workspace_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(input.clone()),
+            None,
+        )
+        .expect("insert workspace auto run");
+    runtime
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), run.job_id.clone(), input.clone()),
+        )
+        .expect("write workspace auto run state");
+
+    let outcome = try_execute_named_job(
+        &runtime,
+        &repo_root,
+        &host,
+        "workspace_auto_pipeline",
+        input,
+        &run.run_id,
+    )
+    .expect("restricted drain must still ship");
+    assert!(outcome.success);
+
+    // The classifier needs it to decide what is admissible at all.
+    let classified = host.inputs_for("classify_workspace_auto_tasks");
+    assert_eq!(
+        classified[0]["allowed_crews"],
+        json!(["opus", "sonnet"]),
+        "the classifier must see the window's restriction: {classified:?}"
+    );
+
+    // Both detached shapes carry it: the leaf job and the epic root.
+    let dispatched = host.inputs_for("invoke_detached");
+    let by_job: Vec<(String, Value)> = dispatched
+        .iter()
+        .map(|input| {
+            (
+                input["job_name"].as_str().unwrap_or_default().to_string(),
+                input["run_input"]["allowed_crews"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        by_job,
+        vec![
+            ("task_auto_pipeline".to_string(), json!(["opus", "sonnet"])),
+            ("epic_pipeline".to_string(), json!(["opus", "sonnet"])),
+        ],
+        "every detached child inherits the window: {dispatched:?}"
+    );
+}
+
+/// [ORB-11242] The durable input the drain carries. Omission must stay
+/// byte-identical to the pre-allowlist shape, because "the option was not
+/// passed" and "the option was passed empty" have to mean the same thing all
+/// the way down to the persisted run.
+#[test]
+fn workspace_auto_run_input_records_only_the_options_the_operator_passed() {
+    use crate::application::workflow::CompletionPolicy;
+
+    let bare = workspace_auto_run_input(None, None, CompletionPolicy::Review, &[])
+        .expect("bare submission builds an input");
+    assert_eq!(bare, json!({ "for_seconds": 0 }));
+
+    let restricted = workspace_auto_run_input(
+        Some(7200),
+        Some(8),
+        CompletionPolicy::Done,
+        &["opus".to_string(), "sonnet".to_string()],
+    )
+    .expect("restricted submission builds an input");
+    assert_eq!(
+        restricted,
+        json!({
+            "for_seconds": 7200,
+            "completion": "done",
+            "max_active_leaf_runs": 8,
+            "allowed_crews": ["opus", "sonnet"],
+        })
+    );
+
+    assert!(
+        workspace_auto_run_input(None, Some(0), CompletionPolicy::Review, &[]).is_err(),
+        "zero concurrency is still refused before anything is submitted"
+    );
+}
+
+/// The allowlist is canonicalized and validated against this host's registry
+/// before a run record exists, so a typo is an immediate command error rather
+/// than a live drain that quietly admits less than the operator asked for.
+#[test]
+fn auto_drain_crew_allowlist_is_validated_and_canonicalized_at_submission() {
+    let (_root, runtime, _repo_root, _global_root) = test_runtime();
+
+    assert!(
+        runtime
+            .canonical_allowed_crews(&["not-a-configured-crew".to_string()])
+            .is_err(),
+        "an unconfigured crew must fail the submission"
+    );
+    assert!(
+        runtime
+            .canonical_allowed_crews(&["  ".to_string()])
+            .is_err(),
+        "a blank crew name must fail the submission"
+    );
+    assert_eq!(
+        runtime
+            .canonical_allowed_crews(&[])
+            .expect("omitting the option is valid"),
+        Vec::<String>::new()
+    );
 }

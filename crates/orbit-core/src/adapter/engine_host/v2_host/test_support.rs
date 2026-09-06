@@ -41,11 +41,23 @@ pub(crate) fn seeded_runtime_with_executor(sandbox: Option<ExecutorSandboxKind>)
 }
 
 pub(crate) fn runtime_with_workspace_layout() -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
+    runtime_with_workspace_config(None)
+}
+
+/// The same layout with an optional workspace `config.toml` written before the
+/// runtime opens — the only way to give a fixture a `[crews.*]` registry, which
+/// resolved configuration reads once at open.
+pub(crate) fn runtime_with_workspace_config(
+    config_toml: Option<&str>,
+) -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
     let root = tempdir().expect("create tempdir");
     let global = root.path().join("home/.orbit");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).expect("global orbit dir");
     std::fs::create_dir_all(&workspace).expect("workspace orbit dir");
+    if let Some(config_toml) = config_toml {
+        std::fs::write(workspace.join("config.toml"), config_toml).expect("write workspace config");
+    }
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
     let repo_root = root.path().join("repo");
     (root, runtime, repo_root)

@@ -94,7 +94,7 @@ fn default_workspace_for_cwd_picks_longest_active_prefix() {
 }
 
 #[test]
-fn default_workspace_selection_root_override_beats_cwd() {
+fn default_workspace_selection_selector_beats_cwd() {
     let registry = WorkspaceRegistry {
         workspaces: vec![
             workspace("outer", WorkspaceStatus::Active),
@@ -107,48 +107,58 @@ fn default_workspace_selection_root_override_beats_cwd() {
         ..Default::default()
     };
 
-    // cwd would resolve to "outer", but an explicit --root pointing at
+    // cwd would resolve to "outer", but an explicit --workspace pointing at
     // "inner" takes priority (ORB-10029 regression fix: this is the only
     // signal `orbit web connect` can pass through for the remote's cwd,
     // which is the SSH user's home directory, not any workspace).
     assert_eq!(
         default_workspace_selection(
             &registry,
-            Some(Path::new("/repos/inner")),
+            Some("/repos/inner"),
             Some(Path::new("/repos/pkg")),
         ),
+        Some("inner".to_string())
+    );
+    // The same selector by registered name, which is what a non-path
+    // `--workspace` value resolves through.
+    assert_eq!(
+        default_workspace_selection(&registry, Some("inner"), Some(Path::new("/repos/pkg"))),
         Some("inner".to_string())
     );
 }
 
 #[test]
-fn default_workspace_selection_unmatched_root_override_falls_back_to_none() {
+fn default_workspace_selection_unmatched_selector_falls_back_to_none() {
     let registry = WorkspaceRegistry {
         workspaces: vec![workspace("outer", WorkspaceStatus::Active)],
         checkouts: vec![checkout("outer", "/repos")],
         ..Default::default()
     };
 
-    // An unmatched --root falls back to "All workspaces" (None) even though
-    // cwd would otherwise resolve to a real workspace — it must not silently
-    // fall through to the cwd-based default, and must not error or
+    // An unmatched --workspace falls back to "All workspaces" (None) even
+    // though cwd would otherwise resolve to a real workspace — it must not
+    // silently fall through to the cwd-based default, and must not error or
     // auto-register.
+    assert_eq!(
+        default_workspace_selection(&registry, Some("/nowhere"), Some(Path::new("/repos/pkg")),),
+        None
+    );
     assert_eq!(
         default_workspace_selection(
             &registry,
-            Some(Path::new("/nowhere")),
-            Some(Path::new("/repos/pkg")),
+            Some("no-such-name"),
+            Some(Path::new("/repos/pkg"))
         ),
         None
     );
 }
 
 #[test]
-fn default_workspace_selection_resolves_relative_root_override_against_cwd() {
-    // ORB-10053: a relative --root (e.g. `--root .`) must resolve against
-    // cwd and canonicalize before the prefix-match against registered roots
-    // (which are canonical absolute paths). Prior behavior compared the raw
-    // relative path lexically and always missed, silently falling back to
+fn default_workspace_selection_resolves_relative_selector_against_cwd() {
+    // ORB-10053: a relative path selector (e.g. `--workspace .`) must resolve
+    // against cwd and canonicalize before the prefix-match against registered
+    // roots (which are canonical absolute paths). Prior behavior compared the
+    // raw relative path lexically and always missed, silently falling back to
     // "All workspaces" instead of preselecting the workspace.
     let tmp = tempfile::tempdir().expect("tempdir");
     let parent = tmp.path().canonicalize().expect("canonicalize tmp");
@@ -176,21 +186,27 @@ fn default_workspace_selection_resolves_relative_root_override_against_cwd() {
         ..Default::default()
     };
 
-    // Relative root_override, resolved against a cwd that is the parent of
+    // A relative path selector, resolved against a cwd that is the parent of
     // the workspace, must preselect the workspace — matching the behavior of
-    // passing the equivalent absolute path.
+    // passing the equivalent absolute path. (The registered name here is
+    // `my_workspace` too, so the relative-path case is asserted through a
+    // sibling directory name that no registered name matches.)
     assert_eq!(
-        default_workspace_selection(&registry, Some(Path::new("my_workspace")), Some(&parent),),
+        default_workspace_selection(&registry, Some("./my_workspace"), Some(&parent)),
         Some("my_workspace".to_string())
     );
     assert_eq!(
-        default_workspace_selection(&registry, Some(&canonical_ws_root), Some(&parent)),
+        default_workspace_selection(
+            &registry,
+            Some(&canonical_ws_root.to_string_lossy()),
+            Some(&parent)
+        ),
         Some("my_workspace".to_string())
     );
 }
 
 #[test]
-fn default_workspace_selection_no_root_override_falls_back_to_cwd() {
+fn default_workspace_selection_no_selector_falls_back_to_cwd() {
     let registry = WorkspaceRegistry {
         workspaces: vec![workspace("outer", WorkspaceStatus::Active)],
         checkouts: vec![checkout("outer", "/repos")],

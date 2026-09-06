@@ -9,7 +9,9 @@ Every `orbit.task.*` call needs `model` — your agent family. Never use bare
 
 ## Workflow
 
-1. **Confirm** the objective, constraints, and what done means.
+1. **Establish** the objective, constraints, and what done means from the user's
+   request. Ask only for information that is genuinely missing. Select the
+   authoritative workspace before searching or writing.
 2. **Check for overlapping prior work.** Run a hybrid search on the title and
    description before creating anything — a brand-new task has no embeddings, so
    `--hybrid --kind task` on the text is the check that works. (`search similar`
@@ -46,8 +48,8 @@ Names *only* modification and deletion targets, as canonical selectors
 workspace's root — an out-of-root path fails pipeline admission.
 
 Read-for-context files, convention and pattern docs, and files that don't exist
-yet do not belong there; cite those in prose instead. The exception is a design
-doc the repo co-locates with the code it describes, since it co-changes.
+yet do not belong there; cite those in prose instead. Include a design doc only
+when it exists and is itself an expected modification target.
 
 Prefer `file:`/`symbol:` over `dir:` when the change can be named precisely.
 
@@ -65,7 +67,9 @@ job fills them from real inspection. → [orchestration.md](orchestration.md)
   `acceptance_criteria`.
 - `description` should be multi-line markdown for anything non-trivial.
 - Valid `type`: `feature`, `bug`, `refactor`, `chore`.
-- Do not pass the retired `plan` field.
+- Do not pass `plan` to task creation; author it later through task update.
+- Set `status: proposed` when filing findings for consideration. Creation does
+  not imply approval, dispatch, or completion; preserve the user's intent.
 - Blank companion files (`plan.md`, `execution-summary.md`) are blank *fields* —
   repair with `orbit.task.update`, never by hand.
 
@@ -84,8 +88,12 @@ job fills them from real inspection. → [orchestration.md](orchestration.md)
   but inert. Only `produces`/`resolves` accept non-task targets; the rest
   require a task ID. A dangling target (unknown in every workspace this host
   can see) succeeds but emits a `TaskRelationDangling` audit event.
-- `parent_id`, `source_task_id` (the bug-introducing task; creation-time only —
-  `update` silently drops it), `tags` (reuse existing before inventing new).
+- `parent_id` is a retired `orbit.task.add` input and is stripped with the
+  other entries in `RETIRED_TASK_ADD_INPUT_FIELDS`; use a `child_of` relation
+  in `relations` when creating a subtask. `source_task_id` is also retired
+  from `orbit.task.add`; for bug tasks, set it after creation with
+  `orbit.task.update` (which accepts the field), and use an empty string there
+  to clear it. `tags` (reuse existing before inventing new).
 - `required_tools: ["<exact.canonical.tool>", ...]` — tools the task must add to
   any agent activity's baseline. Use only exact, active, agent-facing registered
   names; wildcards and prefixes are rejected at dispatch. The list is normalized,

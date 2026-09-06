@@ -52,12 +52,36 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     let definition = runtime
         .auto_task_show(&name)?
         .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
-    to_json(&definition)
+    let mut value = to_json(&definition)?;
+    if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
+        let diagnostic = if input
+            .get("preview")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            crate::application::automation::evaluate_auto_task(
+                runtime,
+                &definition,
+                true,
+                chrono::Utc::now(),
+            )?
+        } else {
+            crate::application::automation::inspect_auto_task(
+                runtime,
+                &definition,
+                chrono::Utc::now(),
+            )?
+        };
+        value["automation"] = serde_json::to_value(&diagnostic)
+            .map_err(|e| OrbitError::InvalidInput(e.to_string()))?;
+    }
+    Ok(value)
 }
 
 pub(super) fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let name = required_str(&input, "name")?;
     let params = AutoTaskUpdateParams {
+        waive_batch: parse_field(&input, "waive_batch", false)?,
         description: optional_str(&input, "description"),
         schedule: parse_field(&input, "schedule", false)?,
         dedupe: parse_field(&input, "dedupe", false)?,

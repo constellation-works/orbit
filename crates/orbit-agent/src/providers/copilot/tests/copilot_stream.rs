@@ -7,7 +7,7 @@
 
 use orbit_types::tool::ExecutionResult;
 
-use crate::providers::normalize_cli_stdout;
+use crate::providers::{normalize_cli_stdout, project_cli_response};
 use crate::types::{AgentResponseStatus, parse_and_validate_response};
 
 /// Verbatim stdout from a real Copilot 1.0.80 run whose token lacked Copilot
@@ -37,6 +37,11 @@ fn envelope_line(content: &str) -> String {
 fn normalized(stdout: &str) -> String {
     String::from_utf8(normalize_cli_stdout("copilot", stdout.as_bytes()).into_owned())
         .expect("utf8 normalized stdout")
+}
+
+fn projected(stdout: &str) -> String {
+    String::from_utf8(project_cli_response("copilot", stdout.as_bytes()).into_owned())
+        .expect("utf8 projected response")
 }
 
 fn exec_result(stdout: &str, stderr: &str, exit_code: i32) -> ExecutionResult {
@@ -85,6 +90,86 @@ fn assistant_usage_survives_normalization_for_the_invocation_trace() {
 
     assert!(kept.contains("assistant.usage"));
     assert!(kept.contains("assistant.message"));
+}
+
+#[test]
+fn reasoning_cannot_supply_the_assistant_answer() {
+    let stdout = concat!(
+        r#"{"type":"assistant.reasoning","data":{"content":"{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"claimed\":\"reasoning\"},\"error\":null}"},"id":"reason-1"}"#,
+        "\n",
+        r#"{"type":"assistant.usage","data":{"inputTokens":120,"outputTokens":34}}"#,
+        "\n",
+    );
+
+    assert!(projected(stdout).is_empty());
+    assert!(normalized(stdout).contains("assistant.usage"));
+}
+
+#[test]
+fn empty_message_tool_arguments_cannot_supply_the_assistant_answer() {
+    let stdout = concat!(
+        r#"{"type":"assistant.message","data":{"content":"","toolRequests":[{"toolCallId":"call-1","name":"shell","arguments":{"command":"printf '%s' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"claimed\":\"tool-arguments\"},\"error\":null}'"}}]},"id":"msg-1"}"#,
+        "\n",
+        r#"{"type":"session.abort","data":{"reason":"cancelled"},"ephemeral":true}"#,
+        "\n",
+    );
+
+    assert!(projected(stdout).is_empty());
+    assert!(normalized(stdout).contains("toolRequests"));
+}
+
+#[test]
+fn final_message_after_tool_traffic_is_the_only_projected_content() {
+    let stdout = concat!(
+        r#"{"type":"assistant.message","data":{"content":"","toolRequests":[{"toolCallId":"call-1","name":"shell","arguments":{"command":"echo {\"schemaVersion\":1,\"status\":\"failed\"}"}}]},"id":"msg-1"}"#,
+        "\n",
+        r#"{"type":"assistant.message","data":{"content":"{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"source\":\"assistant\"},\"error\":null}"},"id":"msg-2"}"#,
+        "\n",
+    );
+
+    let answer = projected(stdout);
+    assert!(answer.contains(r#""source":"assistant""#));
+    assert!(!answer.contains("toolCallId"));
+}
+
+#[test]
+fn terminal_assistant_message_replaces_earlier_commentary() {
+    let envelope = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"fixture","message":"failed"}}"#;
+    let stdout = format!(
+        "{}{}",
+        envelope_line("Commentary: I updated the files."),
+        envelope_line(envelope),
+    );
+
+    assert_eq!(projected(&stdout), envelope);
+}
+
+#[test]
+fn trailing_assistant_message_replaces_an_earlier_envelope() {
+    let stdout = format!(
+        "{}{}",
+        envelope_line(r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#),
+        envelope_line("Courtesy: the run is complete."),
+    );
+
+    assert_eq!(projected(&stdout), "Courtesy: the run is complete.");
+}
+
+#[test]
+fn empty_or_missing_terminal_content_replaces_an_earlier_envelope() {
+    let envelope = envelope_line(
+        r#"{"schemaVersion":1,"status":"success","result":{"source":"earlier"},"error":null}"#,
+    );
+
+    for terminal_message in [
+        r#"{"type":"assistant.message","data":{"content":""},"id":"msg-2"}"#,
+        r#"{"type":"assistant.message","data":{},"id":"msg-3"}"#,
+    ] {
+        assert!(
+            projected(&(envelope.clone() + terminal_message + "\n")).is_empty(),
+            "terminal message must replace the earlier envelope: {terminal_message}",
+        );
+    }
 }
 
 #[test]

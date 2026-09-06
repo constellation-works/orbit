@@ -303,6 +303,161 @@ fn malformed_jsonl_and_missing_blobs_are_tolerated() {
 }
 
 #[test]
+fn provider_process_completion_uses_the_parallel_invocation_parent() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    // Regression fixture from jrun-20260905-1721. The process events share
+    // `pilot`, but their direct parents identify separate invocations.
+    let run_id = "jrun-20260905-1721";
+    seed_v2_audit_events(
+        &runtime,
+        run_id,
+        [
+            json!({
+                "event_id": "00000001",
+                "run_id": run_id,
+                "body_kind": "run_started"
+            }),
+            json!({
+                "event_id": "0000000a",
+                "run_id": run_id,
+                "parent_event_id": "00000001",
+                "body_kind": "step_started",
+                "step_id": "pilot"
+            }),
+            json!({
+                "event_id": "0000000b",
+                "run_id": run_id,
+                "parent_event_id": "0000000a",
+                "body_kind": "activity_started"
+            }),
+            json!({
+                "event_id": "0000000d",
+                "run_id": run_id,
+                "parent_event_id": "0000000a",
+                "body_kind": "activity_started"
+            }),
+            json!({
+                "event_id": "00000011",
+                "run_id": run_id,
+                "parent_event_id": "0000000d",
+                "body_kind": "cli_invocation_process",
+                "pid": 288858,
+                "pid_start_time": "ps-lstart-utc-v1:exited"
+            }),
+            json!({
+                "event_id": "00000013",
+                "run_id": run_id,
+                "parent_event_id": "0000000b",
+                "body_kind": "cli_invocation_process",
+                "pid": 289173,
+                "pid_start_time": "ps-lstart-utc-v1:live"
+            }),
+            json!({
+                "event_id": "00000014",
+                "run_id": run_id,
+                "parent_event_id": "0000000d",
+                "body_kind": "cli_invocation_finished",
+                "exit_code": 0,
+                "duration_ms": 30_000
+            }),
+        ],
+    );
+
+    let probed = std::sync::Mutex::new(Vec::new());
+    let records = runtime
+        .collect_run_provider_processes_with(run_id, |pid, token| {
+            probed
+                .lock()
+                .expect("probe lock")
+                .push((pid, token.map(str::to_string)));
+            ProcessLiveness::Alive
+        })
+        .expect("collect provider processes");
+
+    assert!(records[0].finished);
+    assert_eq!(records[0].pid, 288858);
+    assert_eq!(records[0].exit_code, Some(0));
+    assert!(!records[1].finished);
+    assert_eq!(records[1].pid, 289173);
+    assert_eq!(records[1].liveness, ProcessLiveness::Alive);
+    assert_eq!(
+        probed.into_inner().expect("probed pids"),
+        vec![(289173, Some("ps-lstart-utc-v1:live".to_string()))]
+    );
+}
+
+#[test]
+fn parallel_provider_completions_can_arrive_in_reverse_order() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = "jrun-parallel-reverse";
+    seed_v2_audit_events(
+        &runtime,
+        run_id,
+        [
+            json!({ "event_id": "run", "run_id": run_id, "body_kind": "run_started" }),
+            json!({ "event_id": "step", "run_id": run_id, "parent_event_id": "run", "body_kind": "step_started", "step_id": "pilot" }),
+            json!({ "event_id": "first", "run_id": run_id, "parent_event_id": "step", "body_kind": "activity_started" }),
+            json!({ "event_id": "second", "run_id": run_id, "parent_event_id": "step", "body_kind": "activity_started" }),
+            json!({ "event_id": "pid-first", "run_id": run_id, "parent_event_id": "first", "body_kind": "cli_invocation_process", "pid": 101 }),
+            json!({ "event_id": "pid-second", "run_id": run_id, "parent_event_id": "second", "body_kind": "cli_invocation_process", "pid": 202 }),
+            json!({ "event_id": "finished-second", "run_id": run_id, "parent_event_id": "second", "body_kind": "cli_invocation_finished", "exit_code": 22 }),
+            json!({ "event_id": "finished-first", "run_id": run_id, "parent_event_id": "first", "body_kind": "cli_invocation_finished", "exit_code": 11 }),
+        ],
+    );
+
+    let records = runtime
+        .collect_run_provider_processes_with(run_id, |_, _| panic!("no process remains open"))
+        .expect("collect provider processes");
+
+    assert!(records.iter().all(|record| record.finished));
+    assert_eq!(records[0].pid, 101);
+    assert_eq!(records[0].exit_code, Some(11));
+    assert_eq!(records[1].pid, 202);
+    assert_eq!(records[1].exit_code, Some(22));
+}
+
+#[test]
+fn ancestry_free_completions_close_only_an_unambiguous_historical_process() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = "jrun-historical-ancestry-free";
+    seed_v2_audit_events(
+        &runtime,
+        run_id,
+        [
+            json!({ "event_id": "pid-one", "run_id": run_id, "body_kind": "cli_invocation_process", "step_id": "pilot", "pid": 101 }),
+            json!({ "event_id": "finished", "run_id": run_id, "body_kind": "cli_invocation_finished", "step_id": "pilot", "exit_code": 0 }),
+        ],
+    );
+
+    let records = runtime
+        .collect_run_provider_processes_with(run_id, |_, _| {
+            panic!("completed process is not probed")
+        })
+        .expect("collect provider processes");
+    assert!(records[0].finished);
+
+    let ambiguous_run_id = "jrun-historical-ambiguous";
+    seed_v2_audit_events(
+        &runtime,
+        ambiguous_run_id,
+        [
+            json!({ "event_id": "pid-one", "run_id": ambiguous_run_id, "body_kind": "cli_invocation_process", "step_id": "pilot", "pid": 101 }),
+            json!({ "event_id": "pid-two", "run_id": ambiguous_run_id, "body_kind": "cli_invocation_process", "step_id": "pilot", "pid": 202 }),
+            json!({ "event_id": "finished", "run_id": ambiguous_run_id, "body_kind": "cli_invocation_finished", "step_id": "pilot", "exit_code": 0 }),
+        ],
+    );
+    let records = runtime
+        .collect_run_provider_processes_with(ambiguous_run_id, |_, _| ProcessLiveness::Alive)
+        .expect("collect provider processes");
+    assert!(records.iter().all(|record| !record.finished));
+    assert!(
+        records
+            .iter()
+            .all(|record| record.liveness == ProcessLiveness::Alive)
+    );
+}
+
+#[test]
 fn provider_processes_pair_each_spawn_with_the_exit_that_closes_it() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-provider-processes";

@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Task Bundle V2"
 tags: ["task-artifacts"]
-last_validated: 2026-08-16
+last_validated: 2026-09-05
 ---
 
 # Spec: Task Bundle V2
@@ -235,7 +235,7 @@ The file bundle does not provide all-or-nothing transactions across Markdown sid
 
 - `task.yaml` remains canonical for structured metadata.
 - JSONL tail corruption is repaired only at the final partial row; corruption before the tail is an error.
-- The last event with `to_status` must match `task.yaml.status`; mismatches are corruption and must fail reads.
+- The last event with `to_status` must match `task.yaml.status`; a mismatch on a *settled* bundle is corruption and must fail reads. A mismatch observed while a writer is mid-publication is not corruption and must not be observable at all — see [Concurrent reads and lifecycle writes](#concurrent-reads-and-lifecycle-writes).
 - Generated indexes are invalid when count or `updated_at` stamps differ from registered bundle envelopes and must be rebuilt from bundles.
 - Artifact manifest entries must reference existing relative files with matching size and SHA-256; unmanifested files are ignored until a future compaction/prune command removes them.
 
@@ -244,6 +244,39 @@ diagnostic containing the task ID, canonical path, and reason. Direct lookup of
 another ID and allocation/publication of a new task must not scan the malformed
 bundle. List and search remain fail-loud and return that diagnostic. None of
 these query paths may delete, move, repair, or quarantine bundle bytes.
+
+### Concurrent reads and lifecycle writes
+
+A lifecycle write publishes across more than one file — a status transition
+appends to `events.jsonl` and then republishes `task.yaml` — so between those
+two steps the bundle on disk has an event log the envelope does not yet agree
+with. That intermediate state is indistinguishable on inspection from the
+settled mismatch the rule above calls corruption.
+
+Readers must therefore observe the writer's coordination rather than infer
+intent from bytes:
+
+- A writer holds that task's exclusive bundle lock (`<bundle>/task.yaml`, via
+  its sibling lock file) for the whole multi-file publication.
+- A reader that assembles a **complete** bundle must hold the same lock in
+  shared mode. It then observes only settled bundles, so a genuine mismatch
+  still fails the read (`task_bundle_corrupt`) with no tolerance widened.
+- The lock is per bundle: one task's transition must never block, fail, or
+  delay a read of any other task.
+- Reads of the **envelope alone** need no lock. `task.yaml` is renamed into
+  place atomically, so a single file is always self-consistent; the index
+  freshness scan every listing performs stays lock-free.
+- The read lock is not the create/delete sentinel, which keys on the bundle
+  directory. Readers never block a task's creation or removal, and those
+  transient states stay governed by the existing skip tolerance
+  (missing directory or sentinel held).
+- Acquisition is re-entrant per thread, so a writer that reads the bundle it
+  is about to modify from inside its own critical section does not deadlock,
+  and it is best effort, so a store on a read-only mount still serves reads.
+
+This is coordination between live processes, not a file-format transaction: it
+adds no on-disk state and changes nothing about post-crash recovery, which
+remains detect-and-repair. [ORB-11349]
 
 ## Artifacts
 
@@ -263,7 +296,9 @@ files:
 
 Artifact paths must be relative, UTF-8, slash-separated, canonical paths and must not contain `.`, `..`, or leading `./` components. Writers that ingest hand-authored manifests should normalize leading `./` before validation. `sha256` must be a 64-character lowercase hex SHA-256 digest; writer code should format digest bytes with lowercase hex (`{:x}`), not uppercase.
 
-The bundle format does not guarantee cross-file transactions. Writers must keep single-file updates atomic and keep partial multi-file states readable; generated repair/indexing commands reconcile cases such as appended events before envelope status rewrite or artifact files written before manifest rewrite.
+The bundle format does not guarantee cross-file transactions *across a crash*. Writers must keep single-file updates atomic and keep post-crash partial multi-file states readable; generated repair/indexing commands reconcile cases such as appended events before envelope status rewrite or artifact files written before manifest rewrite.
+
+A *live* writer is a different case, and readers must not be exposed to its intermediate states. See [Concurrent reads and lifecycle writes](#concurrent-reads-and-lifecycle-writes).
 
 ## Cutover
 
@@ -290,3 +325,75 @@ Cutover must be idempotent for interrupted local runs. A partially converted tas
 ## Agent Signature
 
 Last revised by `claude` on 2026-08-09 for [ORB-10343].
+
+## Bounded list reads
+
+ORB-11205: bounded task queries validate the generated index against every
+registered, settled envelope, then apply metadata predicates and newest-first
+ordering (task ID ascending for ties) before loading full bundles. Exact totals
+count metadata matches; they do not certify off-page body, event, or artifact
+integrity. A selected corrupt bundle fails the request and is never replaced
+with another row. Direct and unbounded full-bundle reads remain strict.
+
+Status, type, priority, parent, job run, tags and external-reference predicates
+use metadata. Readiness and context-path predicates currently use an explicit
+residual fallback, hydrating metadata matches before filtering and limiting.
+Missing/stale indexes require a strict bundle scan and best-effort index repair;
+errors encountered reading that scan propagate. An update racing selected-row
+hydration causes one strict rescan with filter-before-limit semantics. In-flight
+creation/deletion retains the existing list-read tolerance.
+
+Dashboard list and detail projections retain comments, history and the sorted
+artifact manifest from each validated bundle. The aggregate selects the global
+newest 50 from workspace metadata before hydration and shares one request-scoped
+global dependency-status projection. Storage and rendering run on the blocking
+pool, including cold workspace selection and runtime construction in the
+shared workspace extractor. Envelope validation and dependency-status work remain linear in corpus
+size; there is no persistent validation cache or content integrity audit added.
+
+### Reproducing the bounded-read measurements
+
+The ignored `task_list_io_benchmark` store test generates three temporary
+workspaces, each containing `ORBIT_TASK_BENCH_SIZE` tasks (100, 1000 or 10000).
+Each task has a roughly 8 KB description, a nonempty plan, eight comments,
+twelve history events and a 1 KB artifact. Every tenth task has the selective
+tag. It measures unfiltered and selective limit-50 reads, detail, and the
+global newest-50 aggregate. `ORBIT_TASK_BENCH_MODE=baseline` uses the frozen
+settled-index read algorithm from `424529c518d59631bb55e1df579454ff5e10307a`;
+`candidate` uses the bounded store query. Counters distinguish full bundle
+loads from envelope-only freshness reads (each full bundle also reads an
+envelope). Residual and rebuild costs are covered separately by the listing
+regression tests.
+
+For example, after building test binaries outside the checkout:
+
+```sh
+export CARGO_TARGET_DIR=/tmp/orbit-task-bench-target
+export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+ORBIT_TASK_BENCH_SIZE=1000 ORBIT_TASK_BENCH_MODE=candidate \
+ORBIT_TASK_BENCH_ROOT=/tmp/orbit-task-bench-1000 \
+cargo test -p orbit-store task_list_io_benchmark -- --ignored --nocapture
+
+ORBIT_TASK_BENCH_SIZE=1000 ORBIT_TASK_BENCH_MODE=candidate \
+ORBIT_TASK_BENCH_ROOT=/tmp/orbit-task-bench-1000 \
+cargo test -p orbit-web task_response_benchmark -- --ignored --nocapture
+```
+
+The fixture root must be new and temporary. Omitting it from the store test
+automatically removes the generated corpus after the measurement. To compare
+actual HTTP implementations, archive the baseline commit into a temporary
+directory and add only `api/tests/task_response_bench.rs` and its test-module
+registration. Run that identical harness on the same retained corpus, setting
+the mode label to `baseline`. Build both binaries first, then run benchmarks
+serially without compilation overlap. HTTP measurements include response
+serialization and an unrelated workspace request under four concurrent lists
+on one Tokio worker.
+
+Both harnesses warm each operation before eleven timed samples, reporting the
+median and nearest-rank p95 (the maximum with eleven samples). Linux `VmHWM`
+reports process peak RSS including fixture/runtime setup and earlier cases;
+it is not a per-request allocation measurement. The recorded ORB-11205 run
+used unoptimized test binaries with debug information disabled and temporary
+corpora on Linux tmpfs. These are warm-cache measurements, not controlled
+cold-cache or production-release latency claims. Small-corpus pool/metadata
+overhead and concurrent-request RSS must be reported alongside improvements.

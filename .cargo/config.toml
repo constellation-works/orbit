@@ -1,0 +1,5 @@
+# Opt-in host compiler cache. The wrapper execs rustc unchanged when sccache
+# is missing or $HOME/.orbit/cache/compiler is not writable. [ORB-11259]
+# Do not point workers at a shared CARGO_TARGET_DIR.
+[build]
+rustc-wrapper = "./scripts/rustc-compiler-cache.sh"

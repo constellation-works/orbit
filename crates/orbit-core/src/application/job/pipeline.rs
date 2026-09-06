@@ -11,7 +11,8 @@ use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
-    AuditEventInsertParams, JobRunStepParams, TaskReservationReleaseReason,
+    AuditEventInsertParams, ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams,
+    JobRunStepParams, TaskReservationReleaseReason,
 };
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
@@ -25,7 +26,9 @@ use sha2::{Digest, Sha256};
 
 use orbit_engine::activity_job::load_job_asset;
 use orbit_types::workflow::JobV2;
-use orbit_types::workflow::activity_job::validate_job_retired_sessions;
+use orbit_types::workflow::activity_job::{
+    TRUSTED_HOST_ADMISSION_KEY, run_input_declares_trusted_host, validate_job_retired_sessions,
+};
 
 use crate::OrbitRuntime;
 use crate::application::job::exec::V2RunFinalizationOptions;
@@ -33,16 +36,40 @@ use crate::application::job::resume::ResumePlan;
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
+
+#[cfg(unix)]
+use super::run::CANCELLATION_WORKER_EXIT_AUDIT;
 
 const PIPELINE_WAIT_DEFAULT_TIMEOUT_SECONDS: u64 = 3600;
 const PIPELINE_WAIT_MAX_TIMEOUT_SECONDS: u64 = 7200;
 const PIPELINE_WAIT_DEFAULT_POLL_SECONDS: u64 = 5;
 const PIPELINE_WAIT_MIN_POLL_SECONDS: u64 = 1;
 const PIPELINE_WORKER_LOG_TAIL_BYTES: u64 = 16 * 1024;
+/// Run-input field carrying a caller's agent-invocation retry key [ORB-11354].
+const AGENT_INVOKE_IDEMPOTENCY_KEY_FIELD: &str = "idempotency_key";
+/// Cap on the run history scanned when matching an agent-invocation retry key.
+const AGENT_INVOKE_IDEMPOTENCY_SCAN_LIMIT: usize = 200;
+
 /// [ORB-10544] Cap on the run history scanned by the in-flight ship guard.
 /// Non-terminal runs are always among the newest rows, so a bounded window is
 /// enough to spot a duplicate dispatch without walking the whole history.
 const SHIP_IN_FLIGHT_SCAN_LIMIT: usize = 200;
+
+/// The refusal for a submission that supplied the reserved trusted-host
+/// admission key it is not entitled to write [ORB-11354].
+///
+/// Shared by every entry point that accepts caller-shaped run input so the
+/// refusal reads identically whether it came from `orbit run job`, a direct
+/// YAML path, a resume, or a tool call.
+pub(crate) fn reserved_trusted_host_key_error(job_name: &str) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "run input for job '{job_name}' set the reserved `{TRUSTED_HOST_ADMISSION_KEY}` field; \
+         trusted host execution is admitted per invocation by the governed `orbit.agent.invoke` \
+         operation and cannot be requested through ordinary job input"
+    ))
+}
 
 /// One durable pipeline submission: what to run, with what input, and how the
 /// detached worker will find the definition again.
@@ -52,6 +79,40 @@ struct PipelineSubmission<'a> {
     input: Value,
     resume: Option<&'a ResumePlan>,
     actor: Option<&'a str>,
+    action_key: Option<&'a str>,
+    /// Whether this submission is the canonical trusted-host admission
+    /// [ORB-11354]. Only it may carry [`TRUSTED_HOST_ADMISSION_KEY`] in its
+    /// input; every other submission is refused for supplying it.
+    trusted_host: bool,
+}
+
+impl<'a> PipelineSubmission<'a> {
+    /// An ordinary submission: catalog definition, no resume, no idempotency
+    /// key, and no trusted-host admission.
+    fn catalog(job_name: &'a str, input: Value, actor: Option<&'a str>) -> Self {
+        Self {
+            job_name,
+            definition: SubmittedDefinition::Catalog,
+            input,
+            resume: None,
+            actor,
+            action_key: None,
+            trusted_host: false,
+        }
+    }
+}
+
+/// Trusted context for a pipeline child submitted by a running v2 activity.
+///
+/// The parent run id comes from the engine-owned [`orbit_tools::ToolContext`],
+/// never from tool input. The remaining fields make the parent link complete
+/// at the same atomic boundary that creates the child.
+#[derive(Debug, Clone)]
+pub(crate) struct ChildPipelineAdmission {
+    pub parent_run_id: String,
+    pub parent_step_id: Option<String>,
+    pub action: String,
+    pub blocking: bool,
 }
 
 /// How a submitted run's definition reaches its worker.
@@ -110,6 +171,13 @@ impl OrbitRuntime {
     /// surface submitted them. Auto mode has no task ids to key on and is
     /// unaffected.
     ///
+    /// [ORB-11187] `completion` is the caller's explicit authorization for this
+    /// run to finish delivery and perform the guarded `review -> done`
+    /// transition. It defaults to
+    /// [`CompletionPolicy::Review`](crate::application::workflow::CompletionPolicy::Review)
+    /// at every surface and is only ever raised by a per-invocation operator
+    /// flag; nothing derives it from workspace configuration or the environment.
+    ///
     /// [ORB-10709] The workspace claim is checked first, for the case the
     /// duplicate-dispatch guard structurally cannot cover: it is keyed on task
     /// id over a bounded window of recent runs, so a stale non-terminal run
@@ -117,11 +185,15 @@ impl OrbitRuntime {
     /// carries no task ids at all. The claim check is keyed on neither, so both
     /// gaps close. `claim_token` is the holder's minted token; `None` falls back
     /// to [`CLAIM_TOKEN_ENV`](crate::runtime::workspace_claim::CLAIM_TOKEN_ENV).
+    // Existing public positional API; keep callers stable while submission is composed internally.
+    #[allow(clippy::too_many_arguments)]
     pub fn submit_ship_run(
         &self,
         mode: crate::application::workflow::ShipMode,
         base_branch: Option<&str>,
         task_ids: &[String],
+        completion: crate::application::workflow::CompletionPolicy,
+        allowed_crews: &[String],
         actor: Option<&str>,
         claim_token: Option<&str>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
@@ -131,7 +203,15 @@ impl OrbitRuntime {
         )
         .ok_or_else(|| OrbitError::InvalidInput("unknown workflow 'ship'".to_string()))?;
         let base = base_branch.unwrap_or_else(|| self.workflow_base_branch());
-        let input = crate::application::workflow::build_ship_input(mode, base, task_ids)?;
+        let allowed_crews = self.canonical_allowed_crews(allowed_crews)?;
+        let allowlist = self.crew_allowlist(&allowed_crews)?;
+        let input = crate::application::workflow::build_ship_input(
+            mode,
+            base,
+            task_ids,
+            completion,
+            &allowed_crews,
+        )?;
         // Validate explicit selections before inspecting runs or creating a
         // pipeline record. Auto mode intentionally carries no task ids: the
         // worker discovers eligible backlog tasks after it starts.
@@ -141,6 +221,14 @@ impl OrbitRuntime {
                 return Err(OrbitError::InvalidInput(format!(
                     "task '{task_id}' is an epic root and cannot be shipped as a leaf; use `orbit run auto` or `orbit run job epic_pipeline`"
                 )));
+            }
+            if let Some(allowlist) = allowlist.as_ref() {
+                let crew = self.effective_task_crew(&task)?;
+                crate::runtime::engine::crew::enforce_crew_allowlist(
+                    Some(allowlist),
+                    &crew,
+                    &format!("explicit ship task '{task_id}'"),
+                )?;
             }
         }
         if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
@@ -160,10 +248,21 @@ impl OrbitRuntime {
     /// `task_auto_pipeline` children may be live at once. Omitted, the job's
     /// own default applies — this only forwards an explicit override, so the
     /// default lives in one place, next to the loop that reads it.
+    ///
+    /// [ORB-11242] `allowed_crews` is the run-scoped crew restriction. Empty
+    /// means unrestricted, which is what every caller predating it gets. Names
+    /// are resolved against this host's `[crews.*]` registry *here*, before a
+    /// run record exists, so an unknown or blank name fails the submission
+    /// rather than quietly shrinking what a live drain admits; the canonical
+    /// registry names are what gets persisted and forwarded. It gates what the
+    /// drain may *start* — it does not touch workspace configuration, reassign
+    /// a task's crew, or cancel work another invocation already has in flight.
     pub fn submit_workspace_auto_run(
         &self,
         for_seconds: Option<u64>,
         max_active_leaf_runs: Option<u32>,
+        completion: crate::application::workflow::CompletionPolicy,
+        allowed_crews: &[String],
         actor: Option<&str>,
         claim_token: Option<&str>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
@@ -172,21 +271,40 @@ impl OrbitRuntime {
             crate::application::workflow::AUTO_WORKFLOW_ALIAS,
         )
         .ok_or_else(|| OrbitError::InvalidInput("unknown workflow 'auto'".to_string()))?;
-        let mut input = json!({ "for_seconds": for_seconds.unwrap_or(0) });
-        if let Some(max_active_leaf_runs) = max_active_leaf_runs {
-            if max_active_leaf_runs == 0 {
+        let input = workspace_auto_run_input(
+            for_seconds,
+            max_active_leaf_runs,
+            completion,
+            &self.canonical_allowed_crews(allowed_crews)?,
+        )?;
+        self.submit_pipeline_run(workflow.job_id, input, None, actor)
+    }
+
+    /// Canonicalize an operator-supplied crew allowlist, rejecting blank or
+    /// unconfigured names [ORB-11242].
+    ///
+    /// Canonical registry names are persisted rather than the operator's
+    /// spelling, so the durable run input says exactly which configured crews
+    /// the window permits regardless of the alias that was typed.
+    pub(super) fn canonical_allowed_crews(
+        &self,
+        allowed_crews: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        let mut canonical: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for name in allowed_crews {
+            if name.trim().is_empty() {
                 return Err(OrbitError::InvalidInput(
-                    "concurrency must be at least 1".to_string(),
+                    "crew name in the allowlist must not be empty".to_string(),
                 ));
             }
-            if let Some(object) = input.as_object_mut() {
-                object.insert(
-                    "max_active_leaf_runs".to_string(),
-                    json!(max_active_leaf_runs),
-                );
-            }
+            let Some(resolved) = self.canonical_crew_name(Some(name))? else {
+                return Err(OrbitError::InvalidInput(
+                    "crew name in the allowlist must not be empty".to_string(),
+                ));
+            };
+            canonical.insert(resolved);
         }
-        self.submit_pipeline_run(workflow.job_id, input, None, actor)
+        Ok(canonical.into_iter().collect())
     }
 
     /// The duplicate-dispatch refusal for the newest non-terminal run already
@@ -227,6 +345,93 @@ impl OrbitRuntime {
         }))
     }
 
+    /// Persist and dispatch one operator-admitted trusted-host invocation
+    /// [ORB-11354].
+    ///
+    /// The only submission permitted to write [`TRUSTED_HOST_ADMISSION_KEY`],
+    /// which is why it is here — on the module that owns the refusal — rather
+    /// than assembling a `PipelineSubmission` from outside.
+    ///
+    /// `idempotency_key` makes a retried submission resolve the run the first
+    /// attempt created instead of starting a second subprocess. Keys are
+    /// matched over a bounded window of this job's recent runs, the same shape
+    /// the ship guard uses: a key older than that window is not recognized and
+    /// submits again, which is why a key is a retry handle rather than a
+    /// permanent uniqueness constraint.
+    pub(super) fn submit_trusted_host_pipeline_run(
+        &self,
+        input: Value,
+        actor: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<(PipelineInvokeResult, bool), OrbitError> {
+        let job_name = crate::application::job::AGENT_INVOKE_JOB_ID;
+        let idempotency_key = idempotency_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let mut input = input;
+        if let Some(key) = idempotency_key {
+            if let Some(existing) = self.agent_invoke_run_for_key(job_name, key)? {
+                return Ok((
+                    PipelineInvokeResult {
+                        run_id: existing.run_id,
+                        job_name: job_name.to_string(),
+                        submitted_at: existing.scheduled_at.to_rfc3339(),
+                        queued: existing.state == JobRunState::Pending,
+                    },
+                    true,
+                ));
+            }
+            if let Some(object) = input.as_object_mut() {
+                object.insert(
+                    AGENT_INVOKE_IDEMPOTENCY_KEY_FIELD.to_string(),
+                    Value::String(key.to_string()),
+                );
+            }
+        }
+        let result = self.submit_persisted_pipeline_run(PipelineSubmission {
+            trusted_host: true,
+            ..PipelineSubmission::catalog(job_name, input.clone(), Some(actor))
+        });
+        self.record_pipeline_audit(
+            "agent.invoke",
+            result.as_ref().ok().map(|value| value.run_id.as_str()),
+            Some(actor),
+            match &result {
+                Ok(_) => AuditEventStatus::Success,
+                Err(_) => AuditEventStatus::Failure,
+            },
+            json!({
+                "actor": actor,
+                "job_name": job_name,
+                "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
+                "idempotency_key": idempotency_key,
+                "input_hash": input_hash(&input),
+            }),
+            result.as_ref().err().map(|error| error.to_string()),
+        )?;
+        result.map(|invoke| (invoke, false))
+    }
+
+    /// The newest recent run of `job_name` submitted under `key`, if any.
+    fn agent_invoke_run_for_key(
+        &self,
+        job_name: &str,
+        key: &str,
+    ) -> Result<Option<JobRun>, OrbitError> {
+        let runs = self.list_job_runs(crate::application::job::JobRunListParams {
+            job_id: Some(job_name.to_string()),
+            limit: Some(AGENT_INVOKE_IDEMPOTENCY_SCAN_LIMIT),
+            ..Default::default()
+        })?;
+        Ok(runs.into_iter().find(|run| {
+            run.input
+                .as_ref()
+                .and_then(|input| input.get(AGENT_INVOKE_IDEMPOTENCY_KEY_FIELD))
+                .and_then(Value::as_str)
+                == Some(key)
+        }))
+    }
+
     /// [ORB-10470] Submit a resume of a terminal run as a detached run.
     ///
     /// The non-blocking counterpart to
@@ -253,11 +458,8 @@ impl OrbitRuntime {
         let plan = self.plan_job_run_resume(source_run_id)?;
         let job_id = plan.source.job_id.clone();
         self.submit_persisted_pipeline_run(PipelineSubmission {
-            job_name: &job_id,
-            definition: SubmittedDefinition::Catalog,
-            input: plan.input.clone(),
             resume: Some(&plan),
-            actor,
+            ..PipelineSubmission::catalog(&job_id, plan.input.clone(), actor)
         })
     }
 
@@ -290,14 +492,11 @@ impl OrbitRuntime {
 
         let (job_name, spec, yaml) = self.load_direct_job_definition(direct_path)?;
         let result = self.submit_persisted_pipeline_run(PipelineSubmission {
-            job_name: &job_name,
             definition: SubmittedDefinition::Snapshot {
                 spec: &spec,
                 yaml: &yaml,
             },
-            input: input.clone(),
-            resume: None,
-            actor,
+            ..PipelineSubmission::catalog(&job_name, input.clone(), actor)
         });
         self.record_submission_audit(&job_name, &input, actor, &result)?;
         result
@@ -320,6 +519,20 @@ impl OrbitRuntime {
         Ok((asset.name, asset.spec, yaml))
     }
 
+    pub(crate) fn submit_automation_pipeline_run(
+        &self,
+        job_name: &str,
+        input: Value,
+        key: &str,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let result = self.submit_persisted_pipeline_run(PipelineSubmission {
+            action_key: Some(key),
+            ..PipelineSubmission::catalog(job_name, input.clone(), Some("automation"))
+        });
+        self.record_submission_audit(job_name, &input, Some("automation"), &result)?;
+        result
+    }
+
     pub fn submit_pipeline_run(
         &self,
         job_name: &str,
@@ -327,13 +540,11 @@ impl OrbitRuntime {
         priority: Option<&str>,
         actor: Option<&str>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
-        let result = self.submit_persisted_pipeline_run(PipelineSubmission {
+        let result = self.submit_persisted_pipeline_run(PipelineSubmission::catalog(
             job_name,
-            definition: SubmittedDefinition::Catalog,
-            input: input.clone(),
-            resume: None,
+            input.clone(),
             actor,
-        });
+        ));
 
         self.record_pipeline_audit(
             "pipeline.invoke",
@@ -348,6 +559,56 @@ impl OrbitRuntime {
                 "job_name": job_name,
                 "priority": priority,
                 "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
+                "input_hash": input_hash(&input),
+            }),
+            result.as_ref().err().map(|error| error.to_string()),
+        )?;
+
+        result
+    }
+
+    /// Submit a v2 activity's child through the parent's durable admission
+    /// boundary [ORB-11310].
+    ///
+    /// `Ok(None)` is the benign, idempotent result when the parent auto drain
+    /// has already acknowledged an admissions stop. Direct/non-child callers
+    /// continue to use [`Self::submit_pipeline_run`] and are unchanged.
+    pub(crate) fn submit_child_pipeline_run(
+        &self,
+        job_name: &str,
+        input: Value,
+        priority: Option<&str>,
+        actor: Option<&str>,
+        admission: &ChildPipelineAdmission,
+    ) -> Result<Option<PipelineInvokeResult>, OrbitError> {
+        let result = self.submit_persisted_pipeline_run_with_admission(
+            PipelineSubmission::catalog(job_name, input.clone(), actor),
+            Some(admission),
+        );
+
+        self.record_pipeline_audit(
+            "pipeline.invoke",
+            result
+                .as_ref()
+                .ok()
+                .and_then(|value| value.as_ref())
+                .map(|value| value.run_id.as_str()),
+            actor,
+            match &result {
+                Ok(_) => AuditEventStatus::Success,
+                Err(_) => AuditEventStatus::Failure,
+            },
+            json!({
+                "actor": actor,
+                "job_name": job_name,
+                "priority": priority,
+                "parent_run_id": admission.parent_run_id,
+                "outcome": if matches!(&result, Ok(None)) { "admissions_stopped" } else { "submitted" },
+                "run_id": result
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.as_ref())
+                    .map(|value| value.run_id.clone()),
                 "input_hash": input_hash(&input),
             }),
             result.as_ref().err().map(|error| error.to_string()),
@@ -394,13 +655,36 @@ impl OrbitRuntime {
         &self,
         submission: PipelineSubmission<'_>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.submit_persisted_pipeline_run_with_admission(submission, None)?
+            .ok_or_else(|| {
+                OrbitError::Execution(
+                    "unconditional pipeline submission was refused as stopped".to_string(),
+                )
+            })
+    }
+
+    fn submit_persisted_pipeline_run_with_admission(
+        &self,
+        submission: PipelineSubmission<'_>,
+        admission: Option<&ChildPipelineAdmission>,
+    ) -> Result<Option<PipelineInvokeResult>, OrbitError> {
         let PipelineSubmission {
             job_name,
             definition,
             input,
             resume,
             actor,
+            action_key,
+            trusted_host,
         } = submission;
+        // [ORB-11354] The reserved admission key is writable by exactly one
+        // caller. Refusing it here — on the single path every submission
+        // surface funnels through — is what stops `orbit run job`, a resume,
+        // an automation key, or a child dispatch from manufacturing an
+        // unsandboxed run out of ordinary job input.
+        if !trusted_host && run_input_declares_trusted_host(&input) {
+            return Err(reserved_trusted_host_key_error(job_name));
+        }
         let result = (|| {
             let spec = match &definition {
                 SubmittedDefinition::Catalog => self.load_v2_job_asset_by_name(job_name)?.1,
@@ -413,14 +697,38 @@ impl OrbitRuntime {
             }
 
             let submitted_at = Utc::now();
-            let run = self.stores().jobs().insert_job_run(
-                job_name,
-                resume.map_or(1, |plan| plan.attempt),
-                submitted_at,
-                Some(input.clone()),
-                resume.map(|plan| plan.source.run_id.clone()),
-            )?;
-            self.seed_v2_pipeline_run(&run, &input, resume)?;
+            let run = if let Some(admission) = admission {
+                match self
+                    .stores()
+                    .jobs()
+                    .admit_child_job_run(&ChildJobRunAdmissionParams {
+                        parent_run_id: admission.parent_run_id.clone(),
+                        parent_step_id: admission.parent_step_id.clone(),
+                        job_id: job_name.to_string(),
+                        action: admission.action.clone(),
+                        blocking: admission.blocking,
+                        attempt: 1,
+                        scheduled_at: submitted_at,
+                        input: Some(input.clone()),
+                    })? {
+                    ChildJobRunAdmissionOutcome::Admitted(run) => *run,
+                    ChildJobRunAdmissionOutcome::AdmissionsStopped => return Ok(None),
+                }
+            } else if let Some(key) = action_key {
+                self.stores()
+                    .jobs()
+                    .insert_automation_job_run(job_name, input.clone(), key)?
+            } else {
+                let run = self.stores().jobs().insert_job_run(
+                    job_name,
+                    resume.map_or(1, |plan| plan.attempt),
+                    submitted_at,
+                    Some(input.clone()),
+                    resume.map(|plan| plan.source.run_id.clone()),
+                )?;
+                self.seed_v2_pipeline_run(&run, &input, resume)?;
+                run
+            };
 
             // Pin the definition before the worker can exist. A direct-path
             // submission must not depend on the source file surviving
@@ -440,7 +748,11 @@ impl OrbitRuntime {
                 .list_pending_or_running_job_runs(job_name)?;
             let queued = !pipeline_run_is_runnable(&active_runs, &run.run_id, spec.max_active_runs);
 
-            if let Err(error) = self.spawn_pipeline_worker(&run.run_id, actor) {
+            // A repeated automation admission resolves the original run. Only
+            // pending runs need delivery; the existing Start CAS fences workers.
+            if (action_key.is_none() || run.state == JobRunState::Pending)
+                && let Err(error) = self.spawn_pipeline_worker(&run.run_id, actor)
+            {
                 let worker_log = pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id);
                 let message = format!(
                     "pipeline worker for run '{}' could not start from registered workspace '{}': \
@@ -452,19 +764,22 @@ impl OrbitRuntime {
                 let _ = self.finalize_pipeline_worker_startup_failure(&run, &message, actor);
                 return Err(error);
             }
-
-            Ok(PipelineInvokeResult {
+            Ok(Some(PipelineInvokeResult {
                 run_id: run.run_id,
                 job_name: job_name.to_string(),
                 submitted_at: submitted_at.to_rfc3339(),
                 queued,
-            })
+            }))
         })();
 
         if let Some(plan) = resume {
             self.record_pipeline_audit(
                 "pipeline.resume",
-                result.as_ref().ok().map(|value| value.run_id.as_str()),
+                result
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.as_ref())
+                    .map(|value| value.run_id.as_str()),
                 actor,
                 match &result {
                     Ok(_) => AuditEventStatus::Success,
@@ -477,7 +792,11 @@ impl OrbitRuntime {
                     "attempt": plan.attempt,
                     "resumed_from_checkpoints": plan.resume_state.is_some(),
                     "checkpoint_batch_id": plan.checkpoint_batch_id,
-                    "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
+                    "run_id": result
+                        .as_ref()
+                        .ok()
+                        .and_then(|value| value.as_ref())
+                        .map(|value| value.run_id.clone()),
                 }),
                 result.as_ref().err().map(|error| error.to_string()),
             )?;
@@ -921,20 +1240,28 @@ impl OrbitRuntime {
     fn pipeline_worker_command(&self, run_id: &str) -> Result<Command, OrbitError> {
         let paths = self.paths();
         #[cfg(test)]
-        if let Some(command) = worker_command_override::command(&paths.repo_root, run_id) {
-            return Ok(command);
+        {
+            worker_command_override::command(&paths.repo_root, run_id).ok_or_else(|| {
+                OrbitError::Execution(
+                    "test pipeline worker requires an explicit worker command override".to_string(),
+                )
+            })
         }
-        let current_exe = std::env::current_exe().map_err(|error| {
-            OrbitError::Execution(format!("resolve current orbit executable: {error}"))
-        })?;
-        let mut command = Command::new(resolve_pipeline_worker_executable(current_exe));
-        configure_pipeline_worker_command(
-            &mut command,
-            &paths.repo_root,
-            run_id,
-            pipeline_worker_root_override(paths),
-        );
-        Ok(command)
+
+        #[cfg(not(test))]
+        {
+            let current_exe = std::env::current_exe().map_err(|error| {
+                OrbitError::Execution(format!("resolve current orbit executable: {error}"))
+            })?;
+            let mut command = Command::new(resolve_pipeline_worker_executable(current_exe));
+            configure_pipeline_worker_command(
+                &mut command,
+                &paths.repo_root,
+                run_id,
+                pipeline_worker_root_override(paths),
+            );
+            Ok(command)
+        }
     }
 
     pub(crate) fn spawn_pipeline_worker_process(
@@ -1078,6 +1405,24 @@ impl OrbitRuntime {
                     );
                     return Ok(());
                 }
+                #[cfg(unix)]
+                if let Some(signal) = status
+                    .signal()
+                    .filter(|signal| matches!(*signal, libc::SIGTERM | libc::SIGKILL))
+                    && self.record_pipeline_worker_cancellation_exit(
+                        &run,
+                        signal,
+                        &status.to_string(),
+                        actor,
+                    )?
+                {
+                    // The cancelling caller owns terminalization after it has
+                    // verified both the recorded leader and process group are
+                    // gone. Reaping the worker proves only the leader exited;
+                    // finalizing here could release reservations while a
+                    // run-owned child remains alive.
+                    return Ok(());
+                }
                 if run.state.is_terminal() {
                     return Ok(());
                 }
@@ -1100,6 +1445,41 @@ impl OrbitRuntime {
 
             thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    /// Record a TERM/KILL worker exit that belongs to an outstanding
+    /// cancellation request, without terminalizing the run. The signalling
+    /// caller performs the authoritative liveness verification and then
+    /// finalizes `cancelled`; this observer only preserves the completion
+    /// cause and suppresses the misleading generic worker-failure path.
+    #[cfg(unix)]
+    pub(crate) fn record_pipeline_worker_cancellation_exit(
+        &self,
+        run: &JobRun,
+        signal: i32,
+        exit_status: &str,
+        actor: Option<&str>,
+    ) -> Result<bool, OrbitError> {
+        let Some(request_id) = self.active_job_run_cancellation_request(&run.run_id)? else {
+            return Ok(false);
+        };
+        self.record_pipeline_audit(
+            CANCELLATION_WORKER_EXIT_AUDIT,
+            Some(&run.run_id),
+            actor,
+            AuditEventStatus::Success,
+            json!({
+                "request_id": request_id,
+                "run_id": run.run_id,
+                "owner_pid": run.pid,
+                "signal": signal,
+                "signal_name": worker_cancellation_signal_name(signal),
+                "exit_status": exit_status,
+                "observed_at": Utc::now().to_rfc3339(),
+            }),
+            None,
+        )?;
+        Ok(true)
     }
 
     /// Terminalize a worker process that exited while it still owned a
@@ -1304,6 +1684,15 @@ impl OrbitRuntime {
             activity_id: None,
             step_index: None,
         })
+    }
+}
+
+#[cfg(unix)]
+fn worker_cancellation_signal_name(signal: i32) -> &'static str {
+    match signal {
+        libc::SIGTERM => "SIGTERM",
+        libc::SIGKILL => "SIGKILL",
+        _ => "unknown",
     }
 }
 
@@ -1531,6 +1920,52 @@ fn pipeline_run_is_runnable(runs: &[JobRun], run_id: &str, max_active_runs: u32)
 fn input_hash(input: &Value) -> String {
     let encoded = serde_json::to_vec(input).unwrap_or_default();
     format!("{:x}", Sha256::digest(encoded))
+}
+
+/// The durable input one workspace drain carries for its whole window.
+///
+/// Every key here is *omitted* unless the caller asked for it, so a run's
+/// persisted input records only the deviations from the job's own defaults —
+/// which is what makes an omitted option indistinguishable from the behavior
+/// that predated it. Pure, so the durable contract this shape represents can
+/// be asserted without submitting a run.
+pub(super) fn workspace_auto_run_input(
+    for_seconds: Option<u64>,
+    max_active_leaf_runs: Option<u32>,
+    completion: crate::application::workflow::CompletionPolicy,
+    allowed_crews: &[String],
+) -> Result<Value, OrbitError> {
+    if max_active_leaf_runs == Some(0) {
+        return Err(OrbitError::InvalidInput(
+            "concurrency must be at least 1".to_string(),
+        ));
+    }
+    let mut input = serde_json::Map::new();
+    input.insert(
+        "for_seconds".to_string(),
+        json!(for_seconds.unwrap_or_default()),
+    );
+    // [ORB-11187] Blanket authorization: the drain re-lists the backlog every
+    // pass, so this policy governs every task admitted for the whole window,
+    // not only the ones visible at submission.
+    if completion.completes() {
+        input.insert(
+            "completion".to_string(),
+            Value::String(completion.as_input_value().to_string()),
+        );
+    }
+    if let Some(max_active_leaf_runs) = max_active_leaf_runs {
+        input.insert(
+            "max_active_leaf_runs".to_string(),
+            json!(max_active_leaf_runs),
+        );
+    }
+    // [ORB-11242] Carried by the run itself, so every pipeline it admits
+    // inherits the same window without re-deriving it from configuration.
+    if !allowed_crews.is_empty() {
+        input.insert("allowed_crews".to_string(), json!(allowed_crews));
+    }
+    Ok(Value::Object(input))
 }
 
 /// Test-only substitute for the detached worker program.

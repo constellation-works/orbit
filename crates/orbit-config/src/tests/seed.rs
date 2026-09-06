@@ -72,12 +72,16 @@ fn codex_only_seeds_the_codex_family_and_system() {
     let contents = seed_contents(&seed_for(&["codex"]));
     let parsed = parsed_config(&contents);
 
-    assert_eq!(crew_names(&parsed), vec!["luna", "sol", "system", "terra"]);
+    assert_eq!(
+        crew_names(&parsed),
+        vec!["astra", "luna", "sol", "system", "terra"]
+    );
+    assert_crew(&parsed, "astra", "codex", "gpt-6-astra");
     assert_crew(&parsed, "sol", "codex", "gpt-5.6-sol");
     assert_crew(&parsed, "terra", "codex", "gpt-5.6-terra");
     assert_crew(&parsed, "luna", "codex", "gpt-5.6-luna");
     assert_crew(&parsed, "system", "codex", "gpt-5.6-luna");
-    assert_default_crew(&parsed, Some("sol"));
+    assert_default_crew(&parsed, Some("astra"));
 }
 
 #[test]
@@ -86,9 +90,34 @@ fn gemini_only_seeds_gemini_and_a_system_crew() {
     let parsed = parsed_config(&contents);
 
     assert_eq!(crew_names(&parsed), vec!["gemini", "system"]);
-    assert_crew(&parsed, "gemini", "gemini", "gemini-3.7-flash");
-    assert_crew(&parsed, "system", "gemini", "gemini-3.7-flash");
+    assert_crew(&parsed, "gemini", "gemini", "gemini-3.8-flash");
+    assert_crew(&parsed, "system", "gemini", "gemini-3.8-flash");
     assert_default_crew(&parsed, Some("gemini"));
+}
+
+#[test]
+fn antigravity_only_seeds_antigravity_and_a_system_crew() {
+    let contents = seed_contents(&seed_for(&["antigravity"]));
+    let parsed = parsed_config(&contents);
+
+    assert_eq!(crew_names(&parsed), vec!["antigravity", "system"]);
+    assert_crew(
+        &parsed,
+        "antigravity",
+        "antigravity",
+        "gemini-3.8-flash-high",
+    );
+    assert_crew(&parsed, "system", "antigravity", "gemini-3.8-flash-low");
+    assert_default_crew(&parsed, Some("antigravity"));
+}
+
+#[test]
+fn antigravity_outranks_legacy_gemini_when_both_are_available() {
+    let contents = seed_contents(&seed_for(&["antigravity", "gemini"]));
+    let parsed = parsed_config(&contents);
+    assert_eq!(crew_names(&parsed), vec!["antigravity", "gemini", "system"]);
+    assert_default_crew(&parsed, Some("antigravity"));
+    assert_crew(&parsed, "system", "antigravity", "gemini-3.8-flash-low");
 }
 
 #[test]
@@ -111,6 +140,60 @@ fn cursor_only_seeds_cursor_and_a_system_crew() {
     assert_crew(&parsed, "cursor", "cursor", "gpt-5");
     assert_crew(&parsed, "system", "cursor", "gpt-5");
     assert_default_crew(&parsed, Some("cursor"));
+}
+
+#[test]
+fn pi_only_seeds_pi_and_a_system_crew() {
+    let contents = seed_contents(&seed_for(&["pi"]));
+    let parsed = parsed_config(&contents);
+
+    assert_eq!(crew_names(&parsed), vec!["pi", "system"]);
+    assert_crew(&parsed, "pi", "pi", "sonnet");
+    assert_crew(&parsed, "system", "pi", "sonnet");
+    assert_default_crew(&parsed, Some("pi"));
+}
+
+/// [ORB-11296] Pi is appended last in the preference order, so installing it
+/// beside an earlier family never moves that host's default or system crew.
+#[test]
+fn adding_pi_never_displaces_an_earlier_family() {
+    let parsed = parsed_config(&seed_contents(&seed_for(&["claude", "pi"])));
+
+    assert_default_crew(&parsed, Some("opus"));
+    assert_crew(&parsed, "system", "claude", "sonnet");
+    assert_crew(&parsed, "pi", "pi", "sonnet");
+}
+
+#[test]
+fn opencode_only_seeds_opencode_and_a_system_crew() {
+    let contents = seed_contents(&seed_for(&["opencode"]));
+    let parsed = parsed_config(&contents);
+
+    assert_eq!(crew_names(&parsed), vec!["opencode", "system"]);
+    assert_crew(
+        &parsed,
+        "opencode",
+        "opencode",
+        "anthropic/claude-sonnet-4-5",
+    );
+    assert_crew(&parsed, "system", "opencode", "anthropic/claude-haiku-4-5");
+    assert_default_crew(&parsed, Some("opencode"));
+}
+
+/// [ORB-11295] OpenCode is appended last in the preference order, so installing
+/// it beside an earlier family never moves that host's default or system crew.
+#[test]
+fn adding_opencode_never_displaces_an_earlier_family() {
+    let parsed = parsed_config(&seed_contents(&seed_for(&["claude", "pi", "opencode"])));
+
+    assert_default_crew(&parsed, Some("opus"));
+    assert_crew(&parsed, "system", "claude", "sonnet");
+    assert_crew(
+        &parsed,
+        "opencode",
+        "opencode",
+        "anthropic/claude-sonnet-4-5",
+    );
 }
 
 /// Orbit ships no `ollama` crew, so a host whose only agent CLI is ollama
@@ -136,7 +219,7 @@ fn multi_provider_seed_includes_each_available_family_and_excludes_unavailable()
     assert_eq!(
         crew_names(&parsed),
         vec![
-            "fable", "grok", "luna", "opus", "sol", "sonnet", "system", "terra"
+            "astra", "fable", "grok", "luna", "opus", "sol", "sonnet", "system", "terra"
         ]
     );
     assert_default_crew(&parsed, Some("opus"));
@@ -146,6 +229,7 @@ fn multi_provider_seed_includes_each_available_family_and_excludes_unavailable()
     assert_crew(&parsed, "sol", "codex", "gpt-5.6-sol");
     assert_crew(&parsed, "terra", "codex", "gpt-5.6-terra");
     assert_crew(&parsed, "luna", "codex", "gpt-5.6-luna");
+    assert_crew(&parsed, "astra", "codex", "gpt-6-astra");
     assert_crew(&parsed, "grok", "grok", "grok-4.6");
     // codex outranks claude and grok in the system-lane preference order.
     assert_crew(&parsed, "system", "codex", "gpt-5.6-luna");

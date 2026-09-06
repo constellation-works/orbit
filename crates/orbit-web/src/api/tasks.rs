@@ -16,14 +16,14 @@ use orbit_types::identity::{
     agent_family_from_cli, all_agent_families, infer_agent_family_from_model,
 };
 use orbit_types::task::TaskRelation;
-use orbit_types::task::validate_relative_artifact_path;
+use orbit_types::task::{inline_safe_artifact_media_type, validate_relative_artifact_path};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
 use super::{
     bad_request, blocking, map_runtime_error, non_empty_string, server_error, validate_id,
 };
-use crate::projections::{task_locks_json, task_to_json_with_sidecars};
+use crate::projections::{task_locks_json, task_row_to_json, task_to_json_with_sidecars};
 
 /// Actor recorded for a dashboard-authored comment when the request supplies no
 /// usable human identity. The dashboard is a human-operated surface, so this is
@@ -334,9 +334,14 @@ pub(super) async fn list_tasks(Ws(runtime): Ws, RawQuery(query): RawQuery) -> Re
         Ok(query) => query,
         Err(message) => return bad_request(message),
     };
-    match task_list_page_json(&runtime, &query) {
-        Ok(value) => Json(value).into_response(),
-        Err(e) => server_error(e),
+    match blocking("task list", move || {
+        Ok(task_list_page_json(&runtime, &query))
+    })
+    .await
+    {
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(e)) => server_error(e),
+        Err(response) => *response,
     }
 }
 
@@ -440,36 +445,26 @@ fn task_list_page_json(
     runtime: &OrbitRuntime,
     query: &TaskListQuery,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let (tasks, total) = filtered_dashboard_tasks(runtime, query)?;
-    let items = task_values(runtime, &tasks)?;
-    let truncated = total > items.len();
-    Ok(json!({
-        "items": items,
-        "total": total,
-        "limit": query.limit,
-        "truncated": truncated,
-    }))
-}
-
-/// Build the dashboard task list as JSON values for the cross-workspace
-/// `/api/tasks/all` aggregate: unfiltered and bounded by the default limit,
-/// exactly as `GET /api/tasks` was before it grew query filters.
-pub(super) fn list_tasks_json(
-    runtime: &OrbitRuntime,
-) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let (tasks, _total) = filtered_dashboard_tasks(runtime, &TaskListQuery::default())?;
-    task_values(runtime, &tasks)
-}
-
-fn task_values(
-    runtime: &OrbitRuntime,
-    tasks: &[Task],
-) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let status_by_id = dashboard_status_index(runtime)?;
-    tasks
+    let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
+        filter: orbit_core::application::task::TaskListFilter {
+            statuses: (!query.statuses.is_empty()).then(|| query.statuses.clone()),
+            task_type: query.task_type,
+            tags: query.tags.clone(),
+            ..Default::default()
+        },
+        limit: query.limit,
+        ..Default::default()
+    })?;
+    let status_by_id = page.status_by_id;
+    let items = page
+        .items
         .iter()
-        .map(|task| task_to_json_with_sidecars(runtime, task, &status_by_id))
-        .collect()
+        .map(|row| task_row_to_json(runtime, row, &status_by_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(
+        json!({ "truncated": page.total > items.len(), "items": items,
+        "total": page.total, "limit": query.limit }),
+    )
 }
 
 pub(super) async fn list_task_locks(Ws(runtime): Ws) -> Response {
@@ -477,33 +472,6 @@ pub(super) async fn list_task_locks(Ws(runtime): Ws) -> Response {
         Ok(value) => Json(value).into_response(),
         Err(e) => server_error(e),
     }
-}
-
-/// The dashboard task list: status-neutral by default, newest-first, and
-/// bounded (ORB-10310). Returns the page plus the **pre-limit** match count.
-///
-/// `list_tasks_by_tags` orders by `created_at DESC` with task ID ascending for
-/// ties and applies Orbit's own `normalize_task_tags`/`task_matches_tags`, so
-/// tag matching here is identical to `orbit task list --tag` (a colon is
-/// ordinary tag content). The remaining predicates preserve that order, and —
-/// the point of ORB-10400 — every predicate runs *before* the truncation, so
-/// the page holds the newest tasks matching the filter rather than whatever
-/// survives a truncation of the unfiltered set. With no filters this is exactly
-/// the previous behavior: the newest `DEFAULT_TASK_LIST_LIMIT` tasks of any
-/// lifecycle status, `done`/`archived` included.
-fn filtered_dashboard_tasks(
-    runtime: &OrbitRuntime,
-    query: &TaskListQuery,
-) -> Result<(Vec<Task>, usize), orbit_core::OrbitError> {
-    let mut matching = runtime
-        .list_tasks_by_tags(&query.tags)?
-        .into_iter()
-        .filter(|task| query.statuses.is_empty() || query.statuses.contains(&task.status))
-        .filter(|task| query.task_type.is_none_or(|kind| task.task_type == kind))
-        .collect::<Vec<_>>();
-    let total = matching.len();
-    matching.truncate(query.limit);
-    Ok((matching, total))
 }
 
 /// Dependency-status projection for dashboard task serialization.
@@ -525,15 +493,17 @@ pub(super) async fn get_task(Ws(runtime): Ws, Path(id): Path<String>) -> Respons
         Ok(id) => id,
         Err(message) => return bad_request(message),
     };
-    match runtime.get_task(id) {
-        Ok(task) => match dashboard_status_index(&runtime) {
-            Ok(status_by_id) => match task_to_json_with_sidecars(&runtime, &task, &status_by_id) {
-                Ok(value) => Json(value).into_response(),
-                Err(e) => server_error(e),
-            },
-            Err(e) => server_error(e),
-        },
-        Err(e) => map_runtime_error(e),
+    let id = id.to_string();
+    match blocking("task detail", move || {
+        let row = runtime.get_task_row(&id)?;
+        Ok(dashboard_status_index(&runtime)
+            .and_then(|statuses| task_row_to_json(&runtime, &row, &statuses)))
+    })
+    .await
+    {
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(e)) => server_error(e),
+        Err(response) => *response,
     }
 }
 
@@ -575,37 +545,14 @@ pub(super) async fn get_task_artifact(
 }
 
 fn artifact_response_policy(media_type: &str) -> ArtifactResponsePolicy {
-    let content_type = inline_safe_artifact_content_type(media_type);
+    // The inline allowlist is the shared artifact policy, not a web-only rule:
+    // the dashboard and `orbit.task.artifact.get` must agree on which media
+    // types may be rendered rather than downloaded.
+    let content_type = inline_safe_artifact_media_type(media_type);
     ArtifactResponsePolicy {
         content_type: content_type.unwrap_or("application/octet-stream"),
         attachment: content_type.is_none(),
     }
-}
-
-fn inline_safe_artifact_content_type(media_type: &str) -> Option<&'static str> {
-    match normalized_media_type(media_type).as_deref() {
-        Some("application/json") => Some("application/json"),
-        Some("application/toml") => Some("application/toml"),
-        Some("application/yaml") => Some("application/yaml"),
-        Some("image/gif") => Some("image/gif"),
-        Some("image/jpeg") => Some("image/jpeg"),
-        Some("image/png") => Some("image/png"),
-        Some("image/webp") => Some("image/webp"),
-        Some("text/csv") => Some("text/csv"),
-        Some("text/plain") => Some("text/plain"),
-        _ => None,
-    }
-}
-
-fn normalized_media_type(media_type: &str) -> Option<String> {
-    let base = media_type
-        .split_once(';')
-        .map_or(media_type, |(base, _params)| base)
-        .trim();
-    if base.is_empty() {
-        return None;
-    }
-    Some(base.to_ascii_lowercase())
 }
 
 fn validate_artifact_request_path(path: &str) -> Result<String, String> {

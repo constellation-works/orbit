@@ -12,7 +12,7 @@ pub struct WorkspaceConfig {
     pub schema_version: u32,
     pub workspace_id: String,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCreateParams {
     pub actor: String,
     pub parent_id: Option<OrbitId>,
@@ -90,11 +90,21 @@ pub struct TaskHistoryUpdateParams {
     pub status_note: Option<String>,
     pub append_history: Vec<TaskHistoryEntry>,
     pub append_comments: Vec<TaskComment>,
+    /// [ORB-11305] Compare-and-set guard: when `Some`, the write is applied
+    /// only if the task's *persisted* status at write time is one of these.
+    ///
+    /// The check runs inside the per-task exclusive file lock, after the
+    /// bundle is re-read, so a status a caller observed before calling cannot
+    /// go stale in the gap. `None` keeps the unconditional last-writer-wins
+    /// behavior every other caller relies on.
+    pub expected_status: Option<Vec<TaskStatus>>,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct TaskArtifactUpdateParams {
     pub actor: String,
+    /// Trusted executor context supplied by Core, never parsed from tool input.
+    pub owner_run_id: Option<String>,
     /// Artifact files to write under the task bundle `artifacts/` directory.
     /// Existing files at the same relative path are overwritten.
     pub upsert_artifacts: Vec<TaskArtifact>,
@@ -385,4 +395,19 @@ pub struct JobRunQuery {
     pub terminal_only: bool,
     pub created_since: Option<DateTime<Utc>>,
     pub limit: Option<usize>,
+    /// Which timestamp `limit` truncates against. Defaults to `CreatedAt` so
+    /// existing CLI/history callers keep their current ordering.
+    pub order_by: JobRunOrder,
+}
+
+/// Which timestamp a bounded [`JobRunQuery`] orders and truncates by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JobRunOrder {
+    /// `created_at DESC, run_id ASC` — the historical list/CLI default.
+    #[default]
+    CreatedAt,
+    /// The same "most recent activity" timestamp displayed runs are ranked
+    /// by: `finished_at`, else `started_at`, else `created_at`, each DESC
+    /// with `run_id ASC` as the deterministic tiebreak.
+    Recency,
 }

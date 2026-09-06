@@ -78,9 +78,13 @@ fn registered_checkout_opens_a_bound_runtime() {
     let workspace = workspace("logical-abc123", "local");
     let checkout = WorkspaceCheckout::owner(workspace.id.clone(), repo.clone(), orbit_dir);
 
+    std::fs::write(global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_local\"\nhost_id = \"local\"\ntask_prefix = \"ORB\"\n")
+        .expect("host identity");
     let runtime =
         RegisteredRuntimeFactory::open_registered_checkout(&global, &workspace, &checkout)
             .expect("bound runtime");
+    assert_eq!(runtime.automation_machine_identity(), Some("hm_local"));
     let binding = runtime
         .workspace_runtime_binding()
         .expect("runtime binding");
@@ -370,6 +374,56 @@ fn registered_workspace(
     };
     let checkout = WorkspaceCheckout::owner(id.to_string(), repo, orbit_dir);
     (workspace, checkout)
+}
+
+#[test]
+fn bootstrap_hint_stays_within_its_registered_git_repository() {
+    let root = tempfile::tempdir().expect("root");
+    let home = root.path().join("home");
+    let global = home.join(".orbit");
+    std::fs::create_dir_all(&global).expect("global root");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_nested_hint\"\nhost_id = \"nested-hint\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("host identity");
+
+    let (parent, checkout) =
+        registered_workspace(root.path(), "ws_parent", "parent", "hm_nested_hint");
+    std::fs::create_dir_all(checkout.repo_root.join(".git")).expect("parent git directory");
+    save_registry_to(
+        &WorkspaceRegistry {
+            workspaces: vec![parent],
+            checkouts: vec![checkout.clone()],
+            ..Default::default()
+        },
+        &registry_path_for(&global),
+    )
+    .expect("workspace registry");
+
+    let same_repo_subdir = checkout.repo_root.join("packages/demo");
+    let independent_child = checkout.repo_root.join("codebases/child");
+    std::fs::create_dir_all(&same_repo_subdir).expect("same-repo subdirectory");
+    std::fs::create_dir_all(independent_child.join(".git")).expect("child git directory");
+    let home_var = home.to_string_lossy().into_owned();
+    let _env = orbit_common::test_env::scoped([
+        ("HOME", Some(home_var.as_str())),
+        ("ORBIT_ROOT", None),
+        ("ORBIT_REGISTRY_ROOT", None),
+        ("ORBIT_MANAGED_RUN_CONTEXT", None),
+        ("ORBIT_WORKSPACE", None),
+    ]);
+
+    let same_repo =
+        RegisteredRuntimeFactory::resolve_bootstrap_roots_for_cwd(&same_repo_subdir, None)
+            .expect("resolve registered subdirectory");
+    assert_eq!(same_repo.shared_root, checkout.orbit_dir);
+
+    let child = RegisteredRuntimeFactory::resolve_bootstrap_roots_for_cwd(&independent_child, None)
+        .expect("resolve independent child repository");
+    assert_eq!(child.shared_root, independent_child.join(".orbit"));
+    assert_eq!(child.local_root, independent_child.join(".orbit"));
+    assert_eq!(child.global_root, global);
 }
 
 fn unsupported_workspace_message(error: OrbitError, selector: &str) -> String {
@@ -762,6 +816,10 @@ fn managed_registry_locator_routes_linked_worktree_to_authoritative_store() {
     let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&fixture.worktree_root, None)
         .expect("resolve production-shaped managed roots");
     assert_eq!(roots, fixture.unpinned_roots());
+    let bootstrap_roots =
+        RegisteredRuntimeFactory::resolve_bootstrap_roots_for_cwd(&fixture.worktree_root, None)
+            .expect("resolve linked-worktree bootstrap roots");
+    assert_eq!(bootstrap_roots, fixture.unpinned_roots());
     let runtime = RegisteredRuntimeFactory::open_resolved_roots(roots)
         .expect("open registered linked-worktree runtime");
 

@@ -272,7 +272,7 @@ pub(super) async fn mint_auto_task(
     .into_response()
 }
 
-fn resolve_workspace(
+pub(super) fn resolve_workspace(
     state: &DashboardState,
     workspace: &str,
 ) -> Result<(String, Arc<OrbitRuntime>), String> {
@@ -356,6 +356,15 @@ fn definition_json(
     cursor: Option<&orbit_core::application::auto_tasks::AutoTaskCursor>,
     now: DateTime<Utc>,
 ) -> Value {
+    let automation = match &definition.schedule {
+        AutoTaskSchedule::Deliveries { .. } => Some(
+            match orbit_core::application::automation::inspect_auto_task(runtime, definition, now) {
+                Ok(diagnostic) => json!(diagnostic),
+                Err(error) => json!({"reason":"state_unavailable","error":error.to_string()}),
+            },
+        ),
+        _ => None,
+    };
     let minted = tagged_instances(runtime, &definition.name);
     let open_duplicate = minted
         .as_ref()
@@ -371,6 +380,7 @@ fn definition_json(
         "enabled": definition.enabled,
         "schedule": definition.schedule,
         "schedule_summary": schedule_summary(&definition.schedule),
+        "automation": automation,
         "template_summary": template_summary(&definition.template),
         "template": {
             "title": definition.template.title,
@@ -415,6 +425,12 @@ fn is_open_status(status: TaskStatus) -> bool {
 
 fn schedule_summary(schedule: &AutoTaskSchedule) -> String {
     match schedule {
+        AutoTaskSchedule::Deliveries {
+            deliveries_landed: t,
+        } => format!(
+            "{} deliveries on {} ({:?})",
+            t.threshold, t.branch, t.coverage
+        ),
         AutoTaskSchedule::Cron { cron } => format!("cron {cron}"),
         AutoTaskSchedule::Interval { every_minutes } if *every_minutes == 1 => {
             "every 1 minute".to_string()
@@ -447,6 +463,7 @@ fn next_evaluation(
 ) -> Option<String> {
     let cursor = cursor?;
     match schedule {
+        AutoTaskSchedule::Deliveries { .. } => None,
         AutoTaskSchedule::Cron { cron } => {
             let parsed = parse_cron(cron).ok()?;
             let now_local = now.with_timezone(&Local);

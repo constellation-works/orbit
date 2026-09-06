@@ -27,6 +27,32 @@ proposed -> backlog -> in-progress -> review -> done
 
 Human-created direct tasks may enter the backlog immediately. Proposed tasks must be approved before normal execution. Review tasks are approved or rejected after the agent produces work.
 
+### Approval
+
+Both human gates use the same command:
+
+```bash
+orbit task update "$TASK_ID" --approve --note "Scope reviewed."
+```
+
+`--approve` takes the task's *next* approval step, chosen from its current
+status — `proposed → backlog`, or `review → done`. Because the transition is
+derived rather than stated, `--approve` cannot be combined with field edits or
+an explicit `--status`. The note is recorded on the status-history entry.
+
+These two gates are independent, and so is the authority that can satisfy them:
+
+- Entry into the backlog is **always** a human decision. No run, flag, or
+  scheduler grants it.
+- Completion out of `review` can instead be authorized per run with
+  `--complete`, which never reaches back and approves `proposed` work. See
+  [Completing work with `--complete`](../../getting-started/workflows/#completing-work-with---complete).
+
+Recurring work minted by an [auto-task
+definition](../../how-to/recurring-work/#3-define-recurring-chores-as-auto-tasks)
+enters at whichever status that definition declares — `backlog` by default, or
+`proposed` when you want to review each instance.
+
 ### Statuses
 
 | Status        | Purpose |

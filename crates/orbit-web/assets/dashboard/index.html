@@ -334,6 +334,7 @@
       <nav class="subtabs" id="operations-subtabs">
         <button class="subtab active" data-subtab="routines" type="button">Routines</button>
         <button class="subtab" data-subtab="auto-tasks" type="button">Auto-tasks</button>
+        <button class="subtab" data-subtab="auto-drain" type="button">Auto-drain</button>
       </nav>
       <main class="operations-layout" id="operations-routines-main">
         <section class="panel" id="routines-panel">
@@ -362,6 +363,18 @@
           </header>
           <div class="operation-feedback" id="auto-task-operation-feedback" role="status" aria-live="polite"></div>
           <div class="body" id="auto-tasks-body">
+            <div class="skeleton-state"><div class="skeleton skeleton-row"></div></div>
+          </div>
+        </section>
+      </main>
+      <main class="operations-layout operations-auto-drain-layout" id="operations-auto-drain-main" hidden>
+        <section class="panel" id="auto-drain-panel">
+          <header>
+            <span>Bounded Auto-delivery Window</span>
+            <span class="count" id="auto-drain-count">-</span>
+          </header>
+          <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
+          <div class="body" id="auto-drain-body">
             <div class="skeleton-state"><div class="skeleton skeleton-row"></div></div>
           </div>
         </section>

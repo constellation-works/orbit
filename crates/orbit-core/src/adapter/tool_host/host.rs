@@ -35,8 +35,8 @@ use orbit_types::record::FrictionStatus;
 use orbit_types::task::{
     Task, TaskComment, TaskPriority, TaskStatus, TaskType, normalize_required_tools,
     normalize_task_dependencies, normalize_task_tags, resolve_task_dependencies,
-    resolve_task_relations, task_dependencies_ready, task_matches_tags,
-    task_show_record_field_json, unknown_task_show_field_message, validate_task_dependencies,
+    resolve_task_relations, task_show_record_field_json, unknown_task_show_field_message,
+    validate_task_dependencies,
 };
 use orbit_types::tool::ToolSessionContext;
 use serde_json::{Map, Value, json};
@@ -48,6 +48,7 @@ pub(crate) fn build_orbit_tool_host(
     runtime: &OrbitRuntime,
     task_id: Option<String>,
     run_id: Option<String>,
+    session_context: ToolSessionContext,
 ) -> Arc<dyn OrbitToolHost> {
     Arc::new(RuntimeOrbitToolHost {
         runtime: runtime.clone(),
@@ -56,6 +57,7 @@ pub(crate) fn build_orbit_tool_host(
             task_id,
             run_id: run_id.or_else(trusted_env_run_id),
         },
+        session_context,
     })
 }
 
@@ -63,6 +65,15 @@ pub(crate) fn build_orbit_tool_host(
 struct RuntimeOrbitToolHost {
     runtime: OrbitRuntime,
     task_scope: OrbitTaskScope,
+    /// The calling session's asserted grants, carried so a handler whose
+    /// decision depends on *who is calling* can reach them [ORB-11354].
+    ///
+    /// The tool chokepoint resolves capabilities before dispatch, but its
+    /// answer is a yes/no it does not pass on. `orbit.agent.invoke` needs the
+    /// caller itself, because it records the authorizing operator on a durable
+    /// admission and refuses federated callers the ordinary registry would
+    /// allow.
+    session_context: ToolSessionContext,
 }
 
 /// Checkout-independent executor for coordination-authoritative hub tools.
@@ -363,6 +374,7 @@ impl HubCoordinationExecutor {
         input: Value,
         agent: Option<String>,
         model: Option<String>,
+        owner: Option<ReservationOwnerContext>,
     ) -> Result<Value, OrbitError> {
         if ["required_tools", "requiredTools", "required-tool"]
             .iter()
@@ -403,7 +415,13 @@ impl HubCoordinationExecutor {
                 &current,
                 &input,
             );
-            let updated = self.update_task_from_snapshot(&id, input.clone(), &actor, &current)?;
+            let updated = self.update_task_from_snapshot(
+                &id,
+                input.clone(),
+                &actor,
+                &current,
+                owner.as_ref(),
+            )?;
             outcome = Some((current, updated));
             Ok(())
         })?;
@@ -419,6 +437,7 @@ impl HubCoordinationExecutor {
         input: Value,
         actor: &str,
         current: &Task,
+        owner: Option<&ReservationOwnerContext>,
     ) -> Result<Task, OrbitError> {
         let status = optional_string(&input, "status")?
             .map(|value| super::input::parse_task_status("status", &value))
@@ -607,6 +626,7 @@ impl HubCoordinationExecutor {
             self.inner.tasks.artifact.upsert_task_artifacts(
                 id,
                 TaskArtifactUpdateParams {
+                    owner_run_id: owner.map(|o| o.owner_run_id.clone()),
                     actor: actor.to_string(),
                     upsert_artifacts: artifacts,
                 },
@@ -630,6 +650,9 @@ impl HubCoordinationExecutor {
                     status_note: None,
                     append_history: Vec::new(),
                     append_comments,
+                    // A human/agent update is authoritative by itself; it has no
+                    // earlier read to guard against [ORB-11305].
+                    expected_status: None,
                 },
             )?;
         }
@@ -725,6 +748,7 @@ impl HubCoordinationExecutor {
                     Value::Object(update),
                     &actor,
                     &current,
+                    None,
                 )?;
                 outcome = Some((current, updated));
                 Ok(())
@@ -830,28 +854,27 @@ impl HubCoordinationExecutor {
         let tags = optional_csv_or_string_list_alias(&input, &["tags", "tag"])?.unwrap_or_default();
         let ready = super::input::optional_bool_alias(&input, &["ready"])?;
         let limit = super::input::task_list_limit(&input)?;
-        let status = self.inner.tasks.task.task_status_index()?;
-        // `list_tasks()` returns tasks newest-first (`created_at DESC`, task ID
-        // ascending for ties); the filters preserve that order, so `take(limit)`
-        // yields the newest matching tasks (ORB-10310).
-        let tasks = self
-            .inner
-            .tasks
-            .task
-            .list_tasks()?
-            .into_iter()
-            .filter(|task| {
-                status_filter
-                    .as_ref()
-                    .is_none_or(|values| values.contains(&task.status))
-            })
-            .filter(|task| type_filter.is_none_or(|value| task.task_type == value))
-            .filter(|task| task_matches_tags(task, &tags))
-            .filter(|task| ready != Some(true) || task_dependencies_ready(task, &status))
-            .take(limit)
-            .map(|task| super::json::task_to_json(&task, &status))
-            .collect();
-        Ok(Value::Array(tasks))
+        let page = crate::application::task::query_task_store(
+            self.inner.tasks.task.as_ref(),
+            &crate::application::task::TaskListQuery {
+                filter: crate::application::task::TaskListFilter {
+                    statuses: status_filter,
+                    task_type: type_filter,
+                    tags,
+                    ..Default::default()
+                },
+                ready: ready == Some(true),
+                limit,
+                path: None,
+            },
+        )?;
+        let status = page.status_by_id;
+        Ok(Value::Array(
+            page.items
+                .into_iter()
+                .map(|row| super::json::task_to_json(&row.task, &status))
+                .collect(),
+        ))
     }
 
     fn friction_root(&self) -> Result<PathBuf, OrbitError> {
@@ -990,7 +1013,7 @@ impl OrbitToolHost for HubCoordinationExecutor {
         input: Value,
         agent: Option<String>,
         model: Option<String>,
-        _reservation_owner: Option<ReservationOwnerContext>,
+        reservation_owner: Option<ReservationOwnerContext>,
     ) -> Result<Value, OrbitError> {
         let (input, _redaction_report) =
             super::artifact_redaction::sanitize_tool_input(action, input)?;
@@ -1000,7 +1023,9 @@ impl OrbitToolHost for HubCoordinationExecutor {
             OrbitBuiltinAction::TaskStart => self.transition(input, agent, model, true),
             OrbitBuiltinAction::TaskShow => self.show_task(input),
             OrbitBuiltinAction::TaskList => self.list_tasks(input),
-            OrbitBuiltinAction::TaskUpdate => self.update_task(input, agent, model),
+            OrbitBuiltinAction::TaskUpdate => {
+                self.update_task(input, agent, model, reservation_owner)
+            }
             OrbitBuiltinAction::Friction(verb) => self.friction(verb, input, model),
             _ => Err(OrbitError::InvalidInput(format!(
                 "action {action:?} is outside the checkoutless hub coordination executor"
@@ -1066,11 +1091,14 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         super::dispatch::execute(
             &self.runtime,
             &self.task_scope,
+            super::dispatch::ToolCaller {
+                session_context: &self.session_context,
+                agent,
+                model,
+                reservation_owner,
+            },
             action,
             input,
-            agent,
-            model,
-            reservation_owner,
         )
     }
 

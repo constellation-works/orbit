@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
 mod body;
+mod complete;
 mod handoff;
 mod merge;
 mod open;

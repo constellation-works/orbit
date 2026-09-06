@@ -374,6 +374,7 @@ fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
         tools: vec!["orbit.task.show".to_string(), "proc.spawn".to_string()],
         on_denial: OnDenial::Terminate,
         model: Some(orbit_common::model_defaults::CLAUDE_DEFAULT_STRONG.to_string()),
+        reasoning_effort: None,
         max_iterations: 1,
         backend: None,
         provider: provider.unwrap_or(Provider::Claude),
@@ -381,6 +382,7 @@ fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
         require_response_envelope: false,
         require_completion_envelope: true,
         proc_allowed_programs: None,
+        trusted_host_execution: false,
     }
 }
 
@@ -453,6 +455,7 @@ fn synthetic_loop_session_job() -> JobV2 {
                 tools: vec![],
                 on_denial: OnDenial::Terminate,
                 model: None,
+                reasoning_effort: None,
                 max_iterations: 1,
                 backend: None,
                 provider: Provider::Claude,
@@ -460,8 +463,10 @@ fn synthetic_loop_session_job() -> JobV2 {
                 require_response_envelope: false,
                 require_completion_envelope: true,
                 proc_allowed_programs: None,
+                trusted_host_execution: false,
             }),
             activity_name: None,
+            input_schema_json: None,
             fs_profile: None,
             default_input: None,
             timeout_seconds: 0,

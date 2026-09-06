@@ -47,10 +47,15 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     // The operator MCP surface [ORB-10534, ORB-10711]: advertised so an
     // operator session can drive dispatch over MCP, governed so an agent
     // session holding only `agent` is refused.
+    // [ORB-11354] Advertised so an operator MCP session can start an
+    // exploration; governed to `operator` alone (never `runner`) so a managed
+    // run cannot admit a subprocess outside the sandbox it executes inside.
+    ("orbit.agent.invoke", Placement::Advertised),
     ("orbit.command.exec", Placement::Advertised),
     ("orbit.workflow.run.list", Placement::Advertised),
     ("orbit.workflow.run.resume", Placement::Advertised),
     ("orbit.workflow.run.show", Placement::Advertised),
+    ("orbit.workflow.run.workers", Placement::Advertised),
     ("orbit.workflow.ship", Placement::Advertised),
     // Destructive administration: off MCP, and governed so that being off MCP
     // is not the only thing standing between an agent and the operation

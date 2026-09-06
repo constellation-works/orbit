@@ -285,6 +285,7 @@ fn agent_implement_shaped_step(id: &str, retry: Option<RetrySpec>) -> JobV2Step 
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,
+        reasoning_effort: None,
         max_iterations: 1,
         backend: None,
         provider: Provider::Claude,
@@ -292,6 +293,7 @@ fn agent_implement_shaped_step(id: &str, retry: Option<RetrySpec>) -> JobV2Step 
         require_response_envelope: false,
         require_completion_envelope: true,
         proc_allowed_programs: None,
+        trusted_host_execution: false,
     };
     JobV2Step {
         id: id.to_string(),
@@ -302,6 +304,7 @@ fn agent_implement_shaped_step(id: &str, retry: Option<RetrySpec>) -> JobV2Step 
         body: JobV2StepBody::Target(TargetStep {
             spec: ActivityV2Spec::AgentLoop(spec),
             activity_name: None,
+            input_schema_json: None,
             fs_profile: None,
             default_input: None,
             timeout_seconds: 0,

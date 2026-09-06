@@ -1,3 +1,7 @@
+# Legacy Gemini CLI executor. Individual Gemini CLI accounts stopped 2026-06-18;
+# enterprise Gemini Code Assist and API-key authentication remain available.
+# New defaults use the Antigravity (`agy`) executor. Do not treat this as the
+# current Google terminal agent. [ORB-11299]
 schemaVersion: 2
 kind: Executor
 metadata:
@@ -14,8 +18,5 @@ spec:
     - json
   stdout_format: envelope
   sandbox: macos-sandbox-exec
-  model_pair_override:
-    strong: gemini-3.1-pro
-    weak: gemini-3.7-flash
   model_flag: "-m"
   env: {}

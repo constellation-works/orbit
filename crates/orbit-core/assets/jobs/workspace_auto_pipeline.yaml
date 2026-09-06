@@ -47,12 +47,34 @@ spec:
     for_seconds: 0
     # Live `task_auto_pipeline` runs allowed at once. That job declares
     # `max_active_runs: 10`, which is the hard ceiling above this one.
+    #
+    # ORB-11253: this is the ceiling the run *starts* with, not a fixed one.
+    # `orbit run concurrency <run_id> --set N` records a live ceiling on this
+    # run's own state, and `classify_workspace_auto_tasks` prefers it on the
+    # next admission pass — same run id, same deadline, same completion
+    # authorization, same children. Lowering it stops new admissions until
+    # enough children finish; it cancels nothing.
+    #
+    # ORB-11283: `orbit run auto --stop` records `drain_admissions_stop` on
+    # this same state. Classify then offers nothing and `drain_window` expires
+    # for the stop rather than the deadline. ORB-11310 makes the final check,
+    # child insert, and parent link one cross-process SQLite transaction, so a
+    # child offered before stop is either already linked or is skipped.
+    # Children already submitted keep running; this is not `orbit run cancel`.
     max_active_leaf_runs: 5
     # Waited when the backlog has work but no slot is free: the latency a
     # freed slot sits idle before it is refilled.
     poll_sleep_seconds: 30
     # Waited when nothing is admissible at all.
     idle_sleep_seconds: 60
+    # ORB-11187: read from `input` inside the drain loop, so every iteration
+    # forwards it — work that entered the backlog after a windowed
+    # `orbit run auto --complete` started inherits the same authorization.
+    completion: review
+    # ORB-11242: opt-in, run-scoped crew restriction. Empty means unrestricted,
+    # which is the behavior of every caller that does not pass it. Forwarded
+    # unchanged so the leaf/epic jobs this run admits inherit the same window.
+    allowed_crews: []
 
   steps:
     - id: resolve_ship_input
@@ -76,6 +98,7 @@ spec:
               max_active_leaf_runs: "{{ input.max_active_leaf_runs }}"
               poll_sleep_seconds: "{{ input.poll_sleep_seconds }}"
               idle_sleep_seconds: "{{ input.idle_sleep_seconds }}"
+              allowed_crews: "{{ input.allowed_crews }}"
 
           # Detached: the next iteration re-lists immediately and refills any
           # slot that has since freed. The fan-out is over submissions, not
@@ -95,6 +118,8 @@ spec:
                     task_ids: "{{ item.task_ids }}"
                     mode: "{{ steps.resolve_ship_input.output.mode }}"
                     base_branch: "{{ steps.resolve_ship_input.output.base_branch }}"
+                    completion: "{{ input.completion }}"
+                    allowed_crews: "{{ input.allowed_crews }}"
             fan_in:
               join:
                 mode: all
@@ -110,6 +135,8 @@ spec:
               job_name: epic_pipeline
               run_input:
                 epic_task_id: "{{ steps.admissible.output.epic_task_id }}"
+                completion: "{{ input.completion }}"
+                allowed_crews: "{{ input.allowed_crews }}"
 
           - id: window
             target: activity:drain_window

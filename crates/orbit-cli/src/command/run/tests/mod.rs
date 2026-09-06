@@ -9,12 +9,12 @@ mod support;
 
 use chrono::Utc;
 use clap::{Parser, error::ErrorKind};
-use orbit_core::OrbitRuntime;
 use orbit_core::runtime::run_audit::RunAuditEvent;
+use orbit_core::{OrbitRuntime, V2AuditEventInsertParams};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
-use crate::command::{Cli, Commands, Execute};
+use crate::command::{Cli, CommandOutput, Commands, Execute};
 
 use super::cancel::RunCancelArgs;
 use super::*;
@@ -98,6 +98,14 @@ fn cancel_requires_confirmation_before_terminalizing_pending_run() {
             .state,
         JobRunState::Cancelled
     );
+
+    RunCancelArgs {
+        run_id: run.run_id.clone(),
+        json: true,
+        confirm: true,
+    }
+    .execute(&runtime)
+    .expect("duplicate cancellation reports already-terminal success");
 }
 
 #[test]
@@ -123,9 +131,53 @@ fn parses_workspace_auto_defaults() {
             // No window means one tick, the behavior every caller had before
             // `--for` existed.
             assert_eq!(args.for_duration, None);
+            // No crew restriction is the pre-ORB-11242 behavior: every crew.
+            assert!(args.allow_crew.is_empty());
+            assert!(!args.stop);
         }
         _ => panic!("expected auto"),
     }
+}
+
+#[test]
+fn parses_workspace_auto_stop() {
+    let command = parse_run(&["orbit", "run", "auto", "--stop"]);
+    match command.command {
+        RunSubcommand::Auto(args) => {
+            assert!(args.stop);
+            assert_eq!(args.for_duration, None);
+            assert!(!args.complete);
+        }
+        _ => panic!("expected auto"),
+    }
+}
+
+#[test]
+fn workspace_auto_stop_conflicts_with_start_flags() {
+    for args in [
+        ["orbit", "run", "auto", "--stop", "--for", "30m"].as_slice(),
+        ["orbit", "run", "auto", "--stop", "--concurrency", "3"].as_slice(),
+        ["orbit", "run", "auto", "--stop", "--complete"].as_slice(),
+        ["orbit", "run", "auto", "--stop", "--allow-crew", "luna"].as_slice(),
+    ] {
+        assert_cli_rejects(args, ErrorKind::ArgumentConflict, "--stop");
+    }
+}
+
+#[test]
+fn auto_stop_with_no_coordinator_is_idle() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    super::auto::AutoCommand {
+        for_duration: None,
+        concurrency: None,
+        complete: false,
+        allow_crew: Vec::new(),
+        json: true,
+        claim_token: None,
+        stop: true,
+    }
+    .execute(&runtime)
+    .expect("idle stop succeeds");
 }
 
 #[test]
@@ -136,6 +188,65 @@ fn parses_workspace_auto_drain_window() {
             assert_eq!(args.for_duration.as_deref(), Some("30m"));
         }
         _ => panic!("expected auto"),
+    }
+}
+
+/// [ORB-11242] Both spellings collect into one list, so an operator excluding
+/// several crews mid-incident does not have to remember which form the flag
+/// takes.
+#[test]
+fn parses_workspace_auto_crew_allowlist_repeated_and_comma_separated() {
+    let command = parse_run(&[
+        "orbit",
+        "run",
+        "auto",
+        "--allow-crew",
+        "opus,sonnet",
+        "--allow-crew",
+        "luna",
+    ]);
+    match command.command {
+        RunSubcommand::Auto(args) => {
+            assert_eq!(args.allow_crew, vec!["opus", "sonnet", "luna"]);
+        }
+        _ => panic!("expected auto"),
+    }
+}
+
+#[test]
+fn readiness_previews_the_same_crew_allowlist() {
+    let command = parse_run(&["orbit", "run", "readiness", "--allow-crew", "opus,sonnet"]);
+    match command.command {
+        RunSubcommand::Readiness(args) => {
+            assert_eq!(args.allow_crew, vec!["opus", "sonnet"]);
+        }
+        _ => panic!("expected readiness"),
+    }
+}
+
+#[test]
+fn parses_readiness_selection_and_json_projection() {
+    let command = parse_run(&[
+        "orbit",
+        "run",
+        "readiness",
+        "TASK-123",
+        "TASK-124",
+        "--concurrency",
+        "8",
+        "--limit",
+        "20",
+        "--json",
+    ]);
+    match command.command {
+        RunSubcommand::Readiness(args) => {
+            assert_eq!(args.task_ids, vec!["TASK-123", "TASK-124"]);
+            assert_eq!(args.concurrency, Some(8));
+            assert_eq!(args.limit, 20);
+            assert!(args.json);
+            assert!(args.allow_crew.is_empty());
+        }
+        _ => panic!("expected readiness"),
     }
 }
 
@@ -245,6 +356,87 @@ fn parses_run_show_run_id() {
         }
         _ => panic!("expected show"),
     }
+}
+
+#[test]
+fn run_show_projects_parallel_provider_completion_by_invocation_parent() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    let scheduled_at = Utc::now();
+    let run = JobRun {
+        run_id: "jrun-cli-parallel-provider".to_string(),
+        job_id: "task_pr_pipeline".to_string(),
+        attempt: 1,
+        state: JobRunState::Running,
+        scheduled_at,
+        started_at: Some(scheduled_at),
+        finished_at: None,
+        duration_ms: None,
+        created_at: scheduled_at,
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+    };
+    runtime
+        .sqlite_store()
+        .expect("store")
+        .upsert_job_run_for_workspace(&workspace_id, &run, None)
+        .expect("insert run");
+
+    let events = [
+        json!({ "event_id": "run", "ts": "2026-09-05T17:26:00Z", "body_kind": "run_started" }),
+        json!({ "event_id": "step", "ts": "2026-09-05T17:26:01Z", "parent_event_id": "run", "body_kind": "step_started", "step_id": "pilot" }),
+        json!({ "event_id": "finished-invocation", "ts": "2026-09-05T17:26:02Z", "parent_event_id": "step", "body_kind": "activity_started" }),
+        json!({ "event_id": "live-invocation", "ts": "2026-09-05T17:26:03Z", "parent_event_id": "step", "body_kind": "activity_started" }),
+        json!({ "event_id": "finished-pid", "ts": "2026-09-05T17:26:04Z", "parent_event_id": "finished-invocation", "body_kind": "cli_invocation_process", "pid": u32::MAX - 2 }),
+        json!({ "event_id": "live-pid", "ts": "2026-09-05T17:26:05Z", "parent_event_id": "live-invocation", "body_kind": "cli_invocation_process", "pid": u32::MAX - 1 }),
+        json!({ "event_id": "finished", "ts": "2026-09-05T17:26:06Z", "parent_event_id": "finished-invocation", "body_kind": "cli_invocation_finished", "exit_code": 0 }),
+    ];
+    for event in events {
+        let ts = event["ts"]
+            .as_str()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc))
+            .expect("event timestamp");
+        runtime
+            .insert_v2_audit_event(&V2AuditEventInsertParams {
+                workspace_id: workspace_id.clone(),
+                event_id: event["event_id"].as_str().expect("event id").to_string(),
+                source: "v2_envelope".to_string(),
+                schema_version: 1,
+                event_type: "test.event".to_string(),
+                ts,
+                run_id: run.run_id.clone(),
+                agent_identity: "codex".to_string(),
+                parent_event_id: event
+                    .get("parent_event_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                workspace_path: None,
+                payload_json: event.to_string(),
+            })
+            .expect("insert event");
+    }
+
+    let output =
+        super::run_show_payload(&runtime, Some(&run.run_id), None).expect("show run payload");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("show should produce a payload");
+    };
+    let (document, _) = payload.into_view();
+    let processes = document["provider_processes"]
+        .as_array()
+        .expect("provider process projection");
+    assert_eq!(processes.len(), 2);
+    assert_eq!(processes[0]["pid"], u32::MAX - 2);
+    assert_eq!(processes[0]["finished"], true);
+    assert_eq!(processes[1]["pid"], u32::MAX - 1);
+    assert_eq!(processes[1]["finished"], false);
 }
 
 #[test]

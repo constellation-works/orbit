@@ -383,6 +383,17 @@ pub(super) fn parse_string_array_field(
         .collect()
 }
 
+pub(super) fn parse_optional_string_array_field(
+    input: &Value,
+    field: &str,
+) -> Result<Vec<String>, OrbitError> {
+    match input.get(field) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) if items.is_empty() => Ok(Vec::new()),
+        Some(_) => parse_string_array_field(input, field),
+    }
+}
+
 pub(super) fn parse_optional_poll_interval_seconds(
     input: &Value,
 ) -> Result<Option<u64>, OrbitError> {
@@ -448,6 +459,24 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("`run_ids` must be a string or array of strings"));
+    }
+
+    #[test]
+    fn parse_optional_string_array_field_treats_empty_values_as_unrestricted() {
+        assert_eq!(
+            parse_optional_string_array_field(&json!({}), "allowed_crews").unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_optional_string_array_field(&json!({"allowed_crews": null}), "allowed_crews")
+                .unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_optional_string_array_field(&json!({"allowed_crews": []}), "allowed_crews")
+                .unwrap(),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

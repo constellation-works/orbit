@@ -18,6 +18,10 @@ use crate::bootstrap::activity::DEFAULT_ACTIVITY_FILES;
 
 const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
+        "agent_invoke_pipeline",
+        include_str!("../../../../assets/jobs/agent_invoke_pipeline.yaml"),
+    ),
+    (
         "auto_task_scheduler_pipeline",
         include_str!("../../../../assets/jobs/auto_task_scheduler_pipeline.yaml"),
     ),
@@ -198,18 +202,17 @@ fn default_activity_catalog() -> V2ActivityCatalog {
     catalog
 }
 
-/// The CI-failure sweep only looks and files. An agent step or a worktree in
-/// this pipeline would mean an agent had been handed the credentialed side of
-/// the sweep, or that the sweep had started building checkouts it never needs.
+/// The CI-failure sweep quarantines first, then delegates read-only inspection
+/// to the existing pilot job. It must never invoke an implementation pipeline
+/// or build a worktree itself.
 #[test]
-fn ci_failure_sweep_pipeline_is_two_deterministic_steps_and_single_flight() {
+fn ci_failure_sweep_pipeline_pilots_proposed_findings_before_authorized_admission() {
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "ci_failure_sweep_pipeline").then_some(*yaml))
         .expect("CI-failure sweep job default exists");
-    let mut asset = load_job_asset(yaml).expect("parse CI-failure sweep pipeline");
+    let asset = load_job_asset(yaml).expect("parse CI-failure sweep pipeline");
     let catalog = default_activity_catalog();
-    resolve_job_target_refs(&mut asset.spec, &catalog).expect("resolve sweep target refs");
 
     assert_eq!(asset.spec.max_active_runs, 1);
 
@@ -219,25 +222,54 @@ fn ci_failure_sweep_pipeline_is_two_deterministic_steps_and_single_flight() {
         .iter()
         .map(|step| step.id.as_str())
         .collect();
-    assert_eq!(step_ids, ["collect", "file"], "collect must precede file");
+    assert_eq!(
+        step_ids,
+        ["collect", "file", "pilots"],
+        "proposed filing must precede pilot admission"
+    );
 
-    for step in &asset.spec.steps {
-        let JobV2StepBody::Target(target) = &step.body else {
-            panic!(
-                "sweep step `{}` must be a resolved activity target",
-                step.id
-            );
+    for step in &asset.spec.steps[..2] {
+        let JobV2StepBody::TargetRef(target) = &step.body else {
+            panic!("sweep step `{}` must reference an activity", step.id);
         };
         assert!(
-            matches!(target.spec, ActivityV2Spec::Deterministic(_)),
-            "sweep step `{}` must be deterministic; this sweep launches no agent",
-            step.id
+            matches!(
+                target.target.as_str(),
+                "activity:collect_ci_evidence" | "activity:file_ci_failure_tasks"
+            ),
+            "unexpected pre-pilot step {}",
+            target.target
         );
     }
+    let JobV2StepBody::FanOut { fan_out, fan_in } = &asset.spec.steps[2].body else {
+        panic!("new CI findings must fan out into independent pilots");
+    };
+    assert_eq!(fan_out.items, "{{ steps.file.output.pilot_candidates }}");
+    assert_eq!(fan_out.max_workers, 3);
+    assert_eq!(fan_in.collect.as_deref(), Some("pilot_results"));
+    let JobV2StepBody::TargetRef(pilot) = &fan_out.worker.body else {
+        panic!("pilot worker must invoke the existing task-pilot job");
+    };
+    assert_eq!(pilot.target, "activity:invoke_and_wait");
+    let input = pilot
+        .default_input
+        .as_ref()
+        .expect("pilot invocation input");
+    assert_eq!(input["job_name"], "task_pilot_pipeline");
+    assert_eq!(
+        input["run_input"]["task_ids"],
+        json!(["{{ item.task_id }}"])
+    );
+    assert_eq!(input["run_input"]["ci_sweep_filing"], "{{ item }}");
+    assert_eq!(input["run_input"]["promotion_authorized"], true);
+
+    let mut resolved = asset.clone();
+    resolve_job_target_refs(&mut resolved.spec, &catalog).expect("resolve sweep target refs");
     assert!(
         !yaml.contains("worktree_setup"),
-        "the sweep only looks and files, so it must never build a worktree"
+        "the sweep never implements, so it must never build a worktree"
     );
+    assert!(!yaml.contains("job_name: task_auto_pipeline"));
 }
 
 #[test]
@@ -303,28 +335,48 @@ fn dependabot_sweep_pipeline_is_two_deterministic_steps_and_single_flight() {
         "collection_outcome:",
         "family_outcomes:",
         "skipped_over_cap:",
+        "match_kind:",
+        "match_evidence:",
     ] {
         assert!(file.contains(field), "file schema missing {field}");
+    }
+
+    let ci_file = DEFAULT_ACTIVITY_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "file_ci_failure_tasks").then_some(*yaml))
+        .expect("CI file activity default exists");
+    for field in ["match_kind:", "match_evidence:"] {
+        assert!(ci_file.contains(field), "CI file schema missing {field}");
     }
 }
 
 #[test]
-fn seeded_step_failure_recovery_asset_stays_aligned_without_retired_role() {
-    let seeded = DEFAULT_ACTIVITY_FILES
-        .iter()
-        .find_map(|(name, yaml)| (*name == "step_failure_recovery").then_some(*yaml))
-        .expect("seeded step failure recovery activity");
-    assert_eq!(
-        seeded,
-        include_str!("../../../../../../.orbit/resources/activities/step_failure_recovery.yaml"),
-        "dogfood and seeded recovery activity assets must remain behaviorally aligned"
-    );
+fn seeded_recovery_assets_stay_aligned_without_retired_role() {
+    for name in ["step_failure_recovery", "pr_conflict_recovery"] {
+        let seeded = DEFAULT_ACTIVITY_FILES
+            .iter()
+            .find_map(|(activity_name, yaml)| (*activity_name == name).then_some(*yaml))
+            .unwrap_or_else(|| panic!("seeded {name} activity"));
+        let dogfood = match name {
+            "step_failure_recovery" => include_str!(
+                "../../../../../../.orbit/resources/activities/step_failure_recovery.yaml"
+            ),
+            "pr_conflict_recovery" => include_str!(
+                "../../../../../../.orbit/resources/activities/pr_conflict_recovery.yaml"
+            ),
+            _ => unreachable!("fixed recovery activity list"),
+        };
+        assert_eq!(
+            seeded, dogfood,
+            "dogfood and seeded {name} assets must remain behaviorally aligned"
+        );
 
-    let asset = load_activity_asset(seeded).expect("parse recovery activity");
-    let ActivityV2Spec::AgentLoop(_) = asset.spec.spec else {
-        panic!("step_failure_recovery must remain an agent loop");
-    };
-    assert!(!seeded.contains("\n  role:"));
+        let asset = load_activity_asset(seeded).expect("parse recovery activity");
+        let ActivityV2Spec::AgentLoop(_) = asset.spec.spec else {
+            panic!("{name} must remain an agent loop");
+        };
+        assert!(!seeded.contains("\n  role:"));
+    }
 }
 
 fn assert_condition_tokens_are_paths(condition: &str) {
@@ -387,7 +439,7 @@ fn default_job_target_refs_resolve_against_default_activities() {
 /// detected at `orbit init`; everywhere else it is a hard dispatch failure,
 /// and the `all` join turns that into a whole-run failure.
 #[test]
-fn task_pilot_pipeline_resolves_system_crew_and_bounded_all_join_partitions() {
+fn task_pilot_pipeline_resolves_system_crew_and_bounded_partial_join_partitions() {
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_pilot_pipeline").then_some(*yaml))
@@ -395,12 +447,18 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_all_join_partitions() {
     let asset = load_job_asset(yaml).expect("task pilot pipeline parses");
     let defaults = asset.spec.default_input.as_ref().expect("default input");
     assert_eq!(defaults["task_ids"], json!([]));
+    assert!(
+        defaults.get("base_branch").is_none(),
+        "branch fallback belongs to the prepare activity, not the job defaults"
+    );
     assert_eq!(defaults["max_partition_size"], 5);
+    assert_eq!(defaults["promotion_authorized"], false);
+    assert_eq!(defaults["ci_sweep_filing"], Value::Null);
     assert!(
         defaults.get("crew").is_none(),
         "a job-input crew would be dead: the system-crew marker overwrites it before resolution"
     );
-    assert_eq!(asset.spec.steps.len(), 3);
+    assert_eq!(asset.spec.steps.len(), 4);
 
     let JobV2StepBody::TargetRef(prepare) = &asset.spec.steps[0].body else {
         panic!("task pilot preparation must be deterministic activity reference");
@@ -408,6 +466,7 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_all_join_partitions() {
     assert_eq!(prepare.target, "activity:prepare_task_pilot");
     let prepare_input = prepare.default_input.as_ref().expect("prepare input");
     assert_eq!(prepare_input["task_ids"], "{{ input.task_ids }}");
+    assert_eq!(prepare_input["base_branch"], "{{ input.base_branch }}");
 
     let JobV2StepBody::FanOut { fan_out, fan_in } = &asset.spec.steps[1].body else {
         panic!("task pilot agent work must fan out");
@@ -416,7 +475,7 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_all_join_partitions() {
     assert_eq!(fan_out.max_workers, 5);
     assert_eq!(
         fan_in.join,
-        orbit_types::workflow::activity_job::JoinMode::All
+        orbit_types::workflow::activity_job::JoinMode::Any
     );
     assert_eq!(fan_in.collect.as_deref(), Some("pilot_results"));
     let JobV2StepBody::TargetRef(pilot) = &fan_out.worker.body else {
@@ -425,6 +484,18 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_all_join_partitions() {
     assert_eq!(pilot.target, "activity:task_pilot");
     let pilot_input = pilot.default_input.as_ref().expect("pilot input");
     assert_eq!(pilot_input["task_ids"], "{{ item.task_ids }}");
+    assert_eq!(
+        pilot_input["base_branch"],
+        "{{ steps.prepare.output.source.base_branch }}"
+    );
+    assert_eq!(
+        pilot_input["source_revision"],
+        pilot_input["inspection_revision"]
+    );
+    assert_eq!(
+        pilot_input["inspection_revision"],
+        "{{ steps.prepare.output.source.source_revision }}"
+    );
     assert_eq!(
         pilot_input["crew"],
         json!("system"),
@@ -442,10 +513,27 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_all_join_partitions() {
     let apply_input = apply.default_input.as_ref().expect("apply input");
     assert_eq!(apply_input["prepared"], "{{ steps.prepare.output }}");
     assert_eq!(apply_input["results"], "{{ steps.pilot_results.output }}");
+    assert_eq!(
+        apply_input["promotion_authorized"],
+        "{{ input.promotion_authorized }}"
+    );
+    assert_eq!(
+        apply_input["ci_sweep_filing"],
+        "{{ input.ci_sweep_filing }}"
+    );
     assert!(
         apply_input.get("crew").is_none() && apply_input.get("system_crew").is_none(),
         "the deterministic apply step must carry no crew key: it cannot receive the \
          system-crew injection, which only runs for agent-loop targets"
+    );
+
+    let JobV2StepBody::TargetRef(require_success) = &asset.spec.steps[3].body else {
+        panic!("task pilot must guard the durable partition apply result");
+    };
+    assert_eq!(require_success.target, "activity:pipeline_success_guard");
+    assert_eq!(
+        require_success.default_input.as_ref().expect("guard input")["result"],
+        "{{ steps.apply.output }}"
     );
     assert!(
         !yaml.contains("crew: luna") && !yaml.contains("{{ input.crew }}"),
@@ -551,6 +639,167 @@ backend = "cli"
     );
 }
 
+/// [ORB-11242] The restriction is only as good as its weakest hand-off. Every
+/// job on the auto-drain's dispatch chain has to declare the input, and every
+/// one that dispatches a child has to forward it, or a nested run would resolve
+/// its crew with no restriction in sight. Asserted on the loaded assets so a
+/// job added to the chain without the forwarding line fails here.
+#[test]
+fn auto_drain_dispatch_chain_declares_and_forwards_the_crew_allowlist() {
+    /// job name -> does it dispatch a child that must inherit the window?
+    const CHAIN: &[(&str, bool)] = &[
+        ("workspace_auto_pipeline", true),
+        ("task_auto_pipeline", true),
+        ("task_gate_pipeline", true),
+        ("epic_pipeline", true),
+        // Chain termini: the agent activities in these jobs resolve their crew
+        // against this run input, which is where the gate reads it.
+        ("task_local_pipeline", false),
+        ("task_pr_pipeline", false),
+    ];
+
+    for (job_name, forwards) in CHAIN {
+        let yaml = DEFAULT_JOB_FILES
+            .iter()
+            .find_map(|(name, yaml)| (name == job_name).then_some(*yaml))
+            .unwrap_or_else(|| panic!("{job_name} ships as a default job"));
+        let asset = load_job_asset(yaml).unwrap_or_else(|error| panic!("{job_name}: {error}"));
+        let default_input = asset
+            .spec
+            .default_input
+            .as_ref()
+            .unwrap_or_else(|| panic!("{job_name} declares a default input"));
+        assert_eq!(
+            default_input.get("allowed_crews"),
+            Some(&json!([])),
+            "{job_name} must default to an unrestricted window"
+        );
+
+        let rendered = serde_json::to_string(&asset.spec).expect("serialize job spec");
+        assert_eq!(
+            rendered.contains("{{ input.allowed_crews }}"),
+            *forwards,
+            "{job_name} forwarding expectation mismatch"
+        );
+    }
+}
+
+/// [ORB-11242] The failure that motivated the run-scoped allowlist: a system
+/// activity resolved `workflow.system_crew` on its own, so it launched a
+/// provider the operator had excluded even though the run's own crew was a
+/// permitted one. Driven through the shipped `task_pilot_pipeline` asset and
+/// the real dispatch order (`inject_system_crew_input` then
+/// `resolve_crew_settings`), because the injection is exactly what made the
+/// override invisible to the run input.
+#[test]
+fn system_crew_dispatch_is_refused_when_the_run_window_excludes_it() {
+    let root = tempdir().expect("create tempdir");
+    let global = root.path().join("global");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&global).expect("create global root");
+    std::fs::create_dir_all(&workspace).expect("create workspace root");
+    // `luna` is the permitted wrapper the run selected; `system` resolves to a
+    // *different* model, which is the provider usage the window excluded.
+    std::fs::write(
+        workspace.join("config.toml"),
+        r#"[workflow]
+default_crew = "luna"
+system_crew = "system"
+
+[crews.luna]
+provider = "claude"
+model = "claude-opus-4-6"
+backend = "cli"
+
+[crews.system]
+provider = "claude"
+model = "claude-fable-5-1"
+backend = "cli"
+"#,
+    )
+    .expect("write crew config");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+
+    let yaml = DEFAULT_JOB_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "task_pilot_pipeline").then_some(*yaml))
+        .expect("task pilot pipeline exists");
+    let mut asset = load_job_asset(yaml).expect("task pilot pipeline parses");
+    resolve_job_target_refs(&mut asset.spec, &default_activity_catalog())
+        .expect("task pilot activity references resolve");
+    let JobV2StepBody::FanOut { fan_out, .. } = &asset.spec.steps[1].body else {
+        panic!("task pilot agent work must fan out");
+    };
+    let JobV2StepBody::Target(pilot) = &fan_out.worker.body else {
+        panic!("task pilot worker must resolve to an activity target");
+    };
+    let ActivityV2Spec::AgentLoop(spec) = &pilot.spec else {
+        panic!("task pilot worker must be an agent loop");
+    };
+    let pilot_input = pilot.default_input.clone().expect("pilot input");
+    let dispatched_input =
+        inject_system_crew_input(&runtime, &pilot_input).expect("inject configured system crew");
+
+    // The permitted control: an unrestricted run dispatches the system crew as
+    // it always has, so the refusal below is the allowlist and nothing else.
+    let unrestricted = resolve_crew_settings(&runtime, spec, &dispatched_input, &json!({}))
+        .expect("an unrestricted run still dispatches the system crew")
+        .expect("system crew resolves");
+    assert_eq!(unrestricted.model.as_deref(), Some("claude-fable-5-1"));
+
+    // The run permits only `luna`. The system override names its own crew, so
+    // without the run input's allowlist travelling with it this would launch
+    // `claude-fable-5-1` regardless of the window.
+    let error = resolve_crew_settings(
+        &runtime,
+        spec,
+        &dispatched_input,
+        &json!({ "allowed_crews": ["luna"] }),
+    )
+    .expect_err("an excluded system crew must not reach a provider");
+    let message = error.to_string();
+    assert!(
+        message.contains("`system`") && message.contains("claude-fable-5-1"),
+        "the refusal must name the effective configured identity: {message}"
+    );
+    assert!(message.contains("luna"), "{message}");
+
+    // The other system route: `system_crew: true`, which the recovery
+    // dispatcher injects at runtime rather than declaring in an asset. It
+    // resolves `workflow.system_crew` itself, so it is the route that could
+    // reach an excluded provider without the run input ever naming it.
+    let injected = inject_system_crew_input(&runtime, &json!({ "system_crew": true }))
+        .expect("inject configured system crew");
+    let injected_error = resolve_crew_settings(
+        &runtime,
+        spec,
+        &injected,
+        &json!({ "allowed_crews": ["luna"] }),
+    )
+    .expect_err("an excluded `workflow.system_crew` must not reach a provider");
+    let injected_message = injected_error.to_string();
+    assert!(
+        injected_message.contains("workflow.system_crew"),
+        "the refusal must name where the crew came from: {injected_message}"
+    );
+    assert!(
+        injected_message.contains("claude-fable-5-1"),
+        "{injected_message}"
+    );
+
+    // A wrapper is not provider usage: naming `luna` is what the run selected,
+    // and it still dispatches under the same restriction.
+    let allowed = resolve_crew_settings(
+        &runtime,
+        spec,
+        &json!({ "crew": "luna" }),
+        &json!({ "allowed_crews": ["luna"] }),
+    )
+    .expect("a permitted crew must still dispatch")
+    .expect("permitted crew resolves");
+    assert_eq!(allowed.model.as_deref(), Some("claude-opus-4-6"));
+}
+
 /// [ORB-10385] Every deterministic action reachable from a shipped job —
 /// including terminal `failure_activity` hooks — must be registered in
 /// this binary's v2 dispatch table. `pr_failure_handoff` shipped as a
@@ -571,6 +820,32 @@ fn default_jobs_only_reference_registered_deterministic_actions() {
         orbit_engine::validate_job_deterministic_actions(&asset.spec, &runtime).unwrap_or_else(
             |err| panic!("default job {job_name} references an unregistered action: {err}"),
         );
+    }
+}
+
+/// [ORB-11325] No shipped job's `when:` / `break_when:` may read
+/// `steps.<id>.output` for a step that may be skipped — by its own `when:`
+/// or, since [ORB-11346], by a `when:` on any enclosing step, whose false
+/// branch skips the whole nested body. A skipped step records nothing, and
+/// `condition::evaluate_bool_expr` renders the whole expression before
+/// parsing it, so the reference fails with
+/// `template.rs`'s "no data recorded for step" error on exactly the branch
+/// where the referenced step would have been skipped. `validate_job` is the
+/// catalog-load gate; no shipped job is exempted from it.
+#[test]
+fn default_jobs_only_read_step_output_from_always_run_steps() {
+    let catalog = default_activity_catalog();
+
+    for (job_name, yaml) in DEFAULT_JOB_FILES {
+        let mut asset = load_job_asset(yaml)
+            .unwrap_or_else(|err| panic!("default job {job_name} should parse: {err}"));
+        resolve_job_target_refs(&mut asset.spec, &catalog)
+            .unwrap_or_else(|err| panic!("default job {job_name} refs resolve: {err}"));
+        orbit_engine::validate_job(&asset.spec).unwrap_or_else(|err| {
+            panic!(
+                "default job {job_name} reads a conditional step's output from a when/break_when: {err}"
+            )
+        });
     }
 }
 
@@ -765,7 +1040,7 @@ fn pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints() {
             (
                 "sync_base",
                 "activity:git_rebase",
-                Some("step_failure_recovery")
+                Some("pr_conflict_recovery")
             ),
             ("push", "activity:git_push", Some("step_failure_recovery")),
             ("pr_open", "activity:pr_open", Some("step_failure_recovery")),
@@ -777,6 +1052,18 @@ fn pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints() {
             (
                 "promote_no_diff",
                 "activity:pr_promote",
+                Some("step_failure_recovery")
+            ),
+            // ORB-11187: completion is two more ordered checkpoints after the
+            // review handoff, reached only under explicit authorization.
+            (
+                "complete_pr",
+                "activity:pr_complete",
+                Some("step_failure_recovery")
+            ),
+            (
+                "complete_no_diff",
+                "activity:pr_complete",
                 Some("step_failure_recovery")
             ),
         ]
@@ -841,6 +1128,11 @@ fn gate_pipeline_releases_reservation_before_child_success_guard() {
     );
 
     let dispatch = &asset.spec.steps[dispatch_index];
+    // No `when:` of its own (ORB-11325): `starvation_check`'s complementary
+    // `when: reserved == false` always fails and halts the run before this
+    // step would otherwise be reached on that branch, which is what lets
+    // `release_reservation` safely read `steps.dispatch_child.output`.
+    assert_eq!(dispatch.when.as_deref(), None);
     match &dispatch.body {
         JobV2StepBody::TargetRef(target) => {
             assert_eq!(target.target, "activity:invoke_and_wait");
@@ -881,10 +1173,11 @@ fn gate_pipeline_releases_reservation_before_child_success_guard() {
     }
 
     let guard = &asset.spec.steps[guard_index];
-    assert_eq!(
-        guard.when.as_deref(),
-        Some("{{ steps.reserve.output.reserved }} == true")
-    );
+    // No `when:` of its own: reaching this step already implies
+    // `reserve.output.reserved == true`, since `starvation_check`'s
+    // complementary `when: reserved == false` always fails and halts the run
+    // on the other branch (ORB-11325).
+    assert_eq!(guard.when.as_deref(), None);
     match &guard.body {
         JobV2StepBody::TargetRef(target) => {
             assert_eq!(target.target, "activity:pipeline_success_guard");
@@ -948,6 +1241,42 @@ fn auto_pipeline_checks_gate_results_after_fan_in() {
             );
         }
         other => panic!("expected guard target ref, got {other:?}"),
+    }
+}
+
+/// [ORB-11268] `allowed_crews` reaching the `dispatch` fan-out is not enough:
+/// the generic escape hatch (`orbit run job task_auto_pipeline --input
+/// allowed_crews=<crew>` with `task_ids` left empty) forces the discovery
+/// branch in `list_backlog_tasks`, which reads the allowlist off
+/// `list_backlog`'s own rendered step input. If that step never forwards
+/// `input.allowed_crews`, discovery-mode backlog listing silently ignores the
+/// run's crew restriction even though the later gate still enforces it.
+#[test]
+fn auto_pipeline_list_backlog_step_forwards_allowed_crews() {
+    let yaml = DEFAULT_JOB_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "task_auto_pipeline").then_some(*yaml))
+        .expect("task auto pipeline default exists");
+    let asset = load_job_asset(yaml).expect("parse task auto pipeline");
+
+    let list_backlog = asset
+        .spec
+        .steps
+        .iter()
+        .find(|step| step.id == "list_backlog")
+        .expect("task auto pipeline has a list_backlog step");
+    match &list_backlog.body {
+        JobV2StepBody::TargetRef(target) => {
+            assert_eq!(target.target, "activity:list_backlog_tasks");
+            let input = target.default_input.as_ref().expect("list_backlog input");
+            assert_eq!(
+                input["allowed_crews"],
+                Value::String("{{ input.allowed_crews }}".to_string()),
+                "list_backlog must forward the job's top-level allowed_crews input, \
+                 not just the later dispatch step"
+            );
+        }
+        other => panic!("expected list_backlog target ref, got {other:?}"),
     }
 }
 
@@ -1337,9 +1666,14 @@ fn task_shipment_jobs_resolve_default_recovery_activity() {
             "default job {job_name} should wire recovery on direct shipment steps"
         );
         for (step_id, recovery_activity, resolved) in recovery_steps {
+            let expected = if job_name == "task_pr_pipeline" && step_id == "sync_base" {
+                "pr_conflict_recovery"
+            } else {
+                "step_failure_recovery"
+            };
             assert_eq!(
                 recovery_activity.as_deref(),
-                Some("step_failure_recovery"),
+                Some(expected),
                 "step {step_id} should use default recovery activity"
             );
             assert!(
@@ -1387,7 +1721,8 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
     );
     let asset = load_job_asset(yaml).expect("epic pipeline parses");
     assert_eq!(asset.spec.max_active_runs, 1);
-    assert_eq!(asset.spec.steps.len(), 13);
+    // ORB-11187 added the two authorized PR completion steps.
+    assert_eq!(asset.spec.steps.len(), 15);
     let root_step_ids = asset
         .spec
         .steps
@@ -1408,6 +1743,10 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
             "pr_open",
             "promote_pr",
             "promote_pr_no_diff",
+            // ORB-11187: authorized PR completion, between the review handoff
+            // and the local-mode delivery steps.
+            "complete_pr",
+            "complete_pr_no_diff",
             "merge",
             "mark_done",
         ]
@@ -1596,7 +1935,7 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
         "review"
     );
 
-    let merge = &asset.spec.steps[11];
+    let merge = &asset.spec.steps[13];
     assert_eq!(
         merge.when.as_deref(),
         Some("{{ steps.resolve_ship_input.output.mode }} == local")
@@ -1615,7 +1954,7 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
         "{{ steps.resolve_ship_input.output.base_branch }}"
     );
 
-    let mark_done = &asset.spec.steps[12];
+    let mark_done = &asset.spec.steps[14];
     assert_eq!(
         mark_done.when.as_deref(),
         Some("{{ steps.resolve_ship_input.output.mode }} == local")
@@ -1882,4 +2221,251 @@ fn malformed_job_assets_remain_hard_catalog_errors() {
         .expect_err("malformed job should fail catalog loading");
     assert!(err.to_string().contains("malformed.yaml"), "{err}");
     assert!(err.to_string().contains("parse"), "{err}");
+}
+
+/// [ORB-11187] The completion policy is one shared input threaded through every
+/// job boundary rather than parallel per-surface behavior. This pins both ends:
+/// each pipeline defaults it to `review`, and each dispatching pipeline forwards
+/// its own `input.completion` to its children.
+#[test]
+fn completion_policy_defaults_to_review_and_propagates_across_job_boundaries() {
+    fn job(name: &str) -> JobV2 {
+        let yaml = DEFAULT_JOB_FILES
+            .iter()
+            .find_map(|(job_name, yaml)| (*job_name == name).then_some(*yaml))
+            .unwrap_or_else(|| panic!("default job {name} exists"));
+        load_job_asset(yaml)
+            .unwrap_or_else(|error| panic!("parse {name}: {error}"))
+            .spec
+    }
+
+    // Every pipeline that participates must default to the review-ending
+    // behavior, so an omitted policy can never be read as authorization.
+    for name in [
+        "workspace_auto_pipeline",
+        "task_auto_pipeline",
+        "task_gate_pipeline",
+        "task_local_pipeline",
+        "task_pr_pipeline",
+        "epic_pipeline",
+    ] {
+        assert_eq!(
+            job(name).default_input.as_ref().expect("default input")["completion"],
+            "review",
+            "{name} must default to ending successful work at review"
+        );
+    }
+
+    // workspace auto -> task auto (detached leaves) and -> epic. Both are read
+    // from `input`, not from a step output captured once, so every drain
+    // iteration forwards the same authorization to newly discovered work.
+    let workspace_auto = job("workspace_auto_pipeline");
+    let drain = workspace_auto
+        .steps
+        .iter()
+        .find(|step| step.id == "drain")
+        .expect("workspace auto drain loop");
+    let JobV2StepBody::Loop { loop_ } = &drain.body else {
+        panic!("workspace auto drain must be a loop");
+    };
+    let ship_leaves = loop_
+        .steps
+        .iter()
+        .find(|step| step.id == "ship_leaves")
+        .expect("ship_leaves step");
+    let JobV2StepBody::FanOut { fan_out, .. } = &ship_leaves.body else {
+        panic!("ship_leaves must be a fan-out");
+    };
+    let JobV2StepBody::TargetRef(leaf_invoke) = &fan_out.worker.body else {
+        panic!("leaf worker must reference invoke_detached");
+    };
+    assert_eq!(
+        leaf_invoke.default_input.as_ref().expect("leaf input")["run_input"]["completion"],
+        "{{ input.completion }}",
+        "detached leaves must inherit the drain's completion authorization"
+    );
+
+    let start_epic = loop_
+        .steps
+        .iter()
+        .find(|step| step.id == "start_epic")
+        .expect("start_epic step");
+    let JobV2StepBody::TargetRef(start_epic) = &start_epic.body else {
+        panic!("start_epic must reference invoke_detached");
+    };
+    assert_eq!(
+        start_epic.default_input.as_ref().expect("epic input")["run_input"]["completion"],
+        "{{ input.completion }}"
+    );
+
+    // task auto -> gate.
+    let task_auto = job("task_auto_pipeline");
+    let dispatch = task_auto
+        .steps
+        .iter()
+        .find(|step| step.id == "dispatch")
+        .expect("task auto dispatch");
+    let JobV2StepBody::FanOut { fan_out, .. } = &dispatch.body else {
+        panic!("task auto dispatch must be a fan-out");
+    };
+    let JobV2StepBody::TargetRef(gate_invoke) = &fan_out.worker.body else {
+        panic!("gate worker must reference invoke_and_wait");
+    };
+    assert_eq!(
+        gate_invoke.default_input.as_ref().expect("gate input")["run_input"]["completion"],
+        "{{ input.completion }}"
+    );
+
+    // gate -> leaf.
+    let gate = job("task_gate_pipeline");
+    let dispatch_child = gate
+        .steps
+        .iter()
+        .find(|step| step.id == "dispatch_child")
+        .expect("gate dispatch_child");
+    let JobV2StepBody::TargetRef(dispatch_child) = &dispatch_child.body else {
+        panic!("gate dispatch_child must reference invoke_and_wait");
+    };
+    assert_eq!(
+        dispatch_child.default_input.as_ref().expect("child input")["run_input"]["completion"],
+        "{{ input.completion }}"
+    );
+}
+
+/// [ORB-11187] Local completion must be unreachable unless every publication
+/// step this invocation required already succeeded, so the terminal transition
+/// is ordered after both the merge and the push.
+#[test]
+fn local_pipeline_completes_tasks_only_after_merge_and_push() {
+    let yaml = DEFAULT_JOB_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "task_local_pipeline").then_some(*yaml))
+        .expect("task local pipeline default exists");
+    let asset = load_job_asset(yaml).expect("parse task local pipeline");
+    let step_ids = asset
+        .spec
+        .steps
+        .iter()
+        .map(|step| step.id.as_str())
+        .collect::<Vec<_>>();
+    let index = |id: &str| {
+        step_ids
+            .iter()
+            .position(|candidate| *candidate == id)
+            .unwrap_or_else(|| panic!("task local pipeline has a {id} step"))
+    };
+
+    assert!(
+        index("merge") < index("complete_tasks"),
+        "a failed merge must fail the run before any task can reach done"
+    );
+    assert!(
+        index("push") < index("complete_tasks"),
+        "a failed push must fail the run before any task can reach done"
+    );
+
+    let complete = asset
+        .spec
+        .steps
+        .iter()
+        .find(|step| step.id == "complete_tasks")
+        .expect("complete_tasks step");
+    assert_eq!(
+        complete.when.as_deref(),
+        Some("{{ input.completion }} == done"),
+        "completion must be gated on the explicit authorization"
+    );
+    let JobV2StepBody::Loop { loop_ } = &complete.body else {
+        panic!("complete_tasks must be a loop over the bundle");
+    };
+    let JobV2StepBody::TargetRef(complete_one) = &loop_.steps[0].body else {
+        panic!("complete_tasks must reference task_complete");
+    };
+    assert_eq!(complete_one.target, "activity:task_complete");
+}
+
+/// [ORB-11187] PR-mode completion runs after the PR is opened, is gated on the
+/// authorization, and routes no-diff work down a path that needs no PR.
+#[test]
+fn pr_pipelines_complete_only_when_authorized_and_handle_no_diff_without_a_pr() {
+    for job_name in ["task_pr_pipeline", "epic_pipeline"] {
+        let yaml = DEFAULT_JOB_FILES
+            .iter()
+            .find_map(|(name, yaml)| (*name == job_name).then_some(*yaml))
+            .unwrap_or_else(|| panic!("default job {job_name} exists"));
+        let asset =
+            load_job_asset(yaml).unwrap_or_else(|error| panic!("parse {job_name}: {error}"));
+
+        let no_diff_id = if job_name == "task_pr_pipeline" {
+            "complete_no_diff"
+        } else {
+            "complete_pr_no_diff"
+        };
+
+        let complete = asset
+            .spec
+            .steps
+            .iter()
+            .find(|step| step.id == "complete_pr")
+            .unwrap_or_else(|| panic!("{job_name} has a complete_pr step"));
+        let when = complete.when.as_deref().unwrap_or_default();
+        assert!(
+            when.contains("{{ input.completion }} == done"),
+            "{job_name} completion must be gated on the authorization: {when}"
+        );
+        let JobV2StepBody::TargetRef(complete) = &complete.body else {
+            panic!("{job_name} complete_pr must reference pr_complete");
+        };
+        assert_eq!(complete.target, "activity:pr_complete");
+
+        let no_diff = asset
+            .spec
+            .steps
+            .iter()
+            .find(|step| step.id == no_diff_id)
+            .unwrap_or_else(|| panic!("{job_name} has a {no_diff_id} step"));
+        let when = no_diff.when.as_deref().unwrap_or_default();
+        assert!(
+            when.contains("{{ input.completion }} == done"),
+            "{job_name} no-diff completion must be gated on the authorization: {when}"
+        );
+
+        // task_pr_pipeline's `skipped_no_diff_expected` is tag-derived (its
+        // `commit` step passes no `allow_empty`), so its no-diff completion
+        // still asserts the tag through `pr_complete`, exactly like
+        // `pr_promote`'s equivalent guard. epic_pipeline's `commit_delivery`
+        // passes `allow_empty: true` unconditionally, so the same signal does
+        // NOT imply the tag there; it must route through the tag-agnostic
+        // `task_complete` instead, matching `promote_pr_no_diff` routing
+        // around `pr_promote`'s guard on the same branch.
+        if job_name == "task_pr_pipeline" {
+            let JobV2StepBody::TargetRef(no_diff) = &no_diff.body else {
+                panic!("{job_name} {no_diff_id} must reference pr_complete");
+            };
+            assert_eq!(no_diff.target, "activity:pr_complete");
+            let input = no_diff.default_input.as_ref().expect("no-diff input");
+            assert_eq!(input["no_diff_expected"], true);
+            assert!(
+                input.get("pr_number").is_none(),
+                "{job_name} no-diff completion must not require a nonexistent PR"
+            );
+        } else {
+            let JobV2StepBody::TargetRef(no_diff) = &no_diff.body else {
+                panic!("{job_name} {no_diff_id} must reference task_complete");
+            };
+            assert_eq!(
+                no_diff.target, "activity:task_complete",
+                "epic no-diff completion must not carry pr_complete's tag guard"
+            );
+            let input = no_diff.default_input.as_ref().expect("no-diff input");
+            assert!(
+                input.get("no_diff_expected").is_none(),
+                "task_complete has no tag guard to gate"
+            );
+            assert!(
+                input.get("pr_number").is_none(),
+                "{job_name} no-diff completion must not require a nonexistent PR"
+            );
+        }
+    }
 }

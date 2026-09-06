@@ -98,5 +98,6 @@ fn job_run_query(params: JobRunListParams) -> JobRunQuery {
         terminal_only: params.terminal_only,
         created_since: params.since,
         limit: params.limit,
+        order_by: params.order_by,
     }
 }

@@ -27,6 +27,7 @@ pub use crate::builtin::github::dependabot_alerts::{
     project_pull_request as project_dependabot_pull_request, project_secret_location,
     project_secret_scanning_alert,
 };
+pub use crate::builtin::github::landing::commit_pull_requests as commit_pull_requests_request;
 pub use crate::builtin::github::pr_list::{
     build_exec_request as pr_list_request, project_pull_request,
 };
@@ -39,5 +40,6 @@ pub use crate::builtin::github::run_view::{
     build_exec_request as run_view_request, project_run_view,
 };
 pub use crate::builtin::github::{
-    BoundedLog, CheckoutEvidence, bound_log_text, parse_gh_json, scan_checkout_evidence,
+    BoundedLog, CheckoutEvidence, StreamedLog, StreamedLogCollector, bound_log_text, parse_gh_json,
+    scan_checkout_evidence,
 };

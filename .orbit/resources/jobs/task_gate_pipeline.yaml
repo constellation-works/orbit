@@ -30,12 +30,25 @@
 # - The dispatched child pipeline runs while the reservation is still valid;
 #   a fresh `orbit.task.locks.reserve` call from another bundle will either
 #   wait or surface `task.locks.reserve.denied`. `invoke_and_wait` re-checks
-#   worktree workflow admission immediately before child dispatch; stale
+#   worktree workflow admission immediately before child dispatch, because a
+#   gate can sit in `wait_for_window` for its whole budget and the admission
+#   that queued it is a snapshot, not standing approval (ORB-11305). Stale
 #   `review` / `done` tasks return a succeeded no-op output so the reservation
-#   can be released without launching a child run. After `invoke_and_wait`
-#   returns a terminal child-run status, `release_reservation` frees the
-#   reservation immediately before `require_child_success` fails the gate on
-#   a non-succeeded child. TTL remains the fallback for abandoned/crashed runs.
+#   can be released without launching a child run; a task a human withdrew
+#   during the wait (`proposed`, `someday`, `archived`, `rejected`, `blocked`)
+#   returns a non-succeeded output instead, so the reservation is still
+#   released and the gate then fails naming the task and its status. After
+#   `invoke_and_wait` returns a terminal child-run status,
+#   `release_reservation` frees the reservation immediately before
+#   `require_child_success` fails the gate on a non-succeeded child. TTL
+#   remains the fallback for abandoned/crashed runs.
+# - `dispatch_child` and `require_child_success` carry no `when:` of their
+#   own: `starvation_check`'s `when: reserved == false` is the exact
+#   complement, and `gate_starvation_fail` always errors, which halts the run
+#   before these steps would otherwise be reached on that branch (ORB-11325).
+#   That makes `dispatch_child` a step `release_reservation` may safely read
+#   `steps.dispatch_child.output` from — see design doc §8.2 on why a
+#   condition may only read the output of a step that always runs.
 
 schemaVersion: 2
 kind: Job
@@ -53,6 +66,12 @@ spec:
     # ORB-10644: forwarded to the child pipeline; empty means the base is the
     # landing branch.
     landing_branch: ""
+    # ORB-11187: forwarded to the leaf pipeline unchanged.
+    completion: review
+    # ORB-11242: opt-in, run-scoped crew restriction. Empty means unrestricted,
+    # which is the behavior of every caller that does not pass it. Forwarded
+    # unchanged so the leaf/epic jobs this run admits inherit the same window.
+    allowed_crews: []
     max_wait_seconds: 3600
     poll_interval_seconds: 30
     ttl_seconds: 7200
@@ -85,7 +104,6 @@ spec:
         max_wait_seconds: "{{ input.max_wait_seconds }}"
 
     - id: dispatch_child
-      when: "{{ steps.reserve.output.reserved }} == true"
       target: activity:invoke_and_wait
       default_input:
         job_name: "task_{{ input.mode }}_pipeline"
@@ -94,6 +112,8 @@ spec:
           base_branch: "{{ input.base_branch }}"
           base_sync: "{{ input.base_sync }}"
           landing_branch: "{{ input.landing_branch }}"
+          completion: "{{ input.completion }}"
+          allowed_crews: "{{ input.allowed_crews }}"
           auto_push: true
         admission_task_ids: "{{ input.task_ids }}"
         admission_workflow: worktree_setup
@@ -106,7 +126,6 @@ spec:
         reservation_id: "{{ steps.reserve.output.reservation_id }}"
 
     - id: require_child_success
-      when: "{{ steps.reserve.output.reserved }} == true"
       target: activity:pipeline_success_guard
       default_input:
         context: task_gate_pipeline child run

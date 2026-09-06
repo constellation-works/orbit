@@ -1,12 +1,21 @@
 // Routine-definition, host sweep-clock, and auto-task operations [ORB-10875, ORB-10876].
 
 import { el, fetchJson, getWorkspace, postJson } from './common.js';
+import { navigateToRun } from './router.js';
+import { renderAutomation } from './automation.js';
 
 const $ = (id) => document.getElementById(id);
 const pendingOperations = new Set();
 const UNCONDITIONAL_MINT_WARNING = "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.";
+const AUTO_DRAIN_DURATIONS = ["15m", "30m", "1h", "2h", "4h", "8h"];
+const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as done (review -> done), not only the ones eligible right now.";
 let lastOperations = null;
 let lastAutoTasks = null;
+let lastAutoDrain = null;
+let autoDrainDuration = "1h";
+let autoDrainConcurrency = "";
+let autoDrainComplete = false;
+let lastAutoDrainRun = null;
 let context = null;
 
 export function initOperations(nextContext) {
@@ -124,7 +133,7 @@ function renderOperations(payload) {
       el("div", { class: "operation-target mono", text: routine.target }),
       el("div", { class: "operation-grid" }, [
         field("Source workspace", routine.source),
-        field("Schedule", routine.cron),
+        field("Schedule", routine.trigger?.deliveries_landed ? `${routine.trigger.deliveries_landed.threshold} verified deliveries on ${routine.trigger.deliveries_landed.branch}` : routine.cron),
         field("Host pin", (routine.hosts || []).join(", ") || "Local host"),
         field("Last evaluation", time(routine.last_evaluated_slot || routine.first_observed_at)),
         field("Next evaluation", time(routine.next_due)),
@@ -132,6 +141,8 @@ function renderOperations(payload) {
         field("Linked run / outcome", fire ? `${fire.run_id || "No run"} · ${fire.state}` : "No fire recorded"),
       ]),
     );
+    const automation = renderAutomation(routine.automation);
+    if (automation) card.appendChild(automation);
     if (routine.description) card.appendChild(el("p", { class: "operation-description", text: routine.description }));
     const reason = controlReason(payload, routine);
     if (reason) card.appendChild(el("p", { class: "operation-control-note", text: reason }));
@@ -385,6 +396,8 @@ function renderAutoTasks(payload) {
         field("Open duplicate", definition.open_duplicate ? "Yes — mint will create another" : "No"),
       ]),
     );
+    const automation = renderAutomation(definition.automation);
+    if (automation) card.appendChild(automation);
     if (definition.description) {
       card.appendChild(el("p", { class: "operation-description", text: definition.description }));
     }
@@ -404,11 +417,174 @@ function fetchAndRenderAutoTasks() {
   return fetchJson("/api/auto-tasks").then(renderAutoTasks);
 }
 
+// ORB-11250: bounded backlog auto-drain window ("orbit run auto --for
+// <duration> [--complete]" from the dashboard). One workspace-scoped action,
+// not a per-row one, so it follows the mint/clock in-flight idiom (a single
+// fixed `pendingOperations` key, guard released in `finally`) rather than
+// tasks.js's per-task Ship guard.
+function autoDrainReasons(payload) {
+  const workspaceReason = workspaceReadOnlyReason();
+  return {
+    submit: workspaceReason,
+    complete: workspaceReason || (payload.controls_authorized === false
+      ? "Automatic completion requires an authorized operator session; the window can still start with default review completion."
+      : ""),
+  };
+}
+
+function autoDrainCounts(payload) {
+  const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+  const eligible = tasks.filter((task) => task.eligible).length;
+  return { eligible, waiting: tasks.length - eligible };
+}
+
+function autoDrainStartButton(payload) {
+  const key = "auto-drain:start";
+  const reasons = autoDrainReasons(payload);
+  const pending = pendingOperations.has(key);
+  const button = el("button", {
+    class: "operation-button secondary",
+    text: pending ? "Starting…" : "Start bounded window",
+    title: reasons.submit || "Submit orbit.workflow.auto with this duration and concurrency",
+  });
+  button.type = "button";
+  button.disabled = Boolean(reasons.submit) || pending || autoDrainComplete && Boolean(reasons.complete);
+  button.addEventListener("click", async () => {
+    if (pendingOperations.has(key)) return;
+    const workspace = selectedWorkspace();
+    const counts = autoDrainCounts(payload);
+    const completeLine = autoDrainComplete
+      ? `WARNING: ${AUTO_DRAIN_COMPLETE_WARNING}`
+      : "Shipped tasks stay in review; a separate action completes them.";
+    const confirmText = [
+      `Start a bounded auto-delivery window in workspace "${workspace?.name || workspace?.id}"?`,
+      `Duration: ${autoDrainDuration} · Concurrency: ${autoDrainConcurrency || "runtime default"}`,
+      `Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}`,
+      "",
+      completeLine,
+    ].join("\n");
+    if (!window.confirm(confirmText)) return;
+    pendingOperations.add(key);
+    feedback("auto-drain-operation-feedback", "pending", `Starting a ${autoDrainDuration} auto-delivery window…`);
+    renderAutoDrain(payload);
+    try {
+      const body = { for_duration: autoDrainDuration, complete: autoDrainComplete };
+      if (autoDrainConcurrency) body.concurrency = Number(autoDrainConcurrency);
+      const result = await postJson("/api/workflows/auto", body);
+      const runId = result?.run_id ?? null;
+      const state = result?.state ?? "submitted";
+      const completion = result?.completion ?? "review";
+      feedback("auto-drain-operation-feedback", "success", `Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).`);
+      lastAutoDrainRun = runId ? { runId, state, completion, workspaceId: workspace?.id } : null;
+      await fetchAndRenderAutoDrain();
+    } catch (error) {
+      feedback("auto-drain-operation-feedback", "error", `Auto-delivery window failed to start: ${error.message}`);
+    } finally {
+      pendingOperations.delete(key);
+      if (lastAutoDrain) renderAutoDrain(lastAutoDrain);
+    }
+  });
+  return button;
+}
+
+function renderAutoDrain(payload) {
+  lastAutoDrain = payload;
+  const body = $("auto-drain-body");
+  if (!body) return;
+  body.textContent = "";
+  const reasons = autoDrainReasons(payload);
+  const workspace = selectedWorkspace();
+  if (reasons.submit) {
+    body.appendChild(el("div", { class: "operations-readonly-note", text: reasons.submit }));
+    $("auto-drain-count").textContent = "read-only";
+    return;
+  }
+  const counts = autoDrainCounts(payload);
+  const capacity = payload.capacity || {};
+  body.append(
+    el("div", { class: "operation-grid" }, [
+      field("Active leaf runs", `${capacity.active_leaf_runs ?? "—"} / ${capacity.max_active_leaf_runs ?? "—"}`),
+      field("Free slots", capacity.free_slots),
+      field("Eligible now", counts.eligible),
+      field("Waiting", counts.waiting),
+    ]),
+  );
+  body.appendChild(el("p", {
+    class: "operation-control-note",
+    text: "Proposed tasks are never drained automatically; promote a task to backlog first. This snapshot can change the instant after it is read.",
+  }));
+
+  const durationSelect = el("select", { class: "operation-cadence", title: "Bounded drain window" });
+  for (const value of AUTO_DRAIN_DURATIONS) {
+    const option = el("option", { text: value });
+    option.value = value;
+    option.selected = value === autoDrainDuration;
+    durationSelect.appendChild(option);
+  }
+  durationSelect.addEventListener("change", () => {
+    autoDrainDuration = durationSelect.value;
+  });
+
+  const concurrencyInput = el("input", { class: "operation-cadence", title: "Leaf-run concurrency (blank = runtime default)" });
+  concurrencyInput.type = "number";
+  concurrencyInput.min = "1";
+  concurrencyInput.placeholder = "Default";
+  concurrencyInput.value = autoDrainConcurrency;
+  concurrencyInput.addEventListener("change", () => {
+    autoDrainConcurrency = concurrencyInput.value.trim();
+  });
+
+  const completeLabel = el("label", { class: "operation-field", title: reasons.complete || AUTO_DRAIN_COMPLETE_WARNING });
+  const completeCheckbox = el("input");
+  completeCheckbox.type = "checkbox";
+  completeCheckbox.checked = autoDrainComplete;
+  completeCheckbox.disabled = Boolean(reasons.complete);
+  completeCheckbox.addEventListener("change", () => {
+    autoDrainComplete = completeCheckbox.checked;
+    renderAutoDrain(payload);
+  });
+  completeLabel.append(completeCheckbox, el("span", { text: " Also mark shipped tasks done (skip review)" }));
+
+  const form = el("div", { class: "operation-clock-actions" }, [durationSelect, concurrencyInput, completeLabel, autoDrainStartButton(payload)]);
+  body.appendChild(form);
+  if (autoDrainComplete) {
+    body.appendChild(el("p", { class: "operation-control-note operation-mint-warning", text: AUTO_DRAIN_COMPLETE_WARNING }));
+  }
+  if (lastAutoDrainRun && lastAutoDrainRun.workspaceId === workspace?.id) {
+    const runLink = el("a", {
+      class: "operation-control-note",
+      text: `Open run ${lastAutoDrainRun.runId} (${lastAutoDrainRun.state}, completion: ${lastAutoDrainRun.completion}) →`,
+      title: "Open the submitted parent run",
+    });
+    runLink.href = "#";
+    runLink.addEventListener("click", (event) => {
+      event.preventDefault();
+      navigateToRun(lastAutoDrainRun.runId, lastAutoDrainRun.workspaceId);
+    });
+    body.appendChild(runLink);
+  }
+
+  $("auto-drain-count").textContent = `${counts.eligible} eligible · ${workspace?.name || workspace?.id}`;
+}
+
+function fetchAndRenderAutoDrain() {
+  const workspace = selectedWorkspace();
+  if (!workspace) {
+    renderAutoDrain({});
+    return Promise.resolve();
+  }
+  const query = autoDrainConcurrency ? `?concurrency=${encodeURIComponent(autoDrainConcurrency)}` : "";
+  return fetchJson(`/api/workflows/auto/readiness${query}`).then(renderAutoDrain);
+}
+
 export function fetchAndRenderOperations() {
   return Promise.all([
     fetchJson("/api/routines").then(renderOperations),
     fetchAndRenderAutoTasks().catch((error) => {
       feedback("auto-task-operation-feedback", "error", `Failed to load auto-tasks: ${error.message}`);
+    }),
+    fetchAndRenderAutoDrain().catch((error) => {
+      feedback("auto-drain-operation-feedback", "error", `Failed to load auto-delivery readiness: ${error.message}`);
     }),
   ]);
 }

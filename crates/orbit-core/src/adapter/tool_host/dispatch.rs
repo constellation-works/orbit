@@ -1,18 +1,36 @@
 use orbit_common::OrbitError;
 use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, ReservationOwnerContext};
+use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 
+/// Everything the dispatch table knows about *who* is making this call.
+///
+/// Grouped rather than passed as four more parameters because the handlers
+/// consume different subsets of it: attribution for a persisted record, the
+/// reservation owner for a lock write, and the session itself for the one
+/// operation whose decision depends on the caller [ORB-11354].
+pub(super) struct ToolCaller<'a> {
+    pub(super) session_context: &'a ToolSessionContext,
+    pub(super) agent: Option<String>,
+    pub(super) model: Option<String>,
+    pub(super) reservation_owner: Option<ReservationOwnerContext>,
+}
+
 pub(super) fn execute(
     runtime: &OrbitRuntime,
     task_scope: &OrbitTaskScope,
+    caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
     input: Value,
-    agent: Option<String>,
-    model: Option<String>,
-    reservation_owner: Option<ReservationOwnerContext>,
 ) -> Result<Value, OrbitError> {
+    let ToolCaller {
+        session_context,
+        agent,
+        model,
+        reservation_owner,
+    } = caller;
     let (input, redaction_report) = super::artifact_redaction::sanitize_tool_input(action, input)?;
     let agent_for_audit = agent.clone();
     let model_for_audit = model.clone();
@@ -25,6 +43,9 @@ pub(super) fn execute(
         | OrbitBuiltinAction::AdrSupersede => Err(OrbitError::InvalidInput(
             "ADR lifecycle tools have been retired; edit docs/design/**/4_decisions.md".to_string(),
         )),
+        OrbitBuiltinAction::AgentInvoke => {
+            super::agent_tools::invoke(runtime, session_context, input, agent, model)
+        }
         OrbitBuiltinAction::AutoTaskAdd => super::auto_task_tools::add(runtime, input),
         OrbitBuiltinAction::AutoTaskList => super::auto_task_tools::list(runtime, input),
         OrbitBuiltinAction::AutoTaskMint => super::auto_task_tools::mint(runtime, input),
@@ -43,7 +64,7 @@ pub(super) fn execute(
             super::friction_tools::dispatch(runtime, verb, input, model)
         }
         OrbitBuiltinAction::PipelineInvoke => {
-            super::pipeline_tools::invoke(runtime, input, agent, model)
+            super::pipeline_tools::invoke(runtime, input, agent, model, reservation_owner)
         }
         OrbitBuiltinAction::PipelineWait => {
             super::pipeline_tools::wait(runtime, input, agent, model)
@@ -57,6 +78,7 @@ pub(super) fn execute(
         OrbitBuiltinAction::StateSet => super::state_tools::set(task_scope, input),
         OrbitBuiltinAction::TaskAdd => super::task_tools::add(runtime, input, agent, model),
         OrbitBuiltinAction::TaskApprove => super::task_tools::approve(runtime, input, agent, model),
+        OrbitBuiltinAction::TaskArtifactGet => super::task_tools::artifact_get(runtime, input),
         OrbitBuiltinAction::TaskDelete => super::task_tools::delete(runtime, input),
         OrbitBuiltinAction::TaskLint => super::task_tools::lint(runtime, input),
         OrbitBuiltinAction::TaskList => super::task_tools::list(runtime, input),
@@ -70,7 +92,9 @@ pub(super) fn execute(
         OrbitBuiltinAction::TaskReject => super::task_tools::reject(runtime, input, agent, model),
         OrbitBuiltinAction::TaskShow => super::task_tools::show(runtime, input),
         OrbitBuiltinAction::TaskStart => super::task_tools::start(runtime, input, agent, model),
-        OrbitBuiltinAction::TaskUpdate => super::task_tools::update(runtime, input, agent, model),
+        OrbitBuiltinAction::TaskUpdate => {
+            super::task_tools::update(runtime, input, agent, model, reservation_owner)
+        }
         OrbitBuiltinAction::WorkflowShip => {
             super::workflow_tools::ship(runtime, input, agent, model)
         }
@@ -78,6 +102,9 @@ pub(super) fn execute(
         OrbitBuiltinAction::WorkflowRunList => super::workflow_tools::list(runtime, input),
         OrbitBuiltinAction::WorkflowRunResume => {
             super::workflow_tools::resume(runtime, input, agent, model)
+        }
+        OrbitBuiltinAction::WorkflowRunWorkers => {
+            super::workflow_tools::workers(runtime, input, agent, model)
         }
         OrbitBuiltinAction::WorkspaceClaimAcquire => {
             crate::runtime::workspace_claim::acquire(runtime, input, agent, model)

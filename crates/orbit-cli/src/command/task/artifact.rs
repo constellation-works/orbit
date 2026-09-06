@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use orbit_common::task_artifact_from_source_file;
+use orbit_common::{NotFoundKind, OrbitError, task_artifact_from_source_file};
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_types::task::{ArtifactPresentation, artifact_presentation};
 
 use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 
@@ -26,12 +27,15 @@ impl Execute for TaskArtifactCommand {
 pub enum TaskArtifactSubcommand {
     /// Store a UTF-8 source file under a task's artifacts directory
     Put(TaskArtifactPutArgs),
+    /// Read one stored artifact back out of a task
+    Get(TaskArtifactGetArgs),
 }
 
 impl Execute for TaskArtifactSubcommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         match self {
             TaskArtifactSubcommand::Put(args) => args.execute(runtime),
+            TaskArtifactSubcommand::Get(args) => args.execute(runtime),
         }
     }
 }
@@ -80,6 +84,88 @@ impl Execute for TaskArtifactPutArgs {
         } else {
             println!("Stored artifact '{artifact_path}' on task '{}'", task.id);
             Ok(CommandOutput::Silent)
+        }
+    }
+}
+
+#[derive(Args)]
+pub struct TaskArtifactGetArgs {
+    /// Task ID that owns the artifact
+    pub id: String,
+    /// Artifact path relative to the task artifacts directory, as listed by
+    /// `orbit task artifacts --task <ID>`
+    pub path: String,
+    /// Write the artifact's bytes to this file instead of printing them
+    #[arg(long = "out")]
+    pub out: Option<PathBuf>,
+    /// Output the artifact's metadata as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl Execute for TaskArtifactGetArgs {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let TaskArtifactGetArgs {
+            id,
+            path,
+            out,
+            json,
+        } = self;
+        // Resolve the owning task first so an unknown id fails as a task
+        // not-found rather than as a missing artifact.
+        let task = runtime.get_task(&id)?;
+        let artifact = runtime.get_task_artifact(&task.id, &path)?.ok_or_else(|| {
+            OrbitError::not_found(NotFoundKind::Artifact, format!("{}/{path}", task.id))
+        })?;
+        let presentation = artifact_presentation(&artifact.media_type, &artifact.content);
+
+        if let Some(out) = &out {
+            std::fs::write(out, &artifact.content).map_err(|error| {
+                OrbitError::Io(format!("write artifact to '{}': {error}", out.display()))
+            })?;
+        }
+
+        if json {
+            return Ok(Payload::document(serde_json::json!({
+                "id": task.id,
+                "path": artifact.path,
+                "media_type": artifact.media_type,
+                "size": artifact.content.len(),
+                "presentation": presentation.as_str(),
+                "written_to": out.as_ref().map(|out| out.display().to_string()),
+            }))
+            .into());
+        }
+
+        if let Some(out) = out {
+            println!(
+                "Wrote {} bytes of '{}' ({}) to {}",
+                artifact.content.len(),
+                artifact.path,
+                artifact.media_type,
+                out.display()
+            );
+            return Ok(CommandOutput::Silent);
+        }
+
+        // Only UTF-8 text is safe to write to a terminal. Anything else needs a
+        // destination file rather than a screenful of raw bytes.
+        match presentation {
+            ArtifactPresentation::Text => {
+                if let Some(content) = artifact.text_content() {
+                    println!("{content}");
+                }
+                Ok(CommandOutput::Silent)
+            }
+            ArtifactPresentation::Image | ArtifactPresentation::Opaque => {
+                Err(OrbitError::InvalidInput(format!(
+                    "artifact '{}' on task '{}' is {} ({} bytes) and is not printable; re-run with --out <FILE> to save it",
+                    artifact.path,
+                    task.id,
+                    artifact.media_type,
+                    artifact.content.len()
+                )))
+            }
         }
     }
 }

@@ -9,10 +9,12 @@
 
 pub(super) mod backlog_exclusion;
 pub(super) mod child_dispatch;
+pub(super) mod ci_failure_admission;
 pub(super) mod ci_failure_tasks;
 pub(super) mod cli_executor;
 pub(super) mod dependabot_alert_tasks;
 pub(super) mod dispatch;
+pub(super) mod duplicate_tasks;
 pub(super) mod pipeline_actions;
 pub(super) mod sandbox;
 pub(super) mod scan_unresolved;
@@ -27,7 +29,9 @@ pub(super) mod workspace_auto;
 
 #[cfg(test)]
 use crate::OrbitRuntime;
+
 #[cfg(test)]
 use orbit_engine::RuntimeHost;
+
 #[cfg(test)]
 use serde_json::Value;

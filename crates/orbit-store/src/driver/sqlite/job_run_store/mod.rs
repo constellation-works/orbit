@@ -6,12 +6,15 @@ use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, JobRunStep, JobTargetType, KnowledgeRunMetrics,
-    PipelineState, RunEvent,
+    ChildDispatch, JobRun, JobRunStartOutcome, JobRunState, JobRunStep, JobTargetType,
+    KnowledgeRunMetrics, PipelineState, RunEvent, RunStateUpdate,
 };
-use rusqlite::TransactionBehavior;
+use rusqlite::{OptionalExtension, TransactionBehavior};
 
-use crate::contracts::{JobRunQuery, JobRunStepParams, JobRunStoreBackend};
+use crate::contracts::{
+    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunOrder, JobRunQuery,
+    JobRunStepParams, JobRunStoreBackend,
+};
 use crate::fs::path_safety::validate_path_stem;
 use crate::{Store, parse_timestamp};
 
@@ -73,6 +76,57 @@ impl SqliteJobRunStore {
 }
 
 impl JobRunStoreBackend for SqliteJobRunStore {
+    fn job_run_retries(&self, run_id: &str, limit: usize) -> Result<Vec<JobRun>, OrbitError> {
+        self.store.with_read_connection(|conn| {
+            let mut statement = conn.prepare("SELECT run_id FROM job_runs WHERE workspace_id=?1 AND retry_source_run_id=?2 ORDER BY created_at,run_id LIMIT ?3")
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            let ids = statement.query_map(rusqlite::params![self.workspace_id,run_id,limit.min(1000)], |row|row.get::<_,String>(0))
+                .map_err(|error| OrbitError::Store(error.to_string()))?
+                .collect::<Result<Vec<_>,_>>().map_err(|error| OrbitError::Store(error.to_string()))?;
+            ids.into_iter().map(|id| get_job_run_for_workspace_conn(conn, &self.workspace_id, &id)?
+                .ok_or_else(|| OrbitError::Store("retry run disappeared".into()))).collect()
+        })
+    }
+
+    fn automation_job_for_key(&self, key: &str) -> Result<Option<String>, OrbitError> {
+        use rusqlite::OptionalExtension;
+        self.store.with_read_connection(|conn| {
+            conn.query_row(
+                "SELECT run_id FROM automation_job_keys WHERE workspace_id=?1 AND action_key=?2",
+                rusqlite::params![self.workspace_id, key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| OrbitError::Store(error.to_string()))
+        })
+    }
+
+    fn insert_automation_job_run(
+        &self,
+        job_id: &str,
+        input: serde_json::Value,
+        key: &str,
+    ) -> Result<JobRun, OrbitError> {
+        validate_path_stem(job_id, "job")?;
+        super::automation::initialize(&self.store)?;
+        self.store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let conn=tx.connection();
+            let existing:Option<String>=conn.query_row("SELECT run_id FROM automation_job_keys WHERE workspace_id=?1 AND action_key=?2",rusqlite::params![self.workspace_id,key],|r|r.get(0)).optional().map_err(|e|OrbitError::Store(e.to_string()))?;
+            if let Some(id)=existing {
+                let run=get_job_run_for_workspace_conn(conn,&self.workspace_id,&id)?.ok_or_else(||OrbitError::Store("automation run missing".into()))?;
+                if run.job_id!=job_id || run.input.as_ref()!=Some(&input) {return Err(OrbitError::InvalidInput("automation job key input changed".into()));}
+                return Ok(run);
+            }
+            let now=Utc::now();
+            let id=next_run_id_conn(conn,&self.workspace_id,job_id,now)?;
+            let run=JobRun {run_id:id.clone(),job_id:job_id.into(),attempt:1,state:JobRunState::Pending,scheduled_at:now,started_at:None,finished_at:None,duration_ms:None,created_at:now,pid:None,pid_start_time:None,input:Some(input.clone()),retry_source_run_id:None,knowledge_metrics:None,resolved_crew:None,crew_model:None,steps:Vec::new()};
+            let state=PipelineState::new(id.clone(),job_id.into(),input.clone());
+            upsert_job_run_for_workspace_conn(conn,&self.workspace_id,&run,Some(&state))?;
+            conn.execute("INSERT INTO automation_job_keys VALUES (?1,?2,?3)",rusqlite::params![self.workspace_id,key,id]).map_err(|e|OrbitError::Store(e.to_string()))?;
+            Ok(run)
+        })
+    }
+
     fn list_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError> {
         validate_path_stem(job_id, "job")?;
         self.list_job_runs_filtered(&JobRunQuery {
@@ -145,6 +199,122 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         self.store
             .upsert_job_run_for_workspace(&self.workspace_id, &run, None)?;
         Ok(run)
+    }
+
+    /// [ORB-11310] The admissions-stop flag and durable child creation share
+    /// this SQLite `IMMEDIATE` transaction. SQLite's database writer lock is
+    /// process-wide, unlike a Rust mutex: whichever transaction commits first
+    /// defines the order seen by every process. The child row, its initial
+    /// state, and the parent link commit together, so stop can never
+    /// acknowledge between admission and linkage.
+    fn admit_child_job_run(
+        &self,
+        params: &ChildJobRunAdmissionParams,
+    ) -> Result<ChildJobRunAdmissionOutcome, OrbitError> {
+        validate_path_stem(&params.job_id, "job")?;
+        self.store
+            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                let parent_row = tx
+                    .tx
+                    .query_row(
+                        "SELECT state, pipeline_state_json FROM job_runs \
+                         WHERE workspace_id = ?1 AND run_id = ?2",
+                        rusqlite::params![self.workspace_id, params.parent_run_id],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                    )
+                    .map_err(|error| match error {
+                        rusqlite::Error::QueryReturnedNoRows => OrbitError::not_found(
+                            NotFoundKind::JobRun,
+                            params.parent_run_id.clone(),
+                        ),
+                        other => OrbitError::Store(other.to_string()),
+                    })?;
+                let parent_run_state = JobRunState::from_str(&parent_row.0).map_err(|error| {
+                    OrbitError::Store(format!("invalid job run state: {error}"))
+                })?;
+                if parent_run_state.is_terminal() {
+                    return Err(OrbitError::JobValidation(format!(
+                        "parent job run '{}' is {parent_run_state}; a terminal run admits no further work",
+                        params.parent_run_id
+                    )));
+                }
+                let raw_parent_state = parent_row.1.ok_or_else(|| {
+                    OrbitError::JobValidation(format!(
+                        "parent job run '{}' has no pipeline state; child admission cannot be guarded",
+                        params.parent_run_id
+                    ))
+                })?;
+                let mut parent_state: PipelineState = serde_json::from_str(&raw_parent_state)
+                    .map_err(|error| {
+                        OrbitError::Store(format!("invalid pipeline_state_json: {error}"))
+                    })?;
+                if parent_state.admissions_stopped() {
+                    return Ok(ChildJobRunAdmissionOutcome::AdmissionsStopped);
+                }
+
+                let run_id = next_run_id_conn(
+                    &tx.tx,
+                    &self.workspace_id,
+                    &params.job_id,
+                    params.scheduled_at,
+                )?;
+                let run = JobRun {
+                    run_id: run_id.clone(),
+                    job_id: params.job_id.clone(),
+                    attempt: params.attempt,
+                    state: JobRunState::Pending,
+                    scheduled_at: params.scheduled_at,
+                    started_at: None,
+                    finished_at: None,
+                    duration_ms: None,
+                    created_at: Utc::now(),
+                    pid: None,
+                    pid_start_time: None,
+                    input: params.input.clone(),
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: None,
+                    crew_model: None,
+                    steps: Vec::new(),
+                };
+                let child_state = PipelineState::new(
+                    run_id.clone(),
+                    params.job_id.clone(),
+                    params.input.clone().unwrap_or_else(|| serde_json::json!({})),
+                );
+                parent_state.record_child_dispatch(
+                    ChildDispatch::submitted(
+                        run_id,
+                        params.job_id.clone(),
+                        params.action.clone(),
+                        params.blocking,
+                        false,
+                        params.scheduled_at,
+                    )
+                    .with_parent_step_id(params.parent_step_id.clone()),
+                );
+
+                upsert_job_run_for_workspace_conn(
+                    &tx.tx,
+                    &self.workspace_id,
+                    &run,
+                    Some(&child_state),
+                )?;
+                let parent_state_json = serde_json::to_string_pretty(&parent_state)
+                    .map_err(|error| OrbitError::Store(format!("serialize pipeline state: {error}")))?;
+                tx.tx
+                    .execute(
+                        "UPDATE job_runs SET pipeline_state_json = ?3 \
+                         WHERE workspace_id = ?1 AND run_id = ?2",
+                        rusqlite::params![
+                            self.workspace_id,
+                            params.parent_run_id,
+                            parent_state_json
+                        ],
+                    )
+                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                Ok(ChildJobRunAdmissionOutcome::Admitted(Box::new(run)))
+            })
     }
 
     /// [ORB-10965] The single arbiter of job-run start authority.
@@ -358,6 +528,15 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         self.store
             .write_job_run_state_for_workspace(&self.workspace_id, run_id, state)
     }
+
+    fn update_run_state(
+        &self,
+        run_id: &str,
+        update: &mut dyn FnMut(JobRunState, &mut PipelineState) -> Result<(), OrbitError>,
+    ) -> Result<RunStateUpdate, OrbitError> {
+        self.store
+            .update_job_run_state_for_workspace(&self.workspace_id, run_id, update)
+    }
 }
 
 impl Store {
@@ -437,11 +616,12 @@ impl Store {
         query: &JobRunQuery,
     ) -> Result<Vec<JobRun>, OrbitError> {
         let (where_clause, mut params) = job_run_filter_sql(workspace_id, query);
+        let order_clause = job_run_order_sql(query.order_by);
         let mut sql = format!(
             "SELECT run_id, job_id, attempt, state, scheduled_at, started_at, finished_at, \
              duration_ms, created_at, pid, pid_start_time, input_json, retry_source_run_id, \
              knowledge_metrics_json, resolved_crew, COALESCE(crew_model, implementer_model) \
-             FROM job_runs WHERE {where_clause} ORDER BY created_at DESC, run_id ASC"
+             FROM job_runs WHERE {where_clause} ORDER BY {order_clause}"
         );
         if let Some(limit) = query.limit {
             sql.push_str(&format!(" LIMIT ?{}", params.len() + 1));
@@ -566,6 +746,59 @@ impl Store {
         Ok(())
     }
 
+    /// [ORB-11253] Apply `update` to a run's pipeline state, reading the run's
+    /// state and its checkpoint blob inside the same immediate write
+    /// transaction that persists the result.
+    ///
+    /// `IMMEDIATE` takes the write lock at BEGIN rather than at first write, so
+    /// two callers serialize here instead of racing between their own read and
+    /// write. An `Err` from `update` — the shape both a refused terminal run
+    /// and a lost compare-and-set take — propagates before the commit, leaving
+    /// the stored state untouched.
+    pub fn update_job_run_state_for_workspace(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+        update: &mut dyn FnMut(JobRunState, &mut PipelineState) -> Result<(), OrbitError>,
+    ) -> Result<RunStateUpdate, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let row = tx
+                .tx
+                .query_row(
+                    "SELECT state, pipeline_state_json FROM job_runs \
+                     WHERE workspace_id = ?1 AND run_id = ?2",
+                    rusqlite::params![workspace_id, run_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .map(Some)
+                .or_else(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    other => Err(OrbitError::Store(other.to_string())),
+                })?;
+            let Some((raw_state, raw_pipeline_state)) = row else {
+                return Ok(RunStateUpdate::NotFound);
+            };
+            let state = JobRunState::from_str(&raw_state)
+                .map_err(|error| OrbitError::Store(format!("invalid job run state: {error}")))?;
+            let Some(raw_pipeline_state) = raw_pipeline_state else {
+                return Ok(RunStateUpdate::NoState);
+            };
+            let mut pipeline_state: PipelineState = serde_json::from_str(&raw_pipeline_state)
+                .map_err(|e| OrbitError::Store(format!("invalid pipeline_state_json: {e}")))?;
+            update(state, &mut pipeline_state)?;
+            let state_json = serde_json::to_string_pretty(&pipeline_state)
+                .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
+            tx.tx
+                .execute(
+                    "UPDATE job_runs SET pipeline_state_json = ?3 \
+                     WHERE workspace_id = ?1 AND run_id = ?2",
+                    rusqlite::params![workspace_id, run_id, state_json],
+                )
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            Ok(RunStateUpdate::Updated)
+        })
+    }
+
     pub fn delete_job_run_for_workspace(
         &self,
         workspace_id: &str,
@@ -641,6 +874,35 @@ fn upsert_job_run_for_workspace_conn(
     )
     .map_err(|e| OrbitError::Store(e.to_string()))?;
     Ok(())
+}
+
+fn next_run_id_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    job_id: &str,
+    submitted_at: DateTime<Utc>,
+) -> Result<String, OrbitError> {
+    let base = format!("jrun-{}", submitted_at.format("%Y%m%d-%H%M"));
+    for suffix in 1..1024_u32 {
+        let candidate = if suffix == 1 {
+            base.clone()
+        } else {
+            format!("{base}-{suffix}")
+        };
+        let exists = conn
+            .query_row(
+                "SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
+                rusqlite::params![workspace_id, candidate],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|error| OrbitError::Store(error.to_string()))?
+            .is_some();
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+    Ok(format!("{base}-{job_id}"))
 }
 
 fn get_job_run_for_workspace_conn(
@@ -723,6 +985,21 @@ fn job_run_filter_sql(
         params.push(Box::new(created_since.to_rfc3339()));
     }
     (conditions.join(" AND "), params)
+}
+
+/// `ORDER BY` clause for a bounded [`JobRunQuery`], matched to
+/// [`JobRunOrder`]. `run_id ASC` breaks ties deterministically in both
+/// variants; timestamps are stored as fixed-width RFC 3339 text, so a
+/// lexical `DESC` sort matches chronological order. `CreatedAt` is covered by
+/// `idx_job_runs_workspace_created`; `Recency` is a query-time expression
+/// over the same rows the `workspace_id` prefix of that index already
+/// narrows to, so a per-workspace sort stays cheap without a dedicated index
+/// [ORB-11251].
+fn job_run_order_sql(order_by: JobRunOrder) -> &'static str {
+    match order_by {
+        JobRunOrder::CreatedAt => "created_at DESC, run_id ASC",
+        JobRunOrder::Recency => "COALESCE(finished_at, started_at, created_at) DESC, run_id ASC",
+    }
 }
 
 /// Run ids per `IN (...)` list, under SQLite's bound-parameter cap.

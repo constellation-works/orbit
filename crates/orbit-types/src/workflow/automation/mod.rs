@@ -1,0 +1,315 @@
+//! Shared delivery-trigger, batch and coverage contracts [ORB-11330].
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+pub mod members;
+
+/// Supported examination contracts; QA and review never share acceptance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageClass {
+    IntegratedQaV1,
+    LandedCodeReviewV1,
+}
+
+/// Opt-in delivery scheduling configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryTrigger {
+    /// Stable registry machine ID; execution remains inert until explicitly selected.
+    #[serde(default)]
+    pub owner_machine: Option<String>,
+    pub branch: String,
+    pub threshold: usize,
+    pub max_wait_minutes: u32,
+    pub coverage: CoverageClass,
+    #[serde(default = "default_batch_size")]
+    pub max_items: usize,
+    #[serde(default)]
+    pub retries: u32,
+}
+
+fn default_batch_size() -> usize {
+    50
+}
+
+impl DeliveryTrigger {
+    pub fn validate(&self) -> Result<(), super::error::WorkflowError> {
+        if self.branch.is_empty()
+            || self.branch.starts_with('-')
+            || self.branch.chars().any(char::is_whitespace)
+            || self.threshold == 0
+            || self.threshold > self.max_items
+            || self.max_items > 50
+            || self.max_wait_minutes == 0
+            || self.retries > 5
+        {
+            return Err(super::error::WorkflowError::Invalid(
+                "delivery trigger requires a branch, 1 <= threshold <= max_items <= 50, positive max_wait_minutes and retries <= 5".into(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+/// A commit and its resulting tree, verified by the source adapter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRevision {
+    pub commit: String,
+    pub tree: String,
+}
+
+/// Canonical verified landing; task/commit membership does not multiply count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Delivery {
+    pub key: String,
+    pub repository: String,
+    pub branch: String,
+    pub before: SourceRevision,
+    pub after: SourceRevision,
+    pub commits: Vec<String>,
+    pub task_ids: Vec<String>,
+    pub evidence_reference: String,
+    pub evidence_digest: String,
+    pub landed_at: DateTime<Utc>,
+}
+
+/// Bounded, pinned source observation. Unresolved commits remain obligations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourcePage {
+    pub from: SourceRevision,
+    pub through: SourceRevision,
+    pub commits: Vec<String>,
+    pub deliveries: Vec<Delivery>,
+    pub unresolved: BTreeMap<String, String>,
+    #[serde(default)]
+    pub associations: BTreeMap<String, Option<DeliveryAssociation>>,
+    pub complete: bool,
+}
+
+/// Frozen input supplied verbatim to the task or job.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageBatch {
+    pub schema_version: u32,
+    pub id: String,
+    pub consumer: String,
+    pub epoch: String,
+    pub repository: String,
+    pub branch: String,
+    pub coverage: CoverageClass,
+    pub from_exclusive: SourceRevision,
+    pub through_inclusive: SourceRevision,
+    pub commits: Vec<String>,
+    pub deliveries: Vec<Delivery>,
+    pub created_at: DateTime<Utc>,
+    /// Aggregate budget is frozen with the batch, including configuration edits.
+    pub max_attempts: u32,
+    pub retry_until: DateTime<Utc>,
+}
+
+/// Scheduling debt and successful examination are distinct durable states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchState {
+    Claimed,
+    Admitted,
+    Failed,
+    Exhausted,
+    Waived,
+    Covered,
+}
+
+/// One current attempt over immutable input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchAttempt {
+    pub batch: CoverageBatch,
+    pub input_digest: String,
+    pub attempt: u32,
+    pub action_key: String,
+    pub action_id: Option<String>,
+    pub state: BatchState,
+    pub reason: Option<String>,
+    pub retry_after: Option<DateTime<Utc>>,
+}
+
+/// Small current scheduler state; completed batches/receipts are separate rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<members::MemberState>,
+    pub consumer: String,
+    pub epoch: String,
+    pub repository: String,
+    pub branch: String,
+    pub generation: u64,
+    pub baseline: SourceRevision,
+    pub observed: SourceRevision,
+    pub covered: SourceRevision,
+    pub pending_commits: Vec<String>,
+    pub pending: Vec<Delivery>,
+    #[serde(default)]
+    pub waived: Vec<Delivery>,
+    pub unresolved: BTreeMap<String, String>,
+    #[serde(default)]
+    pub associations: BTreeMap<String, Option<DeliveryAssociation>>,
+    pub active: Option<BatchAttempt>,
+}
+
+/// Worker-submitted structured evidence, attached through orbit.task.artifact.put.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageEvidence {
+    pub schema_version: u32,
+    pub batch_id: String,
+    pub consumer: String,
+    pub epoch: String,
+    pub input_digest: String,
+    pub action_id: String,
+    pub attempt: u32,
+    pub coverage: CoverageClass,
+    pub from_exclusive: SourceRevision,
+    pub through_inclusive: SourceRevision,
+    pub examined_commits: Vec<String>,
+    pub examined_deliveries: Vec<String>,
+    pub examination_complete: bool,
+    /// Concrete commands/checks and their observations. Findings may remain open.
+    pub checks: Vec<ExaminationCheck>,
+    pub findings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExaminationCheck {
+    pub subject: String,
+    pub method: String,
+    pub observation: String,
+}
+
+/// Immutable accepted bytes and provenance, independent of artifact replacement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcceptedCoverage {
+    pub batch_id: String,
+    pub action_id: String,
+    pub input_digest: String,
+    pub evidence_digest: String,
+    pub evidence: Vec<u8>,
+    pub evidence_reference: String,
+    pub submitted_by: String,
+    pub accepted_at: DateTime<Utc>,
+}
+
+/// Existing inspection surfaces render the same domain projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationDiagnostic {
+    pub reason: String,
+    pub state: Option<AutomationState>,
+    pub receipts: Vec<CoverageReceiptSummary>,
+    pub waivers: Vec<BatchWaiver>,
+}
+
+/// Core-verified writer authority for exact artifact bytes; this is not coverage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceSubmission {
+    pub action_id: String,
+    pub evidence_digest: String,
+    pub run_id: String,
+}
+
+/// Shape supplied with a frozen batch. Workers fill checks/findings and attest completion.
+pub fn evidence_template(attempt: &BatchAttempt) -> CoverageEvidence {
+    CoverageEvidence {
+        schema_version: 1,
+        batch_id: attempt.batch.id.clone(),
+        consumer: attempt.batch.consumer.clone(),
+        epoch: attempt.batch.epoch.clone(),
+        input_digest: attempt.input_digest.clone(),
+        action_id: attempt
+            .action_id
+            .clone()
+            .unwrap_or_else(|| "<this-task-or-run-id>".into()),
+        attempt: attempt.attempt,
+        coverage: attempt.batch.coverage,
+        from_exclusive: attempt.batch.from_exclusive.clone(),
+        through_inclusive: attempt.batch.through_inclusive.clone(),
+        examined_commits: attempt.batch.commits.clone(),
+        examined_deliveries: attempt
+            .batch
+            .deliveries
+            .iter()
+            .map(|d| d.key.clone())
+            .collect(),
+        examination_complete: false,
+        checks: vec![],
+        findings: vec![],
+    }
+}
+
+/// Reserved Store-authored artifact; callers cannot supply its contents.
+pub const EVIDENCE_AUTHORITY_ARTIFACT: &str = "automation-evidence-authority.json";
+
+/// Deterministic delivery-owner facts captured before attempting a direct landing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectLandingRequest {
+    pub run_id: String,
+    pub branch: String,
+    pub before_commit: String,
+    pub after_commit: String,
+}
+
+/// Provider association retained while a complete PR landing span is unresolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryAssociation {
+    pub key: String,
+    pub anchor: String,
+    pub reference: String,
+    pub landed_at: DateTime<Utc>,
+}
+
+/// Small diagnostic receipt; accepted bytes are downloaded separately.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoverageReceiptSummary {
+    pub batch_id: String,
+    pub action_id: String,
+    pub input_digest: String,
+    pub evidence_digest: String,
+    pub evidence_reference: String,
+    pub submitted_by: String,
+    pub accepted_at: DateTime<Utc>,
+}
+
+impl From<AcceptedCoverage> for CoverageReceiptSummary {
+    fn from(receipt: AcceptedCoverage) -> Self {
+        Self {
+            batch_id: receipt.batch_id,
+            action_id: receipt.action_id,
+            input_digest: receipt.input_digest,
+            evidence_digest: receipt.evidence_digest,
+            evidence_reference: receipt.evidence_reference,
+            submitted_by: receipt.submitted_by,
+            accepted_at: receipt.accepted_at,
+        }
+    }
+}
+
+/// Explicit debt disposition. It never advances the covered revision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchWaiver {
+    pub batch_id: String,
+    pub reason: String,
+    pub by: String,
+    pub at: DateTime<Utc>,
+}
+
+/// Existing definition-update surface accepts this administrative request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WaiveBatchRequest {
+    pub batch_id: String,
+    pub reason: String,
+}

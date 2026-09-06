@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use assert_cmd::Command as AssertCommand;
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -344,6 +345,7 @@ fn run_orbit_success(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<
         .env("HOME", home)
         .env("USERPROFILE", home)
         .args(args);
+    clear_inherited_authority_env(&mut command);
     set_orbit_root_env(&mut command, orbit_root);
     command.assert().success();
 }
@@ -359,25 +361,23 @@ fn run_orbit_json(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Pa
         .env("HOME", home)
         .env("USERPROFILE", home)
         .args(args);
-    clear_agent_identity_env(&mut command);
+    clear_inherited_authority_env(&mut command);
     set_orbit_root_env(&mut command, orbit_root);
     let assert = command.assert().success();
     serde_json::from_slice(&assert.get_output().stdout).expect("orbit json output")
 }
 
-/// Prevent ambient managed-run identity from changing child command behavior.
-fn clear_agent_identity_env(command: &mut AssertCommand) {
-    command
-        .env_remove("ORBIT_AGENT_NAME")
-        .env_remove("ORBIT_AGENT_MODEL")
-        .env_remove("ORBIT_MANAGED_RUN_CONTEXT")
-        .env_remove("ORBIT_RUN_ID")
-        .env_remove("ORBIT_WORKSPACE")
-        .env_remove("ORBIT_TASK_ID")
-        .env_remove("ORBIT_ACTIVE_TASK_ID")
-        .env_remove("ORBIT_SESSION_ID")
-        .env_remove("ORBIT_BIN")
-        .env_remove("LLVM_PROFILE_FILE");
+/// Prevent ambient managed-run authority from changing child command
+/// behavior — or, worse, routing its writes (ORB-11300). Both runners below
+/// apply this before `set_orbit_root_env`, so an explicit fixture root still
+/// wins.
+fn clear_inherited_authority_env(command: &mut AssertCommand) {
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    // Not Orbit authority: a coverage build hands every child the same profile
+    // path, which the child would then clobber.
+    command.env_remove("LLVM_PROFILE_FILE");
 }
 
 fn set_orbit_root_env(command: &mut AssertCommand, orbit_root: Option<&Path>) {

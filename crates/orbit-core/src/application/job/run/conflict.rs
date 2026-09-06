@@ -27,6 +27,11 @@
 //! What was actually missing is not a winner rule but a *record*: the operator
 //! needs to know the two outcomes disagreed. So the terminal state stands and
 //! the conflicting outcome is recorded durably and loudly instead of dropped.
+//! A cancellation request that loses to a terminal worker outcome is the one
+//! exception: cancellation reports `already_terminal` and does not manufacture
+//! a conflict by attempting to replace the worker's outcome. The inverse is
+//! still a real conflict — a worker outcome reported after `cancelled` remains
+//! explicit here.
 //!
 //! ## Where a reader sees it
 //!

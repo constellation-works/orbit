@@ -16,7 +16,17 @@ const LINUX: &str = "linux";
 
 /// Shipped executors that opt into Orbit's sandbox wrapper. `local-shell` is
 /// deliberately excluded — it stays unsandboxed on every platform.
-const SANDBOXED_SHIPPED: &[&str] = &["claude", "codex", "gemini", "grok", "copilot", "cursor"];
+const SANDBOXED_SHIPPED: &[&str] = &[
+    "claude",
+    "codex",
+    "gemini",
+    "antigravity",
+    "grok",
+    "copilot",
+    "cursor",
+    "pi",
+    "opencode",
+];
 
 fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
     let now = Utc::now();
@@ -308,22 +318,147 @@ fn custom_executor_sandbox_choice_is_not_rewritten_by_seed_migration() {
     );
 }
 
-/// The asset↔const seam: the shipped `claude.yaml` cannot reference the
-/// Rust constants, so this test pins the executor asset's model pair to the
-/// authoritative `orbit-common::model_defaults` values. A drift on either side
-/// (bumping the const without the asset, or vice versa) fails here.
+/// Shipped direct-agent defaults use crew-selected models at runtime. Their
+/// legacy model-pair field remains readable for older/user-authored files but
+/// must not be emitted by fresh assets.
 #[test]
-fn shipped_claude_executor_pair_matches_model_defaults() {
-    use orbit_common::model_defaults::{CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK};
+fn shipped_direct_agent_defaults_omit_legacy_model_pair_override() {
+    for name in SANDBOXED_SHIPPED {
+        let def = parse_default_executor_for_platform(name, yaml_for(name), LINUX)
+            .unwrap_or_else(|err| panic!("parse {name}: {err}"));
+        assert_eq!(
+            def.model_pair_override(),
+            None,
+            "fresh {name} default must omit the legacy model pair override"
+        );
+        assert!(
+            def.model_flag.is_some(),
+            "fresh {name} default must retain crew-selected model flag behavior"
+        );
+    }
+}
 
-    let (_name, yaml) = DEFAULT_EXECUTOR_FILES
-        .iter()
-        .find(|(name, _)| *name == "claude")
-        .expect("claude executor asset present");
-    let def = parse_default_executor("claude", yaml).expect("parse claude executor");
-    let pair = def
-        .model_pair_override()
-        .expect("claude executor declares a model pair");
-    assert_eq!(pair.strong, CLAUDE_DEFAULT_STRONG);
-    assert_eq!(pair.weak, CLAUDE_DEFAULT_WEAK);
+#[test]
+fn seeding_adds_antigravity_without_rewriting_a_customized_gemini_executor() {
+    let store = InMemoryExecutorStore::default();
+    let mut custom = base_def("gemini", ExecutorType::DirectAgent);
+    custom.command = Some("gemini".to_string());
+    custom.args = vec![
+        "--approval-mode".to_string(),
+        "yolo".to_string(),
+        "--allowed-mcp-server-names".to_string(),
+        "orbit".to_string(),
+        "-o".to_string(),
+        "json".to_string(),
+    ];
+    custom.model_pair_override = Some(orbit_types::workflow::ModelPairOverride {
+        strong: "custom-strong".to_string(),
+        weak: "custom-weak".to_string(),
+    });
+    custom.model_flag = Some("-m".to_string());
+    custom.sandbox = Some(ExecutorSandboxKind::LinuxBwrap);
+    store
+        .upsert_executor_def(&custom)
+        .expect("seed custom gemini");
+
+    seed_default_executors_for_platform(&store, false, LINUX).expect("seed defaults");
+
+    let gemini = store
+        .get_executor_def("gemini")
+        .expect("get")
+        .expect("gemini present");
+    assert_eq!(gemini.command.as_deref(), Some("gemini"));
+    assert_eq!(gemini.args, custom.args);
+    assert_eq!(gemini.model_pair_override, custom.model_pair_override);
+    assert_eq!(gemini.model_flag, custom.model_flag);
+
+    let antigravity = store
+        .get_executor_def("antigravity")
+        .expect("get")
+        .expect("antigravity seeded");
+    assert_eq!(antigravity.command.as_deref(), Some("agy"));
+    assert!(
+        !antigravity.args.iter().any(|arg| arg == "--approval-mode"
+            || arg == "-o"
+            || arg == "--allowed-mcp-server-names")
+    );
+    assert!(
+        antigravity
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--output-format", "stream-json"])
+    );
+    assert_eq!(antigravity.model_pair_override, None);
+}
+
+#[test]
+fn seeding_preserves_customized_legacy_model_pair_override() {
+    let store = InMemoryExecutorStore::default();
+    let mut custom = base_def("claude", ExecutorType::DirectAgent);
+    custom.model_pair_override = Some(orbit_types::workflow::ModelPairOverride {
+        strong: "custom-strong".to_string(),
+        weak: "custom-weak".to_string(),
+    });
+    custom.model_flag = Some("--model".to_string());
+    custom.sandbox = Some(ExecutorSandboxKind::LinuxBwrap);
+    store.upsert_executor_def(&custom).expect("seed custom def");
+
+    seed_default_executors_for_platform(&store, false, LINUX).expect("seed defaults");
+
+    let persisted = store
+        .get_executor_def("claude")
+        .expect("get")
+        .expect("claude present");
+    assert_eq!(persisted.model_pair_override, custom.model_pair_override);
+    assert_eq!(persisted.model_flag, custom.model_flag);
+}
+
+/// The shipped `local-shell` asset advertises only what the runtime supports:
+/// the `local_shell` executor family that the deterministic `local_shell`
+/// action dispatches, and no agent-shaped fields. [ORB-11294]
+#[test]
+fn shipped_local_shell_advertises_the_local_shell_executor_family() {
+    let def = parse_default_executor_for_platform("local-shell", yaml_for("local-shell"), LINUX)
+        .expect("parse local-shell");
+
+    assert_eq!(def.executor_type, ExecutorType::LocalShell);
+    assert_eq!(def.command, None);
+    assert!(def.args.is_empty());
+    assert_eq!(def.model_pair_override, None);
+    assert_eq!(def.model_flag, None);
+    assert_eq!(def.stdout_format, None);
+}
+
+/// A definition installed before [ORB-11294] persists `executor_type:
+/// cli_command`. Re-seeding must load it, keep every customization the operator
+/// made, and not rewrite it.
+#[test]
+fn seeding_preserves_a_customized_legacy_local_shell_definition() {
+    let legacy_yaml = r#"schemaVersion: 2
+kind: Executor
+metadata:
+  name: local-shell
+spec:
+  executor_type: cli_command
+  command: /bin/bash
+  args: ["-lc"]
+  timeout_seconds: 90
+"#;
+    let legacy = parse_default_executor_for_platform("local-shell", legacy_yaml, LINUX)
+        .expect("legacy cli_command definition still loads");
+    assert_eq!(legacy.executor_type, ExecutorType::LocalShell);
+    assert_eq!(legacy.command.as_deref(), Some("/bin/bash"));
+
+    let store = InMemoryExecutorStore::default();
+    store.upsert_executor_def(&legacy).expect("install legacy");
+    seed_default_executors_for_platform(&store, false, LINUX).expect("seed");
+
+    let after = store
+        .get_executor_def("local-shell")
+        .expect("get")
+        .expect("local-shell present");
+    assert_eq!(
+        after, legacy,
+        "re-seeding must not overwrite an operator's local-shell definition"
+    );
 }

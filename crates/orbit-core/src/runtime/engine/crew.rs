@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use orbit_common::OrbitError;
 use orbit_types::identity::{
     Crew, CrewAssignment, all_agent_families, infer_agent_family_from_model, resolve_crew,
@@ -39,6 +41,124 @@ pub(crate) fn select_crew_name<'a>(
             .filter(|value| !value.is_empty())
             .map(|value| (value, source))
     })
+}
+
+/// Run-input key carrying a shipment's crew allowlist [ORB-11242].
+///
+/// The drain persists it on the run it submits and every pipeline it admits
+/// forwards it, so the *run* input is the authority for the whole window. An
+/// activity input never widens it.
+pub(crate) const ALLOWED_CREWS_INPUT_KEY: &str = "allowed_crews";
+
+/// The configured crews one submitted shipment may launch a provider as
+/// [ORB-11242].
+///
+/// Opt-in and run-scoped: an absent or empty list is no restriction at all, so
+/// every pre-existing caller keeps today's behavior. Nothing here rewrites
+/// workspace configuration, remaps a task's crew, or cancels work another
+/// invocation already started — it only refuses to *start* one.
+///
+/// Membership is checked twice over, because a crew name is a wrapper and the
+/// provider process is what actually costs tokens:
+///
+/// - by canonical registry name, the ordinary case; and
+/// - by effective configured identity — the `(provider, model)` the crew
+///   resolves to — so a differently-named alias of a permitted crew (for
+///   instance the `system` entry that mirrors `default_crew`) is permitted,
+///   while a permitted-looking wrapper that resolves to a *different* provider
+///   or model is not. Naming a run wrapper is not by itself provider usage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CrewAllowlist {
+    names: BTreeSet<String>,
+    identities: BTreeSet<(String, String)>,
+}
+
+impl CrewAllowlist {
+    /// Whether `crew` — already resolved through the registry — may run.
+    pub(crate) fn permits(&self, crew: &Crew) -> bool {
+        self.names.contains(crew.name.trim())
+            || self.identities.contains(&crew_identity(&crew.assignment))
+    }
+
+    /// The permitted names, for operator-facing messages.
+    pub(crate) fn names(&self) -> Vec<&str> {
+        self.names.iter().map(String::as_str).collect()
+    }
+
+    fn describe(&self) -> String {
+        self.names().join(", ")
+    }
+}
+
+/// Refuse a resolved crew the run's window does not permit [ORB-11242].
+///
+/// `origin` names where the crew came from (the task, an explicit activity
+/// crew, `workflow.system_crew`) so the failure is actionable without reading
+/// the pipeline. There is deliberately no fallback: a restricted drain that
+/// quietly re-routed to a permitted crew would spend a budget the operator
+/// scoped, against work they did not choose.
+pub(crate) fn enforce_crew_allowlist(
+    allowlist: Option<&CrewAllowlist>,
+    crew: &Crew,
+    origin: &str,
+) -> Result<(), OrbitError> {
+    let Some(allowlist) = allowlist else {
+        return Ok(());
+    };
+    if allowlist.permits(crew) {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "crew `{}` ({}/{}) selected by {origin} is not permitted by this run's crew allowlist [{}]; \
+         reassign the task or submit a drain that permits it",
+        crew.name,
+        crew.assignment.provider,
+        crew.assignment.model,
+        allowlist.describe(),
+    )))
+}
+
+/// The effective configured identity a crew dispatches as. Provider casing is
+/// normalized because it is matched against typed provider enums downstream;
+/// the model string is compared verbatim.
+fn crew_identity(assignment: &CrewAssignment) -> (String, String) {
+    (
+        assignment.provider.trim().to_ascii_lowercase(),
+        assignment.model.trim().to_string(),
+    )
+}
+
+/// Read the run-scoped allowlist *names* off a run/activity input.
+///
+/// Tolerates the shapes a job template produces: an absent key renders as the
+/// empty string rather than JSON `null`, and a declared `allowed_crews: []`
+/// default renders as an empty array. Both mean "unrestricted".
+pub(crate) fn crew_allowlist_names_from_input(input: &Value) -> Result<Vec<String>, OrbitError> {
+    let Some(raw) = input.get(ALLOWED_CREWS_INPUT_KEY) else {
+        return Ok(Vec::new());
+    };
+    match raw {
+        Value::Null => Ok(Vec::new()),
+        Value::String(text) => Ok(non_empty(text)
+            .map(|name| vec![name.to_string()])
+            .unwrap_or_default()),
+        Value::Array(items) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .and_then(non_empty)
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| {
+                        OrbitError::InvalidInput(format!(
+                            "`{ALLOWED_CREWS_INPUT_KEY}` must list non-empty crew names, got {item}"
+                        ))
+                    })
+            })
+            .collect(),
+        other => Err(OrbitError::InvalidInput(format!(
+            "`{ALLOWED_CREWS_INPUT_KEY}` must be a list of crew names, got {other}"
+        ))),
+    }
 }
 
 /// Runtime crew registry projection for dashboard/API consumers.
@@ -167,6 +287,46 @@ impl OrbitRuntime {
 
     pub fn validate_crew_name(&self, crew: Option<&str>) -> Result<(), OrbitError> {
         self.canonical_crew_name(crew).map(|_| ())
+    }
+
+    /// Build the run-scoped allowlist for `names` [ORB-11242].
+    ///
+    /// Validation happens here, before any run record exists, so a typo or a
+    /// crew this host does not configure fails the submission instead of
+    /// silently narrowing what a live drain will admit. An empty selection is
+    /// `None` — the option was omitted, and behavior is unchanged.
+    pub(crate) fn crew_allowlist(
+        &self,
+        names: &[String],
+    ) -> Result<Option<CrewAllowlist>, OrbitError> {
+        let mut allowed_names = BTreeSet::new();
+        let mut identities = BTreeSet::new();
+        for name in names {
+            let crew = resolve_crew(name.trim(), self.context.settings().crews())?;
+            identities.insert(crew_identity(&crew.assignment));
+            allowed_names.insert(crew.name);
+        }
+        Ok((!allowed_names.is_empty()).then_some(CrewAllowlist {
+            names: allowed_names,
+            identities,
+        }))
+    }
+
+    /// The allowlist carried by a run/activity input, or `None` when the run
+    /// placed no restriction on its window.
+    pub(crate) fn crew_allowlist_from_input(
+        &self,
+        input: &Value,
+    ) -> Result<Option<CrewAllowlist>, OrbitError> {
+        self.crew_allowlist(&crew_allowlist_names_from_input(input)?)
+    }
+
+    /// The crew a backlog task would actually dispatch as, or the reason it
+    /// cannot be determined on this host. Used by auto-drain admission so an
+    /// excluded task is reported against its *effective* crew rather than the
+    /// raw string on the task.
+    pub(crate) fn effective_task_crew(&self, task: &Task) -> Result<Crew, OrbitError> {
+        self.resolve_crew_for_task(None, task.crew.as_deref())
     }
 
     /// Resolve a user-supplied crew name to the exact alias stored in the

@@ -38,9 +38,9 @@ fails the build on a violation:
 - [`bootstrap/`](src/bootstrap) — initialization, managed-asset seeding, policy
   seeding, forward-only startup migrations. Runs once, at open.
 
-`auto_tasks`, `routines`, and `metrics` are domain kernels layered on the
-runtime: scheduling and derived measurement, each fired through the same v2 job
-machinery rather than through bespoke code paths.
+`auto_tasks` and `routines` compose the scheduling domain in `orbit-automation`
+with Core task/job lifecycle adapters [ORB-11330]. `metrics` owns derived
+measurement. All use the existing v2 job machinery.
 
 The guardrail also fails if a retired path reappears: `src/command`,
 `src/runtime/orbit_tool_host`, `src/runtime/engine/runtime_host.rs`. Do not

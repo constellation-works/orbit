@@ -3,17 +3,13 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_types::task::TaskArtifact;
+use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::{Map, Value, json};
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext};
 
 pub struct OrbitTaskArtifactPutTool;
-
-/// Keep caller-local artifact reads bounded before the byte payload crosses
-/// the coordination boundary. The hub never receives a caller-local path.
-pub(crate) const MAX_ARTIFACT_CONTENT_BYTES: u64 = 1_048_576;
 
 impl Tool for OrbitTaskArtifactPutTool {
     fn schema(&self) -> ToolSchema {
@@ -38,7 +34,7 @@ impl Tool for OrbitTaskArtifactPutTool {
 
         ToolSchema {
             name: "orbit.task.artifact.put".to_string(),
-            description: "Store a source file under a task's artifacts directory".to_string(),
+            description: "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context; malformed, stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage.".to_string(),
             parameters,
             builtin: true,
         }
@@ -119,7 +115,7 @@ fn read_bounded_artifact(
     })?;
     let mut content = Vec::new();
     file.by_ref()
-        .take(MAX_ARTIFACT_CONTENT_BYTES + 1)
+        .take(MAX_TASK_ARTIFACT_CONTENT_BYTES + 1)
         .read_to_end(&mut content)
         .map_err(|error| {
             OrbitError::Io(format!(
@@ -127,11 +123,11 @@ fn read_bounded_artifact(
                 source_path.display()
             ))
         })?;
-    if content.len() as u64 > MAX_ARTIFACT_CONTENT_BYTES {
+    if content.len() as u64 > MAX_TASK_ARTIFACT_CONTENT_BYTES {
         return Err(OrbitError::InvalidInput(format!(
             "artifact source '{}' exceeds the {} byte content limit",
             source_path.display(),
-            MAX_ARTIFACT_CONTENT_BYTES
+            MAX_TASK_ARTIFACT_CONTENT_BYTES
         )));
     }
 

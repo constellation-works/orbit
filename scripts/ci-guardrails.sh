@@ -39,6 +39,7 @@ fi
 "$repo_root/scripts/check-history-note-size.sh"
 "$repo_root/scripts/check-stability.sh"
 "$repo_root/scripts/check-artifact-redaction-guardrail.sh"
+"$repo_root/scripts/check-ci-failure-reporting.sh"
 "$repo_root/scripts/check-public-artifact-ids.py"
 "$repo_root/scripts/check-changelog-style.sh"
 "$repo_root/scripts/check-error-translation.sh"

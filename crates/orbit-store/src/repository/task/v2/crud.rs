@@ -2,6 +2,13 @@ use super::*;
 
 impl TaskV2Store {
     pub(crate) fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
+        self.create_task_with_key(params, None)
+    }
+    pub(crate) fn create_task_with_key(
+        &self,
+        params: TaskCreateParams,
+        key: Option<&str>,
+    ) -> Result<Task, OrbitError> {
         if params.title.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
                 "task title must not be empty".to_string(),
@@ -17,7 +24,17 @@ impl TaskV2Store {
             .validate_new_task_relation_targets(&self.workspace_id, &relations)?;
 
         let now = Utc::now();
-        let id = self.registry.allocate_task_id(&self.workspace_id)?;
+        let id = if let Some(key) = key {
+            let bytes =
+                serde_json::to_vec(&params).map_err(|e| OrbitError::Store(e.to_string()))?;
+            self.registry.reserve_task_action(
+                &self.workspace_id,
+                key,
+                &format!("{:x}", Sha256::digest(bytes)),
+            )?
+        } else {
+            self.registry.allocate_task_id(&self.workspace_id)?
+        };
         self.registry
             .validate_task_relations(&self.workspace_id, &id, &relations)?;
         let comments = params
@@ -74,6 +91,11 @@ impl TaskV2Store {
             artifact_manifest: None,
         };
 
+        if key.is_some() {
+            let bundle = self.bundle_store.create_or_recover_action_bundle(&bundle)?;
+            self.replace_index_best_effort(&bundle.envelope, "idempotent task creation");
+            return self.task_from_bundle(bundle);
+        }
         self.bundle_store.create_bundle(&bundle)?;
         self.replace_index_best_effort(&bundle.envelope, "task creation");
         self.task_from_bundle(bundle)

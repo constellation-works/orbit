@@ -1,94 +1,137 @@
-# Remote access: dashboard and MCP
+# Remote access, federation, and caller permissions
 
-Reaching another machine's Orbit. Both surfaces are live access to *that
-machine's* state — neither is synchronization, replication, or an offline copy.
-The remote machine stays authoritative for every workspace and mutation it
-serves.
+Remote access reads or operates the accepting host's live store. It does not
+replicate tasks. First identify the owning host and workspace; see
+[multi-host.md](multi-host.md) for owner/replica setup and
+[publication.md](publication.md) for offline snapshots.
 
-## The dashboard
+## Direct and federated MCP
 
 ```bash
-orbit web serve                    # loopback, port 7878, opens a browser
+orbit mcp serve --workspace <workspace-id>
+orbit mcp serve --mode remote <ssh-host>
+orbit mcp serve --mode federated
+```
+
+Local stdio is what a client launches. Remote mode relays one non-interactive,
+non-PTY SSH connection to a destination Orbit. Federated mode combines the local
+host with configured SSH destinations into one tool surface. There is no
+`orbit mcp connect` command; use `serve --mode remote`.
+
+For federation, put remote membership in the calling machine's
+`~/.orbit/mcp-destinations.toml`:
+
+```toml
+[[destinations]]
+ssh = "<ssh-config-alias>"
+machine_id = "<destination-machine-id>"
+```
+
+Copy machine IDs from `orbit host show` on the corresponding hosts. Local
+membership is automatic and needs no row. Missing/empty configuration gives a
+local-only mux; malformed or ambiguous configuration fails closed. A configured
+unreachable destination remains visible in discovery rather than disappearing.
+
+```bash
+orbit mcp init --federated --client codex
+```
+
+This creates a separate client integration and preserves the ordinary one.
+Federation is session-unbound: call `orbit_workspace_list` and pass each
+returned host-qualified `selector` unchanged. Do not pass `--workspace` or a
+positional SSH destination to federated mode. On a direct server, a session
+binding via `--workspace` is valid, and explicit per-call selectors take
+precedence. `--root` is not an MCP workspace-routing mechanism.
+
+## Authority on the destination
+
+Bare local `serve` and ordinary `mcp init` are agent-only.
+`workspace init --mcp` deliberately installs a local operator integration.
+On SSH, a request for operator capability is capped by the destination's
+`~/.orbit/mcp-callers.toml`; the caller cannot grant itself that authority.
+
+```bash
+orbit mcp callers list
+orbit mcp callers check <caller-machine-id>
+orbit mcp callers init
+```
+
+`init` seeds known callers with agent grants only. Operator grants are deliberate
+operator edits on the destination. For example:
+
+```toml
+default = "deny"
+
+[[callers]]
+machine_id = "<caller-machine-id>"
+label = "<display-name>"
+capabilities = ["agent", "operator"]
+workspaces = ["<allowed-workspace-id>"]
+```
+
+`default` accepts `agent` or `deny`, never `operator`. A missing callers file
+means agent by default. `workspaces` optionally narrows a row to specific logical
+IDs. Effective permissions are the intersection of the requested capability and
+the destination grant, with ordinary tool policy still enforced. A malformed
+file fails closed. Inspect the check result and session audit evidence when a
+workflow tool is absent or denied; do not treat changing remote argv as a fix.
+
+There are two identity strengths. Ordinary SSH proxy identity is a self-asserted
+audit label, suitable for cooperative operators with shell access; it is not
+proof against a caller naming a different machine. Key-bound acceptance uses a
+forced command generated on the destination:
+
+```bash
+orbit mcp callers authorize --machine-id <caller-machine-id> \
+  --key <public-key-path> --launcher <protected-orbit-launcher>
+```
+
+This prints configuration; it does not install it. The protected path requires
+a dedicated Linux login account, a root-managed `AuthorizedKeysFile`, per-key
+environments enabled, and a root-owned mode-2555 setgid Orbit copy configured as
+that account's login shell. The launcher must match the running Orbit binary and
+use a group different from the account's primary group. Follow the installed
+command's help and host administration procedure; an ordinary shell wrapper is
+not equivalent. Refresh the protected launcher after binary upgrades. Do not
+infer verified identity merely from a configured key fingerprint: inspect the
+recorded identity proof.
+
+## Dashboard
+
+```bash
+orbit web serve --no-open
 orbit web serve --port 8080 --no-open
-```
-
-One dashboard serves every workspace registered on that machine; requests select
-one by ID, falling back to the default. It shows tasks, runs, routines, frictions,
-and audit history.
-
-To view a remote machine's dashboard, forward it over SSH:
-
-```bash
-orbit web connect <ssh-host>                    # anything ssh accepts, including a config alias
+orbit web connect <ssh-host>
 orbit web connect <ssh-host> --remote-port 7878 --port 9000
-orbit web connect <ssh-host> --root /path/to/remote/workspace
+orbit web connect <ssh-host> --workspace <remote-workspace-selector>
 ```
 
-`connect` first probes for a dashboard already running on the remote loopback. If
-one answers, it attaches without touching that process. Otherwise it starts
-`orbit web serve --no-open` over a second SSH connection and owns that process's
-lifetime.
+`orbit --root <ROOT> web serve` serves `<ROOT>/workspaces.json` and nothing from
+the machine-global registry, so an explicit root isolates the dashboard the same
+way it isolates every other command. `--workspace` picks which of the served
+workspaces the dashboard opens on, and is what `connect` forwards to the remote
+server; `connect` itself rejects `--root`.
 
-## The MCP surface
+The default dashboard port is 7878. `connect` reuses an existing remote loopback
+server when available; otherwise it starts one and owns that process's lifetime.
+The browser offers workspace selection, task detail and lifecycle controls,
+run/step inspection, routines, knowledge/frictions, audit, and metrics. Verify the
+selected workspace before any mutation; a dashboard aggregate or metric is not
+proof that a particular task or run succeeded.
 
-The same server, three transports:
+The dashboard refuses non-loopback binds and has no application login. Its
+Origin checks mitigate browser CSRF, not unauthorized port access. Anyone with
+access to its forwarded port can reach mutation endpoints with the server's
+application authority. Keep access within the intended operator boundary.
 
-```text
-local:   client ──stdio──> orbit mcp serve ──> Orbit Core
-remote:  client ──stdio──> ssh ──> orbit mcp serve ──> Orbit Core
-socket:  client ──TCP────> orbit mcp listen ──> Orbit Core
-```
-
-**Local** is what `orbit mcp init` registers with an agent client — the client
-launches `orbit mcp serve` itself over stdio.
-
-**Remote** is direct SSH stdio. The local side starts a non-interactive SSH
-process whose remote command is the same `orbit mcp serve`, and inherits stdin,
-stdout, and stderr. It does not parse MCP frames, resolve a workspace, filter
-tools, or make authorization decisions — it is a pipe.
-
-**Socket** is for deployments that need one, typically reached through an SSH
-tunnel:
+## TCP MCP
 
 ```bash
-orbit mcp listen                        # 127.0.0.1:7879 by default
+orbit mcp listen
 orbit mcp listen 0.0.0.0:7879 --allow-non-loopback
 ```
 
-Each accepted connection is an independent session against the same
-server-local tool surface, resolved and audited exactly as a stdio session is.
-
-## The security boundary — read this before exposing anything
-
-**SSH is the access control. There is nothing else.**
-
-- The dashboard refuses non-loopback binds and has no application
-  authentication. Its Origin check is browser-CSRF mitigation, not access
-  control. The Web API includes mutations, so anyone who reaches the forwarded
-  port can act with the authority of the remote Orbit process.
-- The MCP socket authenticates no client. It binds loopback for that reason, and
-  `--allow-non-loopback` hands this machine's full tool surface to anyone who
-  can reach the address. Pass it only where the network path is already
-  restricted.
-
-Neither surface has per-user permissions. If someone can reach the port, they
-are an operator.
-
-## Which machine is authoritative
-
-The machine accepting `orbit mcp serve` or `orbit mcp listen` owns the call. It
-derives its own process identity, resolves any required workspace against its own
-registry, opens that server-local runtime, and records success, failure, or
-denial at that boundary. A transport changes only how the bytes arrive.
-
-Practical consequence: a workspace path in a tool call is resolved on the
-*remote* machine. Passing a local path that doesn't exist there fails, and a path
-that happens to exist on both resolves to the remote one.
-
-## Workspace selection
-
-Calls resolve a workspace from MCP initialize/session context or an explicit
-`workspace` input. Do **not** add a global `--root` to `orbit mcp serve` to force
-routing — the server rejects launch-root routing. If a call reports that
-workspace selection is missing, supply the selector rather than changing the
-launch command.
+Default is loopback port 7879. The socket authenticates no client; use a protected
+network path such as an SSH tunnel. Non-loopback exposure is an explicit choice,
+not a remedy for a missing capability. SSH caller-policy configuration does not
+turn a raw TCP socket or dashboard into an authenticated per-user service.

@@ -2,7 +2,6 @@ node_modules/
 dist/
 .astro/
 .wrangler/
-src/content/docs/architecture/design/
+# Retired generated output can remain in checkouts created before its removal.
 src/content/docs/metrics/
-src/content/docs/tasks/
 !package-lock.json

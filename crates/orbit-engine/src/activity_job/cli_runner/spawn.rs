@@ -18,6 +18,9 @@ use tempfile::NamedTempFile;
 use super::super::dispatcher::ResolvedSandbox;
 
 const ORBIT_BIN_ENV: &str = "ORBIT_BIN";
+pub(super) const CODEX_CA_CERTIFICATE_ENV: &str = "CODEX_CA_CERTIFICATE";
+pub(super) const SSL_CERT_FILE_ENV: &str = "SSL_CERT_FILE";
+const DEFAULT_MACOS_CA_CERTIFICATE: &str = "/etc/ssl/cert.pem";
 
 /// Conventional `$HOME` bin directories searched when a provider launcher
 /// is not on the inherited `PATH`, and backfilled into a spawned agent's
@@ -40,24 +43,46 @@ pub(crate) struct SpawnError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SandboxDispatchMetadata {
-    pub(super) backend: Option<String>,
-    pub(super) trusted_wrapper: Option<String>,
-    pub(super) probe_outcome: Option<String>,
-    pub(super) write_enforcement: String,
-    pub(super) read_enforcement: String,
+pub(crate) struct SandboxDispatchMetadata {
+    pub(crate) backend: Option<String>,
+    pub(crate) trusted_wrapper: Option<String>,
+    pub(crate) probe_outcome: Option<String>,
+    pub(crate) write_enforcement: String,
+    pub(crate) read_enforcement: String,
 }
 
-pub(super) struct PreparedSandbox<'a> {
-    pub(super) effective: Option<&'a ResolvedSandbox>,
-    pub(super) metadata: SandboxDispatchMetadata,
+pub(crate) struct PreparedSandbox<'a> {
+    pub(crate) effective: Option<&'a ResolvedSandbox>,
+    pub(crate) metadata: SandboxDispatchMetadata,
+}
+
+impl PreparedSandbox<'_> {
+    /// The deliberate absence of a sandbox for an operator-admitted
+    /// trusted-host invocation [ORB-11354].
+    ///
+    /// Named distinctly from the `None` arm of
+    /// [`prepare_sandbox_for_dispatch`] — which means "this executor declares
+    /// no sandbox" — so a run trail distinguishes an executor that never had
+    /// one from an operator who explicitly removed it.
+    pub(crate) fn none_trusted_host() -> Self {
+        Self {
+            effective: None,
+            metadata: SandboxDispatchMetadata {
+                backend: Some("none-trusted-host".to_string()),
+                trusted_wrapper: None,
+                probe_outcome: None,
+                write_enforcement: "write_unrestricted_trusted_host".to_string(),
+                read_enforcement: "read_unrestricted_trusted_host".to_string(),
+            },
+        }
+    }
 }
 
 /// Resolve availability before provider argv construction. This ordering is
 /// security-sensitive: provider-native flags are neutralized only when the
 /// outer wrapper is actually usable, while an explicitly allowed bare
 /// fallback keeps those flags intact.
-pub(super) fn prepare_sandbox_for_dispatch(
+pub(crate) fn prepare_sandbox_for_dispatch(
     sandbox: Option<&ResolvedSandbox>,
 ) -> Result<PreparedSandbox<'_>, SpawnError> {
     match sandbox {
@@ -343,14 +368,14 @@ fn windows_executable_extensions() -> Vec<String> {
 }
 
 #[derive(Debug)]
-pub(super) struct SpawnedChild {
-    pub(super) child: Child,
+pub(crate) struct SpawnedChild {
+    pub(crate) child: Child,
     /// Sandbox profile tempfile, if any. Held until the supervisor returns
     /// so the kernel can keep reading the SBPL profile while the child runs.
-    pub(super) _profile_temp: Option<NamedTempFile>,
+    pub(crate) _profile_temp: Option<NamedTempFile>,
 }
 
-pub(super) fn spawn_child_with_optional_sandbox(
+pub(crate) fn spawn_child_with_optional_sandbox(
     program: &str,
     args: &[String],
     env: &[(String, String)],
@@ -716,11 +741,17 @@ pub(crate) fn spawn_macos_sandboxed_with(
     // `orbit_exec::macos_login_keychain_access`. [ORB-10929]
     let profile_text = compile_macos_sandbox_profile(&sandbox.fs_profile, provider)
         .map_err(|err| SpawnError::permanent(err.to_string()))?;
+    let child_env = prepare_macos_codex_ca_environment_with(
+        provider,
+        env,
+        cwd,
+        Path::new(DEFAULT_MACOS_CA_CERTIFICATE),
+    )?;
     let (child, profile_temp) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
         profile_text: &profile_text,
         program,
         args,
-        env,
+        env: &child_env,
         cwd,
         stdin: Stdio::piped(),
         stdout: Stdio::piped(),
@@ -731,4 +762,99 @@ pub(crate) fn spawn_macos_sandboxed_with(
         child,
         _profile_temp: Some(profile_temp),
     })
+}
+
+/// Select the CA bundle seen by Codex under Orbit's macOS sandbox.
+///
+/// Denying the system Keychain directories is intentional, but it prevents
+/// rustls-native-certs from completing native root discovery. Codex supports
+/// file-backed trust through `CODEX_CA_CERTIFICATE`, so Orbit supplies macOS's
+/// public bundle when the operator has not selected either documented
+/// override. Explicit values keep their normal precedence and are validated,
+/// never replaced with the fallback after a typo or permissions failure.
+pub(crate) fn prepare_macos_codex_ca_environment_with(
+    provider: &str,
+    env: &[(String, String)],
+    cwd: Option<&Path>,
+    default_ca_certificate: &Path,
+) -> Result<Vec<(String, String)>, SpawnError> {
+    if provider != "codex" {
+        return Ok(env.to_vec());
+    }
+
+    let selected = [CODEX_CA_CERTIFICATE_ENV, SSL_CERT_FILE_ENV]
+        .into_iter()
+        .find_map(|name| {
+            env.iter()
+                .rev()
+                .find(|(candidate, _)| candidate == name)
+                .map(|(_, value)| value.as_str())
+                .filter(|value| !value.is_empty())
+                .map(|value| (name, value))
+        });
+    if let Some((name, value)) = selected {
+        validate_ca_certificate_path(
+            name,
+            value,
+            cwd,
+            &format!(
+                "set {name} to a readable PEM CA bundle or unset it so Orbit can use {DEFAULT_MACOS_CA_CERTIFICATE}"
+            ),
+        )?;
+        return Ok(env.to_vec());
+    }
+
+    let value = default_ca_certificate.to_string_lossy().into_owned();
+    validate_ca_certificate_path(
+        CODEX_CA_CERTIFICATE_ENV,
+        &value,
+        cwd,
+        "make the macOS public CA bundle readable or set CODEX_CA_CERTIFICATE or SSL_CERT_FILE to a readable PEM CA bundle",
+    )?;
+
+    let mut child_env = env.to_vec();
+    child_env.push((CODEX_CA_CERTIFICATE_ENV.to_string(), value));
+    Ok(child_env)
+}
+
+fn validate_ca_certificate_path(
+    variable: &str,
+    value: &str,
+    cwd: Option<&Path>,
+    recovery: &str,
+) -> Result<(), SpawnError> {
+    let configured = Path::new(value);
+    let resolved = if configured.is_absolute() {
+        configured.to_path_buf()
+    } else {
+        let base = match cwd {
+            Some(cwd) => cwd.to_path_buf(),
+            None => std::env::current_dir().map_err(|error| {
+                SpawnError::permanent(format!(
+                    "cannot resolve relative {variable} value `{value}` for sandboxed Codex: {error}"
+                ))
+            })?,
+        };
+        base.join(configured)
+    };
+    let metadata = std::fs::metadata(&resolved).map_err(|error| {
+        SpawnError::permanent(format!(
+            "{variable} selects CA bundle `{}` for sandboxed Codex, but Orbit cannot read it: {error}; {recovery}",
+            resolved.display(),
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(SpawnError::permanent(format!(
+            "{variable} selects `{}` for sandboxed Codex, but it is not a CA bundle file; {recovery}",
+            resolved.display()
+        )));
+    }
+    std::fs::File::open(&resolved).map_err(|error| {
+        SpawnError::permanent(format!(
+            "{variable} selects CA bundle `{}` for sandboxed Codex, but Orbit cannot open it: {error}; {recovery}",
+            resolved.display()
+        ))
+    })?;
+
+    Ok(())
 }

@@ -1,5 +1,7 @@
+use std::io::Read;
+
 use orbit_common::OrbitError;
-use orbit_exec::ExecRequest;
+use orbit_exec::{ExecRequest, NoSandbox, run_process_streaming_stdout};
 use serde_json::{Value, json};
 
 use crate::{TIMEOUT_LONG_MS, check_exec_result};
@@ -48,41 +50,78 @@ pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
     Ok(super::gh_exec_request(args, None, TIMEOUT_LONG_MS))
 }
 
-super::gh_tool! {
-    pub struct GithubRunLogsTool;
-    name: "github.run.logs";
-    description: "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus the commit the runner actually checked out, parsed from the log's own checkout evidence. Output is capped so a large log cannot exhaust the caller's context; `truncated` reports when it was.";
-    parameters: [
-        super::tool_param("run", "Numeric workflow-run ID", "string", true),
-        super::tool_param("job", "Numeric job ID to narrow the log to one job", "string", false),
-        super::tool_param("scope", "\"failed\" (default) for failed-step logs, or \"all\" for the full run log — use \"all\" to evidence the checked-out commit, since the checkout step usually succeeds", "string", false),
-        super::tool_param("max_bytes", "Maximum log bytes to return (default 16384, capped at 262144). The excerpt keeps the head and the tail and marks the omitted gap.", "integer", false),
-        super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
-    ];
-    request: |_ctx, input| {
-        build_exec_request(input)
-    }
-    response: |_ctx, input, result| {
-        check_exec_result(result, "gh run view --log")?;
+pub struct GithubRunLogsTool;
 
+impl crate::Tool for GithubRunLogsTool {
+    fn schema(&self) -> orbit_types::tool::ToolSchema {
+        super::gh_schema(
+            "github.run.logs",
+            "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is drained incrementally; checkout extraction stops after 8 MiB and reports incomplete evidence rather than retaining an unbounded log.",
+            vec![
+                super::tool_param("run", "Numeric workflow-run ID", "string", true),
+                super::tool_param(
+                    "job",
+                    "Numeric job ID to narrow the log to one job",
+                    "string",
+                    false,
+                ),
+                super::tool_param(
+                    "scope",
+                    "\"failed\" (default) for failed-step logs, or \"all\" for the full run log — use \"all\" to evidence the checked-out commit, since the checkout step usually succeeds",
+                    "string",
+                    false,
+                ),
+                super::tool_param(
+                    "max_bytes",
+                    "Maximum log bytes to return (default 16384, capped at 262144). The excerpt keeps the head and the tail and marks the omitted gap.",
+                    "integer",
+                    false,
+                ),
+                super::tool_param(
+                    "repo",
+                    "Repository in owner/name format (uses current directory if omitted)",
+                    "string",
+                    false,
+                ),
+            ],
+        )
+    }
+
+    fn execute(&self, _ctx: &crate::ToolContext, input: Value) -> Result<Value, OrbitError> {
+        let request = build_exec_request(&input)?;
         let max_bytes =
-            super::bounded_limit(input, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES)? as usize;
-        let bounded = super::bound_log_text(&result.stdout, max_bytes);
-        // Scan the whole log, not the excerpt: truncation must not be able to
-        // hide the checkout evidence the caller came for.
-        let evidence = super::scan_checkout_evidence(&result.stdout, MAX_EVIDENCE_LINES);
+            super::bounded_limit(&input, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES)? as usize;
+        let (result, log) =
+            run_process_streaming_stdout(&request, &NoSandbox, move |mut stdout| {
+                let mut collector = super::StreamedLogCollector::new(max_bytes, MAX_EVIDENCE_LINES);
+                let mut chunk = [0_u8; 4096];
+                loop {
+                    let read = stdout.read(&mut chunk).map_err(|error| {
+                        OrbitError::Execution(format!("failed reading gh run log: {error}"))
+                    })?;
+                    if read == 0 {
+                        return Ok(collector.finish());
+                    }
+                    collector.push(&chunk[..read]);
+                }
+            })?;
+        check_exec_result(&result, "gh run view --log")?;
+        let evidence = log.checkout_evidence;
 
         Ok(json!({
             "run_id": input.get("run"),
             "scope": input.get("scope").and_then(Value::as_str).unwrap_or("failed"),
-            "log": bounded.text,
-            "truncated": bounded.truncated,
-            "returned_bytes": bounded.returned_bytes,
-            "total_bytes": bounded.total_bytes,
+            "log": log.text,
+            "truncated": log.truncated,
+            "returned_bytes": log.returned_bytes,
+            "total_bytes": log.total_bytes,
             // Distinct from any run's `reported_head_sha`: this is what the
             // runner checked out, read from the runner's own output.
             "checkout_commits": evidence.commits,
             "checkout_evidence": evidence.lines,
+            "checkout_evidence_complete": evidence.complete,
+            "checkout_evidence_scanned_bytes": evidence.scanned_bytes,
+            "checkout_evidence_source_truncated": evidence.source_truncated,
         }))
     }
 }

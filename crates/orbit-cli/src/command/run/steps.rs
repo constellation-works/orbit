@@ -8,8 +8,8 @@ use crate::command::{CommandOut, Payload};
 use crate::output::color::Domain;
 
 use super::format::{
-    format_child_dispatch_lines, format_duration, format_timestamp, format_waiting_line,
-    summarize_error_message,
+    format_admissions_stop_line, format_child_dispatch_lines, format_duration, format_timestamp,
+    format_waiting_line, format_worker_limit_line, summarize_error_message,
 };
 
 pub(crate) fn resolve_run(
@@ -183,11 +183,82 @@ pub(crate) fn run_header_text_with_state(run: &JobRun, state: Option<&PipelineSt
         ),
         format!("{} {}", bold("Duration:"), format_duration(run.duration_ms)),
     ];
+    if let Some(requested_crew) = run
+        .input
+        .as_ref()
+        .and_then(|input| input.get("crew"))
+        .and_then(Value::as_str)
+    {
+        lines.push(format!("{} {}", bold("Requested Crew:"), requested_crew));
+    }
+    if run.resolved_crew.is_some() || run.crew_model.is_some() {
+        lines.push(format!(
+            "{} {} ({})",
+            bold("Resolved Run Crew:"),
+            run.resolved_crew.as_deref().unwrap_or("-"),
+            run.crew_model.as_deref().unwrap_or("model unavailable"),
+        ));
+    }
     if let Some(line) = format_waiting_line(run.state, state) {
+        lines.push(line);
+    }
+    if let Some(line) = format_worker_limit_line(state) {
+        lines.push(line);
+    }
+    if let Some(line) = format_admissions_stop_line(state) {
         lines.push(line);
     }
     lines.extend(format_child_dispatch_lines(state));
     lines.join("\n")
+}
+
+/// Compact actual provider/model evidence for ordinary human run inspection.
+/// The JSON projection keeps the complete invocation list, including retries.
+pub(crate) fn activity_provenance_lines(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|activity| {
+            let id = activity
+                .get("activity_id")
+                .and_then(Value::as_str)
+                .unwrap_or("-");
+            let status = activity
+                .get("actual_status")
+                .and_then(Value::as_str)
+                .unwrap_or("unavailable");
+            let values = activity
+                .get("invocations")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|invocation| {
+                    let provider = invocation
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .unwrap_or("-");
+                    let model = invocation
+                        .get("model")
+                        .and_then(Value::as_str)
+                        .unwrap_or("model unavailable");
+                    format!("{provider}/{model}")
+                })
+                .collect::<Vec<_>>();
+            format!(
+                "Activity {} actual={} {}",
+                id,
+                status,
+                if values.is_empty() {
+                    "".to_string()
+                } else {
+                    values.join(", ")
+                }
+            )
+            .trim_end()
+            .to_string()
+        })
+        .collect()
 }
 
 pub(crate) fn step_summary_table(steps: &[&JobRunStep]) -> crate::output::table::Table {

@@ -73,7 +73,20 @@ a root, or migrating legacy files: [docs-corpus.md](docs-corpus.md).
 **Frictions** — records of what made the work harder. Lexical only.
 → [friction.md](friction.md)
 
-**Decision records** are titled entries inside a feature's decision doc, not a
-separate corpus. They are indexed as ordinary docs: use `--kind doc` and search
-by title or body text. There is no decision store to query — the retired
-`--kind adr` is rejected.
+**Historical decision documents**, when present under docs roots, are ordinary
+docs, not a separate corpus or an authority source. Evaluate retrieved claims
+against current requirements and evidence. The retired `--kind adr` is rejected.
+
+## Scope and hidden history
+
+Ordinary searches hide closed task/friction history. `all: true` includes
+normally hidden statuses for the selected kind; explicit `status` tokens override
+that default. Use a bounded all-status pass before concluding a repair was never
+done. `orbit_task_list` has different defaults: it lists all statuses unless
+filtered, with a default limit of 50. Do not equate an empty active search with
+an empty task store.
+
+Direct-server `workspaces` or `all_workspaces` can widen search when advertised
+and authorized; managed runs cannot request all workspaces. Federated scope
+uses that surface's returned host-qualified selectors. Inspect attribution on
+each hit and mutate a result only through its owning workspace.

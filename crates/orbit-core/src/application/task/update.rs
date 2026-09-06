@@ -34,7 +34,19 @@ impl OrbitRuntime {
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.update_task_with_status_note_and_identity(id, params, None, agent, model)
+        self.update_task_with_status_note_and_identity(id, params, None, agent, model, None)
+    }
+
+    pub(crate) fn update_task_with_owner(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        agent: Option<String>,
+        model: Option<String>,
+        owner: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.update_task_with_status_note_and_identity(id, params, None, agent, model, owner)
     }
 
     pub fn update_task_from_activity(
@@ -61,6 +73,7 @@ impl OrbitRuntime {
             note,
             agent.or_else(|| model.is_none().then(|| SYSTEM_ACTOR_LABEL.to_string())),
             model,
+            None,
         )
     }
 
@@ -81,17 +94,19 @@ impl OrbitRuntime {
         status_note: Option<String>,
         agent: Option<String>,
         model: Option<String>,
+        owner: Option<String>,
     ) -> Result<Task, OrbitError> {
         // The lock hook takes `FnMut` because it is a trait object, but the
         // body must run exactly once and consumes its inputs; `take()` makes
         // both facts explicit rather than forcing the params to be cloneable.
-        let mut inputs = Some((params, status_note, agent, model));
+        let mut inputs = Some((params, status_note, agent, model, owner));
         let mut updated: Option<Task> = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
-            let (params, status_note, agent, model) = inputs.take().ok_or_else(|| {
+            let (params, status_note, agent, model, owner) = inputs.take().ok_or_else(|| {
                 OrbitError::Execution("task update body was invoked more than once".to_string())
             })?;
-            updated = Some(self.update_task_locked(id, params, status_note, agent, model)?);
+            updated =
+                Some(self.update_task_locked(id, params, status_note, agent, model, owner)?);
             Ok(())
         })?;
         let updated = updated.ok_or_else(|| {
@@ -113,6 +128,7 @@ impl OrbitRuntime {
         status_note: Option<String>,
         agent: Option<String>,
         model: Option<String>,
+        owner: Option<String>,
     ) -> Result<Task, OrbitError> {
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
@@ -251,6 +267,18 @@ impl OrbitRuntime {
                 &dropped_context_files,
             )]
         };
+        // An explicit block is current intent even when the failure already
+        // parked the task. Triage must not mistake this for its old coupling.
+        if task.status == TaskStatus::Blocked && params.status == Some(TaskStatus::Blocked) {
+            append_history.push(TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: effective_label.clone(),
+                event: "block_confirmed".into(),
+                note: params.comment.clone(),
+                from_status: Some(TaskStatus::Blocked),
+                to_status: Some(TaskStatus::Blocked),
+            });
+        }
         if let Some(replacement) = source_task_id_replacement {
             // ORB-10311: record the explicit previous and replacement source
             // ids (with a clear marker for the unset case) so the change is
@@ -272,6 +300,7 @@ impl OrbitRuntime {
             let task = self.stores().task_records().update(
                 id,
                 TaskRecordUpdateParams {
+                    artifact_owner_run_id: owner.clone(),
                     actor: effective_label.clone(),
                     planned_by: attribution.planned_by.clone(),
                     implemented_by: attribution.implemented_by.clone(),

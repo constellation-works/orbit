@@ -21,6 +21,7 @@ use url::Url;
 
 mod audit;
 mod auto_tasks;
+mod automation;
 mod crews;
 mod denials;
 mod diagnostics;
@@ -417,6 +418,14 @@ async fn require_localhost_origin(request: Request<Body>, next: Next) -> Respons
     next.run(request).await
 }
 
+/// Tell long-lived streaming handlers (currently `/api/log/stream`) to close
+/// cooperatively. Called once from [`crate::shutdown_signal`] so the bounded
+/// graceful-drain deadline in `crate::run_server` rarely has to be relied on
+/// (ORB-11246).
+pub(super) fn request_shutdown() {
+    log::request_shutdown();
+}
+
 pub(super) fn router() -> Router<crate::state::DashboardState> {
     Router::new()
         .route("/search", get(search::search))
@@ -430,6 +439,7 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
             get(tasks::completion_by_complexity),
         )
         .route("/tasks/all", get(workspaces::list_all_tasks))
+        .route("/job-runs/all", get(workspaces::list_all_job_runs))
         .route("/workspaces", get(workspaces::list_workspaces))
         .route(
             "/tasks/:id",
@@ -437,6 +447,10 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
         )
         .route("/crews", get(crews::list_crews))
         .route("/tasks/:id/artifacts/*path", get(tasks::get_task_artifact))
+        .route(
+            "/automation/:kind/:name/coverage/:batch/evidence",
+            get(automation::accepted_evidence),
+        )
         .route("/tasks/:id/comments", post(tasks::add_task_comment_action))
         .route("/tasks/:id/approve", post(tasks::approve_task_action))
         .route("/tasks/:id/reject", post(tasks::reject_task_action))
@@ -458,6 +472,8 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
         .route("/job-runs", get(jobs::list_job_runs))
         .route("/job-runs/:id/resume", post(jobs::resume_job_run_action))
         .route("/workflows/ship", post(runs::ship_workflow_action))
+        .route("/workflows/auto", post(runs::auto_drain_workflow_action))
+        .route("/workflows/auto/readiness", get(runs::auto_drain_readiness))
         .route("/runs/:id", get(runs::get_run))
         .route("/runs/:id/cancel", post(runs::cancel_run_action))
         .route("/runs/:id/replay", post(runs::replay_run_action))

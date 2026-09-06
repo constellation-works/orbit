@@ -23,6 +23,7 @@ pub(super) fn run_action(
                 McpProvider::Claude => apply_claude_init(&target, launch)?,
                 McpProvider::Codex => apply_codex_init(&target, launch)?,
                 McpProvider::Gemini => apply_gemini_init(&target, launch)?,
+                McpProvider::Antigravity => apply_simple_json_init(&target, "mcpServers", launch)?,
                 McpProvider::Grok => apply_grok_init(&target, launch)?,
                 McpProvider::Cursor => apply_simple_json_init(&target, "mcpServers", launch)?,
                 McpProvider::Vscode => apply_simple_json_init(&target, "servers", launch)?,
@@ -38,6 +39,9 @@ pub(super) fn run_action(
                     McpProvider::Claude => apply_claude_remove(&target, server_id)?,
                     McpProvider::Codex => apply_codex_remove(&target, server_id)?,
                     McpProvider::Gemini => apply_gemini_remove(&target, server_id)?,
+                    McpProvider::Antigravity => {
+                        apply_simple_json_remove(&target, "mcpServers", server_id)?
+                    }
                     McpProvider::Grok => apply_grok_remove(&target, server_id)?,
                     McpProvider::Cursor => {
                         apply_simple_json_remove(&target, "mcpServers", server_id)?
@@ -104,6 +108,17 @@ impl ConfigTarget {
             }
             (ScopeArg::Workspace, McpProvider::Gemini) => Ok(Self {
                 mcp_path: repo_root.join(".gemini").join("settings.json"),
+                settings_path: None,
+            }),
+            (ScopeArg::Home, McpProvider::Antigravity) => {
+                let home = require_home_dir(home_dir)?;
+                Ok(Self {
+                    mcp_path: home.join(".gemini").join("config").join("mcp_config.json"),
+                    settings_path: None,
+                })
+            }
+            (ScopeArg::Workspace, McpProvider::Antigravity) => Ok(Self {
+                mcp_path: repo_root.join(".agents").join("mcp_config.json"),
                 settings_path: None,
             }),
             (ScopeArg::Home, McpProvider::Grok) => {
@@ -226,6 +241,20 @@ pub(super) fn auto_detected_providers(
         .unwrap_or(false);
     if gemini_repo || gemini_home {
         providers.push(McpProvider::Gemini);
+    }
+    let antigravity_repo = repo_root.join(".agents").join("mcp_config.json").is_file()
+        || repo_root.join(".agents").is_dir();
+    let antigravity_home = home_dir
+        .map(|home| {
+            home.join(".gemini")
+                .join("config")
+                .join("mcp_config.json")
+                .is_file()
+                || home.join(".gemini").join("antigravity-cli").is_dir()
+        })
+        .unwrap_or(false);
+    if antigravity_repo || antigravity_home {
+        providers.push(McpProvider::Antigravity);
     }
     let grok_repo = repo_root.join(".grok").is_dir();
     let grok_home = home_dir

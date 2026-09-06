@@ -7,14 +7,14 @@ after that, use it to disambiguate a term rather than reading it end to end.
 
 ```text
 host (one machine, one identity, one task-id prefix)
-└── workspace (one registered checkout)
+└── workspace (logical identity with a registered checkout and owner)
     ├── tasks, docs, frictions          ← what the work is
     ├── routines, auto-tasks            ← what fires on a schedule
     └── runs                            ← what actually executed
 ```
 
-A host holds many workspaces. A workspace holds the durable record. Everything
-that *executes* is a run, and every run is attributable.
+A host holds many workspaces. A workspace scopes the durable record. Job
+executions become runs; ordinary tool calls have their own audit records.
 
 ## Places
 
@@ -22,7 +22,10 @@ that *executes* is a run, and every run is attributable.
 used to pin routines, a machine ID, and an **immutable task prefix** that
 namespaces every task ID this machine allocates. Chosen once, at `orbit init`.
 
-**Workspace** — one registered checkout, with `.orbit/` at its root. Registered
+**Workspace** — a logical project registered with a local checkout, with
+`.orbit/` at its root. A checkout declares an owner or replica role; the owner
+machine is authoritative for mutations. A replica does not become an owner
+merely by sharing Git history. Registered
 in a machine-global registry, so commands can address it by name, by logical ID
 (`ws_*`), or by absolute path. A linked Git worktree resolves to its registered
 checkout rather than registering separately.
@@ -45,10 +48,16 @@ and a full history. IDs are allocated by the store; never invented.
 **Epic** — a task with descendants, shipped through a pipeline that gives the
 whole family one worktree and one branch, instead of one per child.
 
+**Publication** — an explicitly published, validated task snapshot in a
+dedicated Git repository. It has source/workspace/authority identity, a
+generation, a commit, and attachment completeness labels. Inspection is not a
+live task read; restore is an explicit same-authority operation.
+See [publication.md](setup/publication.md).
+
 **Doc** — reviewed markdown under the configured docs roots, indexed for
-retrieval by concept rather than filename. Decision records are titled entries
-inside a feature's design docs, indexed as ordinary docs — there is no separate
-decision store.
+retrieval by concept rather than filename. Historical decision documents can be indexed as ordinary docs; there is no
+separate decision store. Retrieved history does not override current
+requirements, code, or explicit instructions.
 
 **Friction** — a record of something that made the work harder than it should
 have been. A ledger of experience, not a queue of work; see

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::{SecondsFormat, Utc};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
@@ -6,7 +8,8 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
-    runtime_with_workspace_layout, seed_list_backlog_task, write_workspace_file,
+    runtime_with_workspace_config, runtime_with_workspace_layout, seed_list_backlog_task,
+    write_workspace_file,
 };
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
@@ -84,6 +87,233 @@ fn list_epic_descendants_err(
             ToolContext::default(),
         )
         .expect_err("list epic descendants should fail")
+}
+
+fn readiness(runtime: &OrbitRuntime, task_ids: &[String], concurrency: Option<u32>) -> Value {
+    readiness_allowing(runtime, task_ids, concurrency, &[])
+}
+
+fn readiness_allowing(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+    concurrency: Option<u32>,
+    allowed_crews: &[String],
+) -> Value {
+    runtime
+        .workspace_auto_readiness(task_ids, concurrency, 50, allowed_crews)
+        .expect("explain readiness")
+}
+
+fn readiness_task<'a>(output: &'a Value, task_id: &str) -> &'a Value {
+    output["tasks"]
+        .as_array()
+        .expect("readiness tasks")
+        .iter()
+        .find(|task| task["task_id"] == task_id)
+        .expect("readiness task")
+}
+
+#[test]
+fn readiness_explains_dependencies_locks_epics_claims_and_capacity() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "crates/locked/src/lib.rs");
+    let dependency = seed_list_backlog_task(
+        &runtime,
+        "Unfinished dependency",
+        TaskStatus::Proposed,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        None,
+        vec![],
+    );
+    let blocked = runtime
+        .add_task(TaskAddParams {
+            title: "Blocked leaf".to_string(),
+            description: "fixture".to_string(),
+            acceptance_criteria: vec!["fixture".to_string()],
+            plan: "fixture".to_string(),
+            dependencies: vec![dependency.id.clone()],
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("seed blocked leaf");
+    let missing_dependency = seed_list_backlog_task(
+        &runtime,
+        "Deleted dependency",
+        TaskStatus::Backlog,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        None,
+        vec![],
+    );
+    let missing = runtime
+        .add_task(TaskAddParams {
+            title: "Missing dependency leaf".to_string(),
+            description: "fixture".to_string(),
+            acceptance_criteria: vec!["fixture".to_string()],
+            plan: "fixture".to_string(),
+            dependencies: vec![missing_dependency.id.clone()],
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("seed missing dependency leaf");
+    runtime
+        .delete_task(&missing_dependency.id)
+        .expect("delete dependency for missing fixture");
+    let _holder = seed_list_backlog_task(
+        &runtime,
+        "Lock holder",
+        TaskStatus::InProgress,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        None,
+        vec!["crates/locked/src/lib.rs"],
+    );
+    let locked = seed_list_backlog_task(
+        &runtime,
+        "Locked leaf",
+        TaskStatus::Backlog,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        None,
+        vec!["crates/locked/src/lib.rs"],
+    );
+    let epic = runtime
+        .add_task(TaskAddParams {
+            title: "Managed epic".to_string(),
+            description: "fixture".to_string(),
+            acceptance_criteria: vec!["fixture".to_string()],
+            plan: "fixture".to_string(),
+            tags: vec!["epic".to_string()],
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("seed epic");
+    let epic_child = seed_list_backlog_task(
+        &runtime,
+        "Managed epic child",
+        TaskStatus::Backlog,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        Some(epic.id),
+        vec![],
+    );
+    let claimed = seed_list_backlog_task(
+        &runtime,
+        "Claimed leaf",
+        TaskStatus::Backlog,
+        TaskPriority::High,
+        TaskType::Chore,
+        None,
+        vec![],
+    );
+    let claim_run = seed_live_leaf_run(&runtime, &[&claimed.id]);
+    let saturated = seed_list_backlog_task(
+        &runtime,
+        "Capacity leaf",
+        TaskStatus::Backlog,
+        TaskPriority::Low,
+        TaskType::Chore,
+        None,
+        vec![],
+    );
+
+    let ids = vec![
+        blocked.id.clone(),
+        missing.id.clone(),
+        locked.id.clone(),
+        epic_child.id.clone(),
+        claimed.id.clone(),
+        saturated.id.clone(),
+    ];
+    let output = readiness(&runtime, &ids, Some(1));
+
+    assert_eq!(
+        readiness_task(&output, &blocked.id)["reason"],
+        "unmet_dependency"
+    );
+    assert_eq!(
+        readiness_task(&output, &missing.id)["dependencies"][0]["status"],
+        "missing"
+    );
+    assert_eq!(
+        readiness_task(&output, &locked.id)["reason"],
+        "context_lock_conflict"
+    );
+    assert_eq!(
+        readiness_task(&output, &epic_child.id)["reason"],
+        "epic_managed"
+    );
+    assert_eq!(
+        readiness_task(&output, &claimed.id)["reason"],
+        "claimed_by_live_child"
+    );
+    assert_eq!(
+        readiness_task(&output, &claimed.id)["run_ids"],
+        json!([claim_run])
+    );
+    assert_eq!(
+        readiness_task(&output, &saturated.id)["reason"],
+        "capacity_saturated"
+    );
+}
+
+#[test]
+fn readiness_matches_dispatch_and_does_not_mutate_the_snapshot() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let first = seed_list_backlog_task(
+        &runtime,
+        "First ready leaf",
+        TaskStatus::Backlog,
+        TaskPriority::High,
+        TaskType::Chore,
+        None,
+        vec![],
+    );
+    let second = seed_list_backlog_task(
+        &runtime,
+        "Second ready leaf",
+        TaskStatus::Backlog,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        None,
+        vec![],
+    );
+    let ids = vec![second.id.clone(), first.id.clone()];
+    let before_runs = runtime
+        .stores()
+        .jobs()
+        .list_pending_or_running_job_runs("task_auto_pipeline")
+        .expect("list runs");
+
+    let output = readiness(&runtime, &ids, Some(1));
+    let dispatched = classify_with(&runtime, json!({ "max_active_leaf_runs": 1 }));
+
+    assert_eq!(readiness_task(&output, &first.id)["reason"], "ready");
+    assert_eq!(readiness_task(&output, &first.id)["eligible"], true);
+    assert_eq!(
+        readiness_task(&output, &second.id)["reason"],
+        "capacity_saturated"
+    );
+    assert_eq!(dispatched["loose_task_ids"], json!([first.id]));
+    assert_eq!(
+        runtime
+            .stores()
+            .jobs()
+            .list_pending_or_running_job_runs("task_auto_pipeline")
+            .expect("list runs after"),
+        before_runs
+    );
+    assert_eq!(
+        runtime.get_task(&second.id).expect("read task").status,
+        TaskStatus::Backlog
+    );
+    assert!(
+        output["snapshot"]["limitations"]
+            .as_str()
+            .expect("limitations")
+            .contains("does not guarantee")
+    );
 }
 
 #[test]
@@ -684,6 +914,28 @@ fn a_stamped_window_answers_expiry_against_its_own_deadline() {
 }
 
 #[test]
+fn a_stopped_drain_expires_the_window_without_waiting_for_the_deadline() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let drain_run_id = seed_running_drain(&runtime, 5);
+    runtime
+        .stop_workspace_auto_admissions(crate::application::job::DrainAdmissionsStopRequest {
+            actor: "tester",
+            source: "unit",
+            reason: None,
+            claim_token: None,
+        })
+        .expect("stop drain");
+
+    let stamped = drain_window(
+        &runtime,
+        json!({ "run_id": drain_run_id, "for_seconds": 600 }),
+    );
+    assert_eq!(stamped["expired"], true);
+    assert_eq!(stamped["expired_reason"], "admissions_stopped");
+    assert_eq!(stamped["remaining_seconds"], 0.0);
+}
+
+#[test]
 fn a_drain_window_rejects_an_unparseable_deadline_or_an_oversize_request() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
 
@@ -870,4 +1122,424 @@ fn loop_inputs_survive_template_rendering_as_strings() {
 
     let empty_string_falls_back = classify_with(&runtime, json!({ "max_active_leaf_runs": "" }));
     assert_eq!(empty_string_falls_back["free_slots"], 5);
+}
+
+/// Two crews plus a `system` entry that mirrors `opus` exactly — the shape that
+/// makes "a wrapper is not provider usage" testable: `system` is a different
+/// registry name for the same effective `(provider, model)`.
+const ALLOWLIST_CREW_CONFIG: &str = r#"
+[workflow]
+default_crew = "opus"
+system_crew = "system"
+
+[crews.opus]
+provider = "claude"
+model = "claude-opus-4-6"
+backend = "cli"
+
+[crews.fable]
+provider = "claude"
+model = "claude-fable-5-1"
+backend = "cli"
+
+[crews.system]
+provider = "claude"
+model = "claude-opus-4-6"
+backend = "cli"
+"#;
+
+fn seed_crewed_backlog_task(runtime: &OrbitRuntime, title: &str, crew: &str) -> String {
+    let task = seed_list_backlog_task(
+        runtime,
+        title,
+        TaskStatus::Backlog,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        None,
+        vec![],
+    );
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                crew: Some(Some(crew.to_string())),
+                ..Default::default()
+            },
+        )
+        .expect("assign task crew");
+    task.id
+}
+
+/// [ORB-11242] A restricted window skips the crews it excludes and keeps
+/// draining everything else. The excluded task is left exactly as it is — still
+/// `backlog`, still on its own crew — and readiness says so by name, which is
+/// what makes "reassign it yourself" an instruction the operator can follow.
+#[test]
+fn crew_allowlist_skips_excluded_tasks_and_keeps_draining_the_rest() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_config(Some(ALLOWLIST_CREW_CONFIG));
+    let permitted = seed_crewed_backlog_task(&runtime, "Permitted leaf", "opus");
+    let excluded = seed_crewed_backlog_task(&runtime, "Excluded leaf", "fable");
+
+    let classified = classify_with(&runtime, json!({ "allowed_crews": ["opus"] }));
+    assert_eq!(classified["loose_task_ids"], json!([permitted]));
+    assert_eq!(classified["has_leaves"], json!(true));
+
+    let readiness = readiness_allowing(&runtime, &[], None, &["opus".to_string()]);
+    assert_eq!(readiness_task(&readiness, &permitted)["reason"], "ready");
+    let blocked = readiness_task(&readiness, &excluded);
+    assert_eq!(blocked["eligible"], json!(false));
+    assert_eq!(blocked["reason"], "crew_not_allowed");
+    assert_eq!(blocked["crew"], "fable");
+    assert_eq!(blocked["allowed_crews"], json!(["opus"]));
+
+    // The drain never rewrites the task it skipped.
+    assert_eq!(
+        runtime.get_task(&excluded).expect("excluded task").crew,
+        Some("fable".to_string())
+    );
+
+    // Omitting the option is the pre-ORB-11242 behavior: both tasks admitted.
+    let unrestricted = classify(&runtime);
+    let admitted = unrestricted["loose_task_ids"]
+        .as_array()
+        .expect("loose task ids")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        admitted,
+        BTreeSet::from([permitted.as_str(), excluded.as_str()])
+    );
+}
+
+/// A crew that resolves to the *same* configured provider/model as a permitted
+/// one is permitted under its own name too: the allowlist restricts what runs,
+/// not which alias names it.
+#[test]
+fn crew_allowlist_permits_an_alias_of_a_permitted_identity() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_config(Some(ALLOWLIST_CREW_CONFIG));
+    let aliased = seed_crewed_backlog_task(&runtime, "System-aliased leaf", "system");
+
+    let classified = classify_with(&runtime, json!({ "allowed_crews": ["opus"] }));
+    assert_eq!(classified["loose_task_ids"], json!([aliased]));
+}
+
+/// An epic root is admitted through the same effective-crew rule as a leaf, so
+/// a restricted window cannot start one whose crew it excluded.
+#[test]
+fn crew_allowlist_withholds_an_excluded_epic_root() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_config(Some(ALLOWLIST_CREW_CONFIG));
+    let epic = seed_list_backlog_task(
+        &runtime,
+        "Excluded epic",
+        TaskStatus::Backlog,
+        TaskPriority::Medium,
+        TaskType::Feature,
+        None,
+        vec![],
+    );
+    runtime
+        .update_task(
+            &epic.id,
+            TaskUpdateParams {
+                crew: Some(Some("fable".to_string())),
+                tags: Some(vec!["epic".to_string()]),
+                ..Default::default()
+            },
+        )
+        .expect("tag epic root");
+
+    assert_eq!(
+        classify_with(&runtime, json!({ "allowed_crews": ["opus"] }))["has_epic"],
+        json!(false)
+    );
+    assert_eq!(classify(&runtime)["epic_task_id"], json!(epic.id));
+}
+
+/// The allowlist is validated where the operator can act on it, not silently
+/// narrowed at dispatch time.
+#[test]
+fn crew_allowlist_rejects_a_crew_this_workspace_does_not_configure() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_config(Some(ALLOWLIST_CREW_CONFIG));
+    let error = runtime
+        .workspace_auto_readiness(&[], None, 50, &["nope".to_string()])
+        .expect_err("an unconfigured crew must fail");
+    assert!(error.to_string().contains("nope"), "{error}");
+}
+
+// [ORB-11253] A live worker ceiling, observed by the admission path.
+
+/// A running drain with checkpoint state, as the engine leaves one behind.
+fn seed_running_drain(runtime: &OrbitRuntime, submitted: u32) -> String {
+    seed_running_drain_input(runtime, json!({ "max_active_leaf_runs": submitted }))
+}
+
+fn seed_running_drain_input(runtime: &OrbitRuntime, input: Value) -> String {
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "workspace_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(input.clone()),
+            None,
+        )
+        .expect("insert drain run");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .expect("start drain run");
+    let state = orbit_types::workflow::PipelineState::new(
+        run.run_id.clone(),
+        "workspace_auto_pipeline".to_string(),
+        input,
+    );
+    runtime
+        .stores()
+        .jobs()
+        .write_run_state(&run.run_id, &state)
+        .expect("write drain state");
+    run.run_id
+}
+
+fn set_worker_limit(runtime: &OrbitRuntime, run_id: &str, concurrency: u32) {
+    runtime
+        .set_drain_worker_limit(crate::application::job::DrainWorkerLimitRequest {
+            run_id,
+            max_active_leaf_runs: concurrency,
+            expected_revision: None,
+            reason: None,
+            actor: "tester",
+            source: "unit",
+            claim_token: None,
+        })
+        .expect("set worker limit");
+}
+
+fn seed_backlog_leaves(runtime: &OrbitRuntime, count: usize) -> Vec<String> {
+    (0..count)
+        .map(|index| {
+            seed_list_backlog_task(
+                runtime,
+                &format!("leaf {index}"),
+                TaskStatus::Backlog,
+                TaskPriority::Medium,
+                TaskType::Chore,
+                None,
+                vec![&format!("crates/leaf_{index}/src/lib.rs")],
+            )
+            .id
+        })
+        .collect()
+}
+
+#[test]
+fn a_stopped_drain_admits_no_leaves_or_epics_and_leaves_live_children() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "crates/leaf_0/src/lib.rs");
+    seed_backlog_leaves(&runtime, 1);
+    let epic = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Epic root".to_string(),
+            description: "fixture".to_string(),
+            acceptance_criteria: vec!["fixture".to_string()],
+            plan: "fixture".to_string(),
+            tags: vec!["epic".to_string()],
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("seed epic");
+    let drain_run_id = seed_running_drain(&runtime, 5);
+    let live = seed_live_leaf_run(&runtime, &["CARRIED"]);
+
+    runtime
+        .stop_workspace_auto_admissions(crate::application::job::DrainAdmissionsStopRequest {
+            actor: "tester",
+            source: "unit",
+            reason: None,
+            claim_token: None,
+        })
+        .expect("stop drain");
+
+    let output = classify_with(
+        &runtime,
+        json!({ "run_id": drain_run_id, "max_active_leaf_runs": 5 }),
+    );
+    assert_eq!(output["admissions_stopped"], true);
+    assert_eq!(output["free_slots"], 0);
+    assert!(
+        output["loose_task_ids"]
+            .as_array()
+            .expect("admitted")
+            .is_empty(),
+        "a stopped drain admits no leaves: {output}"
+    );
+    assert_eq!(output["epic_task_id"], Value::Null);
+    assert_eq!(output["has_epic"], false);
+    assert_eq!(output["has_leaves"], false);
+    let child = runtime.show_job_run(&live).expect("show child");
+    assert!(
+        !child.state.is_terminal(),
+        "stop must not cancel an already admitted child"
+    );
+    assert_ne!(
+        output["epic_task_id"],
+        json!(epic.id),
+        "a stopped drain must not start an admissible epic"
+    );
+
+    let readiness = readiness(&runtime, &[], None);
+    assert_eq!(readiness["capacity"]["admissions_stopped"], true);
+    assert_eq!(readiness["capacity"]["free_slots"], 0);
+}
+
+#[test]
+fn a_raised_ceiling_is_observed_by_the_next_admission_pass() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    for index in 0..7 {
+        write_workspace_file(&repo_root, &format!("crates/leaf_{index}/src/lib.rs"));
+    }
+    seed_backlog_leaves(&runtime, 7);
+    let drain_run_id = seed_running_drain(&runtime, 5);
+    let input = json!({ "run_id": drain_run_id, "max_active_leaf_runs": 5 });
+
+    let before = classify_with(&runtime, input.clone());
+    assert_eq!(before["max_active_leaf_runs"], 5);
+    assert_eq!(before["worker_limit_source"], "run_input");
+    assert_eq!(before["free_slots"], 5);
+    assert_eq!(
+        before["loose_task_ids"].as_array().expect("admitted").len(),
+        5
+    );
+
+    set_worker_limit(&runtime, &drain_run_id, 7);
+
+    let after = classify_with(&runtime, input);
+    assert_eq!(after["max_active_leaf_runs"], 7);
+    assert_eq!(after["submitted_max_active_leaf_runs"], 5);
+    assert_eq!(after["worker_limit_source"], "run_control");
+    assert_eq!(after["worker_limit"]["previous_max_active_leaf_runs"], 5);
+    assert_eq!(after["worker_limit"]["revision"], 1);
+    assert_eq!(after["free_slots"], 7);
+    assert_eq!(
+        after["loose_task_ids"].as_array().expect("admitted").len(),
+        7
+    );
+}
+
+#[test]
+fn a_lowered_ceiling_stops_admissions_without_touching_live_children() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    for index in 0..3 {
+        write_workspace_file(&repo_root, &format!("crates/leaf_{index}/src/lib.rs"));
+    }
+    let backlog = seed_backlog_leaves(&runtime, 3);
+    let drain_run_id = seed_running_drain(&runtime, 5);
+    // Four children are already in flight when the ceiling drops to two.
+    let live: Vec<String> = (0..4)
+        .map(|index| seed_live_leaf_run(&runtime, &[&format!("CARRIED-{index}")]))
+        .collect();
+
+    set_worker_limit(&runtime, &drain_run_id, 2);
+    let output = classify_with(
+        &runtime,
+        json!({ "run_id": drain_run_id, "max_active_leaf_runs": 5 }),
+    );
+
+    assert_eq!(output["max_active_leaf_runs"], 2);
+    assert_eq!(output["active_leaf_runs"], 4);
+    assert_eq!(output["free_slots"], 0);
+    assert!(
+        output["loose_task_ids"]
+            .as_array()
+            .expect("admitted")
+            .is_empty(),
+        "an over-capacity drain admits nothing: {output}"
+    );
+    assert_eq!(output["pending_backlog"], backlog.len());
+    // Nothing was cancelled: every child is still a live leaf run.
+    for run_id in &live {
+        let child = runtime.show_job_run(run_id).expect("show child run");
+        assert!(
+            !child.state.is_terminal(),
+            "child {run_id} was terminalized"
+        );
+    }
+}
+
+#[test]
+fn a_drain_that_cannot_be_identified_keeps_its_submitted_ceiling() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "crates/leaf_0/src/lib.rs");
+    seed_backlog_leaves(&runtime, 1);
+
+    // No `run_id` (a direct dispatch) and an unknown one both degrade to the
+    // submitted ceiling rather than failing the iteration.
+    for input in [
+        json!({ "max_active_leaf_runs": 3 }),
+        json!({ "run_id": "jrun-missing", "max_active_leaf_runs": 3 }),
+    ] {
+        let output = classify_with(&runtime, input);
+        assert_eq!(output["max_active_leaf_runs"], 3);
+        assert_eq!(output["worker_limit_source"], "run_input");
+        assert_eq!(output["worker_limit"], Value::Null);
+    }
+}
+
+#[test]
+fn readiness_reports_the_live_ceiling_and_who_moved_it() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "crates/leaf_0/src/lib.rs");
+    let backlog = seed_backlog_leaves(&runtime, 1);
+    let drain_run_id = seed_running_drain(&runtime, 5);
+
+    let submitted = readiness(&runtime, &backlog, None);
+    assert_eq!(submitted["capacity"]["max_active_leaf_runs"], 5);
+    assert_eq!(submitted["capacity"]["limit_source"], "run_input");
+    assert_eq!(submitted["capacity"]["drain_run_id"], drain_run_id);
+
+    set_worker_limit(&runtime, &drain_run_id, 7);
+
+    let adjusted = readiness(&runtime, &backlog, None);
+    assert_eq!(adjusted["capacity"]["max_active_leaf_runs"], 7);
+    assert_eq!(adjusted["capacity"]["limit_source"], "run_control");
+    assert_eq!(adjusted["capacity"]["worker_limit"]["actor"], "tester");
+    assert_eq!(adjusted["capacity"]["worker_limit"]["revision"], 1);
+
+    // An explicit `--concurrency` still previews what the operator typed.
+    let previewed = readiness(&runtime, &backlog, Some(2));
+    assert_eq!(previewed["capacity"]["max_active_leaf_runs"], 2);
+    assert_eq!(previewed["capacity"]["limit_source"], "requested");
+}
+
+/// [ORB-11273] `orbit run job ... --input max_active_leaf_runs=7` persists the
+/// ceiling as a JSON string. Readiness must report that live drain ceiling
+/// (and the same source the classifier uses), not the numeric-only fallback of 5.
+#[test]
+fn readiness_parses_numeric_and_string_run_input_ceilings() {
+    for submitted in [json!(7), json!("7")] {
+        let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+        write_workspace_file(&repo_root, "crates/leaf_0/src/lib.rs");
+        let backlog = seed_backlog_leaves(&runtime, 1);
+        let drain_run_id =
+            seed_running_drain_input(&runtime, json!({ "max_active_leaf_runs": submitted }));
+
+        let output = readiness(&runtime, &backlog, None);
+        assert_eq!(
+            output["capacity"]["max_active_leaf_runs"], 7,
+            "submitted {submitted} must report the live ceiling, not the default 5"
+        );
+        assert_eq!(output["capacity"]["limit_source"], "run_input");
+        assert_eq!(output["capacity"]["drain_run_id"], drain_run_id);
+
+        let classified = classify_with(
+            &runtime,
+            json!({ "run_id": drain_run_id, "max_active_leaf_runs": submitted }),
+        );
+        assert_eq!(classified["max_active_leaf_runs"], 7);
+        assert_eq!(classified["submitted_max_active_leaf_runs"], 7);
+        assert_eq!(classified["worker_limit_source"], "run_input");
+    }
 }

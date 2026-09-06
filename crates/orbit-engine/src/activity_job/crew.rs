@@ -5,6 +5,7 @@
 //! The host returns the selected assignment and this module applies it over the
 //! inline activity baseline field by field.
 
+use orbit_types::identity::ReasoningEffort;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 use serde_json::Value;
 
@@ -17,7 +18,13 @@ use crate::context::RuntimeHost;
 pub struct ResolvedAgentSettings {
     pub provider: Provider,
     pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
+
+/// A run-scoped restriction on the crews this run may launch [ORB-11242]. The
+/// key travels on the *run* input, so the restriction survives whichever input
+/// selects the crew for a given activity.
+const ALLOWED_CREWS_KEY: &str = "allowed_crews";
 
 /// Resolve one crew assignment for an activity. Explicit activity input wins;
 /// absent that, the run input preserves the run's resolved crew selection.
@@ -27,15 +34,34 @@ pub fn resolve_crew_settings(
     activity_input: &Value,
     run_input: &Value,
 ) -> Result<Option<ResolvedAgentSettings>, DispatchError> {
-    let input = if explicit_crew(activity_input).is_some() {
+    let selected = if explicit_crew(activity_input).is_some() {
         activity_input
     } else {
         run_input
     };
-    let config = host.agent_crew_config_for_input(input)?;
+    let input = with_run_crew_allowlist(selected, run_input);
+    let config = host.agent_crew_config_for_input(&input)?;
     Ok(config
         .as_ref()
         .map(|config| resolve_from_config(config, inline)))
+}
+
+/// Carry the run's crew allowlist onto whichever input selects the crew.
+///
+/// [ORB-11242] An activity that names its own crew — including the
+/// `workflow.system_crew` injection below — would otherwise be resolved from
+/// an input that never saw the run's restriction, which is exactly how a
+/// system override reaches a provider the operator excluded. The run input is
+/// the authority and always overwrites, so an activity input cannot widen it.
+fn with_run_crew_allowlist(selected: &Value, run_input: &Value) -> Value {
+    let Some(allowed) = run_input.get(ALLOWED_CREWS_KEY) else {
+        return selected.clone();
+    };
+    let mut input = selected.clone();
+    if let Some(object) = input.as_object_mut() {
+        object.insert(ALLOWED_CREWS_KEY.to_string(), allowed.clone());
+    }
+    input
 }
 
 /// Add the configured system crew to an activity input that explicitly opts
@@ -84,10 +110,12 @@ pub(crate) fn resolve_from_config(
     ResolvedAgentSettings {
         provider: config.provider.unwrap_or(inline.provider),
         model: config.model.clone().or_else(|| inline.model.clone()),
+        reasoning_effort: config.reasoning_effort.or(inline.reasoning_effort),
     }
 }
 
 pub fn apply_resolved_settings(spec: &mut AgentLoopSpec, resolved: &ResolvedAgentSettings) {
     spec.provider = resolved.provider;
     spec.model = resolved.model.clone();
+    spec.reasoning_effort = resolved.reasoning_effort;
 }

@@ -11,5 +11,6 @@ pub(crate) mod task_reservation_store;
 pub(crate) mod tool_store;
 pub(crate) mod v2_audit_store;
 
+pub(crate) mod automation;
 #[cfg(test)]
 pub(crate) mod tests;

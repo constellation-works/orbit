@@ -17,7 +17,7 @@
 //
 // Also exports parseHashRoute for symmetry (used only internally today).
 
-import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors } from './common.js';
+import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors } from './common.js';
 import { renderRuns } from './runs.js';
 
 const $ = (id) => document.getElementById(id);
@@ -41,7 +41,7 @@ function markWorkspaceSelectorScope(fleetWide) {
 // being diagnostics-shaped, now routes as `#diagnostics/scoreboard`.
 const TABS = ["tasks", "audit", "diagnostics", "operations", "knowledge", "run-detail"];
 const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "reliability", "scoreboard"];
-const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];
+const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "auto-drain"];
 // ORB-10444/ORB-10588: subtabs that replace the two-column diagnostics layout
 // with their own full-width <main>, keyed by the element they reveal.
 const DIAG_FULL_WIDTH_MAINS = {
@@ -126,18 +126,12 @@ function setDiagSubtabImpl(ctx, name) {
     return;
   }
 
-  // ORB-00044: in the aggregate "All workspaces" view the diagnostics fetches
-  // are skipped (activeRefreshJobs), so a subtab switch must not repaint the
-  // previous workspace's stale rows over the placeholder — render the
-  // placeholder for the now-visible body instead.
+  // Runs remains live in the aggregate view. Other per-workspace diagnostics
+  // must keep their placeholder and never repaint a prior workspace's rows.
   if (name === "runs") {
     $("diag-body").style.display = "none";
     $("runs-body").style.display = "block";
-    if (isAggregateView()) {
-      renderPanelPlaceholder("runs-body");
-    } else {
-      renderRuns(ctx.getLastRuns ? ctx.getLastRuns() : []);
-    }
+    renderRuns(ctx.getLastRuns ? ctx.getLastRuns() : []);
   } else {
     $("diag-body").style.display = "block";
     $("runs-body").style.display = "none";
@@ -157,8 +151,10 @@ function setOperationsSubtabImpl(ctx, name) {
   }
   const routines = $("operations-routines-main");
   const autoTasks = $("operations-auto-tasks-main");
+  const autoDrain = $("operations-auto-drain-main");
   if (routines) routines.hidden = name !== "routines";
   if (autoTasks) autoTasks.hidden = name !== "auto-tasks";
+  if (autoDrain) autoDrain.hidden = name !== "auto-drain";
 }
 
 function setKnowledgeSubtabImpl(ctx, name) {
@@ -299,7 +295,13 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   if (opts.refresh !== false && (!hashChanged || !shouldUpdateHash)) ctx.refreshDashboard();
 }
 
-function navigateToRunImpl(ctx, runId) {
+function navigateToRunImpl(ctx, runId, workspaceId = null) {
+  if (workspaceId) {
+    setWorkspace(workspaceId);
+    persistScopeToUrl();
+    const selector = $("workspace-select");
+    if (selector) selector.value = workspaceId;
+  }
   ctx.setRunId(runId);
   ctx.setExpandedSteps(new Set());
   ctx.setRunDetail(null);
@@ -368,9 +370,9 @@ export function setActiveTab(raw, opts = {}) {
   return setActiveTabImpl(ctx, raw, opts);
 }
 
-export function navigateToRun(runId) {
+export function navigateToRun(runId, workspaceId = null) {
   const ctx = getCtx();
-  return navigateToRunImpl(ctx, runId);
+  return navigateToRunImpl(ctx, runId, workspaceId);
 }
 
 export function initTabs() {

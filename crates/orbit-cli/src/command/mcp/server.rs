@@ -41,6 +41,7 @@ pub(super) fn serve_mcp_stdio(
     authority: McpSessionAuthority,
     bound_workspace: Option<String>,
     acceptance: SshAcceptance,
+    bound_orchestrator: Option<String>,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root()?;
     let policy = orbit_mcp::mcp_serve_session_policy(
@@ -54,6 +55,7 @@ pub(super) fn serve_mcp_stdio(
         remote_caller_machine_id,
         policy,
         bound_workspace,
+        bound_orchestrator,
     )?;
     block_on_server(orbit_mcp::serve_stdio_with_context(host, session_context))
 }
@@ -66,7 +68,9 @@ pub(super) fn serve_mcp_stdio(
 /// machine-global destinations file, whose duplicate-`machine_id` check runs
 /// here, before any tool is advertised. A missing or empty file is a valid
 /// local-only configuration.
-pub(super) fn serve_mcp_federated_stdio() -> Result<(), OrbitError> {
+pub(super) fn serve_mcp_federated_stdio(
+    bound_orchestrator: Option<String>,
+) -> Result<(), OrbitError> {
     let global_root = resolve_global_root()?;
     let remotes = federated::load_destinations(&federated::destinations_path(&global_root))?;
     // The mux is a client to each remote, and identifies itself with the same
@@ -75,11 +79,17 @@ pub(super) fn serve_mcp_federated_stdio() -> Result<(), OrbitError> {
     // why it composes a local policy: each destination caps the mux
     // independently with its own callers file, and the mux is not a
     // destination for its own request [ORB-11052].
-    let identity = orbit_mcp::mcp_server_identity(
+    let mut identity = orbit_mcp::mcp_server_identity(
         &global_root,
         None,
         &SessionCapabilityPolicy::local(McpSessionAuthority::Agent),
     )?;
+    // The mux binds no workspace, but it does carry one attribution default.
+    // Local destinations read it from this context; remote ones are told in
+    // their own argv, because a routed SSH session forwards no context
+    // [ORB-11313].
+    let bound_orchestrator = normalized_selector(bound_orchestrator);
+    identity.session_context.orchestrator = bound_orchestrator.clone();
     let destinations = federated::federated_membership(
         identity.process_machine_id.clone(),
         identity.process_host_id.clone(),
@@ -104,6 +114,7 @@ pub(super) fn serve_mcp_federated_stdio() -> Result<(), OrbitError> {
             identity.process_machine_id.clone(),
             federated::DEFAULT_PROBE_TIMEOUT,
             federated::DEFAULT_ROUTED_DELIVERY_TIMEOUT,
+            bound_orchestrator,
         )),
     );
     let host: Arc<dyn McpHost> = Arc::new(federated::FederatedMcpHost::new(
@@ -146,6 +157,7 @@ pub(super) fn serve_mcp_listener(
         None,
         SessionCapabilityPolicy::local(McpSessionAuthority::Agent),
         None,
+        None,
     )?;
     block_on_server(async move {
         let listener = McpListener::bind(addr, exposure, host, session_context).await?;
@@ -172,14 +184,12 @@ fn compose_server(
     remote_caller_machine_id: Option<String>,
     policy: SessionCapabilityPolicy,
     bound_workspace: Option<String>,
+    bound_orchestrator: Option<String>,
 ) -> Result<(Arc<dyn McpHost>, ToolSessionContext), OrbitError> {
     let mut identity =
         orbit_mcp::mcp_server_identity(&global_root, remote_caller_machine_id, &policy)?;
-    identity.session_context.workspace = bound_workspace
-        .as_deref()
-        .map(str::trim)
-        .filter(|selector| !selector.is_empty())
-        .map(ToOwned::to_owned);
+    identity.session_context.workspace = normalized_selector(bound_workspace);
+    identity.session_context.orchestrator = normalized_selector(bound_orchestrator);
     let host = Arc::new(ServerMcpHost::new(
         global_root,
         identity.process_machine_id,
@@ -187,6 +197,16 @@ fn compose_server(
         policy,
     ));
     Ok((host, identity.session_context))
+}
+
+/// Reduce a launch-time selector to the value a session should carry, so an
+/// omitted flag and a whitespace-only one are the same absent default.
+fn normalized_selector(value: Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn block_on_server<F>(server: F) -> Result<(), OrbitError>

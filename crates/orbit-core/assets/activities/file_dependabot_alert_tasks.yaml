@@ -9,7 +9,12 @@ spec:
     Dependabot, Code scanning, and secret scanning snapshot. Preserve
     Dependabot clustering, severity filtering, and PR skips; dedupe the other
     families by repository and alert number; and enforce one max_tasks bound
-    across all families. Filed tasks require no tools.
+    across all families. Exact generated-key tags remain the fast path, then a
+    shared high-confidence material coverage check finds untagged still-open
+    tasks. Skips name the covering task and bounded match evidence; closed
+    historical tasks and superficial similarities do not suppress a current
+    alert. Duplicate-check failures are bounded retryable errors and happen
+    before any task is filed. Filed tasks require no tools.
   input_schema_json:
     type: object
     required: [dependabot_snapshot]
@@ -48,6 +53,21 @@ spec:
         type: array
       skipped_existing:
         type: array
+        items:
+          type: object
+          required: [family, key, task_id, match_kind, match_evidence]
+          properties:
+            family:
+              type: string
+            key:
+              type: string
+            task_id:
+              type: string
+            match_kind:
+              type: string
+              enum: [exact_key, material_coverage]
+            match_evidence:
+              type: object
       skipped_dependabot_pr:
         type: array
       skipped_over_cap:

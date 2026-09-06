@@ -12,7 +12,7 @@ Orbit is pre-1.0 and ships from `main`. Security fixes land on `main` and the mo
 
 ## Reporting a Vulnerability
 
-Please report security issues privately via GitHub: open the repository's **Security** tab and choose **Report a vulnerability** ([private vulnerability reporting](https://github.com/danieljhkim/orbit/security/advisories/new)).
+Please report security issues privately via GitHub: open the repository's **Security** tab and choose **Report a vulnerability** ([private vulnerability reporting](https://github.com/constellation-works/orbit/security/advisories/new)).
 
 Do **not** open a public issue, pull request, or discussion for suspected vulnerabilities.
 
@@ -95,6 +95,20 @@ provider carve-out, then the activity's own negated `read` rules, so an
 failing run says which case it hit: Orbit attaches its own attribution to the
 provider's misleading "expired" message, and only recommends re-authenticating
 when the credential really was reachable.
+
+**Sandboxed Codex uses a public file-backed CA bundle on macOS.** The system
+Keychain read denies above prevent Codex's rustls WebSocket client from
+completing native-root discovery even though its HTTPS backend can still
+connect. For a Codex child under `macos-sandbox-exec`, Orbit preserves an
+explicit non-empty `CODEX_CA_CERTIFICATE` first and `SSL_CERT_FILE` second; when neither
+is present, it sets `CODEX_CA_CERTIFICATE=/etc/ssl/cert.pem`. Orbit verifies
+that the selected path is a readable file before launching the child and fails
+with the variable and path when it is not. This supplies public trust anchors;
+it does not disable TLS verification or re-allow `/Library/Keychains`,
+`/System/Library/Keychains`, `~/Library/Keychains`, or any other credential
+directory. Activity `denyRead` rules remain later SBPL clauses and can still
+deny the selected bundle. Other providers, Linux, and bare Codex invocations do
+not receive this Orbit-managed default.
 
 **Environment forwarding to sandboxed/subprocess agents is name-based, not
 value-shaped.** Orbit filters ambient environment variables passed to

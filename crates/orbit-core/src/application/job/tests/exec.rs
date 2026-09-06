@@ -4,14 +4,16 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod completion;
+
 use chrono::Utc;
 use orbit_engine::{
-    DispatchError, JobOutcome, ResolvedCliExecutor, RuntimeHost, V2AuditWriter,
+    DispatchError, JobOutcome, ResolvedCliExecutor, RuntimeHost, TaskActivityUpdate, V2AuditWriter,
     execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
 use orbit_store::{InvocationQuery, TaskReservationReleaseReason, V2AuditEventFilter};
 use orbit_tools::{FsAuditLogger, ToolContext};
-use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     ActivityV2Spec, ExecutorDef, ExecutorType, JobRunState, JobV2Step, JobV2StepBody,
@@ -138,6 +140,17 @@ pub(super) fn try_execute_named_job(
     run_id: &str,
 ) -> Result<JobOutcome, DispatchError> {
     let job = resolved_job(runtime, job_name);
+    try_execute_job(runtime, repo_root, host, job, input, run_id)
+}
+
+pub(super) fn try_execute_job(
+    runtime: &OrbitRuntime,
+    repo_root: &Path,
+    host: &dyn RuntimeHost,
+    job: orbit_types::workflow::activity_job::JobV2,
+    input: Value,
+    run_id: &str,
+) -> Result<JobOutcome, DispatchError> {
     let writer = V2AuditWriter::with_disk_sinks(
         &runtime.paths().audit_dir,
         runtime
@@ -913,6 +926,21 @@ impl RuntimeHost for ScriptedEpicHost<'_> {
             proc_allowed_programs,
         )
     }
+
+    // `task_complete` runs as the real production activity (it is never
+    // retargeted to a scripted action), so it needs a real task to read and
+    // mutate rather than a scripted echo.
+    fn get_task(&self, task_id: &str) -> Result<Task, orbit_common::OrbitError> {
+        self.runtime.get_task(task_id)
+    }
+
+    fn update_task_from_activity(
+        &self,
+        task_id: &str,
+        update: TaskActivityUpdate,
+    ) -> Result<Task, orbit_common::OrbitError> {
+        self.runtime.update_task_from_activity(task_id, update)
+    }
 }
 
 fn write_job(path: &Path, name: &str, action: &str) {
@@ -1388,6 +1416,54 @@ fn epic_pipeline_no_diff_skips_empty_pr_and_promotes_the_root() {
     assert_eq!(updates[0]["status"], "review");
 }
 
+/// [ORB-11214] `commit_delivery` sets `allow_empty: true` unconditionally, so
+/// an ordinary untagged epic root can report `skipped_no_diff_expected: true`
+/// with no `no-diff-expected` tag involved at all — unlike task_pr_pipeline,
+/// where the same signal is tag-derived. A `--complete` run must still finish
+/// this epic root, not fail on a tag guard the operator never asked for. This
+/// drives `complete_pr_no_diff`'s real activity (never scripted) against a
+/// real, untagged task to prove the completion itself succeeds, not just that
+/// the pipeline steps are shaped correctly.
+#[test]
+fn epic_pipeline_completes_an_untagged_no_diff_root_when_authorized() {
+    let (_root, runtime, repo_root, global_root) = test_runtime();
+    seed_default_catalogs(&global_root);
+    stub_epic_finisher(&global_root);
+    let epic_task_id = seed_gate_task(&runtime, &repo_root, TaskStatus::Review);
+    assert!(
+        runtime
+            .get_task(&epic_task_id)
+            .expect("seeded epic root")
+            .tags
+            .is_empty(),
+        "the epic root under test must not carry the no-diff-expected tag"
+    );
+    let host = ScriptedEpicHost::new(&runtime, Vec::new()).no_diff();
+
+    let outcome = try_execute_full_epic_job(
+        &runtime,
+        &repo_root,
+        &host,
+        json!({ "epic_task_id": epic_task_id, "completion": "done" }),
+        "jrun-scripted-epic-no-diff-complete",
+    )
+    .expect(
+        "an untagged no-diff epic root must complete under authorization, not demand the \
+         no-diff-expected tag pr_complete requires",
+    );
+
+    assert!(outcome.success);
+    assert!(host.inputs_for("pr_open").is_empty());
+    assert!(host.inputs_for("git_push").is_empty());
+    assert_eq!(
+        runtime
+            .get_task(&epic_task_id)
+            .expect("completed epic root")
+            .status,
+        TaskStatus::Done
+    );
+}
+
 #[test]
 fn epic_pipeline_fails_closed_when_descendants_remain_and_names_them() {
     let (_root, runtime, repo_root, global_root) = test_runtime();
@@ -1461,6 +1537,16 @@ fn seed_failed_triage_candidate(runtime: &OrbitRuntime, title: &str) -> String {
         .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
         .expect("mark failed pipeline run running");
     runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some(Some(run.run_id.clone())),
+                ..Default::default()
+            },
+        )
+        .expect("couple blocked task to failed run");
+    runtime
         .finalize_job_run_with_reservation_cleanup(
             &run.run_id,
             JobRunState::Failed,
@@ -1469,16 +1555,6 @@ fn seed_failed_triage_candidate(runtime: &OrbitRuntime, title: &str) -> String {
             TaskReservationReleaseReason::RunTerminal,
         )
         .expect("finalize failed pipeline run");
-    runtime
-        .update_task(
-            &task.id,
-            TaskUpdateParams {
-                status: Some(TaskStatus::Blocked),
-                job_run_id: Some(Some(run.run_id)),
-                ..Default::default()
-            },
-        )
-        .expect("couple blocked task to failed run");
     task.id
 }
 

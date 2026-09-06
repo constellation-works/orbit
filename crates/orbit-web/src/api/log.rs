@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::thread;
@@ -62,6 +63,20 @@ impl LogStreamGate {
 fn global_log_stream_gate() -> &'static LogStreamGate {
     static GATE: OnceLock<LogStreamGate> = OnceLock::new();
     GATE.get_or_init(|| LogStreamGate::new(LOG_STREAM_MAX_CONCURRENT))
+}
+
+/// Set once a shutdown signal is received (see [`crate::shutdown_signal`]), so
+/// every open (and future) `/api/log/stream` polling thread closes on its next
+/// tick instead of running until the client disconnects. An open stream that
+/// outlives the client is exactly the ownership gap that let a live restart
+/// hang past `orbit-web.service`'s `TimeoutStopUSec` until systemd's SIGKILL
+/// (ORB-11246): the stream is this handler's resource, so it must close
+/// itself, not wait to be told by a client that may not respond in time.
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Tell every open (and future) log-stream polling thread to close now.
+pub(super) fn request_shutdown() {
+    SHUTTING_DOWN.store(true, Ordering::Relaxed);
 }
 
 pub(super) async fn get_log(Query(q): Query<LogQuery>) -> Response {
@@ -166,7 +181,7 @@ fn spawn_log_sse_frames(
         let mut offset = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let mut leftover = String::new();
         loop {
-            if tx.is_closed() {
+            if tx.is_closed() || SHUTTING_DOWN.load(Ordering::Relaxed) {
                 return;
             }
             match read_appended_log_events(&path, &filters, &mut offset, &mut leftover) {

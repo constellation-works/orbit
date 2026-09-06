@@ -158,6 +158,43 @@ fn repeated_reopens_do_not_make_a_stable_open_task_look_draining() {
     assert!(report.verdict().starts_with("flat"), "{}", report.verdict());
 }
 
+/// A task that reaches `done` and is later `archived` (routine housekeeping,
+/// not a reopen) must contribute exactly one outflow event, not two: the
+/// archive is a reclassification of an already-departed task, not a second
+/// departure. ORB-11206.
+#[test]
+fn done_then_archived_contributes_a_single_outflow_event() {
+    let report = compute_flow(
+        &[status_history(
+            1,
+            &[(9, TaskStatus::Done), (16, TaskStatus::Archived)],
+        )],
+        at(21),
+        Duration::days(7),
+        3,
+    );
+
+    // Bucket 0: [day 0, day 7) — the task is filed.
+    assert_eq!(report.buckets[0].filed, 1);
+    assert_eq!(report.buckets[0].closed, 0);
+    assert_eq!(report.buckets[0].dropped, 0);
+    // Bucket 1: [day 7, day 14) — the `Done` transition is the one outflow event.
+    assert_eq!(report.buckets[1].closed, 1);
+    assert_eq!(report.buckets[1].dropped, 0);
+    // Bucket 2: [day 14, day 21) — the later `Archived` transition is a
+    // relabeling of the same departure, not a second one.
+    assert_eq!(report.buckets[2].closed, 0);
+    assert_eq!(report.buckets[2].dropped, 0);
+
+    assert_eq!(report.filed, 1);
+    assert_eq!(report.reopened, 0);
+    assert_eq!(report.closed, 1);
+    assert_eq!(report.dropped, 0);
+    assert_eq!(report.net(), 0);
+    assert_eq!(report.open_now, 0);
+    assert!(report.verdict().starts_with("flat"), "{}", report.verdict());
+}
+
 #[test]
 fn a_task_created_after_a_window_is_not_open_during_it() {
     let report = compute_flow(&[open(20)], at(21), Duration::days(7), 2);

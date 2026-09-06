@@ -220,8 +220,14 @@ impl OrbitRuntime {
         // a run condemned to `interrupted` while it was still working and then
         // reporting the success it actually reached. That must not vanish, so
         // it is recorded on the run instead of discarded. See
-        // `command::job::run::conflict` for why the recorded state still wins.
-        if let Some(prior) = prior_state.filter(|prior| prior.is_terminal() && *prior != state) {
+        // `application::job::run::conflict` for why the recorded state still wins.
+        // A cancellation request that loses to a worker's terminal outcome is
+        // reported to the caller as `already_terminal`; it did not produce a
+        // second durable outcome. The inverse remains a real contradiction: a
+        // worker reporting success/failure after `cancelled` is still recorded.
+        if let Some(prior) = prior_state.filter(|prior| {
+            prior.is_terminal() && *prior != state && state != JobRunState::Cancelled
+        }) {
             self.record_terminal_outcome_conflict(run_id, prior, state, finished_at);
         }
         if state.is_terminal() {

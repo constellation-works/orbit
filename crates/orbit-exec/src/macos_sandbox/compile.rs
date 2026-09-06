@@ -46,6 +46,11 @@ pub fn compile_macos_sandbox_profile(
     let grok_home = std::env::var_os("GROK_HOME");
     let copilot_home = std::env::var_os("COPILOT_HOME");
     let xdg_cache_home = std::env::var_os("XDG_CACHE_HOME");
+    let pi_coding_agent_dir = std::env::var_os("PI_CODING_AGENT_DIR");
+    let xdg_data_home = std::env::var_os("XDG_DATA_HOME");
+    let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
+    let xdg_state_home = std::env::var_os("XDG_STATE_HOME");
+    let opencode_config_dir = std::env::var_os("OPENCODE_CONFIG_DIR");
     compile_macos_sandbox_profile_with_env(
         rules,
         provider,
@@ -56,6 +61,11 @@ pub fn compile_macos_sandbox_profile(
             grok_home: grok_home.as_deref(),
             copilot_home: copilot_home.as_deref(),
             xdg_cache_home: xdg_cache_home.as_deref(),
+            pi_coding_agent_dir: pi_coding_agent_dir.as_deref(),
+            xdg_data_home: xdg_data_home.as_deref(),
+            xdg_config_home: xdg_config_home.as_deref(),
+            xdg_state_home: xdg_state_home.as_deref(),
+            opencode_config_dir: opencode_config_dir.as_deref(),
         },
     )
 }
@@ -71,6 +81,11 @@ pub(super) struct SandboxCompileEnv<'a> {
     pub(super) grok_home: Option<&'a OsStr>,
     pub(super) copilot_home: Option<&'a OsStr>,
     pub(super) xdg_cache_home: Option<&'a OsStr>,
+    pub(super) pi_coding_agent_dir: Option<&'a OsStr>,
+    pub(super) xdg_data_home: Option<&'a OsStr>,
+    pub(super) xdg_config_home: Option<&'a OsStr>,
+    pub(super) xdg_state_home: Option<&'a OsStr>,
+    pub(super) opencode_config_dir: Option<&'a OsStr>,
 }
 
 pub(super) fn compile_macos_sandbox_profile_with_env(
@@ -85,6 +100,11 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
         grok_home,
         copilot_home,
         xdg_cache_home,
+        pi_coding_agent_dir,
+        xdg_data_home,
+        xdg_config_home,
+        xdg_state_home,
+        opencode_config_dir,
     } = env;
     let mut out = String::new();
     out.push_str("(version 1)\n");
@@ -171,6 +191,39 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
             "(allow file-write* (subpath \"{}\"))\n",
             super::sbpl_filter::sbpl_escape(&state_dir.display().to_string())
         ));
+    }
+    // Pi's agent directory holds `/login` credentials, settings, saved project
+    // trust decisions, installed packages, and sessions. Grant it only to the
+    // active Pi executor; API-key auth is an explicit environment opt-in and
+    // needs no additional path. [ORB-11296]
+    if Provider::parse(provider).ok() == Some(Provider::Pi)
+        && let Some(state_dir) = super::provider_dirs::pi_state_dir(home, pi_coding_agent_dir)
+    {
+        out.push_str(&format!(
+            "(allow file-write* (subpath \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&state_dir.display().to_string())
+        ));
+    }
+    // OpenCode creates its XDG data/config/state roots during startup, before
+    // it reads Orbit's envelope, so they are granted only to the active
+    // OpenCode executor. `auth.json` lives in the data root; API-key auth is an
+    // explicit environment opt-in and needs no additional path. [ORB-11295]
+    if Provider::parse(provider).ok() == Some(Provider::Opencode) {
+        for state_dir in
+            super::provider_dirs::opencode_state_dirs(super::provider_dirs::OpencodeDirEnv {
+                home,
+                xdg_data_home,
+                xdg_config_home,
+                xdg_state_home,
+                xdg_cache_home,
+                opencode_config_dir,
+            })
+        {
+            out.push_str(&format!(
+                "(allow file-write* (subpath \"{}\"))\n",
+                super::sbpl_filter::sbpl_escape(&state_dir.display().to_string())
+            ));
+        }
     }
     super::provider_dirs::emit_claude_home_json_allows(home, claude_config_dir, &mut out);
     super::provider_dirs::emit_grok_state_file_allows(home, grok_home, &mut out);

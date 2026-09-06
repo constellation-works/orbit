@@ -332,3 +332,394 @@ fn failure_activity_unavailable_after_admission_preserves_original_step_error() 
         "the terminal hook is still attempted once"
     );
 }
+
+// --------------------------------------------------------------------------
+// [ORB-11325] A `when:` / `break_when:` condition may only read the output
+// of a step that always runs — see design doc §8.2.
+// --------------------------------------------------------------------------
+
+fn step_with_when(id: &str, when: &str, action: &str) -> JobV2Step {
+    JobV2Step {
+        id: id.to_string(),
+        when: Some(when.to_string()),
+        retry: None,
+        recovery_activity: None,
+        resolved_recovery_activity: None,
+        body: JobV2StepBody::Target(deterministic_target(action)),
+    }
+}
+
+#[test]
+fn validate_job_rejects_when_reading_output_of_a_conditionally_run_step() {
+    let conditional = step_with_when("maybe_run", "{{ input.flag }} == true", "maybe_run_action");
+    let reader = step_with_when(
+        "reader",
+        "{{ steps.maybe_run.output.done }} == true",
+        "reader_action",
+    );
+
+    let err = validate_job(&job_with_steps(vec![conditional, reader]))
+        .expect_err("reading a conditional step's output must be rejected");
+
+    match &err {
+        DispatchError::JobValidation(message) => {
+            assert!(
+                message.contains("reader"),
+                "message must name the reading step: {message}"
+            );
+            assert!(
+                message.contains("maybe_run"),
+                "message must name the conditional step: {message}"
+            );
+        }
+        other => panic!("expected JobValidation, got {other:?}"),
+    }
+}
+
+#[test]
+fn validate_job_accepts_when_reading_output_of_an_always_run_step() {
+    let always = target_step("always_run", "always_run_action");
+    let reader = step_with_when(
+        "reader",
+        "{{ steps.always_run.output.done }} == true",
+        "reader_action",
+    );
+
+    assert!(
+        validate_job(&job_with_steps(vec![always, reader])).is_ok(),
+        "reading an always-run step's output must be accepted"
+    );
+}
+
+#[test]
+fn validate_job_rejects_break_when_reading_output_of_a_conditionally_run_step_in_a_loop() {
+    let conditional = step_with_when("maybe_run", "{{ input.flag }} == true", "maybe_run_action");
+    let loop_step = JobV2Step {
+        id: "loop_step".to_string(),
+        when: None,
+        retry: None,
+        recovery_activity: None,
+        resolved_recovery_activity: None,
+        body: JobV2StepBody::Loop {
+            loop_: LoopBlock {
+                items: None,
+                max_iterations: 3,
+                break_when: Some("{{ steps.maybe_run.output.done }} == true".to_string()),
+                steps: vec![conditional],
+            },
+        },
+    };
+
+    let err = validate_job(&job_with_steps(vec![loop_step]))
+        .expect_err("break_when reading a conditional step's output must be rejected");
+
+    assert!(
+        matches!(err, DispatchError::JobValidation(ref message) if message.contains("maybe_run")),
+        "got {err:?}"
+    );
+}
+
+// --------------------------------------------------------------------------
+// [ORB-11346] A parent's `when:` skips its whole body, so "always runs" is an
+// ancestor-chain property, not a per-step flag.
+// --------------------------------------------------------------------------
+
+/// The reproducer shape: a container guarded by `when:` whose nested step
+/// carries no guard of its own.
+fn conditional_parent_with_unguarded_child(parent: JobV2Step) -> JobV2Step {
+    JobV2Step {
+        when: Some("{{ input.run }} == true".to_string()),
+        ..parent
+    }
+}
+
+#[test]
+fn a_false_parent_guard_leaves_its_nested_step_with_no_recorded_output() {
+    // The runtime fact the validator has to model: `run_step` returns before
+    // running the body, so `produce` never records anything and a later
+    // reader — here an ordinary input template, which validation does not
+    // inspect — fails on the false branch.
+    let gate = conditional_parent_with_unguarded_child(parallel_step(
+        "gate",
+        JoinMode::All,
+        vec![target_step("produce", "produce_action")],
+    ));
+    let mut reader = target_step("reader", "reader_action");
+    reader.body = JobV2StepBody::Target(TargetStep {
+        default_input: Some(json!({ "done": "{{ steps.produce.output.done }}" })),
+        ..deterministic_target("reader_action")
+    });
+    let job = job_with_steps(vec![gate, reader]);
+    let host = ScriptedHost::new([
+        ("produce_action", vec![Action::Ok(json!({ "done": true }))]),
+        ("reader_action", vec![Action::Ok(json!({}))]),
+    ]);
+    let writer = std::sync::Arc::new(test_writer("run-false-parent"));
+
+    let err = execute_job(
+        &job,
+        json!({ "run": false }),
+        "run-false-parent",
+        writer,
+        &host,
+    )
+    .expect_err("the reader must fail once the parent guard skipped `produce`");
+
+    assert!(
+        err.to_string()
+            .contains("no data recorded for step 'produce'"),
+        "expected the skipped-step template failure, got {err:?}"
+    );
+    assert_eq!(
+        host.call_count("produce_action"),
+        0,
+        "a false parent guard must skip the nested step entirely"
+    );
+}
+
+#[test]
+fn validate_job_rejects_when_reading_a_step_nested_in_a_conditional_parallel() {
+    let gate = conditional_parent_with_unguarded_child(parallel_step(
+        "gate",
+        JoinMode::All,
+        vec![target_step("produce", "produce_action")],
+    ));
+    let reader = step_with_when(
+        "reader",
+        "{{ steps.produce.output.done }} == true",
+        "reader_action",
+    );
+
+    let err = validate_job(&job_with_steps(vec![gate, reader]))
+        .expect_err("reading a step nested under a conditional parallel must be rejected");
+
+    match &err {
+        DispatchError::JobValidation(message) => {
+            assert!(
+                message.contains("reader"),
+                "message must name the reading step: {message}"
+            );
+            assert!(
+                message.contains("produce"),
+                "message must name the referenced step: {message}"
+            );
+            assert!(
+                message.contains("gate"),
+                "message must name the guarding ancestor: {message}"
+            );
+        }
+        other => panic!("expected JobValidation, got {other:?}"),
+    }
+}
+
+#[test]
+fn validate_job_rejects_when_reading_a_step_nested_in_a_conditional_loop() {
+    let gate = conditional_parent_with_unguarded_child(loop_step(
+        "gate",
+        None,
+        3,
+        None,
+        vec![target_step("produce", "produce_action")],
+    ));
+    let reader = step_with_when(
+        "reader",
+        "{{ steps.produce.output.done }} == true",
+        "reader_action",
+    );
+
+    let err = validate_job(&job_with_steps(vec![gate, reader]))
+        .expect_err("reading a step nested under a conditional loop must be rejected");
+
+    assert!(
+        matches!(&err, DispatchError::JobValidation(message)
+            if message.contains("produce") && message.contains("gate")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn validate_job_rejects_when_reading_a_worker_nested_in_a_conditional_fan_out() {
+    let gate = conditional_parent_with_unguarded_child(fanout_step(
+        "gate",
+        "{{ input.items }}",
+        2,
+        target_step("produce", "produce_action"),
+        JoinMode::All,
+        None,
+    ));
+    let reader = step_with_when(
+        "reader",
+        "{{ steps.produce.output.done }} == true",
+        "reader_action",
+    );
+
+    let err = validate_job(&job_with_steps(vec![gate, reader]))
+        .expect_err("reading a worker nested under a conditional fan-out must be rejected");
+
+    assert!(
+        matches!(&err, DispatchError::JobValidation(message)
+            if message.contains("produce") && message.contains("gate")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn validate_job_accepts_when_reading_a_step_under_an_always_run_ancestor_chain() {
+    // No ancestor carries a guard, so `produce` runs whenever the job runs —
+    // the shape every shipped asset relies on.
+    let outer = parallel_step(
+        "outer",
+        JoinMode::All,
+        vec![loop_step(
+            "inner",
+            None,
+            2,
+            None,
+            vec![target_step("produce", "produce_action")],
+        )],
+    );
+    let reader = step_with_when(
+        "reader",
+        "{{ steps.produce.output.done }} == true",
+        "reader_action",
+    );
+
+    assert!(
+        validate_job(&job_with_steps(vec![outer, reader])).is_ok(),
+        "an unguarded ancestor chain must stay valid"
+    );
+}
+
+#[test]
+fn validate_job_accepts_a_reader_that_shares_every_guard_with_the_step_it_reads() {
+    // [ORB-11346] / [ORB-11361] `break_when` is evaluated after the body, so
+    // it may read an earlier body step; a later sibling `when:` only runs
+    // when the same enclosing guard passed. A guard both sides sit under
+    // skips them together and can never strand the reader.
+    let mut gate = loop_step(
+        "gate",
+        None,
+        3,
+        Some("{{ steps.produce.output.done }} == true"),
+        vec![
+            target_step("produce", "produce_action"),
+            step_with_when(
+                "body_reader",
+                "{{ steps.produce.output.done }} == false",
+                "reader_action",
+            ),
+        ],
+    );
+    gate.when = Some("{{ input.run }} == true".to_string());
+
+    assert!(
+        validate_job(&job_with_steps(vec![gate])).is_ok(),
+        "a guard shared by reader and referenced step must stay valid"
+    );
+}
+
+// --------------------------------------------------------------------------
+// [ORB-11361] A step's `when:` runs before its body, so it cannot read an
+// output that only that body produces — including a nested child or the
+// step's own output. `break_when` stays after-body (covered above).
+// --------------------------------------------------------------------------
+
+fn container_when_reading_nested(parent: JobV2Step) -> JobV2Step {
+    JobV2Step {
+        when: Some("{{ steps.produce.output.done }} == true".to_string()),
+        ..parent
+    }
+}
+
+#[test]
+fn validate_job_rejects_container_when_reading_a_nested_parallel_output() {
+    let gate = container_when_reading_nested(parallel_step(
+        "gate",
+        JoinMode::All,
+        vec![target_step("produce", "produce_action")],
+    ));
+
+    let err = validate_job(&job_with_steps(vec![gate]))
+        .expect_err("a container when: must not read a nested output");
+
+    match &err {
+        DispatchError::JobValidation(message) => {
+            assert!(
+                message.contains("gate"),
+                "message must name the reading step: {message}"
+            );
+            assert!(
+                message.contains("produce"),
+                "message must name the referenced step: {message}"
+            );
+        }
+        other => panic!("expected JobValidation, got {other:?}"),
+    }
+}
+
+#[test]
+fn validate_job_rejects_container_when_reading_a_nested_loop_output() {
+    let gate = container_when_reading_nested(loop_step(
+        "gate",
+        None,
+        3,
+        None,
+        vec![target_step("produce", "produce_action")],
+    ));
+
+    let err = validate_job(&job_with_steps(vec![gate]))
+        .expect_err("a loop when: must not read a nested output");
+
+    assert!(
+        matches!(&err, DispatchError::JobValidation(message)
+            if message.contains("gate") && message.contains("produce")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn validate_job_rejects_container_when_reading_a_nested_fan_out_worker_output() {
+    let gate = container_when_reading_nested(fanout_step(
+        "gate",
+        "{{ input.items }}",
+        2,
+        target_step("produce", "produce_action"),
+        JoinMode::All,
+        None,
+    ));
+
+    let err = validate_job(&job_with_steps(vec![gate]))
+        .expect_err("a fan-out when: must not read a worker output");
+
+    assert!(
+        matches!(&err, DispatchError::JobValidation(message)
+            if message.contains("gate") && message.contains("produce")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn validate_job_rejects_when_reading_the_same_step_own_output() {
+    let self_reader = step_with_when(
+        "reader",
+        "{{ steps.reader.output.done }} == true",
+        "reader_action",
+    );
+
+    let err = validate_job(&job_with_steps(vec![self_reader]))
+        .expect_err("a step when: must not read its own output");
+
+    match &err {
+        DispatchError::JobValidation(message) => {
+            assert!(
+                message.contains("reader"),
+                "message must name the reading step: {message}"
+            );
+            assert!(
+                message.contains("steps.reader.output"),
+                "message must name the referenced output: {message}"
+            );
+        }
+        other => panic!("expected JobValidation, got {other:?}"),
+    }
+}

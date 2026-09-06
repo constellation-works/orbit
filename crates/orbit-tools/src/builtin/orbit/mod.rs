@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod auto_task;
 pub mod command;
 pub mod docs;
@@ -53,6 +54,12 @@ pub fn register(registry: &mut ToolRegistry) {
     // operation registry and registered from there.
     friction::register(registry);
     registry.register_mcp(task::add::OrbitTaskAddTool, McpToolScope::WorkspaceRequired);
+    // Attach and read are the two halves of one artifact surface: without a
+    // read verb an agent can store a reference it can never inspect again.
+    registry.register_mcp(
+        task::artifact_get::OrbitTaskArtifactGetTool,
+        McpToolScope::WorkspaceRequired,
+    );
     registry.register_mcp(
         task::artifact_put::OrbitTaskArtifactPutTool,
         McpToolScope::WorkspaceRequired,
@@ -72,6 +79,9 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.register_inactive(workspace_claim::OrbitWorkspaceClaimAcquireTool);
     registry.register_inactive(workspace_claim::OrbitWorkspaceClaimReleaseTool);
     registry.register_inactive(workspace_claim::OrbitWorkspaceClaimShowTool);
+    // Agent invocation is workspace-scoped: the admission is made against the
+    // checkout that owns it, and Core is where that decision lives.
+    registry.register_mcp(agent::OrbitAgentInvokeTool, McpToolScope::WorkspaceRequired);
     // Command execution is workspace-scoped; Core retains its domain and claim
     // validation.
     registry.register_mcp(
@@ -113,6 +123,10 @@ pub fn register(registry: &mut ToolRegistry) {
     );
     registry.register_mcp(
         workflow::OrbitWorkflowRunResumeTool,
+        McpToolScope::WorkspaceRequired,
+    );
+    registry.register_mcp(
+        workflow::OrbitWorkflowRunWorkersTool,
         McpToolScope::WorkspaceRequired,
     );
     registry.register_inactive(semantic::install::OrbitSemanticInstallTool);
@@ -296,6 +310,43 @@ pub(super) fn resolve_workspace_argument(
                 .to_string(),
         )),
     }
+}
+
+/// Apply the MCP session's configured orchestrator crew to a task-creation
+/// call that did not name one [ORB-11313].
+///
+/// Creation only. Attribution on an existing task is never rewritten from
+/// ambient session configuration, so `orbit.task.update` deliberately does
+/// not call this and existing records are never backfilled.
+///
+/// An explicit `orchestrator` on the call always wins; JSON `null` counts as
+/// absent, matching how every other optional field reads. The resolved name
+/// is written into the input rather than checked here: only the target
+/// workspace's crew registry knows which crews exist, and it rejects an
+/// unknown name instead of falling back to another crew.
+pub(super) fn apply_session_orchestrator_default(ctx: &ToolContext, input: &mut Value) {
+    if input
+        .get("orchestrator")
+        .is_some_and(|value| !value.is_null())
+    {
+        return;
+    }
+    let Some(session_orchestrator) = ctx
+        .session_context
+        .orchestrator
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let Some(object) = input.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "orchestrator".to_string(),
+        Value::String(session_orchestrator.to_string()),
+    );
 }
 
 fn set_input_workspace(input: &mut Value, workspace: &str) -> Result<(), OrbitError> {

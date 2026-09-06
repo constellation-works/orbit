@@ -1,0 +1,32 @@
+schemaVersion: 2
+kind: Executor
+metadata:
+  name: opencode
+spec:
+  executor_type: direct_agent
+  command: opencode
+  # OpenCode headless contract (opencode 1.18.29). Static flags only. The
+  # prompt is NOT passed here: `opencode run` reads piped stdin whenever stdin
+  # is not a TTY and uses it as the whole message when no positional
+  # `[message..]` is given, which keeps the Orbit execution envelope out of
+  # argv and therefore out of process listings and audit records. [ORB-11295]
+  args:
+    # Non-interactive subcommand. Without it the CLI starts its TUI.
+    - run
+    # Raw JSON event stream, one object per line, shaped
+    # `{type, timestamp, sessionID, ...}`. Orbit reads only the assistant
+    # `text` parts; see the `opencode` stdout adapter for why `tool_use` and
+    # `reasoning` frames are dropped rather than searched.
+    - --format
+    - json
+    # Required for unattended runs. Without it OpenCode *auto-rejects* every
+    # permission request and the turn cannot touch the worktree. This is the
+    # documented non-interactive analog of an interactive approval, not a
+    # security boundary: Orbit's OS sandbox remains the filesystem/network
+    # boundary and the activity `fsProfile` stays authoritative for the
+    # worktree.
+    - --auto
+  stdout_format: envelope
+  sandbox: macos-sandbox-exec
+  model_flag: "--model"
+  env: {}

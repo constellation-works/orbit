@@ -5,7 +5,8 @@ workspaces; the rest is periodic hygiene.
 
 ## Worktree garbage collection
 
-Every pipeline run gets a worktree. Nothing reclaims them automatically unless
+Implementation pipelines create worktrees; deterministic collection or filing
+jobs need not. Nothing reclaims them automatically unless
 you arrange it, so a workspace that ships on a schedule accumulates worktrees
 until the disk fills. **Enable this before, not after, scheduling ship traffic.**
 
@@ -56,7 +57,30 @@ through this surface — never by editing the store. The full diagnostic sequenc
 for a reservation blocking a run is in
 [common-failures.md](../common-failures.md).
 
-## Upgrades
+## Managed resources and upgrades
+
+```bash
+orbit workspace sync --check --json   # no writes; exit 3 means pending changes
+orbit workspace sync --json           # converge managed defaults
+orbit skill list
+orbit skill doctor
+orbit skill link                      # repair supported user skill symlinks
+```
+
+Run sync from an initialized, registered checkout after upgrading the binary.
+It reconciles both host-global and workspace-local managed assets, including
+skill references, jobs, activities, routines, and auto-task definitions.
+Provenance distinguishes untouched shipped content from local edits. Read
+`preserved` and `binding_drift` outcomes; a successful sync does not mean a
+customized override was overwritten. Never fabricate or edit the managed-asset
+manifest to force replacement. Review custom overrides against the installed
+catalog and update them deliberately.
+
+Sync updates managed files, not workspace ownership or task publication. The
+plugin skill bundle updates through its plugin distribution; global skill
+symlinks and a plugin installation are distinct delivery paths.
+
+## Database and layout upgrades
 
 ```bash
 orbit migrate               # inspect pending migrations without applying
@@ -123,6 +147,18 @@ Files under `.orbit/state/job-runs/`, `.orbit/state/audit/`, and
 warning disappear or a run look successful. If a run is wrong, fix the cause and
 re-run; the failed run stays as history.
 
-Task bundles can be moved deliberately, though — `orbit task export` and
+For a validated task snapshot and same-authority recovery, use
+[publication.md](publication.md). It does not back up logs, credentials, or
+scheduler state.
+
+Task bundles can also be moved deliberately — `orbit task export` and
 `orbit task import` handle portable archives, and `orbit task reindex` rebuilds
 the registry index from on-disk bundles after a restore.
+
+For archive migration, `orbit task export --output <archive.tar.zst> --ids <id>,<id>`
+selects tasks (omitting IDs exports all). `orbit task import <archive.tar.zst>`
+defaults to renumbering collisions and rewriting references; choose
+`--on-conflict fail` or `skip` deliberately when appropriate. Inspect the returned
+ID mapping. Import is a different operation from publication's strict
+same-authority, identical-retry recovery; do not substitute it to bypass a
+publication ownership or divergence error.

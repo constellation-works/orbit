@@ -38,6 +38,7 @@ mod artifact_paths;
 mod artifacts;
 mod crud;
 mod index;
+mod listing;
 mod query;
 mod relations;
 mod sequencing;

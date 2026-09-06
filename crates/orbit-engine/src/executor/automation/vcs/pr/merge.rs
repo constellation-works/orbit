@@ -15,6 +15,104 @@ use super::super::git::{base_sync_mode_from_input, git_command_success, git_outp
 use super::super::operations;
 use super::attribution::ship_done_attribution;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MergeStrategy {
+    Squash,
+    Rebase,
+    Merge,
+}
+
+/// Repository capabilities needed to request a permitted PR merge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct MergeCapabilities {
+    pub(super) strategy: MergeStrategy,
+    pub(super) auto_merge_allowed: bool,
+}
+
+impl MergeStrategy {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Squash => "squash",
+            Self::Rebase => "rebase",
+            Self::Merge => "merge",
+        }
+    }
+}
+
+pub(super) fn resolve_merge_strategy<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &str,
+    pr_number: &str,
+) -> Result<MergeStrategy, OrbitError> {
+    Ok(resolve_merge_capabilities(host, workspace_path, pr_number)?.strategy)
+}
+
+pub(super) fn resolve_merge_capabilities<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &str,
+    pr_number: &str,
+) -> Result<MergeCapabilities, OrbitError> {
+    let response = host.run_private_vcs_operation(
+        operations::PR_MERGE_CAPABILITIES,
+        json!({
+            "pr": pr_number,
+            "workspace_path": workspace_path,
+        }),
+    )?;
+    let repository = response.get("repository").ok_or_else(|| {
+        OrbitError::Execution(
+            "merge strategy resolution: private VCS response omitted repository capabilities"
+                .to_string(),
+        )
+    })?;
+    let capability = |key: &str| {
+        repository.get(key).and_then(Value::as_bool).ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "merge strategy resolution: repository capabilities omitted boolean {key}"
+            ))
+        })
+    };
+    let squash = capability("allow_squash_merge")?;
+    let rebase = capability("allow_rebase_merge")?;
+    let merge = capability("allow_merge_commit")?;
+    let linear = capability("requires_linear_history")?;
+    let auto_merge_allowed = capability("allow_auto_merge")?;
+
+    if squash {
+        return Ok(MergeCapabilities {
+            strategy: MergeStrategy::Squash,
+            auto_merge_allowed,
+        });
+    }
+    if rebase {
+        return Ok(MergeCapabilities {
+            strategy: MergeStrategy::Rebase,
+            auto_merge_allowed,
+        });
+    }
+    if merge && !linear {
+        return Ok(MergeCapabilities {
+            strategy: MergeStrategy::Merge,
+            auto_merge_allowed,
+        });
+    }
+
+    let repository_name = repository
+        .get("name_with_owner")
+        .and_then(Value::as_str)
+        .unwrap_or("repository");
+    let base_branch = repository
+        .get("base_branch")
+        .and_then(Value::as_str)
+        .unwrap_or("target branch");
+    Err(OrbitError::Execution(format!(
+        "no permitted merge method for pull request #{pr_number} in {repository_name}: \
+         squash={squash}, rebase={rebase}, merge_commit={merge}, \
+         {base_branch}.requires_linear_history={linear}; repository settings were not changed \
+         and no administrative bypass was attempted"
+    )))
+}
+
 pub(in crate::executor::automation) fn git_merge<H: RuntimeHost + Sync + ?Sized>(
     host: &H,
     input: &Value,
@@ -96,11 +194,13 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
 
     ensure_branch_fresh_against_base(&workspace_path, &head, &base, base_sync_mode)?;
 
+    let merge_strategy =
+        resolve_merge_strategy(host, &workspace_path.to_string_lossy(), &pr_number)?;
     host.run_private_vcs_operation(
         operations::PR_MERGE,
         json!({
             "pr": pr_number,
-            "strategy": "squash",
+            "strategy": merge_strategy.as_str(),
             "workspace_path": workspace_path,
         }),
     )?;
@@ -147,7 +247,10 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
         };
     }
 
-    Ok(json!({ "merged": true }))
+    Ok(json!({
+        "merged": true,
+        "strategy": merge_strategy.as_str(),
+    }))
 }
 
 fn resolve_batch_workspace_path<H: RuntimeHost + ?Sized>(

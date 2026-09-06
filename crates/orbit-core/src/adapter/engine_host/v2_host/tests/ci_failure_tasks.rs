@@ -44,7 +44,14 @@ fn file_error(runtime: &OrbitRuntime, input: Value) -> String {
 }
 
 /// One current failure, shaped exactly as `collect_ci_evidence` emits it.
-fn failure(run_id: u64, workflow: &str, job: &str, step: &str, log: &str, checkout: &str) -> Value {
+pub(super) fn failure(
+    run_id: u64,
+    workflow: &str,
+    job: &str,
+    step: &str,
+    log: &str,
+    checkout: &str,
+) -> Value {
     json!({
         "run_id": run_id,
         "workflow": workflow,
@@ -76,7 +83,7 @@ fn failure(run_id: u64, workflow: &str, job: &str, step: &str, log: &str, checko
     })
 }
 
-fn snapshot(current: Vec<Value>) -> Value {
+pub(super) fn snapshot(current: Vec<Value>) -> Value {
     let latest = current.clone();
     json!({
         "schema_version": 1,
@@ -99,7 +106,7 @@ fn snapshot(current: Vec<Value>) -> Value {
     })
 }
 
-fn filed_task_ids(output: &Value) -> Vec<String> {
+pub(super) fn filed_task_ids(output: &Value) -> Vec<String> {
     output["filed"]
         .as_array()
         .expect("filed array")
@@ -186,6 +193,126 @@ fn no_current_failure_is_a_clean_no_op_and_not_a_capability_problem() {
     );
 }
 
+/// The jrun-20260905-2307 regression: `collect_ci_evidence` deliberately
+/// filters an in-flight run with an observed failed job but unavailable logs
+/// out of `current_failures` (it is retryable, not a repair yet) while still
+/// recording a run-scoped error in `retryable_errors`
+/// (`incomplete_mixed_state_evidence_stays_retryable_until_logs_are_available`
+/// in `orbit-engine`'s collector tests). That error names no row in
+/// `current_failures` for the join-by-run-ID `deferred` construction to
+/// attach to, so it must not be silently dropped and read as a clean
+/// `no_current_failure`.
+#[test]
+fn incomplete_mixed_state_evidence_stays_retryable_through_filing() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    // Shaped exactly as the collector emits it for this case: the mixed-state
+    // run is absent from `current_failures` entirely, and its only trace is
+    // the run-scoped retryable error — passed through unmodified, the same
+    // way the `file` step of `ci_failure_sweep_pipeline` receives
+    // `steps.collect.output.ci_evidence`.
+    let mut evidence = snapshot(Vec::new());
+    evidence["outcome_hint"] = json!("retryable_error");
+    evidence["in_flight"] = json!([{
+        "run_id": 40,
+        "workflow": "ci",
+        "status": "in_progress",
+        "head_branch": "agent-main",
+    }]);
+    evidence["retryable_errors"] = json!([{
+        "stage": "investigation",
+        "operation": "run_logs",
+        "run_id": 40,
+        "retryable": true,
+        "message": "logs are not available until the job finishes",
+    }]);
+
+    let error = file_error(&runtime, json!({"ci_evidence": evidence}));
+
+    assert!(error.contains("retryable_error"));
+    assert!(error.contains("run_logs"));
+    assert!(error.contains("\"run_id\":40"));
+    assert!(
+        runtime
+            .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+            .expect("list tasks")
+            .is_empty(),
+        "a mixed-state run with incomplete logs must never be filed as a clean no-op"
+    );
+}
+
+/// The companion case: a genuinely pending in-flight run that never failed a
+/// job carries no retryable error at all (the collector never reads its logs
+/// or checkout), so it must remain a clean no-op rather than being swept up
+/// by the fix for the mixed-state gap above.
+#[test]
+fn a_pending_in_flight_run_with_no_failed_jobs_is_still_a_no_op() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut evidence = snapshot(Vec::new());
+    evidence["in_flight"] = json!([{
+        "run_id": 40,
+        "workflow": "ci",
+        "status": "in_progress",
+        "head_branch": "agent-main",
+    }]);
+
+    let output = file(&runtime, json!({"ci_evidence": evidence}));
+
+    assert_eq!(output["outcome"], json!("no_current_failure"));
+    assert_eq!(output["filed_count"], json!(0));
+    assert_eq!(output["deferred"], json!([]));
+    assert!(
+        runtime
+            .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+            .expect("list tasks")
+            .is_empty()
+    );
+}
+
+#[test]
+fn explicit_deferred_evidence_retains_metadata_alongside_filed_tasks() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let log = "ci\ttest\t2026-08-30T01:00:00Z assertion failed: left == right\n";
+    let mut evidence = snapshot(vec![failure(
+        10,
+        "ci",
+        "test (ubuntu)",
+        "cargo test",
+        log,
+        CHECKOUT,
+    )]);
+    evidence["deferred"] = json!([{
+        "run_id": 99,
+        "url": "https://github.com/acme/orbit/actions/runs/99",
+        "workflow": "ci",
+        "head_branch": "feature/unverified",
+        "ref_kind": "other",
+        "investigated": false,
+    }]);
+    evidence["retryable_errors"] = json!([{
+        "stage": "discovery",
+        "operation": "remote_branch_head",
+        "run_id": 99,
+        "retryable": true,
+        "message": "candidate branch 'feature/unverified' could not be checked against origin; its failure remains deferred until verified",
+    }]);
+
+    let output = file(&runtime, json!({"ci_evidence": evidence}));
+
+    assert_eq!(output["filed_count"], json!(1));
+    let deferred = output["deferred"].as_array().expect("deferred entries");
+    assert_eq!(deferred.len(), 1);
+    assert_eq!(deferred[0]["run_id"], json!(99));
+    assert_eq!(
+        deferred[0]["url"],
+        json!("https://github.com/acme/orbit/actions/runs/99")
+    );
+    assert_eq!(deferred[0]["workflow"], json!("ci"));
+    assert_eq!(deferred[0]["head_branch"], json!("feature/unverified"));
+    assert_eq!(deferred[0]["ref_kind"], json!("other"));
+    assert_eq!(deferred[0]["investigated"], json!(false));
+    assert_eq!(deferred[0]["retryable"], json!(true));
+}
+
 #[test]
 fn one_regression_across_push_and_pull_request_runs_becomes_one_task() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
@@ -216,7 +343,7 @@ fn one_regression_across_push_and_pull_request_runs_becomes_one_task() {
 }
 
 #[test]
-fn a_filed_task_is_an_ordinary_backlog_bug_carrying_usable_evidence() {
+fn a_filed_task_is_a_proposed_bug_carrying_usable_evidence() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let log = "ci\ttest\t2026-08-30T01:00:00Z assertion failed: left == right\n";
 
@@ -238,7 +365,7 @@ fn a_filed_task_is_an_ordinary_backlog_bug_carrying_usable_evidence() {
         .expect("one filed task");
     let task = runtime.get_task(&task_id).expect("read filed task");
 
-    assert_eq!(task.status, TaskStatus::Backlog);
+    assert_eq!(task.status, TaskStatus::Proposed);
     assert_eq!(task.task_type, orbit_types::task::TaskType::Bug);
     // No `github.*` requirement: the evidence is in the description, so the
     // task ships on the ordinary agent baseline.
@@ -356,6 +483,37 @@ fn live_run_fixture_files_once_with_complete_actionable_evidence() {
 }
 
 #[test]
+fn mixed_state_in_progress_failure_files_once_and_repeat_names_the_owner() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut mixed = failure(
+        33_979_680_684,
+        "CI",
+        "Linux tests",
+        "Run tests",
+        "CI\tLinux tests\tassertion failed in collect.rs\n",
+        "8b0a760bae17b6f0aeee9eab47840684697fa812",
+    );
+    mixed["status"] = json!("in_progress");
+    mixed["conclusion"] = Value::Null;
+    mixed["url"] = json!("https://github.com/danieljhkim/orbit/actions/runs/33979680684");
+    let evidence = snapshot(vec![mixed]);
+
+    let first = file(&runtime, json!({"ci_evidence": evidence.clone()}));
+    assert_eq!(first["outcome"], json!("current_failures"));
+    assert_eq!(first["filed_count"], json!(1));
+    let task_id = filed_task_ids(&first).remove(0);
+    let task = runtime.get_task(&task_id).expect("read filed task");
+    assert!(task.description.contains("Linux tests"));
+    assert!(task.description.contains("33979680684"));
+
+    let second = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(second["outcome"], json!("current_failures"));
+    assert_eq!(second["filed_count"], json!(0));
+    assert_eq!(second["skipped_existing"][0]["task_id"], json!(task_id));
+    assert_eq!(second["audit"]["existing_task_owners"], json!([task_id]));
+}
+
+#[test]
 fn task_add_failure_is_retryable_and_cannot_persist_a_handled_state() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let evidence = snapshot(vec![failure(
@@ -420,6 +578,11 @@ fn a_second_sweep_over_a_still_red_run_does_not_file_a_second_task() {
 
     assert_eq!(second["outcome"], json!("current_failures"));
     assert_eq!(second["filed_count"], json!(0));
+    assert_eq!(
+        second["pilot_candidates"][0]["task_id"],
+        json!(task_id.clone()),
+        "a proposed task whose prior pilot did not admit it must remain retryable"
+    );
     let skipped = second["skipped_existing"].as_array().expect("skipped");
     assert!(!skipped.is_empty());
     assert!(
@@ -455,6 +618,15 @@ fn a_closed_task_does_not_suppress_a_recurrence() {
         .first()
         .cloned()
         .expect("first sweep files one task");
+    runtime
+        .update_task(
+            &task_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("admit the first task before completing it");
     runtime
         .update_task(
             &task_id,
@@ -900,6 +1072,150 @@ fn same_failure_under_a_different_commit_message_reuses_the_failure_key() {
     );
 }
 
+/// Captured Coverage / Collect workspace coverage shape from ORB-11340:
+/// passing libtest names that contain `error`/`failure`, then `failures:`,
+/// the panic, cargo wrappers, and GitHub's generic exit trailer. Collection
+/// often drops the `test … FAILED` line with the middle of the log.
+fn orb_11340_style_rust_test_log(passing: &[&str], failing: &str) -> String {
+    let prefix = |msg: &str| {
+        format!(
+            "Coverage (informational)\tCollect workspace coverage\t2026-09-06T00:12:19.7226670Z {msg}\n"
+        )
+    };
+    let mut out = String::new();
+    out.push_str(&prefix(
+        "##[group]Run cargo llvm-cov --workspace --locked --no-report",
+    ));
+    for name in passing {
+        out.push_str(&prefix(&format!("test {name} ... ok")));
+    }
+    out.push_str(&prefix(""));
+    out.push_str(&prefix("failures:"));
+    out.push_str(&prefix(""));
+    out.push_str(&prefix(&format!("---- {failing} stdout ----")));
+    out.push_str(&prefix(""));
+    out.push_str(&prefix(&format!(
+        "thread '{failing}' (10411) panicked at crates/orbit-cli/tests/mcp_roundtrip.rs:1416:33:"
+    )));
+    out.push_str(&prefix(
+        "spawn destination-issued command: Os { code: 26, kind: ExecutableFileBusy, message: \"Text file busy\" }",
+    ));
+    out.push_str(&prefix(
+        "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+    ));
+    out.push_str(&prefix(""));
+    out.push_str(&prefix("failures:"));
+    out.push_str(&prefix(&format!("    {failing}")));
+    out.push_str(&prefix(""));
+    out.push_str(&prefix(
+        "test result: FAILED. 46 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 81.42s",
+    ));
+    out.push_str(&prefix(""));
+    out.push_str(&prefix(
+        "error: test failed, to rerun pass `-p orbit-cli --test mcp_roundtrip`",
+    ));
+    out.push_str(&prefix(
+        "error: process didn't exit successfully: `/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo test --tests --manifest-path /home/runner/work/orbit/orbit/Cargo.toml --target-dir /home/runner/work/orbit/orbit/target/llvm-cov-target --workspace --locked` (exit status: 101)",
+    ));
+    out.push_str(&prefix("##[error]Process completed with exit code 101."));
+    out
+}
+
+const ORB_11340_PASSING: &[&str] = &[
+    "unmanaged_orbit_workspace_env_does_not_bind_mcp",
+    "mcp_serve_error_paths_return_tool_errors_and_keep_serving",
+    "task_show_is_global_by_default_across_tool_run_and_mcp",
+];
+
+const ORB_11340_FAILING: &str = "a_forced_command_ignores_the_command_the_caller_asked_for";
+
+#[test]
+fn passing_test_names_with_error_words_are_not_the_signature() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let log = orb_11340_style_rust_test_log(ORB_11340_PASSING, ORB_11340_FAILING);
+
+    let (_output, description) = filed_description(&runtime, &log);
+    let signature = signature_line(&description).to_ascii_lowercase();
+    assert!(
+        signature.contains(ORB_11340_FAILING) && signature.contains("panicked"),
+        "signature must be the panic diagnostic: {signature}"
+    );
+    assert!(
+        !signature.contains("mcp_serve_error_paths")
+            && !signature.contains("... ok")
+            && !signature.contains("keep_serving"),
+        "a passing test whose name contains error must not be the signature: {signature}"
+    );
+    assert!(
+        !signature.contains("process completed"),
+        "generic runner trailer must not be the signature: {signature}"
+    );
+}
+
+#[test]
+fn distinct_rust_panics_with_the_same_passing_preamble_keep_distinct_keys() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let foo_log = orb_11340_style_rust_test_log(ORB_11340_PASSING, ORB_11340_FAILING);
+    let bar_log = orb_11340_style_rust_test_log(
+        ORB_11340_PASSING,
+        "another_forced_command_ignores_the_command_the_caller_asked_for",
+    );
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![
+            failure(10, "ci", "coverage", "collect coverage", &foo_log, CHECKOUT),
+            failure(11, "ci", "coverage", "collect coverage", &bar_log, CHECKOUT),
+        ])}),
+    );
+
+    assert_eq!(first["filed_count"], json!(2));
+    let filed = first["filed"].as_array().expect("filed");
+    assert_ne!(filed[0]["failure_key"], filed[1]["failure_key"]);
+    for (task_id, needle) in filed_task_ids(&first).iter().zip([
+        ORB_11340_FAILING,
+        "another_forced_command_ignores_the_command_the_caller_asked_for",
+    ]) {
+        let description = runtime
+            .get_task(task_id)
+            .expect("read filed task")
+            .description;
+        let signature = signature_line(&description).to_ascii_lowercase();
+        assert!(
+            signature.contains(needle) && signature.contains("panicked"),
+            "each panic must be its own signature: {signature}"
+        );
+        assert!(
+            !signature.contains("mcp_serve_error_paths"),
+            "shared passing preamble must not become the signature: {signature}"
+        );
+    }
+
+    let renamed_preamble = orb_11340_style_rust_test_log(
+        &[
+            "renamed_mcp_serve_error_paths_return_tool_errors_and_keep_serving",
+            "workspace_init_mcp_config_reaches_a_governed_tool_over_the_real_transport",
+        ],
+        ORB_11340_FAILING,
+    );
+    let repeated = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            12,
+            "ci",
+            "coverage",
+            "collect coverage",
+            &renamed_preamble,
+            NEXT_HEAD,
+        )])}),
+    );
+    assert_eq!(repeated["filed_count"], json!(0));
+    assert_eq!(
+        repeated["skipped_existing"][0]["failure_key"], filed[0]["failure_key"],
+        "the same panic must retain its failure key across passing-test names, run ids, and commits"
+    );
+}
+
 #[test]
 fn query_error_prevents_filing_and_remains_retryable() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
@@ -929,5 +1245,211 @@ fn query_error_prevents_filing_and_remains_retryable() {
             .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
             .expect("list tasks")
             .is_empty()
+    );
+}
+
+/// One uninvestigated run, shaped as collection leaves it when the budget runs
+/// out: a URL and a verdict, no job, step, or log.
+fn deferred_failure(run_id: u64, workflow: &str, branch: &str) -> Value {
+    let mut failure = failure(run_id, workflow, "", "", "", "");
+    failure["investigated"] = json!(false);
+    failure["failed_jobs"] = json!([]);
+    failure["log_excerpt"] = json!("");
+    failure["actual_checkout_shas"] = json!([]);
+    failure["checkout_evidence"] = json!([]);
+    failure["head_branch"] = json!(branch);
+    failure["ref_kind"] = json!("pull_request");
+    failure
+}
+
+fn budget_error(run_id: u64) -> Value {
+    json!({
+        "stage": "investigation",
+        "operation": "investigation_budget",
+        "run_id": run_id,
+        "retryable": true,
+        "message": "current failure was not investigated because max_investigated_runs was exhausted",
+    })
+}
+
+/// The jrun-20260905-1932 regression: fourteen candidates, three of them fully
+/// evidenced, and the other eleven starved of investigation budget. The three
+/// complete findings are real, filable defects and must not be withheld
+/// because their neighbours are incomplete.
+#[test]
+fn complete_findings_file_while_incomplete_ones_stay_deferred() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut current = vec![
+        failure(
+            33_986_585_197,
+            "Platform",
+            "macOS",
+            "cargo test",
+            "ci\tmacOS\t2026-09-05T19:20:00Z ##[error]linker command failed\n",
+            CHECKOUT,
+        ),
+        failure(
+            33_986_582_084,
+            "Website",
+            "build",
+            "sync website",
+            "ci\tbuild\t2026-09-05T19:19:00Z ##[error]sync command not found\n",
+            CHECKOUT,
+        ),
+        failure(
+            33_986_085_270,
+            "Pi",
+            "macOS",
+            "cargo build",
+            "ci\tmacOS\t2026-09-05T19:10:00Z ##[error]could not compile orbit-pi\n",
+            CHECKOUT,
+        ),
+    ];
+    let deferred_ids = (0..11_u64)
+        .map(|index| 33_900_000_000 + index)
+        .collect::<Vec<_>>();
+    for run_id in &deferred_ids {
+        current.push(deferred_failure(
+            *run_id,
+            "Platform",
+            "orbit/ORB-11200-older",
+        ));
+    }
+    let mut evidence = snapshot(current);
+    evidence["retryable_errors"] = json!(
+        deferred_ids
+            .iter()
+            .map(|run_id| budget_error(*run_id))
+            .collect::<Vec<_>>()
+    );
+
+    let output = file(&runtime, json!({"ci_evidence": evidence}));
+
+    assert_eq!(output["outcome"], json!("current_failures"));
+    assert_eq!(output["filed_count"], json!(3), "{output}");
+    assert_eq!(filed_task_ids(&output).len(), 3);
+    // The durable outcome is the tasks themselves, not the report.
+    assert_eq!(
+        runtime
+            .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+            .expect("list tasks")
+            .len(),
+        3
+    );
+
+    let deferred = output["deferred"].as_array().expect("deferred array");
+    assert_eq!(deferred.len(), 11);
+    assert_eq!(deferred[0]["run_id"], json!(33_900_000_000_u64));
+    assert_eq!(deferred[0]["investigated"], json!(false));
+    assert_eq!(deferred[0]["retryable"], json!(true));
+    assert_eq!(
+        deferred[0]["reasons"][0]["operation"],
+        json!("investigation_budget")
+    );
+
+    let audit = &output["audit"];
+    assert_eq!(audit["current_failures"], json!(14));
+    assert_eq!(audit["investigated_failures"], json!(3));
+    assert_eq!(audit["tasks_created"], json!(3));
+    assert_eq!(audit["deferred_failures"], json!(11));
+    assert_eq!(audit["retryable_errors"], json!(11));
+    assert_eq!(
+        audit["deferred_failure_run_ids"]
+            .as_array()
+            .expect("deferred ids")
+            .len(),
+        11
+    );
+}
+
+/// The boundary the partial path must not cross. A listing that failed may be
+/// the one holding the newer run that would have superseded a finding, so a
+/// snapshot-wide error still withholds everything — including findings that
+/// look complete.
+#[test]
+fn a_snapshot_wide_discovery_error_still_withholds_a_complete_finding() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut evidence = snapshot(vec![failure(
+        10,
+        "ci",
+        "build",
+        "cargo build",
+        "ci\tbuild\t2026-08-30T01:00:00Z ##[error]expected 3 arguments\n",
+        CHECKOUT,
+    )]);
+    evidence["retryable_errors"] = json!([
+        {
+            "stage": "discovery",
+            "operation": "run_list",
+            "run_id": Value::Null,
+            "retryable": true,
+            "message": "HTTP 502: Bad Gateway",
+        },
+        budget_error(11),
+    ]);
+
+    let error = file_error(&runtime, json!({"ci_evidence": evidence}));
+
+    assert!(error.contains("retryable_error"));
+    assert!(error.contains("run_list"));
+    // The run-scoped error travels with it, so one payload explains the sweep.
+    assert!(error.contains("investigation_budget"));
+    assert!(
+        runtime
+            .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+            .expect("list tasks")
+            .is_empty()
+    );
+}
+
+/// A finding whose own run carries an error is not filed from partial
+/// evidence: per-finding requirements are unchanged, and the gap is stated
+/// rather than papered over.
+#[test]
+fn a_finding_whose_own_run_failed_a_query_is_deferred_not_filed_from_partial_evidence() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut evidence = snapshot(vec![
+        failure(
+            10,
+            "ci",
+            "build",
+            "cargo build",
+            "ci\tbuild\t2026-08-30T01:00:00Z ##[error]expected 3 arguments\n",
+            CHECKOUT,
+        ),
+        failure(
+            11,
+            "Website",
+            "deploy",
+            "sync website",
+            "ci\tdeploy\t2026-08-30T01:00:00Z ##[error]sync command not found\n",
+            CHECKOUT,
+        ),
+    ]);
+    evidence["retryable_errors"] = json!([
+        {
+            "stage": "registration",
+            "operation": "checkout_evidence",
+            "run_id": 11,
+            "retryable": true,
+            "message": "checkout evidence scan reached its hard limit; actual checkout identity is incomplete",
+        }
+    ]);
+
+    let output = file(&runtime, json!({"ci_evidence": evidence}));
+
+    assert_eq!(output["filed_count"], json!(1));
+    assert_eq!(output["filed"][0]["workflow"], json!("ci"));
+    let deferred = output["deferred"].as_array().expect("deferred array");
+    assert_eq!(deferred.len(), 1);
+    assert_eq!(deferred[0]["run_id"], json!(11));
+    assert_eq!(
+        deferred[0]["investigated"],
+        json!(true),
+        "the run was investigated; its evidence is what is incomplete"
+    );
+    assert_eq!(
+        deferred[0]["reasons"][0]["operation"],
+        json!("checkout_evidence")
     );
 }

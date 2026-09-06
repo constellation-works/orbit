@@ -1,4 +1,4 @@
-.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint stability release-check docs-index cleanup-branches
+.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint stability release-check docs-index cleanup-branches compiler-cache-status compiler-cache-setup compiler-cache-bench
 
 # ------------------------------------------------------------
 # Config
@@ -57,6 +57,9 @@ help:
 	@echo "  make uninstall    Remove installed binary"
 	@echo "  make clean        Clean build artifacts"
 	@echo "  make cleanup-branches  Force-remove worktrees and branches except main/agent-main (DESTRUCTIVE)"
+	@echo "  make compiler-cache-status  Show whether the opt-in rustc cache would enable"
+	@echo "  make compiler-cache-setup   Create ~/.orbit/cache/compiler (SETUP_FLAGS=--install to fetch sccache)"
+	@echo "  make compiler-cache-bench   Two-worktree cold/warm/concurrent compiler-cache timings"
 	@echo "  make watch        Continuous check + test"
 
 # ------------------------------------------------------------
@@ -128,10 +131,12 @@ ci-fast:
 	./scripts/check-orphan-modules.sh
 	./scripts/check-crate-agent-guides.sh
 	./scripts/check-embedded-asset-portability.py
+	./scripts/sync-activity-assets.sh --check
 	./scripts/sync-plugin-skills.sh --check
 	./scripts/test-validate-codex-plugin.sh
 	./scripts/test-validate-agent-plugin.sh
 	./scripts/smoke-plugin-install.sh
+	./scripts/test-compiler-cache.sh
 
 # Compile-time pre-handoff gate for agents. Keep this invocation aligned with
 # the default workspace clippy pass in scripts/ci-guardrails.sh.
@@ -171,6 +176,18 @@ clean:
 # Destructive: discards in-progress task branches and uncommitted work in worktrees.
 cleanup-branches:
 	./scripts/cleanup-branches.sh
+
+# Opt-in host compiler cache shared across worktrees (sccache). Falls back to
+# ordinary rustc when the cache is missing or unwritable. See
+# docs/runbooks/compiler-cache.md. [ORB-11259]
+compiler-cache-status:
+	./scripts/compiler-cache.sh status
+
+compiler-cache-setup:
+	./scripts/compiler-cache.sh setup $(SETUP_FLAGS)
+
+compiler-cache-bench:
+	./scripts/bench-compiler-cache.sh
 
 # ------------------------------------------------------------
 # Dev Loop

@@ -62,8 +62,13 @@ pub struct RoutineDefinition {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoutineTrigger {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<super::automation::members::StateTrigger>,
     /// Standard 5-field cron expression, evaluated in host-local time.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cron: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deliveries_landed: Option<super::automation::DeliveryTrigger>,
     /// What to do about scheduled slots that fell in a gap. Defaults to
     /// `skip` (wait for the next natural slot).
     #[serde(default)]
@@ -237,7 +242,33 @@ impl RoutineDefinition {
                 self.name
             )));
         }
-        if self.trigger.cron.trim().is_empty() {
+        if let Some(state) = &self.trigger.state {
+            state.validate()?;
+            if !self.trigger.cron.is_empty()
+                || self.trigger.deliveries_landed.is_some()
+                || self.hosts.len() > 1
+                || self.policy.overlap != OverlapPolicy::Forbid
+                || self.target.job_name() != state.job_name()
+            {
+                return Err(WorkflowError::Invalid("state routines require their pilot/triage target, one owner, overlap forbid and exactly one trigger".into()));
+            }
+        }
+        if let Some(delivery) = &self.trigger.deliveries_landed {
+            delivery.validate()?;
+            if !self.trigger.cron.is_empty()
+                || self.hosts.len() > 1
+                || self.policy.overlap != OverlapPolicy::Forbid
+            {
+                return Err(WorkflowError::Invalid(
+                    "delivery routines require one owner, overlap forbid, and exactly one trigger"
+                        .into(),
+                ));
+            }
+        }
+        if self.trigger.cron.trim().is_empty()
+            && self.trigger.deliveries_landed.is_none()
+            && self.trigger.state.is_none()
+        {
             return Err(WorkflowError::Invalid(format!(
                 "routine '{}' trigger.cron must not be empty",
                 self.name

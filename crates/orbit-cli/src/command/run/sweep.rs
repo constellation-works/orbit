@@ -241,7 +241,17 @@ fn sweep_active_workspace(
     // operator holding the workspace claim is driving dispatch by hand, so the
     // unattended sweep stands down for that workspace and reports why, rather
     // than failing the whole run.
-    let invoke = match runtime.submit_ship_run(mode, None, &[], Some("ship-sweep"), None) {
+    let invoke = match runtime.submit_ship_run(
+        mode,
+        None,
+        &[],
+        // The sweep is an unattended routine: completion is only ever granted by
+        // an operator on a single invocation, never implied by a schedule.
+        orbit_core::CompletionPolicy::Review,
+        &[],
+        Some("ship-sweep"),
+        None,
+    ) {
         Ok(invoke) => invoke,
         Err(OrbitError::WorkspaceClaimHeld(claim)) => {
             return Ok(SweepReport::skipped(

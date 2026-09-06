@@ -114,6 +114,7 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: Some("gpt-5".to_string()),
+        reasoning_effort: None,
         max_iterations: 1,
         backend: None,
         provider: Provider::Cursor,
@@ -121,6 +122,7 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
         require_response_envelope: true,
         require_completion_envelope: true,
         proc_allowed_programs: None,
+        trusted_host_execution: false,
     }
 }
 

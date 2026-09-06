@@ -9,7 +9,12 @@ pub(super) fn run_target(
     ctx: &ExecCtx<'_>,
 ) -> Result<StepOutcome, DispatchError> {
     let tctx = ctx.template_ctx();
-    let rendered_input = render_input(t.default_input.as_ref(), &ctx.input, &tctx)?;
+    let rendered_input = render_input(
+        t.default_input.as_ref(),
+        &ctx.input,
+        &tctx,
+        t.input_schema_json.as_ref(),
+    )?;
     // [ORB-10902] Rebind before dispatch so `system_crew: true` reaches the
     // activity input, not only the local copy used to resolve crew settings.
     // Recovery does the same; injection is independent of target spec type.

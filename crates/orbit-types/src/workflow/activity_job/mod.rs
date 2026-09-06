@@ -10,6 +10,7 @@ pub mod job_v2;
 pub mod retired;
 pub mod schema_header;
 pub mod tool_allowlist;
+pub mod trusted_host;
 
 /// The single declaration of the deterministic action catalog. The generated
 /// typed actions make the core/engine ownership boundary exhaustive at compile
@@ -51,10 +52,13 @@ macro_rules! deterministic_action_catalog {
                 GitMerge => "git_merge",
                 GitPush => "git_push",
                 GitRebase => "git_rebase",
+                LocalShell => "local_shell",
                 PrFailureHandoff => "pr_failure_handoff",
                 PrOpen => "pr_open",
                 PrPrepare => "pr_prepare",
+                PrComplete => "pr_complete",
                 PrPromote => "pr_promote",
+                TaskComplete => "task_complete",
                 UpdateTask => "update_task",
                 WorktreeGc => "worktree_gc",
                 WorktreeSetup => "worktree_setup",
@@ -149,6 +153,11 @@ pub use tool_allowlist::{
     tool_allowed, validate_activity_tool_allowlist,
     validate_activity_tool_allowlist_against_registered_tools, validate_tool_allowlist,
     validate_tool_allowlist_against_registered_tools,
+};
+pub use trusted_host::{
+    TRUSTED_HOST_ACTIVITY, TRUSTED_HOST_ADMISSION_KEY, TrustedHostActivityError,
+    TrustedHostAdmission, run_input_declares_trusted_host, strip_trusted_host_admission,
+    validate_trusted_host_activity,
 };
 
 #[cfg(test)]

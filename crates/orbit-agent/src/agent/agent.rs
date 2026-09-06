@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use orbit_common::OrbitError;
+use orbit_types::identity::ReasoningEffort;
 use orbit_types::telemetry::InvocationTrace;
 
 use crate::runtime::{AgentRuntime, ProviderRegistry, resolve_runtime};
@@ -15,17 +16,45 @@ pub enum ProviderOptions {
         writable_dirs: Vec<String>,
     },
     Gemini,
+    Antigravity,
     Grok,
     Copilot,
     Cursor,
     Ollama,
+    Pi,
+    Opencode,
     Mock,
+}
+
+impl ProviderOptions {
+    /// The canonical provider identity used for cross-provider validation
+    /// (e.g. [`ReasoningEffort::validate_for_provider_model`]), independent
+    /// of `AgentConfig::provider_key` — the registry dispatch key, which is
+    /// derived from the CLI executable name and can diverge from it (the
+    /// Antigravity executable is `agy`, but its canonical identity is
+    /// `antigravity`).
+    fn canonical_provider_name(&self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex { .. } => "codex",
+            Self::Gemini => "gemini",
+            Self::Antigravity => "antigravity",
+            Self::Grok => "grok",
+            Self::Copilot => "copilot",
+            Self::Cursor => "cursor",
+            Self::Ollama => "ollama",
+            Self::Pi => "pi",
+            Self::Opencode => "opencode",
+            Self::Mock => "mock",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentConfig {
     pub command: String,
     pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub provider_key: &'static str,
     pub provider_options: ProviderOptions,
 }
@@ -50,6 +79,7 @@ impl AgentConfig {
         Ok(Self {
             command,
             model: model.map(ToString::to_string),
+            reasoning_effort: None,
             provider_key: factory.key(),
             provider_options: factory.options_from_config(config)?,
         })
@@ -58,6 +88,24 @@ impl AgentConfig {
     pub fn with_model(mut self, model: Option<&str>) -> Self {
         self.model = model.map(ToString::to_string);
         self
+    }
+
+    /// Attach effort resolved from a crew after verifying the provider-model
+    /// CLI contract that will receive it.
+    pub fn with_reasoning_effort(
+        mut self,
+        reasoning_effort: Option<ReasoningEffort>,
+    ) -> Result<Self, OrbitError> {
+        if let Some(effort) = reasoning_effort {
+            effort
+                .validate_for_provider_model(
+                    self.provider_options.canonical_provider_name(),
+                    self.model.as_deref(),
+                )
+                .map_err(OrbitError::InvalidInput)?;
+        }
+        self.reasoning_effort = reasoning_effort;
+        Ok(self)
     }
 }
 

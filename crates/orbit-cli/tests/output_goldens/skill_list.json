@@ -4,5 +4,11 @@
     "id": "orbit",
     "meta": null,
     "path": "<HOME>/.orbit/skills/orbit"
+  },
+  {
+    "content_hash": "<CONTENT_HASH>",
+    "id": "orbit-orchestrate",
+    "meta": null,
+    "path": "<HOME>/.orbit/skills/orbit-orchestrate"
   }
 ]

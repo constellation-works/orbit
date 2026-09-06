@@ -30,18 +30,23 @@ function fmtScoreboardCount(value) {
 }
 
 function formatScoreboardPair(agent, col) {
-  const left = asScoreboardNumber(
-    col.leftCompute ? col.leftCompute(agent) : readPath(agent, col.left),
-  );
-  const right = asScoreboardNumber(
-    col.rightCompute ? col.rightCompute(agent) : readPath(agent, col.right),
-  );
+  const rawLeft = col.leftCompute ? col.leftCompute(agent) : readPath(agent, col.left);
+  const rawRight = col.rightCompute ? col.rightCompute(agent) : readPath(agent, col.right);
+  // ORB-11201: `null` means the source read failed for this window, distinct
+  // from a genuinely observed zero. Coercing it away here would reintroduce
+  // exactly the confusion that fix eliminated in the API payload.
+  const unavailable = rawLeft === null || rawRight === null;
+  const left = asScoreboardNumber(rawLeft);
+  const right = asScoreboardNumber(rawRight);
   return {
     left,
     right,
-    text: `${fmtScoreboardCount(left)}/${fmtScoreboardCount(right)}`,
-    zero: left === 0 && right === 0,
-    title: `${col.title}: ${left} / ${right}`,
+    unavailable,
+    text: unavailable ? "unavailable" : `${fmtScoreboardCount(left)}/${fmtScoreboardCount(right)}`,
+    zero: !unavailable && left === 0 && right === 0,
+    title: unavailable
+      ? `${col.title}: unavailable (source failed for this window; not a measured zero)`
+      : `${col.title}: ${left} / ${right}`,
   };
 }
 
@@ -122,6 +127,10 @@ const OPERATIONS_SCOREBOARD_COLUMNS = [
     tone: "warn",
     title: "grouped failure incidents / raw failed events they collapsed",
     help: "grouped",
+    // ORB-11207: names the `coverage.failure_incidents` note so an
+    // unavailable source keeps this row visible instead of reading as a
+    // filtered-out measured zero.
+    coverageKey: "failure_incidents",
   },
   {
     key: "friction.reported",
@@ -543,7 +552,7 @@ function buildLeaderboardMatrix(rows, sectionList, opts = {}) {
   for (const section of sectionList) {
     const metrics = section.columns
       .filter((candidate) => candidate.key !== "agent")
-      .filter((candidate) => metricHasActivity(rows, candidate));
+      .filter((candidate) => metricHasActivity(rows, candidate, opts.coverage));
     if (showSectionDividers) {
       const badge = metrics.length === 0
         ? emptySectionBadge(section.title, opts.coverage)
@@ -589,7 +598,13 @@ function buildLeaderboardMatrix(rows, sectionList, opts = {}) {
   return table;
 }
 
-function metricHasActivity(rows, col) {
+function metricHasActivity(rows, col, coverage) {
+  // ORB-11207: an unavailable source is not the same as an observed zero —
+  // keep the row visible so the operator sees the missing-coverage marker
+  // instead of the row silently disappearing from the table.
+  if (col.coverageKey && coverage?.[col.coverageKey]?.availability === "unavailable") {
+    return true;
+  }
   return rows.some(([, agent]) => scoreboardCellActivity(agent, col) > 0);
 }
 
@@ -652,7 +667,7 @@ function scoreboardCellNode(name, value, rowMax, isLeader, opts = {}) {
   }, [
     el("span", { class: "track" }, [fill]),
     el("span", { class: valueClass }, opts.pair
-      ? pairTextNodes(opts.pair.left, opts.pair.right, opts.pair.zero, isLeader)
+      ? pairTextNodes(opts.pair, isLeader)
       : [
           document.createTextNode(num === 0 ? "—" : fmtScoreboardCount(num)),
           ...(isLeader ? [leaderBadge()] : []),
@@ -679,7 +694,13 @@ function emptySectionBadge(title, coverage) {
     return "no observed review comments in this source";
   }
   if (title === "Delivery") return "no observed task events this window";
-  if (title === "Operations") return "no observed tool calls or friction this window";
+  if (title === "Operations") {
+    if (coverage?.failure_incidents?.availability === "unavailable") {
+      return coverage.failure_incidents.detail
+        || "failure-incident coverage is unavailable for this window; this is missing coverage, not zero activity";
+    }
+    return "no observed tool calls or friction this window";
+  }
   return "no observed events this window";
 }
 
@@ -737,12 +758,19 @@ function emptyScoreboardNode() {
   return el("span", { class: "em", text: "—" });
 }
 
-function pairTextNodes(left, right, zero, isLeader) {
-  if (zero) return [emptyScoreboardNode()];
+function pairTextNodes(pair, isLeader) {
+  if (pair.unavailable) {
+    return [el("span", {
+      class: "em unavailable",
+      text: "unavailable",
+      title: "source unavailable for this window; not a measured zero",
+    })];
+  }
+  if (pair.zero) return [emptyScoreboardNode()];
   return [
-    left === 0 ? emptyScoreboardNode() : el("span", { class: "sb-value", text: fmtScoreboardCount(left) }),
+    pair.left === 0 ? emptyScoreboardNode() : el("span", { class: "sb-value", text: fmtScoreboardCount(pair.left) }),
     el("span", { class: "pair", text: "/" }),
-    right === 0 ? emptyScoreboardNode() : el("span", { class: "sb-pair-right", text: fmtScoreboardCount(right) }),
+    pair.right === 0 ? emptyScoreboardNode() : el("span", { class: "sb-pair-right", text: fmtScoreboardCount(pair.right) }),
     ...(isLeader ? [leaderBadge()] : []),
   ];
 }

@@ -11,7 +11,7 @@ use crate::executor::automation::input::{
 };
 
 use super::commit::commit_failure_candidate;
-use super::freshness::commit_sha;
+use super::freshness::{commit_sha, original_base_sha};
 use super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
@@ -21,12 +21,12 @@ use super::push::push_batch_changes_inner;
 const CONFLICT_BLOCKED_EVENT: &str = "pr_conflict_blocked";
 const FAILURE_HANDOFF_EVENT: &str = "pr_failure_handoff";
 
-/// ADR-0246 terminal hook for `task_pr_pipeline`.
+/// Terminal hook for `task_pr_pipeline`.
 ///
-/// The original job error remains authoritative. This action only makes the
-/// candidate recoverable: restore the pre-rebase branch, commit dirtiness,
-/// push without rewriting unknown remote history, publish a blocked PR, and
-/// leave the task in `blocked` rather than `review`.
+/// The original job error remains authoritative. Failures before publication
+/// make the candidate recoverable and block the task for reconciliation.
+/// Completion failures after publication preserve that exact PR and keep the
+/// task in review so an operator can fix the named merge gate and safely retry.
 pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync + ?Sized>(
     host: &H,
     input: &Value,
@@ -63,6 +63,20 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
             "pr_failure_handoff: task '{}' no longer belongs to run '{}'",
             task.id, run_id
         )));
+    }
+
+    if failed_step_id == "complete_pr"
+        && let Some(pr_number) = task.github_pr_number().map(ToOwned::to_owned)
+    {
+        return preserve_completion_failure(
+            host,
+            &task,
+            run_id,
+            failed_step_id,
+            error_code,
+            error_message,
+            &pr_number,
+        );
     }
 
     let worktree = pipeline_step(input, "worktree")?;
@@ -187,6 +201,51 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_code: &str,
+    error_message: &str,
+    pr_number: &str,
+) -> Result<Value, OrbitError> {
+    let pr_url = task
+        .external_refs
+        .iter()
+        .find(|external_ref| external_ref.system == "github-pr" && external_ref.id == pr_number)
+        .and_then(|external_ref| external_ref.url.clone());
+    let note = format!(
+        "PR completion failed after publication; preserved PR #{pr_number} and task status '{}' \
+         for a safe completion retry. No candidate, PR body, branch, or repository setting was \
+         changed.\n\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n- Error code: \
+         `{error_code}`\n\nFailure:\n```text\n{error_message}\n```",
+        task.status
+    );
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message: note,
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+
+    Ok(json!({
+        "phase": "failure_handoff",
+        "decision": "review_completion_failure",
+        "failed_step_id": failed_step_id,
+        "pr_number": pr_number,
+        "pr_url": pr_url,
+        "candidate_preserved": true,
+        "task_status": task.status.to_string(),
+    }))
+}
+
 fn pipeline_step<'a>(input: &'a Value, step: &str) -> Result<&'a Value, OrbitError> {
     input
         .get("pipeline")
@@ -218,21 +277,6 @@ fn unmerged_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
             .map(ToOwned::to_owned)
             .collect(),
     )
-}
-
-fn original_base_sha(
-    workspace_path: &Path,
-    head_sha: &str,
-    target_base_sha: &str,
-) -> Result<String, OrbitError> {
-    match git_output(workspace_path, &["merge-base", head_sha, target_base_sha]) {
-        Ok(sha) if !sha.trim().is_empty() => Ok(sha.trim().to_string()),
-        _ => Ok(
-            git_output(workspace_path, &["rev-parse", &format!("{head_sha}^")])?
-                .trim()
-                .to_string(),
-        ),
-    }
 }
 
 fn conflicts_from_error(error: &str) -> Vec<String> {
@@ -271,9 +315,11 @@ fn blocked_pr_body(
             .join("\n")
     };
     format!(
-        "## Manual resolution required\n\n\
+        "## Automatic conflict recovery exhausted\n\n\
          Orbit preserved and pushed this task's pre-rebase candidate after the shipment pipeline \
-         stopped. This PR is intentionally blocked and must be reconciled manually before merge.\n\n\
+         exhausted its single system-crew conflict-recovery attempt. This PR is intentionally \
+         blocked; inspect the recorded attempt and reconcile the named conflict before retrying \
+         delivery.\n\n\
          - Task: `{task_id}`\n\
          - Run: `{run_id}`\n\
          - Failed step: `{failed_step_id}`\n\

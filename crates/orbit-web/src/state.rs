@@ -29,7 +29,7 @@
 //! concurrent add/remove/rebind is observed as one coherent old-or-new view —
 //! never old metadata spliced onto a newer runtime.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -64,8 +64,9 @@ pub(crate) type PrePublishHook = Arc<dyn Fn(&str) + Send + Sync>;
 /// `orbit_dir` is the workspace's `.orbit` directory — the value passed to
 /// [`RegisteredRuntimeFactory::open_resolved_checkout`] as the workspace root. Active
 /// entries carry the complete runtime binding resolved from the logical
-/// workspace and local checkout. Inactive (stale-path) entries keep no binding:
-/// they are listed but never built.
+/// workspace and local checkout. Inactive entries — whether their checkout path
+/// is stale or its identity cannot be read — keep no binding: they are listed
+/// but never built.
 #[derive(Clone, Debug)]
 pub(crate) struct WsEntry {
     pub(crate) id: String,
@@ -96,58 +97,116 @@ pub(crate) struct Snapshot {
 /// and [`DashboardState::global`] leave it `None`, making [`DashboardState::refresh`]
 /// a no-op (their entries are supplied directly and never re-read).
 pub(crate) struct RegistrySource {
-    /// Path to `~/.orbit/workspaces.json` (or a test double).
+    /// Path to the served registry: `<--root>/workspaces.json` when an
+    /// explicit root was given, `~/.orbit/workspaces.json` otherwise (or a
+    /// test double).
     registry_path: PathBuf,
-    /// The top-level `--root <path>` flag, if any, for default re-selection.
-    root_override: Option<PathBuf>,
+    /// The `--workspace <selector>` flag, if any, for default re-selection.
+    workspace_selector: Option<String>,
     /// Process cwd captured at startup, for default re-selection.
     cwd: Option<PathBuf>,
+    /// Per-checkout failures already reported to operators. A refresh happens at
+    /// every request boundary, so retaining this set avoids emitting the same
+    /// diagnostic for every request while allowing a repaired-and-broken-again
+    /// checkout to be reported anew.
+    reported_unavailable: Mutex<HashSet<UnavailableCheckout>>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct UnavailableCheckout {
+    workspace: String,
+    checkout: PathBuf,
+    error: String,
+}
+
+impl UnavailableCheckout {
+    fn warn(&self) {
+        tracing::warn!(
+            workspace = %self.workspace,
+            checkout = %self.checkout.display(),
+            error = %self.error,
+            "registered workspace is unavailable; dashboard will continue serving healthy workspaces"
+        );
+    }
 }
 
 impl RegistrySource {
     pub(crate) fn new(
         registry_path: PathBuf,
-        root_override: Option<PathBuf>,
+        workspace_selector: Option<String>,
         cwd: Option<PathBuf>,
     ) -> Self {
         Self {
             registry_path,
-            root_override,
+            workspace_selector,
             cwd,
+            reported_unavailable: Mutex::new(HashSet::new()),
         }
     }
 
     /// Reload the authoritative registry into a fresh (generation-less) snapshot
     /// view. Stale-path workspaces are marked inactive (never deleted) via
-    /// `validate_workspaces`. The caller stamps the generation at publication.
+    /// `validate_workspaces`; active checkouts whose identity cannot be resolved
+    /// are likewise excluded after an operator-visible warning. The caller stamps
+    /// the generation at publication.
     fn load(&self) -> Result<SnapshotData, OrbitError> {
         let mut registry = workspace_registry::load_registry_from(&self.registry_path)?;
         workspace_registry::validate_workspaces(&mut registry);
-        let default_workspace = crate::default_workspace_selection(
-            &registry,
-            self.root_override.as_deref(),
-            self.cwd.as_deref(),
-        );
-        let entries = workspace_registry::local_workspaces(&registry)
+        let mut unavailable = HashSet::new();
+        let entries: Vec<WsEntry> = workspace_registry::local_workspaces(&registry)
             .map(|(workspace, checkout)| {
-                let active = workspace.status == WorkspaceStatus::Active;
-                let binding = active
+                let binding = (workspace.status == WorkspaceStatus::Active)
                     .then(|| workspace_runtime_binding(workspace, checkout))
-                    .transpose()?;
-                Ok(WsEntry {
+                    .and_then(|result| match result {
+                        Ok(binding) => Some(binding),
+                        Err(error) => {
+                            unavailable.insert(UnavailableCheckout {
+                                workspace: workspace.id.clone(),
+                                checkout: checkout.orbit_dir.clone(),
+                                error: error.to_string(),
+                            });
+                            None
+                        }
+                    });
+                let active = binding.is_some();
+                WsEntry {
                     id: workspace.id.clone(),
                     name: workspace.name.clone(),
                     repo_root: checkout.repo_root.clone(),
                     orbit_dir: checkout.orbit_dir.clone(),
                     binding,
                     active,
-                })
+                }
             })
-            .collect::<Result<Vec<_>, OrbitError>>()?;
+            .collect();
+        self.report_unavailable(unavailable);
+        let default_workspace = crate::default_workspace_selection(
+            &registry,
+            self.workspace_selector.as_deref(),
+            self.cwd.as_deref(),
+        )
+        .filter(|id| entries.iter().any(|entry| entry.id == *id && entry.active));
         Ok(SnapshotData {
             entries,
             default_workspace,
         })
+    }
+
+    fn report_unavailable(&self, unavailable: HashSet<UnavailableCheckout>) {
+        let new_failures = {
+            let mut reported = self
+                .reported_unavailable
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            reported.retain(|failure| unavailable.contains(failure));
+            unavailable
+                .into_iter()
+                .filter(|failure| reported.insert(failure.clone()))
+                .collect::<Vec<_>>()
+        };
+        for failure in new_failures {
+            failure.warn();
+        }
     }
 }
 
@@ -172,8 +231,9 @@ struct CachedRuntime {
 }
 
 struct StateInner {
-    /// Global orbit root (`~/.orbit`); passed as `global_root` when building
-    /// per-workspace runtimes. Unused in single mode.
+    /// The served Orbit root: an explicit `--root`, else `~/.orbit`. Passed as
+    /// `global_root` when building per-workspace runtimes. Unused in single
+    /// mode.
     global_root: PathBuf,
     /// Atomically-swapped registered workspace set + default selection.
     snapshot: Mutex<Arc<Snapshot>>,
@@ -437,7 +497,9 @@ impl DashboardState {
     /// workspace init/remove` and binding changes become visible without a
     /// restart. The initial load is eager — a malformed registry at startup is
     /// fatal (matching the pre-refresh behavior), whereas a later malformed
-    /// refresh retains the last valid snapshot.
+    /// refresh retains the last valid snapshot. An individual checkout with an
+    /// unreadable identity is instead listed inactive so it cannot take down
+    /// healthy workspaces.
     pub(crate) fn from_registry(
         global_root: PathBuf,
         source: RegistrySource,
@@ -688,7 +750,7 @@ impl WsRejection {
     fn inactive(id: &str) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            message: format!("workspace '{id}' is inactive (its path no longer exists)"),
+            message: format!("workspace '{id}' is inactive; select an active workspace"),
         }
     }
 
@@ -740,16 +802,24 @@ impl FromRequestParts<DashboardState> for Ws {
         // Refresh and pin one snapshot so selection and runtime resolution share
         // a generation: a native add/remove/rebind since the last request is
         // honored, and the resolved runtime always matches the pinned binding.
-        let pinned = state.pin();
         let requested = parts.uri.query().and_then(workspace_from_query);
-        let id = match requested {
-            Some(id) => id,
-            None => pinned
-                .default_workspace()
-                .map(str::to_string)
-                .ok_or_else(WsRejection::no_default)?,
-        };
-        Ok(Ws(pinned.runtime_for(&id)?))
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            let pinned = state.pin();
+            let id = match requested {
+                Some(id) => id,
+                None => pinned
+                    .default_workspace()
+                    .map(str::to_string)
+                    .ok_or_else(WsRejection::no_default)?,
+            };
+            Ok(Ws(pinned.runtime_for(&id)?))
+        })
+        .await
+        .map_err(|error| WsRejection {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: format!("workspace selection panicked: {error}"),
+        })?
     }
 }
 

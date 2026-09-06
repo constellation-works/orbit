@@ -4,13 +4,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_agent::{
-    Agent, AgentConfig, AgentOperation, AgentRequest, normalize_cli_stdout, peek_response_status,
+    Agent, AgentConfig, AgentOperation, AgentRequest, antigravity_terminal_error_diagnostic,
+    normalize_cli_stdout, peek_response_status, project_cli_response,
     provider_invocation_diagnostic, response_envelope_protocol_check,
 };
 use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_text};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, V2AuditEventKind};
+use orbit_types::workflow::ExecutorSandboxKind;
+use orbit_types::workflow::activity_job::{AgentLoopSpec, TrustedHostAdmission, V2AuditEventKind};
 use serde_json::Value;
 
 use crate::context::{ProvenanceEnv, provenance_env};
@@ -21,13 +23,16 @@ use super::super::workspace::{
     WorktreeBoundaryGuard, resolve_subprocess_cwd, validate_declared_worktree_pair,
 };
 use super::argv::{
-    apply_provider_static_arg_fixups, neutralize_inner_sandbox, try_audit_argv_for_dispatch,
+    apply_provider_runtime_arg_fixups, apply_provider_static_arg_fixups, neutralize_inner_sandbox,
+    try_audit_argv_for_dispatch,
 };
 use super::envelope::{
     cli_agent_envelope_json, parse_cli_invocation_trace, parse_cli_response_result,
     task_id_from_input, task_ids_from_input,
 };
+use super::inspection::SourceInspection;
 use super::spawn::{
+    CODEX_CA_CERTIFICATE_ENV, PreparedSandbox, SSL_CERT_FILE_ENV,
     linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic, orbit_tool_env,
     prepare_sandbox_for_dispatch, resolve_provider_launcher,
 };
@@ -44,17 +49,48 @@ const RESPONSE_DIAGNOSTIC_LIMIT_CHARS: usize = 1024;
 pub fn run_cli_backend(
     host: &dyn RuntimeHost,
     spec: &AgentLoopSpec,
+    activity_name: &str,
     run_id: &str,
     audit: Arc<V2AuditWriter>,
     input: &Value,
     fs_profile: Option<&str>,
 ) -> Result<DispatchOutcome, DispatchError> {
     let provider = spec.provider.as_str().to_string();
+    // [ORB-11354] Trusted host execution needs both halves: the built-in
+    // activity declares the mode, and the operator's canonical submission
+    // stamps the admission into the run input. A declaration without an
+    // admission is a broken admission path, not a request for a sandboxed run,
+    // so it fails closed here rather than silently downgrading.
+    let trusted_host = if spec.trusted_host_execution {
+        Some(TrustedHostAdmission::from_run_input(input).ok_or_else(|| {
+            DispatchError::CliInvocationPermanent(format!(
+                "activity `{activity_name}` declares trusted host execution but this run carries \
+                 no operator admission; submit it through the governed `orbit.agent.invoke` \
+                 operation"
+            ))
+        })?)
+    } else {
+        None
+    };
     let mut cli_executor = host.resolve_cli_executor(&provider)?;
-    let timeout_seconds = if spec.wall_clock_timeout_seconds == 0 {
+    let declared_timeout_seconds = if spec.wall_clock_timeout_seconds == 0 {
         DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS
     } else {
         spec.wall_clock_timeout_seconds
+    };
+    // [ORB-11354] An operator submitting an exploration says how long they are
+    // willing to wait. The request can only *shorten* the activity's declared
+    // bound, so the asset stays the ceiling and no run input can extend an
+    // unsandboxed subprocess past it. Only the admitted mode reads the key;
+    // every other activity keeps its declared timeout verbatim.
+    let timeout_seconds = match trusted_host.as_ref().and(
+        input
+            .get("timeout_seconds")
+            .and_then(Value::as_u64)
+            .filter(|seconds| *seconds > 0),
+    ) {
+        Some(requested) => requested.min(declared_timeout_seconds),
+        None => declared_timeout_seconds,
     };
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
 
@@ -96,22 +132,42 @@ pub fn run_cli_backend(
     // re-allow the active worktree subpath after the policy deny rules. The
     // sandbox's `denyModify .orbit/**` rule otherwise blocks every non-codex
     // provider from writing inside its own jrun worktree. See T20260508-17.
-    let subprocess_cwd =
+    let source_cwd =
         resolve_subprocess_cwd(input, task_ctx.as_ref(), tool_ctx.workspace_root.as_deref())?;
+    let inspection = SourceInspection::from_input(input, source_cwd.as_deref(), fs_profile)?;
+    let inspection_input = inspection
+        .as_ref()
+        .map(|snapshot| snapshot.bind_input(input));
+    let inspection_task_ctx = inspection
+        .as_ref()
+        .and_then(|snapshot| task_ctx.as_ref().map(|task| snapshot.bind_input(task)));
+    let subprocess_cwd = inspection
+        .as_ref()
+        .map(|snapshot| snapshot.root().to_path_buf())
+        .or_else(|| source_cwd.clone());
     let subprocess_cwd_string = subprocess_cwd
         .as_ref()
         .map(|path| path.display().to_string());
-    let resolved_sandbox =
-        host.resolve_executor_sandbox(&provider, fs_profile, subprocess_cwd.as_deref())?;
-    let prepared_sandbox = prepare_sandbox_for_dispatch(resolved_sandbox.as_ref())
-        .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
+    // An admitted trusted-host invocation skips sandbox resolution entirely
+    // rather than resolving one and discarding it: there is no profile to
+    // compile, no wrapper to probe, and no inner-sandbox flag to neutralize.
+    // Every other activity, including every managed task job, is unchanged.
+    let resolved_sandbox = match &trusted_host {
+        Some(_) => None,
+        None => host.resolve_executor_sandbox(&provider, fs_profile, subprocess_cwd.as_deref())?,
+    };
+    let prepared_sandbox = match &trusted_host {
+        Some(_) => PreparedSandbox::none_trusted_host(),
+        None => prepare_sandbox_for_dispatch(resolved_sandbox.as_ref())
+            .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?,
+    };
     let sandbox = prepared_sandbox.effective;
 
     let envelope_json = cli_agent_envelope_json(
         spec,
         run_id,
-        input,
-        task_ctx.as_ref(),
+        inspection_input.as_ref().unwrap_or(input),
+        inspection_task_ctx.as_ref().or(task_ctx.as_ref()),
         &activity_tools.requested_tools,
         &activity_tools.effective_tools,
     )?;
@@ -145,6 +201,7 @@ pub fn run_cli_backend(
         spec.model.as_deref(),
         &provider_config,
     )
+    .and_then(|config| config.with_reasoning_effort(spec.reasoning_effort))
     .map_err(|err| DispatchError::CliInvocationPermanent(format!("agent config: {err}")))?;
     let agent = Agent::new(&config)
         .map_err(|err| DispatchError::CliInvocationPermanent(format!("agent build: {err}")))?;
@@ -170,6 +227,10 @@ pub fn run_cli_backend(
     let mut subprocess_args = Vec::with_capacity(cli_executor.args.len() + invocation.args.len());
     subprocess_args.extend(cli_executor.args.iter().cloned());
     subprocess_args.extend(invocation.args.iter().cloned());
+    // Combined executor + transport argv is the only place that can honor a
+    // custom `--print-timeout` without duplicating it, and the remaining
+    // spawn deadline is known here. [ORB-11337]
+    apply_provider_runtime_arg_fixups(&provider, &mut subprocess_args, wall_clock_timeout);
 
     // The audit argv reflects what actually runs. Under sandbox-exec the
     // parent is `<trusted sandbox-exec> -f <profile.sb> <program> <args...>`;
@@ -188,6 +249,8 @@ pub fn run_cli_backend(
     let stdin_blob_ref = audit.write_blob(&invocation.stdin);
 
     // L-0095: Provider cwd is advisory; enforce the linked-worktree postcondition.
+    // Inspection owns its temporary checkout separately; retain the original
+    // source pair here so task-worktree ownership validation stays unchanged.
     // Snapshot both sides of a linked-worktree invocation immediately before
     // provider spawn. `tool_ctx.workspace_root` is the registered primary
     // checkout; `subprocess_cwd` is the canonical assigned worktree. Direct
@@ -197,10 +260,33 @@ pub fn run_cli_backend(
         task_ctx.as_ref(),
         run_id,
         &provider,
-        subprocess_cwd.as_deref(),
+        source_cwd.as_deref(),
         tool_ctx.workspace_root.as_deref(),
         declared_worktree_pair.as_ref(),
     )?;
+
+    if let Some(admission) = &trusted_host {
+        tracing::warn!(
+            target: "orbit.trusted_host",
+            run_id,
+            activity_name,
+            provider = %provider,
+            authorized_by = %admission.authorized_by,
+            authorizer_provenance = %admission.authorizer_provenance,
+            workspace_path = %admission.workspace_path,
+            cwd = %admission.cwd,
+            "starting an operator-admitted provider subprocess outside the executor sandbox"
+        );
+        audit.emit_lossy(V2AuditEventKind::TrustedHostExecutionAdmitted {
+            provider: provider.clone(),
+            activity_name: activity_name.to_string(),
+            authorized_by: admission.authorized_by.clone(),
+            authorizer_provenance: admission.authorizer_provenance.clone(),
+            authorized_at: admission.authorized_at.clone(),
+            workspace_path: admission.workspace_path.clone(),
+            cwd: admission.cwd.clone(),
+        });
+    }
 
     let model_redacted = agent.model_name().map(|m| redaction.apply_str(m));
     audit.emit_lossy(V2AuditEventKind::CliInvocationStarted {
@@ -285,7 +371,8 @@ pub fn run_cli_backend(
     // starts the CLI. `dispatch_env` is appended last and later entries win, so
     // this run's identity and tool pinning override any same-named value the
     // allowlist forwarded from an outer process. [ORB-10917]
-    let mut child_env = host.agent_subprocess_environment(invocation.required_env_vars);
+    let mut child_env =
+        provider_child_environment(host, &provider, sandbox, invocation.required_env_vars);
     if registry_locator_injected {
         // A host process may itself have been launched with an operator
         // `ORBIT_ROOT`. Do not reinterpret that pinned-data-root input as the
@@ -355,6 +442,10 @@ pub fn run_cli_backend(
         }
     };
 
+    if let Some(snapshot) = &inspection {
+        snapshot.verify()?;
+    }
+
     if let Some(guard) = linux_post_run_guard {
         guard
             .verify()
@@ -411,16 +502,16 @@ pub fn run_cli_backend(
     // from its diagnostic prefix. Protocol parsing must use that tail so a
     // verbose provider's final Orbit envelope remains authoritative.
     //
-    // [ORB-10946] Reduce the capture to the bytes this provider's protocol
-    // contract may be read from, once, so every check below agrees on what the
-    // agent actually emitted. For all providers but `copilot` this borrows the
-    // capture unchanged; `copilot` streams JSONL agent events that replay
-    // Orbit's own prompt — example envelope included — back as a `user.message`
-    // frame, which the reverse envelope scan would otherwise be free to read as
-    // completion evidence.
-    let protocol_stdout = normalize_cli_stdout(&provider, stdout.protocol_bytes());
-    let stdout_text = String::from_utf8_lossy(protocol_stdout.as_ref());
-    let envelope_status = peek_response_status(stdout_text.as_ref());
+    // Keep invocation telemetry distinct from answer projection. Provider
+    // JSONL carries usage, tool traffic, failures, reasoning, and command
+    // output; those frames belong in the trace and diagnostics, but only
+    // provider-attributed assistant answer content may supply Orbit response
+    // fields or completion status. [ORB-10946] [ORB-11348]
+    let trace_stdout = normalize_cli_stdout(&provider, stdout.protocol_bytes());
+    let answer_stdout = project_cli_response(&provider, stdout.protocol_bytes());
+    let answer_text = String::from_utf8_lossy(answer_stdout.as_ref());
+    let trace_stdout_text = String::from_utf8_lossy(trace_stdout.as_ref());
+    let envelope_status = peek_response_status(answer_text.as_ref());
     // The operator-facing preview stays on the *raw* capture: normalization
     // drops the session control plane, and that is where a provider puts the
     // policy and authentication failures an operator needs to see.
@@ -429,7 +520,7 @@ pub fn run_cli_backend(
         stdout_text_preview(raw_stdout_text.as_ref(), &redaction, stdout.truncated());
     let parsed_result = exit_success.then(|| {
         parse_cli_response_result(
-            protocol_stdout.as_ref(),
+            answer_stdout.as_ref(),
             stderr.protocol_bytes(),
             exit_code,
             duration.as_millis() as u64,
@@ -451,7 +542,7 @@ pub fn run_cli_backend(
     // Only meaningful on an otherwise-clean exit: a timeout or nonzero exit
     // already fails the step with a more specific message.
     let completion_envelope_error = exit_success
-        .then(|| response_envelope_protocol_check(stdout_text.as_ref()))
+        .then(|| response_envelope_protocol_check(answer_text.as_ref()))
         .and_then(Result::err)
         .map(|error| completion_diagnostic(&error.to_string(), &redaction));
     let completion_protocol_violation =
@@ -472,7 +563,7 @@ pub fn run_cli_backend(
         && !completion_status_failure
         && (!spec.require_response_envelope || response_envelope_valid);
     let trace = parse_cli_invocation_trace(
-        protocol_stdout.as_ref(),
+        trace_stdout.as_ref(),
         stderr.protocol_bytes(),
         exit_code,
         duration.as_millis() as u64,
@@ -498,7 +589,7 @@ pub fn run_cli_backend(
                     macos_keychain_auth_diagnostic(
                         &provider,
                         sandbox,
-                        &format!("{stdout_text}\n{stderr_text}"),
+                        &format!("{trace_stdout_text}\n{stderr_text}"),
                     )
                     .map(|diagnostic| format!("{} {diagnostic}", exit_message()))
                 })
@@ -507,8 +598,23 @@ pub fn run_cli_backend(
                 // schema" from any other nonzero exit, and the first two are
                 // configuration faults an operator can act on immediately.
                 .or_else(|| {
-                    provider_invocation_diagnostic(stdout_text.as_ref(), stderr_text.as_ref())
+                    provider_invocation_diagnostic(trace_stdout_text.as_ref(), stderr_text.as_ref())
                         .map(|diagnostic| bounded_diagnostic(&diagnostic, &redaction))
+                })
+                // Antigravity writes terminal `ERROR` on stdout and often
+                // leaves stderr empty. Read the raw capture: normalization
+                // drops failed terminals so they cannot satisfy completion.
+                // [ORB-11337]
+                .or_else(|| {
+                    antigravity_terminal_error_diagnostic(&provider, stdout.protocol_bytes()).map(
+                        |diagnostic| {
+                            format!(
+                                "{} {}",
+                                exit_message(),
+                                bounded_diagnostic(&diagnostic, &redaction)
+                            )
+                        },
+                    )
                 })
                 .unwrap_or_else(exit_message),
         )
@@ -642,6 +748,30 @@ pub fn run_cli_backend(
             trace,
         }),
     })
+}
+
+/// Compose the provider environment while admitting Codex's two documented
+/// CA-bundle overrides only when Orbit's macOS wrapper needs them.
+///
+/// The variables remain outside the general agent baseline: other providers,
+/// bare Codex invocations, and Linux keep their existing environment surface.
+/// The macOS spawn layer supplies a public system bundle only when neither
+/// explicit value is present.
+pub(crate) fn provider_child_environment(
+    host: &dyn RuntimeHost,
+    provider: &str,
+    sandbox: Option<&super::super::dispatcher::ResolvedSandbox>,
+    required_env_vars: &[&str],
+) -> Vec<(String, String)> {
+    let needs_codex_ca_overrides = provider == "codex"
+        && sandbox.is_some_and(|sandbox| sandbox.kind == ExecutorSandboxKind::MacosSandboxExec);
+    if !needs_codex_ca_overrides {
+        return host.agent_subprocess_environment(required_env_vars);
+    }
+
+    let mut env_names = required_env_vars.to_vec();
+    env_names.extend([CODEX_CA_CERTIFICATE_ENV, SSL_CERT_FILE_ENV]);
+    host.agent_subprocess_environment(&env_names)
 }
 
 pub(super) fn resolved_activity_fs_profile_name(fs_profile: Option<&str>) -> &str {

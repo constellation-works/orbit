@@ -21,12 +21,17 @@ pub struct RemoteProxyArgs {
     /// SSH destination accepted by `ssh`, such as a host, `user@host`, or a
     /// configured alias.
     pub ssh_host: String,
+    /// Orchestrator attribution default to configure on the remote server
+    /// [ORB-11313]. Forwarded in the remote argv because the proxy is
+    /// byte-faithful and never edits the JSON-RPC stream.
+    pub orchestrator: Option<String>,
 }
 
 /// Relay this process's MCP stdio directly through one non-PTY SSH child.
 pub fn serve_mcp_remote_proxy(args: RemoteProxyArgs) -> Result<(), OrbitError> {
     let caller_machine_id = local_caller_machine_id();
     let mut command = ssh_command(&args, &caller_machine_id);
+
     tracing::info!(
         ssh_host = %args.ssh_host,
         caller_machine_id = %caller_machine_id,
@@ -60,7 +65,10 @@ pub(super) fn ssh_command(args: &RemoteProxyArgs, caller_machine_id: &str) -> Co
         .arg("-T")
         .arg("--")
         .arg(&args.ssh_host)
-        .arg(remote_serve_command(caller_machine_id))
+        .arg(remote_serve_command(
+            caller_machine_id,
+            args.orchestrator.as_deref(),
+        ))
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
@@ -68,11 +76,24 @@ pub(super) fn ssh_command(args: &RemoteProxyArgs, caller_machine_id: &str) -> Co
 }
 
 /// Remote command whose hidden argument marks an SSH-originated MCP session.
-pub(crate) fn remote_serve_command(caller_machine_id: &str) -> String {
-    format!(
+///
+/// `orchestrator` is the caller's attribution default for the session it is
+/// opening [ORB-11313]. Like the requested authority in `--operator`, it is a
+/// request the destination may replace: a destination whose `authorized_keys`
+/// pins a forced command composes its own argv, and its configuration wins.
+pub(crate) fn remote_serve_command(caller_machine_id: &str, orchestrator: Option<&str>) -> String {
+    let mut command = format!(
         "orbit mcp serve --remote-caller-machine-id {}",
         quote_posix_arg(caller_machine_id)
-    )
+    );
+    if let Some(orchestrator) = orchestrator
+        .map(str::trim)
+        .filter(|orchestrator| !orchestrator.is_empty())
+    {
+        command.push_str(" --orchestrator ");
+        command.push_str(&quote_posix_arg(orchestrator));
+    }
+    command
 }
 
 /// Resolve the caller's persisted machine identity, or the audit-only fallback.

@@ -3,8 +3,8 @@ summary: "Policy & Sandboxing — Overview"
 type: design
 title: "Policy & Sandboxing — Overview"
 owner: claude
-last_updated: 2026-08-15
-last_validated: 2026-08-15
+last_updated: 2026-09-06
+last_validated: 2026-09-06
 status: Draft
 feature: policy-sandbox
 doc_role: overview
@@ -45,7 +45,7 @@ When an activity omits `fsProfile:`, the v2 host uses `UNRESTRICTED_FS_PROFILE`.
 
 `PolicyDef::check_path` evaluates normalized workspace-relative paths against positive and negated rules. The last matching rule wins. Empty positive sets deny with `[]`; unmatched positive sets deny with `<no matching rule>`.
 
-The shipped host policy keeps `.orbit/**` protected, then explicitly re-allows only versioned definitions and configuration: `.orbit/auto_tasks/**`, `.orbit/routines/**`, `.orbit/config.yaml`, `.orbit/config.toml`, and `.orbit/resources/**`. Runtime state, Orbit-owned records, databases, locks, and unknown `.orbit` paths stay protected. These exceptions intersect the activity profile; they do not derive authority from task `context_files`.
+The shipped host policy keeps `.orbit/**` protected, then explicitly re-allows only repository-versioned definitions and configuration: `.orbit/auto_tasks/**`, `.orbit/routines/**`, `.orbit/config.toml`, and `.orbit/resources/**`. Checkout-local `.orbit/config.yaml` is runtime identity, is ignored by the initializer, and remains protected from managed agents. Runtime state, Orbit-owned records, databases, locks, and unknown `.orbit` paths stay protected. These exceptions intersect the activity profile; they do not derive authority from task `context_files`. [ORB-11376]
 
 Linux provider launch materializes a missing write-grant anchor before spawning, because Bubblewrap cannot bind-mount a nonexistent child beneath the read-only `.orbit` parent. The set of anchors is read off the effective profile that compiles the same argv — every narrow re-allow nested under an earlier deny — so it cannot drift from what the kernel enforces, and it is re-derived at each spawn rather than snapshotted once. Materialization runs only inside the disposable worktree, never opens an existing target for writing, and rejects symlinks and filesystem-type mismatches. Task `context_files` are not consulted: they are planning selectors, not policy authority. A grant the plan cannot mount is reported against its path and rule, never silently dropped. [ORB-10602]
 
@@ -94,5 +94,6 @@ When the default policy denies workspace `.orbit/**`, the v2 host re-allows only
 - **[ORB-10560]** — Permit only explicit versioned `.orbit` configuration beneath the default protected boundary.
 - **[ORB-10573]** — Prepare only missing, exactly scoped versioned-config anchors that remain permitted by the effective host policy/profile.
 - **[ORB-10602]** — Derive write-grant anchors from the effective profile at each spawn instead of a hardcoded table plus a context-file snapshot, and report every unmountable grant.
+- **[ORB-11376]** — Keep checkout-local runtime identity outside the agent-write and sandbox-anchor surface; add exact-registration recovery for missing or corrupt identity.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

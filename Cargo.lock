@@ -2084,7 +2084,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orbit-agent"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "chrono",
  "orbit-common",
@@ -2101,8 +2101,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-automation"
+version = "0.19.0"
+dependencies = [
+ "chrono",
+ "croner",
+ "orbit-common",
+ "orbit-store",
+ "orbit-types",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "orbit-cli"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -2135,9 +2152,10 @@ dependencies = [
 
 [[package]]
 name = "orbit-cmd"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "chrono",
+ "flate2",
  "fs2",
  "libc",
  "orbit-common",
@@ -2147,9 +2165,12 @@ dependencies = [
  "orbit-registry",
  "orbit-store",
  "orbit-types",
+ "reqwest",
+ "rsa",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tar",
  "tempfile",
  "toml",
  "tracing",
@@ -2157,7 +2178,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-common"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "chrono",
  "fs2",
@@ -2165,6 +2186,7 @@ dependencies = [
  "orbit-types",
  "proptest",
  "regex",
+ "rsa",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2182,7 +2204,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-config"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "orbit-common",
  "orbit-types",
@@ -2196,12 +2218,14 @@ dependencies = [
 
 [[package]]
 name = "orbit-core"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "croner",
  "fs2",
  "libc",
+ "orbit-automation",
  "orbit-common",
  "orbit-config",
  "orbit-engine",
@@ -2224,7 +2248,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-engine"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "chrono",
  "jsonschema",
@@ -2249,7 +2273,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-exec"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "libc",
  "orbit-common",
@@ -2261,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-mcp"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2283,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-policy"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "chrono",
  "orbit-common",
@@ -2294,7 +2318,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-registry"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "chrono",
  "hostname",
@@ -2308,7 +2332,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-search"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "blake3",
  "chrono",
@@ -2318,7 +2342,6 @@ dependencies = [
  "orbit-common",
  "orbit-types",
  "reqwest",
- "rsa",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2329,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-store"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "blake3",
  "chrono",
@@ -2352,7 +2375,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-tools"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "chrono",
  "orbit-common",
@@ -2372,7 +2395,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-types"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "chrono",
  "clap",
@@ -2389,7 +2412,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-web"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "axum",
  "chrono",

@@ -173,6 +173,28 @@ pub enum V2AuditEventKind {
         /// Compatibility projection of `effective_tools`.
         tools: Vec<String>,
     },
+    /// [ORB-11354] An operator-admitted provider subprocess is about to run
+    /// **outside** the executor's filesystem sandbox.
+    ///
+    /// Emitted immediately before the invocation starts, and only for the one
+    /// activity that may run this way, so the run trail names who authorized an
+    /// unsandboxed process and against which checkout — rather than leaving the
+    /// absence of a sandbox to be inferred from a missing field on
+    /// `cli.invocation.started`.
+    TrustedHostExecutionAdmitted {
+        provider: String,
+        activity_name: String,
+        /// Attribution label of the operator recorded in the run's admission.
+        authorized_by: String,
+        /// How the authorization chokepoint resolved that operator.
+        authorizer_provenance: String,
+        /// RFC 3339 timestamp the admission was stamped.
+        authorized_at: String,
+        /// Canonical checkout the invocation was admitted against.
+        workspace_path: String,
+        /// Canonical working directory of the provider subprocess.
+        cwd: String,
+    },
     /// §7.6 — CLI backend subprocess starting. Emitted after redaction has been
     /// applied to `argv`; the stdin blob is already written and hashed by the
     /// time this event fires.
@@ -263,6 +285,9 @@ impl V2AuditEventKind {
             V2AuditEventKind::ToolDenied { .. } => V2_EVENT_TYPE_TOOL_DENIED,
             V2AuditEventKind::ToolAllowlistHarnessDelegated { .. } => {
                 "tool_allowlist.harness_delegated"
+            }
+            V2AuditEventKind::TrustedHostExecutionAdmitted { .. } => {
+                "trusted_host.execution_admitted"
             }
             V2AuditEventKind::CliInvocationStarted { .. } => "cli.invocation.started",
             V2AuditEventKind::CliInvocationProcess { .. } => "cli.invocation.process",

@@ -1,0 +1,113 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: pr_conflict_recovery
+spec:
+  type: agent_loop
+  description: >
+    Leaf recovery for a typed task-PR rebase conflict. It uses the configured
+    system crew to reconcile the live candidate against its pinned target base,
+    validate the result, and leave the failed step ready for one executor-owned
+    retry.
+  input_schema_json:
+    type: object
+    additionalProperties: false
+    required:
+      - failed_step_id
+      - activity_name
+      - error_message
+      - attempt
+      - max_attempts
+      - recovery_kind
+      - operation
+      - original_base_sha
+      - target_base_sha
+      - conflicting_paths
+      - diagnostic
+    properties:
+      failed_step_id:
+        type: string
+      activity_name:
+        type: string
+      error_message:
+        type: string
+      attempt:
+        type: integer
+        minimum: 1
+      max_attempts:
+        type: integer
+        minimum: 1
+      recovery_kind:
+        const: vcs_conflict
+      operation:
+        const: git_rebase
+      original_base_sha:
+        type: string
+      target_base_sha:
+        type: string
+      conflicting_paths:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      diagnostic:
+        type: string
+      system_crew:
+        type: boolean
+  # Advisory only. The executor judges recovery by retrying the deterministic
+  # rebase step once against the durable Git state.
+  output_schema_json:
+    type: object
+    properties:
+      recovered:
+        type: boolean
+      summary:
+        type: string
+      validations:
+        type: array
+        items:
+          type: string
+  instruction: |
+    You are Orbit's task-PR merge-conflict recovery leaf.
+
+    The executor has already proved that the live `git_rebase` step stopped on
+    actual unmerged index entries. It will retry that same deterministic step
+    exactly once after you return success. You repair only; you do not restart
+    implementation, dispatch or resume a job, create another task or branch,
+    open another PR, push, merge, or change lifecycle status.
+
+    1. Read the supplied conflict evidence. Inspect the current run through
+       `orbit run show "$ORBIT_RUN_ID" --json`, its task, and its checkpointed
+       worktree. Confirm the run, task, checked-out branch, recorded pre-rewrite
+       HEAD, and target base SHA agree before editing. If the run is cancelled,
+       the task refuses writes, or attribution differs, stop without mutation.
+    2. Resolve every supplied conflicting path using the task description,
+       acceptance criteria, candidate changes, and both sides of the conflict.
+       Preserve the candidate intent and the target-base changes. Do not take a
+       whole-file side merely to make the index clean.
+    3. Stage only the resolutions and continue the existing rebase. Do not
+       start a new rebase onto a moving branch name: the supplied
+       `target_base_sha` is authoritative for this attempt.
+    4. Verify that no unmerged index entry or rebase state remains, that the
+       target base SHA is an ancestor of the recovered branch, and that the
+       task candidate is still present. Run focused affected tests followed by
+       the repository-required `make ci-fast` and `make ci-lint` gates.
+    5. Return success only after those checks pass. On ambiguity, validation
+       failure, a concurrently changed branch/base checkpoint, or exhausted
+       resolution, preserve the current evidence and return failed. The job's
+       existing failure handoff will abort the stopped rebase, reuse the same
+       candidate branch/PR, and block the task with the original evidence.
+
+    Return exactly one Orbit response envelope. Result fields are advisory;
+    durable Git state and the executor's deterministic retry decide recovery.
+  tools:
+    - orbit.task.*
+    - proc.spawn
+  proc_allowed_programs:
+    - cargo
+    - git
+    - make
+    - orbit
+    - rg
+  on_denial: terminate
+  wall_clock_timeout_seconds: 3600

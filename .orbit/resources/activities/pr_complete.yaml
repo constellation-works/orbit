@@ -1,0 +1,60 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: pr_complete
+spec:
+  type: deterministic
+  description: >
+    Carry a completion-authorized PR bundle from review to done: drive the open
+    PR to merge through GitHub's own gates, verify it is actually merged, then
+    apply the guarded review -> done transition. Branch protections and required
+    checks are respected; no administrative bypass is available. A no-diff
+    bundle completes without a PR.
+  input_schema_json:
+    type: object
+    required: [job_run_id, completed_task_ids]
+    properties:
+      job_run_id:
+        type: string
+      completed_task_ids:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      workspace_path:
+        type: string
+      pr_number:
+        type: string
+      no_diff_expected:
+        type: boolean
+      max_wait_seconds:
+        type: integer
+        description: >
+          Budget for waiting out required checks. Exceeding it fails the run
+          with the tasks left in review.
+      poll_interval_seconds:
+        type: integer
+      authorized_by:
+        type: string
+  output_schema_json:
+    type: object
+    required: [phase, completed_task_ids, skipped_task_ids]
+    properties:
+      phase:
+        type: string
+      no_diff_expected:
+        type: boolean
+      merge:
+        type: object
+      completed_task_ids:
+        type: array
+        items:
+          type: string
+      skipped_task_ids:
+        type: array
+        items:
+          type: string
+      authorization:
+        type: string
+  action: pr_complete
+  config: {}

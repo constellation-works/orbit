@@ -57,6 +57,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/epic_orchestrator.yaml"),
     ),
     (
+        "agent_invoke",
+        include_str!("../../assets/activities/agent_invoke.yaml"),
+    ),
+    (
         "gate_starvation_fail",
         include_str!("../../assets/activities/gate_starvation_fail.yaml"),
     ),
@@ -109,8 +113,16 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/pr_failure_handoff.yaml"),
     ),
     (
+        "pr_conflict_recovery",
+        include_str!("../../assets/activities/pr_conflict_recovery.yaml"),
+    ),
+    (
         "pr_prepare",
         include_str!("../../assets/activities/pr_prepare.yaml"),
+    ),
+    (
+        "pr_complete",
+        include_str!("../../assets/activities/pr_complete.yaml"),
     ),
     (
         "pr_promote",
@@ -140,6 +152,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "step_failure_recovery",
         include_str!("../../assets/activities/step_failure_recovery.yaml"),
+    ),
+    (
+        "task_complete",
+        include_str!("../../assets/activities/task_complete.yaml"),
     ),
     (
         "task_pilot",
@@ -233,9 +249,17 @@ backend = "cli"
 
         let expected = BTreeMap::from([
             ("agent_implement", ("codex", "gpt-5.6-sol".to_string())),
+            // The exploration invocation names no crew either: an operator
+            // chooses one per submission, and an omitted choice falls through
+            // to the run's crew exactly like every other activity here.
+            ("agent_invoke", ("codex", "gpt-5.6-sol".to_string())),
             ("epic_orchestrator", ("codex", "gpt-5.6-sol".to_string())),
             (
                 "step_failure_recovery",
+                ("codex", "gpt-5.6-luna".to_string()),
+            ),
+            (
+                "pr_conflict_recovery",
                 ("codex", "gpt-5.6-luna".to_string()),
             ),
             ("task_pilot", ("codex", "gpt-5.6-luna".to_string())),
@@ -254,7 +278,10 @@ backend = "cli"
             // crew literally, so none of them depend on a family-specific
             // `[crews]` entry existing on the machine that runs it.
             let activity_input = match *name {
-                "task_pilot" | "step_failure_recovery" | "triage_failed_runs" => {
+                "task_pilot"
+                | "step_failure_recovery"
+                | "pr_conflict_recovery"
+                | "triage_failed_runs" => {
                     inject_system_crew_input(&runtime, &json!({ "system_crew": true }))
                         .expect("inject configured system crew")
                 }
@@ -286,7 +313,9 @@ backend = "cli"
             ("git_rebase", "git_rebase"),
             ("pr_prepare", "pr_prepare"),
             ("pr_failure_handoff", "pr_failure_handoff"),
+            ("pr_complete", "pr_complete"),
             ("pr_promote", "pr_promote"),
+            ("task_complete", "task_complete"),
             ("release_locks", "release_locks"),
             ("list_triage_candidates", "list_triage_candidates"),
             ("scan_unresolved_work", "scan_unresolved_work"),
@@ -526,6 +555,63 @@ backend = "cli"
         }
     }
 
+    /// [ORB-11261] The task-pilot output schema's per-task field types must
+    /// mirror what `apply_task_pilot_results` actually enforces
+    /// (`string_array_value` in `adapter::engine_host::v2_host::task_pilot`),
+    /// so a producer sees the concrete string-array contract for
+    /// `adr_conflicts` and its siblings instead of an avoidable shape failure
+    /// discovered only after full exploration. Optionality (no `required` at
+    /// any level) must survive alongside the added types.
+    #[test]
+    fn task_pilot_output_schema_declares_advisory_field_types() {
+        let (_, yaml) = DEFAULT_ACTIVITY_FILES
+            .iter()
+            .find(|(name, _)| *name == "task_pilot")
+            .expect("task pilot activity is seeded");
+        let asset = load_activity_asset(yaml).expect("parse task pilot activity");
+        let schema = &asset.spec.output_schema_json;
+        assert!(
+            schema.get("required").is_none(),
+            "top-level output schema must stay optional"
+        );
+
+        let task_item = &schema["properties"]["tasks"]["items"];
+        assert_eq!(task_item["type"], serde_json::json!("object"));
+        assert!(
+            task_item.get("required").is_none(),
+            "per-task output schema must stay optional until apply_task_pilot_results validates"
+        );
+
+        let properties = &task_item["properties"];
+        for field in [
+            "blocked_by",
+            "adr_conflicts",
+            "utility_warnings",
+            "surface_warnings",
+            "context_files_before",
+            "context_files_after",
+        ] {
+            assert_eq!(
+                properties[field]["type"],
+                serde_json::json!("array"),
+                "{field} must declare an array type consistent with the deterministic apply parser"
+            );
+            assert_eq!(
+                properties[field]["items"]["type"],
+                serde_json::json!("string"),
+                "{field} items must declare a string type consistent with `string_array_value`"
+            );
+        }
+        assert_eq!(
+            properties["disposition"]["enum"],
+            serde_json::json!(["selectors", "verified_no_diff", "host_operational"])
+        );
+        assert_eq!(
+            properties["recommended_complexity"]["enum"],
+            serde_json::json!(["low", "medium", "hard"])
+        );
+    }
+
     /// [ORB-10129] The triage agent's hard bounds are structural: its tool
     /// allowlist must exclude every write/dispatch surface (code edits,
     /// commits/pushes/merges, PR approval, pipeline invocation, task
@@ -540,7 +626,18 @@ backend = "cli"
             .iter()
             .find(|(name, _)| *name == "triage_failed_runs")
             .expect("triage agent activity is seeded");
+        let workspace_yaml =
+            include_str!("../../../../.orbit/resources/activities/triage_failed_runs.yaml");
+        assert_eq!(
+            *yaml, workspace_yaml,
+            "shipped and workspace triage resources must remain byte-identical"
+        );
         let asset = load_activity_asset(yaml).expect("parse triage agent activity");
+        assert_eq!(
+            asset.spec.fs_profile.as_deref(),
+            Some("reviewer"),
+            "direct triage must not inherit unrestricted workspace writes"
+        );
         match asset.spec.spec {
             ActivityV2Spec::AgentLoop(spec) => {
                 assert!(!yaml.contains("\n  role:"));

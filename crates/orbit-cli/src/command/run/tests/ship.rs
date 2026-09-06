@@ -3,6 +3,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
 use serde_json::json;
 
+use super::super::auto::AutoCommand;
 use super::super::ship::*;
 
 fn ship_args(task_ids: &[&str], mode: ShipMode, base: Option<&str>) -> ShipCommand {
@@ -10,8 +11,30 @@ fn ship_args(task_ids: &[&str], mode: ShipMode, base: Option<&str>) -> ShipComma
         task_ids: task_ids.iter().map(|value| value.to_string()).collect(),
         mode: Some(mode),
         base: base.map(str::to_string),
+        complete: false,
+        allow_crew: Vec::new(),
         json: false,
         claim_token: None,
+    }
+}
+
+/// The same args with the operator's explicit completion authorization.
+fn completing_ship_args(task_ids: &[&str], mode: ShipMode, base: Option<&str>) -> ShipCommand {
+    ShipCommand {
+        complete: true,
+        ..ship_args(task_ids, mode, base)
+    }
+}
+
+fn restricted_ship_args(
+    task_ids: &[&str],
+    mode: ShipMode,
+    base: Option<&str>,
+    crews: &[&str],
+) -> ShipCommand {
+    ShipCommand {
+        allow_crew: crews.iter().map(|crew| (*crew).to_string()).collect(),
+        ..ship_args(task_ids, mode, base)
     }
 }
 
@@ -87,6 +110,17 @@ fn explicit_ship_preserves_local_mode_and_base_override() {
             "task_ids": ["T20260425-2010"],
         })
     );
+}
+
+#[test]
+fn explicit_ship_persists_its_crew_restriction() {
+    let plan = build_plan(
+        &restricted_ship_args(&["T20260425-2010"], ShipMode::Pr, None, &["sol"]),
+        "agent-main",
+    )
+    .expect("build plan");
+
+    assert_eq!(plan.input["allowed_crews"], json!(["sol"]));
 }
 
 #[test]
@@ -238,4 +272,91 @@ fn interactive_ship_inherits_the_shared_in_flight_guard() {
         1,
         "a refused CLI submission must not insert a run"
     );
+}
+
+/// [ORB-11187] `--complete` is the operator's per-invocation authorization for
+/// the run to finish delivery and complete the tasks it ships.
+#[test]
+fn complete_flag_persists_the_completion_policy_in_the_submitted_input() {
+    let plan = build_plan(
+        &completing_ship_args(&["T20260425-2010"], ShipMode::Pr, None),
+        "agent-main",
+    )
+    .expect("build plan");
+
+    assert_eq!(
+        plan.input,
+        json!({
+            "mode": "pr",
+            "base_branch": "agent-main",
+            "task_ids": ["T20260425-2010"],
+            "completion": "done",
+        })
+    );
+}
+
+/// The default is unchanged in the strongest sense available: the submitted run
+/// input is byte-identical to what it was before the flag existed, so nothing
+/// downstream can read a completion policy out of an ordinary submission.
+#[test]
+fn omitting_the_complete_flag_leaves_the_submitted_input_untouched() {
+    for mode in [ShipMode::Pr, ShipMode::Local] {
+        let plan = build_plan(&ship_args(&["T20260425-2010"], mode, None), "agent-main")
+            .expect("build plan");
+
+        assert!(
+            plan.input.get("completion").is_none(),
+            "{mode:?} default submission must not carry a completion policy"
+        );
+    }
+}
+
+/// Both entrypoints must parse the flag; `run auto` states the wider scope.
+#[test]
+fn complete_flag_parses_on_ship_and_auto_with_documented_scope() {
+    use clap::{Args as _, FromArgMatches};
+
+    let matches = ShipCommand::augment_args(clap::Command::new("ship"))
+        .no_binary_name(true)
+        .try_get_matches_from(["T20260425-2010", "--complete"])
+        .expect("`orbit run ship <TASK_ID> --complete` parses");
+    let ship = ShipCommand::from_arg_matches(&matches).expect("build ship command");
+    assert!(ship.complete);
+
+    let matches = AutoCommand::augment_args(clap::Command::new("auto"))
+        .no_binary_name(true)
+        .try_get_matches_from(["--for", "4h", "--complete"])
+        .expect("`orbit run auto --for 4h --complete` parses");
+    let auto = AutoCommand::from_arg_matches(&matches).expect("build auto command");
+    assert!(auto.complete);
+
+    let auto_help = AutoCommand::augment_args(clap::Command::new("auto"))
+        .render_long_help()
+        .to_string();
+    assert!(
+        auto_help.contains("blanket authorization"),
+        "`run auto --complete` must document its window-wide authorization scope"
+    );
+    assert!(
+        auto_help.contains("Off by default"),
+        "`run auto --complete` must document that it is off by default"
+    );
+}
+
+#[test]
+fn allow_crew_parses_on_explicit_ship_and_is_documented() {
+    use clap::{Args as _, FromArgMatches};
+
+    let matches = ShipCommand::augment_args(clap::Command::new("ship"))
+        .no_binary_name(true)
+        .try_get_matches_from(["T20260425-2010", "--allow-crew", "sol,terra"])
+        .expect("explicit ship crew restriction parses");
+    let ship = ShipCommand::from_arg_matches(&matches).expect("build ship command");
+    assert_eq!(ship.allow_crew, vec!["sol", "terra"]);
+
+    let help = ShipCommand::augment_args(clap::Command::new("ship"))
+        .render_long_help()
+        .to_string();
+    assert!(help.contains("--allow-crew"));
+    assert!(help.contains("before a run is created"));
 }

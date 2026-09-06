@@ -7,7 +7,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::{atomic_write_text, sync_parent_dir, with_exclusive_file_lock};
+use orbit_common::fs::io::{
+    atomic_write_text, sync_parent_dir, with_exclusive_file_lock, with_shared_file_lock,
+};
 use orbit_types::task::{
     ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME,
     TASK_COMMENTS_FILE_NAME, TASK_ENVELOPE_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2,
@@ -41,6 +43,10 @@ pub(crate) struct TaskBundleStoreV2 {
     // `tests/test_support.rs`) to access internal state for durability and projection
     // assertions. See ORB-00247 and docs/design-patterns/test_layout.md (widen
     // deliberately rather than keep nested anti-pattern).
+    #[cfg(test)]
+    pub(crate) bundle_reads: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    pub(crate) envelope_reads: std::sync::atomic::AtomicUsize,
     pub(crate) registry: TaskRegistryStore,
     pub(crate) workspace_id: String,
     pub(crate) workspace_orbit_dir: Option<PathBuf>,
@@ -53,6 +59,10 @@ impl TaskBundleStoreV2 {
         workspace_orbit_dir: PathBuf,
     ) -> Self {
         Self {
+            #[cfg(test)]
+            bundle_reads: Default::default(),
+            #[cfg(test)]
+            envelope_reads: Default::default(),
             registry,
             workspace_id,
             workspace_orbit_dir: Some(workspace_orbit_dir),
@@ -61,6 +71,10 @@ impl TaskBundleStoreV2 {
 
     pub(crate) fn new_checkoutless(registry: TaskRegistryStore, workspace_id: String) -> Self {
         Self {
+            #[cfg(test)]
+            bundle_reads: Default::default(),
+            #[cfg(test)]
+            envelope_reads: Default::default(),
             registry,
             workspace_id,
             workspace_orbit_dir: None,
@@ -70,6 +84,65 @@ impl TaskBundleStoreV2 {
     pub(crate) fn bundle_path(&self, task_id: &str) -> Result<PathBuf, OrbitError> {
         self.registry
             .canonical_task_bundle_path(&self.workspace_id, task_id)
+    }
+
+    /// Run `op` while holding this task's exclusive bundle lock.
+    ///
+    /// A lifecycle write spans more than one file — a transition appends to
+    /// `events.jsonl` and republishes `task.yaml` — so it is only a consistent
+    /// unit to a reader that observes the same lock. This store owns the lock
+    /// target for both sides ([`bundle_lock_target`]) precisely so a reader and
+    /// a writer cannot drift onto different files (ORB-11349).
+    pub(crate) fn with_bundle_write_lock<T, F>(&self, task_id: &str, op: F) -> Result<T, OrbitError>
+    where
+        F: FnOnce() -> Result<T, OrbitError>,
+    {
+        with_exclusive_file_lock(
+            &bundle_lock_target(&self.bundle_path(task_id)?),
+            "task artifact v2",
+            op,
+        )
+    }
+
+    /// The caller has durably reserved this ID for one action and input digest.
+    /// Re-enter after a crash under the canonical bundle lock. A readable bundle
+    /// wins; unreadable bytes are retained for explicit recovery.
+    pub(crate) fn create_or_recover_action_bundle(
+        &self,
+        proposed: &TaskBundleV2,
+    ) -> Result<TaskBundleV2, OrbitError> {
+        let id = &proposed.envelope.id;
+        let path = self.bundle_path(id)?;
+        with_exclusive_file_lock(&path, "task action admission", || {
+            // Under the *creation* lock, which does not exclude a lifecycle
+            // write to an already-recovered bundle — so read this the same
+            // coordinated way, or a replay racing a transition would declare a
+            // perfectly good bundle unreadable.
+            if let Ok(existing) = read_bundle_consistently(&path) {
+                self.registry
+                    .register_task_bundle(id, &self.workspace_id, &path)?;
+                if let Some(workspace) = &self.workspace_orbit_dir
+                    && let Err(error) = crate::repository::checkout_projection::rebuild_projection(
+                        &self.registry,
+                        workspace,
+                        &self.workspace_id,
+                    )
+                {
+                    orbit_common::tracing::warn!(task_id=id,error=%error,"recovered action task; checkout projection remains degraded");
+                }
+                remove_task_bundle_lock_sentinel(&task_bundle_lock_sentinel_path(&path)?)?;
+                return Ok(existing);
+            }
+            if path.exists() {
+                return Err(OrbitError::Store(
+                    "action task bundle is unreadable; repair the retained bundle before replay"
+                        .into(),
+                ));
+            }
+            self.create_bundle_locked(id, &path, proposed)?;
+            remove_task_bundle_lock_sentinel(&task_bundle_lock_sentinel_path(&path)?)?;
+            Ok(proposed.clone())
+        })
     }
 
     pub(crate) fn create_bundle(
@@ -184,8 +257,11 @@ impl TaskBundleStoreV2 {
     }
 
     pub(crate) fn read_bundle(&self, task_id: &str) -> Result<TaskBundleV2, OrbitError> {
+        #[cfg(test)]
+        self.bundle_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let bundle_dir = self.bundle_path(task_id)?;
-        read_bundle_at(&bundle_dir)
+        read_bundle_consistently(&bundle_dir)
     }
 
     pub(crate) fn delete_bundle(&self, task_id: &str) -> Result<bool, OrbitError> {
@@ -223,6 +299,9 @@ impl TaskBundleStoreV2 {
         let bindings = self.registry.tasks_for_workspace(&self.workspace_id)?;
         let mut bundles = Vec::with_capacity(bindings.len());
         for binding in &bindings {
+            #[cfg(test)]
+            self.bundle_reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if let Some(bundle) = read_bundle_tolerating_in_flight(&binding.canonical_path)? {
                 bundles.push(bundle);
             }
@@ -236,6 +315,9 @@ impl TaskBundleStoreV2 {
         &self,
         task_id: &str,
     ) -> Result<Option<TaskBundleV2>, OrbitError> {
+        #[cfg(test)]
+        self.bundle_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         read_bundle_tolerating_in_flight(&self.bundle_path(task_id)?)
     }
 
@@ -245,6 +327,9 @@ impl TaskBundleStoreV2 {
         &self,
         task_id: &str,
     ) -> Result<Option<TaskEnvelopeV2>, OrbitError> {
+        #[cfg(test)]
+        self.envelope_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let bundle_dir = self.bundle_path(task_id)?;
         match read_envelope_at(&bundle_dir) {
             Ok(envelope) => Ok(Some(envelope)),
@@ -322,8 +407,34 @@ impl TaskBundleStoreV2 {
     }
 }
 
+/// The lock file coordinating one bundle's readers and writers.
+///
+/// Deliberately *not* the create/delete sentinel, which keys on the bundle
+/// directory itself: a reader must not block a task's creation or removal, and
+/// those transient states stay governed by [`skip_if_in_flight`].
+fn bundle_lock_target(bundle_dir: &Path) -> PathBuf {
+    bundle_dir.join(TASK_ENVELOPE_FILE_NAME)
+}
+
+/// Assemble a whole bundle under this task's shared read lock.
+///
+/// A bundle spans several files, so reading it is only atomic with respect to
+/// a lifecycle write that publishes across those same files if the reader
+/// observes the writer's lock (ORB-11349). Without it a reader could pair an
+/// appended transition event with the envelope the writer had not yet
+/// republished, and report that mismatch as bundle corruption.
+///
+/// Envelope-only reads stay lock-free on purpose: `task.yaml` is renamed into
+/// place atomically, so one file is always self-consistent, and the index
+/// validation that reads it on every listing pays nothing here.
+fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
+        read_bundle_at(bundle_dir)
+    })
+}
+
 fn read_bundle_tolerating_in_flight(bundle_dir: &Path) -> Result<Option<TaskBundleV2>, OrbitError> {
-    match read_bundle_at(bundle_dir) {
+    match read_bundle_consistently(bundle_dir) {
         Ok(bundle) => Ok(Some(bundle)),
         Err(err) => skip_if_in_flight(bundle_dir, err),
     }

@@ -1,15 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
+use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, TaskStatus, task_dependencies_ready};
+use orbit_types::task::{Task, TaskStatus, task_dependencies_ready, unmet_task_dependencies};
+use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
+use crate::runtime::engine::crew::CrewAllowlist;
+
 use super::backlog_exclusion::{
-    EpicFamilyMembership, epic_family_membership, list_backlog_tasks,
-    sort_tasks_for_automatic_dispatch,
+    BacklogTaskExclusionReason, EpicFamilyMembership, allowlist_from_input, backlog_snapshot,
+    epic_family_membership, list_backlog_tasks, sort_tasks_for_automatic_dispatch,
 };
 
 /// The job that supervises one epic root. `classify_workspace_auto_tasks`
@@ -23,6 +27,10 @@ const EPIC_JOB_NAME: &str = "epic_pipeline";
 /// own run input is the only record of the claim in between, and without it
 /// the next iteration would hand the same task to a second child.
 const LEAF_JOB_NAME: &str = "task_auto_pipeline";
+
+/// The drain job itself. Readiness reads its live run to report the ceiling a
+/// running drain is actually admitting under [ORB-11253].
+const DRAIN_JOB_NAME: &str = "workspace_auto_pipeline";
 
 /// Default ceiling on concurrently live leaf runs. Matches the `max_workers`
 /// the fan-out used while the drain waited on its leaves, so steady-state
@@ -39,6 +47,8 @@ const DEFAULT_POLL_SLEEP_SECONDS: u64 = 30;
 /// only things that can change are a task arriving or the detached epic
 /// finishing.
 const DEFAULT_IDLE_SLEEP_SECONDS: u64 = 60;
+
+const MAX_READINESS_LIMIT: usize = 500;
 
 /// Longest drain window a caller may request, in seconds (24h). The window is
 /// the caller's, not a safety property, but an unbounded deadline would let a
@@ -69,12 +79,21 @@ pub(super) fn classify_workspace_auto_tasks(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
-    let max_active_leaf_runs = templated_u64(
+    let submitted_max_active_leaf_runs = templated_u64(
         action,
         input,
         "max_active_leaf_runs",
         DEFAULT_MAX_ACTIVE_LEAF_RUNS,
     )?;
+    // [ORB-11253] The submitted ceiling is a snapshot; the run's own control is
+    // the live one. Reading it here, per iteration, is what makes an adjustment
+    // take effect on the next admission without replacing the coordinator.
+    let worker_limit = live_worker_limit(runtime, input);
+    let max_active_leaf_runs = worker_limit
+        .as_ref()
+        .map_or(submitted_max_active_leaf_runs, |limit| {
+            u64::from(limit.max_active_leaf_runs)
+        });
     let poll_sleep_seconds = templated_u64(
         action,
         input,
@@ -93,9 +112,15 @@ pub(super) fn classify_workspace_auto_tasks(
         .iter()
         .flat_map(|run| run.task_ids.iter().cloned())
         .collect();
-    let free_slots = usize::try_from(max_active_leaf_runs)
-        .unwrap_or(usize::MAX)
-        .saturating_sub(live_leaves.len());
+    let admissions_stop = live_admissions_stop(runtime, input);
+    let admissions_stopped = admissions_stop.is_some();
+    let free_slots = if admissions_stopped {
+        0
+    } else {
+        usize::try_from(max_active_leaf_runs)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(live_leaves.len())
+    };
 
     let backlog = list_backlog_tasks(runtime, action, input)?;
     // Priority/age order is `list_backlog_tasks`'s, and the truncation to the
@@ -118,15 +143,21 @@ pub(super) fn classify_workspace_auto_tasks(
         .collect();
 
     let active_epic = active_epic_run(runtime, action)?;
-    let epic_task_id = match &active_epic {
-        // One epic at a time. `epic_pipeline` declares `max_active_runs: 1`,
-        // so offering a second root would not run it — it would queue a
-        // `pending` run behind the live one, and the drain loop would mint a
-        // fresh one every iteration. Keying on the run rather than on the
-        // root's status also closes the window between a detached submit and
-        // the child's `worktree_setup` moving that root to `in-progress`.
-        Some(_) => None,
-        None => next_admissible_epic_root(runtime, action)?,
+    // One epic at a time. `epic_pipeline` declares `max_active_runs: 1`,
+    // so offering a second root would not run it — it would queue a
+    // `pending` run behind the live one, and the drain loop would mint a
+    // fresh one every iteration. Keying on the run rather than on the
+    // root's status also closes the window between a detached submit and
+    // the child's `worktree_setup` moving that root to `in-progress`.
+    // [ORB-11283] A stopped drain offers no new epic either.
+    let epic_task_id = if admissions_stopped || active_epic.is_some() {
+        None
+    } else {
+        next_admissible_epic_root(
+            runtime,
+            action,
+            allowlist_from_input(runtime, action, input)?.as_ref(),
+        )?
     };
 
     let has_leaves = !loose_task_dispatches.is_empty();
@@ -153,9 +184,380 @@ pub(super) fn classify_workspace_auto_tasks(
         "pending_backlog": pending.len(),
         "active_leaf_runs": live_leaves.len(),
         "free_slots": free_slots,
+        "max_active_leaf_runs": max_active_leaf_runs,
+        "submitted_max_active_leaf_runs": submitted_max_active_leaf_runs,
+        "worker_limit_source": if worker_limit.is_some() { "run_control" } else { "run_input" },
+        "worker_limit": worker_limit,
+        "admissions_stopped": admissions_stopped,
+        "admissions_stop": admissions_stop,
         "active_epic_run_id": active_epic.as_ref().map(|epic| epic.run_id.clone()),
         "active_epic_task_id": active_epic.and_then(|epic| epic.task_id),
     }))
+}
+
+/// Explain the same snapshot that auto-drain uses without performing its
+/// stale-run reconciliation. This is deliberately an observation API: it
+/// neither reserves work nor creates a pipeline run, and its answer can go
+/// stale immediately after the stores are read.
+pub fn explain_workspace_auto_readiness(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+    max_active_leaf_runs: Option<u32>,
+    limit: usize,
+    allowed_crews: &[String],
+) -> Result<Value, OrbitError> {
+    if !(1..=MAX_READINESS_LIMIT).contains(&limit) {
+        return Err(OrbitError::InvalidInput(format!(
+            "readiness limit must be between 1 and {MAX_READINESS_LIMIT}"
+        )));
+    }
+    if max_active_leaf_runs == Some(0) {
+        return Err(OrbitError::InvalidInput(
+            "concurrency must be at least 1".to_string(),
+        ));
+    }
+    // [ORB-11253] Without an explicit `--concurrency`, report what the live
+    // drain is admitting under — including an operator adjustment — rather than
+    // the static default, so readiness and the drain cannot disagree about the
+    // ceiling that decides `capacity_saturated`.
+    let active_drain = active_drain(runtime)?;
+    let (max_active_leaf_runs, limit_source) = match (max_active_leaf_runs, &active_drain) {
+        (Some(requested), _) => (u64::from(requested), "requested"),
+        (None, Some(drain)) => (
+            u64::from(drain.effective_max_active_leaf_runs()),
+            if drain.limit.is_some() {
+                "run_control"
+            } else {
+                "run_input"
+            },
+        ),
+        (None, None) => (DEFAULT_MAX_ACTIVE_LEAF_RUNS, "default"),
+    };
+
+    // Validated here, before any snapshot work, so a typo reads the same way
+    // it would on `orbit run auto --allow-crew`.
+    let allowlist = runtime.crew_allowlist(allowed_crews)?;
+    let snapshot = backlog_snapshot(
+        runtime,
+        "explain_workspace_auto_readiness",
+        allowlist.as_ref(),
+    )
+    .map_err(|error| OrbitError::Execution(format!("read readiness snapshot: {error}")))?;
+    let live_leaves = read_live_leaf_runs(runtime)?;
+    let active_epic = read_active_epic_run(runtime)?;
+    let claimed_by_task =
+        live_leaves
+            .iter()
+            .fold(BTreeMap::<String, Vec<String>>::new(), |mut claims, run| {
+                for task_id in &run.task_ids {
+                    claims
+                        .entry(task_id.clone())
+                        .or_default()
+                        .push(run.run_id.clone());
+                }
+                claims
+            });
+    let admissions_stopped = active_drain
+        .as_ref()
+        .is_some_and(|drain| drain.admissions_stopped());
+    let free_slots = if admissions_stopped {
+        0
+    } else {
+        usize::try_from(max_active_leaf_runs)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(live_leaves.len())
+    };
+    let pending = snapshot
+        .admissible_leaves
+        .iter()
+        .filter(|task| !claimed_by_task.contains_key(&task.id))
+        .map(|task| task.id.clone())
+        .collect::<Vec<_>>();
+    let admitted = pending
+        .iter()
+        .take(free_slots)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let excluded_by_id = snapshot
+        .excluded
+        .iter()
+        .map(|excluded| (excluded.id.as_str(), excluded))
+        .collect::<BTreeMap<_, _>>();
+    let next_epic = if active_epic.is_none() && !admissions_stopped {
+        next_admissible_epic_root(
+            runtime,
+            "explain_workspace_auto_readiness",
+            allowlist.as_ref(),
+        )
+        .map_err(|error| OrbitError::Execution(format!("read epic readiness: {error}")))?
+    } else {
+        None
+    };
+
+    let selected_ids = if task_ids.is_empty() {
+        let mut ids = snapshot
+            .task_lookup
+            .values()
+            .filter(|task| task.status == TaskStatus::Backlog)
+            .cloned()
+            .collect::<Vec<_>>();
+        sort_tasks_for_automatic_dispatch(&mut ids);
+        ids.into_iter().take(limit).map(|task| task.id).collect()
+    } else {
+        let mut ids = task_ids.to_vec();
+        ids.sort();
+        ids.dedup();
+        if let Some(missing) = ids
+            .iter()
+            .find(|id| !snapshot.task_lookup.contains_key(*id))
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "task `{missing}` was not found in this workspace"
+            )));
+        }
+        if ids.len() > limit {
+            return Err(OrbitError::InvalidInput(format!(
+                "readiness selection contains {} tasks; limit is {limit}",
+                ids.len()
+            )));
+        }
+        ids
+    };
+
+    let tasks = selected_ids
+        .iter()
+        .filter_map(|id| snapshot.task_lookup.get(id))
+        .map(|task| {
+            let mut entry = json!({
+                "task_id": task.id,
+                "status": task.status.to_string(),
+                "eligible": false,
+                "reason": "not_backlog",
+            });
+            let Some(object) = entry.as_object_mut() else {
+                unreachable!("readiness task entry is an object");
+            };
+            if task.status != TaskStatus::Backlog {
+                return Value::Object(object.clone());
+            }
+            let unmet = unmet_task_dependencies(task, &snapshot.status_by_id);
+            if !unmet.is_empty() {
+                object.insert("reason".to_string(), Value::String("unmet_dependency".to_string()));
+                object.insert(
+                    "dependencies".to_string(),
+                    json!(unmet
+                        .into_iter()
+                        .map(|dependency| json!({ "task_id": dependency.id, "status": dependency.status }))
+                        .collect::<Vec<_>>()),
+                );
+                return Value::Object(object.clone());
+            }
+            if let Some(excluded) = excluded_by_id.get(task.id.as_str()) {
+                match excluded.reason {
+                    BacklogTaskExclusionReason::CrewNotAllowed => {
+                        object.insert("reason".to_string(), Value::String("crew_not_allowed".to_string()));
+                        object.insert("crew".to_string(), json!(excluded.crew));
+                        object.insert("allowed_crews".to_string(), json!(allowlist.as_ref().map(CrewAllowlist::names)));
+                    }
+                    BacklogTaskExclusionReason::EpicChild => {
+                        object.insert("reason".to_string(), Value::String("epic_managed".to_string()));
+                    }
+                    BacklogTaskExclusionReason::EpicRoot => {
+                        if admissions_stopped {
+                            object.insert(
+                                "reason".to_string(),
+                                Value::String("admissions_stopped".to_string()),
+                            );
+                        } else if active_epic.is_some() {
+                            object.insert("reason".to_string(), Value::String("epic_run_active".to_string()));
+                            object.insert("epic_run_id".to_string(), json!(active_epic.as_ref().map(|run| &run.run_id)));
+                        } else if next_epic.as_deref() == Some(task.id.as_str()) {
+                            object.insert("eligible".to_string(), Value::Bool(true));
+                            object.insert("reason".to_string(), Value::String("ready_as_epic".to_string()));
+                        } else {
+                            object.insert("reason".to_string(), Value::String("queued_behind_epic".to_string()));
+                            object.insert("next_epic_task_id".to_string(), json!(next_epic));
+                        }
+                    }
+                    BacklogTaskExclusionReason::ContextLockConflict
+                    | BacklogTaskExclusionReason::GroupMemberConflict => {
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String(match excluded.reason {
+                                BacklogTaskExclusionReason::ContextLockConflict => "context_lock_conflict",
+                                BacklogTaskExclusionReason::GroupMemberConflict => "group_member_conflict",
+                                _ => unreachable!("lock exclusions are handled above"),
+                            }.to_string()),
+                        );
+                        object.insert(
+                            "conflicts".to_string(),
+                            json!(excluded.conflicts.iter().map(|conflict| json!({
+                                "requested_file": conflict.requested_file,
+                                "locking_task_id": conflict.locking_task_id,
+                            })).collect::<Vec<_>>()),
+                        );
+                    }
+                }
+                return Value::Object(object.clone());
+            }
+            if let Some(run_ids) = claimed_by_task.get(&task.id) {
+                object.insert("reason".to_string(), Value::String("claimed_by_live_child".to_string()));
+                object.insert("run_ids".to_string(), json!(run_ids));
+            } else if admissions_stopped {
+                object.insert(
+                    "reason".to_string(),
+                    Value::String("admissions_stopped".to_string()),
+                );
+            } else if admitted.contains(&task.id) {
+                object.insert("eligible".to_string(), Value::Bool(true));
+                object.insert("reason".to_string(), Value::String("ready".to_string()));
+            } else {
+                object.insert("reason".to_string(), Value::String("capacity_saturated".to_string()));
+                object.insert("active_run_ids".to_string(), json!(live_leaves.iter().map(|run| &run.run_id).collect::<Vec<_>>()));
+            }
+            Value::Object(object.clone())
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "snapshot": {
+            "read_only": true,
+            "limitations": "Snapshot only: eligibility can change immediately and does not guarantee a task will start. No stale-run reconciliation, reservation, task mutation, or run submission was performed.",
+        },
+        "capacity": {
+            "max_active_leaf_runs": max_active_leaf_runs,
+            "active_leaf_runs": live_leaves.len(),
+            "free_slots": free_slots,
+            "limit_source": limit_source,
+            "drain_run_id": active_drain.as_ref().map(|drain| &drain.run_id),
+            "worker_limit": active_drain.as_ref().and_then(|drain| drain.limit.clone()),
+            "admissions_stopped": admissions_stopped,
+            "admissions_stop": active_drain
+                .as_ref()
+                .and_then(|drain| drain.stop.clone()),
+        },
+        "tasks": tasks,
+    }))
+}
+
+impl OrbitRuntime {
+    /// Read-only projection of the current auto-drain admission snapshot.
+    pub fn workspace_auto_readiness(
+        &self,
+        task_ids: &[String],
+        max_active_leaf_runs: Option<u32>,
+        limit: usize,
+        allowed_crews: &[String],
+    ) -> Result<Value, OrbitError> {
+        explain_workspace_auto_readiness(self, task_ids, max_active_leaf_runs, limit, allowed_crews)
+    }
+}
+
+/// The live worker ceiling an operator has set on *this* drain [ORB-11253].
+///
+/// The engine injects the executing run's id into every activity input, which
+/// is the only handle the admission path has on the coordinator whose control
+/// it must read. Absent or unreadable state degrades to the submitted ceiling:
+/// a drain that cannot read its own control must keep admitting at the value it
+/// was started with rather than stalling.
+fn live_worker_limit(runtime: &OrbitRuntime, input: &Value) -> Option<DrainWorkerLimit> {
+    let run_id = input
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    read_drain_worker_limit(runtime, run_id)
+}
+
+fn live_admissions_stop(runtime: &OrbitRuntime, input: &Value) -> Option<DrainAdmissionsStop> {
+    let run_id = input
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    runtime
+        .read_run_state(run_id)
+        .ok()
+        .flatten()
+        .and_then(|state| state.drain_admissions_stop)
+}
+
+/// The live drain run, with both the ceiling it was submitted with and the one
+/// an operator has since set.
+struct ActiveDrain {
+    run_id: String,
+    submitted: u32,
+    limit: Option<DrainWorkerLimit>,
+    stop: Option<DrainAdmissionsStop>,
+}
+
+impl ActiveDrain {
+    fn admissions_stopped(&self) -> bool {
+        self.stop.is_some()
+    }
+
+    fn effective_max_active_leaf_runs(&self) -> u32 {
+        self.limit
+            .as_ref()
+            .map_or(self.submitted, |limit| limit.max_active_leaf_runs)
+    }
+}
+
+/// The workspace's live drain, if one is running. `workspace_auto_pipeline`
+/// declares `max_active_runs: 1`, so there is at most one to report.
+fn active_drain(runtime: &OrbitRuntime) -> Result<Option<ActiveDrain>, OrbitError> {
+    let Some(run) = runtime
+        .stores()
+        .jobs()
+        .list_pending_or_running_job_runs(DRAIN_JOB_NAME)?
+        .into_iter()
+        .next()
+    else {
+        return Ok(None);
+    };
+    let submitted = run
+        .input
+        .as_ref()
+        .and_then(|input| input.get("max_active_leaf_runs"))
+        .and_then(json_u32)
+        .unwrap_or(DEFAULT_MAX_ACTIVE_LEAF_RUNS as u32);
+    let state = runtime
+        .stores()
+        .jobs()
+        .read_run_state(&run.run_id)
+        .ok()
+        .flatten();
+    let limit = state
+        .as_ref()
+        .and_then(|state| state.drain_worker_limit.clone());
+    let stop = state.and_then(|state| state.drain_admissions_stop);
+    Ok(Some(ActiveDrain {
+        run_id: run.run_id,
+        submitted,
+        limit,
+        stop,
+    }))
+}
+
+fn read_drain_worker_limit(runtime: &OrbitRuntime, run_id: &str) -> Option<DrainWorkerLimit> {
+    runtime
+        .stores()
+        .jobs()
+        .read_run_state(run_id)
+        .ok()
+        .flatten()
+        .and_then(|state| state.drain_worker_limit)
+}
+
+/// A durable run-input ceiling. The generic job surface persists every
+/// `--input key=value` as a JSON string, so `"7"` must parse the same as `7`
+/// ([ORB-11273]). Matches `job_input_u32` on the worker-limit write path.
+fn json_u32(value: &Value) -> Option<u32> {
+    match value {
+        Value::Number(number) => number.as_u64().and_then(|value| u32::try_from(value).ok()),
+        Value::String(text) => text.trim().parse::<u32>().ok(),
+        _ => None,
+    }
 }
 
 /// A numeric loop input, tolerating the string a template renders. A step's
@@ -194,6 +596,7 @@ fn templated_u64(
 
 /// A live `task_auto_pipeline` run and the tasks it is carrying.
 struct LiveLeafRun {
+    run_id: String,
     task_ids: Vec<String>,
 }
 
@@ -211,14 +614,19 @@ fn live_leaf_runs(runtime: &OrbitRuntime, action: &str) -> Result<Vec<LiveLeafRu
                 format!("reconcile stale {LEAF_JOB_NAME} runs: {err}"),
             )
         })?;
+    read_live_leaf_runs(runtime)
+        .map_err(|error| action_failed(action, format!("list live {LEAF_JOB_NAME} runs: {error}")))
+}
+
+fn read_live_leaf_runs(runtime: &OrbitRuntime) -> Result<Vec<LiveLeafRun>, OrbitError> {
     let runs = runtime
         .stores()
         .jobs()
-        .list_pending_or_running_job_runs(LEAF_JOB_NAME)
-        .map_err(|err| action_failed(action, format!("list live {LEAF_JOB_NAME} runs: {err}")))?;
+        .list_pending_or_running_job_runs(LEAF_JOB_NAME)?;
     Ok(runs
         .into_iter()
         .map(|run| LiveLeafRun {
+            run_id: run.run_id,
             task_ids: run
                 .input
                 .as_ref()
@@ -258,14 +666,17 @@ fn active_epic_run(
             action: action.to_string(),
             message: format!("reconcile stale {EPIC_JOB_NAME} runs: {err}"),
         })?;
+    read_active_epic_run(runtime).map_err(|error| DispatchError::DeterministicActionFailed {
+        action: action.to_string(),
+        message: format!("list live {EPIC_JOB_NAME} runs: {error}"),
+    })
+}
+
+fn read_active_epic_run(runtime: &OrbitRuntime) -> Result<Option<ActiveEpicRun>, OrbitError> {
     let runs = runtime
         .stores()
         .jobs()
-        .list_pending_or_running_job_runs(EPIC_JOB_NAME)
-        .map_err(|err| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("list live {EPIC_JOB_NAME} runs: {err}"),
-        })?;
+        .list_pending_or_running_job_runs(EPIC_JOB_NAME)?;
     Ok(runs.into_iter().next().map(|run| ActiveEpicRun {
         task_id: run
             .input
@@ -279,10 +690,12 @@ fn active_epic_run(
     }))
 }
 
-/// The highest-priority `backlog` epic root whose dependencies are satisfied.
+/// The highest-priority `backlog` epic root whose dependencies are satisfied
+/// and whose effective crew this run's window permits [ORB-11242].
 fn next_admissible_epic_root(
     runtime: &OrbitRuntime,
     action: &str,
+    allowlist: Option<&CrewAllowlist>,
 ) -> Result<Option<String>, DispatchError> {
     let all_tasks = runtime.stores().tasks().list_tasks().map_err(|err| {
         DispatchError::DeterministicActionFailed {
@@ -309,6 +722,11 @@ fn next_admissible_epic_root(
             task.status == TaskStatus::Backlog
                 && epic_family_membership(task, &task_lookup) == Some(EpicFamilyMembership::Root)
                 && task_dependencies_ready(task, &status_by_id)
+                && allowlist.is_none_or(|allowlist| {
+                    runtime
+                        .effective_task_crew(task)
+                        .is_ok_and(|crew| allowlist.permits(&crew))
+                })
         })
         .collect::<Vec<_>>();
     sort_tasks_for_automatic_dispatch(&mut backlog_epics);
@@ -332,7 +750,11 @@ fn next_admissible_epic_root(
 /// what makes "the window does not affect tasks already in progress" true by
 /// construction: an in-flight child is held by `invoke_and_wait`, not by the
 /// window.
-pub(super) fn drain_window(action: &str, input: &Value) -> Result<Value, DispatchError> {
+pub(super) fn drain_window(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+) -> Result<Value, DispatchError> {
     let now = Utc::now();
     let deadline = match optional_deadline(action, input)? {
         Some(deadline) => deadline,
@@ -349,10 +771,20 @@ pub(super) fn drain_window(action: &str, input: &Value) -> Result<Value, Dispatc
     };
 
     let remaining_seconds = (deadline - now).num_milliseconds() as f64 / 1000.0;
+    let window_expired = remaining_seconds <= 0.0;
+    let admissions_stopped = live_admissions_stop(runtime, input).is_some();
+    let expired = window_expired || admissions_stopped;
     Ok(json!({
         "deadline": deadline.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "expired": remaining_seconds <= 0.0,
-        "remaining_seconds": remaining_seconds.max(0.0),
+        "expired": expired,
+        "remaining_seconds": if admissions_stopped { 0.0 } else { remaining_seconds.max(0.0) },
+        "expired_reason": if admissions_stopped {
+            "admissions_stopped"
+        } else if window_expired {
+            "window"
+        } else {
+            "open"
+        },
     }))
 }
 

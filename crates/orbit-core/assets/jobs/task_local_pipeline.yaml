@@ -5,6 +5,10 @@
 # - If `implement_one` fails, pending changes remain in the shared worktree for inspection.
 # - If all implementations succeed, `commit` snapshots the bundle branch before merge.
 # - Tasks move to `terminal_status` only after the full bundle commits and merges cleanly.
+# - ORB-11187: when the submitting operator authorized completion
+#   (`completion: done`), `complete_tasks` runs *after* `push`, so a failed merge
+#   or a failed push fails the run with the tasks still in `review`. Completion is
+#   never reached by a bundle whose publication did not succeed.
 #
 schemaVersion: 2
 kind: Job
@@ -20,7 +24,16 @@ spec:
     base_branch: main
     base_sync: remote
     landing_branch: ""
+    landing_mode: local
     terminal_status: review
+    # `review` (default) ends successful tasks at review. `done` is explicit
+    # per-invocation operator authorization to finish delivery.
+    completion: review
+    # ORB-11242: the run-scoped crew restriction the auto-drain admitting this
+    # run applied. Empty means unrestricted. This is the innermost carrier: the
+    # agent activities below resolve their crew against this run input, so the
+    # dispatch gate refuses a crew the window excluded before a provider starts.
+    allowed_crews: []
   
   steps:
     - id: worktree
@@ -34,6 +47,7 @@ spec:
         task_ids: "{{ input.task_ids }}"
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
+        landing_mode: "{{ input.landing_mode }}"
 
     - id: implement_bundle
       loop:
@@ -90,3 +104,18 @@ spec:
       default_input:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         branch: "{{ input.base_branch }}"
+
+    # Last: every publication step this invocation required has succeeded by
+    # here, which is the precondition the completion authorization was granted
+    # against.
+    - id: complete_tasks
+      when: "{{ input.completion }} == done"
+      loop:
+        items: "{{ input.task_ids }}"
+        max_iterations: 256
+        steps:
+          - id: complete_one
+            target: activity:task_complete
+            default_input:
+              job_run_id: "{{ steps.worktree.output.job_run_id }}"
+              task_id: "{{ item }}"

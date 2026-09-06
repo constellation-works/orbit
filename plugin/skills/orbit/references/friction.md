@@ -31,8 +31,7 @@ Records live in Orbit's store, keyed by `(workspace_id, friction_id)` — IDs ar
 workspace-local and monthly (`F<YYYY>-<MM>-<NNN>`), so the same ID in two
 workspaces is two unrelated records. Reach them only through `orbit.friction.*`;
 any `.orbit/frictions/` markdown tree is legacy evidence, and editing a file
-there cannot change what a read returns. Bodies are append-only, triage metadata
-is mutable. New records start `open` and may become `triaged` or `resolved`.
+there cannot change what a read returns. Creation is durable; `update` can replace the body and triage metadata. New records start `open` and may become `triaged` or `resolved`.
 
 ```bash
 orbit tool run orbit.friction.add --input '{
@@ -54,8 +53,8 @@ Omitting `title` is allowed and derives one from the body: the opening line,
 minus a leading section label, clamped to 120 characters. Derivation cannot
 invent a subject the opening line doesn't state, so a body opening with a
 section heading gets whatever that section's first sentence says.
-`orbit friction update --title` retitles an existing record without touching its
-append-only body.
+`orbit friction update <ID> --title <title>` retitles an existing record
+without replacing its body.
 
 ## Tags
 
@@ -84,11 +83,13 @@ sends everything to `other` is telling you it's the wrong taxonomy.
 ## Lifecycle
 
 ```bash
-orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"triaged"}'
-orbit tool run orbit.friction.resolve --input '{"id":"<ID>"}'
+orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"triaged","model":"<agent-family>"}'
+orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"resolved","model":"<agent-family>"}'
 ```
 
-`update` also accepts `tags` and `body`.
+`update` also accepts `tags` and `body`. Over MCP, use `orbit_friction_update`
+with `status: resolved`; the separate CLI resolve operation is not an advertised
+MCP tool. Include the selected `workspace` in every MCP example here.
 
 When a task in the **same workspace** as the friction fixes the underlying
 cause, give that task

@@ -418,3 +418,99 @@ fn blocked_task_is_rejected_by_workflow_admission() {
         "blocked task must not appear in backlog discovery"
     );
 }
+
+/// [ORB-11305] A withdrawal that lands while the run is being torn down must
+/// survive the teardown.
+///
+/// The ordering this pins comes straight from the incident: the human withdrew
+/// the task, the orchestrator then cancelled the run that had started it
+/// anyway, and cleanup ran *after* the withdrawal. Blocking the task there
+/// would replace the owner's newer decision with `blocked`, so the withdrawal
+/// has to be re-applied by hand once the run finishes unwinding.
+#[test]
+fn failure_cleanup_leaves_a_newer_human_withdrawal_alone() {
+    for withdrawn_to in [
+        TaskStatus::Proposed,
+        TaskStatus::Someday,
+        TaskStatus::Archived,
+        TaskStatus::Rejected,
+    ] {
+        let (_root, runtime, repo_root) = test_runtime();
+        let task_id = create_backlog_task(&runtime, &repo_root, "withdrawn");
+        let run = insert_running_pipeline_run(&runtime);
+        couple_task(&runtime, &task_id, &run.run_id, TaskStatus::InProgress);
+
+        // The human withdraws while the run is still live.
+        couple_task(&runtime, &task_id, &run.run_id, withdrawn_to);
+
+        // Only then does the cancelled run's cleanup arrive.
+        record_failing_step(&runtime, &run.run_id);
+        finalize_failed(&runtime, &run.run_id);
+
+        assert_eq!(
+            runtime.get_task(&task_id).expect("task").status,
+            withdrawn_to,
+            "{withdrawn_to} is newer than the run's failure and must win"
+        );
+        assert!(
+            failure_history_entries(&runtime, &task_id).is_empty(),
+            "{withdrawn_to} must not be annotated as a workflow failure"
+        );
+    }
+}
+
+/// The counterpart: a task still executing under the failed run is exactly what
+/// this cleanup is for, and must still be blocked. Narrowing the transition
+/// must not turn it off.
+#[test]
+fn failure_cleanup_still_blocks_a_task_left_in_progress() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task_id = create_backlog_task(&runtime, &repo_root, "stranded");
+    let run = insert_running_pipeline_run(&runtime);
+    couple_task(&runtime, &task_id, &run.run_id, TaskStatus::InProgress);
+    record_failing_step(&runtime, &run.run_id);
+    finalize_failed(&runtime, &run.run_id);
+
+    assert_eq!(
+        runtime.get_task(&task_id).expect("task").status,
+        TaskStatus::Blocked
+    );
+    assert_eq!(failure_history_entries(&runtime, &task_id).len(), 1);
+}
+
+/// [ORB-11305] The documented way out of `blocked` still works, and lands the
+/// task somewhere workflow admission accepts — otherwise narrowing admission
+/// would have made every blocked task unrecoverable.
+#[test]
+fn an_explicitly_restarted_blocked_task_is_admissible_again() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task_id = create_backlog_task(&runtime, &repo_root, "recovered");
+    let run = insert_running_pipeline_run(&runtime);
+    couple_task(&runtime, &task_id, &run.run_id, TaskStatus::InProgress);
+    record_failing_step(&runtime, &run.run_id);
+    finalize_failed(&runtime, &run.run_id);
+    assert_eq!(
+        runtime.get_task(&task_id).expect("task").status,
+        TaskStatus::Blocked
+    );
+
+    // `start_task` keeps its own plan prerequisite; that gate is unrelated to
+    // admission and stays exactly where it was.
+    runtime
+        .update_task(
+            &task_id,
+            crate::application::task::TaskUpdateParams {
+                plan: Some("1. Retry the failed step.".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("author a plan");
+    let restarted = runtime
+        .start_task(&task_id, None, None)
+        .expect("a human may restart a blocked task");
+    assert_eq!(restarted.status, TaskStatus::InProgress);
+    let admitted = runtime
+        .ensure_task_can_enter_workflow_as_system(&task_id, "worktree_setup")
+        .expect("an explicitly restarted task is admissible");
+    assert_eq!(admitted.status, TaskStatus::InProgress);
+}

@@ -79,7 +79,7 @@ fn detected_agents_lists_every_family_when_only_copilot_is_present() {
 
     assert_eq!(result.provider.as_deref(), Some("copilot"));
     assert!(prompter.transcript().contains(
-        "Detected agents:\n  Claude CLI         not found\n  Codex CLI          not found\n  Gemini CLI         not found\n  Grok CLI           not found\n  Copilot CLI        found\n  Cursor Agent CLI   not found\n  Ollama CLI         not found"
+        "Detected agents:\n  Claude CLI         not found\n  Codex CLI          not found\n  Antigravity CLI    not found\n  Gemini CLI         not found\n  Grok CLI           not found\n  Copilot CLI        found\n  Cursor Agent CLI   not found\n  Pi CLI             not found\n  OpenCode CLI       not found\n  Ollama CLI         not found"
     ));
 }
 
@@ -106,7 +106,7 @@ fn system_crew_prompt_offers_only_detected_cheap_tier_options() {
     assert!(transcript.contains("gpt-5.6-luna"));
     assert!(transcript.contains("sonnet"));
     assert!(transcript.contains("grok-4.6"));
-    assert!(transcript.contains("gemini-3.7-flash"));
+    assert!(transcript.contains("gemini-3.8-flash"));
     assert!(transcript.contains("System crew [1]: "));
     assert!(!transcript.contains("Custom"));
     assert!(!transcript.contains("gpt-5.6-sol"));

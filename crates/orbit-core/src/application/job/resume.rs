@@ -29,6 +29,7 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
+use orbit_types::workflow::activity_job::run_input_declares_trusted_host;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::Value;
 
@@ -77,6 +78,22 @@ impl OrbitRuntime {
         // `show_job_run` reconciles a stale Running owner first, so a run
         // orphaned by SIGKILL flips to Interrupted before the state guard.
         let source = self.show_job_run(source_run_id)?;
+        // [ORB-11354] A resume reuses the source run's persisted input, which
+        // for a trusted-host invocation would carry its admission forward into
+        // a run nobody authorized now. The mode is per-invocation on purpose,
+        // so resume refuses rather than re-admitting; submitting again is the
+        // operator's explicit re-authorization.
+        if source
+            .input
+            .as_ref()
+            .is_some_and(run_input_declares_trusted_host)
+        {
+            return Err(OrbitError::JobValidation(format!(
+                "job run '{source_run_id}' was an operator-admitted trusted host invocation and \
+                 cannot be resumed; its admission covered that invocation only. Submit a new \
+                 `orbit.agent.invoke` to authorize another one"
+            )));
+        }
         if !matches!(
             source.state,
             JobRunState::Interrupted | JobRunState::Failed | JobRunState::Timeout
@@ -175,6 +192,7 @@ impl OrbitRuntime {
             terminal_only: false,
             created_since: None,
             limit: Some(RESUME_LINEAGE_SCAN_LIMIT),
+            ..Default::default()
         })?;
         // Descendants can appear in any order relative to their parents, so
         // grow the set to a fixpoint rather than in a single pass.

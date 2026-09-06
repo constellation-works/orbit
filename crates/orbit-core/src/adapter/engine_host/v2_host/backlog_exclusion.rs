@@ -8,21 +8,33 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::lock_context_files_for_task;
 
 const MAX_TASK_PARENT_CHAIN_DEPTH: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-struct BacklogTaskExclusion {
-    id: String,
-    reason: BacklogTaskExclusionReason,
-    conflicts: Vec<BacklogTaskConflict>,
+pub(super) struct BacklogTaskExclusion {
+    pub(super) id: String,
+    pub(super) reason: BacklogTaskExclusionReason,
+    pub(super) conflicts: Vec<BacklogTaskConflict>,
+    /// The crew the task would have dispatched as, on a
+    /// [`BacklogTaskExclusionReason::CrewNotAllowed`] exclusion. Naming the
+    /// *effective* crew — not the raw `task.crew`, which is often unset and
+    /// inherited — is what makes the exclusion actionable [ORB-11242].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) crew: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum BacklogTaskExclusionReason {
+pub(super) enum BacklogTaskExclusionReason {
     ContextLockConflict,
+    /// The run window permits a set of crews and this task's effective crew is
+    /// not one of them [ORB-11242]. The task is left in `backlog` exactly as
+    /// it is — never silently re-crewed — and the remaining eligible work
+    /// keeps filling the drain's slots.
+    CrewNotAllowed,
     EpicChild,
     EpicRoot,
     GroupMemberConflict,
@@ -35,9 +47,19 @@ pub(super) enum EpicFamilyMembership {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct BacklogTaskConflict {
-    requested_file: String,
-    locking_task_id: String,
+pub(super) struct BacklogTaskConflict {
+    pub(super) requested_file: String,
+    pub(super) locking_task_id: String,
+}
+
+/// The task population and leaf eligibility result shared by automatic
+/// dispatch and its read-only diagnostic.  Keeping the lock/epic filter here
+/// prevents the diagnostic from becoming a second scheduler.
+pub(super) struct BacklogSnapshot {
+    pub(super) task_lookup: BTreeMap<String, Task>,
+    pub(super) status_by_id: BTreeMap<String, TaskStatus>,
+    pub(super) admissible_leaves: Vec<Task>,
+    pub(super) excluded: Vec<BacklogTaskExclusion>,
 }
 
 fn active_task_lock_holders(
@@ -114,98 +136,12 @@ pub(super) fn list_backlog_tasks(
         // list into the lookup, then clone only the backlog tasks that survive
         // the filter — tens of clones on a large workspace instead of one per
         // task, and one copy held rather than two.
-        let task_lookup: BTreeMap<String, Task> = runtime
-            .stores()
-            .tasks()
-            .list_tasks()
-            .map_err(|err| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("list tasks: {err}"),
-            })?
-            .into_iter()
-            .map(|task| (task.id.clone(), task))
-            .collect();
-        let status_by_id = runtime.task_status_index().map_err(|err| {
-            DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("load global task status projection: {err}"),
-            }
-        })?;
-        let workspace_root = runtime.paths().repo_root.as_path();
-        let lock_holders = active_task_lock_holders(&task_lookup, workspace_root);
-        // `task_lookup` iterates in task-ID order rather than the store's
-        // created-at order; `sort_tasks_for_automatic_dispatch` is a total
-        // order ending in the task ID, so the dispatch sequence is unchanged.
-        let mut backlog: Vec<Task> = task_lookup
-            .values()
-            .filter(|task| {
-                task.status == TaskStatus::Backlog && task_dependencies_ready(task, &status_by_id)
-            })
-            .cloned()
-            .collect();
-        sort_tasks_for_automatic_dispatch(&mut backlog);
-        let mut excluded = Vec::new();
-        backlog.retain(|task| {
-            let Some(membership) = epic_family_membership(task, &task_lookup) else {
-                return true;
-            };
-            excluded.push(BacklogTaskExclusion {
-                id: task.id.clone(),
-                reason: match membership {
-                    EpicFamilyMembership::Root => BacklogTaskExclusionReason::EpicRoot,
-                    EpicFamilyMembership::Child => BacklogTaskExclusionReason::EpicChild,
-                },
-                conflicts: Vec::new(),
-            });
-            false
-        });
-        if !lock_holders.is_empty() {
-            let direct_conflicts: BTreeMap<String, Vec<BacklogTaskConflict>> = backlog
-                .iter()
-                .filter_map(|task| {
-                    let conflicts =
-                        task_overlap_conflicts(task, &task_lookup, &lock_holders, workspace_root);
-                    (!conflicts.is_empty()).then(|| (task.id.clone(), conflicts))
-                })
-                .collect();
-            let mut root_trigger: BTreeMap<String, Vec<BacklogTaskConflict>> = BTreeMap::new();
-            for task in &backlog {
-                if let Some(conflicts) = direct_conflicts.get(&task.id) {
-                    let root_id = task_root_id(task, &task_lookup);
-                    // Backlog is already priority/age sorted; the first direct
-                    // conflict in that order supplies group-member attribution.
-                    root_trigger
-                        .entry(root_id)
-                        .or_insert_with(|| conflicts.clone());
-                }
-            }
-            if !root_trigger.is_empty() {
-                let mut kept = Vec::new();
-                for task in backlog {
-                    let root_id = task_root_id(&task, &task_lookup);
-                    if let Some(trigger_conflicts) = root_trigger.get(&root_id) {
-                        if let Some(conflicts) = direct_conflicts.get(&task.id) {
-                            excluded.push(BacklogTaskExclusion {
-                                id: task.id.clone(),
-                                reason: BacklogTaskExclusionReason::ContextLockConflict,
-                                conflicts: conflicts.clone(),
-                            });
-                        } else {
-                            excluded.push(BacklogTaskExclusion {
-                                id: task.id.clone(),
-                                reason: BacklogTaskExclusionReason::GroupMemberConflict,
-                                conflicts: trigger_conflicts.clone(),
-                            });
-                        }
-                    } else {
-                        kept.push(task);
-                    }
-                }
-                backlog = kept;
-            }
-        }
-        excluded.sort_by(|a, b| a.id.cmp(&b.id));
-        (backlog, Some(excluded))
+        let snapshot = backlog_snapshot(
+            runtime,
+            action,
+            allowlist_from_input(runtime, action, input)?.as_ref(),
+        )?;
+        (snapshot.admissible_leaves, Some(snapshot.excluded))
     } else {
         let tasks = explicit_task_ids
             .iter()
@@ -255,6 +191,153 @@ pub(super) fn list_backlog_tasks(
         );
     }
     Ok(Value::Object(payload))
+}
+
+/// The run-scoped crew allowlist carried on a deterministic action's input
+/// [ORB-11242]. Absent or empty means unrestricted.
+pub(super) fn allowlist_from_input(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+) -> Result<Option<CrewAllowlist>, DispatchError> {
+    runtime.crew_allowlist_from_input(input).map_err(|error| {
+        DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("resolve run crew allowlist: {error}"),
+        }
+    })
+}
+
+pub(super) fn backlog_snapshot(
+    runtime: &OrbitRuntime,
+    action: &str,
+    allowlist: Option<&CrewAllowlist>,
+) -> Result<BacklogSnapshot, DispatchError> {
+    let task_lookup: BTreeMap<String, Task> = runtime
+        .stores()
+        .tasks()
+        .list_tasks()
+        .map_err(|err| DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("list tasks: {err}"),
+        })?
+        .into_iter()
+        .map(|task| (task.id.clone(), task))
+        .collect();
+    let status_by_id =
+        runtime
+            .task_status_index()
+            .map_err(|err| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: format!("load global task status projection: {err}"),
+            })?;
+    let workspace_root = runtime.paths().repo_root.as_path();
+    let lock_holders = active_task_lock_holders(&task_lookup, workspace_root);
+    // `task_lookup` iterates in task-ID order rather than the store's
+    // created-at order; `sort_tasks_for_automatic_dispatch` is a total order
+    // ending in the task ID, so the dispatch sequence is unchanged.
+    let mut backlog: Vec<Task> = task_lookup
+        .values()
+        .filter(|task| {
+            task.status == TaskStatus::Backlog && task_dependencies_ready(task, &status_by_id)
+        })
+        .cloned()
+        .collect();
+    sort_tasks_for_automatic_dispatch(&mut backlog);
+    let mut excluded = Vec::new();
+    // [ORB-11242] The crew filter runs first so an excluded task reports the
+    // reason an operator can act on — reassign it, or run a drain that permits
+    // its crew — rather than a downstream epic/lock reason that would not
+    // explain why a permitted-looking task never started. Everything that
+    // survives keeps its ordinary priority/age order, so the remaining crews
+    // go on filling the drain's slots at the usual rate.
+    if let Some(allowlist) = allowlist {
+        backlog.retain(|task| {
+            match runtime.effective_task_crew(task) {
+                Ok(crew) if allowlist.permits(&crew) => true,
+                // An unresolvable crew fails closed under an explicit
+                // restriction: the drain cannot show it is permitted, and
+                // guessing would spend a budget the operator scoped.
+                resolution => {
+                    excluded.push(BacklogTaskExclusion {
+                        id: task.id.clone(),
+                        reason: BacklogTaskExclusionReason::CrewNotAllowed,
+                        conflicts: Vec::new(),
+                        crew: Some(match resolution {
+                            Ok(crew) => crew.name,
+                            Err(error) => format!("<unresolved: {error}>"),
+                        }),
+                    });
+                    false
+                }
+            }
+        });
+    }
+    backlog.retain(|task| {
+        let Some(membership) = epic_family_membership(task, &task_lookup) else {
+            return true;
+        };
+        excluded.push(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: match membership {
+                EpicFamilyMembership::Root => BacklogTaskExclusionReason::EpicRoot,
+                EpicFamilyMembership::Child => BacklogTaskExclusionReason::EpicChild,
+            },
+            conflicts: Vec::new(),
+            crew: None,
+        });
+        false
+    });
+    if !lock_holders.is_empty() {
+        let direct_conflicts: BTreeMap<String, Vec<BacklogTaskConflict>> = backlog
+            .iter()
+            .filter_map(|task| {
+                let conflicts =
+                    task_overlap_conflicts(task, &task_lookup, &lock_holders, workspace_root);
+                (!conflicts.is_empty()).then(|| (task.id.clone(), conflicts))
+            })
+            .collect();
+        let mut root_trigger: BTreeMap<String, Vec<BacklogTaskConflict>> = BTreeMap::new();
+        for task in &backlog {
+            if let Some(conflicts) = direct_conflicts.get(&task.id) {
+                let root_id = task_root_id(task, &task_lookup);
+                root_trigger
+                    .entry(root_id)
+                    .or_insert_with(|| conflicts.clone());
+            }
+        }
+        if !root_trigger.is_empty() {
+            let mut kept = Vec::new();
+            for task in backlog {
+                let root_id = task_root_id(&task, &task_lookup);
+                if let Some(trigger_conflicts) = root_trigger.get(&root_id) {
+                    excluded.push(BacklogTaskExclusion {
+                        id: task.id.clone(),
+                        reason: if direct_conflicts.contains_key(&task.id) {
+                            BacklogTaskExclusionReason::ContextLockConflict
+                        } else {
+                            BacklogTaskExclusionReason::GroupMemberConflict
+                        },
+                        conflicts: direct_conflicts
+                            .get(&task.id)
+                            .cloned()
+                            .unwrap_or_else(|| trigger_conflicts.clone()),
+                        crew: None,
+                    });
+                } else {
+                    kept.push(task);
+                }
+            }
+            backlog = kept;
+        }
+    }
+    excluded.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(BacklogSnapshot {
+        task_lookup,
+        status_by_id,
+        admissible_leaves: backlog,
+        excluded,
+    })
 }
 
 pub(super) fn sort_tasks_for_automatic_dispatch(tasks: &mut [Task]) {

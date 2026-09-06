@@ -620,6 +620,7 @@ fn count_failed_runs(
             terminal_only: false,
             since: Some(since),
             limit: None,
+            ..Default::default()
         })?;
     }
     Ok(i64::try_from(total).unwrap_or(i64::MAX))
@@ -644,6 +645,7 @@ fn count_active_long_runs(
             terminal_only: true,
             since: Some(since),
             limit: None,
+            ..Default::default()
         })?
         .into_iter()
         .map(|d| i64::try_from(d).unwrap_or(i64::MAX))
@@ -663,6 +665,7 @@ fn count_active_long_runs(
         terminal_only: false,
         since: None,
         limit: None,
+        ..Default::default()
     })?;
 
     let now = Utc::now();

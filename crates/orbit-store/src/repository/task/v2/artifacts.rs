@@ -104,6 +104,34 @@ impl TaskV2Store {
             ));
         }
 
+        use orbit_types::workflow::automation::{EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission};
+        let mut artifacts = fields.upsert_artifacts.clone();
+        for artifact in &mut artifacts {
+            artifact.path = normalize_v2_artifact_path(&artifact.path)?;
+            if artifact.path == EVIDENCE_AUTHORITY_ARTIFACT {
+                return Err(OrbitError::InvalidInput(
+                    "automation evidence authority is reserved for the artifact store".into(),
+                ));
+            }
+        }
+        if let Some(artifact) = artifacts
+            .iter()
+            .find(|a| a.path == "automation-coverage.json")
+            && let Some(run_id) = &fields.owner_run_id
+        {
+            let witness = EvidenceSubmission {
+                action_id: id.into(),
+                evidence_digest: format!("{:x}", Sha256::digest(&artifact.content)),
+                run_id: run_id.clone(),
+            };
+            artifacts.push(orbit_types::task::TaskArtifact {
+                path: EVIDENCE_AUTHORITY_ARTIFACT.into(),
+                media_type: "application/json".into(),
+                content: serde_json::to_vec(&witness)
+                    .map_err(|e| OrbitError::Store(e.to_string()))?,
+                created_by: None,
+            });
+        }
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
             let bundle_dir = self.bundle_store.bundle_path(id)?;
@@ -125,7 +153,7 @@ impl TaskV2Store {
                 .collect::<BTreeMap<_, _>>();
 
             let now = Utc::now();
-            for artifact in &fields.upsert_artifacts {
+            for artifact in &artifacts {
                 let path = normalize_v2_artifact_path(&artifact.path)?;
                 let blob = format!("{TASK_ARTIFACT_FILES_DIR_NAME}/{path}");
                 let destination = files_dir.join(&path);

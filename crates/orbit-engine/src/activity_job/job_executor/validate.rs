@@ -20,7 +20,176 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
     for step in &job.steps {
         validate_step(step)?;
     }
+    validate_step_output_readiness(job)?;
     Ok(())
+}
+
+/// [ORB-11325] Reject a job whose `when:` / `break_when:` reads
+/// `steps.<id>.output` for a step that may be skipped.
+///
+/// `condition::evaluate_bool_expr` renders the whole expression before it
+/// parses it, so both sides of `&&` / `||` render unconditionally; a step
+/// skipped by `when:` records no output at all, so a reference to it fails
+/// with `template.rs`'s "no data recorded for step" error — and fails on
+/// exactly the branch where the referenced step would have been skipped,
+/// which is the branch an author is least likely to exercise first. See
+/// design doc §8.2 for the working alternative and the workarounds that do
+/// not help.
+///
+/// [ORB-11346] "May be skipped" is inherited, not local: `step::run_step`
+/// returns before running any body when a guard is false, so every step
+/// nested in a `parallel:`, `fan_out:`, or `loop:` block under a
+/// `when:`-carrying ancestor is skipped with it and records nothing, however
+/// unguarded the nested step looks on its own.
+///
+/// [ORB-11361] Shared-guard membership is not enough: `when:` is evaluated
+/// before the body, so a step does not yet sit under its own id. A container
+/// `when:` that reads a nested output, or a step `when:` that reads its own
+/// output, is therefore unsafe even though `record_step_guards` stored the
+/// reader id on the referenced step. `break_when` is the opposite — it runs
+/// after the loop body — so the loop's own guard *is* covering there.
+fn validate_step_output_readiness(job: &JobV2) -> Result<(), DispatchError> {
+    let mut guards = HashMap::new();
+    for step in &job.steps {
+        record_step_guards(step, &[], &mut guards);
+    }
+    for step in &job.steps {
+        check_step_output_refs(step, &[], &guards)?;
+    }
+    Ok(())
+}
+
+/// Every `when:` whose false branch skips this step — the step's own guard
+/// plus each enclosing step's, outermost first.
+fn guard_chain(step: &JobV2Step, inherited: &[String]) -> Vec<String> {
+    let mut chain = inherited.to_vec();
+    if step.when.is_some() {
+        chain.push(step.id.clone());
+    }
+    chain
+}
+
+fn record_step_guards(
+    step: &JobV2Step,
+    inherited: &[String],
+    guards: &mut HashMap<String, Vec<String>>,
+) {
+    let chain = guard_chain(step, inherited);
+    match &step.body {
+        JobV2StepBody::Parallel { parallel } => {
+            for branch in &parallel.branches {
+                record_step_guards(branch, &chain, guards);
+            }
+        }
+        JobV2StepBody::FanOut { fan_out, .. } => {
+            record_step_guards(&fan_out.worker, &chain, guards);
+        }
+        JobV2StepBody::Loop { loop_ } => {
+            for body in &loop_.steps {
+                record_step_guards(body, &chain, guards);
+            }
+        }
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
+    }
+    guards.insert(step.id.clone(), chain);
+}
+
+fn check_step_output_refs(
+    step: &JobV2Step,
+    inherited: &[String],
+    guards: &HashMap<String, Vec<String>>,
+) -> Result<(), DispatchError> {
+    let chain = guard_chain(step, inherited);
+    if let Some(expr) = &step.when {
+        // `when:` is evaluated before the body (`step.rs`), so this step's
+        // own id is not yet a covering guard: nested outputs have not run,
+        // and the step cannot read its own output. Only enclosing guards
+        // skip the reader together with the referenced step.
+        check_expr_output_refs(&step.id, expr, inherited, guards)?;
+    }
+    match &step.body {
+        JobV2StepBody::Parallel { parallel } => {
+            for branch in &parallel.branches {
+                check_step_output_refs(branch, &chain, guards)?;
+            }
+        }
+        JobV2StepBody::FanOut { fan_out, .. } => {
+            check_step_output_refs(&fan_out.worker, &chain, guards)?;
+        }
+        JobV2StepBody::Loop { loop_ } => {
+            if let Some(expr) = &loop_.break_when {
+                // `break_when` is evaluated after the loop body
+                // (`loop_block.rs`), so nested body outputs exist whenever
+                // the loop itself ran. The loop's own `when:` is a covering
+                // guard here — unlike the pre-body `when:` check above.
+                check_expr_output_refs(&step.id, expr, &chain, guards)?;
+            }
+            for body in &loop_.steps {
+                check_step_output_refs(body, &chain, guards)?;
+            }
+        }
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
+    }
+    Ok(())
+}
+
+fn check_expr_output_refs(
+    referencing_step: &str,
+    expr: &str,
+    reader_guards: &[String],
+    guards: &HashMap<String, Vec<String>>,
+) -> Result<(), DispatchError> {
+    for referenced_step in output_step_refs(expr) {
+        let Some(referenced_guards) = guards.get(&referenced_step) else {
+            continue;
+        };
+        // A guard the reader itself sits under skips both steps together, so
+        // it can never strand the reader; only a guard outside the reader's
+        // own chain can leave the reader running with nothing recorded.
+        let Some(guard) = referenced_guards
+            .iter()
+            .find(|guard| !reader_guards.contains(guard))
+        else {
+            continue;
+        };
+        let cause = if *guard == referenced_step {
+            format!("step `{referenced_step}` carries its own `when:` and may be skipped")
+        } else {
+            format!(
+                "step `{referenced_step}` runs inside step `{guard}`, which carries a `when:` \
+                 and skips its whole body"
+            )
+        };
+        return Err(DispatchError::JobValidation(format!(
+            "step `{referencing_step}` reads `steps.{referenced_step}.output`, but {cause} — a \
+             `when:` or `break_when:` condition may only read the output of a step that always \
+             runs"
+        )));
+    }
+    Ok(())
+}
+
+/// Extract every `steps.<id>.output...` reference from the `{{ }}` template
+/// tokens in a `when:` / `break_when:` expression, mirroring the token shape
+/// `template::resolve_token` parses at render time.
+fn output_step_refs(expr: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    let mut remaining = expr;
+    while let Some(start) = remaining.find("{{") {
+        let after_start = &remaining[start + 2..];
+        let Some(end) = after_start.find("}}") else {
+            break;
+        };
+        let token = after_start[..end].trim();
+        let mut parts = token.split('.');
+        if parts.next() == Some("steps")
+            && let (Some(step_id), Some("output")) = (parts.next(), parts.next())
+        {
+            refs.push(step_id.to_string());
+        }
+        remaining = &after_start[end + 2..];
+    }
+    refs
 }
 
 /// [ORB-10385] Reject a job whose resolved activities name deterministic

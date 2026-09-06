@@ -40,6 +40,13 @@ spec:
     # ORB-10644: forwarded to each gate run; empty means the base is the
     # landing branch.
     landing_branch: ""
+    # ORB-11187: forwarded to each gate run. `review` is the default everywhere;
+    # `done` is explicit per-invocation operator authorization (`--complete`).
+    completion: review
+    # ORB-11242: opt-in, run-scoped crew restriction. Empty means unrestricted,
+    # which is the behavior of every caller that does not pass it. Forwarded
+    # unchanged so the leaf/epic jobs this run admits inherit the same window.
+    allowed_crews: []
     max_bundles: 10
     concurrency: 5
     max_bundle_size: 5
@@ -51,6 +58,7 @@ spec:
       default_input:
         max_tasks: "{{ input.max_tasks }}"
         task_ids: "{{ input.task_ids }}"
+        allowed_crews: "{{ input.allowed_crews }}"
 
     - id: validate_bundles
       target: activity:validate_bundles
@@ -74,6 +82,8 @@ spec:
               base_branch: "{{ input.base_branch }}"
               base_sync: "{{ input.base_sync }}"
               landing_branch: "{{ input.landing_branch }}"
+              completion: "{{ input.completion }}"
+              allowed_crews: "{{ input.allowed_crews }}"
       fan_in:
         join:
           mode: all

@@ -4,27 +4,51 @@ metadata:
   name: apply_task_pilot_results
 spec:
   type: deterministic
-  description: Validate all task-pilot proposals, then replace only context_files.
+  description: >
+    Partition-isolated, fail-closed task-pilot apply boundary. It validates each
+    partition's exact before snapshots, dispositions, canonical in-workspace
+    file/dir/symbol selectors, and target existence against the prepared source
+    revision when one was pinned. Stale or malformed partitions are reported
+    without writes while independently valid partitions still apply. Every other task
+    field, lifecycle state, dispatch state, and recommendation remains unchanged
+    unless a CI sweep supplies its exact filing record and explicit promotion
+    authority. In that mode only a proposed, selector-backed task with no
+    duplicate, already-landed, conflict, or warning finding advances to backlog;
+    all other findings remain proposed and are classified in the output.
   input_schema_json:
     type: object
-    required: [prepared, results, workspace_path, crew]
+    required: [prepared, results, workspace_path]
     properties:
       prepared: {type: object}
       results: {type: array, items: {type: object}}
       workspace_path: {type: string}
-      crew: {type: string}
+      promotion_authorized: {type: boolean}
+      ci_sweep_filing:
+        oneOf:
+          - type: object
+          - type: "null"
   output_schema_json:
     type: object
-    required: [status, mode, crew, workspace_path, discovery, partition_decisions, partition_count, failed_partitions, tasks]
+    required: [status, error, mode, workspace_path, source, discovery, partition_decisions, partition_count, received_partition_count, failed_partitions, skipped_stale_partitions, tasks, ci_sweep_admission]
     properties:
-      status: {type: string, enum: [success]}
+      status: {type: string, enum: [succeeded, failed]}
+      error:
+        oneOf:
+          - type: string
+          - type: "null"
       mode: {type: string, enum: [automatic, explicit]}
-      crew: {type: string}
       workspace_path: {type: string}
+      source:
+        oneOf:
+          - type: object
+          - type: "null"
       discovery: {type: object}
       partition_decisions: {type: array, items: {type: object}}
       partition_count: {type: number}
+      received_partition_count: {type: number}
       failed_partitions: {type: array, items: {type: object}}
+      skipped_stale_partitions: {type: array, items: {type: object}}
       tasks: {type: array, items: {type: object}}
+      ci_sweep_admission: {type: array, items: {type: object}}
   action: apply_task_pilot_results
   config: {}

@@ -1,8 +1,8 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-08-23
-last_validated: 2026-08-15
+last_updated: 2026-09-05
+last_validated: 2026-09-05
 status: Accepted
 ---
 
@@ -211,6 +211,7 @@ Retired features stay listed with their `_archive/` path as a historical record.
 |---------|--------|------|
 | Activity / Job | [docs/design/activity-job/](./activity-job/) | codex |
 | Agent Families | [docs/design/agent-families/](./agent-families/) | grok |
+| Automation Triggers | [docs/design/automation-triggers/](./automation-triggers/) | codex |
 | Auditability | [docs/design/auditability/](./auditability/) | codex |
 | Executors | [docs/design/executors/](./executors/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
@@ -219,6 +220,7 @@ Retired features stay listed with their `_archive/` path as a historical record.
 | Knowledge graph | [docs/design/_archive/knowledge-graph/](./_archive/knowledge-graph/) | claude |
 | MCP Bridge | [docs/design/mcp-bridge/](./mcp-bridge/) | claude |
 | MCP Session Context | [docs/design/mcp-session-context/](./mcp-session-context/) | codex |
+| Operation Mode | [docs/design/operation-mode/](./operation-mode/) | codex |
 | Orbit Core | [docs/design/orbit-core/](./orbit-core/) | claude |
 | Orbit Docs | [docs/design/orbit-docs/](./orbit-docs/) | claude |
 | Orbit Graph | [docs/design/_archive/orbit-graph/](./_archive/orbit-graph/) | claude |

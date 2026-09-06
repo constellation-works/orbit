@@ -130,6 +130,24 @@ impl JobRunStartOutcome {
     }
 }
 
+/// [ORB-11253] Outcome of a transactional pipeline-state mutation.
+///
+/// A run's state is one document that several writers touch: the engine
+/// checkpoints steps and records child dispatches, and an operator sets run
+/// controls. "Read it, change it, write it" loses whichever change landed in
+/// between, and a run terminalizes on its own worker's schedule, so both the
+/// decision and the write have to happen in one transaction. This is what that
+/// combined operation answers; the two refusals write nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunStateUpdate {
+    /// The state was mutated and persisted.
+    Updated,
+    /// No run with the requested id exists in this workspace.
+    NotFound,
+    /// The run exists but has no persisted pipeline state yet.
+    NoState,
+}
+
 /// Events that drive job run state transitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunEvent {

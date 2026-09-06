@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Recoverable automatic workflows"
 tags: ["activity-job", "workflow", "recovery", "semantic-search"]
-last_validated: 2026-08-15
+last_validated: 2026-09-05
 ---
 
 # Spec: Recoverable Automatic Workflows

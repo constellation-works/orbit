@@ -31,6 +31,8 @@ pub struct CommandMeta {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeNeed {
     Required,
+    /// Read an existing workspace without stale-run reconciliation on open.
+    ReadOnly,
     Forbidden,
     /// Bind the workspace that owns this task ID rather than the one the cwd
     /// or `--workspace` walk would pick [ORB-10797] [ORB-10961].
@@ -208,12 +210,21 @@ impl Commands {
             ),
             Commands::Workspace(command) => {
                 use super::workspace::WorkspacePublicationSubcommand;
+                use super::workspace::WorkspaceSourceRemoteSubcommand;
                 use super::workspace::WorkspaceSubcommand;
                 let (subcommand, runtime_need, governed) = match &command.command {
                     WorkspaceSubcommand::Init(_) => ("init", RuntimeNeed::Forbidden, false),
                     WorkspaceSubcommand::Sync(_) => ("sync", RuntimeNeed::Forbidden, false),
                     WorkspaceSubcommand::List(_) => ("list", RuntimeNeed::Required, false),
                     WorkspaceSubcommand::Show(_) => ("show", RuntimeNeed::Required, false),
+                    WorkspaceSubcommand::SourceRemote(command) => match &command.command {
+                        WorkspaceSourceRemoteSubcommand::Show(_) => {
+                            ("source-remote-show", RuntimeNeed::Required, false)
+                        }
+                        WorkspaceSourceRemoteSubcommand::Rebind(_) => {
+                            ("source-remote-rebind", RuntimeNeed::Required, false)
+                        }
+                    },
                     WorkspaceSubcommand::Role(_) => ("role", RuntimeNeed::Required, false),
                     WorkspaceSubcommand::Publication(command) => match &command.command {
                         WorkspacePublicationSubcommand::Bind(_) => {
@@ -250,15 +261,16 @@ impl Commands {
             }
             Commands::Host(command) => {
                 use super::host::HostSubcommand;
-                let subcommand = match &command.command {
-                    HostSubcommand::Rename(_) => "rename",
+                let (subcommand, runtime_need, json_output) = match &command.command {
+                    HostSubcommand::Show(args) => ("show", RuntimeNeed::Forbidden, args.json),
+                    HostSubcommand::Rename(_) => ("rename", RuntimeNeed::Required, false),
                 };
                 CommandOperation::new(
-                    RuntimeNeed::Required,
+                    runtime_need,
                     Some(admin_meta("host", Some(subcommand), Some("host"), None)),
-                    None,
+                    json_output.then_some(true),
                     false,
-                    runtime_dispatch!(Host),
+                    dispatch_host,
                 )
             }
             Commands::Config(command) => {
@@ -311,9 +323,25 @@ impl Commands {
                 false,
                 dispatch_migrate,
             ),
+            Commands::Update(_) => CommandOperation::new(
+                // Forbidden, not merely unused: opening a workspace here would
+                // auto-apply *this* binary's migrations, when the whole point
+                // is to let the replacement binary apply its own.
+                RuntimeNeed::Forbidden,
+                Some(admin_meta("update", None, Some("installation"), None)),
+                None,
+                false,
+                dispatch_update,
+            ),
             Commands::Run(command) => {
                 use super::run::RunSubcommand;
                 let (subcommand, target_type, target_id, runtime_need) = match &command.command {
+                    RunSubcommand::Agent(_) => (
+                        "agent",
+                        Some("workflow"),
+                        Some("agent_invoke"),
+                        RuntimeNeed::Required,
+                    ),
                     RunSubcommand::Auto(_) => (
                         "auto",
                         Some("workflow"),
@@ -343,6 +371,12 @@ impl Commands {
                         Some("workflow"),
                         Some("triage"),
                         RuntimeNeed::Required,
+                    ),
+                    RunSubcommand::Readiness(_) => (
+                        "readiness",
+                        Some("workspace"),
+                        Some("auto_readiness"),
+                        RuntimeNeed::ReadOnly,
                     ),
                     RunSubcommand::History(args) => (
                         "history",
@@ -376,6 +410,12 @@ impl Commands {
                     ),
                     RunSubcommand::Cancel(args) => (
                         "cancel",
+                        Some("job_run"),
+                        Some(args.run_id.as_str()),
+                        RuntimeNeed::Required,
+                    ),
+                    RunSubcommand::Concurrency(args) => (
+                        "concurrency",
                         Some("job_run"),
                         Some(args.run_id.as_str()),
                         RuntimeNeed::Required,
@@ -454,6 +494,9 @@ impl Commands {
                     TaskSubcommand::Artifact(command) => match &command.command {
                         TaskArtifactSubcommand::Put(args) => {
                             ("artifact-put", Some("task"), Some(args.id.as_str()))
+                        }
+                        TaskArtifactSubcommand::Get(args) => {
+                            ("artifact-get", Some("task"), Some(args.id.as_str()))
                         }
                     },
                     TaskSubcommand::Locks(command) => match &command.command {
@@ -908,6 +951,17 @@ fn dispatch_init(command: Commands, context: DispatchContext<'_>) -> CommandOut 
     }
 }
 
+fn dispatch_host(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+    use super::host::{HostCommand, HostSubcommand};
+    match command {
+        Commands::Host(HostCommand {
+            command: HostSubcommand::Show(args),
+        }) => args.execute_without_runtime(context.root_override),
+        Commands::Host(command) => command.execute(context.runtime()?),
+        _ => dispatch_mismatch("Host"),
+    }
+}
+
 fn dispatch_workspace(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     use super::workspace::{WorkspaceCommand, WorkspaceSubcommand};
     match command {
@@ -954,6 +1008,13 @@ fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) -> CommandO
     }
 }
 
+fn dispatch_update(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+    match command {
+        Commands::Update(command) => command.execute_without_runtime(context.root_override),
+        _ => dispatch_mismatch("Update"),
+    }
+}
+
 fn dispatch_run(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     use super::run::{RunCommand, RunSubcommand};
     match command {
@@ -991,7 +1052,7 @@ fn dispatch_web(command: Commands, context: DispatchContext<'_>) -> CommandOut {
         Commands::Web(WebCommand {
             command: WebSubcommand::Connect(args),
         }) => {
-            orbit_web::connect(args)?;
+            orbit_web::connect(args, context.root_override)?;
             Ok(CommandOutput::Silent)
         }
         _ => dispatch_mismatch("Web"),

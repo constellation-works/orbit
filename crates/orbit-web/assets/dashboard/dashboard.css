@@ -1088,6 +1088,53 @@
         margin: 8px 0 12px;
         overflow-x: auto;
       }
+      .artifact-image-view {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      /* The preview scales down to the detail column instead of forcing the
+         panel to scroll sideways, and never scales a small image up past its
+         own resolution. `height: auto` keeps the aspect ratio at every width. */
+      .artifact-image {
+        display: block;
+        max-width: 100%;
+        height: auto;
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        /* A checkerboard so a transparent PNG reads as transparent rather than
+           as whatever the panel background happens to be. */
+        background-color: var(--bg);
+        background-image:
+          linear-gradient(45deg, var(--border) 25%, transparent 25%),
+          linear-gradient(-45deg, var(--border) 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, var(--border) 75%),
+          linear-gradient(-45deg, transparent 75%, var(--border) 75%);
+        background-size: 16px 16px;
+        background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      }
+      .artifact-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+      }
+      .artifact-error {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--state-failed);
+      }
+      @media (max-width: 760px) {
+        /* Narrow viewports get the full column width and a bounded height, so
+           a tall screenshot cannot push the rest of the task detail offscreen. */
+        .artifact-image {
+          width: 100%;
+          max-height: 60vh;
+          object-fit: contain;
+        }
+      }
       
       .row-detail .meta-line {
         font-family: var(--font-mono);
@@ -1434,6 +1481,51 @@
         align-items: center;
         border-bottom: 1px solid rgba(255, 255, 255, 0.03);
       }
+      #runs-body { overflow-x: auto; }
+      .runs-row.workspace-attributed {
+        grid-template-columns:
+          80px minmax(90px, 0.65fr) minmax(100px, 1fr) minmax(100px, 0.7fr)
+          58px 74px 86px 80px 72px;
+      }
+      .runs-row .run-workspace {
+        color: var(--accent);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .runs-filter {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 16px;
+        border-bottom: 1px solid var(--border);
+        font-family: var(--font-mono);
+        font-size: 11px;
+      }
+      .runs-filter-label { color: var(--fg-dim); margin-right: 2px; }
+      .runs-filter-button {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 3px 9px;
+        background: transparent;
+        color: var(--fg-dim);
+        font: inherit;
+        cursor: pointer;
+      }
+      .runs-filter-button:hover,
+      .runs-filter-button.active {
+        border-color: var(--accent);
+        color: var(--accent);
+        background: var(--accent-dim);
+      }
+      .runs-source-warning {
+        padding: 8px 16px;
+        border-bottom: 1px solid var(--border);
+        color: var(--state-failed);
+        background: rgba(239, 68, 68, 0.08);
+        font-family: var(--font-mono);
+        font-size: 11px;
+      }
       
       .runs-row:last-child {
         border-bottom: none;
@@ -1524,6 +1616,17 @@
         cursor: pointer;
       }
       .runs-sort.active { color: var(--fg); }
+
+      @media (max-width: 760px) {
+        .runs-row { min-width: 790px; }
+        .runs-row.workspace-attributed { min-width: 900px; }
+        .runs-filter,
+        .runs-source-warning {
+          min-width: max-content;
+          position: sticky;
+          left: 0;
+        }
+      }
       
       .scoreboard-row {
         display: grid;
@@ -4091,7 +4194,7 @@
         grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
         align-items: start;
       }
-      .operations-auto-tasks-layout { grid-template-columns: minmax(0, 1fr); }
+      .operations-auto-tasks-layout, .operations-auto-drain-layout { grid-template-columns: minmax(0, 1fr); }
       body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
       .operations-layout .panel { min-width: 0; }
       .tab-pane[data-tab="operations"] .subtabs { border-bottom: 1px solid var(--border); }
@@ -4103,7 +4206,7 @@
       .operation-feedback.pending { color: var(--priority-medium); }
       .operation-feedback.success { color: var(--state-success); }
       .operation-feedback.error { color: var(--state-failed); }
-      #routines-body, #clock-body, #auto-tasks-body { padding: 12px; background: var(--bg); }
+      #routines-body, #clock-body, #auto-tasks-body, #auto-drain-body { padding: 12px; background: var(--bg); }
       .operation-card {
         padding: 12px; margin-bottom: 10px; border: 1px solid var(--border);
         border-radius: 4px; background: var(--bg-elev);
@@ -4274,3 +4377,9 @@
         .incident-surface { flex: 1 1 100%; }
         .incident-actions > * { flex: 1 1 100%; }
       }
+
+/* Delivery diagnostics remain readable on narrow operation cards. */
+.automation-diagnostic { margin-top: 1rem; max-width: 100%; }
+.automation-diagnostic summary { cursor: pointer; font-weight: 600; }
+.automation-diagnostic pre { max-height: 18rem; overflow: auto; padding: .75rem; }
+.automation-diagnostic p, .automation-diagnostic .operation-field-value { overflow-wrap: anywhere; }

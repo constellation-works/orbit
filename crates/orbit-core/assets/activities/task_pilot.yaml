@@ -1,3 +1,4 @@
+# Mirror paths: source-tree/orbit-core/assets/activities/task_pilot.yaml and .orbit/resources/activities/task_pilot.yaml; guarded by scripts/sync-activity-assets.sh --check.
 schemaVersion: 2
 kind: Activity
 metadata:
@@ -11,15 +12,16 @@ spec:
   fsProfile: reviewer
   description: >
     Read-only task preflight for one explicit bounded partition. The pilot
-    inspects the selected workspace and target branch, returns exact canonical
-    context_files proposals plus orchestration recommendations, and has no
-    repository-write, task-update, lifecycle, dispatch, or scheduling grant.
+    inspects the selected workspace at the prepared source revision of the
+    target branch, returns exact canonical context_files proposals plus
+    orchestration recommendations, and has no repository-write, task-update,
+    lifecycle, dispatch, or scheduling grant.
   input_schema_json:
     type: object
     # `crew` is optional here: the pipeline names `system` on the pilot step so
     # the crew is readable in the job definition, while a direct invocation may
     # omit it and inherit the run's resolved crew.
-    required: [task_ids, workspace_path, base_branch, partition_index]
+    required: [task_ids, workspace_path, base_branch, inspection_revision, partition_index]
     properties:
       task_ids:
         type: array
@@ -31,13 +33,21 @@ spec:
         type: string
       base_branch:
         type: string
+      source_revision:
+        type: [string, "null"]
+      inspection_revision:
+        type: [string, "null"]
       partition_index:
         type: number
       crew:
         type: string
   # Agent-returned data is advisory until apply_task_pilot_results validates
-  # the complete fan-in, so keep fields optional at this boundary and let that
-  # validation step — not the schema — reject an incomplete partition.
+  # the complete fan-in, so keep fields optional at this boundary (no
+  # `required` list at any level) and let that validation step — not this
+  # schema — reject an incomplete partition. Field *types* below mirror the
+  # canonical apply parser exactly (e.g. adr_conflicts is an array of plain
+  # strings, never an array of objects) so a producer sees the concrete
+  # contract instead of an avoidable shape failure after full exploration.
   output_schema_json:
     type: object
     properties:
@@ -51,14 +61,69 @@ spec:
         type: array
         items:
           type: object
+          properties:
+            task_id:
+              type: string
+            context_files_before:
+              type: array
+              items:
+                type: string
+            context_files_after:
+              type: array
+              items:
+                type: string
+            disposition:
+              type: string
+              enum: [selectors, verified_no_diff, host_operational]
+            evidence:
+              type: string
+            recommended_crew:
+              type: string
+            recommended_complexity:
+              type: string
+              enum: [low, medium, hard]
+            blocked_by:
+              type: array
+              items:
+                type: string
+            duplicate_of:
+              type: [object, "null"]
+              properties:
+                task_id:
+                  type: string
+                evidence:
+                  type: string
+            already_landed:
+              type: [object, "null"]
+              properties:
+                evidence:
+                  type: string
+            adr_conflicts:
+              type: array
+              items:
+                type: string
+            utility_warnings:
+              type: array
+              items:
+                type: string
+            surface_warnings:
+              type: array
+              items:
+                type: string
       summary:
         type: string
   instruction: |
     You are Orbit's task-pilot for one explicit, bounded partition.
 
     Input contains `task_ids` (one to five exact IDs), `workspace_path`,
-    `base_branch`, and `partition_index`. Work only on those task IDs and
-    treat the workspace as read-only.
+    `base_branch`, `inspection_revision` (null only for a non-Git workspace),
+    `source_revision` (the prepared landing-branch commit),
+    and `partition_index`. Work only on those task IDs and treat the
+    workspace as read-only. The CLI host materializes `inspection_revision`
+    in an invocation-owned checkout and binds `workspace_path`, `repo_root`,
+    subprocess cwd, and filesystem reads to it. Orbit tool calls retain the
+    owning logical workspace through the managed environment; do not route
+    task tools using the temporary checkout path.
 
     For every task:
 
@@ -67,29 +132,59 @@ spec:
        `context_files`. Use `orbit.search` for the task ID and relevant design
        terms; inspect linked decision docs when a result points to one.
     2. With `proc.spawn` run only read-only `git`/`rg` commands. Verify the
-       workspace Git top-level, inspect `base_branch`, and determine every real
-       file, directory, or symbol the stated change would modify or delete.
+       workspace Git top-level and confirm HEAD equals `source_revision`
+       when set. Read candidate files only under this supplied checkout.
+       If `source_revision` is a commit id, inspect
+       that exact snapshot (`git rev-parse`, `git ls-tree`, `git show
+       <source_revision>:<path>`) and treat it as the source of truth for
+       whether a modification target exists. `base_branch` names the landing
+       branch that snapshot belongs to; it is provenance, not a ref to resolve
+       again. If `source_revision` is empty or null, this is a non-Git workspace:
+       inspect the supplied filesystem directly.
        Use the provider-native file-read tool to inspect candidate targets. Do not edit repository files.
     3. Propose `context_files_after` as exact canonical selectors using only
        `file:`, `dir:`, or `symbol:`. Every anchor must already exist inside
-       `workspace_path`; omit read-for-context files. Preserve the exact current
-       list as `context_files_before`.
+       `workspace_path` at `source_revision` when that field is set; omit
+       read-for-context files and working-tree-only or later-commit paths.
+       Preserve the exact current list as `context_files_before`.
     4. If the task genuinely requires no repository diff, return an empty
        `context_files_after`, disposition `verified_no_diff`, and concrete
        `evidence`. For host-operational work use `host_operational` with
        evidence. Otherwise use disposition `selectors`. Never use an empty list
        merely because inspection was inconclusive.
+       For a `ci-failure-sweep` task, compare the runner-tested commit and
+       original run evidence in the task description with the pinned
+       `source_revision`. Inspect relevant history and code at that commit. A failure from an
+       old release whose repair is already present must be `verified_no_diff`
+       with `already_landed` set to an object containing concrete `evidence`;
+       do not return executable selectors for it.
     5. Report recommendations only; do not apply them:
        `recommended_crew`, `recommended_complexity`, real `blocked_by` task IDs,
-       `duplicate_of`, `already_landed`, `adr_conflicts`, `utility_warnings`,
-       and `surface_warnings`. Cite evidence for duplicates/already-landed work
-       and ADR conflicts. Do not choose an architecture alternative silently.
+       `duplicate_of`, `already_landed`, `adr_conflicts` (a legacy output field
+       name kept for consumer compatibility — populate it only with concrete
+       current-code or current-contract conflicts and their evidence; a
+       historical ADR is not by itself a reason to block or reshape work),
+       `utility_warnings`, and `surface_warnings`. Each of these four fields is
+       an array of plain strings, one string per finding combining the finding
+       and its citation — for example a non-empty adr_conflicts entry reads
+       ["the module this task would change still exports the type it removes
+       (verified via rg -n 'pub use Bar' at source_revision)"]; never an array
+       of objects. Cite evidence for duplicates, already-landed work, and any
+       reported conflicts. Do not choose an architecture alternative silently.
+       A prior done repair is evidence to inspect, not blanket immunity: when
+       the failure is from the current integration revision and the defect is
+       still present, leave `duplicate_of` and `already_landed` null and return
+       the selectors for the current repair. Use
+       `{"task_id":"...","evidence":"..."}` for a duplicate and
+       `{"evidence":"..."}` for already-landed work; a bare boolean is not
+       auditable.
 
     Hard bounds:
     - Never update a task, transition lifecycle state, promote, dispatch,
       invoke a pipeline, edit/delete files, commit, push, or open a PR.
     - Never inspect or report on task IDs outside the input partition except
-      when citing a concrete dependency, duplicate, or accepted ADR.
+      when citing a concrete dependency, duplicate, or recorded decision in
+      current maintained docs.
     - Preserve provider provenance: task-pilot is a role, not an actor family.
 
     Return exactly one Orbit response envelope:

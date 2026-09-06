@@ -7,11 +7,10 @@
 #   failure that the run recovers from does not block anything. Commit, branch
 #   preparation, base synchronization, push, PR creation/reuse, and promotion
 #   are independent durable steps, so recovery resumes at the failed phase.
-# - When the run itself terminalizes as `failed` (also `cancelled`/`timeout`),
-#   every task coupled to it (stamped with its `job_run_id` by `worktree_setup`)
-#   is moved to `blocked` with a `workflow_run_failed` status event — a dead end
-#   for automation that requires a human/orchestrator decision to clear. Tasks
-#   already in `review`/`done` are left untouched.
+# - When the run itself terminalizes before PR completion, its recoverable
+#   candidate is published and the task is blocked for reconciliation. Once a
+#   PR was published and the task promoted to review, a completion-stage merge
+#   failure preserves that exact candidate and review state for a safe retry.
 #
 schemaVersion: 2
 kind: Job
@@ -21,8 +20,9 @@ spec:
   state: enabled
   kind: workflow
   max_active_runs: 10
-  # ADR-0246: preserve and publish recoverable work after any terminal step
-  # failure while keeping the original failure authoritative.
+  # Preserve recoverable work after terminal failures while keeping the
+  # original error authoritative. Completion-stage failures retain the
+  # already-published PR instead of fabricating a conflict handoff.
   failure_activity: pr_failure_handoff
   default_input:
     task_ids: []
@@ -34,6 +34,15 @@ spec:
     # dispatcher stacking onto an intermediate branch sets this to the real
     # landing branch so delivery fails closed once that branch has landed.
     landing_branch: ""
+    # ORB-11187: `review` (default) ends the run at the PR handoff. `done` is
+    # explicit per-invocation operator authorization to also merge the PR and
+    # complete the tasks, which only happens after the merge is verified.
+    completion: review
+    # ORB-11242: the run-scoped crew restriction the auto-drain admitting this
+    # run applied. Empty means unrestricted. This is the innermost carrier: the
+    # agent activities below resolve their crew against this run input, so the
+    # dispatch gate refuses a crew the window excluded before a provider starts.
+    allowed_crews: []
     title: null
     body: null
 
@@ -86,7 +95,10 @@ spec:
 
     - id: sync_base
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
-      recovery_activity: step_failure_recovery
+      # Only the typed unmerged-index conflict emitted by git_rebase may
+      # dispatch this leaf. Other VCS failures preserve the original error and
+      # fall through to the terminal candidate handoff without an agent.
+      recovery_activity: pr_conflict_recovery
       target: activity:git_rebase
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
@@ -154,6 +166,28 @@ spec:
       when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
       recovery_activity: step_failure_recovery
       target: activity:pr_promote
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        no_diff_expected: true
+
+    - id: complete_pr
+      when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true"
+      recovery_activity: step_failure_recovery
+      target: activity:pr_complete
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        pr_number: "{{ steps.pr_open.output.pr_number }}"
+
+    # A no-diff bundle delivered nothing to merge; its validation is the
+    # delivery, so completion needs no PR.
+    - id: complete_no_diff
+      when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} == true"
+      recovery_activity: step_failure_recovery
+      target: activity:pr_complete
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         completed_task_ids: "{{ input.task_ids }}"

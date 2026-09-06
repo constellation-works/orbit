@@ -4,7 +4,10 @@ Debug an Orbit job run without guessing. A failed run has multiple layers of evi
 
 ## Quick Triage
 
-Given a run id `<run_id>`:
+Given a run id `<run_id>`, first read it through the authoritative
+`orbit_workflow_run_show` (`id`, `workspace`) or the owning host's
+`orbit run show`. Record the owner host and workspace before inspecting files.
+The following raw-file sequence is a fallback when public readers omit evidence:
 
 1. Locate the run bundle:
 
@@ -35,6 +38,24 @@ orbit run trace <run_id>
 orbit run logs <run_id> --json
 ```
 
+### Verify model routing before reading logs
+
+`orbit run show <run_id> --json` separates three identities: `requested_crew`
+is the submitted `crew` input, `resolved_run_crew` is the run-level routing
+decision, and `activity_provenance` is durable provider/model evidence for
+each agent activity. The latter is the source for actual model routing; it can
+be mixed within one run. `actual_status: "not_started"` means no activity has
+begun, while `"unavailable"` means it began but no invocation evidence is
+available. Do not infer provider usage or token cost from the requested or
+resolved crew, and do not charge deterministic workflow wrapper steps to a
+model.
+
+Activities with `system_crew: true` are routed through `[workflow].system_crew`
+(which overwrites an activity `crew` during dispatch). Other activities use an
+explicit activity `crew` when present, otherwise the run's resolved crew.
+Check `activity_provenance` after execution to verify the effective route,
+especially after changing crew configuration.
+
 Step-scoped variants when the failing step is known: `orbit run show|logs|events <run_id> -s <step_id> --json`.
 
 If these commands fail or omit needed detail, fall back to files under `.orbit/state/` and mention the fallback in your report.
@@ -60,6 +81,12 @@ rg -n 'error|failed|panic|conflict|Validation|Outcome|execution_summary|git push
 
 Do not paste huge transcripts back to the human — summarize the decisive lines and identify the blob/command source.
 
+For CI-failure sweeps, checkout identity is separate runner-log evidence, not
+the API event or pull-request head SHA. The collector streams the full log,
+keeps only a bounded human excerpt, and scans at most 8 MiB for checkout
+evidence. Treat `checkout_identity.state: incomplete`, `missing`, or
+`ambiguous` as a diagnostic; do not fill it from another SHA field.
+
 ## Distinguish Failure Classes
 
 - **Implementation failure:** the agent loop exited nonzero or reported a failed envelope during `implement_one`.
@@ -68,6 +95,32 @@ Do not paste huge transcripts back to the human — summarize the decisive lines
 - **Provider/tooling failure:** provider command failed before useful work, model unavailable, timeout, sandbox denial, tool surface mismatch.
 - **Recovery failure:** the original step failed and `step_failure_recovery` also failed — report both, keep the original step as primary unless recovery caused additional damage.
 - **Parent orchestration failure:** a child run failed and a gate/auto/epic parent is still running or waiting — identify both run ids.
+
+## Operator Agent Invocations
+
+A run of `agent_invoke_pipeline` is not a delivery pipeline. It is one operator
+invocation of an agent for exploration or debugging, submitted with
+`orbit run agent` / `orbit_agent_invoke`, and it changes no task, branch, or
+pull request — so do not look for a worktree, a task lifecycle, or a delivery
+tail when triaging one.
+
+`orbit run show <RUN_ID>` prints an `Invocation:` line for these runs, and
+`--json` carries the same facts under `agent_invocation`:
+
+- `outcome` is the run's own state, never the provider's exit code.
+- `envelope_completed: false` on an otherwise-clean exit means the agent stopped
+  mid-turn: exit zero is not evidence the investigation succeeded.
+- `timed_out: true` means the wall-clock bound killed it — resubmit with a
+  longer `--timeout` (the maximum is 7200s) or a narrower prompt.
+- `summary` and the bounded preview are the answer; `orbit run logs <RUN_ID>`
+  has the complete captured output when the preview is truncated.
+
+These runs execute their provider subprocess outside the executor sandbox by
+explicit per-invocation operator admission, so a sandbox-denial diagnostic is
+never the explanation for one failing. The run trail records the admission as a
+`trusted_host.execution_admitted` audit event naming the authorizing operator
+and the working directory. They are deliberately **not resumable**: the
+admission covered one invocation, so submit a new one rather than resuming.
 
 For recurring signatures and known remedies, read [common-failures.md](common-failures.md) after the initial classification — keep this file focused on investigation flow; add new patterns there.
 
@@ -100,7 +153,8 @@ git -C <workspace_path> log --oneline --decorate --graph --max-count=12 --all
 git -C <workspace_path> ls-remote origin refs/heads/<branch> refs/heads/<base_branch>
 ```
 
-Use `git merge-tree` or a dry-run rebase only to understand conflicts — don't resolve conflicts unless asked to fix the run, not merely investigate it.
+Use read-only `git merge-tree` to understand conflicts; Git rebase has no
+general dry-run mode — don't resolve conflicts unless asked to fix the run, not merely investigate it.
 
 ## Check Live Processes
 
@@ -111,7 +165,8 @@ ps -o pid,ppid,pgid,stat,etime,command -p <pid>
 ps -axo pid,ppid,pgid,stat,etime,command | rg '<run_id>|<workspace_path>|<task_id>'
 ```
 
-If asked to kill a run: match run id → task id(s) → `pid` → `pgid` → command; prefer process-group termination (`kill -TERM -<pgid>`, wait, verify with `ps ... | awk '$3==<pgid>'`); escalate to `kill -KILL -<pgid>` only if children remain and the human clearly asked to kill it; if the killed child belongs to a parent gate/auto run for the same task, inspect the parent and kill it only after verifying it owns the same task(s); report whether the run record updated to `failed`/`cancelled` or still says `running` despite no live process.
+If cancellation is authorized, prefer `orbit run cancel <run_id>` on the owning
+host and inspect its result. If process cleanup is still required: match run id → task id(s) → `pid` → `pgid` → command; prefer process-group termination (`kill -TERM -<pgid>`, wait, verify with `ps ... | awk '$3==<pgid>'`); escalate to `kill -KILL -<pgid>` only if children remain and the human clearly asked to kill it; if the killed child belongs to a parent gate/auto run for the same task, inspect the parent and kill it only after verifying it owns the same task(s); report whether the run record updated to `failed`/`cancelled` or still says `running` despite no live process.
 
 ## Report Format
 

@@ -39,7 +39,7 @@ fn representative_prompt(activity_yaml: &str, input: Value, task: Option<Value>)
         envelope.insert("task".to_string(), task);
     }
 
-    let transport = CodexCliTransport::new(None, "workspace-write".to_string(), None, vec![]);
+    let transport = CodexCliTransport::new(None, None, "workspace-write".to_string(), None, vec![]);
     transport.stdin(&serde_json::to_vec(&envelope).expect("serialize execution envelope"))
 }
 
@@ -107,6 +107,7 @@ mod args {
     #![allow(missing_docs)]
 
     use orbit_common::test_fixtures::TEST_CODEX_MODEL;
+    use orbit_types::identity::ReasoningEffort;
 
     use super::super::super::codex_cli::*;
 
@@ -114,6 +115,7 @@ mod args {
     fn codex_args_use_exec_compatible_approval_config() {
         let transport = CodexCliTransport::new(
             Some(TEST_CODEX_MODEL.to_string()),
+            None,
             "workspace-write".to_string(),
             Some("never".to_string()),
             vec!["/tmp/orbit".to_string()],
@@ -130,6 +132,29 @@ mod args {
                 "workspace-write",
                 "--add-dir",
                 "/tmp/orbit",
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_args_pass_the_resolved_reasoning_effort_as_a_config_override() {
+        let transport = CodexCliTransport::new(
+            Some(TEST_CODEX_MODEL.to_string()),
+            Some(ReasoningEffort::Xhigh),
+            "workspace-write".to_string(),
+            None,
+            vec![],
+        );
+
+        assert_eq!(
+            transport.args(),
+            vec![
+                "--model",
+                TEST_CODEX_MODEL,
+                "--config",
+                "model_reasoning_effort=\"xhigh\"",
+                "--sandbox",
+                "workspace-write",
             ]
         );
     }

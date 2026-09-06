@@ -813,6 +813,19 @@ mod tests {
 
     use super::*;
 
+    /// Make global-init routing entirely fixture-owned even when the test
+    /// binary was launched by a managed Orbit run. This is one scoped guard so
+    /// its process-wide lock also restores the parent environment on drop.
+    fn global_init_env(home: &Path) -> orbit_common::test_env::ScopedEnv {
+        orbit_common::test_env::scoped(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied()
+                .map(|name| (name, None))
+                .chain(std::iter::once(("HOME", home.to_str()))),
+        )
+    }
+
     #[test]
     fn fresh_workspace_init_seeds_disabled_worktree_gc_routine() {
         let temp = tempdir().expect("tempdir");
@@ -1035,9 +1048,7 @@ mod tests {
     #[test]
     fn global_init_seeds_skills_and_home_level_links() {
         let home = tempdir().expect("home tempdir");
-        // The shared guard serializes every HOME mutation in this test binary,
-        // including the runtime resolve tests; a module-local lock did not.
-        let _env = orbit_common::test_env::scoped([("HOME", home.path().to_str())]);
+        let _env = global_init_env(home.path());
 
         let result = init_global(
             None,
@@ -1208,9 +1219,7 @@ mod tests {
     #[test]
     fn global_init_writes_crew_settings_as_custom_crew_to_config_toml() {
         let home = tempdir().expect("home tempdir");
-        // The shared guard serializes every HOME mutation in this test binary,
-        // including the runtime resolve tests; a module-local lock did not.
-        let _env = orbit_common::test_env::scoped([("HOME", home.path().to_str())]);
+        let _env = global_init_env(home.path());
 
         let settings = BTreeMap::from([(
             "custom".to_string(),
@@ -1264,9 +1273,7 @@ mod tests {
     #[test]
     fn global_init_with_existing_config_does_not_overwrite_crew_settings() {
         let home = tempdir().expect("home tempdir");
-        // The shared guard serializes every HOME mutation in this test binary,
-        // including the runtime resolve tests; a module-local lock did not.
-        let _env = orbit_common::test_env::scoped([("HOME", home.path().to_str())]);
+        let _env = global_init_env(home.path());
 
         // Pre-seed config.toml with user content.
         let orbit_root = home.path().join(".orbit");
@@ -1301,9 +1308,7 @@ mod tests {
     #[test]
     fn global_init_without_crew_settings_writes_clean_template() {
         let home = tempdir().expect("home tempdir");
-        // The shared guard serializes every HOME mutation in this test binary,
-        // including the runtime resolve tests; a module-local lock did not.
-        let _env = orbit_common::test_env::scoped([("HOME", home.path().to_str())]);
+        let _env = global_init_env(home.path());
 
         let result = init_global(
             None,

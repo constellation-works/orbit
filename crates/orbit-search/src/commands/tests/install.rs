@@ -10,8 +10,10 @@ use super::super::install::path_execution_fallback_rationale;
 use super::super::install::{
     CompanionIntegrity, CompanionLaunchMode, ManagedCompanion, SemanticInstallParams,
     checksum_from_manifest, companion_launch_mode, default_release_download_source, run,
-    sha256_hex, verify_release_checksum_signature_with_key,
+    sha256_hex,
 };
+
+use orbit_common::security::release::verify_checksum_signature_with_key;
 
 use crate::companion::{
     ensure_semantic_search_supported_for_platform, unsafe_companion_overrides_enabled,
@@ -351,12 +353,11 @@ JXAFgkhiMRYeVULLjCacqxXMFDtH1J7uoowGuJaKUVA7fzq+vk2eBO8i1Wm0fVyK
 iQIDAQAB
 -----END PUBLIC KEY-----"#;
 
-    verify_release_checksum_signature_with_key(manifest.as_bytes(), &signature, public_key)
+    verify_checksum_signature_with_key(manifest.as_bytes(), &signature, public_key)
         .expect("valid signature should verify");
     let tampered = manifest.replace("macos-aarch64", "linux-x86_64");
-    let error =
-        verify_release_checksum_signature_with_key(tampered.as_bytes(), &signature, public_key)
-            .expect_err("tampered manifest should fail signature verification");
+    let error = verify_checksum_signature_with_key(tampered.as_bytes(), &signature, public_key)
+        .expect_err("tampered manifest should fail signature verification");
 
     assert!(
         error

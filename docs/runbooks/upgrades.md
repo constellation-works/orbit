@@ -1,17 +1,96 @@
 ---
 type: runbook
-summary: Review, apply, and verify Orbit workspace-layout and store-schema migrations safely.
+summary: Install a new Orbit release with `orbit update`, then review, apply, and verify workspace-layout and store-schema migrations safely.
 tags: [operations, upgrades, migrations, recovery]
-paths: ["crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**"]
+paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014]
-last_validated: 2026-08-31
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344]
+last_validated: 2026-09-06
 ---
 
 # Upgrade Orbit Safely
 
-Use this runbook before replacing an Orbit binary that may introduce workspace-layout or
+Use this runbook to replace an Orbit binary that may introduce workspace-layout or
 store-schema migrations.
+
+## Upgrade with `orbit update`
+
+```sh
+orbit update --check              # is a newer release published? exits 3 when yes
+orbit update                      # install the newest published release
+orbit update --version 0.19.0     # install one exact release
+orbit update --allow-downgrade --version 0.18.0
+orbit update --json               # machine-readable report
+```
+
+`orbit update` does the whole upgrade in one defined order:
+
+1. Resolve the target version — the newest published release, or the one `--version` names.
+2. Refuse an installation Orbit's own installer does not own. An npm, Homebrew, `cargo
+   install`, or checkout build is reported with the command that *does* upgrade it, before
+   anything is downloaded.
+3. Take an exclusive lock in the install directory, so two updates cannot interleave.
+4. Re-read the installed binary's version under that lock, and on Linux resolve a replaced
+   running inode (`/path/to/orbit (deleted)`) back to the live install path. Equal, newer,
+   and older installed versions are decided from that evidence — a writer that started on
+   an older snapshot cannot overwrite a newer install that finished while it was discovering
+   a release. `--check` stays read-only and does not take the lock.
+5. Download the release archive, authenticate the checksum manifest against the trusted
+   release signing keys, compare the archive's SHA-256, and extract its single `orbit` member
+   into a staging file beside the installed one.
+6. Copy the current executable to `<orbit>.previous`, then swap the staged file in with one
+   atomic same-directory rename, and confirm the installed binary reports the requested
+   version. If it does not, the previous executable is copied into a complete sibling staging
+   file and atomically renamed over the replacement, so concurrent launches see either the
+   complete replacement or the complete previous executable; the retained backup is not consumed
+   and no workspace state is touched.
+7. Run `orbit migrate --confirm`, then `orbit workspace sync` — **using the newly installed
+   binary**, in the selected workspace. Orbit passes the resolved root to both subprocesses;
+   an explicit `--root` remains authoritative even when `ORBIT_ROOT` names another workspace.
+   Only the new binary carries the migrations and managed asset definitions for the version
+   being installed.
+
+Migration runs before managed-asset sync because a layout migration can move the directories
+those assets live in.
+
+Everything before the swap fails with nothing changed. After the swap the command never
+reports success on an incomplete upgrade: it exits `4` with `outcome: needs_recovery` and
+names the step that failed.
+
+### Recovery and resumption
+
+Re-running `orbit update` is the resume. At the installed version it skips the replacement and
+re-runs the same idempotent convergence steps, so a run that failed at `migrate --confirm` or
+`workspace sync` is finished by running it again — or by running that one command directly and
+reading its diagnostics. When `--root` or `ORBIT_ROOT` selected the workspace, recovery output
+includes that root explicitly, so retrying from a different checkout does not silently switch the
+workspace being repaired.
+
+The outgoing executable stays at `<orbit>.previous`. Restore it only if `.orbit/` state was not
+migrated: once a migration has been applied, an older binary refuses to open the workspace by
+design. See [Respect the downgrade guard](#respect-the-downgrade-guard).
+
+Without a root override, `orbit update` converges **the workspace you run it from**. `ORBIT_ROOT`
+selects an environment-only override, while an explicit `--root` takes precedence over it. Run
+the update (or `orbit migrate --confirm` and `orbit workspace sync`) for each other registered
+workspace after upgrading, and restart long-lived Orbit services and pipeline workers so newly
+dispatched agents inherit the replacement build.
+
+### Downgrades
+
+A release older than the **currently installed** binary — re-read under the update lock, not
+the version the running process started with — is refused unless `--allow-downgrade` is passed.
+Even then, the staged older binary must be able to open this workspace's state — `orbit update`
+runs its `migrate --dry-run` *before* replacing anything and aborts, with that binary's own
+diagnostic, when it cannot.
+
+### Release mirrors
+
+`ORBIT_UPDATE_RELEASE_DIR` points `orbit update` at a local mirror instead of GitHub Releases,
+for air-gapped or staged rollouts. The layout is `latest-version.txt` plus
+`v<version>/{orbit-<target>.tar.gz,orbit-checksums.txt,orbit-checksums.txt.sig}`. Signature and
+checksum verification are unchanged — a mirror does not lower the bar. `ORBIT_INSTALL_REPO`
+selects a different GitHub repository, as it does for `install.sh`.
 
 ## Understand the version ledgers
 
@@ -78,20 +157,18 @@ Upgrade the binary. Never hand-edit `layout.version` to force the workspace open
 
 ## Verify the upgrade
 
-After reviewing the dry run:
+`orbit update` performs steps 1–3 below for the workspace it runs in. Do the same by hand when
+a package manager owns the binary, and run steps 2–5 in every other registered workspace:
 
 1. Replace or upgrade the binary.
-2. From each initialized, registered workspace, run `orbit workspace sync --check` to review
-   newly shipped, refreshed, retired, or manifest-migration actions. It is read-only and exits
-   nonzero when managed artifacts need convergence.
+2. Run `orbit migrate` (or `orbit migrate --dry-run`) to review pending layout/store changes,
+   then `orbit migrate --confirm` to apply them.
 3. Run `orbit workspace sync` to apply the provenance-safe managed-artifact actions. Operator
    edits, user-authored name collisions, and existing routine `name`/`hosts` bindings are
-   preserved and reported with their paths.
-4. Run `orbit migrate` (or `orbit migrate --dry-run`) to review any still-pending layout/store
-   changes.
-5. Run `orbit migrate --confirm` to apply those migrations.
-6. Run `orbit doctor` and require all relevant checks to pass.
-7. Restart any independently managed dashboard process after swapping the binary.
+   preserved and reported with their paths. `orbit workspace sync --check` reviews the same
+   actions read-only and exits nonzero when managed artifacts need convergence.
+4. Run `orbit doctor` and require all relevant checks to pass.
+5. Restart any independently managed dashboard process after swapping the binary.
 
 These commands are intentionally independent. `workspace sync` converges local definitions
 embedded in the installed binary; it does not install a newer binary, pull a repository, sync

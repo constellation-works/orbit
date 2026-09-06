@@ -11,7 +11,8 @@
 //! Agent provider abstraction for Orbit. Two transport families coexist:
 //!
 //! - **CLI transports** — drive `claude`, `codex`, `gemini`, `grok`, `copilot`,
-//!   `cursor-agent`, `ollama`, or `mock` as subprocesses through
+//!   `cursor-agent`, `ollama`, `opencode`, `pi`, or `mock` as subprocesses
+//!   through
 //!   [`AgentRuntime`]. Each runtime builds an
 //!   [`AgentInvocationSpec`] (program, args, stdin envelope) that the engine
 //!   executes through `orbit-exec`; responses are parsed via
@@ -63,7 +64,10 @@ mod types;
 
 pub use agent::{Agent, AgentConfig, ProviderOptions};
 pub use orbit_types::telemetry::{InvocationTrace, TokenUsage, ToolCallTrace};
-pub use providers::normalize_cli_stdout;
+pub use providers::{
+    antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout, normalize_cli_stdout,
+    project_cli_response,
+};
 pub use runtime::AgentRuntime;
 pub use types::{AgentInvocationSpec, AgentOperation, AgentRequest, AgentResponseStatus};
 pub use types::{

@@ -7,12 +7,14 @@ use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_common::observability::logging::init_default_subscriber;
+use orbit_common::test_env::{INHERITED_AUTHORITY_ENV, unset};
 use orbit_tools::{ToolContext, ToolRegistry};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
 #[test]
 fn policy_denials_emit_redacted_jsonl_tracing_events() {
+    let _env_guard = unset(INHERITED_AUTHORITY_ENV.iter().copied());
     let home = tempdir().expect("create temp home");
     let log_path = home.path().join(".orbit/state/logs/orbit.jsonl");
 

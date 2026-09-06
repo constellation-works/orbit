@@ -19,6 +19,14 @@ spec:
   max_active_runs: 1
   default_input:
     epic_task_id: ""
+    # ORB-11187: local mode has always completed the epic root itself (the
+    # `mark_done` step below), so this governs PR-mode delivery: `done`
+    # authorizes merging the epic PR and completing the root.
+    completion: review
+    # ORB-11242: opt-in, run-scoped crew restriction. Empty means unrestricted,
+    # which is the behavior of every caller that does not pass it. Forwarded
+    # unchanged so the leaf/epic jobs this run admits inherit the same window.
+    allowed_crews: []
 
   steps:
     - id: resolve_ship_input
@@ -71,6 +79,7 @@ spec:
                       auto_push: false
                       landing_branch: "{{ steps.resolve_ship_input.output.base_branch }}"
                       terminal_status: done
+                      allowed_crews: "{{ input.allowed_crews }}"
                     timeout_seconds: 7200
 
                 - id: require_child_success
@@ -203,6 +212,31 @@ spec:
       default_input:
         task_id: "{{ input.epic_task_id }}"
         status: review
+
+    - id: complete_pr
+      when: "{{ steps.resolve_ship_input.output.mode }} == pr && {{ input.completion }} == done && {{ steps.commit_delivery.output.skipped_no_diff_expected }} != true"
+      target: activity:pr_complete
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids:
+          - "{{ input.epic_task_id }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        pr_number: "{{ steps.pr_open.output.pr_number }}"
+
+    - id: complete_pr_no_diff
+      when: "{{ steps.resolve_ship_input.output.mode }} == pr && {{ input.completion }} == done && {{ steps.commit_delivery.output.skipped_no_diff_expected }} == true"
+      # `pr_complete`'s no_diff_expected branch asserts the no-diff-expected tag
+      # on every task, which is correct for task_pr_pipeline (where the tag is
+      # what implied skipped_no_diff_expected in the first place) but wrong
+      # here: `commit_delivery` above sets allow_empty: true unconditionally,
+      # so an ordinary untagged epic root can land this branch too. `promote_pr_no_diff`
+      # already routes around pr_promote's equivalent guard for the same
+      # reason; task_complete is the tag-agnostic status-only transition that
+      # matches it.
+      target: activity:task_complete
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        task_id: "{{ input.epic_task_id }}"
 
     - id: merge
       when: "{{ steps.resolve_ship_input.output.mode }} == local"

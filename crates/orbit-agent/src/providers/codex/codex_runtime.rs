@@ -22,16 +22,13 @@ pub(crate) struct CodexFactory;
 impl CodexRuntime {
     pub(crate) fn new(
         command: String,
-        model: Option<String>,
-        sandbox: String,
-        approval_policy: Option<String>,
-        writable_dirs: Vec<String>,
+        cli: CodexCliTransport,
         runtime_key: &'static str,
         required_env_vars: &'static [&'static str],
     ) -> Self {
         Self {
             command,
-            cli: CodexCliTransport::new(model, sandbox, approval_policy, writable_dirs),
+            cli,
             runtime_key,
             required_env_vars,
         }
@@ -82,10 +79,13 @@ impl AgentRuntimeFactory for CodexFactory {
                 writable_dirs,
             } => Ok(Box::new(CodexRuntime::new(
                 cfg.command.clone(),
-                cfg.model.clone(),
-                sandbox.clone(),
-                approval_policy.clone(),
-                writable_dirs.clone(),
+                CodexCliTransport::new(
+                    cfg.model.clone(),
+                    cfg.reasoning_effort,
+                    sandbox.clone(),
+                    approval_policy.clone(),
+                    writable_dirs.clone(),
+                ),
                 self.key(),
                 self.required_env_vars(),
             ))),

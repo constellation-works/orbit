@@ -1,0 +1,39 @@
+schemaVersion: 1
+name: delivery-qa
+description: Exercise a frozen delivery batch using typed artifact evidence
+enabled: false
+schedule:
+  deliveries_landed:
+    branch: agent-main
+    threshold: 3
+    max_wait_minutes: 360
+    coverage: integrated_qa_v1
+    max_items: 20
+    retries: 0
+template:
+  title: Exercise a frozen delivery batch
+  description: |-
+    Build and exercise the captured changes through their affected CLI, API and dashboard flows. Run relevant checks and record actual observations. File nonduplicate defects with reproduction steps; skipped required checks mean examination is incomplete.
+    Use only the frozen automation input appended to this task. Examine every
+    captured commit, including unattributed neighbors. Findings may remain open.
+    Complete the supplied evidence template, replace action_id with this task ID,
+    and attach automation-coverage.json through orbit.task.artifact.put in this
+    task's assigned executor run. Supply actual checks (subject, method,
+    observation); set examination_complete only after all obligations are examined.
+    Task status, summary prose and successful process exit do not certify coverage.
+  acceptance_criteria:
+  - Every captured obligation is examined at the exact supplied revisions.
+  - Concrete checks and findings are attached as valid automation-coverage.json evidence.
+  - Missing or skipped examination remains explicitly incomplete.
+  task_type: chore
+  tags:
+  - delivery-qa
+  - no-diff-expected
+  priority: medium
+  crew: system
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-09-06T00:00:00Z
+updated_by: system
+updated_at: 2026-09-06T00:00:00Z

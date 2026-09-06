@@ -15,7 +15,7 @@ use crate::adapter::tool_host::test_support::{
     create_context_task, run_tool_as_operator, test_runtime, unmanaged_tool_env_guard,
 };
 use crate::application::task::TaskAddParams;
-use crate::application::workflow::ShipMode;
+use crate::application::workflow::{CompletionPolicy, ShipMode};
 use crate::runtime::workspace_claim::CLAIM_TOKEN_ENV;
 
 /// Acquire the claim and return its token.
@@ -38,6 +38,8 @@ fn ship_error(runtime: &OrbitRuntime, claim_token: Option<&str>) -> OrbitError {
         .submit_ship_run(
             ShipMode::Local,
             Some("main"),
+            &[],
+            CompletionPolicy::Review,
             &[],
             Some("test"),
             claim_token,
@@ -129,7 +131,15 @@ fn a_discovery_mode_submission_carrying_no_task_ids_is_covered() {
     acquire_claim(&runtime, "claude");
 
     let error = runtime
-        .submit_ship_run(ShipMode::Local, Some("main"), &[], Some("test"), None)
+        .submit_ship_run(
+            ShipMode::Local,
+            Some("main"),
+            &[],
+            CompletionPolicy::Review,
+            &[],
+            Some("test"),
+            None,
+        )
         .expect_err("a discovery submission must be gated by the claim");
     assert!(
         matches!(error, OrbitError::WorkspaceClaimHeld(_)),
@@ -290,6 +300,8 @@ fn a_refused_dispatch_is_recorded_as_denied_without_the_holders_token() {
         ShipMode::Local,
         Some("main"),
         std::slice::from_ref(&task_id),
+        CompletionPolicy::Review,
+        &[],
         Some("test"),
         None,
     );

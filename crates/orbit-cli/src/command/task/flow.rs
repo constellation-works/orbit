@@ -10,7 +10,10 @@
 //! Terminal transitions come from task status history, so a task that is
 //! rejected and later reopened remains closed for the intervening windows and
 //! still contributes its dropped event. Legacy terminal tasks without status
-//! history retain the previous `updated_at` approximation.
+//! history retain the previous `updated_at` approximation. A terminal status
+//! reclassified into another terminal status without an intervening reopen
+//! (for example `Done` later `Archived`) contributes only its first outflow
+//! event — the later one is a relabeling, not a second departure.
 
 use chrono::{DateTime, Duration, Utc};
 use clap::{ArgAction, Args};
@@ -149,6 +152,24 @@ impl FlowPoint {
             .then_some(changes[1].at)
         })
     }
+
+    /// Terminal transitions that are genuine departures from the backlog.
+    ///
+    /// A terminal status immediately following another terminal status (for
+    /// example `Done` reclassified as `Archived`) never passed back through
+    /// the live backlog, so it is not a second outflow — only the first
+    /// terminal transition in a contiguous run counts.
+    fn outflow_events(&self) -> impl Iterator<Item = (DateTime<Utc>, TerminalKind)> + '_ {
+        self.status_changes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, change)| {
+                let kind = TerminalKind::of(change.status)?;
+                let follows_terminal =
+                    index > 0 && TerminalKind::of(self.status_changes[index - 1].status).is_some();
+                (!follows_terminal).then_some((change.at, kind))
+            })
+    }
 }
 
 /// One bucket's inflow and outflow, plus the population still open at its end.
@@ -239,11 +260,8 @@ pub(crate) fn compute_flow(
                 .reopen_times()
                 .filter(|at| *at >= bucket.start && *at < bucket.end)
                 .count();
-            for change in &point.status_changes {
-                if let Some(kind) = TerminalKind::of(change.status)
-                    && change.at >= bucket.start
-                    && change.at < bucket.end
-                {
+            for (at, kind) in point.outflow_events() {
+                if at >= bucket.start && at < bucket.end {
                     match kind {
                         TerminalKind::Closed => bucket.closed += 1,
                         TerminalKind::Dropped => bucket.dropped += 1,

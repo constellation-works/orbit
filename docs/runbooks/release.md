@@ -246,7 +246,7 @@ It also runs both plugin validators and the canonical-skill mirror drift check.
 Missing `npm` or `gh` skips that remote source with a stderr note. Local
 Cargo/npm/plugin/registry-metadata drift always fails.
 
-Claude Code installs through `/plugin marketplace add danieljhkim/orbit` and
+Claude Code installs through `/plugin marketplace add constellation-works/orbit` and
 `/plugin install orbit`; Codex installs through its Git marketplace commands.
 Cursor uses `~/.cursor/plugins/local/orbit` pointing at `plugin/`, whose root
 `plugin.json` and `mcp.json` are the Agent Plugins 1.0 contract. Public Cursor

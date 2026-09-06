@@ -7,7 +7,7 @@ use crate::command::{Block, CommandOut, Execute, Payload};
 use crate::output::color::Domain;
 
 use super::format::{format_timestamp, format_waiting_line, summarize_error_message};
-use super::job::job_run_to_json_with_state;
+use super::job::cli_job_run_to_json;
 
 pub(crate) const DEFAULT_HISTORY_LIMIT: usize = 50;
 
@@ -60,7 +60,7 @@ pub(crate) fn run_history_payload(
     let values = runs
         .iter()
         .zip(states.iter())
-        .map(|(run, state)| job_run_to_json_with_state(run, state.as_ref()))
+        .map(|(run, state)| cli_job_run_to_json(run, state.as_ref()))
         .collect::<Vec<_>>();
     let doc = json!({ "runs": values });
 

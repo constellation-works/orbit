@@ -19,8 +19,8 @@
 //! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
 
 pub mod crud;
-pub mod loader;
-pub mod schedule;
+pub use orbit_automation::auto_tasks::loader;
+pub use orbit_automation::auto_tasks::schedule;
 pub mod scheduler;
 pub mod state;
 
@@ -40,6 +40,14 @@ pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cur
 /// workspace on initialization. Defaults are deliberately inert: users must
 /// explicitly mint one or enable it through the existing auto-task surface.
 pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
+    (
+        "delivery-code-review",
+        include_str!("../../../assets/auto_tasks/delivery-code-review.yaml"),
+    ),
+    (
+        "delivery-qa",
+        include_str!("../../../assets/auto_tasks/delivery-qa.yaml"),
+    ),
     (
         "code-review",
         include_str!("../../../assets/auto_tasks/code-review.yaml"),

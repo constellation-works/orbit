@@ -1,7 +1,7 @@
 use clap::{ArgAction, Args};
 use orbit_core::{
     DEFAULT_TASK_LIST_LIMIT, ExternalRef, OrbitError, OrbitRuntime, TaskPriority, TaskStatus,
-    TaskType, task_dependencies_ready, task_selectors_contain_path,
+    TaskType,
 };
 use serde_json::Value;
 
@@ -96,49 +96,24 @@ impl Execute for TaskListArgs {
             task_type: task_type.is_some(),
         };
 
-        // `list_tasks_by_tags` returns tasks already ordered newest-first
-        // (`created_at DESC`, task ID ascending for ties); the filters below
-        // preserve that order, so a trailing `take(limit)` yields the newest
-        // matching tasks (ORB-10310).
-        let tasks_matching_tags = runtime.list_tasks_by_tags(&tags)?;
-        let status_by_id = runtime.task_status_index()?;
-
-        let tasks: Vec<_> = tasks_matching_tags
-            .into_iter()
-            .filter(|t| status.is_empty() || status.contains(&t.status))
-            .filter(|t| priority.is_none_or(|p| t.priority == p))
-            .filter(|t| task_type.is_none_or(|kind| t.task_type == kind))
-            .filter(|t| {
-                parent_id
-                    .as_deref()
-                    .is_none_or(|p| t.parent_id() == Some(p))
-            })
-            .filter(|t| {
-                job_run_id
-                    .as_deref()
-                    .is_none_or(|value| t.job_run_id.as_deref() == Some(value))
-            })
-            .filter(|t| {
-                external_ref.as_ref().is_none_or(|external_ref| {
-                    t.external_refs.iter().any(|candidate| {
-                        candidate.system == external_ref.system && candidate.id == external_ref.id
-                    })
-                })
-            })
-            .filter(|t| {
-                has_ref_system.as_deref().is_none_or(|system| {
-                    t.external_refs
-                        .iter()
-                        .any(|candidate| candidate.system == system)
-                })
-            })
-            .filter(|t| !ready || task_dependencies_ready(t, &status_by_id))
-            .filter(|t| {
-                path.as_deref()
-                    .is_none_or(|p| task_selectors_contain_path(&t.context_files, p))
-            })
-            .take(limit)
-            .collect();
+        let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
+            filter: orbit_core::application::task::TaskListFilter {
+                statuses: (!status.is_empty()).then_some(status),
+                priority,
+                task_type,
+                parent_id,
+                job_run_id,
+                tags,
+                external_ref,
+                has_external_ref_system: has_ref_system,
+                scan_before: None,
+            },
+            ready,
+            path,
+            limit,
+        })?;
+        let status_by_id = page.status_by_id;
+        let tasks: Vec<_> = page.items.into_iter().map(|row| row.task).collect();
 
         // `--ops` selects a narrower record shape, not a different output
         // channel: the table is the same either way, and the renderer decides

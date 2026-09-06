@@ -10,6 +10,7 @@ fn crew_normalization_canonicalizes_alias_and_metadata() {
         assignment: CrewAssignment {
             provider: " OpenAI ".to_string(),
             model: " gpt-test ".to_string(),
+            effort: None,
         },
         description: Some("  Fast implementation  ".to_string()),
         tags: vec![

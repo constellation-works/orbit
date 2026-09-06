@@ -5,6 +5,7 @@
 
 mod attribution;
 mod body;
+mod complete;
 mod merge;
 mod open;
 mod promote;
@@ -12,7 +13,9 @@ mod promote;
 #[cfg(test)]
 mod tests;
 
+pub(in crate::executor::automation) use attribution::ship_done_attribution;
 pub(in crate::executor::automation::vcs) use body::meaningful_execution_summary;
+pub(in crate::executor::automation) use complete::pr_complete;
 pub(in crate::executor::automation) use merge::git_merge;
 pub(in crate::executor::automation::vcs) use open::open_or_reuse_unchecked;
 pub(in crate::executor::automation) use open::pr_open;

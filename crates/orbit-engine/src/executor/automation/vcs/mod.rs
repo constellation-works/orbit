@@ -13,7 +13,7 @@ mod worktree;
 pub(super) use commit::git_commit;
 pub(super) use failure::pr_failure_handoff;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
-pub(super) use pr::{git_merge, pr_open, pr_promote};
+pub(super) use pr::{git_merge, pr_complete, pr_open, pr_promote, ship_done_attribution};
 pub(super) use push::push_batch_changes;
 pub(super) use worktree::setup_worktree;
 pub use worktree::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees};

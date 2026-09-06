@@ -118,3 +118,136 @@ fn a_state_without_children_round_trips_without_the_field() {
     let decoded: PipelineState = serde_json::from_value(encoded).expect("decode");
     assert!(decoded.child_dispatches.is_empty());
 }
+
+// [ORB-11253] The live worker ceiling of a bounded drain.
+
+#[test]
+fn an_absent_control_leaves_the_submitted_ceiling_in_force() {
+    let state = state();
+    assert_eq!(state.effective_max_active_leaf_runs(5), 5);
+    assert_eq!(state.drain_worker_limit_revision(), 0);
+}
+
+#[test]
+fn setting_the_ceiling_records_what_it_replaced_and_advances_the_revision() {
+    let mut state = state();
+
+    assert!(state.set_drain_worker_limit(7, 5, "operator".to_string(), None, Some(0)));
+
+    let limit = state.drain_worker_limit.clone().expect("limit recorded");
+    assert_eq!(limit.max_active_leaf_runs, 7);
+    assert_eq!(limit.previous_max_active_leaf_runs, 5);
+    assert_eq!(limit.revision, 1);
+    assert_eq!(limit.actor, "operator");
+    assert_eq!(state.effective_max_active_leaf_runs(5), 7);
+
+    // The second change replaces the first, not the submitted value.
+    assert!(state.set_drain_worker_limit(
+        3,
+        5,
+        "operator".to_string(),
+        Some("provider throttled".to_string()),
+        Some(1),
+    ));
+    let limit = state.drain_worker_limit.clone().expect("limit recorded");
+    assert_eq!(limit.max_active_leaf_runs, 3);
+    assert_eq!(limit.previous_max_active_leaf_runs, 7);
+    assert_eq!(limit.revision, 2);
+    assert_eq!(limit.reason.as_deref(), Some("provider throttled"));
+}
+
+#[test]
+fn a_stale_expected_revision_changes_nothing() {
+    // Two operators read revision 0; the first wins, and the second must not
+    // silently overwrite the ceiling it never saw.
+    let mut state = state();
+    assert!(state.set_drain_worker_limit(7, 5, "first".to_string(), None, Some(0)));
+
+    assert!(!state.set_drain_worker_limit(2, 5, "second".to_string(), None, Some(0)));
+
+    let limit = state.drain_worker_limit.clone().expect("limit recorded");
+    assert_eq!(limit.max_active_leaf_runs, 7);
+    assert_eq!(limit.revision, 1);
+    assert_eq!(limit.actor, "first");
+}
+
+#[test]
+fn an_unconditional_write_replaces_whatever_is_recorded() {
+    let mut state = state();
+    assert!(state.set_drain_worker_limit(7, 5, "first".to_string(), None, None));
+    assert!(state.set_drain_worker_limit(2, 5, "second".to_string(), None, None));
+    assert_eq!(state.effective_max_active_leaf_runs(5), 2);
+    assert_eq!(state.drain_worker_limit_revision(), 2);
+}
+
+#[test]
+fn the_control_survives_a_state_round_trip() {
+    let mut state = state();
+    state.set_drain_worker_limit(7, 5, "operator".to_string(), None, None);
+    let encoded = serde_json::to_string(&state).expect("serialize state");
+    let decoded: PipelineState = serde_json::from_str(&encoded).expect("deserialize state");
+    assert_eq!(decoded.drain_worker_limit, state.drain_worker_limit);
+}
+
+#[test]
+fn state_written_before_the_control_existed_still_loads() {
+    let legacy = serde_json::json!({
+        "run_id": "jrun-legacy",
+        "job_id": "workspace_auto_pipeline",
+        "initial_input": {},
+        "pipeline": {},
+        "updated_at": Utc::now().to_rfc3339(),
+    });
+    let decoded: PipelineState = serde_json::from_value(legacy).expect("deserialize legacy state");
+    assert!(decoded.drain_worker_limit.is_none());
+    assert!(decoded.drain_admissions_stop.is_none());
+    assert!(!decoded.admissions_stopped());
+    assert_eq!(decoded.effective_max_active_leaf_runs(5), 5);
+}
+
+// [ORB-11283] Stop new admissions without cancelling the coordinator.
+
+#[test]
+fn an_absent_stop_means_the_drain_is_still_admitting() {
+    let state = state();
+    assert!(!state.admissions_stopped());
+    assert!(state.drain_admissions_stop.is_none());
+}
+
+#[test]
+fn setting_the_stop_records_the_actor_and_is_idempotent() {
+    let mut state = state();
+    assert!(state.set_drain_admissions_stop(
+        "operator".to_string(),
+        Some("window closed early".to_string()),
+    ));
+    let first = state.drain_admissions_stop.clone().expect("stop recorded");
+    assert_eq!(first.actor, "operator");
+    assert_eq!(first.reason.as_deref(), Some("window closed early"));
+    assert!(state.admissions_stopped());
+
+    assert!(!state.set_drain_admissions_stop("second".to_string(), None));
+    let second = state
+        .drain_admissions_stop
+        .clone()
+        .expect("original stop kept");
+    assert_eq!(second.actor, "operator");
+    assert_eq!(second.stopped_at, first.stopped_at);
+}
+
+#[test]
+fn the_stop_survives_a_state_round_trip_and_is_omitted_when_absent() {
+    let encoded = serde_json::to_value(state()).expect("encode");
+    assert!(
+        !encoded
+            .as_object()
+            .expect("object")
+            .contains_key("drain_admissions_stop")
+    );
+
+    let mut state = state();
+    state.set_drain_admissions_stop("cli".to_string(), None);
+    let encoded = serde_json::to_string(&state).expect("serialize state");
+    let decoded: PipelineState = serde_json::from_str(&encoded).expect("deserialize state");
+    assert_eq!(decoded.drain_admissions_stop, state.drain_admissions_stop);
+}

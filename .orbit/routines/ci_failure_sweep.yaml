@@ -5,9 +5,11 @@
 # false when seeded: turning on unattended CI-failure filing is an explicit,
 # reviewed, per-workspace decision.
 #
-# This routine is a scheduling surface only. All discovery, clustering, dedupe,
-# and filing live in the job's two deterministic steps, so an operator-triggered
-# run of `ci_failure_sweep_pipeline` behaves identically to a scheduled fire.
+# This routine is a scheduling surface only. Discovery, filing, task-pilot, and
+# guarded admission live in the target job, so an operator-triggered run of
+# `ci_failure_sweep_pipeline` behaves identically to a scheduled fire. Enabling
+# this routine explicitly authorizes that job to promote only pilot-ready
+# repairs from proposed to backlog; it does not authorize task completion.
 #
 # Cadence is hourly, on a minute that stacks with none of the other shipped
 # defaults (the triage routine holds :15, worktree GC :35, and the ship sweep
@@ -24,9 +26,9 @@ schemaVersion: 1
 name: ci-failure-sweep-orbit
 description: >
   Hourly sweep of this repository's current GitHub Actions failures: collect
-  bounded, redacted evidence on the host, then file each current, non-stale
-  failure cluster as an ordinary backlog bug task carrying that evidence
-  inline. Deduped against still-open tasks by failure key.
+  bounded, redacted evidence on the host, file each current failure cluster as
+  a proposed task, and promote only pilot-validated current repairs to backlog.
+  Deduped against still-open tasks by failure key.
 enabled: true
 hosts:
   - dk-server-1

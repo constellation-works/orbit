@@ -237,6 +237,7 @@ fn default_admission_crews() -> BTreeMap<String, Crew> {
             assignment: CrewAssignment {
                 model: String::new(),
                 provider: "claude".to_string(),
+                effort: None,
             },
             description: None,
             tags: Vec::new(),

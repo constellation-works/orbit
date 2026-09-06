@@ -132,6 +132,20 @@ prices:
   # cached reads and writes are included and are subtracted before the full
   # input rate is applied. OpenAI reports no 1h tier; the nonzero 5m fallback
   # rate prevents malformed nonzero 1h data from being treated as free.
+  # GPT-6 Astra launched 2026-09-03. Official API pricing is $10/M input,
+  # $1/M cached input, $12.50/M cache writes, and $50/M output. Like the
+  # existing Codex rows, the 1h field uses the documented cache-write rate as
+  # a nonzero fallback because OpenAI publishes no separate 1h cache tier.
+  - model: "gpt-6-astra"
+    effective_from: "2026-09-03T00:00:00Z"
+    effective_until: null
+    input_token_basis: gross_includes_cache
+    input_per_million_usd: 10.0
+    cache_read_per_million_usd: 1.0
+    cache_create_per_million_usd: 12.5
+    cache_create_1h_per_million_usd: 12.5
+    output_per_million_usd: 50.0
+
   - model: "gpt-5.6-sol"
     effective_from: "2026-07-17T00:00:00Z"
     effective_until: "2026-07-30T00:00:00Z"
@@ -229,6 +243,32 @@ prices:
   # Standard pricing from 2027-01-01 per the same official pricing page:
   # 1.50/7.50, cached input 0.15.
   - model: "gemini-3.7-flash"
+    effective_from: "2027-01-01T00:00:00Z"
+    effective_until: null
+    input_token_basis: gross_includes_cache
+    input_per_million_usd: 1.5
+    cache_read_per_million_usd: 0.15
+    cache_create_per_million_usd: 1.5
+    cache_create_1h_per_million_usd: 1.5
+    output_per_million_usd: 7.5
+
+  # Gemini 3.8 Flash, released 2026-09-03. Official Gemini Developer API
+  # pricing lists the same introductory 0.75/3.75 rates and $0.075 cached
+  # input through 2026-12-31, then 1.50/7.50 and $0.15 from 2027-01-01.
+  # Google bills cache storage separately per hour rather than a per-token
+  # cache-write rate, so the schema's cache-create fields retain the full
+  # input rate convention used by the other Gemini Flash rows.
+  - model: "gemini-3.8-flash"
+    effective_from: "2026-09-03T00:00:00Z"
+    effective_until: "2027-01-01T00:00:00Z"
+    input_token_basis: gross_includes_cache
+    input_per_million_usd: 0.75
+    cache_read_per_million_usd: 0.075
+    cache_create_per_million_usd: 0.75
+    cache_create_1h_per_million_usd: 0.75
+    output_per_million_usd: 3.75
+
+  - model: "gemini-3.8-flash"
     effective_from: "2027-01-01T00:00:00Z"
     effective_until: null
     input_token_basis: gross_includes_cache

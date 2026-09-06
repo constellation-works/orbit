@@ -4,7 +4,7 @@ type: design
 title: "Semantic Search — Decisions"
 owner: claude
 last_updated: 2026-08-24
-last_validated: 2026-08-09
+last_validated: 2026-09-05
 status: Accepted
 feature: orbit-search
 doc_role: decisions

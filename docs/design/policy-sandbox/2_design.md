@@ -3,8 +3,8 @@ summary: "Policy & Sandboxing — Design"
 type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
-last_updated: 2026-08-30
-last_validated: 2026-08-30
+last_updated: 2026-09-06
+last_validated: 2026-09-06
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -33,7 +33,7 @@ A valid policy declares `name`, optional `description`, global `denyRead` / `den
 
 `PolicyDef::merged(global, workspace)` lets workspace `fsProfiles` overwrite globals by name while global denies accumulate. A workspace may repeat or narrow a host `denyModify` exception, but cannot introduce an exception outside the host exception surface. Workspace denies are appended after host exceptions and therefore can narrow them. The merged policy is revalidated.
 
-The shipped default expresses the versioned Orbit boundary as an ordered `.orbit/**` deny followed by exceptions for `.orbit/auto_tasks/**`, `.orbit/routines/**`, `.orbit/config.yaml`, `.orbit/config.toml`, and `.orbit/resources/**`. The broad deny continues to cover `.orbit/state/**`, task/learning/ADR/friction stores, databases, locks, and any future or misspelled `.orbit` path. Task `context_files` remain planning and conflict selectors; policy resolution does not convert them into filesystem grants ([ORB-10560]), and anchor materialization does not consult them at all ([ORB-10602]).
+The shipped default expresses the versioned Orbit boundary as an ordered `.orbit/**` deny followed by exceptions for `.orbit/auto_tasks/**`, `.orbit/routines/**`, `.orbit/config.toml`, and `.orbit/resources/**`. Checkout-local `.orbit/config.yaml` is ignored runtime identity rather than repository configuration; it stays under the deny and therefore cannot become a managed-worktree sandbox anchor ([ORB-11376]). The broad deny continues to cover `.orbit/state/**`, task/learning/ADR/friction stores, databases, locks, and any future or misspelled `.orbit` path. Task `context_files` remain planning and conflict selectors; policy resolution does not convert them into filesystem grants ([ORB-10560]), and anchor materialization does not consult them at all ([ORB-10602]).
 
 ---
 
@@ -135,6 +135,19 @@ The `Sandbox` trait remains the seam for generic `run_process` callers, but CLI-
 
 The macOS wrapper resolves `sandbox-exec` from trusted absolute locations only, currently `/usr/bin/sandbox-exec`; it does not consult `PATH` for either availability checks or process spawn. If the trusted binary is missing, the runner fails closed unless the executor declares `allow_fallback: true`, and the error names the trusted location that was probed ([T20260509-30]).
 
+The wrapper also prepares Codex's TLS trust input before a sandboxed spawn. Its
+system-Keychain denies prevent Codex's rustls WebSocket transport from
+completing native-root discovery, so the child environment admits explicit
+non-empty `CODEX_CA_CERTIFICATE` and `SSL_CERT_FILE` values for this one provider and
+backend. `CODEX_CA_CERTIFICATE` has precedence, followed by `SSL_CERT_FILE`; if
+neither is present Orbit supplies macOS's public `/etc/ssl/cert.pem` through
+`CODEX_CA_CERTIFICATE`. The selected path must be a readable file or dispatch
+fails permanently with an actionable path-specific error. This changes no TLS
+verification setting and no SBPL credential carve-out: keychain and other
+private-directory denies remain intact, as do later activity-authored
+`denyRead` clauses. Bare Codex, other providers, and Linux retain their prior
+environment and spawn behavior. [ORB-11406]
+
 The compiled macOS profile denies by default, allows broad reads required by agent CLIs and system libraries, allows process/signal/ipc/network/sysctl/iokit operations, and allows writes to:
 
 - scratch/cache roots (`/tmp`, `/private/tmp`, `/private/var/folders`, `/dev`, `$HOME/Library/Caches`)
@@ -143,7 +156,7 @@ The compiled macOS profile denies by default, allows broad reads required by age
 - Claude `$HOME/.claude.json` sibling files (`.claude.json`, `.claude.json.lock`, atomic-write `.claude.json.tmp.<pid>.<ms_ts>`) when `CLAUDE_CONFIG_DIR` is unset, since these live at the home root rather than under `$HOME/.claude/` ([T20260508-13])
 - positive `modify` roots from the resolved profile
 - Codex side-write roots from runtime provider config, appended after policy denies so workflow state remains writable under the outer sandbox
-- narrow child Orbit runtime roots appended by the v2 host after policy denies: global logs, global audit, global `orbit.db*`, global tasks, workspace `.orbit/tasks/**`, workspace `.orbit/frictions/**`, workspace audit/logs, and workspace semantic DB sidecars
+- narrow child Orbit runtime roots appended by the v2 host after policy denies: global logs, global audit, global `orbit.db*`, global tasks, global `cache/**` (language-neutral host cache seam for toolchain artifacts shared across worktrees; not a shared Cargo target directory) [ORB-11259], workspace `.orbit/tasks/**`, workspace `.orbit/frictions/**`, workspace audit/logs, and workspace semantic DB sidecars
 
 The child Orbit runtime roots are deliberately narrower than the workspace `.orbit` tree. They cover stores used by currently activity-exposed Orbit write tools: task/review/artifact writes under `.orbit/tasks/**`, friction reporting under `.orbit/frictions/**`, and startup/runtime audit (workspace and global `{root}/state/audit/**`), log, semantic-index, and global database writes. Nested `orbit.*` writes initialize the global audit store before the tool action, so omitting `{global}/state/audit/**` surfaces as `file-write-create ~/.orbit/state/audit` under `sandbox-exec` ([ORB-11055]). The managed CLI runner supplies that global root through `ORBIT_REGISTRY_ROOT`, which is trusted only together with managed-run provenance and never participates in workspace root resolution. Nested tool calls receive the logical workspace as `ORBIT_WORKSPACE` on the same envelope so they do not infer durable ownership from the linked-worktree cwd ([ORB-11117]). It deliberately does not reuse `ORBIT_ROOT`: that remains the operator's explicit pinned-data-root contract, while a managed linked-worktree child continues to resolve shared/local workspace roots through git and the registered checkout. Consequently global registry bootstrap cannot create workspace-only `state/job-runs`, diagnostics, scoreboard, worktrees, or knowledge directories ([ORB-11066]). Generic agent-callable state writes were removed in [ORB-10738]; graph write roots and every unlisted or future store remain outside this inventory.
 
@@ -157,7 +170,7 @@ Negated `read` / `modify` rules become explicit SBPL denies in resolved order. E
 
 On Linux, `ExecutorSandboxKind::LinuxBwrap` resolves only `/usr/bin/bwrap` and runs a real capability probe using the same private user, PID, IPC, and UTS namespaces plus mount setup required by provider execution. Absence or probe failure is permanent and fail-closed unless the executor explicitly sets `allow_fallback: true`. The availability decision happens before provider argv construction: an active outer wrapper neutralizes provider-native sandbox flags, while a bare fallback preserves them.
 
-The deterministic argv starts with a read-only bind of `/`, explicitly retains the host network namespace, and applies canonical `modify` mounts in policy order. Broad positive roots are mounted before denials. A positive exact/subtree root is mounted after an earlier deny only when it is strictly nested beneath that denied root; equal or ancestor positives cannot mask the protection. This implements versioned-config and trusted runtime-store re-allows while unknown `.orbit` children remain read-only. A re-allowed file or directory must already exist because Bubblewrap cannot bind-mount a nonexistent child beneath a read-only parent; §7.1.1 covers how absent anchors are materialized, and a narrow re-allow that still cannot be mounted is returned on the plan's dropped-grant list rather than discarded. `/dev`, `/proc`, and `/tmp` are replaced with private minimal mounts, the wrapper creates a fresh session, and parent-death cleanup remains enabled.
+The deterministic argv starts with a read-only bind of `/`, explicitly retains the host network namespace, and applies canonical `modify` mounts in policy order. Broad positive roots are mounted before denials. A positive exact/subtree root is mounted after an earlier deny only when it is strictly nested beneath that denied root; equal or ancestor positives cannot mask the protection. This implements versioned-config and trusted runtime-store re-allows while unknown `.orbit` children remain read-only. A re-allowed file or directory must already exist because Bubblewrap cannot bind-mount a nonexistent child beneath a read-only parent; §7.1.1 covers how absent anchors are materialized, and a narrow re-allow that still cannot be mounted is returned on the plan's dropped-grant list rather than discarded. `/dev`, `/proc`, and `/tmp` are replaced with private minimal mounts, so `/tmp` is not a cross-worktree cache. The wrapper creates a fresh session, and parent-death cleanup remains enabled. Write-capable (implementer/unrestricted) Linux profiles also receive the host global `cache/` directory as a language-neutral extra write root so toolchain caches such as sccache can be shared without a mutable shared `CARGO_TARGET_DIR`; reviewer profiles do not. Managed worktrees additionally bind the activity cwd at `/tmp/orbit-workspace` and `<cwd>/target` at `/tmp/orbit-build` (created at spawn if absent) so compiler caches that key on absolute paths can hit across worktrees; those mounts live on the sandbox's private `/tmp` tmpfs and do not share a Cargo target directory. [ORB-11259]
 
 The ADR authoring exception follows that same ordering: trusted host setup ensures only `<active-worktree>/.orbit/adrs/{proposed,.locks}` exists, then mounts those exact directories writable after the local `.orbit/**` deny. The ADR parent and its Accepted/Superseded lifecycle directories remain read-only. This does not add a policy exception, does not re-allow the shared workspace ADR tree, and does not expose any sibling under the worktree-local `.orbit` directory.
 
@@ -277,7 +290,11 @@ Risk-weighted regression tests sit beside the implementations they guard
   (`compiled_profile_denies_reads_to_negated_read_path` and
   `compiled_profile_for_realistic_agent_loop_profile_allows_repo_writes_denies_dotenv`)
   exercise an `agent_loop`-shaped profile end-to-end against the kernel
-  sandbox.
+  sandbox. The Codex CA regression additionally runs a real macOS wrapper,
+  loads one certificate from the injected public PEM bundle, and proves
+  synthetic Keychain material stays unreadable; platform-neutral fixtures pin
+  explicit-variable precedence, missing-path errors, and the exact provider /
+  backend environment boundary ([ORB-11406]).
 - `crates/orbit-store/src/file/policy_def_store/` — policy resource
   name tests reject traversal-shaped names such as `../x` before path
   construction and assert no file is written outside the policy store
@@ -341,5 +358,6 @@ asserts 100 collision-free dense IDs per artifact kind ([ORB-10596]).
 - **[ORB-10573]** — Materialize only exact missing versioned-config anchors gated by both task scope and the effective host policy/profile before Linux provider launch.
 - **[ORB-10602]** — Replace that table-and-selector gate with per-spawn derivation from the effective profile, and surface every unmountable grant against its path and rule.
 - **[ORB-10596]** — Allow executor-authored Proposed ADRs through one narrow managed-worktree mount while preserving global allocation, federated discovery, and separate acceptance.
+- **[ORB-11376]** — Remove checkout-local runtime identity from the managed-agent write exception so absent identities cannot be published as empty anchors.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

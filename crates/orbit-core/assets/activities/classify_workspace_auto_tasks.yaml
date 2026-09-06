@@ -22,7 +22,11 @@ spec:
     exists. Epic children are never selected. `idle` means the iteration
     started nothing, which includes a saturated drain with a full backlog
     behind it; `sleep_seconds` is the wait that fits — the short poll when work
-    is queued, the long one when nothing is.
+    is queued, the long one when nothing is. The ceiling in force is
+    `max_active_leaf_runs`: the value an operator set live on this run
+    (`worker_limit_source: run_control`, with the change itself in
+    `worker_limit`) when one exists, otherwise the `max_active_leaf_runs` this
+    run was submitted with.
   input_schema_json:
     type: object
     properties:
@@ -78,6 +82,17 @@ spec:
         type: number
       free_slots:
         type: number
+      max_active_leaf_runs:
+        type: number
+      submitted_max_active_leaf_runs:
+        type: number
+      worker_limit_source:
+        type: string
+        enum: [run_input, run_control]
+      worker_limit:
+        oneOf:
+          - type: object
+          - type: "null"
       active_epic_run_id:
         oneOf:
           - type: string

@@ -29,7 +29,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use regex::Regex;
+use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
 const UPDATE_ENV: &str = "ORBIT_UPDATE_OUTPUT_GOLDENS";
@@ -140,6 +142,12 @@ impl Fixture {
     /// color-configuration sweep.
     fn run(&self, args: &[&str], extra_env: &[(&str, &str)]) -> std::process::Output {
         let mut command = cargo_bin_cmd!("orbit");
+        // ORB-11300: one shared list, so this fixture and its siblings cannot
+        // drift apart on which ambient variable still routes a write. The
+        // pinned identity below is deliberate and applies after the scrub.
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
         command
             .current_dir(&self.work)
             .env("HOME", &self.home)
@@ -147,7 +155,6 @@ impl Fixture {
             .env("COLUMNS", "100")
             .env("ORBIT_AGENT_NAME", "claude")
             .env("ORBIT_AGENT_MODEL", "claude")
-            .env_remove("ORBIT_ROOT")
             .env_remove("ORBIT_FORMAT")
             .env_remove("NO_COLOR")
             .env_remove("CLICOLOR_FORCE")
@@ -188,6 +195,53 @@ fn redact(text: &str, home: &Path) -> String {
     let text = rfc3339.replace_all(text, "<TIMESTAMP>");
     let text = short_date.replace_all(&text, "<DATE>");
     text.replace(&home.display().to_string(), "<HOME>")
+}
+
+#[test]
+fn fixture_ignores_inherited_managed_routing_and_identity() {
+    let sentinel = Fixture::new();
+    let sentinel_registry = sentinel.home.join(".orbit");
+    let sentinel_registry = sentinel_registry
+        .to_str()
+        .expect("sentinel registry path is UTF-8");
+    let before = sentinel.run(&["task", "list", "--json"], &[]);
+
+    let _managed_env = test_env::scoped([
+        ("ORBIT_ROOT", Some("/sentinel/orbit-root")),
+        ("ORBIT_SESSION_ID", Some("sentinel-session")),
+        ("ORBIT_TASK_ID", Some("sentinel-task")),
+        ("ORBIT_ACTIVE_TASK_ID", Some("sentinel-task")),
+        ("ORBIT_RUN_ID", Some("sentinel-run")),
+        ("ORBIT_ACTIVITY_ID", Some("sentinel-activity")),
+        ("ORBIT_STEP_INDEX", Some("sentinel-step")),
+        ("ORBIT_AGENT_NAME", Some("sentinel-agent")),
+        ("ORBIT_AGENT_MODEL", Some("sentinel-model")),
+        ("ORBIT_OPERATOR", Some("1")),
+        ("ORBIT_MANAGED_RUN_CONTEXT", Some("1")),
+        ("ORBIT_TASK_ACTOR_KIND", Some("sentinel-actor")),
+        ("ORBIT_REGISTRY_ROOT", Some(sentinel_registry)),
+        ("ORBIT_WORKSPACE", Some("output-goldens")),
+    ]);
+
+    let fixture = Fixture::new();
+
+    let after = sentinel.run(&["task", "list", "--json"], &[]);
+    assert_eq!(
+        after.stdout, before.stdout,
+        "sentinel workspace was modified"
+    );
+
+    let tasks: Value =
+        serde_json::from_slice(&fixture.run(&["task", "list", "--json"], &[]).stdout)
+            .expect("fixture task list JSON");
+    let tasks = tasks.as_array().expect("fixture task list");
+    assert_eq!(tasks.len(), SEED_TASKS.len());
+    assert!(
+        tasks
+            .iter()
+            .all(|task| task["created_by"] == json!("claude")),
+        "fixture task creation must retain the pinned display identity: {tasks:?}"
+    );
 }
 
 /// `skill list`'s `content_hash` column is a SHA-256 digest over the bundled

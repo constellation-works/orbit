@@ -10,12 +10,16 @@ use std::path::{Path, PathBuf};
 
 use axum::extract::State;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::DEFAULT_TASK_LIST_LIMIT;
+use chrono::{DateTime, Utc};
+use orbit_core::application::job::{JobRunListParams, JobRunOrder, job_run_to_json};
+use orbit_core::{DEFAULT_TASK_LIST_LIMIT, JobRun, JobRunState, OrbitRuntime};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::server_error;
-use super::tasks::list_tasks_json;
+use super::{HISTORY_DEFAULT_LIMIT, bad_request, blocking, bounded_limit, server_error};
+use crate::projections::task_row_to_json;
 use crate::state::DashboardState;
+use orbit_core::application::task::TaskListFilter;
 
 /// `GET /api/workspaces` — list every workspace the dashboard can serve, with
 /// the currently-selected default flagged.
@@ -55,54 +59,220 @@ pub(super) async fn list_workspaces(State(state): State<DashboardState>) -> Resp
 /// any that fail to open — the aggregate view stays available even when one
 /// workspace is broken.
 pub(super) async fn list_all_tasks(State(state): State<DashboardState>) -> Response {
-    // Refresh and pin one snapshot so every task's workspace tag (id, name,
-    // root) and the runtime it was listed from come from the same generation —
-    // never old metadata spliced onto a runtime resolved from a newer binding.
+    match blocking("aggregate task list", move || Ok(all_tasks_json(&state))).await {
+        Ok(Ok(values)) => Json(values).into_response(),
+        Ok(Err(error)) => server_error(error),
+        Err(response) => *response,
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct AllJobRunsQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum AllJobRunsState {
+    All,
+    Active,
+    Failed,
+}
+
+impl AllJobRunsState {
+    fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("all") => Ok(Self::All),
+            Some("active") => Ok(Self::Active),
+            Some("failed") => Ok(Self::Failed),
+            Some(_) => Err("invalid state; expected one of: all, active, failed".to_string()),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Active => "active",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// `GET /api/job-runs/all` — a bounded run list across every visible workspace.
+///
+/// Run ids are workspace-local, so every item carries its workspace identity.
+/// Unavailable sources remain in the response instead of being represented as
+/// an empty workspace, allowing the dashboard to distinguish partial data from
+/// a genuine zero-run result.
+///
+/// Each per-workspace query already asks the store to order and truncate by
+/// [`JobRunOrder::Recency`] — the same `run_timestamp` this handler later
+/// merge-sorts by — so an old, long-running run that only just finished
+/// cannot be dropped by a workspace's `limit` before its recency ever gets
+/// compared (ORB-11251).
+pub(super) async fn list_all_job_runs(
+    State(state): State<DashboardState>,
+    axum::extract::Query(query): axum::extract::Query<AllJobRunsQuery>,
+) -> Response {
+    let limit = bounded_limit(query.limit, HISTORY_DEFAULT_LIMIT);
+    let state_filter = match AllJobRunsState::parse(query.state.as_deref()) {
+        Ok(filter) => filter,
+        Err(message) => return bad_request(message),
+    };
+    match blocking("aggregate job run list", move || {
+        Ok::<_, orbit_core::OrbitError>(all_job_runs_json(&state, limit, state_filter))
+    })
+    .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => *response,
+    }
+}
+
+fn all_job_runs_json(state: &DashboardState, limit: usize, state_filter: AllJobRunsState) -> Value {
+    let pinned = state.pin();
+    let mut candidates = Vec::new();
+    let mut unavailable = Vec::new();
+    let mut source_truncated = false;
+
+    for entry in pinned.entries() {
+        if !entry.active {
+            unavailable.push(json!({
+                "workspace_id": entry.id,
+                "workspace_name": entry.name,
+                "error": "workspace is unavailable",
+            }));
+            continue;
+        }
+        let runtime = match pinned.runtime_for(&entry.id) {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                unavailable.push(json!({
+                    "workspace_id": entry.id,
+                    "workspace_name": entry.name,
+                    "error": "failed to open workspace",
+                }));
+                continue;
+            }
+        };
+        match workspace_job_runs(&runtime, limit, state_filter) {
+            Ok(runs) => {
+                source_truncated |= runs.len() == limit;
+                candidates.extend(
+                    runs.into_iter()
+                        .map(|run| (run, entry.id.clone(), entry.name.clone())),
+                );
+            }
+            Err(error) => unavailable.push(json!({
+                "workspace_id": entry.id,
+                "workspace_name": entry.name,
+                "error": error.to_string(),
+            })),
+        }
+    }
+
+    candidates.sort_by(|(left, left_workspace, _), (right, right_workspace, _)| {
+        run_timestamp(right)
+            .cmp(&run_timestamp(left))
+            .then_with(|| left_workspace.cmp(right_workspace))
+            .then_with(|| left.run_id.cmp(&right.run_id))
+    });
+    let truncated = source_truncated || candidates.len() > limit;
+    candidates.truncate(limit);
+    let items = candidates
+        .into_iter()
+        .map(|(run, workspace_id, workspace_name)| {
+            let mut value = job_run_to_json(&run, None);
+            if let Value::Object(map) = &mut value {
+                map.insert("workspace_id".to_string(), json!(workspace_id));
+                map.insert("workspace_name".to_string(), json!(workspace_name));
+            }
+            value
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "items": items,
+        "limit": limit,
+        "state": state_filter.label(),
+        "truncated": truncated,
+        "unavailable": unavailable,
+    })
+}
+
+fn workspace_job_runs(
+    runtime: &OrbitRuntime,
+    limit: usize,
+    state_filter: AllJobRunsState,
+) -> Result<Vec<JobRun>, orbit_core::OrbitError> {
+    let list = |state| {
+        runtime.list_job_runs(JobRunListParams {
+            state,
+            limit: Some(limit),
+            order_by: JobRunOrder::Recency,
+            ..Default::default()
+        })
+    };
+    match state_filter {
+        AllJobRunsState::All => list(None),
+        AllJobRunsState::Failed => list(Some(JobRunState::Failed)),
+        AllJobRunsState::Active => {
+            let mut runs = list(Some(JobRunState::Pending))?;
+            runs.extend(list(Some(JobRunState::Running))?);
+            Ok(runs)
+        }
+    }
+}
+
+fn run_timestamp(run: &JobRun) -> DateTime<Utc> {
+    run.finished_at.or(run.started_at).unwrap_or(run.created_at)
+}
+
+fn all_tasks_json(state: &DashboardState) -> Result<Vec<Value>, orbit_core::OrbitError> {
     let pinned = state.pin();
     let home = home_dir();
-    let mut all = Vec::new();
+    let mut candidates = Vec::new();
     for entry in pinned.entries().iter().filter(|entry| entry.active) {
         let Ok(runtime) = pinned.runtime_for(&entry.id) else {
             continue;
         };
-        let values = match list_tasks_json(&runtime) {
-            Ok(values) => values,
-            Err(e) => return server_error(e),
-        };
-        let workspace_root = abbreviate_home(&entry.repo_root, home.as_deref());
-        for mut value in values {
-            if let Value::Object(map) = &mut value {
-                map.insert("workspace_id".to_string(), json!(entry.id));
-                map.insert("workspace_name".to_string(), json!(entry.name));
-                map.insert("workspace_root".to_string(), json!(workspace_root));
-            }
-            all.push(value);
+        let page = runtime.task_candidates(&TaskListFilter::default(), DEFAULT_TASK_LIST_LIMIT)?;
+        for task in page.items {
+            candidates.push((task, runtime.clone(), entry));
         }
     }
-    // Each workspace already contributes its newest tasks; re-sort the union so
-    // the aggregate is globally newest-first and bounded to the same default
-    // limit as every other task-listing surface (ORB-10310). `created_at` is a
-    // fixed-format UTC RFC 3339 string, so lexical order is chronological; task
-    // ID breaks timestamp ties ascending.
-    all.sort_by(|a, b| {
-        let created = |value: &Value| {
-            value
-                .get("created_at")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string()
-        };
-        let id = |value: &Value| {
-            value
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string()
-        };
-        created(b).cmp(&created(a)).then_with(|| id(a).cmp(&id(b)))
+    candidates.sort_by(|(a, _, _), (b, _, _)| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.id.cmp(&b.id))
     });
-    all.truncate(DEFAULT_TASK_LIST_LIMIT);
-    Json(Value::Array(all)).into_response()
+    candidates.truncate(DEFAULT_TASK_LIST_LIMIT);
+    // All runtimes in a dashboard share one coordination registry. Read its
+    // global dependency projection once, after the metadata selection.
+    let statuses = candidates
+        .first()
+        .map(|(_, runtime, _)| runtime.task_status_index())
+        .transpose()?
+        .unwrap_or_default();
+    let mut values = Vec::with_capacity(candidates.len());
+    for (task, runtime, entry) in candidates {
+        let Some(row) = runtime.get_listed_task_row(&task.id)? else {
+            continue;
+        };
+        let mut value = task_row_to_json(&runtime, &row, &statuses)?;
+        if let Value::Object(map) = &mut value {
+            map.insert("workspace_id".to_string(), json!(entry.id));
+            map.insert("workspace_name".to_string(), json!(entry.name));
+            map.insert(
+                "workspace_root".to_string(),
+                json!(abbreviate_home(&entry.repo_root, home.as_deref())),
+            );
+        }
+        values.push(value);
+    }
+    Ok(values)
 }
 
 /// Render a filesystem path for display, collapsing the user's home directory

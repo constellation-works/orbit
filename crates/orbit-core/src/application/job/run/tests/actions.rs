@@ -52,6 +52,7 @@ fn cancel_job_run_marks_pending_cancelled_without_signal() {
         .expect("cancel pending");
 
     assert_eq!(result.previous_state, "pending");
+    assert_eq!(result.outcome, "cancelled");
     assert_eq!(result.final_state, "cancelled");
     assert!(!result.signal_attempted);
     assert_eq!(result.signal_outcome, None);
@@ -156,7 +157,7 @@ fn cancelled_run_wait_status_reports_cancelled() {
 }
 
 #[test]
-fn cancel_job_run_rejects_terminal_run_without_mutating_bundle() {
+fn cancel_job_run_reports_terminal_run_idempotently_without_mutating_bundle() {
     let (_root, runtime) = test_runtime();
     let run = insert_pending_run(&runtime, "qa_cancel_terminal");
     let started_at = Utc::now() - Duration::seconds(2);
@@ -173,14 +174,14 @@ fn cancel_job_run_rejects_terminal_run_without_mutating_bundle() {
         .expect("finalize success");
     let before = runtime.show_job_run(&run.run_id).expect("show before");
 
-    let error = runtime
+    let result = runtime
         .cancel_job_run(&run.run_id)
-        .expect_err("terminal cancellation must fail");
+        .expect("terminal cancellation is an idempotent observation");
 
-    assert!(
-        error.to_string().contains("cannot cancel job run"),
-        "{error}"
-    );
+    assert_eq!(result.outcome, "already_terminal");
+    assert_eq!(result.previous_state, "success");
+    assert_eq!(result.final_state, "success");
+    assert!(!result.signal_attempted);
     let after = runtime.show_job_run(&run.run_id).expect("show after");
     assert_eq!(after, before);
     let events = runtime.list_session_events(20).expect("events");
@@ -432,6 +433,13 @@ fn cancellation_survivor_returns_typed_evidence_without_finalizing_run() {
         runtime.show_job_run(&run.run_id).expect("show run").state,
         JobRunState::Running,
         "a failed liveness verification must not finalize the run"
+    );
+    assert!(
+        runtime
+            .active_job_run_cancellation_request(&run.run_id)
+            .expect("read cancellation audit")
+            .is_none(),
+        "a failed signal attempt must not make a later worker exit look cancellation-induced"
     );
     assert!(
         runtime

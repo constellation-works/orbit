@@ -127,7 +127,8 @@ encode this repository's branches and gates. Re-init preserves them:
   are no longer listed as if they were embedded defaults.
 - ORB-11095 — Added centralized finding-title provenance and established the
   shipped definition's canonical `code-review` name.
-- ORB-11115 — Retired the shipped CI-failure auto-task; CI-failure filing now
-  belongs to the `ci_failure_sweep` routine.
+- ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
+  runner workflows only emit fail-open run/job/commit provenance, while the
+  host-owned `ci_failure_sweep` routine performs durable CI-failure filing.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

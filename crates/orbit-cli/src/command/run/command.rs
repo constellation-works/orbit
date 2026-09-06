@@ -3,12 +3,15 @@ use orbit_core::OrbitRuntime;
 
 use crate::command::{CommandOut, Execute};
 
+use super::agent::RunAgentArgs;
 use super::auto;
 use super::cancel::RunCancelArgs;
+use super::concurrency::RunConcurrencyArgs;
 use super::events::RunEventsArgs;
 use super::history::RunHistoryArgs;
 use super::job::JobRunArgs;
 use super::logs::RunLogsArgs;
+use super::readiness::ReadinessCommand;
 use super::ship;
 use super::show::RunShowArgs;
 use super::sweep;
@@ -18,10 +21,12 @@ use super::triage;
 const RUN_AFTER_HELP: &str = "\
 Workflow entrypoints:
   orbit run auto [--for 30m]
+  orbit run auto --stop
   orbit run ship [task_id ...]
   orbit run ship-sweep [--dry-run] [--json]
   orbit run triage [task_id ...]
   orbit run job <job_id> [--input key=value] [--json] [--debug]
+  orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS]
 
 Run history:
   orbit run history [--limit 50]
@@ -33,6 +38,7 @@ Run history:
 
 Maintenance:
   orbit run cancel <run_id>
+  orbit run concurrency <run_id> --set 7
 ";
 
 #[derive(Args)]
@@ -48,11 +54,13 @@ Maintenance:
 {usage-heading} {usage}
 
 Workflows:
-  auto        Drain the workspace backlog for a window (loose leaves, plus one epic)
+  auto        Drain the workspace backlog for a window (loose leaves, plus one epic); --stop ends new admissions
   ship        Ship backlog or explicitly selected tasks through the gated task pipeline
   ship-sweep  Dispatch ship runs in every registered workspace with ready backlog tasks
   triage      Triage tasks blocked by failed runs; re-backlog environmental failures
+  readiness   Explain why backlog tasks are waiting in auto-drain
   job         Run an arbitrary job by ID
+  agent       Invoke an agent on the host for exploration or debugging (operator only)
 
 Audits:
   history    Show recent job runs, optionally filtered to one job
@@ -62,7 +70,8 @@ Audits:
   trace      Show audit event parent/child trace for a job run
 
 Maintenance:
-  cancel     Cancel a pending or running job run
+  cancel       Cancel a pending or running job run
+  concurrency  Change how many tasks a running drain keeps in flight
 
 Options:
 {options}
@@ -93,6 +102,8 @@ pub enum RunSubcommand {
     ShipSweep(sweep::ShipSweepCommand),
     /// Triage tasks blocked by failed runs; re-backlog environmental failures
     Triage(triage::TriageCommand),
+    /// Explain why backlog tasks can or cannot start in auto-drain
+    Readiness(ReadinessCommand),
     /// Show recent job runs, optionally filtered to one job
     History(RunHistoryArgs),
     /// Show structured state and step summary for a job run
@@ -105,8 +116,12 @@ pub enum RunSubcommand {
     Trace(RunTraceArgs),
     /// Cancel a pending or running job run
     Cancel(RunCancelArgs),
+    /// Change how many tasks a running drain keeps in flight
+    Concurrency(RunConcurrencyArgs),
     /// Run an arbitrary job by ID
     Job(JobRunArgs),
+    /// Invoke an agent on the host for exploration or debugging (operator only)
+    Agent(RunAgentArgs),
 }
 
 impl Execute for RunSubcommand {
@@ -119,13 +134,16 @@ impl Execute for RunSubcommand {
             // registry-driven sweep never uses the cwd-derived runtime.
             RunSubcommand::ShipSweep(command) => command.execute_without_runtime(),
             RunSubcommand::Triage(command) => command.execute(runtime),
+            RunSubcommand::Readiness(command) => command.execute(runtime),
             RunSubcommand::History(command) => command.execute(runtime),
             RunSubcommand::Show(command) => command.execute(runtime),
             RunSubcommand::Logs(command) => command.execute(runtime),
             RunSubcommand::Events(command) => command.execute(runtime),
             RunSubcommand::Trace(command) => command.execute(runtime),
             RunSubcommand::Cancel(command) => command.execute(runtime),
+            RunSubcommand::Concurrency(command) => command.execute(runtime),
             RunSubcommand::Job(command) => command.execute(runtime),
+            RunSubcommand::Agent(command) => command.execute(runtime),
         }
     }
 }

@@ -19,6 +19,7 @@
 use std::path::Path;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use tempfile::{TempDir, tempdir};
 
 /// Commands with a `--json` flag whose output must not shift. Each is a list
@@ -46,11 +47,16 @@ fn fixture() -> Fixture {
 
 fn run(home: &Path, work: &Path, args: &[&str], env: &[(&str, &str)]) -> Vec<u8> {
     let mut command = cargo_bin_cmd!("orbit");
+    // ORB-11300: `task list` reads whatever workspace the ambient
+    // `ORBIT_WORKSPACE`/`ORBIT_REGISTRY_ROOT` pair selects, which is the live
+    // one when the suite runs inside a managed Orbit run.
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(work)
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env_remove("ORBIT_ROOT")
         .env_remove("ORBIT_FORMAT")
         .env_remove("NO_COLOR")
         .env_remove("CLICOLOR_FORCE")

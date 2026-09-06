@@ -26,6 +26,7 @@ pub(super) struct FakeQueries {
     pub(super) logs: HashMap<(String, bool), String>,
     pub(super) repository_runs_error: Option<String>,
     pub(super) run_view_errors: HashMap<String, String>,
+    pub(super) branch_head_errors: HashMap<String, String>,
     pub(super) log_errors: HashMap<(String, bool), String>,
 }
 
@@ -80,6 +81,12 @@ impl FakeQueries {
 
     pub(super) fn with_repository_runs_error(mut self, message: &str) -> Self {
         self.repository_runs_error = Some(message.to_string());
+        self
+    }
+
+    pub(super) fn with_branch_head_error(mut self, branch: &str, message: &str) -> Self {
+        self.branch_head_errors
+            .insert(branch.to_string(), message.to_string());
         self
     }
 
@@ -168,6 +175,9 @@ impl CiQueries for FakeQueries {
     }
 
     fn remote_branch_head(&self, branch: &str) -> Result<Option<String>, OrbitError> {
+        if let Some(message) = self.branch_head_errors.get(branch) {
+            return Err(OrbitError::Execution(message.clone()));
+        }
         Ok(self.branch_heads.get(branch).cloned())
     }
 }
@@ -206,4 +216,14 @@ pub(super) fn run_on_branch(
     let mut value = run(run_id, workflow, sha, status, conclusion, created_at);
     value["head_branch"] = json!(branch);
     value
+}
+
+pub(super) fn failed_job(job_id: u64, name: &str) -> Value {
+    json!({
+        "job_id": job_id,
+        "name": name,
+        "conclusion": "failure",
+        "url": format!("https://github.com/acme/orbit/actions/runs/1/job/{job_id}"),
+        "failed_steps": [{"name": name, "conclusion": "failure"}],
+    })
 }

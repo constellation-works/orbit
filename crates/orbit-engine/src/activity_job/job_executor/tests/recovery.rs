@@ -213,6 +213,7 @@ fn recovery_agent_loop_uses_run_crew_config() {
     let host = RecoveryHost::empty().with_recovery_config(CrewConfig {
         provider: Some(Provider::Gemini),
         model: Some(TEST_GEMINI_MODEL.to_string()),
+        reasoning_effort: None,
     });
     let ctx = recovery_exec_ctx(&host);
     let recovery = agent_loop_recovery_activity(recovery_agent_loop_spec(Provider::Claude, None));
@@ -237,6 +238,7 @@ fn step_failure_recovery_uses_the_lane_middleweight_config() {
         let host = RecoveryHost::empty().with_recovery_config(CrewConfig {
             provider: Some(provider),
             model: Some(model.to_string()),
+            reasoning_effort: None,
         });
         let ctx = recovery_exec_ctx(&host);
         let recovery = step_failure_recovery_agent_loop_activity(recovery_agent_loop_spec(
@@ -330,6 +332,112 @@ fn non_retryable_failure_skips_recovery_and_audit_event() {
     assert!(matches!(err, DispatchError::ToolDenied { .. }));
     assert_eq!(host.action_count("recover"), 0);
     assert!(recovery_events(&writer.events_snapshot().unwrap()).is_empty());
+}
+
+#[test]
+fn typed_vcs_conflict_invokes_pr_recovery_once_and_retries_the_same_step_once() {
+    let conflict = recoverable_vcs_conflict();
+    let host = RecoveryHost::new([
+        (
+            "flaky",
+            vec![
+                Err(conflict.clone()),
+                Ok(json!({"decision": "reused_recovery"})),
+            ],
+        ),
+        ("pr_conflict_recovery", vec![Ok(json!({"recovered": true}))]),
+    ]);
+    let mut job = recovery_job(None, None, "flaky", None, 4);
+    job.steps[0].recovery_activity = Some("pr_conflict_recovery".to_string());
+    job.steps[0].resolved_recovery_activity =
+        Some(deterministic_activity("pr_conflict_recovery", None));
+    let writer = Arc::new(test_writer("run-pr-conflict-recovered"));
+
+    let outcome = execute_job(
+        &job,
+        Value::Null,
+        "run-pr-conflict-recovered",
+        writer.clone(),
+        &host,
+    )
+    .expect("typed conflict should use the bounded recovery seam");
+
+    assert!(outcome.success);
+    assert_eq!(
+        host.actions(),
+        vec!["flaky", "pr_conflict_recovery", "flaky"],
+        "typed conflicts bypass ordinary retry and get one recovery plus one deterministic retry"
+    );
+    assert_eq!(host.action_count("pr_conflict_recovery"), 1);
+    let input = host
+        .input_for_action("pr_conflict_recovery")
+        .expect("recovery input");
+    assert_eq!(input["recovery_kind"], "vcs_conflict");
+    assert_eq!(input["operation"], "git_rebase");
+    assert_eq!(input["original_base_sha"], "base-before");
+    assert_eq!(input["target_base_sha"], "base-target");
+    assert_eq!(input["conflicting_paths"], json!(["src/lib.rs"]));
+    assert_eq!(input["crew"], "qa");
+    assert_eq!(input["crew_config_key"], "workflow.system_crew");
+    assert_eq!(recovery_events(&writer.events_snapshot().unwrap()).len(), 1);
+}
+
+#[test]
+fn non_conflict_vcs_failure_does_not_invoke_pr_conflict_recovery() {
+    let original = retryable_error("git_rebase", "remote lookup failed");
+    let host = RecoveryHost::new([
+        ("flaky", vec![Err(original.clone())]),
+        ("pr_conflict_recovery", vec![Ok(json!({"recovered": true}))]),
+    ]);
+    let mut job = recovery_job(None, None, "flaky", None, 1);
+    job.steps[0].recovery_activity = Some("pr_conflict_recovery".to_string());
+    job.steps[0].resolved_recovery_activity =
+        Some(deterministic_activity("pr_conflict_recovery", None));
+    let writer = Arc::new(test_writer("run-pr-non-conflict"));
+
+    let error = execute_job(
+        &job,
+        Value::Null,
+        "run-pr-non-conflict",
+        writer.clone(),
+        &host,
+    )
+    .expect_err("unrelated VCS failure must remain authoritative");
+
+    assert_eq!(error.to_string(), original.to_string());
+    assert_eq!(host.actions(), vec!["flaky"]);
+    assert!(recovery_events(&writer.events_snapshot().unwrap()).is_empty());
+}
+
+#[test]
+fn exhausted_pr_conflict_recovery_preserves_the_original_typed_error() {
+    let conflict = recoverable_vcs_conflict();
+    let host = RecoveryHost::new([
+        ("flaky", vec![Err(conflict.clone())]),
+        (
+            "pr_conflict_recovery",
+            vec![Err(retryable_error(
+                "pr_conflict_recovery",
+                "validation failed",
+            ))],
+        ),
+    ]);
+    let mut job = recovery_job(None, None, "flaky", None, 3);
+    job.steps[0].recovery_activity = Some("pr_conflict_recovery".to_string());
+    job.steps[0].resolved_recovery_activity =
+        Some(deterministic_activity("pr_conflict_recovery", None));
+
+    let error = execute_job(
+        &job,
+        Value::Null,
+        "run-pr-conflict-exhausted",
+        Arc::new(test_writer("run-pr-conflict-exhausted")),
+        &host,
+    )
+    .expect_err("failed recovery must preserve the typed conflict");
+
+    assert_eq!(error.to_string(), conflict.to_string());
+    assert_eq!(host.actions(), vec!["flaky", "pr_conflict_recovery"]);
 }
 
 #[test]
@@ -633,6 +741,7 @@ fn recovery_job(
             body: JobV2StepBody::Target(TargetStep {
                 spec: deterministic_activity(step_action, None).spec,
                 activity_name: None,
+                input_schema_json: None,
                 fs_profile: step_fs_profile.map(str::to_string),
                 default_input: None,
                 timeout_seconds: 0,
@@ -675,6 +784,7 @@ fn recovery_agent_loop_spec(provider: Provider, model: Option<&str>) -> AgentLoo
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: model.map(str::to_string),
+        reasoning_effort: None,
         max_iterations: 1,
         backend: None,
         provider,
@@ -682,6 +792,7 @@ fn recovery_agent_loop_spec(provider: Provider, model: Option<&str>) -> AgentLoo
         require_response_envelope: false,
         require_completion_envelope: true,
         proc_allowed_programs: None,
+        trusted_host_execution: false,
     }
 }
 
@@ -712,6 +823,16 @@ fn worktree_integrity_error(run_id: &str) -> DispatchError {
         diagnostic: format!(
             r#"{{"task_id":"ORB-10306","run_id":"{run_id}","primary_changed":true,"assigned_changed":true}}"#
         ),
+    }
+}
+
+fn recoverable_vcs_conflict() -> DispatchError {
+    DispatchError::RecoverableVcsConflict {
+        operation: "git_rebase".to_string(),
+        original_base_sha: "base-before".to_string(),
+        target_base_sha: "base-target".to_string(),
+        conflicting_paths: vec!["src/lib.rs".to_string()],
+        diagnostic: "rebase stopped with conflicts".to_string(),
     }
 }
 

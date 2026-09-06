@@ -5,9 +5,12 @@
 //! default and pipeline-friendly when the sink disallows color (`--json` or
 //! plain-text without ANSI escapes).
 
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
@@ -110,7 +113,66 @@ pub(super) fn run_tail<W: Write + ?Sized>(
         return Ok(());
     }
 
-    follow_file(path, initial_offset, filters, args.json, use_color, writer)
+    follow_file(
+        path,
+        initial_offset,
+        filters,
+        args.json,
+        use_color,
+        writer,
+        FollowControl::Forever,
+    )
+}
+
+#[cfg(test)]
+pub(super) struct FollowTestControl {
+    ready: Sender<()>,
+    stop: Receiver<()>,
+}
+
+#[cfg(test)]
+impl FollowTestControl {
+    pub(super) fn new(ready: Sender<()>, stop: Receiver<()>) -> Self {
+        Self { ready, stop }
+    }
+}
+
+#[cfg(test)]
+pub(super) fn run_tail_with_test_control<W: Write + ?Sized>(
+    path: &Path,
+    args: &TailArgs,
+    filters: &Filters,
+    use_color: bool,
+    writer: &mut W,
+    control: FollowTestControl,
+) -> io::Result<()> {
+    if !path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("orbit log file not found: {}", path.display()),
+        ));
+    }
+
+    let initial_offset = print_initial_window(path, args, filters, use_color, writer)?;
+    control.ready.send(()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "follow test stopped before readiness",
+        )
+    })?;
+    if !args.follow {
+        return Ok(());
+    }
+
+    follow_file(
+        path,
+        initial_offset,
+        filters,
+        args.json,
+        use_color,
+        writer,
+        FollowControl::UntilStopped(control.stop),
+    )
 }
 
 fn print_initial_window<W: Write + ?Sized>(
@@ -124,29 +186,60 @@ fn print_initial_window<W: Write + ?Sized>(
     let total_bytes = file.metadata()?.len();
     let mut reader = BufReader::new(file);
     let mut buf = String::new();
-    let mut all = Vec::new();
+    let mut matching_lines = MatchingLineWindow::new(args.lines);
     loop {
         buf.clear();
         let n = reader.read_line(&mut buf)?;
         if n == 0 {
             break;
         }
-        all.push(buf.trim_end_matches('\n').to_string());
+        if args.lines > 0
+            && let Ok(value) = serde_json::from_str::<Value>(&buf)
+            && filters.matches(&value)
+        {
+            matching_lines.push(buf.trim_end_matches('\n').to_owned());
+        }
     }
 
-    let kept: Vec<&String> = all
-        .iter()
-        .filter(|line| match serde_json::from_str::<Value>(line) {
-            Ok(value) => filters.matches(&value),
-            Err(_) => false,
-        })
-        .collect();
-
-    let start = kept.len().saturating_sub(args.lines);
-    for line in &kept[start..] {
-        emit_line(line, args.json, use_color, writer)?;
+    for line in matching_lines.into_lines() {
+        emit_line(&line, args.json, use_color, writer)?;
     }
     Ok(total_bytes)
+}
+
+/// A chronological tail window whose storage never exceeds its requested
+/// record count. The line currently being parsed is held by the caller.
+pub(super) struct MatchingLineWindow {
+    limit: usize,
+    lines: VecDeque<String>,
+}
+
+impl MatchingLineWindow {
+    pub(super) fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            lines: VecDeque::new(),
+        }
+    }
+
+    pub(super) fn push(&mut self, line: String) {
+        if self.limit == 0 {
+            return;
+        }
+        if self.lines.len() == self.limit {
+            self.lines.pop_front();
+        }
+        self.lines.push_back(line);
+    }
+
+    fn into_lines(self) -> VecDeque<String> {
+        self.lines
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.lines.len()
+    }
 }
 
 fn follow_file<W: Write + ?Sized>(
@@ -156,6 +249,7 @@ fn follow_file<W: Write + ?Sized>(
     json: bool,
     use_color: bool,
     writer: &mut W,
+    control: FollowControl,
 ) -> io::Result<()> {
     let mut file = File::open(path)?;
     file.seek(SeekFrom::Start(initial_offset))?;
@@ -163,6 +257,9 @@ fn follow_file<W: Write + ?Sized>(
     let mut leftover = String::new();
 
     loop {
+        if control.should_stop() {
+            return Ok(());
+        }
         let mut buf = String::new();
         let n = reader.read_line(&mut buf)?;
         if n == 0 {
@@ -184,6 +281,22 @@ fn follow_file<W: Write + ?Sized>(
             && filters.matches(&value)
         {
             emit_line(&full_line, json, use_color, writer)?;
+        }
+    }
+}
+
+enum FollowControl {
+    Forever,
+    #[cfg(test)]
+    UntilStopped(Receiver<()>),
+}
+
+impl FollowControl {
+    fn should_stop(&self) -> bool {
+        match self {
+            Self::Forever => false,
+            #[cfg(test)]
+            Self::UntilStopped(stop) => !matches!(stop.try_recv(), Err(TryRecvError::Empty)),
         }
     }
 }

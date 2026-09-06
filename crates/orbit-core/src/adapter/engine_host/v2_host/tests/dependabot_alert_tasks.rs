@@ -7,7 +7,7 @@ use tempfile::tempdir;
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
 
-fn alert(number: u64, severity: &str, range: &str, ghsa: &str) -> Value {
+pub(super) fn alert(number: u64, severity: &str, range: &str, ghsa: &str) -> Value {
     json!({
         "number": number, "state": "open", "ecosystem": "cargo", "package": "time",
         "manifest_path": "Cargo.lock", "scope": "runtime", "severity": severity,
@@ -17,7 +17,7 @@ fn alert(number: u64, severity: &str, range: &str, ghsa: &str) -> Value {
     })
 }
 
-fn snapshot(alerts: Vec<Value>, pull_requests: Vec<Value>) -> Value {
+pub(super) fn snapshot(alerts: Vec<Value>, pull_requests: Vec<Value>) -> Value {
     json!({
         "schema_version": 1, "collected": true,
         "outcome_hint": if alerts.is_empty() { "no_open_alerts" } else { "open_alerts" },
@@ -31,7 +31,7 @@ fn snapshot(alerts: Vec<Value>, pull_requests: Vec<Value>) -> Value {
     })
 }
 
-fn expanded_snapshot(
+pub(super) fn expanded_snapshot(
     dependabot: Vec<Value>,
     code_scanning: Vec<Value>,
     secret_scanning: Vec<Value>,
@@ -69,7 +69,7 @@ fn expanded_snapshot(
     })
 }
 
-fn code_alert(number: u64, severity: &str) -> Value {
+pub(super) fn code_alert(number: u64, severity: &str) -> Value {
     json!({
         "number": number, "state": "open", "rule_id": "rust/sql-injection",
         "rule_name": "SQL injection", "rule_description": "Untrusted input reaches SQL",
@@ -95,7 +95,7 @@ fn secret_alert(number: u64, validity: &str) -> Value {
     })
 }
 
-fn file(runtime: &OrbitRuntime, snapshot: Value, extra: Value) -> Value {
+pub(super) fn file(runtime: &OrbitRuntime, snapshot: Value, extra: Value) -> Value {
     let mut input = json!({"dependabot_snapshot": snapshot});
     if let (Some(target), Some(source)) = (input.as_object_mut(), extra.as_object()) {
         target.extend(source.clone());
@@ -196,6 +196,7 @@ fn dedupe_key_survives_changed_alert_number_severity_and_range() {
         first["filed"][0]["key"],
         second["skipped_existing"][0]["key"]
     );
+    assert_eq!(second["skipped_existing"][0]["match_kind"], "exact_key");
 }
 
 #[test]

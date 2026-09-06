@@ -2,3 +2,4 @@
 
 mod base_obsolescence;
 mod git;
+mod operations;

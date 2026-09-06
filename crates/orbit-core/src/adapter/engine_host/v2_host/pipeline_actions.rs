@@ -87,12 +87,11 @@ pub(super) fn validate_bundles(action: &str, input: &Value) -> Result<Value, Dis
 /// Submit a child v2 Job, link it durably, then block on its terminal state.
 ///
 /// [ORB-10971] Submission and waiting are two observable phases of one
-/// activity. The child's exact run id — the one `orbit.pipeline.invoke`
-/// returned, never one inferred from task status or timestamps — is persisted
-/// into the parent's run state and the audit log *before* the wait begins, so
-/// the dispatch boundary is fail-observable: either a durable child exists and
-/// every reader can name it, or the step fails promptly carrying the concrete
-/// invocation error instead of idling to the wait timeout.
+/// activity. [ORB-11310] Child creation and the first parent link now share the
+/// store transaction that checks the parent's admissions stop; the checkpoint
+/// below adds independent audit evidence before the wait begins. The exact run
+/// id always comes from that durable admission, never from task status or
+/// timestamps.
 ///
 /// [ORB-10819]'s blocking leaf contract is unchanged past that checkpoint: the
 /// activity still returns the child's terminal wait entry, so a following
@@ -103,7 +102,16 @@ pub(super) fn invoke_and_wait(
     input: &Value,
     tool_context: ToolContext,
 ) -> Result<Value, DispatchError> {
-    let wait_context = tool_context.clone();
+    let parent_step_id = child_dispatch::parent_step_id(input);
+    let parent_run_id = child_dispatch::parent_run_id(input);
+    let invoke_context = child_invoke_context(
+        tool_context.clone(),
+        action,
+        parent_run_id,
+        parent_step_id,
+        true,
+    )?;
+    let wait_context = tool_context;
     invoke_and_wait_with(
         runtime,
         action,
@@ -113,7 +121,7 @@ pub(super) fn invoke_and_wait(
                 "orbit.pipeline.invoke",
                 args,
                 Role::Admin,
-                tool_context,
+                invoke_context,
             )
         },
         |args| {
@@ -141,8 +149,12 @@ where
     Invoke: FnOnce(Value) -> Result<Value, OrbitError>,
     Wait: FnOnce(Value) -> Result<Value, OrbitError>,
 {
-    if let Some(noop) = stale_gate_admission_noop(runtime, action, input)? {
-        return Ok(noop);
+    // [ORB-11305] Re-ask the eligibility question here, not just wherever this
+    // dispatch was decided. A gate can sit in `wait_for_window` for its whole
+    // budget, so the admission snapshot that queued this child may be an hour
+    // stale by now.
+    if let Some(stop) = gate_admission_stop(runtime, action, input)? {
+        return Ok(stop);
     }
 
     let job_name = required_job_name(action, input)?;
@@ -163,6 +175,14 @@ where
         );
         action_failed(action, message)
     })?;
+    if invoke_output_admissions_stopped(&invoke_output) {
+        return Ok(serde_json::json!({
+            "skipped": true,
+            "status": "succeeded",
+            "reason": "admissions_stopped",
+            "job_name": job_name,
+        }));
+    }
 
     // Phase 2 — link, durably, before blocking on anything.
     let dispatch = child_dispatch::dispatch_from_invoke_output(
@@ -354,12 +374,33 @@ pub(super) fn invoke_detached(
     let parent_run_id = child_dispatch::parent_run_id(input);
     let parent_step_id = child_dispatch::parent_step_id(input);
 
+    // [ORB-11283] This read is a fast path, not the authority: a stop can land
+    // after it. [ORB-11310] The pipeline submission below re-reads the same
+    // state inside the SQLite transaction that creates and links the child.
+    if parent_run_id
+        .as_deref()
+        .is_some_and(|run_id| runtime.drain_admissions_stopped(run_id))
+    {
+        return Ok(serde_json::json!({
+            "skipped": true,
+            "reason": "admissions_stopped",
+            "job_name": job_name,
+        }));
+    }
+
+    let invoke_context = child_invoke_context(
+        tool_context,
+        action,
+        parent_run_id.clone(),
+        parent_step_id.clone(),
+        false,
+    )?;
     let invoke_output = runtime
         .run_tool_with_context_and_role(
             "orbit.pipeline.invoke",
             invoke_args(&job_name, input),
             Role::Admin,
-            tool_context,
+            invoke_context,
         )
         .map_err(|err| {
             let message = format!("pipeline.invoke failed: {err}");
@@ -373,6 +414,9 @@ pub(super) fn invoke_detached(
             );
             action_failed(action, message)
         })?;
+    if invoke_output_admissions_stopped(&invoke_output) {
+        return Ok(invoke_output);
+    }
 
     // [ORB-10971] A detached child is linked on the same durable checkpoint as
     // a blocked-on one. The caller re-observes it later, so the linkage is the
@@ -400,7 +444,73 @@ pub(super) fn invoke_detached(
     }))
 }
 
-fn stale_gate_admission_noop(
+/// Attach trusted dispatch metadata to the engine-owned parent-run context.
+/// Tool input cannot select the parent whose stop governs this admission.
+fn child_invoke_context(
+    mut tool_context: ToolContext,
+    action: &str,
+    parent_run_id: Option<String>,
+    parent_step_id: Option<String>,
+    blocking: bool,
+) -> Result<ToolContext, DispatchError> {
+    if let (Some(owner), Some(parent_run_id)) = (
+        tool_context.reservation_owner.as_ref(),
+        parent_run_id.as_ref(),
+    ) && owner.owner_run_id != *parent_run_id
+    {
+        return Err(action_failed(
+            action,
+            format!(
+                "activity parent run '{}' does not match trusted run owner '{}'",
+                parent_run_id, owner.owner_run_id
+            ),
+        ));
+    }
+    let Some(owner) = tool_context.reservation_owner.as_mut() else {
+        return Ok(tool_context);
+    };
+    let mut metadata = match owner.owner_metadata_json.as_deref() {
+        Some(raw) => serde_json::from_str::<Value>(raw)
+            .map_err(|error| action_failed(action, format!("invalid run metadata: {error}")))?,
+        None => serde_json::json!({}),
+    };
+    let object = metadata
+        .as_object_mut()
+        .ok_or_else(|| action_failed(action, "run metadata must be a JSON object".to_string()))?;
+    object.insert(
+        "pipeline_child_admission".to_string(),
+        serde_json::json!({
+            "action": action,
+            "parent_step_id": parent_step_id,
+            "blocking": blocking,
+        }),
+    );
+    owner.owner_metadata_json = Some(metadata.to_string());
+    Ok(tool_context)
+}
+
+fn invoke_output_admissions_stopped(output: &Value) -> bool {
+    output.get("skipped").and_then(Value::as_bool) == Some(true)
+        && output.get("reason").and_then(Value::as_str) == Some("admissions_stopped")
+}
+
+/// Re-check live workflow admission for `admission_task_ids` immediately before
+/// child dispatch, and return the synthetic child result when the bundle must
+/// not launch.
+///
+/// `Ok(None)` means every task is still admissible and dispatch proceeds. Two
+/// stops are distinguished because they mean opposite things to the gate:
+///
+/// - **stale no-op** (`review` / `done`) — the work already landed, so the
+///   bundle succeeds having launched nothing.
+/// - **withdrawn** ([ORB-11305]) — a human moved the task somewhere automation
+///   may not start from between admission and now. The gate reports a
+///   non-success child so `release_reservation` frees the reservation and
+///   `require_child_success` then fails the run with the reason attached.
+///
+/// A task that cannot be read at all stays a hard activity failure: that is a
+/// malformed bundle, not a lifecycle decision.
+fn gate_admission_stop(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
@@ -428,6 +538,7 @@ fn stale_gate_admission_noop(
 
     let mut task_statuses = Vec::with_capacity(task_ids.len());
     let mut stale_statuses = Vec::new();
+    let mut withdrawn_statuses = Vec::new();
     let mut admission_errors = Vec::new();
 
     for task_id in &task_ids {
@@ -450,7 +561,12 @@ fn stale_gate_admission_noop(
                     if matches!(status, TaskStatus::Review | TaskStatus::Done) {
                         stale_statuses.push((task_id.clone(), status.to_string()));
                     } else {
-                        admission_errors.push(error.to_string());
+                        // [ORB-11305] The task still exists, a human just moved
+                        // it somewhere automation may not start from. That is a
+                        // terminal answer, not a malfunction: return it as the
+                        // child result so the gate's `release_reservation` step
+                        // still runs before `require_child_success` fails.
+                        withdrawn_statuses.push((task_id.clone(), status.to_string()));
                     }
                 }
                 Err(_) => admission_errors.push(error.to_string()),
@@ -468,42 +584,116 @@ fn stale_gate_admission_noop(
         ));
     }
 
+    // Withdrawal is the stronger signal: a bundle that mixes an already-shipped
+    // task with a withdrawn one must not report success.
+    if !withdrawn_statuses.is_empty() {
+        let reason = format!(
+            "task_gate_pipeline ineligible: workflow admission for '{workflow}' refused child dispatch because {} \
+             is no longer admissible (admission was granted before the status changed). \
+             Return it to the backlog if this work should still run.",
+            summarize_statuses(&withdrawn_statuses)
+        );
+        record_gate_admission_stop(
+            runtime,
+            action,
+            input,
+            &task_ids,
+            &task_statuses,
+            &reason,
+            "withdrawn",
+        )?;
+        return Ok(Some(gate_admission_stop_output(
+            input,
+            "failed",
+            "withdrawn",
+            &reason,
+            &task_statuses,
+        )));
+    }
+
     if stale_statuses.is_empty() {
         return Ok(None);
     }
 
-    let status_summary = stale_statuses
+    let reason = format!(
+        "task_gate_pipeline stale/no-op: workflow admission for '{workflow}' skipped child dispatch because {}",
+        summarize_statuses(&stale_statuses)
+    );
+    record_gate_admission_stop(
+        runtime,
+        action,
+        input,
+        &task_ids,
+        &task_statuses,
+        &reason,
+        "stale_noop",
+    )?;
+    Ok(Some(gate_admission_stop_output(
+        input,
+        "succeeded",
+        "stale_noop",
+        &reason,
+        &task_statuses,
+    )))
+}
+
+fn summarize_statuses(statuses: &[(String, String)]) -> String {
+    statuses
         .iter()
         .map(|(task_id, status)| format!("{task_id}={status}"))
         .collect::<Vec<_>>()
-        .join(", ");
-    let reason = format!(
-        "task_gate_pipeline stale/no-op: workflow admission for '{workflow}' skipped child dispatch because {status_summary}"
-    );
-    record_gate_stale_noop(runtime, action, input, &task_ids, &task_statuses, &reason)?;
-    let parent_run_id = input
+        .join(", ")
+}
+
+/// Build the synthetic child-run result an admission stop reports in place of a
+/// real dispatch. `status` drives the gate: `succeeded` lets
+/// `pipeline_success_guard` pass, anything else fails the gate *after*
+/// `release_reservation` has run, and `error` is what the guard quotes.
+fn gate_admission_stop_output(
+    input: &Value,
+    status: &str,
+    outcome: &str,
+    reason: &str,
+    task_statuses: &[Value],
+) -> Value {
+    let parent_run_id = parent_run_id_or_unknown(input);
+    // Synthetic: this id never resolves to a real run, it only names the stop
+    // for readers. Keep the established `stale-noop-` spelling.
+    let run_id_prefix = outcome.replace('_', "-");
+    let mut output = serde_json::json!({
+        "status": status,
+        "run_id": format!("{run_id_prefix}-{parent_run_id}"),
+        "skipped": true,
+        "reason": reason,
+        "task_statuses": task_statuses,
+    });
+    if status != "succeeded" {
+        output["error"] = Value::String(reason.to_string());
+    }
+    output
+}
+
+fn parent_run_id_or_unknown(input: &Value) -> &str {
+    input
         .get("run_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("unknown");
-
-    Ok(Some(serde_json::json!({
-        "status": "succeeded",
-        "run_id": format!("stale-noop-{parent_run_id}"),
-        "skipped": true,
-        "reason": reason,
-        "task_statuses": task_statuses,
-    })))
+        .unwrap_or("unknown")
 }
 
-fn record_gate_stale_noop(
+/// Audit an admission stop before the gate acts on it. `outcome` is
+/// `stale_noop` (already-shipped work) or `withdrawn` (a human moved the task
+/// out of automation's reach [ORB-11305]); both are recorded so a run that
+/// launched nothing is still explainable from the audit log alone.
+fn record_gate_admission_stop(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
     task_ids: &[String],
     task_statuses: &[Value],
     reason: &str,
+    outcome: &str,
 ) -> Result<(), DispatchError> {
     let parent_run_id = input
         .get("run_id")
@@ -515,18 +705,18 @@ fn record_gate_stale_noop(
         "task_ids": task_ids,
         "task_statuses": task_statuses,
         "reason": reason,
+        "outcome": outcome,
         "parent_run_id": parent_run_id,
     });
-    let arguments_json = serde_json::to_string(&payload).map_err(|err| {
-        action_failed(action, format!("serialize gate.stale_noop payload: {err}"))
-    })?;
-    let execution_id = audit_execution_id("audit-gate-stale-noop");
+    let arguments_json = serde_json::to_string(&payload)
+        .map_err(|err| action_failed(action, format!("serialize gate.{outcome} payload: {err}")))?;
+    let execution_id = audit_execution_id("audit-gate-admission-stop");
     let working_directory = runtime.paths().repo_root.to_string_lossy().into_owned();
 
     runtime
         .record_audit_event(&AuditEventInsertParams {
             execution_id,
-            command: "gate.stale_noop".to_string(),
+            command: format!("gate.{outcome}"),
             subcommand: None,
             tool_name: None,
             target_type: Some("task_bundle".to_string()),
@@ -558,7 +748,7 @@ fn record_gate_stale_noop(
             activity_id: None,
             step_index: None,
         })
-        .map_err(|err| action_failed(action, format!("record gate.stale_noop audit: {err}")))
+        .map_err(|err| action_failed(action, format!("record gate.{outcome} audit: {err}")))
 }
 
 pub(super) fn pipeline_success_guard(action: &str, input: &Value) -> Result<Value, DispatchError> {

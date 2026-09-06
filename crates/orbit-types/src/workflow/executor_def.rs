@@ -12,7 +12,16 @@ use crate::resource::ExecutorResourceSpec;
 pub enum ExecutorType {
     AgentCli,
     DirectAgent,
-    CliCommand,
+    /// Deterministic local command execution. Dispatched by the `local_shell`
+    /// deterministic action, never by the agent CLI runner: it carries no
+    /// model, prompt, or agent tool authority.
+    ///
+    /// `cli_command` is the pre-[ORB-11294] spelling of this same executor
+    /// family and stays accepted on load, so a bundled or user-authored
+    /// definition written before the rename keeps working. Definitions are
+    /// re-serialized under the canonical `local_shell` name.
+    #[serde(alias = "cli_command")]
+    LocalShell,
     /// Generic out-of-process executor speaking the External Executor Protocol
     /// v1 (see `docs/design/executors/specs/external-executor-protocol.md`).
     /// Lets operators register a homegrown binary/script without forking core.
@@ -26,7 +35,7 @@ impl ExecutorType {
         match self {
             Self::AgentCli => "agent_cli",
             Self::DirectAgent => "direct_agent",
-            Self::CliCommand => "cli_command",
+            Self::LocalShell => "local_shell",
             Self::External => "external",
         }
     }
@@ -112,7 +121,7 @@ impl fmt::Display for StdoutFormat {
 pub struct ExecutorDef {
     pub name: String,
     /// Executor family, serialized as "agent_cli", "direct_agent",
-    /// "cli_command", or "external".
+    /// "local_shell", or "external".
     pub executor_type: ExecutorType,
     /// For agent_cli: the CLI command (e.g., "claude", "codex")
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,8 +131,10 @@ pub struct ExecutorDef {
     /// Expected stdout format, serialized as "envelope", "json", or "text".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdout_format: Option<StdoutFormat>,
-    /// Overrides the agent family's default `AgentModelPair` resolution for audit
-    /// canonicalization, envelope rendering, and review attribution.
+    /// Legacy override for the agent family's `AgentModelPair` resolution used
+    /// by older/user-authored definitions for audit canonicalization, envelope
+    /// rendering, and review attribution. Fresh shipped defaults use
+    /// crew-selected models instead.
     ///
     /// Does NOT control which model the subprocess actually runs; operators
     /// should encode runtime model selection in `args`.
@@ -159,14 +170,15 @@ pub struct ExecutorDef {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Override for an agent family's strong/weak `AgentModelPair`.
+/// Legacy override for an agent family's strong/weak `AgentModelPair`.
 ///
 /// Controls how Orbit canonicalizes the agent's model for audit trail,
 /// envelope rendering, and review automation attribution.
 ///
-/// Does NOT control which model the subprocess actually runs. Operators must
-/// encode the runtime model in `args`, and may set `ORBIT_AGENT_MODEL` via
-/// `env:` for explicit audit attribution.
+/// Does NOT control which model the subprocess actually runs. Older or
+/// customized definitions may retain this field; new definitions should use
+/// crew-selected models and `model_flag`. Operators can also set
+/// `ORBIT_AGENT_MODEL` via `env:` for explicit audit attribution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(deny_unknown_fields)]
 pub struct ModelPairOverride {

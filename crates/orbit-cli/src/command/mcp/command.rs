@@ -302,6 +302,25 @@ pub struct ServeArgs {
     /// never from the server process cwd.
     #[arg(long, value_name = "SELECTOR", conflicts_with = "mode")]
     pub workspace: Option<String>,
+    /// Attribute tasks this session creates to a named orchestrator crew,
+    /// unless the call names one itself.
+    ///
+    /// Attribution only. Unlike `--operator` it grants nothing: a session
+    /// still holds exactly the capabilities it was served with, and the crew
+    /// named here neither selects the crew a task executes under nor the
+    /// model recorded for that execution. The name is resolved against the
+    /// crews of whichever workspace the call lands in, so an unconfigured
+    /// crew fails that call rather than quietly selecting another one.
+    ///
+    /// It applies only when a task is created, and only to that task: an
+    /// existing task's orchestrator is never rewritten from this default.
+    ///
+    /// Treat it as configuration, not as evidence of who is calling. A
+    /// long-lived MCP connection outlives a model switch in the client, so
+    /// pass `orchestrator` on the individual call, or restart the connection
+    /// with a new value, when the orchestrating crew actually changes.
+    #[arg(long, value_name = "CREW")]
+    pub orchestrator: Option<String>,
 }
 
 impl ServeArgs {
@@ -324,7 +343,10 @@ impl ServeArgs {
                             .to_string(),
                     )
                 })?;
-                orbit_mcp::serve_mcp_remote_proxy(RemoteProxyArgs { ssh_host })?
+                orbit_mcp::serve_mcp_remote_proxy(RemoteProxyArgs {
+                    ssh_host,
+                    orchestrator: self.orchestrator,
+                })?
             }
             Some(ServeMode::Federated) => {
                 if let Some(ssh_host) = self.ssh_host {
@@ -334,7 +356,7 @@ impl ServeArgs {
                          `~/.orbit/mcp-destinations.toml`"
                     )));
                 }
-                super::server::serve_mcp_federated_stdio()?
+                super::server::serve_mcp_federated_stdio(self.orchestrator)?
             }
             None => super::server::serve_mcp_stdio(
                 self.remote_caller_machine_id,
@@ -356,8 +378,13 @@ impl ServeArgs {
                 } else {
                     SshAcceptance::Environment
                 },
+                self.orchestrator,
             )?,
         }
         Ok(CommandOutput::Silent)
     }
 }
+
+#[cfg(test)]
+#[path = "tests/command.rs"]
+mod tests;

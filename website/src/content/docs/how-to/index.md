@@ -12,6 +12,18 @@ sidebar:
     <h3>Run a Task Lifecycle</h3>
     <p>Create, inspect, ship, and review a task.</p>
   </a>
+  <a class="orbit-card" href="./continuous-delivery/">
+    <h3>Run Continuous Delivery</h3>
+    <p>Prepare tasks, authorize a bounded delivery window, retune it, and recover safely.</p>
+  </a>
+  <a class="orbit-card" href="./recurring-work/">
+    <h3>Schedule Recurring Work</h3>
+    <p>Drive Orbit unattended with the sweep clock, routines, and auto-tasks.</p>
+  </a>
+  <a class="orbit-card" href="./task-publication/">
+    <h3>Publish and Restore Tasks</h3>
+    <p>Snapshot task records to a dedicated repository, and recover them.</p>
+  </a>
   <a class="orbit-card" href="./write-activity/">
     <h3>Write an Activity</h3>
     <p>Create schema v2 activity YAML.</p>

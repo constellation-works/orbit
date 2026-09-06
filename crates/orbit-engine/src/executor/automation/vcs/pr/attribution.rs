@@ -5,7 +5,7 @@ use serde_json::json;
 
 use crate::context::RuntimeHost;
 
-pub(super) fn ship_done_attribution(task: &Task) -> Option<String> {
+pub(in crate::executor::automation) fn ship_done_attribution(task: &Task) -> Option<String> {
     normalize_optional_attribution_label(
         task.implemented_by
             .as_deref()

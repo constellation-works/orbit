@@ -37,6 +37,22 @@ impl OrbitRuntime {
             &roots.shared_root,
             &roots.local_root,
             binding,
+            true,
+        )
+    }
+
+    /// Open an existing workspace for an observation-only command without
+    /// reconciling stale job runs as a side effect of runtime construction.
+    pub fn initialize_from_resolved_roots_read_only(
+        roots: OrbitRuntimeRoots,
+        binding: Option<WorkspaceRuntimeBinding>,
+    ) -> Result<Self, OrbitError> {
+        build_runtime(
+            &roots.global_root,
+            &roots.shared_root,
+            &roots.local_root,
+            binding,
+            false,
         )
     }
 
@@ -99,7 +115,7 @@ impl OrbitRuntime {
         shared_root: &Path,
         local_root: &Path,
     ) -> Result<Self, OrbitError> {
-        build_runtime(global_root, shared_root, local_root, None)
+        build_runtime(global_root, shared_root, local_root, None, true)
     }
 
     pub fn from_resolved_roots_with_binding(
@@ -108,7 +124,16 @@ impl OrbitRuntime {
         local_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<Self, OrbitError> {
-        build_runtime(global_root, shared_root, local_root, Some(binding))
+        build_runtime(global_root, shared_root, local_root, Some(binding), true)
+    }
+
+    pub fn from_resolved_roots_read_only_with_binding(
+        global_root: &Path,
+        shared_root: &Path,
+        local_root: &Path,
+        binding: WorkspaceRuntimeBinding,
+    ) -> Result<Self, OrbitError> {
+        build_runtime(global_root, shared_root, local_root, Some(binding), false)
     }
 
     pub fn in_memory() -> Result<Self, OrbitError> {
@@ -127,6 +152,7 @@ fn build_runtime(
     shared_root: &Path,
     local_root: &Path,
     binding: Option<WorkspaceRuntimeBinding>,
+    reconcile_stale_runs: bool,
 ) -> Result<OrbitRuntime, OrbitError> {
     let layout_report = match orbit_store::workflow::layout::upgrade_workspace_layout(shared_root) {
         Ok(report) => report,
@@ -150,7 +176,7 @@ fn build_runtime(
         &runtime_config,
         layout_report,
     )?;
-    if !managed_run_context_from_env() {
+    if reconcile_stale_runs && !managed_run_context_from_env() {
         runtime.reconcile_stale_job_runs_on_open();
     }
     Ok(runtime)

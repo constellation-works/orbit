@@ -1,9 +1,10 @@
 //! `orbit run auto` workspace logistics entrypoint.
 
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
+use serde_json::json;
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 use crate::parse::parse_duration_seconds;
 
 use super::support::{WorkflowDispatchResult, print_workflow_dispatch_results};
@@ -14,10 +15,24 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
 #[command(
     about = "Drain the workspace backlog for a window (loose leaves, plus one epic)",
     override_usage = "orbit run auto [OPTIONS]",
-    after_help = "Examples:\n  orbit run auto\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n\n\
+    after_help = "Examples:\n  orbit run auto\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --stop\n\n\
                   The drain re-lists the whole backlog every pass and keeps `--concurrency`\n\
                   tasks in flight, starting a replacement as each one finishes rather than\n\
                   waiting for the batch. An epic root runs alongside the leaves, one at a time.\n\n\
+                  `--complete` is blanket authorization: it applies to every task the drain\n\
+                  admits for the whole window, including work that reaches the backlog after\n\
+                  the run starts. The drain is asynchronous, so this prints the durable run ID\n\
+                  and returns without knowing the eventual outcome.\n\n\
+                  `--allow-crew` restricts this one run to the named crews, for its window\n\
+                  only. It edits no configuration and reassigns nothing: a backlog task whose\n\
+                  crew is excluded is simply not started, and `orbit run readiness --allow-crew`\n\
+                  names it. To actually move that work, reassign its crew yourself. Tasks a\n\
+                  different invocation already has in flight keep running.\n\n\
+                  `--stop` ends new admissions for this workspace's active auto coordinator.\n\
+                  You do not need a run ID. Already admitted workers keep running under the\n\
+                  completion authority they were started with; this is not cancellation.\n\
+                  To cancel those workers, `orbit run cancel <RUN_ID> --confirm` each child.\n\
+                  A second `--stop`, or `--stop` with no active coordinator, is a no-op.\n\n\
                   Inspect submitted runs with `orbit run history -j workspace_auto_pipeline` and\n\
                   `orbit run show <RUN_ID>`."
 )]
@@ -32,6 +47,22 @@ pub struct AutoCommand {
     /// not a batch size. Defaults to 5.
     #[arg(long, value_name = "N")]
     pub concurrency: Option<u32>,
+    /// Authorize this drain to finish delivery and move the tasks it ships to
+    /// `done`, instead of leaving them in `review` for a separate approval.
+    /// This is blanket authorization for every task the drain admits during its
+    /// whole window, not just the backlog visible right now. Off by default,
+    /// and it never approves `proposed` work for the backlog.
+    #[arg(long)]
+    pub complete: bool,
+    /// Restrict this run to these configured crews, e.g. when a provider is
+    /// unavailable or its budget is spent. Repeatable and comma-separated.
+    /// Every name must be configured here; an unknown or empty one fails
+    /// before anything is dispatched. Omitted, the drain runs every crew, as
+    /// before. This is scoped to this run's window only — no workspace
+    /// configuration is changed, no task is reassigned, and nothing another
+    /// invocation is already running is cancelled.
+    #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
+    pub allow_crew: Vec<String>,
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
@@ -39,18 +70,36 @@ pub struct AutoCommand {
     /// one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.
     #[arg(long)]
     pub claim_token: Option<String>,
+    /// Stop new admissions for this workspace's active auto coordinator.
+    /// Already admitted workers keep running. Conflicts with the flags that
+    /// start a drain.
+    #[arg(
+        long,
+        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew"]
+    )]
+    pub stop: bool,
 }
 
 impl Execute for AutoCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        if self.stop {
+            return execute_stop(runtime, self.json, self.claim_token.as_deref());
+        }
         let for_seconds = self
             .for_duration
             .as_deref()
             .map(parse_duration_seconds)
             .transpose()?;
+        let completion = if self.complete {
+            CompletionPolicy::Done
+        } else {
+            CompletionPolicy::Review
+        };
         let invoke = runtime.submit_workspace_auto_run(
             for_seconds,
             self.concurrency,
+            completion,
+            &self.allow_crew,
             None,
             self.claim_token.as_deref(),
         )?;
@@ -70,4 +119,67 @@ impl Execute for AutoCommand {
         print_workflow_dispatch_results(AUTO_WORKFLOW, &[run], self.json)?;
         Ok(CommandOutput::Silent)
     }
+}
+
+fn execute_stop(runtime: &OrbitRuntime, json: bool, claim_token: Option<&str>) -> CommandOut {
+    let result = runtime.stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
+        actor: "cli",
+        source: "run_auto_stop",
+        reason: None,
+        claim_token,
+    })?;
+    if json {
+        return Ok(Payload::document(json!({
+            "outcome": result.outcome,
+            "coordinators": result.coordinators.iter().map(|change| json!({
+                "run_id": change.run_id,
+                "job_id": change.job_id,
+                "outcome": change.outcome,
+                "remaining_children": change.remaining_children.iter().map(|child| json!({
+                    "run_id": child.run_id,
+                    "job_name": child.job_name,
+                    "phase": child.phase,
+                    "child_status": child.child_status,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        }))
+        .into());
+    }
+    if result.coordinators.is_empty() {
+        println!("No active auto coordinator in this workspace.");
+        return Ok(CommandOutput::Silent);
+    }
+    for change in &result.coordinators {
+        match change.outcome {
+            "cancelled_queued" => println!(
+                "Cancelled queued auto run {} before it started; it had not admitted any work.",
+                change.run_id
+            ),
+            "unchanged" => println!("job run {} already has admissions stopped.", change.run_id),
+            _ => println!(
+                "Stopped admissions for job run {} ({}).",
+                change.run_id, change.job_id
+            ),
+        }
+        if change.remaining_children.is_empty() {
+            if change.outcome != "cancelled_queued" {
+                println!("No remaining children.");
+            }
+        } else {
+            println!(
+                "Remaining children (still running under their existing completion authority):"
+            );
+            for child in &change.remaining_children {
+                let status = child.child_status.as_deref().unwrap_or("-");
+                println!(
+                    "  {} job={} phase={} status={}",
+                    child.run_id, child.job_name, child.phase, status
+                );
+            }
+            println!(
+                "To cancel already-running workers, use `orbit run cancel <run_id> --confirm` on each child."
+            );
+        }
+    }
+    Ok(CommandOutput::Silent)
 }

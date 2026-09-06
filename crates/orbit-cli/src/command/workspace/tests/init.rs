@@ -10,7 +10,7 @@ use orbit_types::workspace::{
 
 use crate::tests::env_isolation::EnvGuard;
 
-use super::super::init::{WorkspaceInitArgs, canonical_workspace_id};
+use super::super::init::{ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id};
 use super::super::list::{format_workspace_list, workspace_list_json};
 use super::super::role::CliCheckoutRole;
 use super::super::show::format_workspace_show;
@@ -511,6 +511,110 @@ fn forced_workspace_reconciliation_preserves_registry_and_identity_on_validation
     assert_eq!(
         std::fs::read_to_string(&identity_path).expect("read identity"),
         identity_bytes
+    );
+}
+
+#[test]
+fn force_recovers_empty_or_missing_identity_only_for_the_exact_registration() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    let global = home.path().join(".orbit");
+    std::fs::create_dir_all(&global).expect("create global orbit");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_identity_recovery\"\nhost_id = \"identity-recovery\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("write host identity");
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
+    let args = |force| WorkspaceInitArgs {
+        name: Some("identity-recovery".to_string()),
+        base_branch: None,
+        ship_mode: None,
+        role: None,
+        owner: None,
+        task_id_start: None,
+        mcp: false,
+        inject_agent_rules: false,
+        refresh_defaults: false,
+        force,
+    };
+
+    args(false)
+        .execute_without_runtime(None)
+        .expect("initial workspace init");
+    let registry_path = global.join("workspaces.json");
+    let registry_without_refresh_time = || {
+        let mut registry: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&registry_path).expect("read registry for comparison"),
+        )
+        .expect("parse registry for comparison");
+        for workspace in registry["workspaces"]
+            .as_array_mut()
+            .expect("workspace registry array")
+        {
+            workspace
+                .as_object_mut()
+                .expect("workspace registry object")
+                .remove("updated_at");
+        }
+        registry
+    };
+    let registry_before = registry_without_refresh_time();
+    let identity_path = workspace.path().join(".orbit/config.yaml");
+    let expected_id = canonical_workspace_id("identity-recovery");
+
+    std::fs::write(&identity_path, []).expect("truncate identity to zero bytes");
+    let error = args(false)
+        .execute_without_runtime(None)
+        .expect_err("recovery must require force")
+        .to_string();
+    assert!(error.contains("rerun with --force"), "unexpected: {error}");
+    assert_eq!(
+        std::fs::read(&identity_path).expect("read refused empty identity"),
+        Vec::<u8>::new()
+    );
+
+    args(true)
+        .execute_without_runtime(None)
+        .expect("force must recover an empty identity for the exact registration");
+    let recovered = std::fs::read_to_string(&identity_path).expect("read recovered identity");
+    assert!(recovered.contains(&format!("workspace_id: {expected_id}")));
+    let evidence_dir = workspace
+        .path()
+        .join(".orbit/state/recovery/workspace-identity");
+    let evidence = std::fs::read_dir(&evidence_dir)
+        .expect("read identity recovery evidence")
+        .map(|entry| entry.expect("read evidence entry").path())
+        .collect::<Vec<_>>();
+    assert_eq!(evidence.len(), 1, "unexpected evidence: {evidence:?}");
+    assert_eq!(
+        std::fs::read(&evidence[0]).expect("read archived corrupt identity"),
+        Vec::<u8>::new(),
+        "the exact corrupt bytes must be preserved before recovery"
+    );
+    assert_eq!(
+        registry_without_refresh_time(),
+        registry_before,
+        "identity recovery must preserve the global registration"
+    );
+
+    std::fs::remove_file(&identity_path).expect("remove identity for missing recovery");
+    args(true)
+        .execute_without_runtime(None)
+        .expect("force must recover a missing identity for the exact registration");
+    let recovered = std::fs::read_to_string(&identity_path).expect("read recovered identity");
+    assert!(recovered.contains(&format!("workspace_id: {expected_id}")));
+    assert_eq!(
+        std::fs::read_dir(&evidence_dir)
+            .expect("read evidence after missing recovery")
+            .count(),
+        1,
+        "a missing identity has no corrupt bytes to archive"
+    );
+    assert_eq!(
+        registry_without_refresh_time(),
+        registry_before,
+        "missing-identity recovery must preserve the global registration"
     );
 }
 
@@ -1068,12 +1172,13 @@ fn workspace_init_under_home_with_global_orbit_creates_repo_orbit() {
     std::fs::write(&managed_registry_path, "managed registry sentinel\n")
         .expect("seed managed registry");
 
-    let previous_registry_root = std::env::var_os("ORBIT_REGISTRY_ROOT");
-    let previous_managed_context = std::env::var_os("ORBIT_MANAGED_RUN_CONTEXT");
-    let previous_run_id = std::env::var_os("ORBIT_RUN_ID");
-
     {
-        let env = EnvGuard::acquire().managed_registry_root(managed_registry.path());
+        let mut env = EnvGuard::acquire();
+        let previous_registry_root = std::env::var_os("ORBIT_REGISTRY_ROOT");
+        let previous_managed_context = std::env::var_os("ORBIT_MANAGED_RUN_CONTEXT");
+        let previous_run_id = std::env::var_os("ORBIT_RUN_ID");
+
+        env = env.managed_registry_root(managed_registry.path());
 
         assert_eq!(
             orbit_core::runtime::resolve_global_root().expect("resolve managed registry root"),
@@ -1081,7 +1186,7 @@ fn workspace_init_under_home_with_global_orbit_creates_repo_orbit() {
             "a trusted managed child must retain registry-root precedence"
         );
 
-        let _env = env.home(home.path()).cwd(&workspace);
+        env = env.home(home.path()).cwd(&workspace);
 
         assert_eq!(
             orbit_core::runtime::resolve_global_root().expect("resolve fixture registry root"),
@@ -1120,17 +1225,18 @@ fn workspace_init_under_home_with_global_orbit_creates_repo_orbit() {
             orbit_gitignore_block()
         );
         assert!(!orbit_gitignore_block().contains(".orbit/adrs"));
-    }
 
-    assert_eq!(
-        std::env::var_os("ORBIT_REGISTRY_ROOT"),
-        previous_registry_root
-    );
-    assert_eq!(
-        std::env::var_os("ORBIT_MANAGED_RUN_CONTEXT"),
-        previous_managed_context
-    );
-    assert_eq!(std::env::var_os("ORBIT_RUN_ID"), previous_run_id);
+        env.restore_now();
+        assert_eq!(
+            std::env::var_os("ORBIT_REGISTRY_ROOT"),
+            previous_registry_root
+        );
+        assert_eq!(
+            std::env::var_os("ORBIT_MANAGED_RUN_CONTEXT"),
+            previous_managed_context
+        );
+        assert_eq!(std::env::var_os("ORBIT_RUN_ID"), previous_run_id);
+    }
 }
 
 #[test]
@@ -1314,6 +1420,150 @@ fn workspace_init_from_git_subdir_gitignores_repo_orbit_dir() {
         orbit_gitignore_block()
     );
     assert!(!nested.join(".gitignore").exists());
+}
+
+#[test]
+fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
+    let parent = tempdir().expect("parent workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    let global = home.path().join(".orbit");
+    std::fs::create_dir_all(&global).expect("create global orbit");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_nested_init\"\nhost_id = \"nested-init\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("write host identity");
+    let parent_git = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(parent.path())
+        .status()
+        .expect("run git init for parent");
+    assert!(parent_git.success(), "initialize parent git repository");
+
+    let _env = EnvGuard::acquire().home(home.path()).cwd(parent.path());
+    let init = |name: &str| WorkspaceInitArgs {
+        name: Some(name.to_string()),
+        base_branch: Some("agent-main".to_string()),
+        ship_mode: Some("local".to_string()),
+        role: None,
+        owner: None,
+        task_id_start: None,
+        mcp: false,
+        inject_agent_rules: false,
+        refresh_defaults: false,
+        force: false,
+    };
+    init("registered-parent")
+        .execute_without_runtime(None)
+        .expect("initialize registered parent");
+
+    let registry_path = global.join("workspaces.json");
+    let parent_identity_path = parent.path().join(".orbit/config.yaml");
+    let parent_identity_before =
+        std::fs::read(&parent_identity_path).expect("read parent identity before child init");
+    let parent_gitignore_before =
+        std::fs::read(parent.path().join(".gitignore")).expect("read parent gitignore");
+    let registry_before =
+        workspace_registry::load_registry_from(&registry_path).expect("load parent registry");
+    let parent_id = canonical_workspace_id("registered-parent");
+    let parent_workspace_before = serde_json::to_vec(
+        registry_before
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == parent_id)
+            .expect("parent workspace registration"),
+    )
+    .expect("serialize parent workspace registration");
+    let parent_checkout_before = serde_json::to_vec(
+        workspace_registry::find_checkout(&registry_before, &parent_id)
+            .expect("parent checkout registration"),
+    )
+    .expect("serialize parent checkout registration");
+
+    let child = parent.path().join("codebases/independent-child");
+    let child_git = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(&child)
+        .status()
+        .expect("run git init for child");
+    assert!(child_git.success(), "initialize independent child git repo");
+    std::env::set_current_dir(&child).expect("switch to independent child repo");
+    init("independent-child")
+        .execute_without_runtime(None)
+        .expect("initialize independent child workspace");
+
+    let child_id = canonical_workspace_id("independent-child");
+    let child_orbit = child.join(".orbit");
+    let child_identity =
+        std::fs::read_to_string(child_orbit.join("config.yaml")).expect("read child identity");
+    assert!(
+        child_identity.contains(&format!("workspace_id: {child_id}")),
+        "child repository must own its workspace identity: {child_identity}"
+    );
+    std::fs::write(child_orbit.join("config.yaml"), [])
+        .expect("truncate child identity for recovery");
+    let mut child_recovery = init("independent-child");
+    child_recovery.force = true;
+    child_recovery
+        .execute_without_runtime(None)
+        .expect("recover exactly registered child identity");
+    assert_eq!(
+        std::fs::read_to_string(child_orbit.join("config.yaml"))
+            .expect("read recovered child identity"),
+        child_identity,
+        "child recovery must restore its own identity"
+    );
+    for state_dir in ["resources", "tasks", "state"] {
+        assert!(
+            child_orbit.join(state_dir).is_dir(),
+            "child workspace must own its {state_dir} state"
+        );
+    }
+    assert!(
+        !parent.path().join("codebases/.orbit").exists(),
+        "bootstrap must not create an intermediate shadow store"
+    );
+
+    let registry_after =
+        workspace_registry::load_registry_from(&registry_path).expect("load child registry");
+    let child_workspace = registry_after
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == child_id)
+        .expect("child workspace registration");
+    let child_checkout = workspace_registry::find_checkout(&registry_after, &child_id)
+        .expect("child checkout registration");
+    assert_eq!(child_workspace.name, "independent-child");
+    assert_eq!(
+        std::fs::canonicalize(&child_checkout.repo_root).expect("canonical child checkout"),
+        std::fs::canonicalize(&child).expect("canonical child repo")
+    );
+    assert_eq!(child_checkout.orbit_dir, child_orbit);
+
+    let parent_workspace_after = serde_json::to_vec(
+        registry_after
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == parent_id)
+            .expect("preserved parent workspace registration"),
+    )
+    .expect("serialize preserved parent workspace registration");
+    let parent_checkout_after = serde_json::to_vec(
+        workspace_registry::find_checkout(&registry_after, &parent_id)
+            .expect("preserved parent checkout registration"),
+    )
+    .expect("serialize preserved parent checkout registration");
+    assert_eq!(parent_workspace_after, parent_workspace_before);
+    assert_eq!(parent_checkout_after, parent_checkout_before);
+    assert_eq!(
+        std::fs::read(&parent_identity_path).expect("read parent identity after child init"),
+        parent_identity_before
+    );
+    assert_eq!(
+        std::fs::read(parent.path().join(".gitignore"))
+            .expect("read parent gitignore after child init"),
+        parent_gitignore_before
+    );
 }
 
 #[test]
@@ -1536,4 +1786,66 @@ fn nameless_tmp_workspace_registers_only_in_isolated_registry() {
         sentinel,
         "workspace init must never mutate the operator's real registry"
     );
+}
+
+#[test]
+fn workspace_init_guidance_and_generated_onboarding_files_lifecycle() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    let global = home.path().join(".orbit");
+    std::fs::create_dir_all(&global).expect("create global orbit");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_guidance\"\nhost_id = \"guidance-host\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("write host identity");
+
+    // Initialize git repo
+    let git_init = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(workspace.path())
+        .status()
+        .expect("git init");
+    assert!(git_init.success());
+
+    // Verify guidance explicitly explains generated files and operator remediation
+    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".gitignore"));
+    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".orbit/auto_tasks"));
+    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".orbit/routines"));
+    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains("review and commit"));
+    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains("does not auto-commit or discard"));
+
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
+    WorkspaceInitArgs {
+        name: Some("guidance-test".to_string()),
+        base_branch: Some("agent-main".to_string()),
+        ship_mode: Some("local".to_string()),
+        role: None,
+        owner: None,
+        task_id_start: None,
+        mcp: false,
+        inject_agent_rules: false,
+        refresh_defaults: false,
+        force: false,
+    }
+    .execute_without_runtime(None)
+    .expect("workspace init");
+
+    // Verify the generated files exist
+    assert!(workspace.path().join(".gitignore").exists());
+    assert!(workspace.path().join(".orbit/auto_tasks").is_dir());
+    assert!(workspace.path().join(".orbit/routines").is_dir());
+
+    // Git status shows dirt from generated files
+    let status_output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(workspace.path())
+        .output()
+        .expect("git status");
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+    assert!(
+        status_str.contains(".gitignore"),
+        "git status: {status_str}"
+    );
+    assert!(status_str.contains(".orbit/"), "git status: {status_str}");
 }

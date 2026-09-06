@@ -10,6 +10,7 @@ use orbit_types::telemetry::AuditEvent;
 use orbit_types::tool::StoredTool;
 use orbit_types::workflow::{
     ExecutorDef, JobRun, JobRunStartOutcome, JobRunState, KnowledgeRunMetrics, PipelineState,
+    RunStateUpdate,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -38,7 +39,33 @@ use crate::contracts::{
 };
 
 pub trait TaskStoreBackend: Send + Sync {
+    /// Select metadata before hydration, retaining all-envelope index validation.
+    fn task_candidates(
+        &self,
+        filter: &super::TaskListFilter,
+        limit: usize,
+    ) -> Result<super::TaskCandidates, OrbitError>;
+    fn query_task_rows(
+        &self,
+        filter: &super::TaskListFilter,
+        limit: usize,
+        residual: super::TaskResidualFilter<'_>,
+    ) -> Result<super::TaskPage, OrbitError>;
+    /// Direct reads remain strict; list reads tolerate concurrent creation/deletion.
+    fn get_task_row(&self, id: &str, list_read: bool)
+    -> Result<Option<super::TaskRow>, OrbitError>;
     fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError>;
+    /// Durable key admission for automation, sharing ordinary bundle creation.
+    fn create_task_idempotent(
+        &self,
+        _params: TaskCreateParams,
+        _key: &str,
+    ) -> Result<Task, OrbitError> {
+        Err(OrbitError::Store(
+            "idempotent task creation unavailable".into(),
+        ))
+    }
+
     fn list_tasks(&self) -> Result<Vec<Task>, OrbitError>;
     fn task_status_index(&self) -> Result<BTreeMap<OrbitId, TaskStatus>, OrbitError> {
         Ok(self
@@ -341,6 +368,27 @@ pub trait TaskReservationStoreBackend: Send + Sync {
 }
 
 pub trait JobRunStoreBackend: Send + Sync {
+    /// Exact retry children; missing evidence cannot be replaced by a time-window scan.
+    fn job_run_retries(&self, _run_id: &str, _limit: usize) -> Result<Vec<JobRun>, OrbitError> {
+        Err(OrbitError::Store("retry lineage lookup unavailable".into()))
+    }
+
+    fn automation_job_for_key(&self, _key: &str) -> Result<Option<String>, OrbitError> {
+        Err(OrbitError::Store(
+            "automation action lookup unavailable".into(),
+        ))
+    }
+    fn insert_automation_job_run(
+        &self,
+        _job_id: &str,
+        _input: serde_json::Value,
+        _key: &str,
+    ) -> Result<JobRun, OrbitError> {
+        Err(OrbitError::Store(
+            "automation job admission unavailable".into(),
+        ))
+    }
+
     fn list_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
     fn list_job_runs_filtered(&self, query: &JobRunQuery) -> Result<Vec<JobRun>, OrbitError>;
     /// Number of runs matching `query`, ignoring its `limit`.
@@ -358,6 +406,19 @@ pub trait JobRunStoreBackend: Send + Sync {
         input: Option<serde_json::Value>,
         retry_source_run_id: Option<String>,
     ) -> Result<JobRun, OrbitError>;
+    /// Atomically admit and link a child run unless its parent has stopped
+    /// admissions.
+    ///
+    /// The parent-state read, child insert, and parent dispatch checkpoint are
+    /// committed in one backend transaction. That commit is the
+    /// cross-process linearization point shared with an admissions-stop
+    /// update: a stop that commits first makes this return
+    /// [`ChildJobRunAdmissionOutcome::AdmissionsStopped`], while a child that
+    /// commits first is already linked when stop acknowledges.
+    fn admit_child_job_run(
+        &self,
+        params: &ChildJobRunAdmissionParams,
+    ) -> Result<ChildJobRunAdmissionOutcome, OrbitError>;
     /// [ORB-10965] Apply a `Start` event to a run, atomically and idempotently.
     ///
     /// Scheduling is at-least-once, so this is the single point that decides
@@ -413,6 +474,42 @@ pub trait JobRunStoreBackend: Send + Sync {
     fn delete_job_run(&self, run_id: &str) -> Result<String, OrbitError>;
     fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError>;
     fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError>;
+    /// [ORB-11253] Read-modify-write a run's pipeline state in one immediate
+    /// transaction.
+    ///
+    /// The plain read/write pair cannot express a change that must survive
+    /// another writer: the run's state is one document that the engine
+    /// (checkpoints, child dispatches) and operator run controls both mutate,
+    /// so two interleaved read-modify-write cycles silently drop whichever
+    /// change landed in between. `update` also receives the run's current
+    /// [`JobRunState`], so a caller that must not mutate a finished run can
+    /// refuse inside the same transaction that would otherwise have written.
+    /// An `Err` from `update` rolls the transaction back, leaving the stored
+    /// state exactly as it was.
+    fn update_run_state(
+        &self,
+        run_id: &str,
+        update: &mut dyn FnMut(JobRunState, &mut PipelineState) -> Result<(), OrbitError>,
+    ) -> Result<RunStateUpdate, OrbitError>;
+}
+
+/// Durable inputs for one parent-authorized child admission.
+#[derive(Debug, Clone)]
+pub struct ChildJobRunAdmissionParams {
+    pub parent_run_id: String,
+    pub parent_step_id: Option<String>,
+    pub job_id: String,
+    pub action: String,
+    pub blocking: bool,
+    pub attempt: u32,
+    pub scheduled_at: DateTime<Utc>,
+    pub input: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChildJobRunAdmissionOutcome {
+    Admitted(Box<JobRun>),
+    AdmissionsStopped,
 }
 
 #[derive(Debug, Clone)]

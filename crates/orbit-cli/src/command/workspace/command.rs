@@ -9,6 +9,7 @@ use super::publication::WorkspacePublicationCommand;
 use super::remove::WorkspaceRemoveArgs;
 use super::role::WorkspaceRoleArgs;
 use super::show::WorkspaceShowArgs;
+use super::source_remote::WorkspaceSourceRemoteCommand;
 use super::sync::WorkspaceSyncArgs;
 use super::teardown::WorkspaceTeardownArgs;
 
@@ -29,6 +30,8 @@ pub enum WorkspaceSubcommand {
     List(WorkspaceListArgs),
     /// Show the current workspace
     Show(WorkspaceShowArgs),
+    /// Inspect or explicitly rebind the source Git remote
+    SourceRemote(WorkspaceSourceRemoteCommand),
     /// Validate or reassert this checkout's declared local role
     Role(WorkspaceRoleArgs),
     /// Manage the owner-local task-publication repository binding
@@ -51,6 +54,7 @@ impl Execute for WorkspaceCommand {
             }
             WorkspaceSubcommand::List(args) => args.execute(runtime),
             WorkspaceSubcommand::Show(args) => args.execute(runtime),
+            WorkspaceSubcommand::SourceRemote(command) => command.execute(runtime),
             WorkspaceSubcommand::Role(args) => args.execute(runtime),
             WorkspaceSubcommand::Publication(command) => command.execute(runtime),
             WorkspaceSubcommand::Remove(args) => args.execute(runtime),

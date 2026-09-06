@@ -4,6 +4,7 @@ mod add;
 pub(crate) mod contention;
 mod helpers;
 mod lint;
+mod listing;
 mod params;
 mod paths;
 mod query;
@@ -13,6 +14,8 @@ mod update;
 
 pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
+pub(crate) use listing::query_task_store;
+pub use listing::{TaskCandidates, TaskListFilter, TaskListQuery, TaskPage, TaskRow};
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
 

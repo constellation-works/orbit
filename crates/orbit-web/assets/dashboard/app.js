@@ -10,7 +10,7 @@ import { initLogTail, fitLogPanelToViewport } from './log-tail.js';
 import { renderDiagnostics } from './diagnostics.js';
 import { renderMarkdown } from './markdown.js';
 import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './router.js';
-import { initRuns, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
+import { initRuns, getRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
 import { fetchAndRenderOperations, initOperations } from './operations.js';
 import {
   renderRunDetailEmpty,
@@ -75,6 +75,8 @@ let lastTasks = [];
 // `/api/tasks/all` view, which answers a bare array with no such metadata.
 let lastTasksMeta = null;
 let lastRuns = [];
+let lastRunsMeta = null;
+let lastRunSourcesUnavailable = [];
 let lastDiagnostics = { metrics: [], errors: [], incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] };
 let lastFrictionPayload = { stats: {}, tags: [], items: [] };
 let activeTab = "tasks";
@@ -198,7 +200,18 @@ function routerContext() {
 }
 
 function runsContext() {
-  return { navigateToRun: nTR, fetchAndRenderRuns, fetchAndRenderRunDetail, fetchAndRenderRunEvents, getActiveRunId, getLastRuns: () => lastRuns, fmtTimestamp, fmtDuration };
+  return {
+    navigateToRun: nTR,
+    fetchAndRenderRuns,
+    fetchAndRenderRunDetail,
+    fetchAndRenderRunEvents,
+    getActiveRunId,
+    getLastRuns: () => lastRuns,
+    getRunsMeta: () => lastRunsMeta,
+    getRunSourcesUnavailable: () => lastRunSourcesUnavailable,
+    fmtTimestamp,
+    fmtDuration,
+  };
 }
 
 function runDetailContext() {
@@ -843,15 +856,12 @@ function renderAggregatePlaceholders() {
   resetHealthStrip();
 }
 
-// ORB-00044: the Diagnostics tab is fed exclusively by per-workspace endpoints
-// (/api/job-runs, /api/scoreboard, and
-// /api/diagnostics/{metrics,errors,friction,implement_one}), so in aggregate
-// mode every diagnostics panel — all subtab bodies (ORB-10444 folded the
-// scoreboard in as one) and the implement_one side card — shows the placeholder
-// and the count is neutralized.
+// Most Diagnostics panels are fed exclusively by per-workspace endpoints and
+// remain unavailable in aggregate mode. Runs is the exception: its body is
+// managed by the bounded /api/job-runs/all response and must not be overwritten
+// by these placeholders.
 function renderDiagnosticsPlaceholders() {
   renderPanelPlaceholder("diag-body");
-  renderPanelPlaceholder("runs-body");
   renderPanelPlaceholder("scoreboard-body");
   renderPanelPlaceholder("diag-implement-one-body");
   const diagCount = $("diag-count");
@@ -995,6 +1005,12 @@ function buildWorkspaceSelector() {
   select.addEventListener("change", () => {
     setWorkspace(select.value);
     persistScopeToUrl();
+    // Clear the prior scope synchronously. A slower request from that scope is
+    // also discarded in fetchAndRenderRuns, so it cannot repaint stale rows.
+    lastRuns = [];
+    lastRunsMeta = null;
+    lastRunSourcesUnavailable = [];
+    renderRuns(lastRuns);
     refreshDashboard();
   });
 
@@ -1082,11 +1098,9 @@ function activeRefreshJobs() {
   }
 
   if (activeTab === "diagnostics") {
-    // ORB-00044: every diagnostics fetch is per-workspace — /api/job-runs and
-    // all four /api/diagnostics/* endpoints (metrics, errors, friction,
-    // implement_one) take the backend `Ws` extractor and 400 without a concrete
-    // workspace — so in aggregate mode skip the whole tab and show placeholders
-    // (subtab switches are likewise guarded in router.js setDiagSubtabImpl).
+    // Most diagnostics fetches are per-workspace. Runs has a bounded aggregate
+    // endpoint; metrics, errors, friction, implement_one and Scoreboard still
+    // require a concrete workspace and show placeholders without one.
     // ORB-10588: /api/metrics/reliability takes the whole DashboardState, not
     // the `Ws` extractor, so it answers in aggregate mode too — it is fetched
     // ahead of the guard below rather than being placeheld with the rest.
@@ -1095,6 +1109,11 @@ function activeRefreshJobs() {
         fetchAndRenderReliability()
           .catch((e) => console.error("Failed to fetch reliability metrics", e))
       );
+      return jobs;
+    }
+    if (aggregate && activeDiagSubtab === "runs") {
+      renderDiagnosticsPlaceholders();
+      jobs.push(fetchAndRenderRuns());
       return jobs;
     }
     if (aggregate) {
@@ -1173,12 +1192,44 @@ function activeRefreshJobs() {
 }
 
 function fetchAndRenderRuns() {
-  return Promise.all([
-    fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}`),
-    fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`),
-  ]).then(([runs, frictionRows]) => {
+  const requestedWorkspace = getWorkspace();
+  const requestedAggregate = isAggregateView();
+  const runFilter = getRunFilter();
+  const scopeIsCurrent = () =>
+    requestedWorkspace === getWorkspace() &&
+    requestedAggregate === isAggregateView() &&
+    runFilter === getRunFilter();
+  const request = requestedAggregate
+    ? fetchJson(`/api/job-runs/all?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`).then((payload) => ({
+        runs: listItems(payload),
+        frictionRows: [],
+        meta: payload,
+        unavailable: Array.isArray(payload && payload.unavailable) ? payload.unavailable : [],
+      }))
+    : Promise.all([
+        fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}`),
+        fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`),
+      ]).then(([runs, frictionRows]) => ({ runs, frictionRows, meta: null, unavailable: [] }));
+
+  return request.then(({ runs, frictionRows, meta, unavailable }) => {
+    if (!scopeIsCurrent()) return;
     lastRuns = mergeRunsWithFriction(runs, frictionRows);
+    lastRunsMeta = meta;
+    lastRunSourcesUnavailable = unavailable;
     renderRuns(lastRuns);
+  }).catch((error) => {
+    if (scopeIsCurrent()) {
+      const workspace = dashboardWorkspaces.find((entry) => entry.id === requestedWorkspace);
+      lastRuns = [];
+      lastRunsMeta = null;
+      lastRunSourcesUnavailable = [{
+        workspace_id: requestedWorkspace,
+        workspace_name: requestedAggregate ? "All workspaces" : (workspace && workspace.name) || requestedWorkspace || "workspace",
+        error: error.message || "run query failed",
+      }];
+      renderRuns(lastRuns);
+    }
+    throw error;
   });
 }
 

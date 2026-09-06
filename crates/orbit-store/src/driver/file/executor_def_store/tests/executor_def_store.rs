@@ -1,8 +1,7 @@
 // Migrated from file/executor_def_store.rs per ORB-00231
 use super::super::*;
 use chrono::Utc;
-use orbit_types::workflow::ExecutorSandboxKind;
-use orbit_types::workflow::ExecutorType;
+use orbit_types::workflow::{ExecutorSandboxKind, ExecutorType, ModelPairOverride};
 use std::collections::HashMap;
 use tempfile::tempdir;
 
@@ -87,6 +86,31 @@ fn roundtrips_model_flag_field() {
     assert!(
         on_disk.contains("model_flag: -m"),
         "model_flag should be persisted: {on_disk}"
+    );
+}
+
+#[test]
+fn roundtrips_legacy_model_pair_override_field() {
+    let dir = tempdir().expect("tempdir");
+    let store = ExecutorDefFileStore::new(dir.path().to_path_buf());
+
+    let mut def = baseline_def("claude");
+    def.model_pair_override = Some(ModelPairOverride {
+        strong: "custom-strong".to_string(),
+        weak: "custom-weak".to_string(),
+    });
+    store.upsert_executor_def(&def).expect("upsert");
+
+    let loaded = store
+        .get_executor_def("claude")
+        .expect("get")
+        .expect("present");
+    assert_eq!(loaded.model_pair_override, def.model_pair_override);
+
+    let on_disk = std::fs::read_to_string(dir.path().join("claude.yaml")).expect("read");
+    assert!(
+        on_disk.contains("model_pair_override:"),
+        "legacy override should remain persisted for customized executors: {on_disk}"
     );
 }
 

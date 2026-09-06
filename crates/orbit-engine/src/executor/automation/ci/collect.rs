@@ -6,9 +6,12 @@
 //! the commit the runner actually checked out as separate fields, and the
 //! stale/superseding evidence that says which failures are still real.
 //!
-//! "Still real" is decided per workflow. Runs are listed repository-wide and
-//! exactly the newest run of each workflow is authoritative, regardless of
-//! which branch or SHA an older run used.
+//! "Still real" is decided per relevant identity: workflow, ref, and observed
+//! failed jobs. Runs are listed repository-wide so a newer *relevant* success
+//! can suppress an older failure, but a queued or in-progress successor is
+//! not that evidence, and an unrelated pull-request run cannot erase a
+//! landing-branch failure. Already-failed jobs inside an in-flight workflow
+//! are current when their evidence is complete; a pending check is not.
 //!
 //! Losing the agent's ability to ask a follow-up question mid-diagnosis is the
 //! accepted cost of that boundary. The compensation is that the snapshot is
@@ -46,6 +49,10 @@ const MAX_LOG_MAX_BYTES: u64 = 262_144;
 /// Cap on full-log reads taken purely to evidence a checkout commit. The
 /// failed-step log usually lacks it, and a full log can be tens of megabytes.
 const DEFAULT_MAX_CHECKOUT_LOG_READS: u64 = 3;
+/// Cap on origin probes for branches no scanned head covers. One probe per
+/// distinct branch, and only for branches that actually carry a red run.
+const DEFAULT_MAX_RETIRED_REF_PROBES: u64 = 20;
+const MAX_RETIRED_REF_PROBES: u64 = 100;
 const MAX_RETRYABLE_ERROR_CHARS: usize = 500;
 
 /// Which of the workspace's heads a run belongs to.
@@ -81,6 +88,10 @@ struct Bounds {
     max_investigated_runs: usize,
     log_max_bytes: usize,
     max_checkout_log_reads: usize,
+    max_retired_ref_probes: usize,
+    /// Which overflow candidate this sweep spends its rotating investigation
+    /// slot on. Taken from the collection hour unless the caller pins it.
+    investigation_cursor: u64,
 }
 
 fn bounds_from_input(input: &Value) -> Result<Bounds, OrbitError> {
@@ -110,7 +121,25 @@ fn bounds_from_input(input: &Value) -> Result<Bounds, OrbitError> {
             DEFAULT_MAX_CHECKOUT_LOG_READS,
             MAX_INVESTIGATED_RUNS,
         )? as usize,
+        max_retired_ref_probes: bounded_u64(
+            input,
+            "max_retired_ref_probes",
+            DEFAULT_MAX_RETIRED_REF_PROBES,
+            MAX_RETIRED_REF_PROBES,
+        )? as usize,
+        investigation_cursor: bounded_u64(
+            input,
+            "investigation_cursor",
+            default_investigation_cursor(),
+            u64::MAX,
+        )?,
     })
+}
+
+/// The sweep runs hourly, so the hour advances the rotating investigation slot
+/// exactly once per sweep without any state to persist.
+fn default_investigation_cursor() -> u64 {
+    chrono::Utc::now().timestamp().max(0) as u64 / 3_600
 }
 
 /// Collect one CI evidence snapshot.
@@ -164,14 +193,11 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         &mut retryable_errors,
     )?;
 
-    let mut latest: Vec<Value> = Vec::new();
-    let mut current: Vec<Value> = Vec::new();
-    let mut stale: Vec<Value> = Vec::new();
-    let mut in_flight: Vec<Value> = Vec::new();
     // One repository-wide query rather than one per ref: a single list is what
-    // lets a newer run of a workflow supersede an older one without asking the
-    // ref it ran on whether it has advanced. Selection is repository-wide too:
-    // exactly one latest run per workflow is authoritative.
+    // lets a newer *relevant* success supersede an older failure without
+    // asking the ref it ran on whether it has advanced. Selection itself is
+    // scoped to workflow/ref/check identity so an unrelated pull request or
+    // an in-flight successor cannot hide a landing-branch failure.
     let runs = match queries.repository_runs(bounds.max_runs) {
         Ok(runs) => runs,
         Err(error) => {
@@ -193,25 +219,66 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             bounds.max_runs, bounds.max_runs
         ));
     }
+    let probes = probe_branches(queries, &refs, &runs, &bounds, &mut notes);
+    let mut partition = RunPartition::default();
     partition_runs(
         &refs,
         &runs,
-        &mut latest,
-        &mut current,
-        &mut stale,
-        &mut in_flight,
+        &probes.retired,
+        &probes.unverified,
+        &mut partition,
     );
+    let RunPartition {
+        latest,
+        mut current,
+        stale,
+        in_flight,
+        mixed_candidates,
+        mut deferred,
+    } = partition;
 
-    sort_current_failures(&mut current);
-    let discovered = current.len();
-    let attempted = discovered.min(bounds.max_investigated_runs);
-    if discovered > attempted {
+    for failure in &mut deferred {
+        failure["investigated"] = json!(false);
+        if let Some((operation, message)) = probes.unverified.get(run_branch(failure)) {
+            push_retryable_error(
+                &mut retryable_errors,
+                "discovery",
+                operation,
+                failure.get("run_id"),
+                message,
+            );
+        }
+    }
+
+    let mut inspect = Vec::new();
+    let mut seen_run_ids = std::collections::BTreeSet::new();
+    for failure in current.iter().chain(mixed_candidates.iter()) {
+        let Some(run_id) = failure.get("run_id").and_then(Value::as_u64) else {
+            continue;
+        };
+        if seen_run_ids.insert(run_id) {
+            inspect.push(failure.clone());
+        }
+    }
+    sort_current_failures(&mut inspect);
+    let investigation_candidates = inspect.len();
+    let selected = investigation_slots(
+        investigation_candidates,
+        bounds.max_investigated_runs,
+        bounds.investigation_cursor,
+    );
+    let attempted = selected.len();
+    if investigation_candidates > attempted {
         notes.push(format!(
-            "{} of {discovered} current failures were listed but not investigated \
-             (max_investigated_runs={attempted}); their run URLs are still present",
-            discovered - attempted
+            "{} of {investigation_candidates} current or mixed-state runs were listed but not \
+             investigated (max_investigated_runs={attempted}); their run URLs are still present, \
+             and the rotating slot reaches a different overflow candidate on the next sweep",
+            investigation_candidates - attempted
         ));
-        for failure in current.iter().skip(attempted) {
+        for (index, failure) in inspect.iter().enumerate() {
+            if selected.contains(&index) || !run_is_completed(failure) {
+                continue;
+            }
             push_retryable_error(
                 &mut retryable_errors,
                 "investigation",
@@ -222,8 +289,8 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         }
     }
     let mut checkout_log_reads = 0usize;
-    for (index, failure) in current.iter_mut().enumerate() {
-        if index >= attempted {
+    for (index, failure) in inspect.iter_mut().enumerate() {
+        if !selected.contains(&index) {
             failure["investigated"] = json!(false);
             continue;
         }
@@ -235,6 +302,12 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             &mut retryable_errors,
         );
     }
+    current = inspect
+        .into_iter()
+        .filter(is_actionable_current_failure)
+        .collect();
+    sort_current_failures(&mut current);
+    let discovered = current.len();
     let investigated_ids = current
         .iter()
         .filter(|failure| failure.get("investigated").and_then(Value::as_bool) == Some(true))
@@ -248,8 +321,13 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         .iter()
         .filter_map(|run| run.get("run_id").cloned())
         .collect::<Vec<_>>();
+    let deferred_ids = deferred
+        .iter()
+        .filter_map(|run| run.get("run_id").cloned())
+        .collect::<Vec<_>>();
     let investigated_count = investigated_ids.len();
     let retryable_error_count = retryable_errors.len();
+    let unverified_refs = probes.unverified.keys().cloned().collect::<Vec<_>>();
 
     Ok(json!({
         "schema_version": CI_EVIDENCE_SCHEMA_VERSION,
@@ -268,6 +346,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         "current_failures": current,
         "stale_or_superseded": stale,
         "in_flight": in_flight,
+        "deferred": deferred,
         "retryable_errors": retryable_errors,
         "summary": {
             "latest_runs_discovered": latest_ids.len(),
@@ -276,6 +355,8 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             "current_failure_run_ids": current_ids,
             "investigated_failures": investigated_count,
             "investigated_failure_run_ids": investigated_ids,
+            "deferred_failures": deferred_ids.len(),
+            "deferred_failure_run_ids": deferred_ids,
             "retryable_errors": retryable_error_count,
         },
         "truncation": json!({
@@ -293,6 +374,10 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             "log_max_bytes": bounds.log_max_bytes,
             "checkout_log_reads": checkout_log_reads,
             "max_checkout_log_reads": bounds.max_checkout_log_reads,
+            "retired_refs": probes.retired.iter().collect::<Vec<_>>(),
+            "unverified_refs": unverified_refs,
+            "max_retired_ref_probes": bounds.max_retired_ref_probes,
+            "investigation_cursor": bounds.investigation_cursor,
             "notes": notes,
         }),
         "collected_at": chrono::Utc::now().to_rfc3339(),
@@ -415,6 +500,155 @@ fn derive_refs<Q: CiQueries + ?Sized>(
     Ok(refs)
 }
 
+struct CandidateProbeResults {
+    retired: std::collections::BTreeSet<String>,
+    unverified: std::collections::BTreeMap<String, (String, String)>,
+}
+
+/// Branches that carry a red run but no longer exist on origin, or whose
+/// current relevance could not be verified within probe bounds.
+///
+/// A task branch is deleted when its pull request merges, so its old red runs
+/// describe code that either landed — where the landing branch's own runs are
+/// the current evidence — or was abandoned. Either way there is no ref left to
+/// fix, and treating those runs as current is what let a backlog of merged
+/// historical pull requests consume every sweep's investigation budget.
+///
+/// The probe is authoritative (origin, not a naming convention) and bounded:
+/// one query per distinct branch that actually carries a red run, and none at
+/// all for a branch already scanned as a landing head or an open pull request.
+/// A probe that fails or is skipped due to probe budget keeps its branch
+/// deferred rather than assuming it is merged or current.
+fn probe_branches<Q: CiQueries + ?Sized>(
+    queries: &Q,
+    refs: &[ScannedRef],
+    runs: &[Value],
+    bounds: &Bounds,
+    notes: &mut Vec<String>,
+) -> CandidateProbeResults {
+    let mut candidates: Vec<&str> = Vec::new();
+    for run in runs {
+        let branch = run_branch(run);
+        if branch.is_empty() || !run_is_completed(run) || !run_is_unsuccessful(run) {
+            continue;
+        }
+        if refs.iter().any(|scanned| scanned.branch == branch) || candidates.contains(&branch) {
+            continue;
+        }
+        candidates.push(branch);
+    }
+
+    let selected = probe_slots(
+        candidates.len(),
+        bounds.max_retired_ref_probes,
+        bounds.investigation_cursor,
+    );
+
+    if candidates.len() > selected.len() {
+        notes.push(format!(
+            "{} branch(es) carrying red runs were not probed against origin \
+             (max_retired_ref_probes={}); their failures remain deferred until verified",
+            candidates.len() - selected.len(),
+            bounds.max_retired_ref_probes
+        ));
+    }
+
+    let mut retired = std::collections::BTreeSet::new();
+    let mut unverified = std::collections::BTreeMap::new();
+
+    for (index, branch) in candidates.iter().enumerate() {
+        if !selected.contains(&index) {
+            unverified.insert(
+                (*branch).to_string(),
+                (
+                    "retired_ref_budget".to_string(),
+                    format!(
+                        "candidate branch '{branch}' was not probed against origin because \
+                         max_retired_ref_probes ({}) was exhausted; its failure remains deferred \
+                         until verified",
+                        bounds.max_retired_ref_probes
+                    ),
+                ),
+            );
+            continue;
+        }
+
+        match queries.remote_branch_head(branch) {
+            Ok(None) => {
+                retired.insert((*branch).to_string());
+            }
+            Ok(Some(_)) => {}
+            Err(error) => {
+                notes.push(format!(
+                    "branch '{branch}' could not be checked against origin ({error}); its \
+                     failure remains deferred until verified"
+                ));
+                unverified.insert(
+                    (*branch).to_string(),
+                    (
+                        "remote_branch_head".to_string(),
+                        format!(
+                            "candidate branch '{branch}' could not be checked against origin \
+                             ({error}); its failure remains deferred until verified"
+                        ),
+                    ),
+                );
+            }
+        }
+    }
+
+    CandidateProbeResults {
+        retired,
+        unverified,
+    }
+}
+
+/// Which candidate branches this sweep probes against origin.
+///
+/// If candidate count exceeds the probe budget, the prefix of slots probes the
+/// newest candidates while the final slot rotates through overflow candidates
+/// with each advancing cursor so all candidates eventually get probed without
+/// starvation.
+fn probe_slots(candidates: usize, budget: usize, cursor: u64) -> std::collections::BTreeSet<usize> {
+    let attempted = candidates.min(budget);
+    let mut slots: std::collections::BTreeSet<usize> = (0..attempted).collect();
+    if candidates <= attempted || attempted == 0 {
+        return slots;
+    }
+    let rotating = attempted - 1;
+    slots.remove(&rotating);
+    let overflow = candidates - rotating;
+    slots.insert(rotating + (cursor % overflow as u64) as usize);
+    slots
+}
+
+/// Which candidates this sweep spends its investigation budget on.
+///
+/// The budget is smaller than the candidate list often enough that a fixed
+/// prefix would mean the same runs are investigated every hour and everything
+/// below the cap is never investigated at all — a permanent starvation that no
+/// number of sweeps resolves. So the ranked prefix keeps all but one slot, and
+/// the last slot rotates through the remainder: the landing-branch failures
+/// that gate delivery still go first, and every other candidate is reached
+/// within one rotation instead of never. With a budget of one there is nothing
+/// to rotate and the highest-ranked candidate keeps the slot.
+fn investigation_slots(
+    candidates: usize,
+    budget: usize,
+    cursor: u64,
+) -> std::collections::BTreeSet<usize> {
+    let attempted = candidates.min(budget);
+    let mut slots: std::collections::BTreeSet<usize> = (0..attempted).collect();
+    if candidates <= attempted || attempted < 2 {
+        return slots;
+    }
+    let rotating = attempted - 1;
+    slots.remove(&rotating);
+    let overflow = candidates - rotating;
+    slots.insert(rotating + (cursor % overflow as u64) as usize);
+    slots
+}
+
 fn head_json(scanned: &ScannedRef) -> Value {
     json!({
         "kind": scanned.kind.as_str(),
@@ -425,20 +659,38 @@ fn head_json(scanned: &ScannedRef) -> Value {
     })
 }
 
-/// Evaluate exactly the latest repository-wide run for each workflow.
+/// Where each run lands once it has been classified.
+#[derive(Default)]
+struct RunPartition {
+    latest: Vec<Value>,
+    current: Vec<Value>,
+    stale: Vec<Value>,
+    in_flight: Vec<Value>,
+    mixed_candidates: Vec<Value>,
+    deferred: Vec<Value>,
+}
+
+/// Classify repository-wide runs by relevant workflow/ref identity.
 ///
-/// Older unsuccessful runs remain useful evidence, but can never become
-/// current merely because the ref they ran on has not advanced. The latest run
-/// supersedes them regardless of branch, SHA, status, or conclusion. This is
-/// the repository-wide workflow invariant established by ORB-11147.
+/// `latest_runs` still records the newest run of each workflow for audit.
+/// Current failures are the newest unsuccessful completed run per
+/// `(workflow, head_branch)` that a *relevant* newer success has not
+/// suppressed. A queued or in-progress successor is listed in `in_flight`
+/// and, when it is the newest run of that identity, also becomes a mixed-state
+/// candidate so already-failed jobs can be observed. Landing-branch
+/// (integration/release) failures are only suppressed by a newer completed
+/// non-unsuccessful run of the same workflow on the same ref. Non-landing
+/// failures may also be suppressed by a landing-branch success of that
+/// workflow, so an abandoned Dependabot run does not revive after the
+/// integration head has gone green.
 fn partition_runs(
     refs: &[ScannedRef],
     runs: &[Value],
-    latest_runs: &mut Vec<Value>,
-    current: &mut Vec<Value>,
-    stale: &mut Vec<Value>,
-    in_flight: &mut Vec<Value>,
+    retired: &std::collections::BTreeSet<String>,
+    unverified: &std::collections::BTreeMap<String, (String, String)>,
+    out: &mut RunPartition,
 ) {
+    let landing_branches = landing_branch_names(refs);
     let mut workflows = std::collections::BTreeMap::<String, Vec<&Value>>::new();
     for run in runs {
         let workflow = run
@@ -454,52 +706,172 @@ fn partition_runs(
         let Some(latest) = workflow_runs.first().copied() else {
             continue;
         };
-        latest_runs.push(run_summary(ref_for_run(refs, latest), latest));
+        out.latest
+            .push(run_summary(ref_for_run(refs, latest), latest));
 
-        for older in workflow_runs.iter().skip(1).copied() {
-            let completed = older.get("status").and_then(Value::as_str) == Some("completed");
-            let conclusion = older.get("conclusion").and_then(Value::as_str);
-            if completed && unsuccessful_conclusion(conclusion) {
-                let mut entry = run_summary(ref_for_run(refs, older), older);
-                entry["reason"] = json!("superseded_by_newer_workflow_run");
-                entry["evidence"] = json!(format!(
-                    "newer repository-wide run {} at {} is {} with conclusion {}",
-                    latest
-                        .get("run_id")
-                        .and_then(Value::as_u64)
-                        .map_or_else(|| "unknown".to_string(), |id| id.to_string()),
-                    latest
-                        .get("created_at")
-                        .and_then(Value::as_str)
-                        .unwrap_or("an unknown time"),
-                    latest
-                        .get("status")
-                        .and_then(Value::as_str)
-                        .unwrap_or("in an unknown state"),
-                    latest
-                        .get("conclusion")
-                        .and_then(Value::as_str)
-                        .unwrap_or("not yet completed"),
-                ));
-                entry["superseded_by"] = json!({
-                    "run_id": latest.get("run_id"),
-                    "url": latest.get("url"),
-                    "created_at": latest.get("created_at"),
-                    "status": latest.get("status"),
-                    "conclusion": latest.get("conclusion"),
-                });
-                stale.push(entry);
+        let landing_success = workflow_runs.iter().copied().find(|run| {
+            run_is_completed(run)
+                && !run_is_unsuccessful(run)
+                && landing_branches.contains(run_branch(run))
+        });
+
+        let mut by_ref = std::collections::BTreeMap::<String, Vec<&Value>>::new();
+        for run in workflow_runs.iter().copied() {
+            by_ref
+                .entry(run_branch(run).to_string())
+                .or_default()
+                .push(run);
+        }
+
+        for ref_runs in by_ref.values_mut() {
+            ref_runs.sort_by_key(|run| std::cmp::Reverse(run_order(run)));
+            let same_ref_success = ref_runs
+                .iter()
+                .copied()
+                .find(|run| run_is_completed(run) && !run_is_unsuccessful(run));
+            let landing = ref_runs
+                .first()
+                .copied()
+                .is_some_and(|run| landing_branches.contains(run_branch(run)));
+            let suppressor = same_ref_success.or(if landing { None } else { landing_success });
+
+            let mut seen_current = false;
+            let mut seen_in_flight = false;
+            for run in ref_runs.iter().copied() {
+                if !run_is_completed(run) {
+                    out.in_flight.push(run_summary(ref_for_run(refs, run), run));
+                    if !seen_in_flight
+                        && !unverified.contains_key(run_branch(run))
+                        && suppressor.is_none_or(|success| run_order(run) > run_order(success))
+                    {
+                        out.mixed_candidates
+                            .push(run_summary(ref_for_run(refs, run), run));
+                    }
+                    seen_in_flight = true;
+                    continue;
+                }
+                if !run_is_unsuccessful(run) {
+                    continue;
+                }
+                if retired.contains(run_branch(run)) {
+                    out.stale.push(retired_ref_entry(refs, run));
+                    continue;
+                }
+                if let Some(success) =
+                    suppressor.filter(|success| run_order(success) > run_order(run))
+                {
+                    out.stale.push(stale_entry(
+                        refs,
+                        run,
+                        success,
+                        "superseded_by_newer_workflow_run",
+                    ));
+                    continue;
+                }
+                if seen_current {
+                    if let Some(newer) = ref_runs.iter().copied().find(|candidate| {
+                        run_is_completed(candidate)
+                            && run_is_unsuccessful(candidate)
+                            && run_order(candidate) > run_order(run)
+                    }) {
+                        out.stale.push(stale_entry(
+                            refs,
+                            run,
+                            newer,
+                            "superseded_by_newer_workflow_run",
+                        ));
+                    }
+                    continue;
+                }
+                if unverified.contains_key(run_branch(run)) {
+                    out.deferred.push(run_summary(ref_for_run(refs, run), run));
+                    seen_current = true;
+                    continue;
+                }
+                out.current.push(run_summary(ref_for_run(refs, run), run));
+                seen_current = true;
             }
         }
-
-        let completed = latest.get("status").and_then(Value::as_str) == Some("completed");
-        let summary = run_summary(ref_for_run(refs, latest), latest);
-        if !completed {
-            in_flight.push(summary);
-        } else if unsuccessful_conclusion(latest.get("conclusion").and_then(Value::as_str)) {
-            current.push(summary);
-        }
     }
+}
+
+fn landing_branch_names(refs: &[ScannedRef]) -> std::collections::BTreeSet<&str> {
+    refs.iter()
+        .filter(|scanned| matches!(scanned.kind, RefKind::Integration | RefKind::Release))
+        .map(|scanned| scanned.branch.as_str())
+        .collect()
+}
+
+fn run_branch(run: &Value) -> &str {
+    run.get("head_branch").and_then(Value::as_str).unwrap_or("")
+}
+
+fn run_is_completed(run: &Value) -> bool {
+    run.get("status").and_then(Value::as_str) == Some("completed")
+}
+
+fn run_is_unsuccessful(run: &Value) -> bool {
+    unsuccessful_conclusion(run.get("conclusion").and_then(Value::as_str))
+}
+
+fn has_failed_jobs(failure: &Value) -> bool {
+    failure
+        .get("failed_jobs")
+        .and_then(Value::as_array)
+        .is_some_and(|jobs| !jobs.is_empty())
+}
+
+fn is_actionable_current_failure(failure: &Value) -> bool {
+    if run_is_completed(failure) {
+        return run_is_unsuccessful(failure);
+    }
+    has_failed_jobs(failure) && failure.get("investigated").and_then(Value::as_bool) == Some(true)
+}
+
+/// A red run on a branch origin no longer has. Not superseded by a newer run —
+/// there is simply no ref left for the failure to be current on.
+fn retired_ref_entry(refs: &[ScannedRef], run: &Value) -> Value {
+    let mut entry = run_summary(ref_for_run(refs, run), run);
+    entry["reason"] = json!("ref_no_longer_exists");
+    entry["evidence"] = json!(format!(
+        "branch '{}' has no head on origin: its pull request was merged or the branch was \
+         deleted, so this run describes code that is either already landed — where the landing \
+         branch's own runs are the current evidence — or abandoned",
+        run_branch(run)
+    ));
+    entry
+}
+
+fn stale_entry(refs: &[ScannedRef], older: &Value, newer: &Value, reason: &str) -> Value {
+    let mut entry = run_summary(ref_for_run(refs, older), older);
+    entry["reason"] = json!(reason);
+    entry["evidence"] = json!(format!(
+        "newer relevant run {} at {} is {} with conclusion {}",
+        newer
+            .get("run_id")
+            .and_then(Value::as_u64)
+            .map_or_else(|| "unknown".to_string(), |id| id.to_string()),
+        newer
+            .get("created_at")
+            .and_then(Value::as_str)
+            .unwrap_or("an unknown time"),
+        newer
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("in an unknown state"),
+        newer
+            .get("conclusion")
+            .and_then(Value::as_str)
+            .unwrap_or("not yet completed"),
+    ));
+    entry["superseded_by"] = json!({
+        "run_id": newer.get("run_id"),
+        "url": newer.get("url"),
+        "created_at": newer.get("created_at"),
+        "status": newer.get("status"),
+        "conclusion": newer.get("conclusion"),
+    });
+    entry
 }
 
 /// Sortable position of a run: creation time first, run id as the tiebreak.
@@ -542,14 +914,16 @@ fn run_summary(scanned: Option<&ScannedRef>, run: &Value) -> Value {
     })
 }
 
-/// Integration first, then release, then pull requests; newest run first
-/// within each. Investigation budget therefore lands on the heads that gate
-/// delivery before it lands on a pull request.
+/// Integration first, then release, then pull requests, then other refs;
+/// newest run first within each. Investigation budget therefore lands on the
+/// heads that gate delivery before pull requests, and on verified pull
+/// requests before any other branch.
 fn sort_current_failures(failures: &mut [Value]) {
     let rank = |value: &Value| match value.get("ref_kind").and_then(Value::as_str) {
         Some("integration") => 0,
         Some("release") => 1,
-        _ => 2,
+        Some("pull_request") => 2,
+        _ => 3,
     };
     failures.sort_by(|left, right| {
         rank(left)
@@ -586,7 +960,8 @@ fn investigate<Q: CiQueries + ?Sized>(
     match queries.run_view(&run_id) {
         Ok(view) => {
             let failed_jobs = view.get("failed_jobs").cloned().unwrap_or(json!([]));
-            if failed_jobs.as_array().is_none_or(Vec::is_empty) {
+            let empty = failed_jobs.as_array().is_none_or(Vec::is_empty);
+            if empty && run_is_completed(failure) {
                 push_retryable_error(
                     retryable_errors,
                     "registration",
@@ -596,6 +971,12 @@ fn investigate<Q: CiQueries + ?Sized>(
                 );
             }
             failure["failed_jobs"] = failed_jobs;
+            // A pending in-flight check is not a repair task. Do not fetch
+            // logs or consume checkout budget until a job has actually failed.
+            if empty && !run_is_completed(failure) {
+                failure["investigated"] = json!(true);
+                return;
+            }
         }
         Err(error) => {
             push_retryable_error(
@@ -605,6 +986,10 @@ fn investigate<Q: CiQueries + ?Sized>(
                 failure.get("run_id"),
                 &error.to_string(),
             );
+            if !run_is_completed(failure) {
+                failure["investigated"] = json!(false);
+                return;
+            }
         }
     }
 
@@ -618,6 +1003,7 @@ fn investigate<Q: CiQueries + ?Sized>(
             failure["actual_checkout_shas"] = json!(log.checkout_commits);
             failure["checkout_evidence"] = json!(log.checkout_evidence);
             failure["checkout_evidence_scope"] = json!("failed");
+            set_checkout_identity(failure, "failed", &log);
             // `gh` can succeed with empty stdout when the run's logs are gone
             // (retention). That is not a captured excerpt; record it so the
             // filed task can say why the block is empty.
@@ -649,7 +1035,11 @@ fn investigate<Q: CiQueries + ?Sized>(
     let needs_checkout = failure
         .get("actual_checkout_shas")
         .and_then(Value::as_array)
-        .is_none_or(Vec::is_empty);
+        .is_none_or(Vec::is_empty)
+        || failure
+            .get("checkout_evidence_complete")
+            .and_then(Value::as_bool)
+            != Some(true);
     if !needs_checkout {
         failure["investigated"] = json!(retryable_errors.len() == errors_before);
         return;
@@ -672,11 +1062,23 @@ fn investigate<Q: CiQueries + ?Sized>(
             failure["actual_checkout_shas"] = json!(log.checkout_commits);
             failure["checkout_evidence"] = json!(log.checkout_evidence);
             failure["checkout_evidence_scope"] = json!("all");
-            if failure
-                .get("actual_checkout_shas")
-                .and_then(Value::as_array)
-                .is_none_or(Vec::is_empty)
-            {
+            set_checkout_identity(failure, "all", &log);
+            // A genuinely incomplete scan (the source-byte cap, or a dropped
+            // overlong line that could have carried checkout identity) stays
+            // fail-closed even when one SHA was already found: it cannot rule
+            // out a later, conflicting identity past whatever it didn't
+            // manage to read. Only a *display* cap (evidence line/commit
+            // count, or an overlong line unrelated to checkout) is exempt —
+            // that never touches `checkout_evidence_complete`.
+            if !log.checkout_evidence_complete {
+                push_retryable_error(
+                    retryable_errors,
+                    "registration",
+                    "checkout_evidence",
+                    failure.get("run_id"),
+                    "checkout evidence scan reached its hard limit; actual checkout identity is incomplete",
+                );
+            } else if log.checkout_commits.is_empty() {
                 push_retryable_error(
                     retryable_errors,
                     "registration",
@@ -698,6 +1100,37 @@ fn investigate<Q: CiQueries + ?Sized>(
         }
     }
     failure["investigated"] = json!(retryable_errors.len() == errors_before);
+}
+
+fn set_checkout_identity(failure: &mut Value, scope: &str, log: &super::query::RunLog) {
+    let state = if !log.checkout_evidence_complete {
+        "incomplete"
+    } else {
+        match log.checkout_commits.len() {
+            0 => "missing",
+            1 => "observed",
+            _ => "ambiguous",
+        }
+    };
+    failure["checkout_evidence_complete"] = json!(log.checkout_evidence_complete);
+    failure["checkout_evidence_scanned_bytes"] = json!(log.checkout_evidence_scanned_bytes);
+    failure["checkout_evidence_source_truncated"] = json!(log.checkout_evidence_source_truncated);
+    failure["checkout_evidence_display_truncated"] = json!(log.checkout_evidence_display_truncated);
+    failure["checkout_identity"] = json!({
+        "state": state,
+        "observed_shas": log.checkout_commits,
+        "provenance": {
+            "source": "runner_log",
+            "scope": scope,
+            "complete": log.checkout_evidence_complete,
+            "scanned_bytes": log.checkout_evidence_scanned_bytes,
+            "source_truncated": log.checkout_evidence_source_truncated,
+            // Display caps (evidence line/commit count, or an unrelated
+            // overlong line) reduce what is reported without bearing on
+            // whether identity itself was captured; see `complete` for that.
+            "display_truncated": log.checkout_evidence_display_truncated,
+        },
+    });
 }
 
 fn push_retryable_error(

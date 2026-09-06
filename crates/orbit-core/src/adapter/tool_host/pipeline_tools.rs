@@ -1,9 +1,11 @@
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{optional_string, required_string};
+use orbit_tools::ReservationOwnerContext;
 use orbit_types::identity::normalize_optional_attribution_label;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::ChildPipelineAdmission;
 
 use super::input::{
     parse_optional_poll_interval_seconds, parse_optional_timeout_seconds, parse_string_array_field,
@@ -16,6 +18,7 @@ pub(super) fn invoke(
     input: Value,
     agent: Option<String>,
     model: Option<String>,
+    reservation_owner: Option<ReservationOwnerContext>,
 ) -> Result<Value, OrbitError> {
     let job_name = required_string(&input, &["job_name"], "job_name")?;
     let payload = require_object_field(&input, "input")?.clone();
@@ -31,13 +34,66 @@ pub(super) fn invoke(
         .unwrap_or_else(|| runtime.actor_label().to_string()),
     )
     .filter(|value| !value.trim().is_empty());
-    serde_json::to_value(runtime.submit_pipeline_run(
-        &job_name,
-        payload,
-        priority.as_deref(),
-        actor.as_deref(),
-    )?)
-    .map_err(serialize_error("serialize pipeline invoke"))
+    let result = match child_admission(reservation_owner)? {
+        Some(admission) => runtime.submit_child_pipeline_run(
+            &job_name,
+            payload,
+            priority.as_deref(),
+            actor.as_deref(),
+            &admission,
+        )?,
+        None => Some(runtime.submit_pipeline_run(
+            &job_name,
+            payload,
+            priority.as_deref(),
+            actor.as_deref(),
+        )?),
+    };
+    match result {
+        Some(result) => {
+            serde_json::to_value(result).map_err(serialize_error("serialize pipeline invoke"))
+        }
+        None => Ok(serde_json::json!({
+            "skipped": true,
+            "reason": "admissions_stopped",
+            "job_name": job_name,
+        })),
+    }
+}
+
+fn child_admission(
+    reservation_owner: Option<ReservationOwnerContext>,
+) -> Result<Option<ChildPipelineAdmission>, OrbitError> {
+    let Some(owner) = reservation_owner else {
+        return Ok(None);
+    };
+    let Some(metadata) = owner.owner_metadata_json else {
+        return Ok(None);
+    };
+    let metadata: Value = serde_json::from_str(&metadata).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "invalid trusted reservation owner metadata: {error}"
+        ))
+    })?;
+    let Some(admission) = metadata.get("pipeline_child_admission") else {
+        return Ok(None);
+    };
+    let action = required_string(admission, &["action"], "action")?;
+    let blocking = admission
+        .get("blocking")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(
+                "trusted pipeline child admission is missing boolean `blocking`".to_string(),
+            )
+        })?;
+    let parent_step_id = optional_string(admission, "parent_step_id")?;
+    Ok(Some(ChildPipelineAdmission {
+        parent_run_id: owner.owner_run_id,
+        parent_step_id,
+        action,
+        blocking,
+    }))
 }
 
 pub(super) fn wait(

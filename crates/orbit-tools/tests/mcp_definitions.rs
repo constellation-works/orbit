@@ -34,6 +34,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             .map(|definition| definition.schema.name.as_str())
             .collect::<Vec<_>>(),
         [
+            "orbit.agent.invoke",
             "orbit.auto_task.list",
             "orbit.auto_task.mint",
             "orbit.command.exec",
@@ -43,6 +44,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.search",
             "orbit.task.add",
             "orbit.task.approve",
+            "orbit.task.artifact.get",
             "orbit.task.artifact.put",
             "orbit.task.list",
             "orbit.task.show",
@@ -51,6 +53,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.workflow.run.list",
             "orbit.workflow.run.resume",
             "orbit.workflow.run.show",
+            "orbit.workflow.run.workers",
             "orbit.workflow.ship",
         ]
     );

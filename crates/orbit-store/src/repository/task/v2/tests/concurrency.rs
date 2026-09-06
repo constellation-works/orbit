@@ -6,7 +6,9 @@
 //! missing or half there. These tests pin both halves of the rule: transient
 //! states are skipped, genuine corruption still fails fast.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier};
+use std::time::Duration;
 
 use super::*;
 use crate::driver::file::task_bundle::task_bundle_lock_sentinel_path;
@@ -153,6 +155,12 @@ fn parallel_updates_to_distinct_tasks_never_fail_a_concurrent_listing() {
                         .list_tasks()
                         .unwrap_or_else(|err| panic!("listing failed under concurrency: {err}"));
                     assert_eq!(tasks.len(), TASKS, "no task may drop out of a listing");
+                    let page = store
+                        .query_task_rows(&Default::default(), 3, None)
+                        .unwrap_or_else(|err| {
+                            panic!("bounded listing failed under concurrency: {err}")
+                        });
+                    assert_eq!(page.items.len(), 3);
                     listings.fetch_add(1, Ordering::Relaxed);
                 }
             });
@@ -221,4 +229,247 @@ fn parallel_updates_to_one_task_keep_every_appended_comment() {
         created_comments + WRITERS * COMMENTS_PER_WRITER,
         "no concurrent comment may be lost"
     );
+}
+
+/// ORB-11349: the transition row and the envelope that agrees with it are two
+/// files, so `update_task_history` is only a consistent unit to a reader that
+/// waits for the writer. Build exactly that half-published state — hold the
+/// task's write lock, append the event, and stall before republishing the
+/// envelope — and require a reader that arrives inside the window to observe
+/// the settled transition rather than the mixed pair.
+#[test]
+fn a_reader_never_observes_a_transition_between_its_event_and_its_envelope() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let id = create_tasks(&store, 2).remove(0);
+
+    let event_appended = Barrier::new(2);
+    let envelope_published = AtomicBool::new(false);
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            store
+                .with_task_lock(&id, || {
+                    let bundle = store.bundle_store.read_bundle(&id).expect("read bundle");
+                    store
+                        .bundle_store
+                        .append_event(&id, &transition_event(&bundle))
+                        .expect("append transition event");
+                    event_appended.wait();
+                    // Wide enough that a reader taking no lock lands inside the
+                    // window every run, not just under load.
+                    std::thread::sleep(Duration::from_millis(300));
+                    let mut envelope = bundle.envelope.clone();
+                    envelope.status = TaskStatus::InProgress;
+                    envelope.updated_at = Utc::now();
+                    store
+                        .bundle_store
+                        .rewrite_envelope(&id, &envelope)
+                        .expect("publish envelope");
+                    envelope_published.store(true, Ordering::SeqCst);
+                    Ok(())
+                })
+                .expect("half-published transition");
+        });
+
+        event_appended.wait();
+        let task = store
+            .get_task(&id)
+            .expect("a half-published transition must not read as corruption")
+            .expect("task exists");
+        assert!(
+            envelope_published.load(Ordering::SeqCst),
+            "the read must have waited for the writer to publish the envelope"
+        );
+        assert_eq!(
+            task.status,
+            TaskStatus::InProgress,
+            "the read must see the settled transition, not the pre-transition envelope"
+        );
+
+        let listed = store
+            .list_tasks()
+            .expect("a half-published transition must not fail the listing");
+        assert_eq!(listed.len(), 2, "no task may drop out of a listing");
+    });
+}
+
+/// The tolerance stays narrow: once no writer holds the bundle, an event log
+/// that disagrees with the envelope is real damage and must still surface.
+#[test]
+fn a_settled_event_and_envelope_mismatch_is_still_corruption() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let id = create_tasks(&store, 2).remove(0);
+
+    let bundle = store.bundle_store.read_bundle(&id).expect("read bundle");
+    store
+        .bundle_store
+        .append_event(&id, &transition_event(&bundle))
+        .expect("append transition event");
+
+    let err = store
+        .get_task(&id)
+        .expect_err("a settled status mismatch must not be silently tolerated");
+    assert!(
+        matches!(err, OrbitError::TaskBundleCorrupt { ref task_id, .. } if *task_id == id),
+        "expected corruption for {id}, got {err}"
+    );
+    let err = store
+        .list_tasks()
+        .expect_err("a settled status mismatch must not be silently skipped");
+    assert!(
+        matches!(err, OrbitError::TaskBundleCorrupt { ref task_id, .. } if *task_id == id),
+        "expected corruption for {id}, got {err}"
+    );
+}
+
+/// Every lifecycle write reads the bundle it is about to modify from inside
+/// its own write lock, and some read every *other* task too. The read lock
+/// must re-enter the write lock it is nested in rather than block on it.
+#[test]
+fn a_full_read_inside_the_write_lock_does_not_deadlock() {
+    let temp = Arc::new(TempDir::new().expect("tempdir"));
+    let store = Arc::new(store(&temp));
+    let ids = create_tasks(&store, 3);
+
+    // Detached, not scoped: a regression here deadlocks, and a scoped thread
+    // would take the whole suite down with it on join.
+    let finished = run_within(Duration::from_secs(20), move || {
+        let _temp = temp;
+        store
+            .with_task_lock(&ids[0], || {
+                store.bundle_store.read_bundle(&ids[0])?;
+                store.get_task(&ids[0])?;
+                store.list_tasks().map(|tasks| tasks.len())
+            })
+            .expect("a nested read must not deadlock against its own write lock")
+    });
+    assert_eq!(
+        finished,
+        Some(3),
+        "a read nested inside this task's own write lock must re-enter it"
+    );
+}
+
+/// The lock is per bundle, so a writer stalled on one task must not stop reads
+/// of any other. This is the property the incident actually broke: one task's
+/// transition failed an unrelated task's admission.
+#[test]
+fn a_stalled_writer_on_one_task_does_not_block_reads_of_another() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let ids = create_tasks(&store, 2);
+
+    let holding = Barrier::new(2);
+    let released = AtomicBool::new(false);
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            store
+                .with_task_lock(&ids[0], || {
+                    holding.wait();
+                    std::thread::sleep(Duration::from_millis(300));
+                    released.store(true, Ordering::SeqCst);
+                    Ok(())
+                })
+                .expect("hold the write lock");
+        });
+
+        holding.wait();
+        let other = store
+            .get_task(&ids[1])
+            .expect("read of an unrelated task")
+            .expect("task exists");
+        assert_eq!(other.id, ids[1]);
+        assert!(
+            !released.load(Ordering::SeqCst),
+            "an unrelated task's read must not wait for this writer"
+        );
+    });
+}
+
+/// The reported failure shape at status-transition scale: writers flipping
+/// their own task's status while readers assemble whole bundles.
+#[test]
+fn parallel_status_transitions_never_fail_a_concurrent_read() {
+    const TASKS: usize = 6;
+    const ROUNDS: usize = 10;
+
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let ids = create_tasks(&store, TASKS);
+
+    std::thread::scope(|scope| {
+        for id in &ids {
+            let store = &store;
+            scope.spawn(move || {
+                for round in 0..ROUNDS {
+                    let status = if round % 2 == 0 {
+                        TaskStatus::InProgress
+                    } else {
+                        TaskStatus::Backlog
+                    };
+                    store
+                        .update_task_history(
+                            id,
+                            &TaskHistoryUpdateParams {
+                                actor: "codex:gpt-5.5".to_string(),
+                                status: Some(status),
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap_or_else(|err| panic!("transition of {id} failed: {err}"));
+                }
+            });
+        }
+        for _ in 0..4 {
+            let store = &store;
+            let ids = &ids;
+            scope.spawn(move || {
+                for _ in 0..(ROUNDS * TASKS) {
+                    let tasks = store
+                        .list_tasks()
+                        .unwrap_or_else(|err| panic!("listing failed under transitions: {err}"));
+                    assert_eq!(tasks.len(), TASKS, "no task may drop out of a listing");
+                    for id in ids {
+                        store
+                            .get_task(id)
+                            .unwrap_or_else(|err| panic!("read of {id} failed: {err}"))
+                            .expect("task exists");
+                    }
+                }
+            });
+        }
+    });
+}
+
+/// A status transition for `bundle`'s task that its envelope does not yet
+/// reflect — the exact row `update_task_history` appends before republishing.
+fn transition_event(bundle: &TaskBundleV2) -> TaskEventRowV2 {
+    TaskEventRowV2 {
+        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+        event_id: format!("EV-{:04}", bundle.events.len() + 1),
+        at: Utc::now(),
+        by: "codex:gpt-5.5".to_string(),
+        event_type: "status_changed".to_string(),
+        note: None,
+        from_status: Some(bundle.envelope.status),
+        to_status: Some(TaskStatus::InProgress),
+    }
+}
+
+/// Run `op` on its own thread, returning `None` if it has not finished within
+/// `budget`. A deadlock regression then fails this one test instead of hanging
+/// the whole suite until CI kills it.
+fn run_within<T, F>(budget: Duration, op: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(op());
+    });
+    receiver.recv_timeout(budget).ok()
 }

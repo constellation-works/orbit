@@ -344,6 +344,7 @@ fn search_tasks_matches_text_artifacts() {
         .upsert_task_artifacts(
             "ORB-00000",
             &TaskArtifactUpdateParams {
+                owner_run_id: None,
                 actor: "codex:gpt-5.5".to_string(),
                 upsert_artifacts: vec![TaskArtifact::from_text(
                     "reports/search.md",
@@ -417,6 +418,7 @@ fn search_tasks_skips_binary_artifacts_without_poisoning_results() {
         .upsert_task_artifacts(
             "ORB-00001",
             &TaskArtifactUpdateParams {
+                owner_run_id: None,
                 actor: "codex:gpt-5.5".to_string(),
                 upsert_artifacts: vec![TaskArtifact::from_text(
                     "reports/text.txt",

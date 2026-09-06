@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
     CrewConfig, DispatchError, ResolvedActivityTools, ResolvedCliExecutor, ResolvedSandbox,
-    RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate, V2AuditWriter,
+    ResolvedShellExecutor, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate, V2AuditWriter,
 };
 use orbit_store::contracts::{
     InvocationInsertParams, InvocationQuery, InvocationRecord, JobRunStepParams,
@@ -22,7 +22,7 @@ use orbit_types::task::{
     push_external_ref_if_missing,
 };
 use orbit_types::telemetry::InvocationTrace;
-use orbit_types::tool::is_exact_canonical_tool_name;
+use orbit_types::tool::{ToolSessionContext, is_exact_canonical_tool_name};
 use orbit_types::workflow::{ActivityV2, JobRun, JobRunStartOutcome, JobRunState};
 use serde_json::Value;
 
@@ -36,6 +36,13 @@ use crate::application::task::{
 use crate::runtime::engine::paths::{codex_workspace_write_writable_dirs, current_repo_root};
 
 impl RuntimeHost for OrbitRuntime {
+    fn record_direct_landing_intent(
+        &self,
+        request: &orbit_types::workflow::automation::DirectLandingRequest,
+    ) -> Result<(), OrbitError> {
+        crate::application::automation::record_direct_landing_intent(self, request)
+    }
+
     fn insert_job_run(
         &self,
         job_id: &str,
@@ -439,6 +446,13 @@ impl RuntimeHost for OrbitRuntime {
         cli_executor::resolve_cli_executor(self, provider)
     }
 
+    fn resolve_local_shell_executor(
+        &self,
+        executor: &str,
+    ) -> Result<ResolvedShellExecutor, DispatchError> {
+        cli_executor::resolve_local_shell_executor(self, executor)
+    }
+
     fn provider_cli_config(&self, _provider: &str) -> HashMap<String, String> {
         RuntimeHost::agent_provider_config(self)
     }
@@ -553,22 +567,23 @@ impl RuntimeHost for OrbitRuntime {
         output: &Value,
         pipeline_snapshot: &Value,
     ) -> Result<(), DispatchError> {
-        let Some(mut state) = self.read_run_state(run_id).map_err(|error| {
-            DispatchError::JobExecution(format!("read run state for checkpoint: {error}"))
-        })?
-        else {
-            return Ok(());
-        };
-        state.record_step(
-            step_index,
-            orbit_types::workflow::JobRunState::Success,
-            Some(output.clone()),
-            None,
-        );
-        state.sync_pipeline(pipeline_snapshot.clone());
+        // [ORB-11253] Read-modify-write in one transaction rather than a
+        // separate read and write: an operator run control written into this
+        // same state document between the two would otherwise be silently
+        // discarded by the checkpoint that follows it.
         self.stores()
             .jobs()
-            .write_run_state(run_id, &state)
+            .update_run_state(run_id, &mut |_, state| {
+                state.record_step(
+                    step_index,
+                    orbit_types::workflow::JobRunState::Success,
+                    Some(output.clone()),
+                    None,
+                );
+                state.sync_pipeline(pipeline_snapshot.clone());
+                Ok(())
+            })
+            .map(|_| ())
             .map_err(|error| {
                 DispatchError::JobExecution(format!(
                     "persist step checkpoint (run {run_id}, step {step_index} `{step_id}`): {error}"
@@ -630,6 +645,7 @@ impl RuntimeHost for OrbitRuntime {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(ToOwned::to_owned),
+                ToolSessionContext::default(),
             )),
             ..Default::default()
         }
@@ -744,6 +760,22 @@ impl RuntimeHost for OrbitRuntime {
                 })?,
             },
         };
+        // [ORB-11242] The last gate before a provider process is launched, and
+        // the only one that sees the crew *after* alias and default resolution.
+        // A system override, an explicit activity crew, and the run's own crew
+        // all arrive here, so one check covers every route into a provider.
+        let allowlist = self.crew_allowlist_from_input(input).map_err(|error| {
+            DispatchError::JobValidation(format!(
+                "run crew allowlist cannot be resolved for activity dispatch: {error}"
+            ))
+        })?;
+        let origin = match config_key {
+            Some(key) => format!("`{key}`"),
+            None if explicit.is_some() => "an explicit activity crew".to_string(),
+            None => "this run's crew".to_string(),
+        };
+        crate::runtime::engine::crew::enforce_crew_allowlist(allowlist.as_ref(), &crew, &origin)
+            .map_err(|error| DispatchError::JobValidation(error.to_string()))?;
         Ok(Some(
             crate::runtime::engine::environment_host::typed_crew_config_from_assignment(
                 &crew.assignment,

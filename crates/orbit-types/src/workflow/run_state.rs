@@ -9,6 +9,46 @@ use crate::workflow::child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
 };
 
+/// A live operator request to stop a bounded drain's new admissions [ORB-11283].
+///
+/// This is not cancellation. The coordinator stays the same run, already
+/// admitted children keep their completion authority, and the admission path
+/// treats the flag as "offer nothing" on the next pass. Cancellation of those
+/// children is a separate, explicit `orbit run cancel` of each child run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrainAdmissionsStop {
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub stopped_at: DateTime<Utc>,
+}
+
+/// A live operator adjustment to a bounded drain's worker ceiling [ORB-11253].
+///
+/// The ceiling a drain was submitted with lives in its immutable
+/// `initial_input`, which is why raising it used to mean cancelling the
+/// coordinator and submitting a replacement. This is the mutable counterpart:
+/// the admission path prefers it over the submitted value, so the same run id,
+/// deadline, completion policy, and already-dispatched children survive the
+/// change.
+///
+/// `revision` is the compare-and-set handle. Every accepted update increments
+/// it, so a caller that read revision *n* and writes with `expected_revision`
+/// *n* cannot silently overwrite an update that landed in between.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrainWorkerLimit {
+    /// Live ceiling on concurrently live leaf runs.
+    pub max_active_leaf_runs: u32,
+    /// The ceiling this update replaced, kept as change evidence.
+    pub previous_max_active_leaf_runs: u32,
+    /// Accepted-update counter, starting at 1.
+    pub revision: u32,
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Persistent pipeline state for a job run.
 ///
 /// Stored as `state.json` in the run bundle directory. Steps read accumulated
@@ -51,14 +91,26 @@ pub struct PipelineState {
     pub waiting_on_locks: Option<Vec<String>>,
     /// Child Runs this run dispatched, in submission order.
     ///
-    /// Written the moment `orbit.pipeline.invoke` returns a durable child run
-    /// id — before a blocking parent enters its wait — so parent/child lineage
-    /// is observable for the whole life of the dispatch rather than only after
-    /// the step's output is finally persisted. Unlike the waiting reasons
-    /// above, this survives terminalization: a cancelled parent must still
-    /// name the child it left behind.
+    /// For auto children, written in the same durable admission transaction
+    /// that creates the child run [ORB-11310]. Other child callers checkpoint
+    /// it the moment `orbit.pipeline.invoke` returns. Parent/child lineage is
+    /// therefore observable before a blocking wait and survives
+    /// terminalization: a cancelled parent must still name the child it left
+    /// behind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub child_dispatches: Vec<ChildDispatch>,
+    /// Live worker ceiling for a bounded auto drain, when an operator has
+    /// adjusted it [ORB-11253]. Absent means the submitted input still
+    /// governs. Like `child_dispatches` this survives terminalization: it is
+    /// the evidence of what the run was actually admitting under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_worker_limit: Option<DrainWorkerLimit>,
+    /// Operator stop of *new* admissions on a bounded auto drain [ORB-11283].
+    /// Absent means the drain is still admitting under its window and ceiling.
+    /// Like `drain_worker_limit` this survives terminalization: it is how a
+    /// finished coordinator is distinguished from cancellation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_admissions_stop: Option<DrainAdmissionsStop>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -79,8 +131,78 @@ impl PipelineState {
             waiting_on_deps: None,
             waiting_on_locks: None,
             child_dispatches: Vec::new(),
+            drain_worker_limit: None,
+            drain_admissions_stop: None,
             updated_at: Utc::now(),
         }
+    }
+
+    /// The compare-and-set handle for [`Self::drain_worker_limit`]. Zero means
+    /// no operator adjustment has been accepted yet.
+    pub fn drain_worker_limit_revision(&self) -> u32 {
+        self.drain_worker_limit
+            .as_ref()
+            .map_or(0, |limit| limit.revision)
+    }
+
+    /// The ceiling currently in force, given the value the run was submitted
+    /// with. An operator adjustment always wins over the submitted input:
+    /// it is the more recent statement of the same decision.
+    pub fn effective_max_active_leaf_runs(&self, submitted: u32) -> u32 {
+        self.drain_worker_limit
+            .as_ref()
+            .map_or(submitted, |limit| limit.max_active_leaf_runs)
+    }
+
+    /// Record an accepted worker-ceiling change, replacing `submitted` when no
+    /// adjustment is recorded yet.
+    ///
+    /// Returns `false` and mutates nothing when `expected_revision` names a
+    /// revision other than the persisted one — the caller read a ceiling that
+    /// another operator has since replaced, and applying its arithmetic anyway
+    /// would silently discard that update.
+    pub fn set_drain_worker_limit(
+        &mut self,
+        max_active_leaf_runs: u32,
+        submitted: u32,
+        actor: String,
+        reason: Option<String>,
+        expected_revision: Option<u32>,
+    ) -> bool {
+        let revision = self.drain_worker_limit_revision();
+        if expected_revision.is_some_and(|expected| expected != revision) {
+            return false;
+        }
+        self.drain_worker_limit = Some(DrainWorkerLimit {
+            max_active_leaf_runs,
+            previous_max_active_leaf_runs: self.effective_max_active_leaf_runs(submitted),
+            revision: revision.saturating_add(1),
+            actor,
+            reason,
+            updated_at: Utc::now(),
+        });
+        self.updated_at = Utc::now();
+        true
+    }
+
+    /// Whether this drain has been told to stop offering new work.
+    pub fn admissions_stopped(&self) -> bool {
+        self.drain_admissions_stop.is_some()
+    }
+
+    /// Record an admissions stop. Idempotent: a drain that is already stopped
+    /// keeps the original actor and timestamp and returns `false`.
+    pub fn set_drain_admissions_stop(&mut self, actor: String, reason: Option<String>) -> bool {
+        if self.drain_admissions_stop.is_some() {
+            return false;
+        }
+        self.drain_admissions_stop = Some(DrainAdmissionsStop {
+            actor,
+            reason,
+            stopped_at: Utc::now(),
+        });
+        self.updated_at = Utc::now();
+        true
     }
 
     /// Record step recovery metadata and advance the resume cursor.

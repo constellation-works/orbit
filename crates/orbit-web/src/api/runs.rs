@@ -4,16 +4,20 @@ use crate::state::Ws;
 use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
+use orbit_common::governance::authorization::DASHBOARD_AUTO_DRAIN_COMPLETE;
 use orbit_common::security::redaction::redact_all;
+use orbit_core::application::job::{
+    ActivityInvocationEvidence, job_run_to_json_with_activity_provenance,
+};
 use orbit_core::runtime::run_audit::{RunAuditStep, RunCliInvocationRecord, RunProviderProcess};
-use orbit_core::{JobRun, OrbitRuntime, V2AuditEventFilter};
+use orbit_core::{InvocationQuery, JobRun, OrbitRuntime, V2AuditEventFilter};
 use serde_json::{Value, json};
 
+use super::routines::{authorization_denied, authorized_caller};
 use super::{
     HISTORY_DEFAULT_LIMIT, LimitQuery, RunEventsQuery, bad_request, bounded_limit,
     map_runtime_error, validate_id,
 };
-use crate::projections::job_run_to_json_with_state;
 
 const RUN_EVENTS_DEFAULT_LIMIT: usize = 100;
 /// Hard cap on rows scanned from a single run's persisted v2 audit events.
@@ -74,6 +78,11 @@ pub(super) async fn ship_workflow_action(
         mode,
         body.base.as_deref(),
         &body.task_ids,
+        // [ORB-11187] Completion authority is granted per invocation at the CLI
+        // (`orbit run ship --complete`); the dashboard does not offer it, so
+        // this endpoint always ends successful work at `review`.
+        orbit_core::CompletionPolicy::Review,
+        &[],
         Some("dashboard"),
         body.claim_token.as_deref(),
     ) {
@@ -99,6 +108,157 @@ fn workspace_default_ship_mode(runtime: &OrbitRuntime) -> orbit_core::ShipMode {
         .map_or(orbit_core::ShipMode::Pr, |binding| binding.ship_mode)
 }
 
+#[derive(serde::Deserialize, Default)]
+pub(super) struct AutoDrainBody {
+    /// Bounded drain window, e.g. "30m", "2h". Required: unlike the CLI's
+    /// `--for`, this endpoint always starts a bounded window, never an
+    /// open-ended one left running until something else stops it.
+    #[serde(default)]
+    for_duration: String,
+    /// Leaf-run concurrency ceiling; omitted keeps the runtime's own default.
+    #[serde(default)]
+    concurrency: Option<u32>,
+    /// Opt-in to `CompletionPolicy::Done` for this run's whole window,
+    /// mirroring CLI `--complete`. Default keeps every shipped task at
+    /// `review`, same as an omitted `--complete`.
+    #[serde(default)]
+    complete: bool,
+    /// [ORB-10709] Token for this workspace's exclusive claim, when another
+    /// operator holds one.
+    #[serde(default)]
+    claim_token: Option<String>,
+}
+
+/// Minimum bounded window this endpoint accepts, in seconds. `for_seconds:
+/// 0`/omitted is a CLI-only "one tick" shorthand; the dashboard's whole point
+/// is a *bounded* window, so an empty one is rejected rather than silently
+/// accepted.
+const MIN_AUTO_DRAIN_SECONDS: u64 = 1;
+
+/// Read-only eligible/waiting projection for backlog-discovery auto-drain,
+/// same limit the CLI's `orbit run readiness` defaults to.
+const AUTO_DRAIN_READINESS_LIMIT: usize = 50;
+
+/// Parses a "30m"/"2h"/"1d"-shaped duration the same way the CLI's `--for`
+/// does. `orbit-web` does not depend on `orbit-cli` (the dependency edge runs
+/// the other way), so this ~20-line parser is duplicated here rather than
+/// shared across that boundary.
+fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err("for_duration must not be empty".to_string());
+    }
+    let split_at = value
+        .find(|c: char| c.is_alphabetic())
+        .ok_or_else(|| format!("invalid duration: {raw}"))?;
+    let (num_raw, unit_raw) = value.split_at(split_at);
+    let num: u64 = num_raw
+        .parse()
+        .map_err(|_| format!("invalid duration number: {raw}"))?;
+    let seconds = match unit_raw {
+        "s" => Some(num),
+        "m" => num.checked_mul(60),
+        "h" => num.checked_mul(3600),
+        "d" => num.checked_mul(86400),
+        "w" => num.checked_mul(604800),
+        _ => {
+            return Err(format!(
+                "invalid duration unit: {unit_raw} (expected s/m/h/d/w)"
+            ));
+        }
+    }
+    .ok_or_else(|| format!("duration '{raw}' is too large to represent"))?;
+    if seconds < MIN_AUTO_DRAIN_SECONDS {
+        return Err("for_duration must describe a bounded window greater than zero".to_string());
+    }
+    Ok(seconds)
+}
+
+/// Submit a bounded `auto` workflow run
+/// (`POST /workflows/auto?workspace=<id>`).
+///
+/// Dashboard counterpart to `orbit run auto --for <duration> [--concurrency
+/// N] [--complete]`, reusing the same `submit_workspace_auto_run` runtime
+/// path: a concrete workspace only (the `Ws` extractor refuses all-workspace
+/// mode the same way `ship_workflow_action` does, and `submit_workspace_auto_run`
+/// enforces the workspace claim), a required bounded duration, and an
+/// explicit, separately-governed opt-in to `CompletionPolicy::Done` — opting
+/// in authorizes `review -> done` for every task the window ships, not only
+/// the ones visible now, so it is gated the same way `auto_task.mint`'s
+/// unconditional mint is.
+pub(super) async fn auto_drain_workflow_action(
+    Ws(runtime): Ws,
+    body: Option<Json<AutoDrainBody>>,
+) -> Response {
+    let Json(body) = body.unwrap_or_default();
+    let for_seconds = match parse_drain_duration_seconds(&body.for_duration) {
+        Ok(seconds) => seconds,
+        Err(message) => return bad_request(message),
+    };
+    let completion = if body.complete {
+        match authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE) {
+            Ok(_) => orbit_core::CompletionPolicy::Done,
+            Err(denial) => return authorization_denied(denial),
+        }
+    } else {
+        orbit_core::CompletionPolicy::Review
+    };
+    match runtime.submit_workspace_auto_run(
+        Some(for_seconds),
+        body.concurrency,
+        completion,
+        // [ORB-11242] The dashboard launch form does not offer a crew
+        // restriction, so it submits the unrestricted window it always has.
+        &[],
+        Some("dashboard"),
+        body.claim_token.as_deref(),
+    ) {
+        Ok(invoke) => Json(json!({
+            "workflow": "auto",
+            "job_id": invoke.job_name,
+            "run_id": invoke.run_id,
+            "state": if invoke.queued { "queued" } else { "submitted" },
+            "submitted_at": invoke.submitted_at,
+            "completion": completion.as_input_value(),
+        }))
+        .into_response(),
+        Err(orbit_core::OrbitError::InvalidInput(msg)) => bad_request(msg),
+        Err(e) => map_runtime_error(e),
+    }
+}
+
+#[derive(serde::Deserialize, Default)]
+pub(super) struct AutoDrainReadinessQuery {
+    #[serde(default)]
+    concurrency: Option<u32>,
+}
+
+/// `GET /workflows/auto/readiness?workspace=<id>[&concurrency=N]` — the
+/// read-only eligible/waiting snapshot for backlog-discovery auto-drain,
+/// projected straight from `OrbitRuntime::workspace_auto_readiness` (the same
+/// snapshot `orbit run readiness` prints) rather than a dashboard-local
+/// recomputation of eligibility.
+pub(super) async fn auto_drain_readiness(
+    Ws(runtime): Ws,
+    Query(query): Query<AutoDrainReadinessQuery>,
+) -> Response {
+    match runtime.workspace_auto_readiness(&[], query.concurrency, AUTO_DRAIN_READINESS_LIMIT, &[])
+    {
+        Ok(mut payload) => {
+            // So the form can hide/disable the `complete` opt-in before the
+            // operator ever hits the separately-governed 403 at submission.
+            if let Some(object) = payload.as_object_mut() {
+                object.insert(
+                    "controls_authorized".to_string(),
+                    Value::Bool(authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE).is_ok()),
+                );
+            }
+            Json(payload).into_response()
+        }
+        Err(e) => map_runtime_error(e),
+    }
+}
+
 pub(super) async fn get_run(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id,
@@ -118,6 +278,7 @@ pub(super) async fn cancel_run_action(Ws(runtime): Ws, Path(id): Path<String>) -
     match runtime.cancel_job_run_with_context(id, "dashboard", "web") {
         Ok(result) => Json(json!({
             "run_id": result.run_id,
+            "outcome": result.outcome,
             "previous_state": result.previous_state,
             "final_state": result.final_state,
             "actor": result.actor,
@@ -150,7 +311,21 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     // it entirely, so the dashboard could not see the waiting reasons or the
     // child-dispatch lineage the CLI already showed.
     let state = runtime.read_run_state(&run.run_id).ok().flatten();
-    let mut full = job_run_to_json_with_state(run, state.as_ref());
+    let evidence = runtime
+        .invocation_records(InvocationQuery {
+            job_run_id: Some(run.run_id.clone()),
+            limit: 1_000,
+            ..InvocationQuery::default()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|record| ActivityInvocationEvidence {
+            activity_id: record.activity_id,
+            provider: record.agent,
+            model: record.model,
+        })
+        .collect::<Vec<_>>();
+    let mut full = job_run_to_json_with_activity_provenance(run, state.as_ref(), &evidence);
     // Reshape into `{run, steps}` per the dashboard contract: peel the
     // `steps` array off the flat `job_run_to_json` output.
     let stored_steps = full

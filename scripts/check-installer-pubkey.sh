@@ -50,7 +50,7 @@ assert_contains_canonical_key() {
 
 install_keys="$tmp_dir/install-sh-keys.pem"
 npm_keys="$tmp_dir/npm-install-keys.pem"
-semantic_install_keys="$tmp_dir/semantic-install-keys.pem"
+rust_trust_set_keys="$tmp_dir/rust-release-trust-set-keys.pem"
 extract_pem_blocks "$repo_root/install.sh" "$install_keys" || {
   echo "check-installer-pubkey: could not extract release signing public keys from install.sh" >&2
   exit 1
@@ -59,14 +59,14 @@ extract_pem_blocks "$repo_root/npm/scripts/install-binary.js" "$npm_keys" || {
   echo "check-installer-pubkey: could not extract release signing public keys from install-binary.js" >&2
   exit 1
 }
-extract_pem_blocks "$repo_root/crates/orbit-search/src/commands/install.rs" "$semantic_install_keys" || {
-  echo "check-installer-pubkey: could not extract release signing public keys from semantic install code" >&2
+extract_pem_blocks "$repo_root/crates/orbit-common/src/security/release.rs" "$rust_trust_set_keys" || {
+  echo "check-installer-pubkey: could not extract release signing public keys from the shared Rust release trust set" >&2
   exit 1
 }
 
 install_key_count="$(awk '/-----BEGIN PUBLIC KEY-----/ { count++ } END { print count + 0 }' "$install_keys")"
 npm_key_count="$(awk '/-----BEGIN PUBLIC KEY-----/ { count++ } END { print count + 0 }' "$npm_keys")"
-semantic_install_key_count="$(awk '/-----BEGIN PUBLIC KEY-----/ { count++ } END { print count + 0 }' "$semantic_install_keys")"
+rust_trust_set_key_count="$(awk '/-----BEGIN PUBLIC KEY-----/ { count++ } END { print count + 0 }' "$rust_trust_set_keys")"
 if [ "$install_key_count" -lt 2 ]; then
   echo "check-installer-pubkey: expected at least two public key blocks in install.sh, found $install_key_count" >&2
   exit 1
@@ -75,15 +75,15 @@ if [ "$npm_key_count" -lt 2 ]; then
   echo "check-installer-pubkey: expected at least two public key blocks in install-binary.js, found $npm_key_count" >&2
   exit 1
 fi
-if [ "$semantic_install_key_count" -lt 1 ]; then
-  echo "check-installer-pubkey: expected at least one public key block in semantic install code, found $semantic_install_key_count" >&2
+if [ "$rust_trust_set_key_count" -lt 2 ]; then
+  echo "check-installer-pubkey: expected at least two public key blocks in the shared Rust release trust set, found $rust_trust_set_key_count" >&2
   exit 1
 fi
 
 assert_contains_canonical_key "install.sh" "$install_keys"
 assert_contains_canonical_key "install-binary.js" "$npm_keys"
 # L-0044: Keep every release checksum-signature consumer on the canonical signing key.
-assert_contains_canonical_key "semantic install code" "$semantic_install_keys"
+assert_contains_canonical_key "shared Rust release trust set" "$rust_trust_set_keys"
 
 # Read the canonical key IDs out of install-binary.js (the structured source of
 # truth), then require each ID to appear in install.sh. This avoids hardcoding

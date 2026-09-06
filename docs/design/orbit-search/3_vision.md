@@ -4,7 +4,7 @@ type: design
 title: "Semantic Search — Vision"
 owner: claude
 last_updated: 2026-08-13
-last_validated: 2026-08-09
+last_validated: 2026-09-05
 status: Draft
 feature: orbit-search
 doc_role: vision
@@ -74,7 +74,7 @@ All three are useful, all three are out of scope phase 1, and all three are down
 
 ### 1.6 Review-thread granularity
 
-Phase 1 indexes each review-thread message as a separate row. The alternative — index whole threads as single documents — loses authorship signal but improves recall on multi-message threads where the decision context is spread across replies. Which granularity is more useful for "find me the thread where we decided X" is an empirical question that wants the eval harness from §1.1 to settle.
+The current task index stores title, description, plan, execution summary, and acceptance as separate rows; review-thread messages are not represented in the task embedding fields. If review threads become searchable, the alternative — index each message separately or whole threads as single documents — trades authorship signal against recall when decision context is spread across replies. Which granularity is more useful for "find me the thread where we decided X" is an empirical question that wants the eval harness from §1.1 to settle.
 
 ### 1.7 Historical phase-2 graph corpus proposal
 
@@ -146,7 +146,7 @@ The schema's `source_kind` discriminator is not future-proofing for its own sake
 
 ### 3.3 Failure-mode honesty in the score breakdown
 
-The result shape exposes `bm25_rank` and `cosine_rank` separately on every result. A consumer (especially an agent) can detect "this matched only lexically" or "this matched only semantically" and adjust confidence. Most hybrid systems hide the constituent ranks behind a fused score; surfacing both costs nothing and gives downstream tooling a real signal.
+Semantic task results expose `bm25_rank` and `cosine_rank` separately in their score breakdown. A consumer (especially an agent) can detect "this matched only lexically" or "this matched only semantically" and adjust confidence; lexical and doc results do not necessarily carry both ranks. Most hybrid systems hide the constituent ranks behind a fused score; surfacing both costs nothing and gives downstream tooling a real signal.
 
 ---
 

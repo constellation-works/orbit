@@ -43,6 +43,19 @@ impl TaskRecordService<'_> {
         Ok(task)
     }
 
+    pub(crate) fn create_with_key(
+        &self,
+        params: TaskCreateParams,
+        key: Option<&str>,
+    ) -> Result<Task, OrbitError> {
+        let task = match key {
+            Some(key) => self.store.create_task_idempotent(params, key)?,
+            None => return self.create(params),
+        };
+        self.semantic_worker.enqueue(task.clone());
+        Ok(task)
+    }
+
     pub(crate) fn update(
         &self,
         id: &str,
@@ -88,6 +101,7 @@ impl TaskRecordService<'_> {
                     status_note: params.status_note.clone(),
                     append_history: params.append_history.clone(),
                     append_comments: params.append_comments.clone(),
+                    expected_status: params.expected_status.clone(),
                 },
             )?;
         }
@@ -96,6 +110,7 @@ impl TaskRecordService<'_> {
             self.artifact.upsert_task_artifacts(
                 id,
                 TaskArtifactUpdateParams {
+                    owner_run_id: params.artifact_owner_run_id.clone(),
                     actor: params.actor.clone(),
                     upsert_artifacts: params.upsert_artifacts.clone(),
                 },

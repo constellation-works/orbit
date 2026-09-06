@@ -1,9 +1,9 @@
 # @orbit-tools/cli
 
-npm binary proxy for the [Orbit](https://github.com/danieljhkim/orbit) CLI.
+npm binary proxy for the [Orbit](https://github.com/constellation-works/orbit) CLI.
 
 On install, downloads the matching prebuilt `orbit` binary from
-[GitHub Releases](https://github.com/danieljhkim/orbit/releases), authenticates
+[GitHub Releases](https://github.com/constellation-works/orbit/releases), authenticates
 the signed `orbit-checksums.txt` with the package-pinned release trust set,
 verifies the archive SHA-256, and exposes it as the `orbit` command.
 

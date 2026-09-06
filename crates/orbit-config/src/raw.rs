@@ -54,6 +54,10 @@ pub(crate) struct RawCrewEntry {
     pub(crate) provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) model: Option<String>,
+    /// Optional Codex reasoning effort. Parsed into the typed closed set when
+    /// the effective crew registry is resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) effort: Option<String>,
     /// Retired in ORB-10801. Read only so a crew that still pins the agent
     /// execution backend is either accepted as inert (`cli`) or refused with
     /// the migration message, never silently re-pointed at another runtime.

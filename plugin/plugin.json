@@ -1,14 +1,14 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "orbit",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "Task and activity orchestration for AI coding agents. Adds Orbit's MCP tool surface and shared workflow skills to compatible clients.",
   "author": {
     "name": "danieljhkim",
     "url": "https://github.com/danieljhkim"
   },
-  "homepage": "https://github.com/danieljhkim/orbit",
-  "repository": "https://github.com/danieljhkim/orbit",
+  "homepage": "https://github.com/constellation-works/orbit",
+  "repository": "https://github.com/constellation-works/orbit",
   "license": "MIT",
   "keywords": [
     "orbit",

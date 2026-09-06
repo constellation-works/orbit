@@ -10,15 +10,23 @@ spec:
     workspace tasks, including tasks with non-empty context_files. Without
     task_ids it selects only proposed/backlog tasks whose context_files are
     empty, excluding no-diff-needed/no-diff-expected tasks and every active,
-    review, or terminal status. This action never promotes or dispatches work.
+    review, or terminal status. In a Git workspace this step also fetches the
+    landing branch and pins one verified source revision without changing
+    the primary HEAD, index, or working files, including dirty and untracked
+    content. Remote failures stop preparation before any agent call. This action never promotes or dispatches work.
   input_schema_json:
     type: object
     properties:
+      state_automation: {}
+      source_revision:
+        type: string
       task_ids:
         type: array
         items:
           type: string
       workspace_path:
+        type: string
+      base_branch:
         type: string
       max_tasks:
         type: number
@@ -30,10 +38,14 @@ spec:
         maximum: 5
   output_schema_json:
     type: object
-    required: [mode, workspace_path, task_count, task_ids, tasks, partition_size, partition_count, partitions, excluded]
+    required: [mode, workspace_path, source, task_count, task_ids, tasks, partition_size, partition_count, partitions, excluded]
     properties:
       mode: {type: string, enum: [automatic, explicit]}
       workspace_path: {type: string}
+      source:
+        oneOf:
+          - type: object
+          - type: "null"
       task_count: {type: number}
       task_ids: {type: array, items: {type: string}}
       tasks: {type: array, items: {type: object}}

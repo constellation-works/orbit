@@ -702,3 +702,5 @@ pub mod workspace_sync;
 
 #[cfg(test)]
 mod tests;
+
+pub mod automation;

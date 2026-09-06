@@ -48,6 +48,12 @@ surface-local variant:
   denylist admits every credential nobody thought to name. Every subprocess
   launcher applies it to a *cleared* environment; `orbit-config` only supplies
   the operator's `[execution.env]` pass list.
+- [`security::release`](src/security/release.rs) is the only Rust copy of the
+  release signing key set and of checksum-manifest verification. `install.sh`
+  and `npm/scripts/install-binary.js` carry their own copies because they run
+  before any Rust exists; `scripts/check-installer-pubkey.sh` fails the build
+  when the three drift (L-0044). Every Rust consumer — `orbit update`,
+  `orbit semantic install` — reads this module.
 - [`security::redaction`](src/security/redaction.rs) is the only redaction
   implementation. `scripts/check-artifact-redaction-guardrail.sh` fails the
   build if a task/friction tool surface or a CLI-runner argv path grows its own

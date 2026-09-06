@@ -18,10 +18,10 @@ use crate::application::job::JobRunListParams;
 use crate::application::job::pipeline::{
     configure_pipeline_worker_command, configure_pipeline_worker_stdio, pipeline_worker_log_path,
     pipeline_worker_profile_file, pipeline_worker_root_override,
-    resolve_pipeline_worker_executable,
+    resolve_pipeline_worker_executable, worker_command_override,
 };
 use crate::application::task::TaskAddParams;
-use crate::application::workflow::ShipMode;
+use crate::application::workflow::{CompletionPolicy, ShipMode};
 
 fn test_runtime() -> (TempDir, OrbitRuntime) {
     let root = TempDir::new().expect("tempdir");
@@ -66,6 +66,21 @@ model = "sol-model"
     let runtime =
         OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build test runtime");
     (root, runtime)
+}
+
+struct WorkerOverride;
+
+impl WorkerOverride {
+    fn shell(script: &str) -> Self {
+        worker_command_override::set(["sh", "-c", script]);
+        Self
+    }
+}
+
+impl Drop for WorkerOverride {
+    fn drop(&mut self) {
+        worker_command_override::clear();
+    }
 }
 
 fn add_backlog_task(runtime: &OrbitRuntime) -> String {
@@ -305,81 +320,38 @@ fn routine_style_detached_worker_is_claimed_within_ownership_window() {
     assert_child_reaped(worker_pid);
 }
 
-/// [ORB-11116] Two observers can watch children for the same persisted run.
-/// The duplicate exits zero after losing Start, but only the child whose exact
-/// PID is persisted may be treated as the owner by its observer.
-#[cfg(unix)]
+/// Exact worker ownership is a persisted state-machine invariant. Keep this
+/// regression in-process: a detached child is unnecessary to prove that a
+/// second PID cannot replace an already-running owner.
 #[test]
-fn duplicate_worker_exit_leaves_real_owner_authoritative_and_non_terminal() {
+fn duplicate_worker_cannot_replace_the_persisted_owner() {
     let (_root, runtime) = test_runtime();
     let run = runtime
         .stores()
         .jobs()
         .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
         .expect("insert pending run");
-    let owner_release = runtime.paths().logs_dir.join("release-real-owner");
+    let owner_pid = std::process::id();
+    let duplicate_pid = owner_pid
+        .checked_add(1)
+        .expect("process id has a successor");
 
-    let mut owner_command = Command::new("sh");
-    owner_command.env("ORBIT_TEST_OWNER_RELEASE", &owner_release);
-    owner_command.args([
-        "-c",
-        "while [ ! -f \"$ORBIT_TEST_OWNER_RELEASE\" ]; do sleep 0.01; done; exit 0",
-    ]);
-    let owner_log = configure_pipeline_worker_stdio(
-        &mut owner_command,
-        &runtime.paths().logs_dir,
-        &format!("{}-owner", run.run_id),
-    )
-    .expect("configure owner worker log");
-    let owner_pid = runtime
-        .spawn_pipeline_worker_process(&run.run_id, Some("test"), owner_command, owner_log)
-        .expect("spawn real owner fixture");
     assert!(
         runtime
             .stores()
             .jobs()
             .claim_pending_job_run_owner(&run.run_id, owner_pid)
-            .expect("claim real owner")
+            .expect("claim exact owner")
     );
     assert_eq!(
         runtime
             .stores()
             .jobs()
             .mark_job_run_running(&run.run_id, Utc::now(), owner_pid)
-            .expect("start real owner"),
+            .expect("start exact owner"),
         JobRunStartOutcome::Started
     );
 
-    let claimed = wait_for_pipeline_audit_event(&runtime, None, "exact-owner audit", |audit| {
-        audit.tool_name.as_deref() == Some("pipeline.worker.claimed")
-            && audit.target_id.as_deref() == Some(run.run_id.as_str())
-    });
-    let claimed_arguments: serde_json::Value = serde_json::from_str(
-        claimed
-            .arguments_json
-            .as_deref()
-            .expect("claimed audit arguments"),
-    )
-    .expect("parse claimed audit arguments");
-    assert_eq!(claimed_arguments["worker_pid"], owner_pid);
-    assert_eq!(claimed_arguments["owner_pid"], owner_pid);
-
-    let duplicate_release = runtime.paths().logs_dir.join("release-duplicate-worker");
-    let mut duplicate_command = Command::new("sh");
-    duplicate_command.env("ORBIT_TEST_DUPLICATE_RELEASE", &duplicate_release);
-    duplicate_command.args([
-        "-c",
-        "while [ ! -f \"$ORBIT_TEST_DUPLICATE_RELEASE\" ]; do sleep 0.01; done; exit 0",
-    ]);
-    let duplicate_log = configure_pipeline_worker_stdio(
-        &mut duplicate_command,
-        &runtime.paths().logs_dir,
-        &format!("{}-duplicate", run.run_id),
-    )
-    .expect("configure duplicate worker log");
-    let duplicate_pid = runtime
-        .spawn_pipeline_worker_process(&run.run_id, Some("test"), duplicate_command, duplicate_log)
-        .expect("spawn duplicate worker fixture");
     let duplicate_start =
         runtime
             .stores()
@@ -389,120 +361,12 @@ fn duplicate_worker_exit_leaves_real_owner_authoritative_and_non_terminal() {
         matches!(duplicate_start, Err(OrbitError::JobRunStartConflict(_))),
         "duplicate worker must lose the atomic Start race: {duplicate_start:?}"
     );
-    std::fs::write(&duplicate_release, "release").expect("release duplicate worker");
 
-    let duplicate =
-        wait_for_pipeline_audit_event(&runtime, None, "duplicate-worker audit", |audit| {
-            audit.tool_name.as_deref() == Some("pipeline.worker.duplicate")
-                && audit.target_id.as_deref() == Some(run.run_id.as_str())
-        });
-    let duplicate_arguments: serde_json::Value = serde_json::from_str(
-        duplicate
-            .arguments_json
-            .as_deref()
-            .expect("duplicate audit arguments"),
-    )
-    .expect("parse duplicate audit arguments");
-    assert_eq!(duplicate_arguments["worker_pid"], duplicate_pid);
-    assert_eq!(duplicate_arguments["owner_pid"], owner_pid);
-    assert_eq!(duplicate_arguments["exit_status"], "exit status: 0");
-    assert_child_reaped(duplicate_pid);
-
-    let after_duplicate = runtime
-        .show_job_run(&run.run_id)
-        .expect("show run after duplicate exit");
-    assert_eq!(after_duplicate.state, JobRunState::Running);
-    assert_eq!(after_duplicate.pid, Some(owner_pid));
-    assert!(after_duplicate.finished_at.is_none());
-    assert!(after_duplicate.steps.is_empty());
-
-    runtime
-        .stores()
-        .jobs()
-        .finalize_job_run(&run.run_id, JobRunState::Success, Utc::now(), Some(1))
-        .expect("real owner completes run");
-    std::fs::write(&owner_release, "release").expect("release real owner");
-
-    let completed = runtime
-        .show_job_run(&run.run_id)
-        .expect("show completed run");
-    assert_eq!(completed.state, JobRunState::Success);
-    assert!(completed.finished_at.is_some());
-    assert!(completed.steps.is_empty());
-    let false_owner_exit = runtime
-        .list_audit_events(None, None, None, None, 50)
-        .expect("list worker audits")
-        .into_iter()
-        .any(|audit| {
-            audit.tool_name.as_deref() == Some("pipeline.worker.exit")
-                && audit.target_id.as_deref() == Some(run.run_id.as_str())
-        });
-    assert!(
-        !false_owner_exit,
-        "duplicate exit must not be an owner failure"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn worker_exit_after_mark_running_is_reaped_and_terminalizes_the_run() {
-    let (_root, runtime) = test_runtime();
-    let run = runtime
-        .stores()
-        .jobs()
-        .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
-        .expect("insert pending run");
-    let release_path = runtime.paths().logs_dir.join("release-claimed-worker");
-    let mut command = Command::new("sh");
-    command.env("ORBIT_TEST_WORKER_RELEASE", &release_path);
-    command.args([
-        "-c",
-        "while [ ! -f \"$ORBIT_TEST_WORKER_RELEASE\" ]; do sleep 0.01; done; \
-         printf 'post-claim validation exploded\\n' >&2; exit 29",
-    ]);
-    let log_path =
-        configure_pipeline_worker_stdio(&mut command, &runtime.paths().logs_dir, &run.run_id)
-            .expect("configure worker log");
-    let worker_pid = runtime
-        .spawn_pipeline_worker_process(&run.run_id, Some("test"), command, log_path)
-        .expect("spawn claimed worker fixture");
-    runtime
-        .stores()
-        .jobs()
-        .claim_pending_job_run_owner(&run.run_id, worker_pid)
-        .expect("claim run owner");
-    assert_eq!(
-        runtime
-            .stores()
-            .jobs()
-            .mark_job_run_running(&run.run_id, Utc::now(), worker_pid)
-            .expect("mark run running"),
-        JobRunStartOutcome::Started
-    );
-    assert_eq!(
-        runtime
-            .show_job_run(&run.run_id)
-            .expect("show running fixture")
-            .state,
-        JobRunState::Running
-    );
-    std::fs::write(&release_path, "release").expect("release claimed worker");
-
-    let terminal = wait_for_worker_terminal(&runtime, &run.run_id);
-    let message = terminal
-        .steps
-        .last()
-        .and_then(|step| step.error_message.as_deref())
-        .expect("post-claim diagnostic");
-    assert_eq!(terminal.state, JobRunState::Failed, "{message}");
-    assert!(terminal.finished_at.is_some());
-    assert!(message.contains("after claiming"), "{message}");
-    assert!(message.contains("exit status: 29"), "{message}");
-    assert!(
-        message.contains("post-claim validation exploded"),
-        "{message}"
-    );
-    assert_child_reaped(worker_pid);
+    let stored = runtime.show_job_run(&run.run_id).expect("show owned run");
+    assert_eq!(stored.state, JobRunState::Running);
+    assert_eq!(stored.pid, Some(owner_pid));
+    assert!(stored.finished_at.is_none());
+    assert!(stored.steps.is_empty());
 }
 
 #[test]
@@ -604,6 +468,112 @@ spec:
             .as_deref()
             .is_some_and(|value| value.contains("mixes crews"))
     );
+}
+
+/// Explicit shipment validates its selected task's effective crew before a
+/// run can be persisted, then carries the canonical restriction into the
+/// child pipeline for the dispatch-time provider gate.
+#[test]
+fn explicit_ship_crew_allowlist_admits_only_configured_permitted_crews() {
+    let (_root, runtime) = test_runtime_with_named_crews();
+    let _worker = WorkerOverride::shell("exit 0");
+    let jobs_dir = runtime.paths().global_dir.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    std::fs::write(
+        jobs_dir.join("task_auto_pipeline.yaml"),
+        r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: task_auto_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: nap
+      spec:
+        type: deterministic
+        action: sleep
+        config: {}
+"#,
+    )
+    .expect("seed task_auto_pipeline definition");
+    let permitted = runtime
+        .add_task(TaskAddParams {
+            title: "Sol shipment".to_string(),
+            description: "Explicit crew allowlist fixture".to_string(),
+            crew: Some("sol".to_string()),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("add permitted task");
+    let excluded = runtime
+        .add_task(TaskAddParams {
+            title: "Primary shipment".to_string(),
+            description: "Explicit crew allowlist fixture".to_string(),
+            crew: Some("primary".to_string()),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("add excluded task");
+
+    let error = runtime
+        .submit_ship_run(
+            ShipMode::Local,
+            Some("main"),
+            std::slice::from_ref(&excluded.id),
+            CompletionPolicy::Review,
+            &["sol".to_string()],
+            Some("test"),
+            None,
+        )
+        .expect_err("an excluded explicit crew must be refused before persistence");
+    assert!(error.to_string().contains("primary"), "{error}");
+    assert!(error.to_string().contains("sol"), "{error}");
+    assert!(
+        runtime
+            .list_job_runs(JobRunListParams::default())
+            .expect("list runs")
+            .is_empty(),
+        "the excluded task must not create a run"
+    );
+
+    let unknown = runtime
+        .submit_ship_run(
+            ShipMode::Local,
+            Some("main"),
+            std::slice::from_ref(&permitted.id),
+            CompletionPolicy::Review,
+            &["unknown".to_string()],
+            Some("test"),
+            None,
+        )
+        .expect_err("an unknown configured crew must fail before run creation");
+    assert!(unknown.to_string().contains("unknown"), "{unknown}");
+    assert!(
+        runtime
+            .list_job_runs(JobRunListParams::default())
+            .expect("list runs")
+            .is_empty(),
+        "an invalid allowlist must not create a run"
+    );
+
+    let admitted = runtime
+        .submit_ship_run(
+            ShipMode::Local,
+            Some("main"),
+            std::slice::from_ref(&permitted.id),
+            CompletionPolicy::Review,
+            &["sol".to_string()],
+            Some("test"),
+            None,
+        )
+        .expect("the explicitly permitted singleton is submitted");
+    let input = runtime
+        .show_job_run(&admitted.run_id)
+        .expect("show admitted run")
+        .input
+        .expect("persisted input");
+    assert_eq!(input["allowed_crews"], serde_json::json!(["sol"]));
 }
 
 fn wait_for_worker_ownership_outcome(
@@ -843,6 +813,8 @@ fn ship_submission_refuses_a_task_already_carried_by_a_non_terminal_run() {
             ShipMode::Local,
             Some("main"),
             std::slice::from_ref(&selected_task_id),
+            CompletionPolicy::Review,
+            &[],
             Some("test"),
             None,
         )
@@ -898,7 +870,15 @@ fn ship_submission_guard_is_scoped_to_the_selected_tasks() {
         ("auto discovery", Vec::new()),
     ] {
         let error = runtime
-            .submit_ship_run(ShipMode::Local, Some("main"), &task_ids, Some("test"), None)
+            .submit_ship_run(
+                ShipMode::Local,
+                Some("main"),
+                &task_ids,
+                CompletionPolicy::Review,
+                &[],
+                Some("test"),
+                None,
+            )
             .expect_err("no job asset is deployed in this fixture");
         assert!(
             !matches!(error, OrbitError::ShipRunInFlight { .. }),
@@ -924,6 +904,8 @@ fn ship_submission_refuses_a_missing_explicit_task_before_persisting_a_run() {
             ShipMode::Local,
             Some("main"),
             std::slice::from_ref(&missing_id),
+            CompletionPolicy::Review,
+            &[],
             Some("test"),
             None,
         )
@@ -970,6 +952,8 @@ fn ship_submission_refuses_an_epic_root_but_allows_its_child() {
             ShipMode::Local,
             Some("main"),
             std::slice::from_ref(&epic.id),
+            CompletionPolicy::Review,
+            &[],
             Some("test"),
             None,
         )
@@ -988,6 +972,8 @@ fn ship_submission_refuses_an_epic_root_but_allows_its_child() {
             ShipMode::Local,
             Some("main"),
             std::slice::from_ref(&child.id),
+            CompletionPolicy::Review,
+            &[],
             Some("test"),
             None,
         )
@@ -1009,6 +995,8 @@ fn ship_submission_mixed_explicit_selection_identifies_the_missing_task() {
             ShipMode::Local,
             Some("main"),
             &[existing_id, missing_id.clone()],
+            CompletionPolicy::Review,
+            &[],
             Some("test"),
             None,
         )

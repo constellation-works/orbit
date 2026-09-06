@@ -1,0 +1,50 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: task_complete
+spec:
+  type: deterministic
+  description: >
+    Perform the guarded review -> done completion transition for tasks a run was
+    explicitly authorized to complete. Already-done tasks are skipped; any other
+    source status is refused, so completion authority can never substitute for
+    backlog approval or skip delivery.
+  input_schema_json:
+    type: object
+    required: [job_run_id]
+    properties:
+      job_run_id:
+        type: string
+      task_id:
+        type: string
+      task_ids:
+        type: array
+        items:
+          type: string
+      completed_task_ids:
+        type: array
+        items:
+          type: string
+      authorized_by:
+        type: string
+        description: >
+          Operator recorded as the authorization provenance for the transition.
+          The run id is always recorded alongside it.
+  output_schema_json:
+    type: object
+    required: [phase, completed_task_ids, skipped_task_ids]
+    properties:
+      phase:
+        type: string
+      completed_task_ids:
+        type: array
+        items:
+          type: string
+      skipped_task_ids:
+        type: array
+        items:
+          type: string
+      authorization:
+        type: string
+  action: task_complete
+  config: {}

@@ -141,6 +141,65 @@ Manifest paths are stored in canonical relative form: slash-separated, no absolu
 
 Text artifacts may still be rendered inline by `orbit.task.show --field artifacts`, but storage and API DTOs must not require UTF-8.
 
+## 5a. Image Artifacts, Presentation, and Retrieval
+
+Binary storage has always worked; what this section fixes is *consumption* — an attached image that no surface could show you again [ORB-11365].
+
+### Discovery and retrieval are separate calls
+
+Metadata listing stays compact and payloads are fetched on demand:
+
+| step | surface | call |
+| --- | --- | --- |
+| attach | MCP | `orbit.task.artifact.put` with `id`, `source_path`, optional `path` |
+| attach | CLI | `orbit task artifact put <ID> <SOURCE> --path <ARTIFACT_PATH>` |
+| list | MCP | `orbit.task.show` with `field: "artifacts"` — `path`, `media_type`, `size`, `created_by` |
+| list | CLI | `orbit task artifacts --task <ID>` |
+| view | MCP | `orbit.task.artifact.get` with `id` and `path` |
+| view | CLI | `orbit task artifact get <ID> <PATH> [--out FILE]` |
+| view | dashboard | task detail → click the artifact row |
+
+The listing never carries binary payloads, so a task with a large screenshot stays cheap to inspect. `orbit.task.artifact.get` reads through the same owning task bundle the dashboard route uses — there is no second artifact store, and no way to reach an artifact except through the task that owns it.
+
+### Supported formats and the presentation classes
+
+Every artifact is classified into exactly one presentation, and both non-opaque classes are *byte-checked* rather than trusted:
+
+| presentation | media types | payload field |
+| --- | --- | --- |
+| `image` | `image/png`, `image/jpeg`, `image/gif`, `image/webp` — and only when the bytes carry that format's signature | `content_base64` |
+| `text` | `text/*` except `text/html`, plus JSON/TOML/YAML — and only when the bytes are valid UTF-8 | `content` |
+| `opaque` | everything else, including `image/svg+xml`, `text/html`, `application/octet-stream`, and any payload whose bytes contradict its declared media type | `content_base64` |
+
+Media type is derived from the artifact path's extension, so a caller can store arbitrary bytes as `diagram.png`. The signature check is what stops a mislabeled — possibly active — payload from being handed to a renderer that would trust the declared type. `opaque` withholds *interpretation*, never access: the complete bytes are always returned.
+
+SVG is deliberately opaque. It is an image format that is also a script host, so it downloads rather than renders; the same is true of `text/html`. Do not "fix" this by treating `image/*` as safe.
+
+Two related but distinct policies live together in `orbit_types::task`:
+
+- `inline_safe_artifact_media_type` — may a *browser* render these bytes from an artifact URL? Enforced with `nosniff` by the HTTP route, and the closed allowlist the dashboard mirrors.
+- `artifact_presentation` — how should a *retrieval payload* be shaped? Broader for text, because handing a caller `text/markdown` as a UTF-8 string renders nothing.
+
+### Size limit
+
+`MAX_TASK_ARTIFACT_CONTENT_BYTES` (1 MiB) bounds both directions: `orbit.task.artifact.put` refuses to read a larger source, and `orbit.task.artifact.get` refuses to return a larger stored payload rather than truncating it — a partial image is indistinguishable from a corrupt one. An oversize artifact remains fully reachable through the dashboard download route (`/api/tasks/<ID>/artifacts/<PATH>`), which streams without that bound.
+
+### Transport: what a multimodal client actually receives
+
+`orbit.task.artifact.get` always returns the structured record. When the payload classifies as `image`, the MCP adapter *also* emits a protocol `image` content block carrying the base64 and its MIME type. This matters because base64 inside a JSON string field is only ever text to a model — a protocol image block is what reaches its vision input. The decision is made on the payload's shape, not the tool name, so the transport cannot disagree with the classification the artifact owner already made.
+
+To avoid spending the payload twice, the JSON text mirror is replaced with a one-line summary for image reads; the bytes appear in the image block and in `structuredContent` (for a text-only client), and nowhere else.
+
+### `source_path` is caller-local, and paths do not travel
+
+`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd. It is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
+
+The consequence is the lesson from ORB-11364: **an operator-host path is not a portable worker reference.** An image uploaded from an operator's `/tmp` is stored successfully and confirmed by `task_show`, and a worker on another host still gets `ENOENT` for that `/tmp` path — the worker never had it. A worker should discover and retrieve an authorized artifact by **owning workspace, task ID, and artifact path**, through `orbit.task.artifact.get`, rather than by assuming operator filesystem visibility. That is the whole point of the read surface, and it removes the need for ad hoc `scp` between hosts wherever the configured connector supports the workspace.
+
+Retrieval routes to the authoritative workspace explicitly. `orbit.task.artifact.get` classifies as `control_plane`, so a federated call is delivered to the workspace's owning host using the host-qualified selector the caller copied from federated `orbit.workspace.list`. An unknown selector is refused, never guessed; workspace scoping stays fail-closed and no implicit cross-workspace access is introduced.
+
+Attachment is not injection: storing an artifact on a task does not push it into an already-running worker's context. A worker picks it up on its next read.
+
 ## 6. Local Task Store and Symlink Projection
 
 Local-first Orbit uses `~/.orbit/tasks/` as the canonical store for task artifacts. `index.sqlite` owns allocation and local operational metadata; `workspaces/<workspace-id>/` owns the actual bundles:
@@ -319,6 +378,7 @@ Binary artifacts increase storage flexibility and require stronger validation. C
 ## Task References
 
 - [ORB-10332] — Retired the unused review-thread task surface and made legacy sidecars inert.
+- [ORB-11365] — Added the bounded artifact read surface, image presentation classification, and the dashboard image preview.
 - [ORB-10466] — Made new-bundle publication atomic and isolated unrelated operations from malformed bundles.
 - [T20260505-12] — Designed git-orphan-branch task sync and documented the current sync-era task bundle assumptions.
 - [T20260506-11] — Removed knowledge-graph task attribution and documented why old task IDs were only local search keys.

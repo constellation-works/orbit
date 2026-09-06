@@ -4,9 +4,43 @@ pub(super) fn render_input(
     default_input: Option<&Value>,
     base_input: &Value,
     tctx: &TemplateContext,
+    input_schema: Option<&Value>,
 ) -> Result<Value, DispatchError> {
     let src = default_input.cloned().unwrap_or_else(|| base_input.clone());
-    render_value(&src, tctx)
+    let normalized_context = normalize_optional_string_inputs(tctx, input_schema);
+    render_value(&src, normalized_context.as_ref().unwrap_or(tctx))
+}
+
+/// Make absent optional string inputs explicit only while binding a resolved
+/// catalog activity. Required fields and names outside the activity contract
+/// remain absent, preserving strict template failures for both cases.
+fn normalize_optional_string_inputs(
+    tctx: &TemplateContext,
+    input_schema: Option<&Value>,
+) -> Option<TemplateContext> {
+    let schema = input_schema?.as_object()?;
+    let properties = schema.get("properties")?.as_object()?;
+    let required = schema.get("required").and_then(Value::as_array);
+    let mut input = tctx.input.as_object()?.clone();
+    let mut changed = false;
+
+    for (name, property) in properties {
+        let is_required = required.is_some_and(|fields| {
+            fields
+                .iter()
+                .any(|field| field.as_str().is_some_and(|field| field == name))
+        });
+        let is_string = property.get("type").and_then(Value::as_str) == Some("string");
+        if !is_required && is_string && !input.contains_key(name) {
+            input.insert(name.clone(), Value::String(String::new()));
+            changed = true;
+        }
+    }
+
+    changed.then(|| TemplateContext {
+        input: Value::Object(input),
+        ..tctx.clone()
+    })
 }
 
 pub(super) fn merge_job_input(default_input: Option<&Value>, input: &Value) -> Value {

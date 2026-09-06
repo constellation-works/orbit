@@ -5,9 +5,11 @@ metadata:
 spec:
   type: deterministic
   description: >
-    Terminal task-PR recovery hook. Commits any dirty candidate, restores and
-    pushes the pre-rebase branch, opens or reuses a blocked PR, and records
-    manual conflict resolution details without replacing the original failure.
+    Terminal task-PR recovery hook. Before publication it commits any dirty
+    candidate, restores and pushes the pre-rebase branch, and opens or reuses a
+    blocked PR after bounded conflict recovery is exhausted. After publication
+    it preserves the existing PR and review state with truthful merge
+    diagnostics for a safe completion retry.
   input_schema_json:
     type: object
     additionalProperties: false
@@ -66,6 +68,8 @@ spec:
         type:
           - string
           - "null"
+      candidate_preserved:
+        type: boolean
       task_status:
         type: string
   action: pr_failure_handoff

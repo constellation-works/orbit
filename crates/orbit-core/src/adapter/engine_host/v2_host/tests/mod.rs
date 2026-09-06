@@ -1,4 +1,5 @@
 mod backlog_exclusion;
+mod ci_failure_admission;
 mod ci_failure_tasks;
 mod cli_executor;
 mod dependabot_alert_tasks;
@@ -8,8 +9,10 @@ mod required_tools;
 mod sandbox;
 mod sandbox_nested;
 mod scan_unresolved;
+mod sweep_duplicate_tasks;
 mod task_context;
 mod task_pilot;
+mod task_pilot_source;
 mod triage;
 mod v2_host;
 mod workspace_auto;

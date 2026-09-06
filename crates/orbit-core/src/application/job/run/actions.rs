@@ -1,9 +1,16 @@
 //! Cancellation, archive, delete, and run-state helpers for job runs.
 
+#[cfg(unix)]
+use std::collections::{HashMap, HashSet};
+
 use chrono::Utc;
+use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
+#[cfg(unix)]
+use orbit_store::contracts::AuditEventFilter;
 use orbit_store::contracts::TaskReservationReleaseReason;
 use orbit_types::record::OrbitEvent;
+use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     ChildCancellation, ChildCancellationPolicy, JobRun, JobRunState, PipelineState,
 };
@@ -18,6 +25,11 @@ use super::types::JobRunCancelResult;
 const CHILD_CASCADE_SOURCE: &str = "parent_cascade";
 /// Backstop against a cycle in persisted dispatch records.
 const MAX_CHILD_CANCEL_CASCADE_DEPTH: usize = 8;
+pub(crate) const CANCELLATION_REQUEST_AUDIT: &str = "pipeline.run.cancel.requested";
+pub(crate) const CANCELLATION_SIGNAL_AUDIT: &str = "pipeline.run.cancel.signal_acknowledged";
+pub(crate) const CANCELLATION_COMPLETION_AUDIT: &str = "pipeline.run.cancel.completed";
+#[cfg(unix)]
+pub(crate) const CANCELLATION_WORKER_EXIT_AUDIT: &str = "pipeline.run.cancel.worker_exit";
 
 impl OrbitRuntime {
     pub fn cancel_job_run(&self, run_id: &str) -> Result<JobRunCancelResult, OrbitError> {
@@ -62,17 +74,75 @@ impl OrbitRuntime {
         let run = self
             .get_job_run_backend(run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
+        let request_id = audit_execution_id("cancel");
+
+        if run.state.is_terminal() {
+            self.record_cancellation_request(&run, &request_id, actor, source)?;
+            self.record_cancellation_completion(&run, &request_id, "already_terminal", None, None)?;
+            return Ok(cancellation_result(
+                &run,
+                "already_terminal",
+                run.state,
+                false,
+                None,
+                actor,
+                source,
+            ));
+        }
         run.state
             .try_transition(orbit_types::workflow::RunEvent::Cancel)
             .map_err(|msg| {
                 OrbitError::JobValidation(format!("cannot cancel job run '{}': {}", run_id, msg))
             })?;
+        self.record_cancellation_request(&run, &request_id, actor, source)?;
         let signal_attempted = run.state == JobRunState::Running && run.pid.is_some();
         let signal_outcome = if signal_attempted {
-            Some(signal(&run)?)
+            match signal(&run) {
+                Ok(outcome) => {
+                    self.record_cancellation_signal_acknowledgement(&run, &request_id, &outcome)?;
+                    Some(outcome)
+                }
+                Err(error) => {
+                    let _ = self.record_cancellation_completion(
+                        &run,
+                        &request_id,
+                        "failed",
+                        None,
+                        Some(&error.to_string()),
+                    );
+                    return Err(error);
+                }
+            }
         } else {
             None
         };
+
+        // The worker can reach a real terminal outcome while its owner is
+        // being signalled. That outcome is authoritative: cancellation lost
+        // the race and is an idempotent already-terminal result, not a second
+        // terminalization attempt or a terminal-outcome conflict.
+        let after_signal = self
+            .get_job_run_backend(run_id)?
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
+        if after_signal.state.is_terminal() {
+            self.record_cancellation_completion(
+                &after_signal,
+                &request_id,
+                "already_terminal",
+                signal_outcome.as_deref(),
+                None,
+            )?;
+            return Ok(cancellation_result(
+                &run,
+                "already_terminal",
+                after_signal.state,
+                signal_attempted,
+                signal_outcome,
+                actor,
+                source,
+            ));
+        }
+
         let now = chrono::Utc::now();
         let duration_ms = run
             .started_at
@@ -88,6 +158,24 @@ impl OrbitRuntime {
             .get_job_run_backend(run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
         if cancelled_run.state != JobRunState::Cancelled {
+            if cancelled_run.state.is_terminal() {
+                self.record_cancellation_completion(
+                    &cancelled_run,
+                    &request_id,
+                    "already_terminal",
+                    signal_outcome.as_deref(),
+                    None,
+                )?;
+                return Ok(cancellation_result(
+                    &run,
+                    "already_terminal",
+                    cancelled_run.state,
+                    signal_attempted,
+                    signal_outcome,
+                    actor,
+                    source,
+                ));
+            }
             let detail = cancelled_run
                 .state
                 .try_transition(orbit_types::workflow::RunEvent::Cancel)
@@ -115,15 +203,156 @@ impl OrbitRuntime {
             signal_attempted: Some(signal_attempted),
             signal_outcome: signal_outcome.clone(),
         })?;
-        Ok(JobRunCancelResult {
-            run_id: run_id.to_string(),
-            previous_state: run.state.to_string(),
-            final_state: JobRunState::Cancelled.to_string(),
-            actor: actor.to_string(),
-            source: source.to_string(),
+        self.record_cancellation_completion(
+            &cancelled_run,
+            &request_id,
+            "cancelled",
+            signal_outcome.as_deref(),
+            None,
+        )?;
+        Ok(cancellation_result(
+            &run,
+            "cancelled",
+            JobRunState::Cancelled,
             signal_attempted,
             signal_outcome,
-        })
+            actor,
+            source,
+        ))
+    }
+
+    fn record_cancellation_request(
+        &self,
+        run: &JobRun,
+        request_id: &str,
+        actor: &str,
+        source: &str,
+    ) -> Result<(), OrbitError> {
+        self.record_pipeline_audit(
+            CANCELLATION_REQUEST_AUDIT,
+            Some(&run.run_id),
+            Some(actor),
+            AuditEventStatus::Success,
+            serde_json::json!({
+                "request_id": request_id,
+                "run_id": run.run_id,
+                "requested_state": run.state.to_string(),
+                "owner_pid": run.pid,
+                "owner_pid_start_time": run.pid_start_time,
+                "actor": actor,
+                "source": source,
+                "requested_at": Utc::now().to_rfc3339(),
+            }),
+            None,
+        )
+    }
+
+    fn record_cancellation_signal_acknowledgement(
+        &self,
+        run: &JobRun,
+        request_id: &str,
+        signal_outcome: &str,
+    ) -> Result<(), OrbitError> {
+        self.record_pipeline_audit(
+            CANCELLATION_SIGNAL_AUDIT,
+            Some(&run.run_id),
+            None,
+            AuditEventStatus::Success,
+            serde_json::json!({
+                "request_id": request_id,
+                "run_id": run.run_id,
+                "signal_outcome": signal_outcome,
+                "acknowledged_at": Utc::now().to_rfc3339(),
+            }),
+            None,
+        )
+    }
+
+    fn record_cancellation_completion(
+        &self,
+        run: &JobRun,
+        request_id: &str,
+        outcome: &str,
+        signal_outcome: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<(), OrbitError> {
+        self.record_pipeline_audit(
+            CANCELLATION_COMPLETION_AUDIT,
+            Some(&run.run_id),
+            None,
+            if outcome == "failed" {
+                AuditEventStatus::Failure
+            } else {
+                AuditEventStatus::Success
+            },
+            serde_json::json!({
+                "request_id": request_id,
+                "run_id": run.run_id,
+                "outcome": outcome,
+                "observed_state": run.state.to_string(),
+                "signal_outcome": signal_outcome,
+                "completed_at": Utc::now().to_rfc3339(),
+            }),
+            error.map(str::to_string),
+        )
+    }
+
+    /// The newest cancellation request that has not conclusively failed or
+    /// observed a pre-existing terminal outcome. Worker observers use this to
+    /// avoid converting an expected TERM/KILL exit into a run failure before
+    /// the signalling caller verifies that every owned target stopped.
+    #[cfg(unix)]
+    pub(crate) fn active_job_run_cancellation_request(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        let audits = self.list_audit_events_filtered(&AuditEventFilter {
+            job_run_id: Some(run_id.to_string()),
+            limit: 200,
+            ..AuditEventFilter::default()
+        })?;
+        let mut completions = HashMap::<String, String>::new();
+        let mut requests = Vec::new();
+        for audit in audits {
+            let Some(tool) = audit.tool_name.as_deref() else {
+                continue;
+            };
+            if !matches!(
+                tool,
+                CANCELLATION_REQUEST_AUDIT | CANCELLATION_COMPLETION_AUDIT
+            ) {
+                continue;
+            }
+            let Some(arguments) = audit
+                .arguments_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            else {
+                continue;
+            };
+            let Some(request_id) = arguments.get("request_id").and_then(Value::as_str) else {
+                continue;
+            };
+            if tool == CANCELLATION_COMPLETION_AUDIT {
+                if let Some(outcome) = arguments.get("outcome").and_then(Value::as_str) {
+                    completions
+                        .entry(request_id.to_string())
+                        .or_insert_with(|| outcome.to_string());
+                }
+            } else {
+                requests.push(request_id.to_string());
+            }
+        }
+        let inactive: HashSet<&str> = completions
+            .iter()
+            .filter_map(|(request_id, outcome)| {
+                matches!(outcome.as_str(), "failed" | "already_terminal")
+                    .then_some(request_id.as_str())
+            })
+            .collect();
+        Ok(requests
+            .into_iter()
+            .find(|request_id| !inactive.contains(request_id.as_str())))
     }
 
     pub fn archive_job_run(&self, run_id: &str) -> Result<(), OrbitError> {
@@ -272,7 +501,14 @@ impl OrbitRuntime {
             signal_run_owner_process,
             depth + 1,
         ) {
-            Ok(_) => ("cancelled".to_string(), None),
+            Ok(result) if result.outcome == "already_terminal" => (
+                result.outcome,
+                Some(format!(
+                    "job run '{}' was already terminal ({})",
+                    result.run_id, result.final_state
+                )),
+            ),
+            Ok(result) => (result.outcome, None),
             // A child that reached a terminal state on its own is the ordinary
             // race, not a fault: the parent simply lost it to the finish line.
             Err(OrbitError::JobValidation(message))
@@ -325,5 +561,26 @@ impl OrbitRuntime {
             self.write_run_state(&run.run_id, &state)?;
         }
         Ok(())
+    }
+}
+
+fn cancellation_result(
+    run: &JobRun,
+    outcome: &str,
+    final_state: JobRunState,
+    signal_attempted: bool,
+    signal_outcome: Option<String>,
+    actor: &str,
+    source: &str,
+) -> JobRunCancelResult {
+    JobRunCancelResult {
+        run_id: run.run_id.clone(),
+        outcome: outcome.to_string(),
+        previous_state: run.state.to_string(),
+        final_state: final_state.to_string(),
+        actor: actor.to_string(),
+        source: source.to_string(),
+        signal_attempted,
+        signal_outcome,
     }
 }

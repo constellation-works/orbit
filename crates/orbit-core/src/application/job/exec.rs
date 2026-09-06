@@ -15,7 +15,10 @@ use orbit_engine::{
 };
 use orbit_store::contracts::{JobRunStepParams, TaskReservationReleaseReason};
 use orbit_types::record::OrbitEvent;
-use orbit_types::workflow::activity_job::{V2AuditEventKind, validate_job_retired_sessions};
+use orbit_types::workflow::activity_job::{
+    V2AuditEventKind, run_input_declares_trusted_host, strip_trusted_host_admission,
+    validate_job_retired_sessions,
+};
 use orbit_types::workflow::{
     JobRun, JobRunStartOutcome, JobRunState, JobTargetType, PipelineState,
 };
@@ -80,7 +83,13 @@ impl OrbitRuntime {
     /// to continue from the failed step instead.
     pub fn replay_job_run(&self, source_run_id: &str) -> Result<V2JobRunResult, OrbitError> {
         let source = self.show_job_run(source_run_id)?;
-        let input = source.input.clone().unwrap_or_else(|| json!({}));
+        let mut input = source.input.clone().unwrap_or_else(|| json!({}));
+        // [ORB-11354] A replay re-runs a historical input under no new
+        // admission, so the source's trusted-host admission does not travel
+        // with it. Stripping rather than refusing keeps replay usable for the
+        // rest of the run's input; the activity then fails closed on the
+        // missing admission, which is the honest outcome.
+        strip_trusted_host_admission(&mut input);
         let (job_path, _) = self.load_v2_job_asset_by_name(&source.job_id)?;
         self.run_job_v2_from_yaml_with_retry_source(
             &job_path,
@@ -130,6 +139,13 @@ impl OrbitRuntime {
         resume: Option<&ResumePlan>,
     ) -> Result<V2JobRunResult, OrbitError> {
         let job_name = load_job_name(yaml_path)?;
+        // [ORB-11354] The foreground path takes caller-shaped input too, so it
+        // gets the same reserved-key refusal as the detached submission path.
+        // Nothing runs a trusted-host activity in the foreground: an admitted
+        // invocation is always a detached run so it survives disconnect.
+        if run_input_declares_trusted_host(&input) {
+            return Err(super::pipeline::reserved_trusted_host_key_error(&job_name));
+        }
         let scheduled_at = chrono::Utc::now();
         let run = self.stores().jobs().insert_job_run(
             &job_name,
@@ -319,10 +335,24 @@ impl OrbitRuntime {
         input: &Value,
         resume: Option<&ResumePlan>,
     ) -> Result<(), OrbitError> {
-        let initial_state = match resume.and_then(|plan| plan.resume_state.as_ref()) {
+        let mut initial_state = match resume.and_then(|plan| plan.resume_state.as_ref()) {
             Some(source_state) => seeded_resume_state(source_state, run),
             None => PipelineState::new(run.run_id.clone(), run.job_id.clone(), input.clone()),
         };
+        // [ORB-11283] A queued drain can carry an operator stop (or worker
+        // ceiling) written before the worker seeded this document. Replacing
+        // the whole state would silently resume admissions.
+        if let Some(existing) = self.read_run_state(&run.run_id)? {
+            if initial_state.drain_worker_limit.is_none() {
+                initial_state.drain_worker_limit = existing.drain_worker_limit;
+            }
+            if initial_state.drain_admissions_stop.is_none() {
+                initial_state.drain_admissions_stop = existing.drain_admissions_stop;
+            }
+            if initial_state.child_dispatches.is_empty() {
+                initial_state.child_dispatches = existing.child_dispatches;
+            }
+        }
         self.stores()
             .jobs()
             .write_run_state(&run.run_id, &initial_state)?;

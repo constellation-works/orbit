@@ -1,6 +1,9 @@
 #![allow(missing_docs)]
 
 use std::path::Path;
+
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tempfile::tempdir;
@@ -303,11 +306,17 @@ fn spawn_with_timeout_returns_after_a_normal_exit_despite_an_escaped_pipe_holder
     }
     let pid_dir = tempdir().expect("pid tempdir");
     let pid_file = pid_dir.path().join("escaped.pid");
-    // perl re-parents itself into a new session (so the group kill misses it)
-    // and execs a sleep that inherits our stdout.
+    let ready_file = pid_dir.path().join("escaped.ready");
+    let escaped_helper = EscapedProcessGuard::new(pid_file.clone());
+    // The delayed helper establishes its detached session and records its PID
+    // before telling the parent it may exit. That makes the parent wait for a
+    // verified escaped pipe holder instead of racing the supervisor's group
+    // cleanup against helper startup.
     let script = format!(
-        "perl -MPOSIX -e 'POSIX::setsid(); open(my $f, \">\", $ARGV[0]); print $f $$; close $f; exec \"sleep\", \"30\"' {} & printf '%s\n' 'done'",
-        shell_quote(pid_file.to_string_lossy().as_ref())
+        "perl -MPOSIX -e 'select(undef, undef, undef, 0.2); POSIX::setsid(); open(my $pid, \">\", $ARGV[0]); print $pid $$; close $pid; open(my $ready, \">\", $ARGV[1]); print $ready \"ready\"; close $ready; exec \"sleep\", \"30\"' {} {} & while [ ! -s {} ]; do sleep 0.01; done; printf '%s\n' 'done'",
+        shell_quote(pid_file.to_string_lossy().as_ref()),
+        shell_quote(ready_file.to_string_lossy().as_ref()),
+        shell_quote(ready_file.to_string_lossy().as_ref()),
     );
     let args = sh_args(&script);
 
@@ -327,14 +336,11 @@ fn spawn_with_timeout_returns_after_a_normal_exit_despite_an_escaped_pipe_holder
         ))
         .expect("spawn succeeds");
 
-    assert!(
-        wait_until(Duration::from_secs(2), || pid_file.exists()),
-        "escaped helper should have recorded its pid"
-    );
     let escaped_pid = read_pid(&pid_file);
-    let _ = std::process::Command::new("kill")
-        .args(["-9", &escaped_pid.to_string()])
-        .status();
+    assert!(
+        process_is_live(escaped_pid),
+        "the escaped helper must remain live after the parent exits"
+    );
 
     assert!(!timed_out);
     assert_eq!(exit_code, Some(0));
@@ -343,6 +349,41 @@ fn spawn_with_timeout_returns_after_a_normal_exit_despite_an_escaped_pipe_holder
         started.elapsed() < Duration::from_secs(5),
         "a normal exit must not wait on the escaped pipe holder"
     );
+    drop(escaped_helper);
+    assert!(
+        wait_until(Duration::from_secs(2), || !process_is_live(escaped_pid)),
+        "escaped helper {escaped_pid} should be gone after test cleanup"
+    );
+}
+
+#[cfg(unix)]
+struct EscapedProcessGuard {
+    pid_file: PathBuf,
+}
+
+#[cfg(unix)]
+impl EscapedProcessGuard {
+    fn new(pid_file: PathBuf) -> Self {
+        Self { pid_file }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for EscapedProcessGuard {
+    fn drop(&mut self) {
+        let Ok(contents) = std::fs::read_to_string(&self.pid_file) else {
+            return;
+        };
+        let Ok(pid) = contents.trim().parse::<u32>() else {
+            return;
+        };
+        if pid > 0 && pid <= i32::MAX as u32 {
+            // SAFETY: the PID comes from the test helper, which we own.
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            }
+        }
+    }
 }
 
 #[cfg(unix)]

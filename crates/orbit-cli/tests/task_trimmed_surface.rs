@@ -12,6 +12,7 @@ use std::path::Path;
 use std::process::Output;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
@@ -155,6 +156,7 @@ fn lint_fix_sweep_drops_stale_context_entries() {
 
 #[test]
 fn task_add_attributes_from_model_flag_and_managed_identity_env() {
+    let ambient = TestWorkspace::new();
     let workspace = TestWorkspace::new();
 
     let explicit = workspace.task_json(&[
@@ -172,30 +174,67 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
     ]);
     assert_eq!(explicit["created_by"], json!("gpt-5.6-sol"));
 
-    let output = run_orbit_with_identity(
-        &workspace.work,
-        &workspace.home,
-        &[
-            "task",
-            "add",
-            "--title",
-            "Managed identity",
-            "--description",
-            "Environment attribution",
-            "--complexity",
-            "low",
-            "--json",
-        ],
-        "codex",
-        "gpt-5.6-terra",
+    let ambient_registry = ambient.home.join(".orbit");
+    let ambient_registry = ambient_registry
+        .to_str()
+        .expect("ambient registry path is UTF-8");
+    let before = ambient.task_json(&["task", "list", "--json"]);
+    let _ambient_env = test_env::scoped([
+        ("ORBIT_ROOT", Some("/sentinel/orbit-root")),
+        ("ORBIT_SESSION_ID", Some("sentinel-session")),
+        ("ORBIT_TASK_ID", Some("sentinel-task")),
+        ("ORBIT_RUN_ID", Some("sentinel-run")),
+        ("ORBIT_ACTIVITY_ID", Some("sentinel-activity")),
+        ("ORBIT_STEP_INDEX", Some("sentinel-step")),
+        ("ORBIT_AGENT_NAME", Some("sentinel-agent")),
+        ("ORBIT_AGENT_MODEL", Some("sentinel-model")),
+        ("ORBIT_OPERATOR", Some("1")),
+        ("ORBIT_MANAGED_RUN_CONTEXT", Some("1")),
+        ("ORBIT_TASK_ACTOR_KIND", Some("sentinel-actor")),
+        ("ORBIT_REGISTRY_ROOT", Some(ambient_registry)),
+        ("ORBIT_WORKSPACE", Some("trimmed-surface-test")),
+    ]);
+
+    for _ in 0..2 {
+        let output = run_orbit_with_identity(
+            &workspace.work,
+            &workspace.home,
+            &[
+                "task",
+                "add",
+                "--title",
+                "Managed identity",
+                "--description",
+                "Environment attribution",
+                "--complexity",
+                "low",
+                "--json",
+            ],
+            "codex",
+            "gpt-5.6-terra",
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let managed: Value = serde_json::from_slice(&output.stdout).expect("managed task JSON");
+        assert_eq!(managed["created_by"], json!("gpt-5.6-terra"));
+    }
+
+    let after = ambient.task_json(&["task", "list", "--json"]);
+    assert_eq!(after, before, "ambient sentinel workspace was modified");
+
+    let fixture_tasks = workspace.task_json(&["task", "list", "--json"]);
+    let fixture_tasks = fixture_tasks.as_array().expect("fixture task list");
+    assert_eq!(fixture_tasks.len(), 3);
+    assert_eq!(
+        fixture_tasks
+            .iter()
+            .filter(|task| task["created_by"] == json!("gpt-5.6-terra"))
+            .count(),
+        2
     );
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let managed: Value = serde_json::from_slice(&output.stdout).expect("managed task JSON");
-    assert_eq!(managed["created_by"], json!("gpt-5.6-terra"));
 }
 
 #[test]
@@ -451,29 +490,27 @@ impl TestWorkspace {
 
 fn run_orbit(cwd: &Path, home: &Path, args: &[&str]) -> Output {
     let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env_remove("ORBIT_ROOT")
-        .env_remove("ORBIT_AGENT_NAME")
-        .env_remove("ORBIT_AGENT_MODEL")
-        .env_remove("ORBIT_MANAGED_RUN_CONTEXT")
         .args(args);
     command.output().expect("run orbit")
 }
 
 fn run_orbit_as_operator(cwd: &Path, home: &Path, args: &[&str]) -> Output {
     let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env("ORBIT_OPERATOR", "1")
-        .env_remove("ORBIT_ROOT")
-        .env_remove("ORBIT_AGENT_NAME")
-        .env_remove("ORBIT_AGENT_MODEL")
-        .env_remove("ORBIT_MANAGED_RUN_CONTEXT")
         .args(args);
     command.output().expect("run orbit as operator")
 }
@@ -486,14 +523,19 @@ fn run_orbit_with_identity(
     model: &str,
 ) -> Output {
     let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env_remove("ORBIT_ROOT")
+        // A managed identity this fixture synthesizes itself, on top of a
+        // cleared environment — never the host run's (ORB-11300).
         .env("ORBIT_AGENT_NAME", agent)
         .env("ORBIT_AGENT_MODEL", model)
         .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
+        .env("ORBIT_RUN_ID", "task-trimmed-surface-managed")
         .args(args);
     command.output().expect("run orbit with managed identity")
 }

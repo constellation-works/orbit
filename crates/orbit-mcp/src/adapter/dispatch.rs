@@ -21,7 +21,7 @@ use super::name_map::{ToolNameCollision, build_name_map};
 use super::schema::{
     SelectorAdvertisement, WorkspaceBinding, ensure_workspace_selector, schema_to_tool,
 };
-use super::structured::mcp_structured_content;
+use super::structured::mcp_tool_call_result;
 use crate::error::tool_error_result;
 
 impl OrbitToolServer {
@@ -180,7 +180,7 @@ impl OrbitToolServer {
         .await;
 
         match result {
-            Ok(Ok(value)) => Ok(CallToolResult::structured(mcp_structured_content(value))),
+            Ok(Ok(value)) => Ok(mcp_tool_call_result(value)),
             Ok(Err(error)) => Ok(tool_error_result(&error)),
             Err(join_error) => {
                 let error = OrbitError::Execution(format!(

@@ -6,10 +6,10 @@
 use std::process::Stdio;
 
 use orbit_exec::{
-    LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, WriteAnchorKind, bwrap_path,
-    bwrap_program_for_audit, compile_linux_bwrap_argv, linux_bwrap_write_grant_diagnostic,
-    linux_bwrap_write_grants, prepare_linux_bwrap_write_grants, probe_bwrap,
-    spawn_under_linux_bwrap,
+    LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapPostRunGuard,
+    LinuxBwrapSpawnRequest, WriteAnchorKind, bwrap_path, bwrap_program_for_audit,
+    compile_linux_bwrap_argv, linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants,
+    prepare_linux_bwrap_write_grants, probe_bwrap, spawn_under_linux_bwrap,
 };
 use orbit_types::policy::ResolvedFsProfile;
 
@@ -422,6 +422,59 @@ fn argv_is_deterministic_and_orders_denies_after_writable_parent() {
     assert_eq!(plan, repeated);
 }
 
+/// [ORB-11259] Managed worktrees get stable `/tmp` workspace and build mounts
+/// so compiler caches can key on path-independent prefixes.
+#[test]
+fn managed_worktree_argv_binds_stable_workspace_and_build_mounts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let resolved = profile(vec![format!("{}/**", workspace.display())]);
+
+    let unmanaged = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
+        .expect("compile unmanaged");
+    let unmanaged_joined = unmanaged.args.join(" ");
+    assert!(
+        !unmanaged_joined.contains(LINUX_STABLE_WORKSPACE_MOUNT),
+        "direct invocations must not grow the stable toolchain mounts: {unmanaged_joined}"
+    );
+
+    let reviewer = profile(Vec::new());
+    let reviewer_plan =
+        compile_linux_bwrap_argv(&reviewer, "/bin/true", &[], Some(&workspace), true)
+            .expect("compile reviewer managed");
+    let reviewer_joined = reviewer_plan.args.join(" ");
+    assert!(
+        !reviewer_joined.contains(LINUX_STABLE_WORKSPACE_MOUNT),
+        "read-only managed profiles must not bind a writable stable workspace mount: {reviewer_joined}"
+    );
+
+    let managed = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true)
+        .expect("compile managed");
+    let joined = managed.args.join(" ");
+    let cwd = workspace.canonicalize().expect("canonical workspace");
+    let target = cwd.join("target");
+    assert!(target.is_dir(), "managed compile must create target/");
+    assert!(
+        joined.contains(&format!("--dir {LINUX_STABLE_WORKSPACE_MOUNT}")),
+        "missing workspace mount dir in {joined}"
+    );
+    assert!(
+        joined.contains(&format!(
+            "--bind {} {LINUX_STABLE_WORKSPACE_MOUNT}",
+            cwd.display()
+        )),
+        "missing workspace bind in {joined}"
+    );
+    assert!(
+        joined.contains(&format!(
+            "--bind {} {LINUX_STABLE_BUILD_MOUNT}",
+            target.display()
+        )),
+        "missing build bind in {joined}"
+    );
+}
+
 #[test]
 fn argv_reallows_only_narrow_existing_paths_after_orbit_deny() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -515,6 +568,76 @@ fn direct_invocation_fails_closed_for_overlapping_non_subtree_deny() {
     let error = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], None, false)
         .expect_err("direct invocation must fail closed");
     assert!(error.to_string().contains("non-subtree denyModify"));
+}
+
+/// [ORB-11257] A read-only direct invocation can compile default dotenv glob
+/// denials. Live Bubblewrap must leave an existing match intact and refuse a
+/// newly created matching path; a write-capable sibling still fails closed.
+#[cfg(target_os = "linux")]
+#[test]
+fn kernel_enforces_existing_and_new_protected_env_paths_for_read_only_direct_invocation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let existing = workspace.join(".env");
+    let created = workspace.join("new.env");
+    std::fs::write(&existing, "secret").expect("write existing protected path");
+    let read_only = profile(vec![
+        format!("!{}/**/.env", workspace.display()),
+        format!("!{}/**/.env.*", workspace.display()),
+        format!("!{}/**/*.env", workspace.display()),
+        format!("!{}/**/*.env.*", workspace.display()),
+    ]);
+    let unsafe_profile = profile(vec![
+        format!("{}/**", workspace.display()),
+        format!("!{}/**/*.env", workspace.display()),
+    ]);
+    let error = compile_linux_bwrap_argv(&unsafe_profile, "/bin/true", &[], None, false)
+        .expect_err("direct invocation must fail closed for unsafe profiles");
+    assert!(error.to_string().contains("non-subtree denyModify"));
+
+    let script = format!(
+        "! printf overwritten > '{existing}'; ! printf created > '{created}'; test -r '{existing}'",
+        existing = existing.display(),
+        created = created.display()
+    );
+    let plan = compile_linux_bwrap_argv(
+        &read_only,
+        "/bin/sh",
+        &["-c".to_string(), script],
+        Some(&workspace),
+        false,
+    )
+    .expect("compile read-only direct invocation");
+    assert!(
+        !plan.args.iter().any(|arg| arg == "--bind"),
+        "a no-modify profile must not gain a writable bind: {:?}",
+        plan.args
+    );
+
+    let probe = probe_bwrap();
+    if !probe.available {
+        println!("skipping real Bubblewrap test: {}", probe.detail);
+        return;
+    }
+    let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+        plan: &plan,
+        env: &[],
+        cwd: Some(&workspace),
+        stdin: Stdio::null(),
+        stdout: Stdio::null(),
+        stderr: Stdio::null(),
+    })
+    .expect("spawn");
+    assert!(child.wait().expect("wait").success());
+    assert_eq!(
+        std::fs::read_to_string(&existing).expect("read existing protected path"),
+        "secret"
+    );
+    assert!(
+        !created.exists(),
+        "newly created matching protected path must stay absent"
+    );
 }
 
 #[test]

@@ -11,7 +11,7 @@ use chrono::Utc;
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{JobRunState, OrbitRuntime, TaskStatus, V2AuditEventInsertParams};
+use orbit_core::{JobRun, JobRunState, OrbitRuntime, TaskStatus, V2AuditEventInsertParams};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -403,6 +403,7 @@ async fn cancel_run_endpoint_cancels_pending_run() {
     assert_eq!(response.status(), StatusCode::OK);
     let payload = body_json(response).await;
     assert_eq!(payload["run_id"], run.run_id);
+    assert_eq!(payload["outcome"], "cancelled");
     assert_eq!(payload["previous_state"], "pending");
     assert_eq!(payload["final_state"], "cancelled");
     assert_eq!(payload["signal_attempted"], false);
@@ -412,7 +413,7 @@ async fn cancel_run_endpoint_cancels_pending_run() {
 }
 
 #[tokio::test]
-async fn cancel_run_endpoint_rejects_terminal_run_without_mutating_bundle() {
+async fn cancel_run_endpoint_reports_terminal_run_idempotently_without_mutating_bundle() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run = seed_run(
         &runtime,
@@ -425,13 +426,12 @@ async fn cancel_run_endpoint_rejects_terminal_run_without_mutating_bundle() {
     let response =
         request_cancel(runtime.clone(), &run.run_id, Some("http://localhost:3000")).await;
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::OK);
     let payload = body_json(response).await;
-    assert!(
-        payload["error"]
-            .as_str()
-            .is_some_and(|message| message.contains("cannot cancel job run"))
-    );
+    assert_eq!(payload["outcome"], "already_terminal");
+    assert_eq!(payload["previous_state"], "success");
+    assert_eq!(payload["final_state"], "success");
+    assert_eq!(payload["signal_attempted"], false);
     let after = runtime.show_job_run(&run.run_id).expect("show after");
     assert_eq!(after, before);
 }
@@ -561,7 +561,7 @@ fn run_detail_uses_v2_audit_steps_when_step_bundle_is_empty() {
 }
 
 #[test]
-fn run_detail_exposes_the_provider_pid_and_liveness_for_an_open_agent_step() {
+fn run_detail_keeps_a_parallel_provider_open_when_another_invocation_finishes() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-web-provider-pid";
     seed_v2_audit_events(
@@ -580,18 +580,61 @@ fn run_detail_exposes_the_provider_pid_and_liveness_for_an_open_agent_step() {
             }),
             json!({
                 "schemaVersion": 1,
-                "event_type": "cli.invocation.process",
-                "event_id": "evt-pid",
+                "event_type": "activity.started",
+                "event_id": "evt-live-invocation",
                 "ts": "2026-07-27T02:41:02Z",
                 "run_id": run_id,
                 "agent_identity": "codex",
                 "parent_event_id": "evt-step-started",
+                "body_kind": "activity_started"
+            }),
+            json!({
+                "schemaVersion": 1,
+                "event_type": "activity.started",
+                "event_id": "evt-finished-invocation",
+                "ts": "2026-07-27T02:41:03Z",
+                "run_id": run_id,
+                "agent_identity": "codex",
+                "parent_event_id": "evt-step-started",
+                "body_kind": "activity_started"
+            }),
+            json!({
+                "schemaVersion": 1,
+                "event_type": "cli.invocation.process",
+                "event_id": "evt-finished-pid",
+                "ts": "2026-07-27T02:41:04Z",
+                "run_id": run_id,
+                "agent_identity": "codex",
+                "parent_event_id": "evt-finished-invocation",
                 "body_kind": "cli_invocation_process",
                 "provider": "codex",
-                // Unreachable PID: the probe must resolve it as gone rather
-                // than reporting a live child that does not exist.
+                "pid": u32::MAX - 2
+            }),
+            json!({
+                "schemaVersion": 1,
+                "event_type": "cli.invocation.process",
+                "event_id": "evt-live-pid",
+                "ts": "2026-07-27T02:41:05Z",
+                "run_id": run_id,
+                "agent_identity": "codex",
+                "parent_event_id": "evt-live-invocation",
+                "body_kind": "cli_invocation_process",
+                "provider": "codex",
+                // This PID is unreachable: the projection must retain the
+                // open record and report its liveness independently.
                 "pid": u32::MAX - 1,
                 "pid_start_time": "ps-lstart-utc-v1:seeded"
+            }),
+            json!({
+                "schemaVersion": 1,
+                "event_type": "cli.invocation.finished",
+                "event_id": "evt-finished",
+                "ts": "2026-07-27T02:41:06Z",
+                "run_id": run_id,
+                "agent_identity": "codex",
+                "parent_event_id": "evt-finished-invocation",
+                "body_kind": "cli_invocation_finished",
+                "exit_code": 0
             }),
         ],
     );
@@ -623,16 +666,19 @@ fn run_detail_exposes_the_provider_pid_and_liveness_for_an_open_agent_step() {
         .as_array()
         .expect("provider_processes array");
 
-    assert_eq!(processes.len(), 1);
-    assert_eq!(processes[0]["pid"], u32::MAX - 1);
-    assert_eq!(processes[0]["provider"], "codex");
-    assert_eq!(processes[0]["step_id"], "agent_implement");
-    assert_eq!(processes[0]["finished"], false);
-    assert_eq!(processes[0]["exit_code"], Value::Null);
+    assert_eq!(processes.len(), 2);
+    assert_eq!(processes[0]["pid"], u32::MAX - 2);
+    assert_eq!(processes[0]["finished"], true);
+    assert_eq!(processes[0]["exit_code"], 0);
+    assert_eq!(processes[1]["pid"], u32::MAX - 1);
+    assert_eq!(processes[1]["provider"], "codex");
+    assert_eq!(processes[1]["step_id"], "agent_implement");
+    assert_eq!(processes[1]["finished"], false);
+    assert_eq!(processes[1]["exit_code"], Value::Null);
     if cfg!(unix) {
-        assert_eq!(processes[0]["liveness"], "exited");
+        assert_eq!(processes[1]["liveness"], "exited");
     } else {
-        assert_eq!(processes[0]["liveness"], "unknown");
+        assert_eq!(processes[1]["liveness"], "unknown");
     }
 }
 
@@ -796,13 +842,17 @@ fn seed_parent_blocked_on_child(
     run_id: &str,
     run_state: JobRunState,
     phase: ChildDispatchPhase,
-) {
+) -> JobRun {
     let run = seed_run(runtime, run_id, "workspace_auto_pipeline", run_state);
     write_seeded_run(runtime, &run);
     let mut state = PipelineState::new(
         run_id.to_string(),
         "workspace_auto_pipeline".to_string(),
         json!({}),
+    );
+    state.set_waiting_reasons(
+        Some(vec!["ORB-1".to_string()]),
+        Some(vec!["file:src/lib.rs".to_string()]),
     );
     state.record_child_dispatch(
         ChildDispatch::submitted(
@@ -819,19 +869,25 @@ fn seed_parent_blocked_on_child(
     runtime
         .write_run_state(run_id, &state)
         .expect("seed parent run state");
+    run
 }
 
 #[test]
 fn run_detail_names_the_child_a_running_parent_is_blocked_on() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-web-child-waiting";
-    seed_parent_blocked_on_child(
+    let run = seed_parent_blocked_on_child(
         &runtime,
         run_id,
         JobRunState::Running,
         ChildDispatchPhase::Waiting,
     );
-    let run = runtime.show_job_run(run_id).expect("show run");
+    assert_eq!(run.state, JobRunState::Running);
+    let state = runtime
+        .read_run_state(run_id)
+        .expect("read run state")
+        .expect("seeded run state");
+    assert_eq!(state.waiting_on_deps, Some(vec!["ORB-1".to_string()]));
 
     let detail = job_run_detail_to_json(&runtime, &run);
     let dispatches = detail["run"]["child_dispatches"]
@@ -844,19 +900,24 @@ fn run_detail_names_the_child_a_running_parent_is_blocked_on() {
     assert_eq!(dispatches[0]["parent_step_id"], "ship_leaves");
     assert_eq!(dispatches[0]["phase"], "waiting");
     assert_eq!(dispatches[0]["queued"], false);
+    assert_eq!(detail["run"]["waiting_on_deps"], json!(["ORB-1"]));
+    assert_eq!(
+        detail["run"]["waiting_on_locks"],
+        json!(["file:src/lib.rs"])
+    );
+    assert!(detail["run"].get("pid").is_none());
 }
 
 #[test]
 fn run_detail_keeps_the_child_link_after_the_parent_terminalizes() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-web-child-cancelled";
-    seed_parent_blocked_on_child(
+    let run = seed_parent_blocked_on_child(
         &runtime,
         run_id,
         JobRunState::Cancelled,
         ChildDispatchPhase::Terminal,
     );
-    let run = runtime.show_job_run(run_id).expect("show run");
 
     let detail = job_run_detail_to_json(&runtime, &run);
     let dispatches = detail["run"]["child_dispatches"]
@@ -869,6 +930,8 @@ fn run_detail_keeps_the_child_link_after_the_parent_terminalizes() {
         "a cancelled parent must still name the child it left behind"
     );
     assert_eq!(dispatches[0]["child_run_id"], "jrun-child-leaves");
+    assert_eq!(detail["run"]["waiting_on_deps"], Value::Null);
+    assert_eq!(detail["run"]["waiting_on_locks"], Value::Null);
 }
 
 #[test]
@@ -906,4 +969,258 @@ fn a_terminal_run_never_projects_an_unfinished_step_as_still_running() {
         "a step cannot outlive its own run"
     );
     assert_eq!(steps[0]["outcome"], "interrupted");
+}
+
+// ─── bounded auto-drain dashboard action [ORB-11250] ──────────────────────
+
+mod auto_drain {
+    use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
+
+    use super::*;
+
+    async fn request_auto(runtime: OrbitRuntime, body: Option<Value>) -> Response {
+        let mut builder = Request::builder()
+            .method(Method::POST)
+            .uri("/workflows/auto")
+            .header(header::ORIGIN, "http://localhost:3000");
+        let body = match body {
+            Some(json) => {
+                builder = builder.header(header::CONTENT_TYPE, "application/json");
+                Body::from(json.to_string())
+            }
+            None => Body::empty(),
+        };
+        router()
+            .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
+            .oneshot(builder.body(body).expect("request"))
+            .await
+            .expect("response")
+    }
+
+    async fn request_readiness(runtime: OrbitRuntime, query: &str) -> Response {
+        router()
+            .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/workflows/auto/readiness{query}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response")
+    }
+
+    /// Pin the process signals `CallerCapabilities::resolve` reads, for the
+    /// whole request. Mirrors `api::tests::auto_tasks`'s helper of the same
+    /// shape: the guard in `orbit_common::test_env` is process-wide, so every
+    /// case whose expected status depends on caller identity must go through
+    /// it rather than reading/setting the env var directly [ORB-10894].
+    #[allow(clippy::await_holding_lock)]
+    async fn with_caller_env<'a, T>(
+        vars: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+        fut: impl std::future::Future<Output = T>,
+    ) -> T {
+        let _env = orbit_common::test_env::scoped(vars);
+        fut.await
+    }
+
+    async fn as_operator<T>(fut: impl std::future::Future<Output = T>) -> T {
+        with_caller_env([(OPERATOR_OVERRIDE_ENV, Some("1"))], fut).await
+    }
+
+    async fn as_agent<T>(fut: impl std::future::Future<Output = T>) -> T {
+        with_caller_env(
+            [
+                (OPERATOR_OVERRIDE_ENV, None),
+                ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+                ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
+            ],
+            fut,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn auto_endpoint_rejects_missing_duration() {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+        let response = request_auto(runtime, None).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload = body_json(response).await;
+        assert!(
+            payload["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("for_duration"))
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_endpoint_rejects_invalid_duration_format() {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+        let response = request_auto(runtime, Some(json!({ "for_duration": "soon" }))).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload = body_json(response).await;
+        assert!(
+            payload["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("invalid duration"))
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_endpoint_rejects_zero_length_window() {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+        let response = request_auto(runtime, Some(json!({ "for_duration": "0s" }))).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload = body_json(response).await;
+        assert!(
+            payload["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("bounded window"))
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_endpoint_rejects_zero_concurrency() {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+        write_replay_job(&runtime, "workspace_auto_pipeline");
+
+        let response = request_auto(
+            runtime,
+            Some(json!({ "for_duration": "30m", "concurrency": 0 })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload = body_json(response).await;
+        assert!(
+            payload["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("concurrency must be at least 1"))
+        );
+    }
+
+    /// Default completion (no `complete` opt-in) needs no authorization, the
+    /// same as the ship endpoint's always-review submission.
+    #[tokio::test]
+    async fn auto_endpoint_defaults_to_review_without_authorization() {
+        as_agent(async {
+            let runtime = OrbitRuntime::in_memory().expect("build runtime");
+            write_replay_job(&runtime, "workspace_auto_pipeline");
+
+            let response = request_auto(runtime, Some(json!({ "for_duration": "30m" }))).await;
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let payload = body_json(response).await;
+            assert_eq!(payload["completion"].as_str(), Some("review"));
+            assert!(payload["run_id"].as_str().is_some_and(|id| !id.is_empty()));
+        })
+        .await;
+    }
+
+    /// Opting into `complete` is separately governed: an unauthorized caller
+    /// is refused before any run is submitted.
+    #[tokio::test]
+    async fn auto_endpoint_refuses_complete_opt_in_without_authorization() {
+        as_agent(async {
+            let runtime = OrbitRuntime::in_memory().expect("build runtime");
+            write_replay_job(&runtime, "workspace_auto_pipeline");
+
+            let response = request_auto(
+                runtime.clone(),
+                Some(json!({ "for_duration": "30m", "complete": true })),
+            )
+            .await;
+
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let payload = body_json(response).await;
+            assert_eq!(payload["code"].as_str(), Some("authorization_denied"));
+
+            let runs = runtime
+                .list_job_runs(JobRunListParams::default())
+                .expect("list runs");
+            assert!(
+                runs.is_empty(),
+                "a denied completion opt-in must not submit a run: {runs:?}"
+            );
+        })
+        .await;
+    }
+
+    /// An authorized operator's `complete` opt-in propagates to the same
+    /// `CompletionPolicy::Done` the CLI's `--complete` sends.
+    #[tokio::test]
+    async fn auto_endpoint_propagates_authorized_complete_opt_in() {
+        as_operator(async {
+            let runtime = OrbitRuntime::in_memory().expect("build runtime");
+            write_replay_job(&runtime, "workspace_auto_pipeline");
+
+            let response = request_auto(
+                runtime.clone(),
+                Some(json!({ "for_duration": "2h", "complete": true })),
+            )
+            .await;
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let payload = body_json(response).await;
+            assert_eq!(payload["completion"].as_str(), Some("done"));
+            let run_id = payload["run_id"].as_str().expect("run_id").to_string();
+
+            let run = runtime.show_job_run(&run_id).expect("show run");
+            let input = run.input.expect("run input");
+            assert_eq!(input["completion"], "done");
+            assert_eq!(input["for_seconds"], 7200);
+        })
+        .await;
+    }
+
+    /// ORB-10008: an unknown `?workspace=` is a clean 404 JSON rejection from
+    /// the workspace extractor, matching the ship endpoint's behavior — this
+    /// is how the endpoint refuses all-workspace mode too, since aggregate
+    /// state has no default workspace to fall back on.
+    #[tokio::test]
+    async fn auto_endpoint_rejects_unknown_workspace_with_404_json() {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+        let state = crate::state::DashboardState::single(Arc::new(runtime));
+
+        let response = router()
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/workflows/auto?workspace=ghost")
+                    .header(header::ORIGIN, "http://localhost:7878")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({ "for_duration": "30m" }).to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let payload = body_json(response).await;
+        assert!(
+            payload["error"]
+                .as_str()
+                .is_some_and(|m| m.contains("unknown workspace: ghost"))
+        );
+    }
+
+    #[tokio::test]
+    async fn readiness_endpoint_returns_read_only_snapshot() {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+        let response = request_readiness(runtime, "").await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = body_json(response).await;
+        assert_eq!(payload["snapshot"]["read_only"], true);
+        assert!(payload["capacity"]["free_slots"].is_number());
+        assert!(payload["controls_authorized"].is_boolean());
+    }
 }

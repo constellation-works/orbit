@@ -26,6 +26,7 @@
 //!
 //! # Key exports
 //! - [`run_process`] — primary entry point for spawning a subprocess
+//! - [`supervise_child`] — supervise a child spawned through a sandbox wrapper
 //! - [`ExecRequest`] — builder-style description of the process to run
 //! - [`ExecutionResult`] — captured stdout/stderr, exit code, and duration
 //! - [`Sandbox`] / [`NoSandbox`] — sandbox strategy trait and strategy that
@@ -44,11 +45,11 @@ pub mod sandbox;
 mod supervision;
 
 pub use linux_sandbox::{
-    BwrapProbeOutcome, LinuxBwrapPlan, LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest,
-    PreparedWriteGrants, UnsatisfiedWriteGrant, WriteAnchorKind, WriteGrant, bwrap_path,
-    bwrap_program_for_audit, bwrap_unavailable_message, compile_linux_bwrap_argv,
-    linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
-    probe_bwrap, spawn_under_linux_bwrap,
+    BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapPlan,
+    LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, PreparedWriteGrants, UnsatisfiedWriteGrant,
+    WriteAnchorKind, WriteGrant, bwrap_path, bwrap_program_for_audit, bwrap_unavailable_message,
+    compile_linux_bwrap_argv, linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants,
+    prepare_linux_bwrap_write_grants, probe_bwrap, spawn_under_linux_bwrap,
 };
 pub use macos_sandbox::{
     MacosLoginKeychainAccess, MacosSandboxSpawnRequest, claude_state_dir_from_env,
@@ -57,5 +58,8 @@ pub use macos_sandbox::{
     sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
 };
 pub use result::ExecutionResult;
-pub use runner::{EnvironmentMode, ExecRequest, StdinMode, run_process};
+pub use runner::{
+    EnvironmentMode, ExecRequest, StdinMode, SupervisedOutcome, run_process,
+    run_process_streaming_stdout, supervise_child,
+};
 pub use sandbox::{NoSandbox, Sandbox};

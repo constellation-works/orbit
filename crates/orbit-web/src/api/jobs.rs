@@ -6,12 +6,12 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_core::JobRunState;
-use orbit_core::application::job::JobRunListParams;
+use orbit_core::application::job::{JobRunListParams, job_run_to_json};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{bad_request, bounded_limit, map_runtime_error, server_error, validate_id};
-use crate::projections::{job_catalog_to_json_with_last_run, job_run_to_json};
+use crate::projections::job_catalog_to_json_with_last_run;
 
 const JOB_RUN_DEFAULT_LIMIT: usize = 25;
 
@@ -74,10 +74,11 @@ pub(super) async fn list_job_runs(Ws(runtime): Ws, Query(q): Query<JobRunListQue
         terminal_only: matches!(state, Some(JobRunListState::Terminal)),
         since: q.since,
         limit: Some(limit),
+        ..Default::default()
     };
     match runtime.list_job_runs(params) {
         Ok(runs) => {
-            let values: Vec<Value> = runs.iter().map(job_run_to_json).collect();
+            let values: Vec<Value> = runs.iter().map(|run| job_run_to_json(run, None)).collect();
             Json(Value::Array(values)).into_response()
         }
         Err(e) => server_error(e),

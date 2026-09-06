@@ -9,6 +9,7 @@ use std::process::Command as StdCommand;
 use std::os::unix::fs::PermissionsExt;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -742,6 +743,11 @@ fn orbit_command(cwd: &Path, home: &Path, publication_bare: &Path) -> assert_cmd
         .parent()
         .expect("publication parent")
         .join("publication-test-ssh");
+    // ORB-11300: clear inherited authority first; the deliberate
+    // `ORBIT_OPERATOR` grant below is this fixture's own, not the host run's.
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
@@ -749,12 +755,7 @@ fn orbit_command(cwd: &Path, home: &Path, publication_bare: &Path) -> assert_cmd
         .env("ORBIT_OPERATOR", "1")
         .env("GIT_SSH", fake_ssh)
         .env("GIT_SSH_VARIANT", "ssh")
-        .env("PUBLICATION_TEST_REPO", publication_bare)
-        .env_remove("ORBIT_ROOT")
-        .env_remove("ORBIT_AGENT_NAME")
-        .env_remove("ORBIT_AGENT_MODEL")
-        .env_remove("ORBIT_MANAGED_RUN_CONTEXT")
-        .env_remove("ORBIT_RUN_ID");
+        .env("PUBLICATION_TEST_REPO", publication_bare);
     command
 }
 

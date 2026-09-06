@@ -1,5 +1,7 @@
 //! Turn a host-collected repository security snapshot into ordinary backlog tasks.
 
+mod duplicates;
+
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
@@ -8,7 +10,15 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::OrbitRuntime;
+use crate::adapter::engine_host::v2_host::duplicate_tasks::{
+    DuplicateTaskLookup, DuplicateTaskMatch, find_covering_task,
+};
 use crate::application::task::TaskAddParams;
+
+use self::duplicates::{
+    code_duplicate_candidate, dependabot_duplicate_candidate, duplicate_lookup_error,
+    secret_duplicate_candidate,
+};
 
 const SUPPORTED_SCHEMA_VERSION: u64 = 2;
 const DEPENDABOT_TAG: &str = "dependabot-sweep";
@@ -25,10 +35,26 @@ const DEFAULT_MAX_TASKS: u64 = 10;
 const MAX_TASKS: u64 = 50;
 const KEY_LEN: usize = 16;
 
+struct PendingTask {
+    params: TaskAddParams,
+    result: Value,
+}
+
 pub(crate) fn file_dependabot_alert_tasks(
     runtime: &OrbitRuntime,
     input: &Value,
 ) -> Result<Value, OrbitError> {
+    file_dependabot_alert_tasks_with_lookup(runtime, input, runtime)
+}
+
+pub(in crate::adapter::engine_host::v2_host) fn file_dependabot_alert_tasks_with_lookup<L>(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    lookup: &L,
+) -> Result<Value, OrbitError>
+where
+    L: DuplicateTaskLookup + ?Sized,
+{
     let snapshot = input.get("dependabot_snapshot").ok_or_else(|| {
         OrbitError::InvalidInput(
             "file_dependabot_alert_tasks requires the `dependabot_snapshot` produced by collect_dependabot_alerts"
@@ -71,7 +97,7 @@ pub(crate) fn file_dependabot_alert_tasks(
         .is_ok()
         .then(|| SYSTEM_CREW.to_string());
 
-    let mut filed = Vec::new();
+    let mut pending_tasks = Vec::new();
     let mut skipped_existing = Vec::new();
     let mut skipped_dependabot_pr = Vec::new();
     let mut skipped_over_cap = Vec::new();
@@ -120,10 +146,20 @@ pub(crate) fn file_dependabot_alert_tasks(
             cluster_alerts
                 .sort_by_key(|alert| alert.get("number").and_then(Value::as_u64).unwrap_or(0));
             let key = digest(&[&ecosystem, &package, &manifest_path]);
-            if let Some(task_id) = open_task_for_key(runtime, DEPENDABOT_KEY_PREFIX, &key)? {
+            if let Some(DuplicateTaskMatch {
+                task_id,
+                match_kind,
+                evidence,
+            }) = find_covering_task(
+                lookup,
+                &dependabot_duplicate_candidate(&key, &package, &manifest_path),
+            )
+            .map_err(|error| duplicate_lookup_error("dependabot", &key, &error))?
+            {
                 skipped_existing.push(json!({
                     "family": "dependabot", "key": key, "task_id": task_id,
                     "ecosystem": ecosystem, "package": package, "manifest_path": manifest_path,
+                    "match_kind": match_kind, "match_evidence": evidence,
                 }));
                 continue;
             }
@@ -139,7 +175,7 @@ pub(crate) fn file_dependabot_alert_tasks(
                 }));
                 continue;
             }
-            if filed.len() >= max_tasks {
+            if pending_tasks.len() >= max_tasks {
                 skipped_over_cap.push(json!({
                     "family": "dependabot", "key": key, "ecosystem": ecosystem,
                     "package": package, "manifest_path": manifest_path,
@@ -152,7 +188,7 @@ pub(crate) fn file_dependabot_alert_tasks(
                 .filter_map(|alert| severity_rank(&field(alert, "severity").to_ascii_lowercase()))
                 .max()
                 .unwrap_or(floor);
-            let task = runtime.add_task(TaskAddParams {
+            let params = TaskAddParams {
                 title: dependabot_task_title(&package, &manifest_path),
                 description: dependabot_task_description(
                     snapshot,
@@ -179,12 +215,15 @@ pub(crate) fn file_dependabot_alert_tasks(
                 status: Some(TaskStatus::Backlog),
                 system_created: true,
                 ..TaskAddParams::default()
-            })?;
-            filed.push(json!({
-                "family": "dependabot", "task_id": task.id, "key": key,
+            };
+            pending_tasks.push(PendingTask {
+                params,
+                result: json!({
+                "family": "dependabot", "key": key,
                 "ecosystem": ecosystem, "package": package, "manifest_path": manifest_path,
                 "alert_count": cluster_alerts.len(),
-            }));
+                }),
+            });
         }
     }
 
@@ -218,14 +257,21 @@ pub(crate) fn file_dependabot_alert_tasks(
             continue;
         }
         let key = digest(&["code-scanning", repository, &number.to_string()]);
-        if let Some(task_id) = open_task_for_key(runtime, CODE_KEY_PREFIX, &key)? {
+        if let Some(DuplicateTaskMatch {
+            task_id,
+            match_kind,
+            evidence,
+        }) = find_covering_task(lookup, &code_duplicate_candidate(&key, &alert))
+            .map_err(|error| duplicate_lookup_error("code_scanning", &key, &error))?
+        {
             skipped_existing.push(json!({
                 "family": "code_scanning", "key": key, "task_id": task_id,
                 "alert_number": number,
+                "match_kind": match_kind, "match_evidence": evidence,
             }));
             continue;
         }
-        if filed.len() >= max_tasks {
+        if pending_tasks.len() >= max_tasks {
             skipped_over_cap.push(json!({
                 "family": "code_scanning", "key": key, "alert_number": number,
             }));
@@ -234,7 +280,7 @@ pub(crate) fn file_dependabot_alert_tasks(
         let rule = field(&alert, "rule_id");
         let path = field(&alert, "path");
         let rank = rank.unwrap_or(floor);
-        let task = runtime.add_task(TaskAddParams {
+        let params = TaskAddParams {
             title: code_task_title(&rule, &path),
             description: code_task_description(snapshot, &alert),
             acceptance_criteria: vec![
@@ -260,11 +306,14 @@ pub(crate) fn file_dependabot_alert_tasks(
             status: Some(TaskStatus::Backlog),
             system_created: true,
             ..TaskAddParams::default()
-        })?;
-        filed.push(json!({
-            "family": "code_scanning", "task_id": task.id, "key": key,
-            "alert_number": number, "rule_id": rule, "path": path,
-        }));
+        };
+        pending_tasks.push(PendingTask {
+            params,
+            result: json!({
+                "family": "code_scanning", "key": key,
+                "alert_number": number, "rule_id": rule, "path": path,
+            }),
+        });
     }
 
     let mut secret_alerts = family_alerts(snapshot, "secret_scanning");
@@ -276,21 +325,28 @@ pub(crate) fn file_dependabot_alert_tasks(
             continue;
         }
         let key = digest(&["secret-scanning", repository, &number.to_string()]);
-        if let Some(task_id) = open_task_for_key(runtime, SECRET_KEY_PREFIX, &key)? {
+        if let Some(DuplicateTaskMatch {
+            task_id,
+            match_kind,
+            evidence,
+        }) = find_covering_task(lookup, &secret_duplicate_candidate(&key, &alert))
+            .map_err(|error| duplicate_lookup_error("secret_scanning", &key, &error))?
+        {
             skipped_existing.push(json!({
                 "family": "secret_scanning", "key": key, "task_id": task_id,
                 "alert_number": number,
+                "match_kind": match_kind, "match_evidence": evidence,
             }));
             continue;
         }
-        if filed.len() >= max_tasks {
+        if pending_tasks.len() >= max_tasks {
             skipped_over_cap.push(json!({
                 "family": "secret_scanning", "key": key, "alert_number": number,
             }));
             continue;
         }
         let secret_type = field(&alert, "secret_type");
-        let task = runtime.add_task(TaskAddParams {
+        let params = TaskAddParams {
             title: secret_task_title(&secret_type, number),
             description: secret_task_description(snapshot, &alert),
             acceptance_criteria: vec![
@@ -316,11 +372,25 @@ pub(crate) fn file_dependabot_alert_tasks(
             status: Some(TaskStatus::Backlog),
             system_created: true,
             ..TaskAddParams::default()
-        })?;
-        filed.push(json!({
-            "family": "secret_scanning", "task_id": task.id, "key": key,
-            "alert_number": number, "secret_type": secret_type,
-        }));
+        };
+        pending_tasks.push(PendingTask {
+            params,
+            result: json!({
+                "family": "secret_scanning", "key": key,
+                "alert_number": number, "secret_type": secret_type,
+            }),
+        });
+    }
+
+    // Duplicate lookups for every candidate completed above. Only now may the
+    // action begin mutating task state, so a lookup failure cannot leave a
+    // partial sweep behind.
+    let mut filed = Vec::with_capacity(pending_tasks.len());
+    for pending in pending_tasks {
+        let task = runtime.add_task(pending.params)?;
+        let mut result = pending.result;
+        result["task_id"] = json!(task.id);
+        filed.push(result);
     }
 
     let family_outcomes = json!({
@@ -655,24 +725,6 @@ fn dependabot_branch_names_package(head_branch: &str, ecosystem: &str, package: 
     };
     let last = last.to_ascii_lowercase();
     last == package || last.starts_with(&format!("{package}-"))
-}
-
-fn open_task_for_key(
-    runtime: &OrbitRuntime,
-    prefix: &str,
-    key: &str,
-) -> Result<Option<String>, OrbitError> {
-    let tag = format!("{prefix}{key}");
-    Ok(runtime
-        .list_tasks_by_tags(std::slice::from_ref(&tag))?
-        .into_iter()
-        .find(|task| {
-            !matches!(
-                task.status,
-                TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
-            )
-        })
-        .map(|task| task.id))
 }
 
 fn severity_rank(value: &str) -> Option<u8> {

@@ -68,10 +68,11 @@ fn job_run_json_includes_waiting_reasons_from_state() {
         Some(vec!["file:src/lib.rs".to_string()]),
     );
 
-    let value = job_run_to_json_with_state(&run, Some(&state));
+    let value = cli_job_run_to_json(&run, Some(&state));
 
     assert_eq!(value["waiting_on_deps"], json!(["ORB-1"]));
     assert_eq!(value["waiting_on_locks"], json!(["file:src/lib.rs"]));
+    assert_eq!(value["pid"], Value::Null);
 }
 
 #[test]
@@ -83,7 +84,7 @@ fn job_run_json_omits_stale_waiting_reasons_for_terminal_run() {
         Some(vec!["file:src/lib.rs".to_string()]),
     );
 
-    let value = job_run_to_json_with_state(&run, Some(&state));
+    let value = cli_job_run_to_json(&run, Some(&state));
 
     assert_eq!(value["waiting_on_deps"], Value::Null);
     assert_eq!(value["waiting_on_locks"], Value::Null);
@@ -265,7 +266,7 @@ fn job_run_json_names_the_child_a_running_parent_dispatched() {
     let run = test_run(JobRunState::Running);
     let state = state_with_child_dispatch(&run, orbit_types::workflow::ChildDispatchPhase::Waiting);
 
-    let value = job_run_to_json_with_state(&run, Some(&state));
+    let value = cli_job_run_to_json(&run, Some(&state));
 
     let dispatches = value["child_dispatches"]
         .as_array()
@@ -285,7 +286,7 @@ fn job_run_json_keeps_child_lineage_for_a_terminal_run() {
     let state =
         state_with_child_dispatch(&run, orbit_types::workflow::ChildDispatchPhase::Terminal);
 
-    let value = job_run_to_json_with_state(&run, Some(&state));
+    let value = cli_job_run_to_json(&run, Some(&state));
 
     assert_eq!(value["waiting_on_deps"], Value::Null);
     assert_eq!(
@@ -298,7 +299,7 @@ fn job_run_json_keeps_child_lineage_for_a_terminal_run() {
 fn job_run_json_always_carries_a_child_dispatch_array() {
     let run = test_run(JobRunState::Running);
 
-    let value = job_run_to_json_with_state(&run, None);
+    let value = cli_job_run_to_json(&run, None);
 
     assert_eq!(
         value["child_dispatches"],

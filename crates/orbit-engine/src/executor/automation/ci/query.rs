@@ -11,11 +11,12 @@
 //! `orbit_tools::github_cli`, so the shape of a `gh` call has exactly one
 //! owner in the workspace.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
-use orbit_exec::{NoSandbox, run_process};
+use orbit_exec::{NoSandbox, run_process, run_process_streaming_stdout};
 use orbit_tools::{check_exec_result, github_cli};
 use serde_json::{Value, json};
 
@@ -65,8 +66,8 @@ impl LogScope {
     }
 }
 
-/// One run log, already bounded and redacted, plus the checkout evidence
-/// scanned out of the *unbounded* text.
+/// One run log, with a bounded human excerpt and separately bounded checkout
+/// evidence extracted while the source stream is drained.
 #[derive(Debug, Clone, Default)]
 pub(super) struct RunLog {
     pub(super) text: String,
@@ -75,6 +76,10 @@ pub(super) struct RunLog {
     pub(super) returned_bytes: usize,
     pub(super) checkout_commits: Vec<String>,
     pub(super) checkout_evidence: Vec<String>,
+    pub(super) checkout_evidence_complete: bool,
+    pub(super) checkout_evidence_scanned_bytes: usize,
+    pub(super) checkout_evidence_source_truncated: bool,
+    pub(super) checkout_evidence_display_truncated: bool,
 }
 
 /// Cap on returned checkout-evidence lines, mirroring `github.run.logs`.
@@ -214,10 +219,37 @@ impl CiQueries for HostCiQueries {
         scope: LogScope,
         max_bytes: usize,
     ) -> Result<RunLog, OrbitError> {
-        let request =
+        let mut request =
             github_cli::run_logs_request(&json!({"run": run_id, "scope": scope.as_input_value()}))?;
-        let stdout = self.run_gh(request, "gh run view --log")?;
-        Ok(bounded_run_log(&stdout, max_bytes))
+        request.current_dir = Some(self.repo_root.to_string_lossy().into_owned());
+        let (result, log) =
+            run_process_streaming_stdout(&request, &NoSandbox, move |mut stdout| {
+                let mut collector =
+                    github_cli::StreamedLogCollector::new(max_bytes, MAX_EVIDENCE_LINES);
+                let mut chunk = [0_u8; 4096];
+                loop {
+                    let read = stdout.read(&mut chunk).map_err(|error| {
+                        OrbitError::Execution(format!("failed reading gh run log: {error}"))
+                    })?;
+                    if read == 0 {
+                        return Ok(collector.finish());
+                    }
+                    collector.push(&chunk[..read]);
+                }
+            })?;
+        check_exec_result(&result, "gh run view --log")?;
+        Ok(RunLog {
+            text: log.text,
+            truncated: log.truncated,
+            total_bytes: log.total_bytes,
+            returned_bytes: log.returned_bytes,
+            checkout_commits: log.checkout_evidence.commits,
+            checkout_evidence: log.checkout_evidence.lines,
+            checkout_evidence_complete: log.checkout_evidence.complete,
+            checkout_evidence_scanned_bytes: log.checkout_evidence.scanned_bytes,
+            checkout_evidence_source_truncated: log.checkout_evidence.source_truncated,
+            checkout_evidence_display_truncated: log.checkout_evidence.display_truncated,
+        })
     }
 
     fn remote_branch_head(&self, branch: &str) -> Result<Option<String>, OrbitError> {
@@ -234,8 +266,10 @@ impl CiQueries for HostCiQueries {
     }
 }
 
-/// Bound and redact one raw run log, scanning the *whole* text for checkout
-/// evidence first so truncation can never hide the commit under test.
+/// Bound and redact one test fixture log, scanning it before truncation.
+/// Production log collection uses [`github_cli::StreamedLogCollector`] so it
+/// does not retain an unbounded `gh` stdout value.
+#[cfg(test)]
 pub(super) fn bounded_run_log(raw: &str, max_bytes: usize) -> RunLog {
     let bounded = github_cli::bound_log_text(raw, max_bytes);
     let evidence = github_cli::scan_checkout_evidence(raw, MAX_EVIDENCE_LINES);
@@ -246,5 +280,9 @@ pub(super) fn bounded_run_log(raw: &str, max_bytes: usize) -> RunLog {
         returned_bytes: bounded.returned_bytes,
         checkout_commits: evidence.commits,
         checkout_evidence: evidence.lines,
+        checkout_evidence_complete: evidence.complete,
+        checkout_evidence_scanned_bytes: evidence.scanned_bytes,
+        checkout_evidence_source_truncated: evidence.source_truncated,
+        checkout_evidence_display_truncated: evidence.display_truncated,
     }
 }

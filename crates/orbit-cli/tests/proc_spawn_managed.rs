@@ -8,6 +8,7 @@ use std::process::{Command as StdCommand, Output};
 
 use assert_cmd::Command as AssertCommand;
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -154,17 +155,17 @@ fn run_managed_proc_spawn(
 
 fn orbit_command(workspace: &Path, home: &Path) -> AssertCommand {
     let mut command = cargo_bin_cmd!("orbit");
+    // ORB-11300: `run_managed_proc_spawn` synthesizes its *own* managed run
+    // context on top of this. Without clearing the inherited
+    // `ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` pair first, that synthetic
+    // context would have pointed the sandboxed tool at the live workspace.
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(workspace)
         .env("HOME", home)
-        .env("USERPROFILE", home)
-        .env_remove("ORBIT_ROOT")
-        .env_remove("ORBIT_AGENT_NAME")
-        .env_remove("ORBIT_AGENT_MODEL")
-        .env_remove("ORBIT_RUN_ID")
-        .env_remove("ORBIT_TASK_ID")
-        .env_remove("ORBIT_ACTIVE_TASK_ID")
-        .env_remove("ORBIT_SESSION_ID");
+        .env("USERPROFILE", home);
     command
 }
 

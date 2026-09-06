@@ -1,3 +1,5 @@
+mod complete;
+
 use orbit_common::OrbitError;
 use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
@@ -6,6 +8,10 @@ use crate::context::{RuntimeHost, TaskActivityUpdate};
 
 use super::StateExecutionContext;
 use super::input::{input_string_field, required_input_string};
+
+pub(in crate::executor::automation) use complete::{
+    authorization_note, complete_tasks, task_complete,
+};
 
 pub(super) fn update_task<H: RuntimeHost + ?Sized>(
     host: &H,

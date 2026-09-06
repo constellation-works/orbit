@@ -1,5 +1,53 @@
 [
   {
+    "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability. Track it with `orbit.workflow.run.show`, read output with `orbit run logs <RUN_ID>`, and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "crew": {
+          "description": "Configured crew selecting the provider, model, and reasoning effort. Defaults to the workspace's default crew.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout; it is never inferred from the caller.",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "description": "Retry handle. A resubmission carrying a key a recent submission already used resolves that run instead of starting a second agent.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "type": "string"
+        },
+        "prompt": {
+          "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change.",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "description": "Wall-clock bound for the invocation. Defaults to 1800 and may not exceed 7200.",
+          "type": "integer"
+        },
+        "workspace": {
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt",
+        "cwd"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_agent_invoke"
+  },
+  {
     "description": "List every auto-task definition in this workspace.",
     "inputSchema": {
       "additionalProperties": true,
@@ -414,7 +462,7 @@
           "type": "string"
         },
         "orchestrator": {
-          "description": "Optional named crew responsible for orchestration attribution; does not select execution",
+          "description": "Optional named crew responsible for orchestration attribution; does not select execution. Defaults to the MCP session's `orbit mcp serve --orchestrator` crew when omitted",
           "type": "string"
         },
         "priority": {
@@ -525,7 +573,47 @@
     "name": "orbit_task_approve"
   },
   {
-    "description": "Store a source file under a task's artifacts directory",
+    "description": "Read one stored task artifact by owning task ID and artifact path. Returns `media_type`, `size`, and the bytes: UTF-8 text as `content`, and everything else as base64 in `content_base64`. Supported raster images (PNG, JPEG, GIF, WebP) whose bytes match their declared type are additionally returned as a viewable image on transports that carry image content, so a multimodal client can inspect a stored visual reference directly. SVG, HTML, and any payload whose bytes contradict its media type are returned as opaque base64 and are never rendered. List available artifacts first with `orbit.task.show` and `field: \"artifacts\"`; payloads are fetched only through this call. Reads are bounded to 1048576 bytes.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "agent": {
+          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
+          "type": "string"
+        },
+        "id": {
+          "description": "Globally unique task ID that owns the artifact.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit.task.show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected.",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Optional explicit workspace filter. `id` is resolved globally by default; when supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed — a valid workspace that does not own the task returns not-found.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_task_artifact_get"
+  },
+  {
+    "description": "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context; malformed, stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage.",
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
@@ -1000,10 +1088,62 @@
     "name": "orbit_workflow_run_show"
   },
   {
-    "description": "Submit an explicit set of tasks to the ship workflow and return its durable run ID.",
+    "description": "Adjust how many tasks a running workspace drain keeps in flight, without replacing its run. The run ID, deadline, completion authorization, and already-dispatched children are preserved; a lower ceiling stops new admissions until enough children finish and cancels nothing.",
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
+        "claim_token": {
+          "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
+          "type": "string"
+        },
+        "concurrency": {
+          "description": "New ceiling on tasks in flight, from 1 to the ship job's own active-run limit.",
+          "type": "integer"
+        },
+        "id": {
+          "description": "Job run ID.",
+          "type": "string"
+        },
+        "if_revision": {
+          "description": "Apply only if the run's ceiling is still at this revision, so a concurrent adjustment is reported rather than overwritten.",
+          "type": "integer"
+        },
+        "reason": {
+          "description": "Optional note recorded with the change.",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "concurrency"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_workflow_run_workers"
+  },
+  {
+    "description": "Submit explicit tasks to the review-only ship workflow and return its durable run ID. This MCP tool does not accept completion authorization; an authorized operator on the owning host can use `orbit run ship <task-id> --complete`.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "allowed_crews": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation."
+        },
         "base": {
           "description": "Optional base branch override.",
           "type": "string"

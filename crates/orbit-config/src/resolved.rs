@@ -14,14 +14,17 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::model_defaults::{
-    CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK, CLAUDE_FABLE_MODEL, CODEX_LUNA_MODEL,
-    CODEX_SOL_MODEL, CODEX_TERRA_MODEL, COPILOT_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL,
-    GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL,
+    ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK, CLAUDE_FABLE_MODEL,
+    CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL, CODEX_TERRA_MODEL, COPILOT_DEFAULT_MODEL,
+    CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, OPENCODE_DEFAULT_MODEL,
+    PI_DEFAULT_MODEL,
 };
 use orbit_common::security::child_env::{allowlisted_child_env, inherited_child_env};
 use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::identity::{Crew, CrewAssignment};
-use orbit_types::workflow::activity_job::{RETIRED_BACKEND_MIGRATION, check_retired_backend_value};
+use orbit_types::identity::{Crew, CrewAssignment, ReasoningEffort, validate_antigravity_model};
+use orbit_types::workflow::activity_job::{
+    Provider, RETIRED_BACKEND_MIGRATION, check_retired_backend_value,
+};
 
 use crate::ConfigRoots;
 use crate::layering::{load_layered_resolved, value_at_path};
@@ -207,10 +210,14 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
         ("sol", CODEX_SOL_MODEL, "codex"),
         ("terra", CODEX_TERRA_MODEL, "codex"),
         ("luna", CODEX_LUNA_MODEL, "codex"),
+        ("astra", CODEX_ASTRA_MODEL, "codex"),
         ("gemini", GEMINI_CREW_MODEL, "gemini"),
+        ("antigravity", ANTIGRAVITY_DEFAULT_MODEL, "antigravity"),
         ("grok", GROK_DEFAULT_MODEL, "grok"),
         ("copilot", COPILOT_DEFAULT_MODEL, "copilot"),
         ("cursor", CURSOR_DEFAULT_MODEL, "cursor"),
+        ("pi", PI_DEFAULT_MODEL, "pi"),
+        ("opencode", OPENCODE_DEFAULT_MODEL, "opencode"),
         // [ORB-10877] Shipped job steps name `system` directly, so the
         // built-in set used by a config with no `[crews]` table must define it
         // or those pipelines fail validation. `orbit init` overwrites this with
@@ -235,6 +242,7 @@ fn crew_assignment(model: &str, provider: &str) -> CrewAssignment {
     CrewAssignment {
         model: model.to_string(),
         provider: provider.to_string(),
+        effort: None,
     }
 }
 
@@ -387,10 +395,47 @@ fn crew_assignment_from_raw(crew: &str, raw: &RawCrewEntry) -> Result<CrewAssign
         )));
     }
     reject_retired_crew_backend(crew, raw.backend.as_deref())?;
+    let model = required_crew_field(crew, "model", raw.model.as_deref())?;
+    let provider = required_crew_field(crew, "provider", raw.provider.as_deref())?;
+    if Provider::parse(&provider).ok() == Some(Provider::Antigravity) {
+        validate_antigravity_model(Some(model.as_str()))
+            .map_err(|error| OrbitError::InvalidInput(format!("[crews.{crew}].model {error}")))?;
+    }
     Ok(CrewAssignment {
-        model: required_crew_field(crew, "model", raw.model.as_deref())?,
-        provider: required_crew_field(crew, "provider", raw.provider.as_deref())?,
+        model,
+        provider,
+        effort: crew_effort_from_raw(
+            crew,
+            raw.effort.as_deref(),
+            raw.provider.as_deref(),
+            raw.model.as_deref(),
+        )?,
     })
+}
+
+/// Validate the provider-model-specific crew setting at config admission.
+fn crew_effort_from_raw(
+    crew: &str,
+    raw_effort: Option<&str>,
+    raw_provider: Option<&str>,
+    raw_model: Option<&str>,
+) -> Result<Option<ReasoningEffort>, OrbitError> {
+    let Some(raw_effort) = raw_effort else {
+        return Ok(None);
+    };
+    let effort = raw_effort
+        .parse::<ReasoningEffort>()
+        .map_err(|error| OrbitError::InvalidInput(format!("[crews.{crew}].{error}")))?;
+    let provider = required_crew_field(crew, "provider", raw_provider)?;
+    let provider = Provider::resolve_name(&provider).map_err(|_| {
+        OrbitError::InvalidInput(format!(
+            "[crews.{crew}].effort requires a supported effort provider; provider '{provider}' is unsupported"
+        ))
+    })?;
+    effort
+        .validate_for_provider_model(provider.provider.as_str(), raw_model)
+        .map_err(|error| OrbitError::InvalidInput(format!("[crews.{crew}].effort {error}")))?;
+    Ok(Some(effort))
 }
 
 /// [ORB-10801] `[crews.<name>] backend` selected the agent execution backend.

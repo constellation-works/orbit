@@ -55,9 +55,9 @@ this, and ignores workspaces that don't.
 **3. Enable routines, one at a time.** Each is a versioned YAML file — flipping
 `enabled: true` is a reviewable commit, not a runtime toggle.
 
-## The five seeded routines
+## The seven seeded routines
 
-`orbit workspace init` seeds all five, **all disabled**, with the host pin and a
+`orbit workspace init` seeds all seven, **all disabled**, with the host pin and a
 workspace-unique name (`<base>-<workspace>`) resolved at seed time. Run
 `orbit routine list` to see their actual names on this host.
 
@@ -67,6 +67,8 @@ workspace-unique name (`<base>-<workspace>`) resolved at seed time. Run
 | `task-pilot` | every 4h | `task_pilot_pipeline` | Preflights proposed/backlog tasks with empty `context_files` and fills in validated selectors. |
 | `task-triage` | hourly | `task_triage_pipeline` | Diagnoses tasks blocked by failed runs; re-backlogs environmental casualties, leaves real failures blocked with a diagnosis. |
 | `auto-task-scheduler` | every minute | `auto_task_scheduler_pipeline` | Mints tasks from every due, enabled auto-task definition. → [auto-tasks.md](auto-tasks.md) |
+| `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
+| `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `ship-sweep` | every 20m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. |
 
 The minutely cadence on the auto-task scheduler is intentional: each definition
@@ -79,11 +81,12 @@ Enable in this order and stop wherever the value runs out. Each step is safe
 without the ones after it; **the reverse is not true.**
 
 1. **`worktree-gc` first.** It is the only one that reclaims disk, and every
-   other routine here creates runs that leave worktrees behind. Turning on
+   implementation workflows create runs that can leave worktrees behind.
+   Deterministic evidence-filing sweeps do not create worktrees. Turning on
    scheduled shipping without GC is how a workspace fills a disk. Watch one
    cycle with `orbit gc worktrees --dry-run` before enabling. →
    [maintenance.md](maintenance.md)
-2. **`task-pilot`.** Read-only, and it makes everything downstream safer:
+2. **`task-pilot`.** Its agent inspection is read-only; its apply step writes validated task selectors, and it makes everything downstream safer:
    populated `context_files` are what conflict detection and file reservation
    use to keep parallel runs off each other's files.
 3. **`task-triage`.** Cleanup, not a hot path. Worth having before unattended
@@ -120,8 +123,9 @@ Parsing is fail-closed: an invalid file — bad schema version, unknown field,
 unresolvable target, unparsable cron — makes *that routine* absent and reports a
 load error. It never fires with defaults.
 
-Consult `orbit routine --help` for the full field schema before hand-authoring
-one. Don't answer field semantics from memory.
+Use `orbit routine show <name>` for a complete installed example and effective
+state; `orbit routine --help` lists the management commands. Keep the schema
+version and field names from the installed definition when authoring one.
 
 ## Verify without firing
 
@@ -155,3 +159,41 @@ routine source, is the clock unit running (`orbit routine clock status`), and di
 the sweep itself error (`orbit log tail --level warn --since 1h`)? For a fire
 that started and then failed, the run is the evidence —
 [run-debugging.md](../run-debugging.md).
+
+## GitHub evidence sweeps
+
+These two routines are optional alternatives to agent-authored recurring reviews.
+They collect bounded evidence on the host and deterministically file tasks;
+they do not launch repair agents or ship the tasks they create.
+
+```bash
+orbit job show ci_failure_sweep_pipeline
+orbit run job ci_failure_sweep_pipeline --input integration_branch=<branch> --input max_tasks=5
+orbit job show dependabot_alert_sweep_pipeline
+orbit run job dependabot_alert_sweep_pipeline --input min_severity=high --input max_tasks=10
+```
+
+These commands can create and pilot proposed tasks; they are not dry runs.
+The CI job promotes only tasks whose pilot applied non-empty canonical
+selectors and reported no duplicate, already-landed, conflict, or warning
+finding. Pilot failure and stale/no-diff findings remain proposed, so an active
+auto-drain cannot claim them. Invoking this named job, or enabling its shipped
+inert routine, is explicit promotion authorization; the filing activity and a
+standalone `task_pilot_pipeline` run carry no such authority. Set the CI
+integration branch explicitly when it differs from GitHub's default branch.
+CI defaults bound investigation to six runs and filing to five tasks. The
+security job defaults to high-severity Dependabot/code-scanning findings and
+always considers secret-scanning findings; it skips dependency alerts with an
+open Dependabot PR by default. Its catalog exposes per-source collection caps.
+Secret values must not be copied into task prose or logs.
+
+A missing GitHub client, authentication, or API permission is a capability gap,
+not evidence of a clean repository. Read the collect/file step outcomes. CI
+failure-key dedupe and security alert identity suppress already-covered work;
+they do not promise general semantic duplicate detection. Discovery and filing
+errors must remain visible and retryable. A previous done repair is evidence to
+inspect, not blanket dedupe: an old failed release already fixed on the current
+integration branch stays proposed as already-landed, while a distinct defect
+that still reproduces at the current revision remains eligible. Choose these
+routines independently of `ship-sweep`; admission to backlog does not authorize
+implementation or completion.

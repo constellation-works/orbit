@@ -19,6 +19,37 @@ use crate::repository::task::TaskV2Store;
 use crate::scope::{ScopeStrategy, ScopedStore, resolve};
 
 impl TaskStoreBackend for TaskV2Store {
+    fn create_task_idempotent(
+        &self,
+        params: TaskCreateParams,
+        key: &str,
+    ) -> Result<Task, OrbitError> {
+        self.create_task_with_key(params, Some(key))
+    }
+
+    fn task_candidates(
+        &self,
+        filter: &crate::contracts::TaskListFilter,
+        limit: usize,
+    ) -> Result<crate::contracts::TaskCandidates, OrbitError> {
+        self.task_candidates(filter, limit)
+    }
+    fn query_task_rows(
+        &self,
+        filter: &crate::contracts::TaskListFilter,
+        limit: usize,
+        residual: crate::contracts::TaskResidualFilter<'_>,
+    ) -> Result<crate::contracts::TaskPage, OrbitError> {
+        self.query_task_rows(filter, limit, residual)
+    }
+    fn get_task_row(
+        &self,
+        id: &str,
+        list_read: bool,
+    ) -> Result<Option<crate::contracts::TaskRow>, OrbitError> {
+        self.get_task_row(id, list_read)
+    }
+
     fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
         self.create_task(params)
     }

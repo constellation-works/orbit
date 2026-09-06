@@ -38,5 +38,9 @@ pub(crate) fn typed_crew_config_from_assignment(raw: &CrewAssignment) -> CrewCon
     let model = raw.model.trim();
     let model = (!model.is_empty()).then(|| model.to_string());
 
-    CrewConfig { provider, model }
+    CrewConfig {
+        provider,
+        model,
+        reasoning_effort: raw.effort,
+    }
 }

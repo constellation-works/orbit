@@ -2,7 +2,7 @@
 
 set -eu
 
-REPO="${ORBIT_INSTALL_REPO:-danieljhkim/orbit}"
+REPO="${ORBIT_INSTALL_REPO:-constellation-works/orbit}"
 BINARY_NAME="orbit"
 CHECKSUM_FILE="orbit-checksums.txt"
 CHECKSUM_SIGNATURE_FILE="orbit-checksums.txt.sig"

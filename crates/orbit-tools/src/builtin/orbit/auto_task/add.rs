@@ -23,7 +23,7 @@ impl Tool for OrbitAutoTaskAddTool {
             },
             ToolParam {
                 name: "schedule".to_string(),
-                description: "Schedule object: exactly one of `{ cron: string }` (5-field cron) or `{ every_minutes: number }`. Required.".to_string(),
+                description: "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, or `{ deliveries_landed: { owner_machine, branch, threshold, max_wait_minutes, coverage, max_items?, retries? } }` (coverage: integrated_qa_v1 or landed_code_review_v1). Required.".to_string(),
                 param_type: "object".to_string(),
                 required: true,
             },

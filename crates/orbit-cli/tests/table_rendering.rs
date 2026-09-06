@@ -23,6 +23,7 @@ use std::path::Path;
 use std::process::Output;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
 
@@ -108,7 +109,7 @@ fn skill_list_renders_one_line_per_skill() {
     let json = workspace.run(&["skill", "list", "--json"], "skill list JSON");
     let skills: Value = serde_json::from_slice(&json.stdout).expect("skill list JSON");
     let expected = skills.as_array().expect("skill array").len();
-    // Orbit ships one skill whose references load on demand, so the catalog is
+    // Each shipped skill's references load on demand, so the catalog is
     // deliberately small — the invariant under test is one line per record, not
     // the record count.
     assert!(
@@ -233,14 +234,18 @@ impl TestWorkspace {
 }
 
 fn run_orbit(work: &Path, home: &Path, args: &[&str]) -> Output {
-    cargo_bin_cmd!("orbit")
+    let mut command = cargo_bin_cmd!("orbit");
+    // ORB-11300: shared with every other fixture that spawns `orbit`.
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
         .current_dir(work)
         .env("HOME", home)
         .env("USERPROFILE", home)
         // Pin the geometry: width resolution is only consulted for a terminal
         // sink, and these assertions must not depend on the runner's terminal.
         .env("COLUMNS", "120")
-        .env_remove("ORBIT_ROOT")
         .args(args)
         .output()
         .expect("run orbit")

@@ -65,8 +65,8 @@ orbit auto-task mint <name>             # mint one right now
 ```
 
 `mint` ignores the schedule, the dedupe policy, and `enabled`, and leaves the
-scheduler's cursor untouched — so it is the safe way to test a definition's
-wording before enabling it. Over MCP: `orbit_auto_task_list` and
+scheduler's cursor untouched — so it creates real work even for a disabled definition. Inspect with
+`show` first; mint only when creating that task is intended. Over MCP: `orbit_auto_task_list` and
 `orbit_auto_task_mint`.
 
 Required tools in a template extend the selected agent activity's baseline;
@@ -81,9 +81,8 @@ example. A minted instance therefore runs under
 implementation tasks that request nothing keep the original baseline and
 cannot call GitHub tools. Inclusion is only allowlist membership — a
 structured `github.auth.status` answer may still report `available: false` or
-`authenticated: false` when the lane has no GitHub CLI or no credentials
-(DANI-10056 is failed-validation evidence of the missing-requirements bug,
-not a clean CI result).
+`authenticated: false` when the lane has no GitHub CLI or no credentials.
+That is unavailable evidence, not a clean CI result.
 
 ## The four seeded definitions
 

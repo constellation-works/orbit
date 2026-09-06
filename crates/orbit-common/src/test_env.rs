@@ -18,6 +18,11 @@
 //! test (ORB-10350). [`unset`] makes the expectation explicit instead of
 //! ambient.
 //!
+//! Integration tests that *spawn* the `orbit` binary need the same defense
+//! one process out, where the stakes include durable routing rather than just
+//! attribution. [`INHERITED_AUTHORITY_ENV`] is the canonical list for that
+//! case and [`clear_inherited_authority`] applies it.
+//!
 //! Exposed behind the `test-util` feature so integration tests and sibling
 //! crates share one implementation rather than re-deriving the guard.
 
@@ -41,6 +46,79 @@ pub const MANAGED_RUN_ENV: &[&str] = &[
     "ORBIT_MANAGED_RUN_CONTEXT",
     "ORBIT_WORKSPACE",
 ];
+
+/// Every ambient variable a test-spawned `orbit` child process must not
+/// inherit from the process that launched the suite.
+///
+/// [`unset`] and [`MANAGED_RUN_ENV`] defend *in-process* tests. A test that
+/// spawns the `orbit` binary needs the same defense one level out, and the
+/// stakes are higher: the child re-reads the environment from scratch, and
+/// two of these variables are durable routing authority.
+/// `ORBIT_REGISTRY_ROOT` selects the host-global registry regardless of
+/// `HOME`, and `ORBIT_WORKSPACE` selects a registered workspace inside it
+/// (see `orbit-core/src/runtime/resolve.rs` and
+/// `orbit-cmd/src/registry_runtime.rs`). Both are honored only behind the
+/// managed-run trust boundary — but an agent running the suite from inside a
+/// managed Orbit run supplies exactly that boundary, so a fixture that resets
+/// only `HOME`/`ORBIT_ROOT` still routes its writes into the *live* workspace.
+/// That is not hypothetical: it created three real task records before it was
+/// caught (ORB-11300).
+///
+/// Clearing the whole set — routing, managed-run trust, actor identity, and
+/// inherited sandbox grants — makes a fixture's authority a property of the
+/// fixture rather than of how the suite was launched. Apply it with
+/// [`clear_inherited_authority`] *before* any variable a test sets on
+/// purpose, so the deliberate value wins.
+pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
+    // Durable routing: which registry, workspace, and data root the child
+    // writes to. `ORBIT_REGISTRY_ROOT` and `ORBIT_WORKSPACE` outrank `HOME`.
+    "ORBIT_ROOT",
+    "ORBIT_REGISTRY_ROOT",
+    "ORBIT_WORKSPACE",
+    "ORBIT_WORKSPACE_CLAIM_TOKEN",
+    "ORBIT_WORKTREE_ROOT",
+    "ORBIT_JOB_DIR",
+    "ORBIT_ACTIVITY_DIR",
+    // Managed-run trust boundary and run identity. Clearing the marker alone
+    // would be enough to disarm routing today; clearing the whole envelope
+    // keeps the fixture correct if that coupling ever changes.
+    "ORBIT_MANAGED_RUN_CONTEXT",
+    "ORBIT_RUN_ID",
+    "ORBIT_TASK_ID",
+    "ORBIT_ACTIVE_TASK_ID",
+    "ORBIT_SESSION_ID",
+    "ORBIT_ACTIVITY_ID",
+    "ORBIT_STEP_INDEX",
+    // Actor identity and audit role attributed to the child's writes.
+    "ORBIT_AGENT_NAME",
+    "ORBIT_AGENT_MODEL",
+    "ORBIT_OPERATOR",
+    "ORBIT_TASK_ACTOR_KIND",
+    // Sandbox and tool grants leased to the host activity, not to a fixture.
+    "ORBIT_ACTIVITY_TOOLS",
+    "ORBIT_ACTIVITY_FS_PROFILE",
+    "ORBIT_PROC_ALLOWED_PROGRAMS",
+    "ORBIT_BIN",
+];
+
+/// Clear every [`INHERITED_AUTHORITY_ENV`] variable from a child command.
+///
+/// `clear` is the command builder's `env_remove`. Passing it as a closure
+/// keeps this crate free of a test-harness dependency while still giving every
+/// fixture one shared list to drift against:
+///
+/// ```ignore
+/// let mut command = cargo_bin_cmd!("orbit");
+/// test_env::clear_inherited_authority(|name| {
+///     command.env_remove(name);
+/// });
+/// command.current_dir(work).env("HOME", home);
+/// ```
+pub fn clear_inherited_authority(mut clear: impl FnMut(&str)) {
+    for name in INHERITED_AUTHORITY_ENV {
+        clear(name);
+    }
+}
 
 /// Restores the variables captured by [`unset`] when dropped.
 ///

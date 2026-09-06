@@ -4,7 +4,7 @@ type: design
 title: "Auditability — Overview"
 owner: codex
 last_updated: 2026-08-15
-last_validated: 2026-08-15
+last_validated: 2026-09-05
 status: Draft
 feature: auditability
 doc_role: overview
@@ -43,8 +43,9 @@ sessions reuse that machine as the caller label; the direct SSH proxy forwards a
 audit correlation metadata, not authenticated identity. The server marks transport as
 `local` or `ssh-mcp`, creates one origin-session id, and mints a unique `trace_id` for every
 call. Outside a managed-run process envelope the audit role is `unverified`. Current v1
-does not populate capability grants, `mcp_call_id`, or leases; their nullable columns remain
-compatibility surface rather than authorization state. Every `tools/call`, including an
+records the effective capability set for each call and federated routing supplies an
+`mcp_call_id`; `lease_id` remains nullable for direct Core audit rows. These are audit
+correlation and authorization metadata, not authenticated identity. Every `tools/call`, including an
 unknown or unadvertised raw name, crosses Core's global audit seam and records one denied
 row when it cannot be dispatched.
 
@@ -54,7 +55,11 @@ The v2 activity/job runtime emits `V2AuditEvent` envelopes for run, step, activi
 
 ### 2.4 Agent-loop audit events preserve provider and tool detail
 
-The HTTP loop engine emits `LoopAuditEvent` records for sessions, HTTP requests/responses, tool requests/results, iteration boundaries, and policy denials. Loop events are persisted in the same `v2_audit_events` SQLite store only when emitted; large request, response, input, and output bodies are stored as redacted content-addressed blobs under `.orbit/state/audit/blobs/`.
+The standalone `orbit-agent` HTTP loop emits `LoopAuditEvent` records for sessions, HTTP
+requests/responses, tool requests/results, iteration boundaries, and policy denials. Loop events
+are persisted in the same `v2_audit_events` SQLite store only when emitted; large request,
+response, input, and output bodies are stored as redacted content-addressed blobs under
+`.orbit/state/audit/blobs/`.
 
 ### 2.5 Invocation metrics are adjacent, not a replacement
 
@@ -75,16 +80,16 @@ The default tracing subscriber appends redacted structured events to `~/.orbit/s
 | Concern | Where it lives | Primary task ID |
 |---------|----------------|-----------------|
 | Audit design ownership | `docs/design/auditability/` | [T20260426-0605] |
-| Command audit records and queries | `crates/orbit-common/src/types/audit_event.rs`, `crates/orbit-cli/src/command/audit/`, `crates/orbit-store/src/sqlite/audit_event_store/` | [T20260426-0605] |
-| MCP session context, server composition, and direct Core tool audit | `crates/orbit-mcp/src/remote/identity.rs`, `crates/orbit-mcp/src/adapter/dispatch.rs`, `crates/orbit-cli/src/command/mcp/server.rs`, `crates/orbit-core/src/command/tool/dispatch.rs` | [ORB-10228], [ORB-10319] |
-| V2 activity/job envelopes and SQLite sink | `crates/orbit-common/src/types/activity_job/audit_envelope.rs`, `crates/orbit-engine/src/activity_job/audit_writer.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs` | [T20260419-0002], [T20260426-0519] |
+| Command audit records and queries | `crates/orbit-types/src/telemetry/audit_event.rs`, `crates/orbit-cli/src/command/audit/`, `crates/orbit-store/src/driver/sqlite/audit_event_store/` | [T20260426-0605] |
+| MCP session context, server composition, and direct Core tool audit | `crates/orbit-mcp/src/remote/identity.rs`, `crates/orbit-mcp/src/adapter/dispatch.rs`, `crates/orbit-cli/src/command/mcp/server.rs`, `crates/orbit-core/src/adapter/command/dispatch.rs` | [ORB-10228], [ORB-10319] |
+| V2 activity/job envelopes and SQLite sink | `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`, `crates/orbit-engine/src/activity_job/audit_writer.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs` | [T20260419-0002], [T20260426-0519] |
 | Run trace inspection CLI | `crates/orbit-cli/src/command/run/mod.rs`, `crates/orbit-core/src/runtime/run_audit.rs` | [T20260426-0705], [T20260426-0709] |
-| Loop audit events and blobs | `crates/orbit-agent/src/loop_engine/audit/mod.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs`, `crates/orbit-common/src/utility/blob_store.rs` | [T20260426-0605] |
-| Redaction utilities | `crates/orbit-common/src/utility/redaction.rs` | [T20260426-0605], [T20260426-2349] |
-| Global tracing JSONL feed and live projections | `crates/orbit-common/src/utility/logging.rs`, selected FS/proc/task producers | [T20260426-2343], [T20260427-0023] |
-| Friction feedback loop | `crates/orbit-store/src/sqlite/friction_store/`, `crates/orbit-web/src/api/frictions.rs` | [T20260510-13], [ORB-00062] |
-| V2 invocation metrics persistence | `crates/orbit-store/src/sqlite/invocation_store.rs`, `crates/orbit-core/src/runtime/v2_host/mod.rs` | [T20260426-0526] |
-| Task attribution fields | `crates/orbit-common/src/types/task.rs`, task update/runtime host paths | [T20260426-0605], [T20260427-47] |
+| Loop audit events and blobs | `crates/orbit-agent/src/loop_engine/audit/mod.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs`, `crates/orbit-common/src/storage/blob_store.rs` | [T20260426-0605] |
+| Redaction utilities | `crates/orbit-common/src/security/redaction.rs` | [T20260426-0605], [T20260426-2349] |
+| Global tracing JSONL feed and live projections | `crates/orbit-common/src/observability/logging.rs`, selected FS/proc/task producers | [T20260426-2343], [T20260427-0023] |
+| Friction feedback loop | `crates/orbit-store/src/repository/friction/`, `crates/orbit-web/src/api/frictions.rs` | [T20260510-13], [ORB-00062] |
+| V2 invocation metrics persistence | `crates/orbit-store/src/driver/sqlite/invocation_store.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host.rs` | [T20260426-0526] |
+| Task attribution fields | `crates/orbit-types/src/task/model.rs`, task update/runtime host paths | [T20260426-0605], [T20260427-47] |
 | Workflow git commit identity attribution | `crates/orbit-engine/src/executor/automation/vcs/commit/` | [T20260508-22], [T20260509-12] |
 
 ---

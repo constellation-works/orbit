@@ -9,12 +9,12 @@
 //!
 //! ## Asset ↔ const seam
 //!
-//! YAML/TOML assets (executor definitions under `assets/executors/*.yaml`,
-//! seeded `config.toml`) cannot reference a Rust const. For those, "single
-//! source of truth" means using the provider alias directly in the asset and
-//! keeping this module authoritative for production Rust paths. The executor
-//! asset ↔ const agreement is guarded by a test in orbit-core's executor
-//! command module.
+//! YAML/TOML assets (including seeded `config.toml`) cannot reference a Rust
+//! const. For those, "single source of truth" means using the provider alias
+//! directly in the asset and keeping this module authoritative for production
+//! Rust paths. Shipped executor assets select models through crews and
+//! `model_flag`; the legacy executor model-pair override is retained only for
+//! compatibility with older/user-authored definitions.
 //!
 //! ## Aliases vs. version pins
 //!
@@ -50,23 +50,35 @@ pub const CODEX_TERRA_MODEL: &str = "gpt-5.6-terra";
 /// Codex model used by the standard Luna crew.
 pub const CODEX_LUNA_MODEL: &str = "gpt-5.6-luna";
 
-/// Default codex model (Terra remains the provider and QA default).
-pub const CODEX_DEFAULT_MODEL: &str = CODEX_TERRA_MODEL;
+/// Codex model used by the standard Astra crew and provider default.
+pub const CODEX_ASTRA_MODEL: &str = "gpt-6-astra";
 
-/// Default codex "weak" model used by the executor model pair.
+/// Default codex model (Astra is the provider default).
+pub const CODEX_DEFAULT_MODEL: &str = CODEX_ASTRA_MODEL;
+
+/// Legacy codex "weak" model retained for compatibility with executor pairs.
 pub const CODEX_DEFAULT_WEAK: &str = "gpt-5.4-mini";
 
 /// Default gemini model for the provider-default map.
-pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.7-flash";
+pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.8-flash";
 
 /// Default gemini model seeded into crew roles.
-pub const GEMINI_CREW_MODEL: &str = "gemini-3.7-flash";
+pub const GEMINI_CREW_MODEL: &str = "gemini-3.8-flash";
 
-/// Default gemini "strong" model used by the executor model pair.
+/// Default Antigravity (`agy`) model: a slug from `agy models` (verified
+/// against Antigravity CLI 1.1.27). Bare Gemini CLI ids such as
+/// `gemini-3.8-flash` are not remapped. [ORB-11299]
+pub const ANTIGRAVITY_DEFAULT_MODEL: &str = "gemini-3.8-flash-high";
+
+/// Cheap-tier Antigravity model used for the bounded system crew. Flash-low
+/// is the documented low-effort sibling of the default high slug.
+pub const ANTIGRAVITY_CREW_MODEL: &str = "gemini-3.8-flash-low";
+
+/// Legacy gemini "strong" model retained for compatibility with executor pairs.
 pub const GEMINI_PAIR_STRONG: &str = "gemini-3.1-pro";
 
-/// Default gemini "weak" model used by the executor model pair.
-pub const GEMINI_PAIR_WEAK: &str = "gemini-3.7-flash";
+/// Legacy gemini "weak" model retained for compatibility with executor pairs.
+pub const GEMINI_PAIR_WEAK: &str = "gemini-3.8-flash";
 
 /// Default Grok Build model (the canonical model listed by `grok models`).
 pub const GROK_DEFAULT_MODEL: &str = "grok-4.6";
@@ -96,6 +108,36 @@ pub const CURSOR_DEFAULT_MODEL: &str = "gpt-5";
 /// stable cheap-tier alias, so the known-good default is reused.
 pub const CURSOR_CREW_MODEL: &str = CURSOR_DEFAULT_MODEL;
 
+/// Default model for the Pi execution lane.
+///
+/// Pi routes to many model vendors and resolves `--model` as a *pattern*
+/// against a catalog it refreshes on its own schedule, so a version-pinned id
+/// would rot faster than the alias does. `sonnet` is the unversioned pattern
+/// Pi's own documented examples use. The persisted provider identity stays
+/// `pi` whichever vendor the pattern resolves to. [ORB-11296]
+pub const PI_DEFAULT_MODEL: &str = "sonnet";
+
+/// Model used for Pi's bounded system crew. Pi publishes no stable cheap-tier
+/// alias of its own, so the known-good default is reused; an operator who
+/// wants a cheaper tier names one explicitly in `[crews.system]`.
+pub const PI_CREW_MODEL: &str = PI_DEFAULT_MODEL;
+
+/// Default model for the OpenCode execution lane.
+///
+/// OpenCode addresses models as a `provider/model` coordinate, where the
+/// leading segment names the *model vendor* inside the OpenCode lane — never
+/// the Orbit executor, which stays `opencode` whichever vendor is selected.
+/// The coordinate must be fully qualified: OpenCode splits on the first `/`
+/// and looks the vendor up in its provider catalog, so a bare model id does
+/// not resolve. [ORB-11295]
+pub const OPENCODE_DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-5";
+
+/// Model used for OpenCode's bounded system crew. OpenCode publishes no
+/// vendor-independent cheap tier, so this names the cheap tier of the same
+/// vendor as [`OPENCODE_DEFAULT_MODEL`]; an operator who prefers another
+/// vendor names one explicitly in `[crews.system]`.
+pub const OPENCODE_CREW_MODEL: &str = "anthropic/claude-haiku-4-5";
+
 /// Cheap Claude model used by the orbit-agent HTTP examples.
 ///
 /// Version pinned like [`ANTHROPIC_HTTP_DEFAULT_MODEL`] because the examples
@@ -106,15 +148,17 @@ pub const ANTHROPIC_EXAMPLE_MODEL: &str = "claude-haiku-4-5-20251001";
 ///
 /// Mirrors the historical `agent_detect::default_model_for` map; `claude` now
 /// resolves to the unversioned [`CLAUDE_DEFAULT_STRONG`] alias. codex/gemini/
-/// grok/copilot/cursor use their provider-specific defaults.
+/// grok/copilot/cursor/pi use their provider-specific defaults.
 pub fn default_model_for_provider(provider: &str) -> Option<&'static str> {
     match provider {
         "claude" => Some(CLAUDE_DEFAULT_STRONG),
         "codex" => Some(CODEX_DEFAULT_MODEL),
         "gemini" => Some(GEMINI_DEFAULT_MODEL),
+        "antigravity" => Some(ANTIGRAVITY_DEFAULT_MODEL),
         "grok" => Some(GROK_DEFAULT_MODEL),
         "copilot" => Some(COPILOT_DEFAULT_MODEL),
         "cursor" => Some(CURSOR_DEFAULT_MODEL),
+        "pi" => Some(PI_DEFAULT_MODEL),
         _ => None,
     }
 }

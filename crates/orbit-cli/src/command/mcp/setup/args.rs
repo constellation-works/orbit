@@ -10,7 +10,7 @@ use crate::command::{CommandOut, CommandOutput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum ScopeArg {
-    /// Write to user-level config (~/.claude, ~/.codex, ~/.gemini, ~/.grok).
+    /// Write to user-level config (~/.claude, ~/.codex, ~/.gemini, ~/.grok, Antigravity mcp_config).
     Home,
     /// Write to repo-local config (.claude.json, .codex/, .gemini/, .grok/). Default.
     #[default]
@@ -22,6 +22,7 @@ pub(super) enum McpProvider {
     Claude,
     Codex,
     Gemini,
+    Antigravity,
     Grok,
     Cursor,
     Vscode,
@@ -34,6 +35,7 @@ impl McpProvider {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Gemini => "gemini",
+            Self::Antigravity => "antigravity",
             Self::Grok => "grok",
             Self::Cursor => "cursor",
             Self::Vscode => "vscode",
@@ -79,6 +81,9 @@ pub struct ProviderSelectionArgs {
     /// Target Gemini CLI integration only.
     #[arg(long)]
     pub gemini: bool,
+    /// Target Antigravity CLI integration only.
+    #[arg(long)]
+    pub antigravity: bool,
     /// Target Grok Build integration only.
     #[arg(long)]
     pub grok: bool,
@@ -102,6 +107,7 @@ impl ProviderSelectionArgs {
             || self.claude
             || self.codex
             || self.gemini
+            || self.antigravity
             || self.grok
             || self.cursor
             || self.vscode
@@ -111,12 +117,12 @@ impl ProviderSelectionArgs {
     pub(super) fn resolve_mode(&self) -> Result<ProviderSelectionMode, OrbitError> {
         if self.auto && (self.any_explicit_provider() || self.all) {
             return Err(OrbitError::InvalidInput(
-                "--auto cannot be combined with --client, --claude, --codex, --gemini, --grok, --cursor, --vscode, --windsurf, or --all".to_string(),
+                "--auto cannot be combined with --client, --claude, --codex, --gemini, --antigravity, --grok, --cursor, --vscode, --windsurf, or --all".to_string(),
             ));
         }
         if self.all && self.any_explicit_provider() {
             return Err(OrbitError::InvalidInput(
-                "--all cannot be combined with --client, --claude, --codex, --gemini, --grok, --cursor, --vscode, or --windsurf".to_string(),
+                "--all cannot be combined with --client, --claude, --codex, --gemini, --antigravity, --grok, --cursor, --vscode, or --windsurf".to_string(),
             ));
         }
         if self.auto || (!self.any_explicit_provider() && !self.all) {
@@ -127,6 +133,7 @@ impl ProviderSelectionArgs {
                 McpProvider::Claude,
                 McpProvider::Codex,
                 McpProvider::Gemini,
+                McpProvider::Antigravity,
                 McpProvider::Grok,
                 McpProvider::Cursor,
                 McpProvider::Vscode,
@@ -139,6 +146,7 @@ impl ProviderSelectionArgs {
             McpProvider::Claude,
             McpProvider::Codex,
             McpProvider::Gemini,
+            McpProvider::Antigravity,
             McpProvider::Grok,
             McpProvider::Cursor,
             McpProvider::Vscode,
@@ -157,6 +165,7 @@ impl ProviderSelectionArgs {
                 McpProvider::Claude => self.claude,
                 McpProvider::Codex => self.codex,
                 McpProvider::Gemini => self.gemini,
+                McpProvider::Antigravity => self.antigravity,
                 McpProvider::Grok => self.grok,
                 McpProvider::Cursor => self.cursor,
                 McpProvider::Vscode => self.vscode,

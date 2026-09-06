@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
 
@@ -52,12 +53,17 @@ impl Lane {
     }
 
     fn preflight(&self) -> Value {
-        let output = cargo_bin_cmd!("orbit")
+        let mut command = cargo_bin_cmd!("orbit");
+        // ORB-11300: `tool run` resolves its runtime from ambient routing
+        // before it ever reaches the stub `gh` on PATH.
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output = command
             .current_dir(&self.work)
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
             .env("PATH", &self.path)
-            .env_remove("ORBIT_ROOT")
             .env_remove("GH_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .args(["tool", "run", "github.auth.status"])

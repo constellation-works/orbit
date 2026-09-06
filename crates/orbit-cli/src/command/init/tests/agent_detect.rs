@@ -41,10 +41,12 @@ fn seeded_crew_availability_requires_a_detected_cli() {
     for (binary, family) in [
         ("claude", "claude"),
         ("codex", "codex"),
+        ("agy", "antigravity"),
         ("gemini", "gemini"),
         ("grok", "grok"),
         ("copilot", "copilot"),
         ("cursor-agent", "cursor"),
+        ("pi", "pi"),
     ] {
         let detected = detect(&MockAgentEnvProbe::new().with_binary(binary));
         assert_eq!(available_crew_families(&detected), vec![family]);
@@ -57,10 +59,13 @@ fn default_provider_prefers_cli_in_documented_order() {
     let detected = DetectedAgents {
         claude_cli: true,
         codex_cli: true,
+        antigravity_cli: true,
         gemini_cli: true,
         grok_cli: true,
         copilot_cli: true,
         cursor_cli: true,
+        pi_cli: true,
+        opencode_cli: true,
         ollama_cli: true,
     };
     assert_eq!(default_provider(&detected), "claude");
@@ -75,7 +80,17 @@ fn default_provider_prefers_cli_in_documented_order() {
     };
     assert_eq!(default_provider(&detected), "codex");
 
-    // gemini wins when claude/codex absent
+    // antigravity wins over legacy gemini when claude/codex are absent
+    let detected = DetectedAgents {
+        antigravity_cli: true,
+        gemini_cli: true,
+        grok_cli: true,
+        ollama_cli: true,
+        ..DetectedAgents::default()
+    };
+    assert_eq!(default_provider(&detected), "antigravity");
+
+    // gemini wins when claude/codex/agy absent
     let detected = DetectedAgents {
         gemini_cli: true,
         grok_cli: true,
@@ -110,6 +125,40 @@ fn default_provider_prefers_cli_in_documented_order() {
     };
     assert_eq!(default_provider(&detected), "cursor");
 
+    // pi wins over ollama when the earlier agent families are absent, and an
+    // installed pi does not displace cursor. [ORB-11296]
+    let detected = DetectedAgents {
+        cursor_cli: true,
+        pi_cli: true,
+        ollama_cli: true,
+        ..DetectedAgents::default()
+    };
+    assert_eq!(default_provider(&detected), "cursor");
+
+    let detected = DetectedAgents {
+        pi_cli: true,
+        ollama_cli: true,
+        ..DetectedAgents::default()
+    };
+    assert_eq!(default_provider(&detected), "pi");
+
+    // opencode wins over ollama when the earlier agent families are absent, and
+    // an installed opencode does not displace pi. [ORB-11295]
+    let detected = DetectedAgents {
+        pi_cli: true,
+        opencode_cli: true,
+        ollama_cli: true,
+        ..DetectedAgents::default()
+    };
+    assert_eq!(default_provider(&detected), "pi");
+
+    let detected = DetectedAgents {
+        opencode_cli: true,
+        ollama_cli: true,
+        ..DetectedAgents::default()
+    };
+    assert_eq!(default_provider(&detected), "opencode");
+
     // ollama wins when nothing else
     let detected = DetectedAgents {
         ollama_cli: true,
@@ -126,15 +175,21 @@ fn default_provider_last_resort_is_claude() {
 #[test]
 fn model_registry_returns_expected_defaults() {
     use orbit_common::model_defaults::{
-        CLAUDE_DEFAULT_STRONG, CODEX_DEFAULT_MODEL, COPILOT_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL,
-        GEMINI_DEFAULT_MODEL, GROK_DEFAULT_MODEL,
+        ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CODEX_DEFAULT_MODEL,
+        COPILOT_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL, GROK_DEFAULT_MODEL,
+        PI_DEFAULT_MODEL,
     };
     assert_eq!(default_model_for("claude"), Some(CLAUDE_DEFAULT_STRONG));
     assert_eq!(default_model_for("codex"), Some(CODEX_DEFAULT_MODEL));
     assert_eq!(default_model_for("gemini"), Some(GEMINI_DEFAULT_MODEL));
+    assert_eq!(
+        default_model_for("antigravity"),
+        Some(ANTIGRAVITY_DEFAULT_MODEL)
+    );
     assert_eq!(default_model_for("grok"), Some(GROK_DEFAULT_MODEL));
     assert_eq!(default_model_for("copilot"), Some(COPILOT_DEFAULT_MODEL));
     assert_eq!(default_model_for("cursor"), Some(CURSOR_DEFAULT_MODEL));
+    assert_eq!(default_model_for("pi"), Some(PI_DEFAULT_MODEL));
     assert_eq!(default_model_for("ollama"), None);
     assert_eq!(default_model_for("unknown"), None);
 }

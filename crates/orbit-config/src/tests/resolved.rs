@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::identity::{Crew, CrewAssignment};
+use orbit_types::identity::{Crew, CrewAssignment, ReasoningEffort};
 use tempfile::tempdir;
 
 use super::{roots, write_config};
@@ -14,6 +14,7 @@ fn single_family_crew(name: &str) -> Crew {
     let assignment = CrewAssignment {
         model: format!("{name}-model"),
         provider: name.to_string(),
+        effort: None,
     };
     Crew {
         name: name.to_string(),
@@ -30,14 +31,28 @@ fn built_in_crews_use_standard_model_specific_names() {
     // lane. [ORB-10877] It is built in because shipped job steps name it
     // directly, so a config with no `[crews]` table must still resolve it.
     //
-    // `copilot` and `cursor` are provider-lane exceptions: each can route to
-    // models supplied by several vendors, so the crew names retain the
-    // execution provider identity. [ORB-10946] [ORB-10945]
+    // `copilot`, `cursor`, `pi`, `antigravity`, and `opencode` are
+    // provider-lane exceptions: each can route to models supplied by several
+    // vendors, so the crew names retain the execution provider identity.
+    // [ORB-10946] [ORB-10945] [ORB-11296] [ORB-11299] [ORB-11295]
     assert_eq!(
         crews.keys().map(String::as_str).collect::<Vec<_>>(),
         vec![
-            "copilot", "cursor", "fable", "gemini", "grok", "luna", "opus", "sol", "sonnet",
-            "system", "terra"
+            "antigravity",
+            "astra",
+            "copilot",
+            "cursor",
+            "fable",
+            "gemini",
+            "grok",
+            "luna",
+            "opencode",
+            "opus",
+            "pi",
+            "sol",
+            "sonnet",
+            "system",
+            "terra",
         ]
     );
     for (name, provider, model) in [
@@ -47,10 +62,14 @@ fn built_in_crews_use_standard_model_specific_names() {
         ("sol", "codex", "gpt-5.6-sol"),
         ("terra", "codex", "gpt-5.6-terra"),
         ("luna", "codex", "gpt-5.6-luna"),
-        ("gemini", "gemini", "gemini-3.7-flash"),
+        ("astra", "codex", "gpt-6-astra"),
+        ("gemini", "gemini", "gemini-3.8-flash"),
+        ("antigravity", "antigravity", "gemini-3.8-flash-high"),
         ("grok", "grok", "grok-4.6"),
         ("copilot", "copilot", "claude-sonnet-4.5"),
         ("cursor", "cursor", "gpt-5"),
+        ("pi", "pi", "sonnet"),
+        ("opencode", "opencode", "anthropic/claude-sonnet-4-5"),
         ("system", "claude", "sonnet"),
     ] {
         let assignment = &crews.get(name).expect("built-in crew").assignment;
@@ -238,6 +257,117 @@ default_crew = "codex"
             .model,
         orbit_common::test_fixtures::TEST_CODEX_MODEL
     );
+    assert_eq!(
+        config
+            .crews
+            .get("codex")
+            .expect("crew exists")
+            .assignment
+            .effort,
+        None,
+        "omitted effort preserves the provider default"
+    );
+}
+
+#[test]
+fn codex_crew_effort_accepts_every_supported_value() {
+    for (raw, expected) in [
+        ("low", ReasoningEffort::Low),
+        ("medium", ReasoningEffort::Medium),
+        ("high", ReasoningEffort::High),
+        ("xhigh", ReasoningEffort::Xhigh),
+        ("max", ReasoningEffort::Max),
+    ] {
+        let config = load_config(&format!(
+            "[crews.terra]\nmodel = \"gpt-5.6-terra\"\nprovider = \"codex\"\neffort = \"{raw}\"\n\n[workflow]\ndefault_crew = \"terra\"\n"
+        ))
+        .unwrap_or_else(|error| panic!("{raw} should load: {error}"));
+        assert_eq!(
+            config
+                .crews
+                .get("terra")
+                .expect("terra crew")
+                .assignment
+                .effort,
+            Some(expected),
+            "{raw}"
+        );
+    }
+}
+
+#[test]
+fn crew_effort_fails_closed_for_invalid_values_and_unsupported_providers() {
+    let invalid = load_config(
+        "[crews.terra]\nmodel = \"gpt-5.6-terra\"\nprovider = \"codex\"\neffort = \"medium-low\"\n\n[workflow]\ndefault_crew = \"terra\"\n",
+    )
+    .expect_err("invalid effort must fail config admission");
+    assert!(
+        invalid
+            .to_string()
+            .contains("expected one of low, medium, high, xhigh, max")
+    );
+
+    let unsupported = load_config(
+        "[crews.gemini]\nmodel = \"gemini\"\nprovider = \"gemini\"\neffort = \"high\"\n\n[workflow]\ndefault_crew = \"gemini\"\n",
+    )
+    .expect_err("unsupported provider must not silently ignore effort");
+    assert!(
+        unsupported
+            .to_string()
+            .contains("does not support configured reasoning effort")
+    );
+
+    let agy_xhigh = load_config(
+        "[crews.antigravity]\nmodel = \"gemini-3.8-flash-high\"\nprovider = \"antigravity\"\neffort = \"xhigh\"\n\n[workflow]\ndefault_crew = \"antigravity\"\n",
+    )
+    .expect_err("agy does not accept xhigh");
+    assert!(
+        agy_xhigh.to_string().contains("low, medium, high"),
+        "{agy_xhigh}"
+    );
+
+    let agy_legacy_model = load_config(
+        "[crews.antigravity]\nmodel = \"gemini-3.8-flash\"\nprovider = \"antigravity\"\n\n[workflow]\ndefault_crew = \"antigravity\"\n",
+    )
+    .expect_err("legacy gemini CLI model ids are not remapped");
+    assert!(
+        agy_legacy_model
+            .to_string()
+            .contains("gemini-3.8-flash-high"),
+        "{agy_legacy_model}"
+    );
+}
+
+#[test]
+fn claude_crew_effort_accepts_every_supported_value() {
+    for raw in ["low", "medium", "high", "xhigh", "max"] {
+        load_config(&format!(
+            "[crews.opus]\nmodel = \"opus\"\nprovider = \"claude\"\neffort = \"{raw}\"\n\n[workflow]\ndefault_crew = \"opus\"\n"
+        ))
+        .unwrap_or_else(|error| panic!("Claude effort {raw} should load: {error}"));
+    }
+}
+
+#[test]
+fn grok_crew_effort_enforces_the_verified_model_contract() {
+    for raw in ["low", "medium", "high", "xhigh"] {
+        load_config(&format!(
+            "[crews.grok]\nmodel = \"grok-4.6\"\nprovider = \"grok\"\neffort = \"{raw}\"\n\n[workflow]\ndefault_crew = \"grok\"\n"
+        ))
+        .unwrap_or_else(|error| panic!("Grok 4.6 effort {raw} should load: {error}"));
+    }
+
+    for (model, effort, expected) in [
+        ("grok-4.6", "max", "low, medium, high, xhigh"),
+        ("grok-4.5", "xhigh", "low, medium, high"),
+        ("grok-unknown", "high", "verified only"),
+    ] {
+        let error = load_config(&format!(
+            "[crews.grok]\nmodel = \"{model}\"\nprovider = \"grok\"\neffort = \"{effort}\"\n\n[workflow]\ndefault_crew = \"grok\"\n"
+        ))
+        .expect_err("unsupported Grok model-effort pair must fail config admission");
+        assert!(error.to_string().contains(expected), "{error}");
+    }
 }
 
 #[test]

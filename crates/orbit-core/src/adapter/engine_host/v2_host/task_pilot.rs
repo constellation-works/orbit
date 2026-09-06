@@ -1,27 +1,44 @@
 //! Deterministic support actions for the task-pilot workflow [ORB-10510].
 //!
 //! The agent leg only proposes task metadata. These actions own discovery,
-//! partitioning, canonical selector validation, and the sole permitted write:
-//! replacing `context_files` on the exact tasks prepared for the run.
+//! partitioning and canonical selector validation. Ordinarily the sole write
+//! is replacing `context_files` on the exact tasks prepared for the run. A
+//! CI-failure sweep may additionally request explicit admission: after the
+//! selectors and every recommendation validate, this boundary promotes only a
+//! current, warning-free repair from `proposed` to `backlog`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::fs::selector::{
-    anchor_path, canonical_selector_in_workspace, exists_in_workspace,
+    anchor_path, canonical_selector, canonical_selector_in_workspace, exists_in_workspace,
 };
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_store::contracts::JobRunQuery;
+use orbit_types::task::{TaskEnvelopeV2, TaskStatus};
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskUpdateParams;
+use crate::application::task::TaskListFilter;
+
+mod apply;
+mod source;
+
+pub(super) use apply::apply;
+use source::{GitPathKind, SourceSnapshot, requested_base_branch, resolve_source_snapshot};
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
 const HARD_MAX_PARTITION_SIZE: usize = 5;
 const DEFAULT_MAX_TASKS: usize = 50;
 const HARD_MAX_TASKS: usize = 500;
 const NO_DIFF_TAGS: [&str; 2] = ["no-diff-needed", "no-diff-expected"];
+const TASK_PILOT_JOB_ID: &str = "task_pilot_pipeline";
+/// Cap on individually itemized `excluded` entries in routine discovery output.
+/// Automatic-mode exclusions still carry full counts by reason; this bounds
+/// only the per-task sample so evidence size stops scaling with terminal
+/// workspace history [ORB-11244].
+const MAX_EXCLUDED_SAMPLE: usize = 20;
 
 pub(super) fn prepare(
     runtime: &OrbitRuntime,
@@ -29,6 +46,18 @@ pub(super) fn prepare(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     let workspace_root = requested_workspace_root(runtime, action, input)?;
+    let claim = crate::application::automation::members::claim(runtime, input)
+        .map_err(|error| action_failed(action, error.to_string()))?;
+    let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
+    if let Some(claim) = &claim
+        && (source.as_ref().map(|s| &s.source_revision) != Some(&claim.member.source.commit)
+            || input.get("task_ids") != Some(&json!(claim.member.task_ids)))
+    {
+        return Err(action_failed(
+            action,
+            "state-trigger source or task membership changed",
+        ));
+    }
     let max_partition_size = bounded_usize(
         action,
         input,
@@ -45,15 +74,16 @@ pub(super) fn prepare(
     )?;
     let explicit_task_ids = string_array(input, "task_ids", action)?;
     let explicit_mode = !explicit_task_ids.is_empty();
-    let all_tasks = runtime
-        .list_tasks()
-        .map_err(|error| action_failed(action, format!("list workspace tasks: {error}")))?;
-    let by_id = all_tasks
-        .iter()
-        .map(|task| (task.id.as_str(), task))
-        .collect::<BTreeMap<_, _>>();
+    let active_preparations = active_task_pilot_preparations(runtime, action, &workspace_root)?;
 
-    let (mode, selected, excluded) = if explicit_mode {
+    let (mode, task_ids, mut task_snapshots, excluded) = if explicit_mode {
+        let all_tasks = runtime
+            .list_tasks()
+            .map_err(|error| action_failed(action, format!("list workspace tasks: {error}")))?;
+        let by_id = all_tasks
+            .iter()
+            .map(|task| (task.id.as_str(), task))
+            .collect::<BTreeMap<_, _>>();
         let mut seen = BTreeSet::new();
         let selected = explicit_task_ids
             .iter()
@@ -69,338 +99,308 @@ pub(super) fn prepare(
                         action,
                         format!("task {task_id} does not exist in the selected workspace"),
                     )
+                }).and_then(|task| {
+                    if let Some(run_ids) = active_preparations.get(task_id) {
+                        Err(action_failed(
+                            action,
+                            format!(
+                                "task {task_id} is already prepared by active task-pilot run(s) {}; inspect or resume that durable run instead of starting duplicate pilot work",
+                                run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
+                            ),
+                        ))
+                    } else {
+                        Ok(task)
+                    }
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        ("explicit", selected, Vec::new())
+        let task_ids = selected
+            .iter()
+            .map(|task| task.id.clone())
+            .collect::<Vec<_>>();
+        let task_snapshots = selected
+            .iter()
+            .map(|task| {
+                task_snapshot(
+                    &task.id,
+                    &task.title,
+                    task.status,
+                    &task.tags,
+                    &task.context_files,
+                )
+            })
+            .collect::<Vec<_>>();
+        (
+            "explicit",
+            task_ids,
+            task_snapshots,
+            ExcludedEvidence::default(),
+        )
     } else {
-        let mut selected = Vec::new();
-        let mut excluded = Vec::new();
-        let mut candidates = all_tasks.iter().collect::<Vec<_>>();
-        candidates.sort_by(|left, right| {
+        // Envelope-only metadata (no description/plan/comments/history/artifacts)
+        // for every task in the workspace, so routine discovery no longer pays
+        // for full-bundle hydration of terminal history it will only exclude.
+        let candidates = runtime
+            .task_candidates(&TaskListFilter::default(), usize::MAX)
+            .map_err(|error| {
+                action_failed(action, format!("list workspace task envelopes: {error}"))
+            })?;
+        let mut envelopes = candidates.items;
+        envelopes.sort_by(|left, right| {
             left.created_at
                 .cmp(&right.created_at)
                 .then(left.id.cmp(&right.id))
         });
-        for task in candidates {
-            let reason = automatic_exclusion_reason(task);
-            if let Some(reason) = reason {
-                excluded.push(json!({ "task_id": task.id, "reason": reason }));
-            } else {
-                selected.push(task);
+
+        let mut selected = Vec::new();
+        let mut excluded = ExcludedEvidence::default();
+        for envelope in &envelopes {
+            let reason = automatic_exclusion_reason(
+                envelope.status,
+                &envelope.context_files,
+                &envelope.tags,
+            )
+            .or_else(|| {
+                active_preparations
+                    .contains_key(&envelope.id)
+                    .then_some("active_pilot_prepared")
+            });
+            match reason {
+                Some(reason) => excluded.record(envelope, reason, &active_preparations),
+                None => selected.push(envelope),
             }
         }
-        ("automatic", selected, excluded)
+
+        let task_ids = selected
+            .iter()
+            .map(|task| task.id.clone())
+            .collect::<Vec<_>>();
+        let task_snapshots = selected
+            .iter()
+            .map(|task| {
+                task_snapshot(
+                    &task.id,
+                    &task.title,
+                    task.status,
+                    &task.tags,
+                    &task.context_files,
+                )
+            })
+            .collect::<Vec<_>>();
+        ("automatic", task_ids, task_snapshots, excluded)
     };
 
-    if selected.len() > max_tasks {
+    if task_ids.len() > max_tasks {
         return Err(action_failed(
             action,
             format!(
                 "{mode} task-pilot selection contains {} tasks, exceeding max_tasks {max_tasks}",
-                selected.len()
+                task_ids.len()
             ),
         ));
     }
 
-    let task_snapshots = selected
-        .iter()
-        .map(|task| task_snapshot(task))
-        .collect::<Vec<_>>();
-    let partitions = selected
+    if let Some(source) = &source {
+        for snapshot in &mut task_snapshots {
+            let task = runtime
+                .get_task(snapshot["task_id"].as_str().unwrap_or_default())
+                .map_err(|error| action_failed(action, error.to_string()))?;
+            let fingerprint = crate::application::automation::preparation::fingerprint(
+                runtime,
+                &task,
+                &source.source_revision,
+            )
+            .map_err(|error| action_failed(action, error.to_string()))?;
+            if claim
+                .as_ref()
+                .is_some_and(|claim| claim.member.fingerprint != fingerprint)
+            {
+                return Err(action_failed(action, "state-trigger task meaning changed"));
+            }
+            snapshot["material_fingerprint"] = json!(fingerprint);
+        }
+    }
+
+    let partitions = task_ids
         .chunks(max_partition_size)
         .enumerate()
-        .map(|(partition_index, tasks)| {
+        .map(|(partition_index, ids)| {
             json!({
                 "partition_index": partition_index,
-                "task_ids": tasks.iter().map(|task| task.id.clone()).collect::<Vec<_>>(),
+                "task_ids": ids,
             })
         })
         .collect::<Vec<_>>();
 
     Ok(json!({
+        "state_automation": claim,
         "mode": mode,
         "workspace_path": workspace_root,
-        "task_count": selected.len(),
-        "task_ids": selected.iter().map(|task| task.id.clone()).collect::<Vec<_>>(),
+        "source": source.as_ref().map(SourceSnapshot::to_json).unwrap_or_else(|| {
+            json!({
+                "base_branch": requested_base_branch(runtime, input),
+                "source_ref": Value::Null,
+                "source_revision": Value::Null,
+                "fast_forwarded": false,
+            })
+        }),
+        "task_count": task_ids.len(),
+        "task_ids": task_ids,
         "tasks": task_snapshots,
         "partition_size": max_partition_size,
         "partition_count": partitions.len(),
         "partitions": partitions,
-        "excluded": excluded,
+        "excluded": excluded.sample,
+        "excluded_total": excluded.total,
+        "excluded_by_reason": excluded.by_reason,
+        "excluded_sample_truncated": excluded.total > excluded.sample.len(),
+        "excluded_omitted_count": excluded.total.saturating_sub(excluded.sample.len()),
     }))
 }
 
-pub(super) fn apply(
+/// Bounded evidence for routine (non-explicit) discovery exclusions: every
+/// excluded task is counted by reason, but only a capped sample is itemized
+/// so response size stops scaling with terminal workspace history.
+#[derive(Default)]
+struct ExcludedEvidence {
+    sample: Vec<Value>,
+    total: usize,
+    by_reason: BTreeMap<&'static str, usize>,
+}
+
+impl ExcludedEvidence {
+    fn record(
+        &mut self,
+        envelope: &TaskEnvelopeV2,
+        reason: &'static str,
+        active_preparations: &BTreeMap<String, BTreeSet<String>>,
+    ) {
+        self.total += 1;
+        *self.by_reason.entry(reason).or_default() += 1;
+        if self.sample.len() >= MAX_EXCLUDED_SAMPLE {
+            return;
+        }
+        let mut entry = json!({ "task_id": envelope.id, "reason": reason });
+        if reason == "active_pilot_prepared"
+            && let Some(run_ids) = active_preparations.get(&envelope.id)
+            && let Value::Object(fields) = &mut entry
+        {
+            fields.insert("prepared_by_run_ids".to_string(), json!(run_ids));
+        }
+        self.sample.push(entry);
+    }
+}
+
+fn active_task_pilot_preparations(
     runtime: &OrbitRuntime,
     action: &str,
-    input: &Value,
-) -> Result<Value, DispatchError> {
-    let workspace_root = requested_workspace_root(runtime, action, input)?;
-    let prepared = input
-        .get("prepared")
-        .and_then(Value::as_object)
-        .ok_or_else(|| action_failed(action, "`prepared` must be an object"))?;
-    let prepared_workspace = prepared
-        .get("workspace_path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| action_failed(action, "prepared.workspace_path must be a string"))?;
-    if Path::new(prepared_workspace) != workspace_root {
-        return Err(action_failed(
-            action,
-            format!(
-                "prepared workspace {prepared_workspace} does not match active workspace {}",
-                workspace_root.display()
-            ),
-        ));
-    }
-    let mode = prepared
-        .get("mode")
-        .and_then(Value::as_str)
-        .ok_or_else(|| action_failed(action, "prepared.mode must be a string"))?;
-    let expected_partitions = prepared
-        .get("partitions")
-        .and_then(Value::as_array)
-        .ok_or_else(|| action_failed(action, "prepared.partitions must be an array"))?;
-    let prepared_tasks = prepared
-        .get("tasks")
-        .and_then(Value::as_array)
-        .ok_or_else(|| action_failed(action, "prepared.tasks must be an array"))?;
-    let results = input
-        .get("results")
-        .and_then(Value::as_array)
-        .ok_or_else(|| action_failed(action, "`results` must be an array"))?;
-
-    if results.len() != expected_partitions.len() {
-        return Err(action_failed(
-            action,
-            format!(
-                "expected {} task-pilot partition results, received {}",
-                expected_partitions.len(),
-                results.len()
-            ),
-        ));
-    }
-
-    let prepared_before = prepared_tasks
-        .iter()
-        .map(|entry| {
-            let task_id = required_string(entry, "task_id", action)?;
-            let before = required_string_array(entry, "context_files_before", action)?;
-            Ok((task_id.to_string(), before))
-        })
-        .collect::<Result<BTreeMap<_, _>, DispatchError>>()?;
-
-    // Validate every partition and every selector before the first mutation.
-    // A malformed or failed partition therefore cannot partially apply the
-    // otherwise-valid partitions that happened to precede it.
-    let mut validated = Vec::with_capacity(prepared_before.len());
-    let mut seen_task_ids = BTreeSet::new();
-    for (position, (expected, result)) in expected_partitions.iter().zip(results).enumerate() {
-        let expected_index = expected
-            .get("partition_index")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                action_failed(
-                    action,
-                    format!("prepared.partitions[{position}].partition_index is invalid"),
-                )
-            })?;
-        let expected_ids = required_string_array(expected, "task_ids", action)?;
-        let result_object = result.as_object().ok_or_else(|| {
-            action_failed(
-                action,
-                format!("partition {expected_index} failed or returned no structured result"),
-            )
-        })?;
-        let result_index = result_object
-            .get("partition_index")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                action_failed(
-                    action,
-                    format!("partition result {position} is missing partition_index"),
-                )
-            })?;
-        if result_index != expected_index {
-            return Err(action_failed(
-                action,
-                format!(
-                    "partition result {position} reports index {result_index}, expected {expected_index}"
-                ),
-            ));
-        }
-        let result_ids = result_object
-            .get("task_ids")
-            .ok_or_else(|| action_failed(action, "`task_ids` must be an array"))
-            .and_then(|value| string_array_value(value, "task_ids", action))?;
-        if result_ids != expected_ids {
-            return Err(action_failed(
-                action,
-                format!("partition {expected_index} task_ids do not match the prepared partition"),
-            ));
-        }
-        let assessments = result_object
-            .get("tasks")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                action_failed(
-                    action,
-                    format!("partition {expected_index}.tasks must be an array"),
-                )
-            })?;
-        if assessments.len() != expected_ids.len() {
-            return Err(action_failed(
-                action,
-                format!(
-                    "partition {expected_index} returned {} task assessments for {} tasks",
-                    assessments.len(),
-                    expected_ids.len()
-                ),
-            ));
-        }
-        let assessments_by_id = assessments
-            .iter()
-            .map(|assessment| {
-                let task_id = required_string(assessment, "task_id", action)?;
-                Ok((task_id.to_string(), assessment))
+    workspace_root: &Path,
+) -> Result<BTreeMap<String, BTreeSet<String>>, DispatchError> {
+    let mut prepared_by_task = BTreeMap::<String, BTreeSet<String>>::new();
+    for state in [
+        JobRunState::Pending,
+        JobRunState::Running,
+        JobRunState::Retrying,
+    ] {
+        let runs = runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(TASK_PILOT_JOB_ID.to_string()),
+                state: Some(state),
+                terminal_only: false,
+                created_since: None,
+                limit: None,
+                ..Default::default()
             })
-            .collect::<Result<BTreeMap<_, _>, DispatchError>>()?;
-        if assessments_by_id.len() != assessments.len() {
-            return Err(action_failed(
-                action,
-                format!("partition {expected_index} contains duplicate task assessments"),
-            ));
-        }
-
-        for task_id in expected_ids {
-            if !seen_task_ids.insert(task_id.clone()) {
-                return Err(action_failed(
-                    action,
-                    format!("task {task_id} appears in more than one partition result"),
-                ));
-            }
-            let assessment = assessments_by_id.get(&task_id).ok_or_else(|| {
+            .map_err(|error| {
+                action_failed(action, format!("list active task-pilot runs: {error}"))
+            })?;
+        for run in runs {
+            let run = runtime.show_job_run(&run.run_id).map_err(|error| {
                 action_failed(
                     action,
-                    format!("partition {expected_index} omitted task {task_id}"),
+                    format!("reconcile active task-pilot run {}: {error}", run.run_id),
                 )
             })?;
-            let expected_before = prepared_before.get(&task_id).ok_or_else(|| {
-                action_failed(action, format!("task {task_id} was not in prepared.tasks"))
-            })?;
-            let reported_before =
-                required_string_array(assessment, "context_files_before", action)?;
-            if &reported_before != expected_before {
-                return Err(action_failed(
-                    action,
-                    format!(
-                        "task {task_id} context_files_before does not match the prepared snapshot"
-                    ),
-                ));
+            if run.state.is_terminal() {
+                continue;
             }
-            let current = runtime.get_task(&task_id).map_err(|error| {
-                action_failed(action, format!("reload task {task_id}: {error}"))
-            })?;
-            if current.context_files != *expected_before {
-                return Err(action_failed(
+            let Some(state) = runtime.read_run_state(&run.run_id).map_err(|error| {
+                action_failed(
                     action,
-                    format!(
-                        "task {task_id} context_files changed after preparation; refusing stale pilot output"
-                    ),
-                ));
-            }
-            let disposition = required_string(assessment, "disposition", action)?;
-            let after = required_string_array(assessment, "context_files_after", action)?;
-            validate_after_selectors(
-                action,
-                &task_id,
-                disposition,
-                assessment,
-                &after,
-                &workspace_root,
-            )?;
-            validate_recommendations(action, &task_id, assessment)?;
-            validated.push((
-                task_id,
-                expected_before.clone(),
-                after,
-                (*assessment).clone(),
-            ));
-        }
-    }
-
-    if seen_task_ids.len() != prepared_before.len() {
-        return Err(action_failed(
-            action,
-            "partition results did not cover every prepared task",
-        ));
-    }
-
-    let mut task_results = Vec::with_capacity(validated.len());
-    for (task_id, before, after, mut assessment) in validated {
-        let changed = before != after;
-        if changed {
-            runtime
-                .update_task(
-                    &task_id,
-                    TaskUpdateParams {
-                        context_files: Some(after.clone()),
-                        ..TaskUpdateParams::default()
-                    },
+                    format!("read active task-pilot run {} state: {error}", run.run_id),
                 )
-                .map_err(|error| {
-                    action_failed(
-                        action,
-                        format!("apply validated context_files for task {task_id}: {error}"),
-                    )
-                })?;
+            })?
+            else {
+                continue;
+            };
+            let Some(task_ids) = state.step_outputs.iter().find_map(|(step_index, output)| {
+                (state.step_states.get(step_index) == Some(&JobRunState::Success))
+                    .then(|| prepared_task_ids(output, workspace_root))
+                    .flatten()
+            }) else {
+                continue;
+            };
+            for task_id in task_ids {
+                prepared_by_task
+                    .entry(task_id)
+                    .or_default()
+                    .insert(run.run_id.clone());
+            }
         }
-        if let Value::Object(fields) = &mut assessment {
-            fields.insert("applied".to_string(), Value::Bool(changed));
-        }
-        task_results.push(assessment);
     }
-
-    Ok(json!({
-        "status": "success",
-        "mode": mode,
-        "workspace_path": workspace_root,
-        "discovery": {
-            "task_ids": prepared.get("task_ids").cloned().unwrap_or_else(|| json!([])),
-            "excluded": prepared.get("excluded").cloned().unwrap_or_else(|| json!([])),
-        },
-        "partition_decisions": expected_partitions,
-        "partition_count": expected_partitions.len(),
-        "failed_partitions": [],
-        "tasks": task_results,
-    }))
+    Ok(prepared_by_task)
 }
 
-fn automatic_exclusion_reason(task: &Task) -> Option<&'static str> {
-    if !matches!(task.status, TaskStatus::Proposed | TaskStatus::Backlog) {
+fn prepared_task_ids(output: &Value, workspace_root: &Path) -> Option<Vec<String>> {
+    let object = output.as_object()?;
+    let prepared_workspace = object.get("workspace_path")?.as_str()?;
+    if Path::new(prepared_workspace) != workspace_root
+        || !object.get("partitions")?.is_array()
+        || !object.get("tasks")?.is_array()
+        || !matches!(object.get("mode")?.as_str(), Some("automatic" | "explicit"))
+    {
+        return None;
+    }
+    object
+        .get("task_ids")?
+        .as_array()?
+        .iter()
+        .map(|task_id| task_id.as_str().map(ToOwned::to_owned))
+        .collect()
+}
+
+fn automatic_exclusion_reason(
+    status: TaskStatus,
+    context_files: &[String],
+    tags: &[String],
+) -> Option<&'static str> {
+    if !matches!(status, TaskStatus::Proposed | TaskStatus::Backlog) {
         return Some("status_not_eligible");
     }
-    if !task.context_files.is_empty() {
+    if !context_files.is_empty() {
         return Some("context_files_not_empty");
     }
-    if task
-        .tags
-        .iter()
-        .any(|tag| NO_DIFF_TAGS.contains(&tag.as_str()))
-    {
+    if tags.iter().any(|tag| NO_DIFF_TAGS.contains(&tag.as_str())) {
         return Some("no_diff_task");
     }
     None
 }
 
-fn task_snapshot(task: &Task) -> Value {
+fn task_snapshot(
+    id: &str,
+    title: &str,
+    status: TaskStatus,
+    tags: &[String],
+    context_files: &[String],
+) -> Value {
     json!({
-        "task_id": task.id,
-        "title": task.title,
-        "status": task.status,
-        "tags": task.tags,
-        "context_files_before": task.context_files,
+        "task_id": id,
+        "title": title,
+        "status": status,
+        "tags": tags,
+        "context_files_before": context_files,
     })
 }
 
@@ -411,6 +411,7 @@ fn validate_after_selectors(
     assessment: &Value,
     selectors: &[String],
     workspace_root: &Path,
+    source: Option<&SourceSnapshot>,
 ) -> Result<(), DispatchError> {
     if selectors.is_empty() {
         if !matches!(disposition, "verified_no_diff" | "host_operational") {
@@ -445,13 +446,20 @@ fn validate_after_selectors(
                 format!("task {task_id} selector {selector:?} must use file:, dir:, or symbol:"),
             ));
         }
-        let canonical =
-            canonical_selector_in_workspace(trimmed, workspace_root).map_err(|error| {
-                action_failed(
-                    action,
-                    format!("task {task_id} selector {selector:?} is invalid: {error}"),
-                )
-            })?;
+        // A dirty primary may replace an anchor with a symlink or a different
+        // kind. Only syntax comes from this parser; pinned Git objects own
+        // containment and target validation when source identity is present.
+        let canonical = if source.is_some() {
+            canonical_selector(trimmed)
+        } else {
+            canonical_selector_in_workspace(trimmed, workspace_root)
+        }
+        .map_err(|error| {
+            action_failed(
+                action,
+                format!("task {task_id} selector {selector:?} is invalid: {error}"),
+            )
+        })?;
         if canonical != trimmed {
             return Err(action_failed(
                 action,
@@ -460,15 +468,19 @@ fn validate_after_selectors(
                 ),
             ));
         }
-        if !exists_in_workspace(&canonical, workspace_root) {
-            return Err(action_failed(
-                action,
-                format!(
-                    "task {task_id} selector {selector:?} does not resolve to an existing in-workspace target"
-                ),
-            ));
+        if let Some(source) = source {
+            validate_selector_at_source(action, task_id, &canonical, workspace_root, source)?;
+        } else {
+            if !exists_in_workspace(&canonical, workspace_root) {
+                return Err(action_failed(
+                    action,
+                    format!(
+                        "task {task_id} selector {selector:?} does not resolve to an existing in-workspace target"
+                    ),
+                ));
+            }
+            validate_selector_target_kind(action, task_id, &canonical, workspace_root)?;
         }
-        validate_selector_target_kind(action, task_id, &canonical, workspace_root)?;
         if !seen.insert(canonical) {
             return Err(action_failed(
                 action,
@@ -515,6 +527,40 @@ fn validate_recommendations(
         }
     }
     Ok(())
+}
+
+fn validate_selector_at_source(
+    action: &str,
+    task_id: &str,
+    selector: &str,
+    workspace_root: &Path,
+    source: &SourceSnapshot,
+) -> Result<(), DispatchError> {
+    let anchor = anchor_path(selector).map_err(|error| {
+        action_failed(
+            action,
+            format!("task {task_id} selector {selector:?} has no filesystem anchor: {error}"),
+        )
+    })?;
+    let kind = source.path_kind(action, workspace_root, &anchor)?;
+    let expected_dir = selector.starts_with("dir:");
+    match (kind, expected_dir) {
+        (GitPathKind::Tree, true) | (GitPathKind::Blob, false) => Ok(()),
+        (GitPathKind::Missing, _) => Err(action_failed(
+            action,
+            format!(
+                "task {task_id} selector {selector:?} does not resolve to an existing in-workspace target at source revision {} ({})",
+                source.source_revision, source.source_ref
+            ),
+        )),
+        _ => Err(action_failed(
+            action,
+            format!(
+                "task {task_id} selector {selector:?} does not match the target's file/directory kind at source revision {} ({})",
+                source.source_revision, source.source_ref
+            ),
+        )),
+    }
 }
 
 fn validate_selector_target_kind(

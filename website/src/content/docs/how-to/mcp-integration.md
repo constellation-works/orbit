@@ -13,6 +13,15 @@ Use auto-detection:
 orbit mcp init --auto
 ```
 
+This registers the **agent-only** tool surface — the same authority as bare
+`orbit mcp serve`. If you want an agent to be able to dispatch workflows and run
+governed operations, register the operator-authorized integration during
+workspace setup instead:
+
+```bash
+orbit workspace init --mcp
+```
+
 Or target a client explicitly:
 
 ```bash
@@ -80,6 +89,41 @@ orbit mcp serve
 Use `orbit tool list` to inspect the current local registry. MCP exposure is a
 capability-filtered subset of that registry. The retired graph tools are not
 exposed.
+
+### Attribute the tasks a session creates
+
+A server can carry the orchestrator crew that its tasks are attributed to, so
+each call does not have to remember it:
+
+```bash
+orbit mcp serve --workspace <selector> --orchestrator <crew>
+```
+
+The value is attribution only. Unlike `--operator` it grants no authority, and
+it neither selects the crew a task executes under nor the model recorded for
+that execution. A call that passes its own `orchestrator` wins; a call that
+omits it inherits the session's; a server started without the flag attributes
+nothing, exactly as before. The crew is resolved against the workspace the call
+lands in, so an unconfigured name fails that call rather than falling back to
+another crew, and only newly created tasks are affected — existing ones are
+never rewritten.
+
+Both client modes forward the value to the server that actually creates the
+task:
+
+```bash
+orbit mcp serve --mode remote <ssh-host> --orchestrator <crew>
+orbit mcp serve --mode federated --orchestrator <crew>
+```
+
+A destination whose `authorized_keys` pins a forced command composes its own
+argv, so its configuration wins there — the same rule that already applies to
+the authority a remote session asks for.
+
+Treat the flag as configuration, not as evidence of which model is answering a
+given call: an MCP connection commonly outlives a model switch on the client
+side. Pass `orchestrator` on the individual call, or restart the connection
+with a new value, when the orchestrating crew genuinely changes.
 
 ## Listen on a socket
 

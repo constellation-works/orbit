@@ -3,7 +3,7 @@ use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string, optional_string_alias,
     optional_string_list_alias, required_string, strip_retired_task_add_input_fields,
 };
-use orbit_types::task::{TaskPriority, task_dependencies_ready};
+use orbit_types::task::{TaskPriority, validate_relative_artifact_path};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -14,7 +14,10 @@ use super::input::{
     parse_relations, parse_task_complexity, parse_task_priority, parse_task_status,
     parse_task_type,
 };
-use super::json::{serialize_task, serialize_task_lint_report, task_fields_to_json, task_to_json};
+use super::json::{
+    serialize_task, serialize_task_artifact_read, serialize_task_lint_report, task_fields_to_json,
+    task_to_json,
+};
 
 pub(super) fn add(
     runtime: &OrbitRuntime,
@@ -140,36 +143,25 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     let ready = optional_bool_alias(&input, &["ready"])?;
     let path = optional_string(&input, "path")?;
     let limit = super::input::task_list_limit(&input)?;
-    // `list_tasks_filtered` returns tasks newest-first (`created_at DESC`, task
-    // ID ascending for ties); the filters below preserve that order, so the
-    // trailing `take(limit)` yields the newest matching tasks (ORB-10310).
-    let all_tasks = runtime.list_tasks_filtered(
-        None,
-        None,
-        parent_id.as_deref(),
-        job_run_id.as_deref(),
-        None,
-        None,
-    )?;
-    let status_by_id = runtime.task_status_index()?;
+    let page = runtime.query_task_rows(&crate::application::task::TaskListQuery {
+        filter: crate::application::task::TaskListFilter {
+            statuses,
+            task_type,
+            parent_id,
+            job_run_id,
+            tags,
+            ..Default::default()
+        },
+        ready: ready == Some(true),
+        path,
+        limit,
+    })?;
+    let status_by_id = page.status_by_id;
     Ok(Value::Array(
-        all_tasks
+        page.items
             .into_iter()
-            .filter(|task| {
-                statuses
-                    .as_ref()
-                    .is_none_or(|values| values.contains(&task.status))
-            })
-            .filter(|task| orbit_types::task::task_matches_tags(task, &tags))
-            .filter(|task| ready != Some(true) || task_dependencies_ready(task, &status_by_id))
-            .filter(|task| {
-                path.as_deref()
-                    .is_none_or(|p| crate::task_selectors_contain_path(&task.context_files, p))
-            })
-            .filter(|task| task_type.is_none_or(|kind| task.task_type == kind))
-            .take(limit)
-            .map(|task| task_to_json(&task, &status_by_id))
-            .collect::<Vec<_>>(),
+            .map(|row| task_to_json(&row.task, &status_by_id))
+            .collect(),
     ))
 }
 
@@ -250,6 +242,31 @@ fn optional_usize_alias(input: &Value, names: &[&str]) -> Result<Option<usize>, 
     Ok(None)
 }
 
+/// Read one stored artifact's bytes through the task's own artifact owner.
+///
+/// Discovery stays separate from retrieval: `orbit.task.show` with
+/// `field: "artifacts"` lists compact metadata, and only this call pays for a
+/// payload. Path containment, workspace ownership, and the symlink-safe blob
+/// resolve all belong to the store, so this handler adds no second access
+/// rule of its own — a caller can only ever reach an artifact through the task
+/// that owns it.
+pub(super) fn artifact_get(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+    let id = required_string(&input, &["id"], "id")?;
+    let path = required_string(&input, &["path", "artifact_path", "artifactPath"], "path")?;
+    validate_relative_artifact_path(&path)
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+    // Resolve the task first so an unknown or foreign id fails as not-found
+    // before any artifact lookup reports on a task the caller cannot see.
+    let task = runtime.get_task(&id)?;
+    let artifact = runtime.get_task_artifact(&task.id, &path)?.ok_or_else(|| {
+        OrbitError::not_found(
+            orbit_common::NotFoundKind::Artifact,
+            format!("{}/{path}", task.id),
+        )
+    })?;
+    serialize_task_artifact_read(&task.id, &artifact)
+}
+
 pub(super) fn start(
     runtime: &OrbitRuntime,
     input: Value,
@@ -273,6 +290,7 @@ pub(super) fn update(
     input: Value,
     agent: Option<String>,
     model: Option<String>,
+    owner: Option<orbit_tools::ReservationOwnerContext>,
 ) -> Result<Value, OrbitError> {
     if ["required_tools", "requiredTools", "required-tool"]
         .iter()
@@ -284,7 +302,7 @@ pub(super) fn update(
         ));
     }
     let id = required_string(&input, &["id"], "id")?;
-    let task = runtime.update_task_with_identity(
+    let task = runtime.update_task_with_owner(
         &id,
         TaskUpdateParams {
             title: optional_string(&input, "title")?,
@@ -349,6 +367,7 @@ pub(super) fn update(
         },
         agent,
         model,
+        owner.map(|owner| owner.owner_run_id),
     )?;
     serialize_task(runtime, &task)
 }

@@ -1,5 +1,8 @@
 # Docs corpus
 
+Agents retrieve through the authoritative `orbit_search` tool. The CLI admin
+commands below run on the workspace owner; they are not all exposed over MCP.
+
 Registration-light: Orbit walks the configured `[docs].roots` on demand and indexes every file with valid frontmatter. Legacy design and pattern docs get a tolerant fallback.
 
 ## Frontmatter
@@ -13,7 +16,7 @@ summary: One-line hook for agent retrieval
 tags: [hooks, audit]
 paths: ["src/**"]
 related_features: [hook-rewrite]
-related_artifacts: ["<task-id>", "<adr-id>"]
+related_artifacts: ["<task-id>"]
 ---
 ```
 

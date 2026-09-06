@@ -70,7 +70,7 @@ orbit log tail --level warn --since 1h
 orbit log tail --target orbit.logging.rotation --since 1h
 
 # Inspect archive files and the raw sink only when filesystem detail is needed.
-find "$orbit_root/state/logs" -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+find "$orbit_root/state/logs" -maxdepth 1 -type f -exec ls -lh {} \;
 sed -n '/^\[runtime\]/,/^\[/p' "$orbit_root/config.toml"
 ```
 
@@ -122,7 +122,7 @@ JSONL file. Identify the invoking process and platform before assuming that
 | --- | --- | --- |
 | Linux logs the warning once per `orbit-sweep` minute, then a normal sweep result with status `0` | `systemctl --user cat orbit-sweep.service`; `test -d "$orbit_root/logs"` | Linux writes sweep output to the journal, while `$orbit_root/logs/sweep.log` is a macOS target. An unconditional prune of that missing parent produces a harmless, noisy ENOENT. Record the version and file a fix to skip sweep-log rotation on Linux or make a missing parent a no-op. Do not create a dummy directory merely to suppress the warning. |
 | A process cannot open or prune `$orbit_root/state/logs/orbit.jsonl` | `ls -ld "$orbit_root/state" "$orbit_root/state/logs"`; check the process `HOME` | Confirm the same user initialized the global root and that the path is readable/writable. Repair permissions or initialization only with explicit approval. |
-| Archive deletion reports permission, read-only filesystem, or I/O errors | `find "$orbit_root/state/logs" -maxdepth 1 -type f -printf '%M %u:%g %p\n'`; `df -h "$orbit_root"` | Retention may no longer bound disk use. Capture the exact path/error and address capacity or ownership through normal host operations. |
+| Archive deletion reports permission, read-only filesystem, or I/O errors | `find "$orbit_root/state/logs" -maxdepth 1 -type f -exec ls -l {} \;`; `df -h "$orbit_root"` | Retention may no longer bound disk use. Capture the exact path/error and address capacity or ownership through normal host operations. |
 | Warning appears during a normal application start, not `orbit-sweep` | Correlate the process command and run `orbit log tail --level warn --since 1h` | Treat it as global JSONL rotation; inspect the active path, archives, limits, and any concurrent removal of the directory. |
 
 The first pattern is non-fatal: it affects an unused Linux sweep-log rotation

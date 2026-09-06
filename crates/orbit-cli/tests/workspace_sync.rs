@@ -7,18 +7,20 @@
 use std::path::{Path, PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
 fn orbit(cwd: &Path, home: &Path) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .current_dir(cwd)
         .env("HOME", home)
-        .env_remove("ORBIT_HOME")
-        .env_remove("ORBIT_ROOT")
-        .env_remove("ORBIT_REGISTRY_ROOT")
-        .env_remove("ORBIT_WORKSPACE");
+        .env("USERPROFILE", home)
+        .env_remove("ORBIT_HOME");
     command
 }
 

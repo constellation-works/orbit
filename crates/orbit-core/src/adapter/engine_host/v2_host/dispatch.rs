@@ -54,6 +54,32 @@ pub(crate) fn run_deterministic(
         .session_context
         .effective_capabilities
         .insert(McpCapability::Runner);
+    if matches!(
+        deterministic_action,
+        CoreDeterministicAction::PrepareTaskPilot
+            | CoreDeterministicAction::ApplyTaskPilotResults
+            | CoreDeterministicAction::ListTriageCandidates
+            | CoreDeterministicAction::ApplyTriageDispositions
+    ) {
+        let claim_input = input.get("prepared").unwrap_or(input);
+        if let Some(claim) = crate::application::automation::members::claim(runtime, claim_input)
+            .map_err(|error| DispatchError::DeterministicActionFailed {
+                action: action.into(),
+                message: error.to_string(),
+            })?
+        {
+            let owner = tool_context
+                .reservation_owner
+                .as_ref()
+                .map(|owner| owner.owner_run_id.as_str());
+            if owner.is_none() || owner != claim.action_id.as_deref() {
+                return Err(DispatchError::DeterministicActionFailed {
+                    action: action.into(),
+                    message: "state claim belongs to another run".into(),
+                });
+            }
+        }
+    }
     match deterministic_action {
         CoreDeterministicAction::OrbitToolCall => {
             // The `config` block shape (see deterministic_reference.yaml):
@@ -233,7 +259,9 @@ pub(crate) fn run_deterministic(
         // Stamp a drain deadline, or answer whether a stamped one has passed
         // [ORB-10819]. Gates the start of the next iteration only; nothing
         // here cancels or shortens an in-flight child run.
-        CoreDeterministicAction::DrainWindow => workspace_auto::drain_window(action, input),
+        CoreDeterministicAction::DrainWindow => {
+            workspace_auto::drain_window(runtime, action, input)
+        }
         // ADR-0223: scheduled shipment resolves only the active runtime's
         // canonical ship input; cross-workspace enumeration stays in the
         // legacy CLI sweep and `workflow.auto_ship` is deliberately ignored.
@@ -406,6 +434,13 @@ pub(crate) fn run_deterministic(
     }
 }
 
+/// [ORB-11187] This activity resolves the *workspace's* shipping defaults —
+/// mode and base branch. Completion authority is deliberately not among them:
+/// it is granted per invocation by an operator and reaches the pipelines through
+/// run input, so no workspace configuration can silently turn it on.
+const COMPLETION_IS_NEVER_WORKSPACE_RESOLVED: crate::application::workflow::CompletionPolicy =
+    crate::application::workflow::CompletionPolicy::Review;
+
 fn resolve_workspace_ship_input(
     runtime: &OrbitRuntime,
     action: &str,
@@ -414,6 +449,8 @@ fn resolve_workspace_ship_input(
         return crate::application::workflow::build_ship_input(
             binding.ship_mode,
             runtime.workflow_base_branch(),
+            &[],
+            COMPLETION_IS_NEVER_WORKSPACE_RESOLVED,
             &[],
         )
         .map_err(|error| DispatchError::DeterministicActionFailed {
@@ -425,6 +462,8 @@ fn resolve_workspace_ship_input(
     crate::application::workflow::build_ship_input(
         crate::application::workflow::ShipMode::Local,
         runtime.workflow_base_branch(),
+        &[],
+        COMPLETION_IS_NEVER_WORKSPACE_RESOLVED,
         &[],
     )
     .map_err(|error| DispatchError::DeterministicActionFailed {

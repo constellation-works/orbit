@@ -1,0 +1,27 @@
+schemaVersion: 2
+kind: Executor
+metadata:
+  name: antigravity
+spec:
+  executor_type: direct_agent
+  command: agy
+  # Antigravity headless contract (agy 1.1.27): stream-json stdin user events
+  # paired with stream-json output, then stdin closure. The Orbit envelope
+  # stays off argv. `--dangerously-skip-permissions` is the documented
+  # unattended analog of interactive Ask; Orbit's OS sandbox remains the
+  # filesystem/network boundary. Do not pass Gemini CLI flags
+  # (`--approval-mode`, `-o json`, `--allowed-mcp-server-names`) or `agy --sandbox`.
+  # `--print-timeout` is injected per invocation from the remaining activity
+  # deadline minus a 30s shutdown margin; do not hard-code the documented 5m
+  # default here. Custom executor values are merged (shorter wins, longer is
+  # capped) without duplicating the flag.
+  args:
+    - --input-format
+    - stream-json
+    - --output-format
+    - stream-json
+    - --dangerously-skip-permissions
+  stdout_format: envelope
+  sandbox: macos-sandbox-exec
+  model_flag: "--model"
+  env: {}

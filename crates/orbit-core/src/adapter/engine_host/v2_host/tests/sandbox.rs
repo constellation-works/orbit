@@ -19,6 +19,41 @@ fn resolve_executor_sandbox_returns_none_when_executor_has_no_sandbox() {
     assert!(resolved.is_none());
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn reviewer_read_rules_follow_inspection_cwd_without_primary_write_grants() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let inspection = tempfile::tempdir().unwrap();
+    let inspection_root = inspection.path().canonicalize().unwrap();
+    #[cfg(target_os = "linux")]
+    let kind = orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap;
+    #[cfg(target_os = "macos")]
+    let kind = orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec;
+    seed_executor(&runtime, "claude", Some(kind));
+    let sandbox = runtime
+        .resolve_executor_sandbox("claude", Some("reviewer"), Some(&inspection_root))
+        .unwrap()
+        .unwrap();
+    assert!(
+        sandbox
+            .fs_profile
+            .read
+            .iter()
+            .any(|rule| rule.starts_with(&inspection_root.display().to_string()))
+    );
+    assert!(
+        !sandbox
+            .fs_profile
+            .read
+            .iter()
+            .any(|rule| rule.starts_with(&repo_root.display().to_string()))
+    );
+    assert!(!sandbox.fs_profile.modify.iter().any(|rule| {
+        rule.starts_with(&inspection_root.display().to_string())
+            || rule.starts_with(&repo_root.display().to_string())
+    }));
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn resolve_executor_sandbox_returns_linux_descriptor_with_absolute_mounts() {
@@ -92,6 +127,60 @@ fn linux_child_runtime_grants_do_not_include_global_workspace_layout() {
             resolved.fs_profile.modify
         );
     }
+}
+
+/// [ORB-11259] Implementer sandboxes receive a language-neutral host cache
+/// write root; reviewer profiles do not. The global registry root itself
+/// stays denied.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_implementer_gains_host_cache_root_reviewer_does_not() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    seed_executor(
+        &runtime,
+        "claude",
+        Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+    );
+
+    let global = runtime
+        .paths()
+        .global_dir
+        .canonicalize()
+        .unwrap_or_else(|_| runtime.paths().global_dir.clone());
+    let cache = global.join("cache").display().to_string();
+
+    let writer = runtime
+        .resolve_executor_sandbox("claude", None, Some(&repo_root))
+        .expect("resolve implementer sandbox")
+        .expect("descriptor");
+    assert!(
+        writer.fs_profile.modify.iter().any(|entry| entry == &cache),
+        "implementer must grant host cache {cache}: {:?}",
+        writer.fs_profile.modify
+    );
+    assert!(
+        !writer
+            .fs_profile
+            .modify
+            .iter()
+            .any(|entry| entry == &global.display().to_string()),
+        "host cache grant must not widen to the whole global registry: {:?}",
+        writer.fs_profile.modify
+    );
+
+    let reviewer = runtime
+        .resolve_executor_sandbox("claude", Some("reviewer"), Some(&repo_root))
+        .expect("resolve reviewer sandbox")
+        .expect("descriptor");
+    assert!(
+        !reviewer
+            .fs_profile
+            .modify
+            .iter()
+            .any(|entry| entry == &cache),
+        "reviewer must not gain the host cache write root: {:?}",
+        reviewer.fs_profile.modify
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -293,7 +382,7 @@ fn managed_worktree_without_an_fs_profile_can_write_under_docs() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn resolve_executor_sandbox_orders_versioned_orbit_exceptions_after_default_deny() {
+fn resolved_sandbox_never_materializes_checkout_identity_as_a_write_anchor() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     seed_executor(
         &runtime,
@@ -308,10 +397,8 @@ fn resolve_executor_sandbox_orders_versioned_orbit_exceptions_after_default_deny
         std::fs::create_dir_all(worktree.join(".orbit").join(directory))
             .expect("create worktree Orbit fixture");
     }
-    for file in ["config.yaml", "config.toml"] {
-        std::fs::write(worktree.join(".orbit").join(file), "versioned = true")
-            .expect("create versioned config fixture");
-    }
+    std::fs::write(worktree.join(".orbit/config.toml"), "versioned = true")
+        .expect("create versioned config fixture");
 
     let resolved = runtime
         .resolve_executor_sandbox("claude", None, Some(&worktree))
@@ -329,7 +416,6 @@ fn resolve_executor_sandbox_orders_versioned_orbit_exceptions_after_default_deny
     for allowed in [
         format!("{}/auto_tasks/**", orbit.display()),
         format!("{}/routines/**", orbit.display()),
-        format!("{}/config.yaml", orbit.display()),
         format!("{}/config.toml", orbit.display()),
         format!("{}/resources/**", orbit.display()),
     ] {
@@ -339,6 +425,24 @@ fn resolve_executor_sandbox_orders_versioned_orbit_exceptions_after_default_deny
             .unwrap_or_else(|| panic!("versioned exception `{allowed}` missing from {modify:?}"));
         assert!(deny_pos < allow_pos, "exception must follow default deny");
     }
+    let identity = orbit.join("config.yaml");
+    assert!(
+        linux_bwrap_write_grant_diagnostic(&resolved.fs_profile, &identity)
+            .expect("diagnose runtime identity")
+            .is_some(),
+        "checkout-local runtime identity must remain read-only"
+    );
+    let prepared = prepare_linux_bwrap_write_grants(&resolved.fs_profile, &worktree)
+        .expect("prepare versioned write grants");
+    assert!(
+        !identity.exists(),
+        "an absent runtime identity must never become an empty sandbox anchor"
+    );
+    assert!(
+        prepared.created.iter().all(|path| path != &identity),
+        "runtime identity appeared in prepared anchors: {:?}",
+        prepared.created
+    );
     for protected in [
         format!("{}/state/**", orbit.display()),
         format!("{}/tasks/**", orbit.display()),
@@ -476,6 +580,7 @@ fn resolve_executor_sandbox_appends_gemini_orbit_runtime_roots_without_home_real
         format!("{global}/state/audit/**"),
         format!("{global}/orbit.db*"),
         format!("{global}/tasks/**"),
+        format!("{global}/cache/**"),
         format!("{workspace_orbit}/tasks/**"),
         format!("{workspace_orbit}/frictions/**"),
         format!("{workspace_orbit}/state/audit/**"),
@@ -811,6 +916,144 @@ mod cursor_state_roots {
             assert!(
                 linux_cursor_state_roots_with(provider, Some(Path::new("/home/test"))).is_empty(),
                 "{provider} must not inherit Cursor state roots",
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod opencode_state_roots {
+    use std::path::{Path, PathBuf};
+
+    use crate::adapter::engine_host::v2_host::sandbox::{
+        OpencodeStateEnv, linux_opencode_state_roots_with,
+    };
+
+    #[test]
+    fn active_opencode_gets_its_four_xdg_roots_from_home_defaults() {
+        assert_eq!(
+            linux_opencode_state_roots_with(
+                "opencode",
+                Some(Path::new("/home/test")),
+                OpencodeStateEnv::default(),
+            ),
+            vec![
+                PathBuf::from("/home/test/.local/share/opencode"),
+                PathBuf::from("/home/test/.config/opencode"),
+                PathBuf::from("/home/test/.local/state/opencode"),
+                PathBuf::from("/home/test/.cache/opencode"),
+            ]
+        );
+        assert!(
+            linux_opencode_state_roots_with("opencode", None, OpencodeStateEnv::default())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn xdg_variables_and_the_config_override_replace_the_home_defaults() {
+        assert_eq!(
+            linux_opencode_state_roots_with(
+                "opencode",
+                Some(Path::new("/home/test")),
+                OpencodeStateEnv {
+                    xdg_data_home: Some(PathBuf::from("/srv/data")),
+                    xdg_config_home: Some(PathBuf::from("/srv/config")),
+                    xdg_state_home: Some(PathBuf::from("/srv/state")),
+                    xdg_cache_home: Some(PathBuf::from("/srv/cache")),
+                    opencode_config_dir: None,
+                },
+            ),
+            vec![
+                PathBuf::from("/srv/data/opencode"),
+                PathBuf::from("/srv/config/opencode"),
+                PathBuf::from("/srv/state/opencode"),
+                PathBuf::from("/srv/cache/opencode"),
+            ]
+        );
+
+        // `OPENCODE_CONFIG_DIR` is the config root itself, not an XDG base, so
+        // it is used verbatim and outranks `XDG_CONFIG_HOME`.
+        let roots = linux_opencode_state_roots_with(
+            "opencode",
+            Some(Path::new("/home/test")),
+            OpencodeStateEnv {
+                xdg_config_home: Some(PathBuf::from("/srv/config")),
+                opencode_config_dir: Some(PathBuf::from("/srv/opencode-config")),
+                ..OpencodeStateEnv::default()
+            },
+        );
+        assert_eq!(roots[1], PathBuf::from("/srv/opencode-config"));
+    }
+
+    #[test]
+    fn other_and_unknown_providers_get_nothing() {
+        for provider in [
+            "claude",
+            "codex",
+            "gemini",
+            "grok",
+            "copilot",
+            "cursor",
+            "pi",
+            "ollama",
+            "not-a-provider",
+        ] {
+            assert!(
+                linux_opencode_state_roots_with(
+                    provider,
+                    Some(Path::new("/home/test")),
+                    OpencodeStateEnv::default(),
+                )
+                .is_empty(),
+                "{provider} must not inherit OpenCode state roots",
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod pi_state_roots {
+    use std::path::{Path, PathBuf};
+
+    use crate::adapter::engine_host::v2_host::sandbox::linux_pi_state_roots_with;
+
+    #[test]
+    fn active_pi_gets_only_its_agent_state_root() {
+        assert_eq!(
+            linux_pi_state_roots_with("pi", Some(Path::new("/home/test")), None),
+            vec![PathBuf::from("/home/test/.pi")]
+        );
+        assert!(linux_pi_state_roots_with("pi", None, None).is_empty());
+    }
+
+    #[test]
+    fn the_agent_dir_override_replaces_the_home_default() {
+        assert_eq!(
+            linux_pi_state_roots_with(
+                "pi",
+                Some(Path::new("/home/test")),
+                Some(Path::new("/srv/pi-agent")),
+            ),
+            vec![PathBuf::from("/srv/pi-agent")]
+        );
+    }
+
+    #[test]
+    fn other_and_unknown_providers_get_nothing() {
+        for provider in [
+            "claude",
+            "codex",
+            "gemini",
+            "grok",
+            "copilot",
+            "cursor",
+            "ollama",
+            "not-a-provider",
+        ] {
+            assert!(
+                linux_pi_state_roots_with(provider, Some(Path::new("/home/test")), None).is_empty(),
+                "{provider} must not inherit Pi state roots",
             );
         }
     }

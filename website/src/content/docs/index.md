@@ -1,6 +1,6 @@
 ---
 title: What Orbit Is
-description: "Orbit is a durable, intent-tracked, auditable task layer for developers driving AI coding agents at high volume — local-first by design."
+description: "Orbit runs your coding agents as tracked, reviewable tasks — isolated worktrees, declared file scope, a gated delivery pipeline, and joined audit records. Local-first, bring your own provider CLI."
 template: splash
 prev: false
 next: false
@@ -10,29 +10,37 @@ next: false
 
 <section class="orbit-hero">
   <div class="orbit-hero-copy">
-    <div class="orbit-hero-eyebrow">v0.9.2 · early access</div>
-    <h1 class="orbit-hero-headline">The audit log for your AI coding agents.</h1>
-    <p class="orbit-hero-lede">Durable task lifecycle, task-attributed workflow commits, and structured audit records for agent workflows. Local-first, bring your own model provider.</p>
+    <div class="orbit-hero-eyebrow">early access</div>
+    <h1 class="orbit-hero-headline">Run coding agents as tracked, reviewable tasks.</h1>
+    <p class="orbit-hero-lede">Write a task with acceptance criteria. Orbit reserves its file scope, runs an agent in an isolated worktree, and takes it through a gated pipeline to a pull request you review — with every mutation in a joined audit record. Local-first, driving the provider CLI you already have.</p>
     <div class="orbit-hero-install">
-      <span class="orbit-hero-install-prompt">$</span>
+      <span class="orbit-hero-install-prompt" aria-hidden="true">$</span>
       <code>npm install -g @orbit-tools/cli</code>
-      <button class="orbit-hero-install-copy" type="button" data-copy="npm install -g @orbit-tools/cli">Copy</button>
+      <button class="orbit-copy" type="button" data-copy="npm install -g @orbit-tools/cli" hidden>
+        <span class="orbit-copy-label">Copy</span><span class="orbit-sr-only"> the install command</span>
+      </button>
+      <span class="orbit-copy-status" role="status"></span>
     </div>
     <div class="orbit-hero-actions">
       <a class="orbit-button primary" href="/getting-started/install/">Install Orbit →</a>
-      <a class="orbit-button" href="/reference/cli/">Read the CLI reference</a>
+      <a class="orbit-button" href="/getting-started/first-task/">Write your first task</a>
     </div>
     <div class="orbit-hero-providers">
-      <span>Runs your provider CLI</span>
+      <span>Drives your provider CLI</span>
       <span class="orbit-hero-providers-rule" aria-hidden="true"></span>
       <span>Claude Code</span>
       <span>Codex</span>
-      <span>Gemini</span>
-      <span>Grok Build</span>
+      <span>Antigravity</span>
+      <span>Grok</span>
+      <span>Copilot</span>
+      <span>Cursor</span>
+      <span>OpenCode</span>
+      <span>Pi</span>
     </div>
+    <p class="orbit-hero-providers-note">Gemini CLI ships as a legacy executor for enterprise Gemini Code Assist and API-key accounts. <a href="/concepts/agents/">How agents are invoked →</a></p>
   </div>
 
-  <div class="orbit-terminal">
+  <figure class="orbit-terminal">
     <div class="orbit-terminal-bar">
       <span>~/repo</span>
       <span>one task, end to end</span>
@@ -55,7 +63,8 @@ next: false
       <div><span class="orbit-terminal-prompt">$ </span><span class="orbit-terminal-cmd">git log -1 --grep "$TASK_ID" --oneline</span></div>
       <div><span class="orbit-terminal-id">[SHA]</span> docs: document fsProfile resolution</div>
     </div>
-  </div>
+    <figcaption class="orbit-terminal-caption">Illustrative transcript. The commands are real; identifiers, step rows and durations are placeholders, not measured results.</figcaption>
+  </figure>
 </section>
 
 <div class="orbit-section-title">Start here</div>
@@ -63,19 +72,163 @@ next: false
 <div class="orbit-card-grid orbit-card-grid-3">
   <a class="orbit-card" data-tag="01" href="/getting-started/install/">
     <h3>Install</h3>
-    <p>One binary, no Rust toolchain. Then <code>orbit init</code> sets up your root and skills.</p>
+    <p>One binary, no Rust toolchain. Then <code>orbit init</code> sets up your global root, and <code>orbit workspace init</code> registers the repository.</p>
     <div class="orbit-card-cmd">orbit init</div>
   </a>
   <a class="orbit-card" data-tag="02" href="/getting-started/first-task/">
     <h3>Write a task</h3>
-    <p>Acceptance criteria are required — agents self-evaluate against them.</p>
+    <p>Acceptance criteria are required — agents self-evaluate against them. Context selectors declare the file scope the run may touch.</p>
     <div class="orbit-card-cmd">orbit task add --title "…"</div>
   </a>
   <a class="orbit-card" data-tag="03" href="/how-to/task-lifecycle/">
     <h3>Ship it</h3>
-    <p>The gated pipeline opens a PR, or stays local with <code>--mode local</code>.</p>
+    <p>The gated pipeline runs the agent, then opens a pull request. The task stops in <code>review</code> for you.</p>
     <div class="orbit-card-cmd">orbit run ship "$TASK_ID"</div>
   </a>
+</div>
+
+<div class="orbit-section-title">Choose a delivery mode</div>
+
+<p class="orbit-section-lede">Every <code>orbit run</code> command is asynchronous: it prints a durable run ID and returns without knowing the outcome. Follow up with <code>orbit run show</code>. Pick the shape of delivery you want — the differences are where the run stops and who authorizes the last step.</p>
+
+<div class="orbit-flow">
+  <div class="orbit-flow-tabs" role="radiogroup" aria-label="Delivery mode">
+    <label class="orbit-flow-tab">
+      <input type="radio" name="orbit-flow" id="orbit-flow-pr" value="pr" checked />
+      <span class="orbit-flow-tab-name">One task, one PR</span>
+      <span class="orbit-flow-tab-cmd">run ship</span>
+    </label>
+    <label class="orbit-flow-tab">
+      <input type="radio" name="orbit-flow" id="orbit-flow-local" value="local" />
+      <span class="orbit-flow-tab-name">One task, merged locally</span>
+      <span class="orbit-flow-tab-cmd">--mode local</span>
+    </label>
+    <label class="orbit-flow-tab">
+      <input type="radio" name="orbit-flow" id="orbit-flow-auto" value="auto" />
+      <span class="orbit-flow-tab-name">A bounded window</span>
+      <span class="orbit-flow-tab-cmd">run auto</span>
+    </label>
+    <label class="orbit-flow-tab">
+      <input type="radio" name="orbit-flow" id="orbit-flow-sweep" value="sweep" />
+      <span class="orbit-flow-tab-name">Unattended sweep</span>
+      <span class="orbit-flow-tab-cmd">run ship-sweep</span>
+    </label>
+  </div>
+
+  <div class="orbit-flow-panels">
+    <section class="orbit-flow-panel" data-flow="pr" aria-label="One task, one PR">
+      <div class="orbit-flow-main">
+        <div class="orbit-flow-cmd">
+          <span class="orbit-flow-cmd-prompt" aria-hidden="true">$</span>
+          <code>orbit run ship "$TASK_ID"</code>
+          <button class="orbit-copy" type="button" data-copy="orbit run ship &quot;$TASK_ID&quot;" hidden>
+            <span class="orbit-copy-label">Copy</span><span class="orbit-sr-only"> the ship command</span>
+          </button>
+          <span class="orbit-copy-status" role="status"></span>
+        </div>
+        <p>The default. The gated pipeline reserves the task's declared file scope, runs the agent in an isolated worktree, then opens or updates a pull request.</p>
+      </div>
+      <dl class="orbit-flow-facts">
+        <div>
+          <dt>Stops at</dt>
+          <dd><code>review</code>, with the pull request open and unmerged.</dd>
+        </div>
+        <div>
+          <dt>Base branch</dt>
+          <dd><code>[workflow] base_branch</code> from <code>config.toml</code>, or <code>main</code> when unset. Override with <code>--base</code>.</dd>
+        </div>
+        <div>
+          <dt>Authorized completion</dt>
+          <dd>Separate and explicit. <code>orbit run ship "$TASK_ID" --complete</code> lets that one run move the task to <code>done</code>, once the PR is verified merged and branch protections and required checks are respected.</dd>
+        </div>
+      </dl>
+      <a class="orbit-flow-link" href="/how-to/task-lifecycle/">Run a task lifecycle →</a>
+    </section>
+    <section class="orbit-flow-panel" data-flow="local" aria-label="One task, merged locally">
+      <div class="orbit-flow-main">
+        <div class="orbit-flow-cmd">
+          <span class="orbit-flow-cmd-prompt" aria-hidden="true">$</span>
+          <code>orbit run ship "$TASK_ID" --mode local</code>
+          <button class="orbit-copy" type="button" data-copy="orbit run ship &quot;$TASK_ID&quot; --mode local" hidden>
+            <span class="orbit-copy-label">Copy</span><span class="orbit-sr-only"> the local ship command</span>
+          </button>
+          <span class="orbit-copy-status" role="status"></span>
+        </div>
+        <p>Delivers in place, with no pull request. The run commits and merges to the configured base <em>before</em> the task reaches <code>review</code>, and may push that base as part of the same delivery.</p>
+      </div>
+      <dl class="orbit-flow-facts">
+        <div>
+          <dt>Stops at</dt>
+          <dd><code>review</code> — but the merge has already happened, so this is not a pre-merge stop.</dd>
+        </div>
+        <div>
+          <dt>When you omit <code>--mode</code></dt>
+          <dd>The mode comes from the workspace's registry entry, falling back to <code>pr</code>.</dd>
+        </div>
+        <div>
+          <dt>Authorized completion</dt>
+          <dd>Still separate. <code>--complete</code> moves the task to <code>done</code> once the work is merged and pushed.</dd>
+        </div>
+      </dl>
+      <a class="orbit-flow-link" href="/getting-started/workflows/">Compare the run surface →</a>
+    </section>
+    <section class="orbit-flow-panel" data-flow="auto" aria-label="A bounded window">
+      <div class="orbit-flow-main">
+        <div class="orbit-flow-cmd">
+          <span class="orbit-flow-cmd-prompt" aria-hidden="true">$</span>
+          <code>orbit run auto --for 4h --concurrency 8</code>
+          <button class="orbit-copy" type="button" data-copy="orbit run auto --for 4h --concurrency 8" hidden>
+            <span class="orbit-copy-label">Copy</span><span class="orbit-sr-only"> the auto drain command</span>
+          </button>
+          <span class="orbit-copy-status" role="status"></span>
+        </div>
+        <p>Drains the workspace backlog for a time-bounded window. The drain re-lists the backlog every pass and keeps <code>--concurrency</code> tasks in flight, starting a replacement as each one finishes rather than waiting for a batch.</p>
+      </div>
+      <dl class="orbit-flow-facts">
+        <div>
+          <dt>The window</dt>
+          <dd><code>--for</code> bounds only the <em>start</em> of new work. A task already being shipped when it expires still finishes. Without <code>--for</code>, the run takes one tick and stops.</dd>
+        </div>
+        <div>
+          <dt>Parallelism</dt>
+          <dd>Defaults to 5. An epic root runs alongside the leaves, one at a time. Check first with <code>orbit run readiness</code>, which reserves and submits nothing.</dd>
+        </div>
+        <div>
+          <dt>Authorized completion</dt>
+          <dd><code>--complete</code> here is blanket authorization for every task the drain admits during the whole window — not just the backlog visible when you started it.</dd>
+        </div>
+      </dl>
+      <a class="orbit-flow-link" href="/how-to/continuous-delivery/">Run a continuous delivery window →</a>
+    </section>
+    <section class="orbit-flow-panel" data-flow="sweep" aria-label="Unattended sweep">
+      <div class="orbit-flow-main">
+        <div class="orbit-flow-cmd">
+          <span class="orbit-flow-cmd-prompt" aria-hidden="true">$</span>
+          <code>orbit run ship-sweep --dry-run</code>
+          <button class="orbit-copy" type="button" data-copy="orbit run ship-sweep --dry-run" hidden>
+            <span class="orbit-copy-label">Copy</span><span class="orbit-sr-only"> the ship sweep command</span>
+          </button>
+          <span class="orbit-copy-status" role="status"></span>
+        </div>
+        <p>Dispatches a ship run in every registered workspace that has ready backlog tasks. Only workspaces with <code>[workflow] auto_ship = true</code> are swept; everything else is reported as skipped.</p>
+      </div>
+      <dl class="orbit-flow-facts">
+        <div>
+          <dt>Intended for</dt>
+          <dd>A scheduler. Routines fire it on the <code>orbit sweep</code> clock, which is also what mints recurring auto-tasks.</dd>
+        </div>
+        <div>
+          <dt>Start read-only</dt>
+          <dd><code>--dry-run</code> reports what would be swept. Drop it once the selection looks right.</dd>
+        </div>
+        <div>
+          <dt>Authorized completion</dt>
+          <dd>Never available here. <code>--complete</code> is off unless you pass it on an invocation, and no workspace setting, environment variable, or unattended routine turns it on.</dd>
+        </div>
+      </dl>
+      <a class="orbit-flow-link" href="/how-to/recurring-work/">Schedule recurring work →</a>
+    </section>
+  </div>
 </div>
 
 <div class="orbit-section-title">Why Orbit</div>
@@ -99,8 +252,33 @@ next: false
   <div class="orbit-card">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="16" rx="2"/><rect x="14" y="4" width="7" height="16" rx="2"/></svg></div>
     <h3>Safe parallel</h3>
-    <p>Worktree isolation and filesystem policies (<code>sandbox-exec</code>, <code>bwrap</code>) keep parallel agents from colliding.</p>
+    <p>Worktree isolation, file-scope locks, and OS sandboxes (<code>sandbox-exec</code>, <code>bwrap</code>) keep parallel agents from colliding.</p>
   </div>
+</div>
+
+<div class="orbit-section-title">Go further</div>
+
+<div class="orbit-card-grid orbit-card-grid-4">
+  <a class="orbit-card" href="/how-to/continuous-delivery/">
+    <h3>Continuous delivery</h3>
+    <p>Prepare work, approve it, check readiness, then authorize a bounded drain — and recover it safely.</p>
+    <div class="orbit-card-cmd">orbit run readiness</div>
+  </a>
+  <a class="orbit-card" href="/how-to/recurring-work/">
+    <h3>Recurring work</h3>
+    <p>Routines fire jobs on a cadence and auto-tasks mint recurring chores. Both run on the sweep clock.</p>
+    <div class="orbit-card-cmd">orbit sweep --dry-run</div>
+  </a>
+  <a class="orbit-card" href="/how-to/task-publication/">
+    <h3>Publication and recovery</h3>
+    <p>Push a validated snapshot of one workspace's tasks to a Git repository you control, then verify and restore it.</p>
+    <div class="orbit-card-cmd">orbit task publication status</div>
+  </a>
+  <a class="orbit-card" href="/reference/cli/">
+    <h3>CLI reference</h3>
+    <p>Every command surface, with the flags, defaults, and JSON output shapes each one accepts.</p>
+    <div class="orbit-card-cmd">orbit --help</div>
+  </a>
 </div>
 
 <div class="orbit-section-title">Explore the docs</div>
@@ -110,7 +288,7 @@ next: false
     <div class="orbit-docs-group-title">Getting Started</div>
     <a href="/getting-started/install/">Install Orbit</a>
     <a href="/getting-started/first-task/">First Task</a>
-    <a href="/getting-started/workflows/">Default Workflows</a>
+    <a href="/getting-started/workflows/">Delivery Workflows</a>
   </div>
   <div class="orbit-docs-group">
     <div class="orbit-docs-group-title">Concepts</div>
@@ -122,6 +300,9 @@ next: false
   <div class="orbit-docs-group">
     <div class="orbit-docs-group-title">How-to Guides</div>
     <a href="/how-to/task-lifecycle/">Run a Task Lifecycle</a>
+    <a href="/how-to/continuous-delivery/">Run Continuous Delivery</a>
+    <a href="/how-to/recurring-work/">Schedule Recurring Work</a>
+    <a href="/how-to/task-publication/">Publish and Restore Tasks</a>
     <a href="/how-to/write-activity/">Write an Activity</a>
     <a href="/how-to/scoping-rules/">Choose Scopes</a>
     <a href="/how-to/mcp-integration/">Set Up MCP</a>
@@ -135,10 +316,6 @@ next: false
     <a href="/reference/scoping/">Scoping Rules</a>
   </div>
   <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">Architecture</div>
-    <a href="/architecture/">Overview</a>
-  </div>
-  <div class="orbit-docs-group">
     <div class="orbit-docs-group-title">Contributing</div>
     <a href="/contributing/local-dev/">Local Development</a>
     <a href="/contributing/crate-layout/">Crate Layout</a>
@@ -149,15 +326,86 @@ next: false
 </div>
 
 <script is:inline>
-  document.addEventListener("click", (e) => {
-    const btn = e.target.closest(".orbit-hero-install-copy");
-    if (!btn) return;
-    const text = btn.dataset.copy || "";
-    if (!text || !navigator.clipboard) return;
-    navigator.clipboard.writeText(text).then(() => {
-      const prev = btn.textContent;
-      btn.textContent = "Copied";
-      setTimeout(() => { btn.textContent = prev; }, 1400);
+  (() => {
+    const RESET_MS = 2400;
+    const timers = new WeakMap();
+    /** The `role="status"` span that pairs with a copy button. */
+    const statusFor = (btn) => {
+      const next = btn.nextElementSibling;
+      return next && next.classList.contains("orbit-copy-status") ? next : null;
+    };
+    /* Feedback goes to two places: the button's own visible label, which is
+       kept short so the control never reflows the row it sits in, and an
+       adjacent `role="status"` region that carries the full sentence for
+       assistive technology. */
+    const report = (btn, state, message) => {
+      const label = btn.querySelector(".orbit-copy-label");
+      btn.dataset.state = state;
+      if (label) label.textContent = state === "ok" ? "Copied" : "Failed";
+      if (state === "error") btn.title = message; else btn.removeAttribute("title");
+      const status = statusFor(btn);
+      // Clearing first makes a repeated identical message announce again.
+      if (status) {
+        status.textContent = "";
+        window.setTimeout(() => { status.textContent = message; }, 30);
+      }
+      window.clearTimeout(timers.get(btn));
+      timers.set(btn, window.setTimeout(() => {
+        delete btn.dataset.state;
+        btn.removeAttribute("title");
+        if (label) label.textContent = "Copy";
+        if (status) status.textContent = "";
+      }, RESET_MS));
+    };
+    /* Last-resort path for browsers without an async clipboard, or on an
+       insecure origin where `navigator.clipboard` is undefined. Returns the
+       browser's own verdict so a failure is never reported as a success. */
+    const legacyCopy = (text) => {
+      const field = document.createElement("textarea");
+      field.value = text;
+      field.setAttribute("readonly", "");
+      field.setAttribute("aria-hidden", "true");
+      field.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;";
+      document.body.appendChild(field);
+      const selection = document.getSelection();
+      const previous = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+      field.select();
+      let copied = false;
+      try {
+        copied = document.execCommand("copy");
+      } catch {
+        copied = false;
+      }
+      field.remove();
+      if (previous && selection) { selection.removeAllRanges(); selection.addRange(previous); }
+      return copied;
+    };
+    const copy = async (btn) => {
+      const text = btn.dataset.copy || "";
+      if (!text) return;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          report(btn, "ok", "Copied to clipboard.");
+          return;
+        }
+      } catch {
+        // A rejected permission or a hidden document falls through to the
+        // legacy path rather than surfacing an unhandled rejection.
+      }
+      if (legacyCopy(text)) {
+        report(btn, "ok", "Copied to clipboard.");
+      } else {
+        report(btn, "error", "Copy failed — select the command and copy it manually.");
+      }
+    };
+    // The buttons ship hidden so a JavaScript-free page has no dead control.
+    for (const btn of document.querySelectorAll(".orbit-copy")) {
+      btn.hidden = false;
+    }
+    document.addEventListener("click", (event) => {
+      const btn = event.target.closest(".orbit-copy");
+      if (btn) copy(btn);
     });
-  });
+  })();
 </script>

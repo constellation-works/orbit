@@ -153,10 +153,44 @@ fn legacy_json(matches: &ArgMatches) -> bool {
     }
 }
 
+/// Repoint clap's default "pass it after `--`" tip when the rejected flag is
+/// `--crew` on `orbit run job` / `orbit job run` (matched by the `<JOB_ID>`
+/// usage, unique to [`command::run::JobRunArgs`]).
+///
+/// That default tip is actively wrong here: a job run has no positional slot
+/// a trailing `--crew` could land in, so following it just produces a second,
+/// more confusing error. Crew selection for a job run goes through the
+/// existing `--input` contract (`resolve_crew_for_run_input` reads `crew`
+/// from the run input), so the repair only rewrites the tip text — it does
+/// not change what argv the parser accepts or make `--crew` appear to work.
+fn repair_crew_flag_suggestion(mut err: clap::error::Error) -> clap::error::Error {
+    use clap::error::{ContextKind, ContextValue};
+
+    let is_crew_flag = matches!(
+        err.get(ContextKind::InvalidArg),
+        Some(ContextValue::String(arg)) if arg == "--crew"
+    );
+    let is_job_run = matches!(
+        err.get(ContextKind::Usage),
+        Some(ContextValue::StyledStr(usage)) if usage.to_string().contains("<JOB_ID>")
+    );
+    if is_crew_flag && is_job_run {
+        err.insert(
+            ContextKind::Suggested,
+            ContextValue::StyledStrs(vec![clap::builder::StyledStr::from(
+                "crew selection is `--input crew=<name>`, e.g. `--input crew=luna` (see `orbit run job --help`)",
+            )]),
+        );
+    }
+    err
+}
+
 /// Parse argv into the derived CLI plus the two inputs to mode resolution.
 fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
     let args = command::mcp::normalize_ssh_login_shell_args(std::env::args_os());
-    let matches = install_format_arg(command::Cli::command()).get_matches_from(args);
+    let matches = install_format_arg(command::Cli::command())
+        .try_get_matches_from(args)
+        .unwrap_or_else(|err| repair_crew_flag_suggestion(err).exit());
     let requested = requested_format(&matches);
     let legacy = legacy_json(&matches);
     let cli = command::Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
@@ -213,6 +247,10 @@ fn main() {
             return;
         }
         RuntimeNeed::Required => RegisteredRuntimeFactory::initialize_with_overrides(
+            root_override.as_deref(),
+            workspace_selector.as_deref(),
+        ),
+        RuntimeNeed::ReadOnly => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
             root_override.as_deref(),
             workspace_selector.as_deref(),
         ),

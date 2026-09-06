@@ -6,6 +6,7 @@ use orbit_types::task::{
 
 #[derive(Default, Clone)]
 pub(crate) struct TaskRecordUpdateParams {
+    pub(crate) artifact_owner_run_id: Option<String>,
     pub(crate) actor: String,
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
@@ -34,6 +35,10 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) append_history: Vec<TaskHistoryEntry>,
     pub(crate) append_comments: Vec<TaskComment>,
     pub(crate) upsert_artifacts: Vec<TaskArtifact>,
+    /// [ORB-11305] Forwarded to the store as a compare-and-set on the task's
+    /// persisted status. Setting it does not itself constitute a history
+    /// change — it only constrains one.
+    pub(crate) expected_status: Option<Vec<TaskStatus>>,
 }
 
 impl TaskRecordUpdateParams {

@@ -25,18 +25,22 @@ mod tests;
 
 pub use connect::{ConnectArgs, connect};
 
+use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use clap::Args;
+use orbit_cmd::registry_runtime;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{WorkspaceRegistry, WorkspaceStatus};
+use tokio::sync::Notify;
 
 const INDEX_HTML: &str = include_str!("../assets/dashboard/index.html");
 const DASHBOARD_CSS: &str = include_str!("../assets/dashboard/dashboard.css");
@@ -55,6 +59,7 @@ const DIAGNOSTICS_JS: &str = include_str!("../assets/dashboard/diagnostics.js");
 const ROUTER_JS: &str = include_str!("../assets/dashboard/router.js");
 const RUNS_JS: &str = include_str!("../assets/dashboard/runs.js");
 const RUN_DETAIL_JS: &str = include_str!("../assets/dashboard/run-detail.js");
+const AUTOMATION_JS: &str = include_str!("../assets/dashboard/automation.js");
 const OPERATIONS_JS: &str = include_str!("../assets/dashboard/operations.js");
 const DASHBOARD_CSP: &str = concat!(
     "default-src 'self'; ",
@@ -97,6 +102,13 @@ pub struct ServeArgs {
     /// — removing it would break tunnels against an old/new binary mix.
     #[arg(long)]
     pub global: bool,
+
+    /// Preselect this workspace in the dashboard, by registered name, logical
+    /// ID (`ws_*`), or local checkout path. Defaults to the workspace
+    /// containing the current directory. Distinct from `--root`, which
+    /// chooses which registry is served.
+    #[arg(long, value_name = "SELECTOR")]
+    pub workspace: Option<String>,
 }
 
 /// Boot the dashboard for a single, already-built runtime and block until
@@ -114,42 +126,51 @@ pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> 
 /// Unlike [`serve`], this needs no pre-built runtime, so it works from any
 /// directory — the entry point for `orbit web serve` (dispatched before the
 /// CLI's eager workspace initialization, which would otherwise fail outside a
-/// workspace). Always serves in global mode: every registered workspace is
-/// selectable via the dropdown, regardless of cwd (`args.global` is accepted
-/// but ignored — see [`ServeArgs::global`]).
+/// workspace). Always serves in global mode: every workspace registered in the
+/// served registry is selectable via the dropdown, regardless of cwd
+/// (`args.global` is accepted but ignored — see [`ServeArgs::global`]).
 ///
-/// `root_override` is the top-level `--root <path>` flag, if given; it picks
-/// the dropdown's default-preselected workspace ahead of the process cwd (see
-/// `build_state`). This matters for `orbit web connect`: the remote `orbit
-/// web serve` it launches over `ssh` runs non-interactively with cwd set to
-/// the remote user's home directory, so `--root` is the only signal available
-/// to hint which workspace should be preselected there.
+/// `root_override` is the top-level `--root <path>` flag, if given. It means
+/// here exactly what it means everywhere else in the CLI: the Orbit data
+/// directory to read, so the dashboard serves `<root>/workspaces.json` and
+/// nothing from the machine-global registry (ORB-11388). Which workspace the
+/// dropdown opens on is a separate question, answered by `--workspace`.
 pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(), OrbitError> {
-    let state = build_state(root_override)?;
+    let state = build_state(root_override, args.workspace.as_deref())?;
     run_server(&args, state)
 }
 
 /// Resolve dashboard state from the environment: registry-backed global mode
-/// over every registered workspace (stale-path entries are listed but marked
-/// inactive and never built). The servable set is reloaded from
-/// `~/.orbit/workspaces.json` on every request boundary (see
+/// over every workspace registered in the served registry (stale-path entries
+/// are listed but marked inactive and never built). The registry is
+/// `<root>/workspaces.json` for an explicit `--root`, and the machine-global
+/// `~/.orbit/workspaces.json` otherwise — the same resolution every other
+/// root-aware command performs, via
+/// [`orbit_cmd::registry_runtime::global_root_for`]. The servable set is
+/// reloaded from that same path on every request boundary (see
 /// [`state::DashboardState::refresh`]), so a native `orbit workspace
 /// init/remove` or binding change becomes visible without restarting the
 /// server. The dropdown's default selection is, in priority order: the
-/// registered/active workspace matching `root_override` (an explicit `--root
-/// <path>`), else the registered workspace containing the cwd (see
+/// registered/active workspace matching `workspace_selector` (an explicit
+/// `--workspace`), else the registered workspace containing the cwd (see
 /// [`default_workspace_for_cwd`]), else "All workspaces". See
 /// [`default_workspace_selection`] for the precedence logic.
 ///
 /// The initial load is eager: a malformed registry at startup is fatal, exactly
 /// as before this became refreshable. A malformed *refresh* after a good
 /// startup retains the last valid snapshot instead (see `refresh`).
-fn build_state(root_override: Option<&Path>) -> Result<state::DashboardState, OrbitError> {
-    let global_root = workspace_registry::global_orbit_dir()?;
-    let registry_path = workspace_registry::registry_path()?;
+fn build_state(
+    root_override: Option<&Path>,
+    workspace_selector: Option<&str>,
+) -> Result<state::DashboardState, OrbitError> {
+    let global_root = registry_runtime::global_root_for(root_override)?;
+    let registry_path = workspace_registry::registry_path_for(&global_root);
     let cwd = std::env::current_dir().ok();
-    let source =
-        state::RegistrySource::new(registry_path, root_override.map(Path::to_path_buf), cwd);
+    let source = state::RegistrySource::new(
+        registry_path,
+        workspace_selector.map(ToOwned::to_owned),
+        cwd,
+    );
     state::DashboardState::from_registry(global_root, source)
 }
 
@@ -172,49 +193,73 @@ fn default_workspace_for_cwd(registry: &WorkspaceRegistry, cwd: &Path) -> Option
 }
 
 /// Precedence logic for the dropdown's default-preselected workspace: an
-/// explicit `root_override` (the top-level `--root <path>` flag) always wins
-/// over `cwd` when given, even if it does not resolve to any registered/active
+/// explicit `workspace_selector` (the `--workspace` flag) always wins over
+/// `cwd` when given, even if it does not resolve to any registered/active
 /// workspace — in that case the result is `None` ("All workspaces"), not a
 /// fallback to the cwd-based default. This matches [`default_workspace_for_cwd`]:
 /// don't error, don't auto-register, just prefer the aggregate view.
 ///
-/// `root_override` not being given falls back to the existing cwd-based
-/// behavior unchanged.
+/// The selector is a registered name or logical `ws_*` ID first, and a local
+/// checkout path when it is path-shaped
+/// ([`registry_runtime::selector_looks_like_path`]); a path is matched the
+/// same way a cwd is (longest registered prefix), which is what `orbit web
+/// connect` forwards for a remote workspace directory. An unknown bare name is
+/// never joined to cwd — that would preselect the cwd's workspace for a
+/// selector that matched nothing. `workspace_selector` not being given falls
+/// back to the existing cwd-based behavior unchanged.
 fn default_workspace_selection(
     registry: &WorkspaceRegistry,
-    root_override: Option<&Path>,
+    workspace_selector: Option<&str>,
     cwd: Option<&Path>,
 ) -> Option<String> {
-    match root_override {
-        Some(root) => {
-            let resolved = resolve_root_override(root, cwd);
-            default_workspace_for_cwd(registry, &resolved)
-        }
+    match workspace_selector {
+        Some(selector) => workspace_registry::resolve_logical_workspace(registry, selector)
+            .ok()
+            .filter(|workspace| workspace.status == WorkspaceStatus::Active)
+            .map(|workspace| workspace.id.clone())
+            .or_else(|| {
+                if !registry_runtime::selector_looks_like_path(selector) {
+                    return None;
+                }
+                let path = resolve_selector_path(Path::new(selector), cwd);
+                default_workspace_for_cwd(registry, &path)
+            }),
         None => cwd.and_then(|cwd| default_workspace_for_cwd(registry, cwd)),
     }
 }
 
-/// Normalize a `--root <path>` value so it can be prefix-matched against
-/// registered workspace roots (which are canonical absolute paths after the
-/// pipeline's canonicalization; see `orbit-runtime/src/builder.rs`).
+/// Normalize a path-shaped `--workspace <selector>` value so it can be
+/// prefix-matched against registered workspace roots (which are canonical
+/// absolute paths after the pipeline's canonicalization; see
+/// `orbit-runtime/src/builder.rs`).
 ///
-/// Relative paths are resolved against `cwd` before canonicalization — mirrors
-/// the pre-ORB-10029 single-mode `--root` behavior. If canonicalization fails
-/// (path may not exist, or symlink resolution errors), return the pre-canonical
-/// absolute path so behavior for nonexistent paths is preserved: a raw
-/// lexical prefix comparison against a stale/nonexistent path just misses,
-/// which is the existing "All workspaces" fallback.
-fn resolve_root_override(root: &Path, cwd: Option<&Path>) -> PathBuf {
-    let absolute = if root.is_absolute() {
-        root.to_path_buf()
+/// Relative paths are resolved against `cwd` before canonicalization. If
+/// canonicalization fails (path may not exist, or symlink resolution errors),
+/// return the pre-canonical absolute path so behavior for nonexistent paths is
+/// preserved: a raw lexical prefix comparison against a stale/nonexistent path
+/// just misses, which is the existing "All workspaces" fallback.
+fn resolve_selector_path(selector: &Path, cwd: Option<&Path>) -> PathBuf {
+    let absolute = if selector.is_absolute() {
+        selector.to_path_buf()
     } else {
         match cwd {
-            Some(cwd) => cwd.join(root),
-            None => root.to_path_buf(),
+            Some(cwd) => cwd.join(selector),
+            None => selector.to_path_buf(),
         }
     };
     absolute.canonicalize().unwrap_or(absolute)
 }
+
+/// Upper bound on graceful connection drain once a shutdown signal (ctrl-c or
+/// SIGTERM) is received — well under `orbit-web.service`'s
+/// `TimeoutStopUSec=90s` (see the 2026-09-05 restart incident, ORB-11246:
+/// `stop-sigterm` timed out and systemd fell back to SIGKILL). [`shutdown_signal`]
+/// also tells long-lived streaming handlers (`api::request_shutdown`, e.g.
+/// `/api/log/stream`) to close cooperatively as soon as shutdown begins, so in
+/// practice the drain below finishes almost immediately; this timeout is a
+/// deterministic backstop for a connection that doesn't cooperate, so the
+/// process still exits on its own instead of relying on systemd's SIGKILL.
+const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(10);
 
 /// Build the axum app and block on the tokio runtime until graceful shutdown.
 fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), OrbitError> {
@@ -242,6 +287,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         .route("/static/runs.js", get(serve_runs_js))
         .route("/static/run-detail.js", get(serve_run_detail_js))
         .route("/static/operations.js", get(serve_operations_js))
+        .route("/static/automation.js", get(serve_automation_js))
         .route("/healthz", get(health::healthz))
         .nest("/api", api::router())
         .with_state(state);
@@ -265,13 +311,78 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
             open_browser(&url);
         }
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .map_err(|e| OrbitError::Execution(format!("serve: {e}")))?;
+        // Shared with `drain_with_grace_period` below: the grace-period timer
+        // must not start until shutdown is actually requested, so the signal
+        // handler notifies it rather than the drain deadline starting
+        // unconditionally when serving starts (see ORB-11255). `notify_one`
+        // (not `notify_waiters`) is required here: `drain` (polled as part of
+        // the `select!` in `drain_with_grace_period`) can resolve this signal
+        // and reach this call before `grace_elapsed`'s `notified().await` has
+        // ever been polled for the first time -- `notify_waiters` only wakes
+        // *already-registered* waiters and would silently drop that
+        // notification, leaving the grace timer never started. `notify_one`
+        // stores a permit for exactly this case: a `notified().await` that
+        // starts after the notify already fired consumes it immediately.
+        // There is exactly one waiter (`grace_elapsed`), so `notify_one` is
+        // sufficient.
+        let shutdown_notify = Arc::new(Notify::new());
+        let notify_on_signal = Arc::clone(&shutdown_notify);
+        let shutdown = async move {
+            shutdown_signal().await;
+            // Ask cooperating long-lived connections (the `/api/log/stream`
+            // SSE handler) to close now, before the bounded drain deadline
+            // below is reached.
+            api::request_shutdown();
+            notify_on_signal.notify_one();
+        };
+        let drain = axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown)
+            .into_future();
 
-        Ok::<(), OrbitError>(())
+        drain_with_grace_period(drain, shutdown_notify, SHUTDOWN_GRACE_PERIOD).await
     })
+}
+
+/// Race a server-drain future against a grace-period timeout that only
+/// starts counting down once `shutdown_notify` fires. Returns `drain`'s
+/// result if it finishes first (normal completion of graceful shutdown, or a
+/// serve error). Otherwise, once `grace_period` elapses after shutdown was
+/// signaled, logs a warning and returns `Ok(())` so the process exits without
+/// waiting further for connections that never close on their own.
+///
+/// Critically, `grace_elapsed` cannot resolve before `shutdown_notify` fires:
+/// this is what stops a healthy, unsignaled server from being torn down after
+/// `grace_period` elapses (ORB-11255 -- the prior `tokio::time::timeout`
+/// wrapped the whole drain and started counting down when serving began, not
+/// when shutdown was requested).
+///
+/// Callers must signal `shutdown_notify` with [`Notify::notify_one`], not
+/// `notify_waiters`: `drain` is polled as part of the `select!` below and may
+/// resolve the signal and notify before `grace_elapsed`'s `notified().await`
+/// is ever polled for the first time. `notify_one` stores a permit for that
+/// case; `notify_waiters` would silently drop the notification and leave the
+/// grace timer never started.
+async fn drain_with_grace_period(
+    drain: impl Future<Output = std::io::Result<()>>,
+    shutdown_notify: Arc<Notify>,
+    grace_period: Duration,
+) -> Result<(), OrbitError> {
+    let grace_elapsed = async {
+        shutdown_notify.notified().await;
+        tokio::time::sleep(grace_period).await;
+    };
+
+    tokio::select! {
+        result = drain => result.map_err(|e| OrbitError::Execution(format!("serve: {e}"))),
+        () = grace_elapsed => {
+            tracing::warn!(
+                grace_period_secs = grace_period.as_secs(),
+                "dashboard shutdown grace period elapsed with connections \
+                 still open; exiting without waiting further"
+            );
+            Ok(())
+        }
+    }
 }
 
 /// Reject binding the dashboard to anything other than a loopback address.
@@ -370,6 +481,9 @@ async fn serve_run_detail_js() -> Response {
 
 async fn serve_operations_js() -> Response {
     dashboard_response("application/javascript; charset=utf-8", OPERATIONS_JS)
+}
+async fn serve_automation_js() -> Response {
+    dashboard_response("application/javascript; charset=utf-8", AUTOMATION_JS)
 }
 
 fn dashboard_response(content_type: &'static str, body: &'static str) -> Response {

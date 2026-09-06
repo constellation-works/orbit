@@ -3,7 +3,7 @@
 use clap::{Args, ValueEnum};
 #[cfg(test)]
 use orbit_core::build_ship_input;
-use orbit_core::{OrbitError, OrbitRuntime, find_workflow};
+use orbit_core::{CompletionPolicy, OrbitError, OrbitRuntime, find_workflow};
 #[cfg(test)]
 use serde_json::Value;
 
@@ -32,7 +32,14 @@ impl ShipMode {
 #[command(
     about = "Ship backlog or explicitly selected tasks through the gated task pipeline",
     override_usage = "orbit run ship [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n\nInspect submitted runs with `orbit run history -j task_auto_pipeline` and `orbit run show <RUN_ID>`."
+    after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n  orbit run ship T123 --allow-crew sol\n  orbit run ship T123 --complete\n\n\
+                  Shipment is asynchronous: this prints the durable run ID and returns. The\n\
+                  eventual outcome is not known when it does.\n\n\
+                  `--allow-crew` restricts an explicit shipment to configured crews. It does\n\
+                  not reassign tasks or select a fallback: an excluded current or later-resolved\n\
+                  crew is refused before its provider starts.\n\n\
+                  Inspect submitted runs with `orbit run history -j task_auto_pipeline` and\n\
+                  `orbit run show <RUN_ID>`."
 )]
 pub struct ShipCommand {
     /// Optional task IDs to seed explicit gated shipment. Omit for auto mode.
@@ -47,6 +54,19 @@ pub struct ShipCommand {
     /// `[workflow] base_branch` from `config.toml` (or `main` if unset).
     #[arg(short = 'b', long)]
     pub base: Option<String>,
+    /// Authorize this run to finish delivery and move the tasks it ships to
+    /// `done`, instead of leaving them in `review` for a separate approval.
+    /// In `local` mode that happens once the work is merged and pushed; in
+    /// `pr` mode once the PR is verified merged, respecting branch protections
+    /// and required checks. Off by default, and it never approves `proposed`
+    /// work for the backlog.
+    #[arg(long)]
+    pub complete: bool,
+    /// Restrict an explicit shipment to these configured crews. Repeatable and
+    /// comma-separated. Every name must be configured; an unknown or empty one
+    /// fails before a run is created. Omitted, shipment remains unrestricted.
+    #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
+    pub allow_crew: Vec<String>,
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
@@ -54,6 +74,16 @@ pub struct ShipCommand {
     /// one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.
     #[arg(long)]
     pub claim_token: Option<String>,
+}
+
+impl ShipCommand {
+    fn completion(&self) -> CompletionPolicy {
+        if self.complete {
+            CompletionPolicy::Done
+        } else {
+            CompletionPolicy::Review
+        }
+    }
 }
 
 impl Execute for ShipCommand {
@@ -67,6 +97,8 @@ impl Execute for ShipCommand {
             mode,
             self.base.as_deref(),
             &self.task_ids,
+            self.completion(),
+            &self.allow_crew,
             None,
             self.claim_token.as_deref(),
         )?;
@@ -163,7 +195,13 @@ pub(crate) fn build_ship_run_plan(
     let base = args.base.as_deref().unwrap_or(config_base_branch);
     Ok(WorkflowRunPlan {
         workflow_alias,
-        input: build_ship_input(mode, base, &args.task_ids)?,
+        input: build_ship_input(
+            mode,
+            base,
+            &args.task_ids,
+            args.completion(),
+            &args.allow_crew,
+        )?,
     })
 }
 

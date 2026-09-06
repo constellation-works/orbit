@@ -64,13 +64,19 @@ pub use orbit_tools::prepare_remote_task_artifact_put;
 
 // Command-layer types the CLI names in its clap surfaces.
 pub use application::docs::{DocType, TaskRelatedDoc};
-pub use application::job::{PipelineInvokeResult, PipelineWaitEntry};
+pub use application::job::{
+    AgentInvokeRequest, AgentInvokeSubmission, DrainAdmissionsStopChange,
+    DrainAdmissionsStopRequest, DrainAdmissionsStopResult, DrainWorkerLimitChange,
+    DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry, RemainingDrainChild,
+};
 pub use application::search::{
     GlobalSearchHit, GlobalSearchKind, GlobalSearchParams, HitWorkspace, WorkspaceSearchReport,
     task_selectors_contain_path,
 };
 pub use application::task::{LockContentionHotspot, LockContentionReport};
-pub use application::workflow::{ShipMode, build_ship_input, find_workflow, resolved_ship_mode};
+pub use application::workflow::{
+    CompletionPolicy, ShipMode, build_ship_input, find_workflow, resolved_ship_mode,
+};
 pub use application::workspace_sync::{
     ManagedArtifactOutcome, ManagedArtifactScope, ManagedArtifactSyncAction,
     WorkspaceManagedArtifactSyncReport, reconcile_workspace_managed_artifacts,

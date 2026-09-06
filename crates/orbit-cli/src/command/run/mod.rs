@@ -1,12 +1,15 @@
+pub mod agent;
 pub mod auto;
 mod cancel;
 mod command;
+mod concurrency;
 mod events;
 mod format;
 mod history;
 pub mod job;
 pub mod legacy_logs;
 mod logs;
+mod readiness;
 pub mod ship;
 mod show;
 mod steps;

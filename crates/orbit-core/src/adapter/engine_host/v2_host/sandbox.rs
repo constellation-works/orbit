@@ -36,12 +36,22 @@ pub(crate) fn resolve_executor_sandbox(
             }
             #[cfg(target_os = "macos")]
             {
-                let mut resolved =
-                    resolve_fs_profile_absolute(runtime, fs_profile, None).map_err(|err| {
-                        DispatchError::CliInvocationFailed(format!(
-                            "resolve fsProfile for sandbox: {err}"
-                        ))
-                    })?;
+                // Read-only reviewer activities may run from an invocation-owned
+                // inspection checkout, so their read grants must follow that
+                // checkout. Implementer profiles stay anchored at the registered
+                // workspace; the active worktree is re-allowed separately below
+                // after the workspace's `.orbit` deny rules.
+                let profile_root = if fs_profile == Some("reviewer") {
+                    subprocess_cwd
+                } else {
+                    None
+                };
+                let mut resolved = resolve_fs_profile_absolute(runtime, fs_profile, profile_root)
+                    .map_err(|err| {
+                    DispatchError::CliInvocationFailed(format!(
+                        "resolve fsProfile for sandbox: {err}"
+                    ))
+                })?;
                 append_codex_side_write_roots(runtime, provider, &mut resolved)?;
                 append_orbit_child_runtime_write_roots(runtime, &mut resolved);
                 append_active_worktree_root(runtime, subprocess_cwd, &mut resolved);
@@ -193,8 +203,9 @@ fn append_codex_side_write_roots(
 /// Allow the nested Orbit processes launched by provider CLIs to initialize
 /// only the runtime stores they need while staying inside the outer sandbox.
 ///
-/// Gemini and Claude do not have a codex-style `--add-dir` side channel, but
-/// their MCP/tool calls still execute `orbit ...` as a sandbox-inherited child.
+/// Gemini, Antigravity, and Claude do not have a codex-style `--add-dir` side
+/// channel, but their MCP/tool calls still execute `orbit ...` as a
+/// sandbox-inherited child.
 /// Those child processes initialize global logs/audit/databases/tasks plus the
 /// workspace stores exposed by activity tool allowlists.
 ///
@@ -227,6 +238,10 @@ fn append_orbit_child_runtime_write_roots(
         format!("{global}/state/audit/**"),
         format!("{global}/orbit.db*"),
         format!("{global}/tasks/**"),
+        // Language-neutral host cache seam shared across worktrees. Not an
+        // activity-tool store and not a shared Cargo target directory.
+        // [ORB-11259]
+        format!("{global}/cache/**"),
         format!("{workspace}/tasks/**"),
         format!("{workspace}/frictions/**"),
         format!("{workspace}/state/audit/**"),
@@ -303,6 +318,14 @@ fn append_linux_runtime_write_roots(
         }
     }
 
+    // Language-neutral host cache for toolchain artifacts shared across
+    // worktrees (compiler caches, etc.). Implementer-only so read-only
+    // profiles stay non-writers. Not a workspace `.orbit` path and not a
+    // shared Cargo target directory. [ORB-11259]
+    let host_cache = global.join("cache");
+    ensure_owned_directory(&host_cache)?;
+    append_unique_modify_root(resolved, host_cache.display().to_string());
+
     Ok(())
 }
 
@@ -334,6 +357,8 @@ fn append_linux_provider_state_roots(
     // `~/.copilot` on hosts that have never installed the CLI.
     directories.extend(linux_copilot_state_roots(provider, home.as_deref()));
     directories.extend(linux_cursor_state_roots_with(provider, home.as_deref()));
+    directories.extend(linux_pi_state_roots(provider, home.as_deref()));
+    directories.extend(linux_opencode_state_roots(provider, home.as_deref()));
     for directory in directories {
         ensure_owned_directory(&directory)?;
         let canonical = directory.canonicalize().map_err(|error| {
@@ -359,6 +384,111 @@ pub(super) fn linux_cursor_state_roots_with(provider: &str, home: Option<&Path>)
     }
     home.map(|home| vec![home.join(".cursor")])
         .unwrap_or_default()
+}
+
+/// Process-env wrapper around [`linux_pi_state_roots_with`].
+#[cfg(target_os = "linux")]
+fn linux_pi_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
+    linux_pi_state_roots_with(
+        provider,
+        home,
+        std::env::var_os("PI_CODING_AGENT_DIR")
+            .map(PathBuf::from)
+            .as_deref(),
+    )
+}
+
+/// Writable state root for an active Pi executor on Linux. The CLI stores
+/// `/login` credentials, settings, saved project trust decisions, installed
+/// packages, and sessions under `$PI_CODING_AGENT_DIR` when set, otherwise
+/// `$HOME/.pi`. No other provider receives this grant — every entry in the
+/// caller's list is *created* by `ensure_owned_directory`, so an unconditional
+/// entry would mkdir a `~/.pi` on hosts that never installed Pi. [ORB-11296]
+#[cfg(target_os = "linux")]
+pub(super) fn linux_pi_state_roots_with(
+    provider: &str,
+    home: Option<&Path>,
+    pi_coding_agent_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    if orbit_types::workflow::Provider::parse(provider).ok()
+        != Some(orbit_types::workflow::Provider::Pi)
+    {
+        return Vec::new();
+    }
+    match pi_coding_agent_dir {
+        Some(path) => vec![path.to_path_buf()],
+        None => home.map(|home| vec![home.join(".pi")]).unwrap_or_default(),
+    }
+}
+
+/// Process-env wrapper around [`linux_opencode_state_roots_with`].
+#[cfg(target_os = "linux")]
+fn linux_opencode_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
+    let env_path = |name: &str| std::env::var_os(name).map(PathBuf::from);
+    linux_opencode_state_roots_with(
+        provider,
+        home,
+        OpencodeStateEnv {
+            xdg_data_home: env_path("XDG_DATA_HOME"),
+            xdg_config_home: env_path("XDG_CONFIG_HOME"),
+            xdg_state_home: env_path("XDG_STATE_HOME"),
+            xdg_cache_home: env_path("XDG_CACHE_HOME"),
+            opencode_config_dir: env_path("OPENCODE_CONFIG_DIR"),
+        },
+    )
+}
+
+/// XDG roots that locate OpenCode's writable state on Linux.
+#[cfg(target_os = "linux")]
+#[derive(Default, Clone)]
+pub(super) struct OpencodeStateEnv {
+    pub(super) xdg_data_home: Option<PathBuf>,
+    pub(super) xdg_config_home: Option<PathBuf>,
+    pub(super) xdg_state_home: Option<PathBuf>,
+    pub(super) xdg_cache_home: Option<PathBuf>,
+    pub(super) opencode_config_dir: Option<PathBuf>,
+}
+
+/// Writable state roots for an active OpenCode executor on Linux.
+///
+/// OpenCode resolves every root through `xdg-basedir` and creates its data,
+/// config, and state directories at startup, before it reads Orbit's envelope.
+/// The data root holds `auth.json` from `opencode auth login`, the session and
+/// message stores, and logs. No other provider receives this grant — every
+/// entry in the caller's list is *created* by `ensure_owned_directory`, so an
+/// unconditional entry would mkdir an `~/.local/share/opencode` on hosts that
+/// never installed OpenCode. [ORB-11295]
+#[cfg(target_os = "linux")]
+pub(super) fn linux_opencode_state_roots_with(
+    provider: &str,
+    home: Option<&Path>,
+    env: OpencodeStateEnv,
+) -> Vec<PathBuf> {
+    if orbit_types::workflow::Provider::parse(provider).ok()
+        != Some(orbit_types::workflow::Provider::Opencode)
+    {
+        return Vec::new();
+    }
+    let scoped = |xdg_base: Option<PathBuf>, home_relative_default: &[&str]| -> Option<PathBuf> {
+        let base = xdg_base.or_else(|| {
+            home.map(|home| {
+                home_relative_default
+                    .iter()
+                    .fold(home.to_path_buf(), |path, segment| path.join(segment))
+            })
+        })?;
+        Some(base.join("opencode"))
+    };
+    [
+        scoped(env.xdg_data_home, &[".local", "share"]),
+        env.opencode_config_dir
+            .or_else(|| scoped(env.xdg_config_home, &[".config"])),
+        scoped(env.xdg_state_home, &[".local", "state"]),
+        scoped(env.xdg_cache_home, &[".cache"]),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Process-env wrapper around [`linux_copilot_state_roots_with`].

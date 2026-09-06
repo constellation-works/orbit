@@ -176,6 +176,7 @@ fn agent_loop_activity(
             tools,
             on_denial: OnDenial::Terminate,
             model: None,
+            reasoning_effort: None,
             max_iterations: 1,
             backend: None,
             provider: Provider::default(),
@@ -183,6 +184,7 @@ fn agent_loop_activity(
             require_response_envelope: false,
             require_completion_envelope: true,
             proc_allowed_programs,
+            trusted_host_execution: false,
         }),
     }
 }

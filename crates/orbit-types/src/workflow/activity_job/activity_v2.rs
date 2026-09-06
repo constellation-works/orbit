@@ -1,6 +1,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::identity::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -55,6 +56,11 @@ pub struct AgentLoopSpec {
     /// Optional model override (provider-specific name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Optional provider-specific reasoning effort resolved from the selected
+    /// crew. The agent configuration boundary rejects it for providers that
+    /// do not support the Codex effort contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// Upper bound on loop iterations. **Inert.**
     ///
     /// It bound only the engine-driven HTTP loop, which was retired with the
@@ -121,6 +127,16 @@ pub struct AgentLoopSpec {
     /// treats `None` as deny-all too. [ORB-10959]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proc_allowed_programs: Option<Vec<String>>,
+    /// Run this activity's provider subprocess directly on the host, outside
+    /// the executor's filesystem sandbox [ORB-11354].
+    ///
+    /// Legal only on the built-in
+    /// [`TRUSTED_HOST_ACTIVITY`](crate::workflow::activity_job::TRUSTED_HOST_ACTIVITY)
+    /// — asset load rejects it anywhere else — and inert without a per-invocation
+    /// operator admission in the run input. The flag names the mode; it never
+    /// grants it. See `crate::workflow::activity_job::trusted_host`.
+    #[serde(rename = "trustedHostExecution", default)]
+    pub trusted_host_execution: bool,
 }
 
 /// Accepted-but-inert value of the retired `backend:` key [ORB-10801].
@@ -187,6 +203,9 @@ pub enum Provider {
     #[serde(rename = "openai_compat", alias = "openai-compat")]
     OpenaiCompat,
     Cursor,
+    Pi,
+    Antigravity,
+    Opencode,
 }
 
 /// One accepted non-canonical spelling for a [`Provider`]. Alias normalization
@@ -227,7 +246,7 @@ impl std::error::Error for ProviderParseError {}
 impl Provider {
     /// Every canonical provider, in declaration order. Adding a variant here is
     /// a compile-time forcing function for the match arms below.
-    pub const ALL: [Provider; 8] = [
+    pub const ALL: [Provider; 11] = [
         Provider::Claude,
         Provider::Codex,
         Provider::Gemini,
@@ -236,6 +255,9 @@ impl Provider {
         Provider::Ollama,
         Provider::OpenaiCompat,
         Provider::Cursor,
+        Provider::Pi,
+        Provider::Antigravity,
+        Provider::Opencode,
     ];
 
     /// Accepted non-canonical spellings, normalized by [`Provider::parse`] /
@@ -247,9 +269,16 @@ impl Provider {
     /// This table is **closed** — an unlisted string is `provider.unknown`,
     /// never guessed. New aliases require a contract bump.
     ///
-    /// `copilot` and `cursor` deliberately have **no** alias rows. Neither the
-    /// platform name nor a selected underlying model vendor may resolve to a
-    /// different execution lane. [ORB-10946] [ORB-10945]
+    /// `copilot`, `cursor`, `pi`, `antigravity`, and `opencode` deliberately
+    /// have **no** alias rows.
+    /// Neither the platform name nor a selected underlying model vendor may
+    /// resolve to a different execution lane. This matters most for `pi`,
+    /// whose own `--provider` flag names the model vendor (`anthropic`,
+    /// `openai`, ...) *inside* the Pi lane: those vendor spellings already
+    /// resolve to other Orbit executors and must keep doing so. The same holds
+    /// for `opencode`, whose `--model provider/model` argument names the model
+    /// vendor *inside* the OpenCode lane. [ORB-10946] [ORB-10945] [ORB-11296]
+    /// [ORB-11299] [ORB-11295]
     pub const ALIASES: &'static [ProviderAlias] = &[
         ProviderAlias {
             alias: "anthropic",
@@ -284,8 +313,7 @@ impl Provider {
     ];
 
     /// Human-readable canonical id list used in diagnostics.
-    pub const CANONICAL_LIST: &'static str =
-        "claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor";
+    pub const CANONICAL_LIST: &'static str = "claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode";
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -297,6 +325,9 @@ impl Provider {
             Provider::Ollama => "ollama",
             Provider::OpenaiCompat => "openai_compat",
             Provider::Cursor => "cursor",
+            Provider::Pi => "pi",
+            Provider::Antigravity => "antigravity",
+            Provider::Opencode => "opencode",
         }
     }
 
@@ -357,8 +388,8 @@ impl Provider {
 
     /// Whether the model-neutral Worker leaf executor can execute this
     /// provider. Worker only wires the four shared CLI agent families;
-    /// `copilot`, `cursor`, `ollama`, and `openai_compat` are Orbit-canonical
-    /// capabilities Worker does not run.
+    /// `copilot`, `cursor`, `pi`, `antigravity`, `opencode`, `ollama`, and
+    /// `openai_compat` are Orbit-canonical capabilities Worker does not run.
     /// Preserving this distinction is an explicit ORB-10091 constraint — Orbit
     /// keeps the wider set even though Worker cannot execute all of it.
     ///

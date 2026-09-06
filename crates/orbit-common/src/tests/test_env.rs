@@ -54,3 +54,39 @@ fn scoped_guard_recovers_after_a_sibling_assertion_panics_while_holding_it() {
 
     assert_eq!(std::env::var(VAR).ok(), baseline);
 }
+
+/// The in-process managed-run envelope and the subprocess scrub must not
+/// drift apart: anything worth hiding from a same-process test is worth
+/// hiding from a spawned `orbit` child, which re-reads the environment from
+/// scratch and can route durable writes with it (ORB-11300).
+#[test]
+fn inherited_authority_covers_the_managed_run_envelope_without_duplicates() {
+    for name in super::MANAGED_RUN_ENV {
+        assert!(
+            super::INHERITED_AUTHORITY_ENV.contains(name),
+            "{name} is scrubbed in-process but would still reach a spawned child"
+        );
+    }
+
+    let mut seen = super::INHERITED_AUTHORITY_ENV.to_vec();
+    seen.sort_unstable();
+    let deduped = {
+        let mut deduped = seen.clone();
+        deduped.dedup();
+        deduped
+    };
+    assert_eq!(seen, deduped, "duplicate names hide an editing mistake");
+}
+
+/// `clear_inherited_authority` must hand the caller every name exactly once —
+/// a fixture wires it straight into `Command::env_remove`.
+#[test]
+fn clear_inherited_authority_visits_every_name_once() {
+    let mut cleared = Vec::new();
+    super::clear_inherited_authority(|name| cleared.push(name.to_string()));
+
+    assert_eq!(cleared.len(), super::INHERITED_AUTHORITY_ENV.len());
+    for name in super::INHERITED_AUTHORITY_ENV {
+        assert!(cleared.iter().any(|seen| seen == name), "missing {name}");
+    }
+}

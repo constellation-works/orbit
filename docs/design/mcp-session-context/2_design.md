@@ -28,10 +28,13 @@ related_artifacts: []
 | transport | Accepting server | local or ssh-mcp |
 | caller_ip | Accepting SSH environment | Best-effort first field of SSH_CONNECTION |
 | trace_id | MCP adapter | Fresh correlation ID for one tools/call |
+| orchestrator | The server's launch binding | Crew name attributed to tasks the session creates; never an authorization or execution input |
 
 Clients cannot populate trusted fields through initialize metadata or tool JSON. Initialize accepts only the workspace selector under _meta.orbit.workspace, plus the compatibility spelling _meta["orbit.workspace"].
 
 A session may also be bound at launch: `orbit mcp serve --workspace <selector>` seeds the trusted envelope's workspace before any client connects. That binding is decided by whoever wrote the launch configuration, not by the connecting client, but it is still only a selector — it is resolved against the registry on every call and overridden by an explicit per-call workspace.
+
+`orbit mcp serve --orchestrator <crew>` binds a second launch value the same way, and is deliberately the weaker of the two: it is attribution, so it contributes nothing to effective_capabilities, to any authorization decision, or to the crew and model a task executes under. It applies at task creation only — orbit.task.add fills an omitted `orchestrator` from it, an explicit one on the call wins, and orbit.task.update never reads it, so no existing record is backfilled. Like the workspace binding it is only a name: the workspace the call lands in resolves it against its own crews and rejects an unconfigured one rather than substituting another. Both client modes forward it into the destination's argv, since a routed session carries no context of its own; a destination running a forced command composes its own argv and its configuration wins there. It is configuration, not authenticated evidence of the model answering a call — a connection outlives a client-side model switch, so a changed orchestrator needs a per-call value or a restarted session.
 
 ## 2. Local and SSH sessions
 

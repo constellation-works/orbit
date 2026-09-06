@@ -21,7 +21,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::activity_job::{DispatchError, ResolvedCliExecutor, ResolvedSandbox, V2AuditWriter};
+use crate::activity_job::{
+    DispatchError, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor, V2AuditWriter,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct TaskAutomationUpdate {
@@ -85,6 +87,14 @@ fn unsupported_dispatch_capability(capability: &str) -> DispatchError {
 /// Deterministic actions, task/run persistence, environment resolution, agent
 /// dispatch, and audit/checkpoint hooks all cross this boundary exactly once.
 pub trait RuntimeHost: Send + Sync {
+    /// Optional observation hook; execution-only test hosts need no scheduler store.
+    fn record_direct_landing_intent(
+        &self,
+        _request: &orbit_types::workflow::automation::DirectLandingRequest,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
     fn insert_job_run(
         &self,
         job_id: &str,
@@ -416,6 +426,25 @@ pub trait RuntimeHost: Send + Sync {
         Err(unsupported_dispatch_capability(provider))
     }
 
+    /// Resolve the registered `local_shell` executor definition backing a
+    /// deterministic shell step [ORB-11294].
+    ///
+    /// Separate from [`RuntimeHost::resolve_cli_executor`] on purpose: that
+    /// boundary resolves an *agent* provider and rejects anything that is not
+    /// `direct_agent` / `agent_cli`. A shell step carries no model, prompt, or
+    /// agent tool authority, so it resolves its own executor family and never
+    /// borrows an agent's.
+    ///
+    /// The default returns the empty definition, which is what a host without
+    /// an executor store should contribute: the activity's own `config` block
+    /// then has to name the command outright.
+    fn resolve_local_shell_executor(
+        &self,
+        _executor: &str,
+    ) -> Result<ResolvedShellExecutor, DispatchError> {
+        Ok(ResolvedShellExecutor::default())
+    }
+
     /// Return provider-specific CLI runtime config for agent execution.
     ///
     /// Most providers ignore this today. Codex uses it for sandbox,
@@ -547,6 +576,7 @@ pub trait RuntimeHost: Send + Sync {
 pub struct CrewConfig {
     pub provider: Option<Provider>,
     pub model: Option<String>,
+    pub reasoning_effort: Option<orbit_types::identity::ReasoningEffort>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

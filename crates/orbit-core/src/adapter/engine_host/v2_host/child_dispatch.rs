@@ -9,13 +9,12 @@
 //! operator could not tell a healthy long wait apart from a dispatch path
 //! wedged before persistence, and no reader could name the child.
 //!
-//! This module makes the dispatch boundary fail-observable. Submission and
-//! waiting are separate persisted phases even though they remain one
-//! activity: either a durable child run exists and is linked immediately, or
-//! the parent fails promptly carrying the exact pre-dispatch error. Evidence
-//! lands in two independent stores — the parent's `PipelineState` (which CLI,
-//! MCP, API, and dashboard readers project) and the audit log — so losing one
-//! does not hide the child.
+//! This module makes the dispatch boundary fail-observable. [ORB-11310] moved
+//! the first parent link into the same SQLite transaction that creates an
+//! auto child, before `orbit.pipeline.invoke` returns. This checkpoint then
+//! records the independent audit evidence and refreshes derived fields such as
+//! `queued`. Either a durable child is already linked, or the parent fails
+//! promptly carrying the exact pre-dispatch error.
 
 use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
@@ -54,9 +53,10 @@ pub(super) fn parent_run_id(input: &Value) -> Option<String> {
 
 /// Persist a freshly submitted child into the parent's run state.
 ///
-/// Ordering is the whole point: the audit event goes first, then the run
-/// state. The two stores fail independently, and the child run id must
-/// survive in at least one of them before the parent blocks on anything.
+/// The auto-admission path already wrote the first link atomically with the
+/// child row [ORB-11310]. Re-recording is an idempotent refresh and preserves
+/// the original submission timestamp. Direct callers without trusted parent
+/// context retain this checkpoint as their first parent-state link.
 ///
 /// A run state that cannot be written is a hard failure of the dispatch step,
 /// not a warning. The alternative — blocking for an hour on a child nobody can
@@ -97,12 +97,17 @@ pub(super) fn checkpoint_submitted_child(
         return Ok(());
     };
 
-    let Some(mut state) = read_state(runtime, action, parent_run_id)? else {
-        return Ok(());
-    };
-    state.record_child_dispatch(dispatch.clone());
+    // [ORB-11253] One transaction for the read and the write, so this
+    // checkpoint cannot discard a run control an operator set on the same
+    // parent state between them.
     runtime
-        .write_run_state(parent_run_id, &state)
+        .stores()
+        .jobs()
+        .update_run_state(parent_run_id, &mut |_, state| {
+            state.record_child_dispatch(dispatch.clone());
+            Ok(())
+        })
+        .map(|_| ())
         .map_err(|error| {
             action_failed(
                 action,
@@ -132,27 +137,17 @@ pub(super) fn advance_child_phase(
     let Some(parent_run_id) = parent_run_id else {
         return;
     };
-    let state = match runtime.read_run_state(parent_run_id) {
-        Ok(Some(state)) => Some(state),
-        Ok(None) => None,
-        Err(error) => {
-            tracing::warn!(
-                parent_run_id,
-                child_run_id,
-                phase = phase.as_str(),
-                %error,
-                "could not read parent run state to advance child dispatch phase"
-            );
-            None
-        }
-    };
-    let Some(mut state) = state else {
-        return;
-    };
-    if !state.advance_child_dispatch(child_run_id, phase, child_status, error) {
-        return;
-    }
-    if let Err(error) = runtime.write_run_state(parent_run_id, &state) {
+    // Keep phase bookkeeping on the same transactional update path as stop
+    // and admission. A read followed by a plain write here could otherwise
+    // restore a stale pre-stop document after the operator was acknowledged.
+    let update = runtime
+        .stores()
+        .jobs()
+        .update_run_state(parent_run_id, &mut |_, state| {
+            state.advance_child_dispatch(child_run_id, phase, child_status.clone(), error.clone());
+            Ok(())
+        });
+    if let Err(error) = update {
         tracing::warn!(
             parent_run_id,
             child_run_id,
@@ -224,16 +219,6 @@ pub(super) fn record_dispatch_failure(
     ) {
         tracing::warn!(%error, job_name, "could not record child dispatch failure audit");
     }
-}
-
-fn read_state(
-    runtime: &OrbitRuntime,
-    action: &str,
-    run_id: &str,
-) -> Result<Option<orbit_types::workflow::PipelineState>, DispatchError> {
-    runtime
-        .read_run_state(run_id)
-        .map_err(|error| action_failed(action, format!("read parent run state: {error}")))
 }
 
 #[allow(clippy::too_many_arguments)]

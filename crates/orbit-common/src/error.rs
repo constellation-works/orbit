@@ -22,6 +22,8 @@ pub struct ArtifactOrigin {
 pub enum NotFoundKind {
     Tool,
     Task,
+    /// One file stored under a task's artifacts directory.
+    Artifact,
     Skill,
     Job,
     JobRun,
@@ -37,6 +39,7 @@ impl std::fmt::Display for NotFoundKind {
         let kind = match self {
             Self::Tool => "tool",
             Self::Task => "task",
+            Self::Artifact => "task artifact",
             Self::Skill => "skill",
             Self::Job => "job",
             Self::JobRun => "job run",
@@ -65,6 +68,19 @@ pub struct DependencyNotDelivered {
     pub base_ref: String,
     pub base_sha: String,
     pub detail: String,
+}
+
+/// Structured evidence for a merge or rebase conflict that an explicitly
+/// configured recovery activity may repair. Keeping the classification typed
+/// prevents unrelated VCS diagnostics from launching a recovery agent based
+/// on message matching.
+#[derive(Debug, Serialize)]
+pub struct RecoverableVcsConflict {
+    pub operation: String,
+    pub original_base_sha: String,
+    pub target_base_sha: String,
+    pub conflicting_paths: Vec<String>,
+    pub diagnostic: String,
 }
 
 /// Evidence behind [`OrbitError::WorkspaceClaimHeld`]: the refused operation,
@@ -205,6 +221,15 @@ pub enum OrbitError {
     #[error("execution failed: {0}")]
     Execution(String),
     #[error(
+        "recoverable VCS conflict during '{}': original base '{}', target base '{}'; {}; conflicting paths: {}",
+        .0.operation,
+        .0.original_base_sha,
+        .0.target_base_sha,
+        .0.diagnostic,
+        .0.conflicting_paths.join(", ")
+    )]
+    RecoverableVcsConflict(Box<RecoverableVcsConflict>),
+    #[error(
         "run cancellation incomplete: pid={pid}, pgid={pgid:?}, term_sent={term_sent}, kill_sent={kill_sent}, leader_alive={leader_alive}, group_alive={group_alive}"
     )]
     RunCancellationIncomplete {
@@ -264,6 +289,13 @@ pub enum OrbitError {
     /// without matching on message text.
     #[error("job run start conflict: {0}")]
     JobRunStartConflict(String),
+    /// [ORB-11253] A run-control update lost a compare-and-set to a concurrent
+    /// update of the same control. Distinct from
+    /// [`OrbitError::JobValidation`] on purpose: nothing is wrong with the
+    /// request, it was simply superseded, so the caller re-reads the current
+    /// value and decides again rather than correcting anything.
+    #[error("job run control conflict: {0}")]
+    JobRunControlConflict(String),
     #[error("workspace error: {0}")]
     WorkspaceError(String),
     #[error("io error: {0}")]

@@ -5,6 +5,12 @@ metadata:
 spec:
   type: agent_loop
   require_response_envelope: true
+  # Direct Linux invocations inherit the primary checkout, not a managed
+  # worktree. Omitting fsProfile falls back to unrestricted writes, which
+  # Bubblewrap cannot combine with non-subtree dotenv denyModify. Reviewer
+  # is read-only: source edits stay denied while Orbit task tools remain
+  # available through the allowlist.
+  fsProfile: reviewer
   description: >
     Diagnose tasks blocked by terminally-failed job runs. For each candidate
     the agent reads the failure evidence, classifies the cause

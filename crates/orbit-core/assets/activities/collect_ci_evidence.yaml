@@ -12,14 +12,39 @@ spec:
     rather than assuming branch names; separates the event-reported SHA, the
     ref's current head, and the commit the runner actually checked out; and
     reports every bound it hit in `truncation` rather than silently returning
-    less. Workflow runs are listed repository-wide in one query and exactly
-    the latest run of each workflow is authoritative, ordered by creation time
-    then run ID. Discovery or investigation failures are bounded, redacted,
-    and emitted in `retryable_errors`; the filing step rejects such a snapshot
-    so it cannot be mistaken for a clean result. When no GitHub client is
-    available or authenticated the snapshot carries `collected: false` and
-    gathers nothing further, so a caller can never mistake it for a clean CI
-    result.
+    less. Checkout identity is extracted while the full runner-log stream is
+    drained, before the human excerpt is truncated; extraction scans at most
+    8 MiB per log and records incomplete evidence rather than guessing.
+    Workflow runs are listed repository-wide in one query. `latest_runs`
+    records the newest run of each workflow for audit, ordered by creation
+    time then run ID. Current failures are selected by relevant identity
+    (workflow, ref, and observed failed jobs): a queued or in-progress
+    successor is not evidence that an observed failure is resolved, an
+    unrelated pull-request run cannot erase a landing-branch failure, and a
+    genuinely newer completed non-unsuccessful check of the same identity
+    (or a landing-branch success, for non-landing noise) does suppress it.
+    Already-failed jobs inside an in-flight workflow become current once
+    their evidence is complete; a pending check alone is never a repair
+    task. Incomplete mixed-state logs stay in `retryable_errors` until a
+    later sweep can finish them. A red run on a branch that is neither a
+    scanned head nor present on origin is reported as
+    `ref_no_longer_exists` rather than current: its pull request merged or
+    its branch was deleted, so the landing branch's own runs are the live
+    evidence. That probe is authoritative and bounded — one origin query per
+    distinct branch carrying a red run, rotating through overflow candidates
+    across bounded sweeps by `investigation_cursor` without starvation. A candidate
+    branch whose origin probe is skipped past the probe budget or fails transiently
+    remains in `deferred` with a run-scoped retryable error rather than being
+    listed as current or assumed merged; verified current failures still progress.
+    When candidates outnumber `max_investigated_runs` the
+    ranked prefix keeps all but one slot and the last slot rotates through
+    the overflow by `investigation_cursor`, so a candidate below the cap is
+    investigated within one rotation instead of never. Discovery or investigation failures are
+    bounded, redacted, and emitted in `retryable_errors`; the filing step
+    rejects such a snapshot so it cannot be mistaken for a clean result.
+    When no GitHub client is available or authenticated the snapshot carries
+    `collected: false` and gathers nothing further, so a caller can never
+    mistake it for a clean CI result.
   input_schema_json:
     type: object
     properties:
@@ -43,6 +68,19 @@ spec:
         type: number
       max_investigated_runs:
         type: number
+      max_retired_ref_probes:
+        type: number
+        description: >
+          Cap on origin probes for branches no scanned head covers. Defaults to
+          20, maximum 100. Branches past the cap keep their failures deferred
+          with retryable errors until relevance is established rather than
+          being assumed merged or current.
+      investigation_cursor:
+        type: number
+        description: >
+          Which overflow candidate the rotating investigation slot lands on.
+          Defaults to the collection hour, which advances once per hourly
+          sweep; pin it to make a sweep's selection reproducible.
       log_max_bytes:
         type: number
       max_checkout_log_reads:
@@ -76,6 +114,8 @@ spec:
           stale_or_superseded:
             type: array
           in_flight:
+            type: array
+          deferred:
             type: array
           retryable_errors:
             type: array

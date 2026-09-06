@@ -27,6 +27,8 @@ pub const PR_LIST_OPERATION: &str = operations::PR_LIST;
 pub const PR_CREATE_OPERATION: &str = operations::PR_CREATE;
 pub const PR_VIEW_OPERATION: &str = operations::PR_VIEW;
 pub const PR_MERGE_OPERATION: &str = operations::PR_MERGE;
+pub const PR_MERGE_CAPABILITIES_OPERATION: &str = operations::PR_MERGE_CAPABILITIES;
+pub const PR_STATUS_OPERATION: &str = operations::PR_STATUS;
 
 #[derive(Clone, Debug)]
 pub struct VcsCall {
@@ -46,6 +48,7 @@ pub struct PrOpenTestHost {
     vcs_errors: Mutex<HashMap<String, String>>,
     queued_vcs_results: Mutex<HashMap<String, VecDeque<Result<Value, String>>>>,
     pr_exists: Mutex<bool>,
+    activity_updates: Mutex<Vec<(String, TaskActivityUpdate)>>,
 }
 
 impl PrOpenTestHost {
@@ -64,6 +67,7 @@ impl PrOpenTestHost {
             vcs_errors: Mutex::new(HashMap::new()),
             queued_vcs_results: Mutex::new(HashMap::new()),
             pr_exists: Mutex::new(false),
+            activity_updates: Mutex::new(Vec::new()),
         }
     }
 
@@ -126,6 +130,73 @@ impl PrOpenTestHost {
                     .map(ToOwned::to_owned)
             })
             .expect("private PR create body")
+    }
+
+    /// Queue the sequence of `pr.status` answers a completion poll will read.
+    ///
+    /// Each entry is one `gh pr view` response, so a test spells out the exact
+    /// state machine GitHub walks through — no live API and no wall clock.
+    pub fn queue_pr_status(&self, states: impl IntoIterator<Item = Value>) {
+        for state in states {
+            self.queue_vcs_result(operations::PR_STATUS, json!({ "pull_request": state }));
+        }
+    }
+
+    pub fn queue_merge_capabilities(
+        &self,
+        squash: bool,
+        rebase: bool,
+        merge: bool,
+        requires_linear_history: bool,
+    ) {
+        self.queue_merge_capabilities_with_auto_merge(
+            squash,
+            rebase,
+            merge,
+            requires_linear_history,
+            true,
+        );
+    }
+
+    pub fn queue_merge_capabilities_with_auto_merge(
+        &self,
+        squash: bool,
+        rebase: bool,
+        merge: bool,
+        requires_linear_history: bool,
+        allow_auto_merge: bool,
+    ) {
+        self.queue_vcs_result(
+            operations::PR_MERGE_CAPABILITIES,
+            json!({
+                "repository": {
+                    "name_with_owner": "orbit/test",
+                    "base_branch": "agent-main",
+                    "allow_squash_merge": squash,
+                    "allow_rebase_merge": rebase,
+                    "allow_merge_commit": merge,
+                    "allow_auto_merge": allow_auto_merge,
+                    "requires_linear_history": requires_linear_history,
+                }
+            }),
+        );
+    }
+
+    pub fn activity_updates(&self) -> Vec<(String, TaskActivityUpdate)> {
+        self.activity_updates
+            .lock()
+            .expect("activity updates lock")
+            .clone()
+    }
+
+    pub fn task_status(&self, task_id: &str) -> TaskStatus {
+        self.tasks
+            .lock()
+            .expect("tasks lock")
+            .iter()
+            .find(|task| task.id == task_id)
+            .map(|task| task.status)
+            .unwrap_or_else(|| panic!("task {task_id} exists"))
     }
 
     pub fn automation_updates(&self) -> Vec<(String, TaskAutomationUpdate)> {
@@ -218,12 +289,24 @@ impl RuntimeHost for PrOpenTestHost {
 
     fn update_task_from_activity(
         &self,
-        _task_id: &str,
-        _update: TaskActivityUpdate,
+        task_id: &str,
+        update: TaskActivityUpdate,
     ) -> Result<Task, OrbitError> {
-        Err(OrbitError::Execution(
-            "update_task_from_activity is not needed by pr_open tests".to_string(),
-        ))
+        self.activity_updates
+            .lock()
+            .expect("activity updates lock")
+            .push((task_id.to_string(), update.clone()));
+
+        let mut tasks = self.tasks.lock().expect("tasks lock");
+        let task = tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
+        task.status = update.status;
+        if let Some(model) = update.model.clone().or(update.agent.clone()) {
+            task.implemented_by = Some(model);
+        }
+        Ok(task.clone())
     }
 
     fn apply_task_automation_update(
@@ -335,6 +418,17 @@ impl RuntimeHost for PrOpenTestHost {
         match operation {
             operations::PUSH => Ok(json!({})),
             operations::PR_MERGE => Ok(json!({})),
+            operations::PR_MERGE_CAPABILITIES => Ok(json!({
+                "repository": {
+                    "name_with_owner": "orbit/test",
+                    "base_branch": "agent-main",
+                    "allow_squash_merge": true,
+                    "allow_rebase_merge": true,
+                    "allow_merge_commit": true,
+                    "allow_auto_merge": true,
+                    "requires_linear_history": true,
+                }
+            })),
             operations::PR_LIST => {
                 let head = input.get("head").and_then(Value::as_str).ok_or_else(|| {
                     OrbitError::InvalidInput("private PR list requires a head branch".to_string())

@@ -3,7 +3,8 @@
 Carry a task from intent to verified implementation with explicit lifecycle
 tracking. Every `orbit.task.*` call needs `model` — your agent family.
 
-No task ID yet? Clarify intent with the human, then use
+No task ID yet? Use the authorized intent, clarify only missing requirements,
+then use
 [task-authoring.md](task-authoring.md). Reviewing someone else's work instead?
 [task-review.md](task-review.md).
 
@@ -13,12 +14,20 @@ No task ID yet? Clarify intent with the human, then use
 required outcome), `plan` (author one if blank or placeholder), `context_files`,
 and `status`.
 
+Also read `comments` (chronological, each with `by` and `at`) before trusting
+the description. A description is written once at filing time and is never
+rewritten when an orchestrator later posts a refinement, so a comment that
+postdates the description always takes precedence over a "Suggested
+direction"/"Suggested fix" section still sitting in that description —
+implement the comment's direction, not the description's.
+
 Read each `file:` target with the provider-native file-read tool. For a `dir:`
 selector, do not call the file-read tool on the directory: after verifying it
 resolves beneath the workspace root, use `rg --files <directory>` to list it,
 then read its key files individually.
 
-Then surface prior related decisions the author never linked:
+Then look for related work the author did not link. Treat historical documents
+as context, not authority over current requirements:
 
 ```bash
 orbit tool run orbit.search --input '{"semantic":"<task-id>","limit":5,"model":"<agent-family>"}'
@@ -32,6 +41,12 @@ Non-blocking — skip it if nothing is relevant, or if the task has no vectors y
 commands, risks — if one doesn't exist.
 
 ## Step 3 — Start
+
+The operator owns pipeline submission. Under a managed activity envelope,
+perform the assigned leaf mandate and leave dispatch and final delivery
+transitions to the pipeline. Direct execution below applies only when the user
+and repository policy authorize it; a technical lifecycle transition is not a
+substitute for human approval.
 
 For first-time pickup or resuming eligible work, use `orbit.task.start` with a
 `note`. It moves `proposed`, `backlog`, `someday`, or `blocked` → `in-progress`

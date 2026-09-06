@@ -65,6 +65,22 @@ pub struct ToolSessionContext {
     /// one that never asked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_caller_grant: Option<RemoteCallerGrant>,
+    /// Orchestrator crew this session attributes newly created tasks to,
+    /// configured by `orbit mcp serve --orchestrator` [ORB-11313].
+    ///
+    /// Session-scoped like [`Self::workspace`] and, like it, purely a
+    /// default: an explicit per-call `orchestrator` wins, and the value is
+    /// resolved against the target workspace's crews on every call rather
+    /// than trusted as written. It is attribution only — it grants no
+    /// capability, never contributes to [`Self::effective_capabilities`] or
+    /// any authorization decision, and never selects the execution crew or
+    /// the model a task runs under.
+    ///
+    /// It is a configured default, not authenticated evidence of the model
+    /// answering a given call: a persistent MCP connection outlives a model
+    /// switch on the client side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator: Option<String>,
 }
 
 impl ToolSessionContext {
@@ -98,6 +114,9 @@ impl ToolSessionContext {
             // ever arrives from the client, at initialize.
             self_reported_actor: None,
             remote_caller_grant: None,
+            // The standalone adapter is launched per call, not configured as
+            // a session, so it carries no attribution default.
+            orchestrator: None,
         }
     }
 

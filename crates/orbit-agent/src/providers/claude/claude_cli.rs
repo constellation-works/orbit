@@ -1,5 +1,6 @@
 use crate::providers::common::render_prompt_with_embedded_envelope;
 use crate::types::response_envelope_json_schema_arg;
+use orbit_types::identity::ReasoningEffort;
 
 fn claude_cli_model_arg(model: &str) -> String {
     let trimmed = model.trim();
@@ -17,11 +18,15 @@ fn claude_cli_model_arg(model: &str) -> String {
 
 pub(crate) struct ClaudeCliTransport {
     model: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl ClaudeCliTransport {
-    pub(crate) fn new(model: Option<String>) -> Self {
-        Self { model }
+    pub(crate) fn new(model: Option<String>, reasoning_effort: Option<ReasoningEffort>) -> Self {
+        Self {
+            model,
+            reasoning_effort,
+        }
     }
 
     // Static Claude CLI flags live in the executor definition; this transport
@@ -50,6 +55,10 @@ impl ClaudeCliTransport {
         if let Some(model) = &self.model {
             args.push("--model".to_string());
             args.push(claude_cli_model_arg(model));
+        }
+        if let Some(effort) = self.reasoning_effort {
+            args.push("--effort".to_string());
+            args.push(effort.to_string());
         }
         args
     }

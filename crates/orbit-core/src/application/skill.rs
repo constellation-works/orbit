@@ -14,13 +14,12 @@ use super::{ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_as
 /// manifest keys on the relative path ([`ManagedAssetLayout::RelativePath`])
 /// instead of a bare definition name.
 ///
-/// Orbit ships exactly one skill. `SKILL.md` is a router carrying only what
-/// every call needs; each reference is loaded on demand, so the whole surface
-/// stays discoverable through one skill description without a per-topic skill
-/// competing for the same trigger. The ordering below mirrors the router's
-/// own reference tables, so the shipped surface reads the same in both
-/// places.
-pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 20] = [
+/// Each shipped skill's `SKILL.md` is a router carrying only what every call
+/// needs; its own references load on demand, so a skill's whole surface stays
+/// discoverable through one description without a per-topic skill competing
+/// for the same trigger. The ordering below mirrors each router's own
+/// reference table, so the shipped surface reads the same in both places.
+pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 28] = [
     (
         "orbit/SKILL.md",
         include_str!("../../assets/skills/orbit/SKILL.md"),
@@ -29,6 +28,10 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 20] = [
     (
         "orbit/references/concepts.md",
         include_str!("../../assets/skills/orbit/references/concepts.md"),
+    ),
+    (
+        "orbit/references/tool-surface.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface.md"),
     ),
     (
         "orbit/references/task-authoring.md",
@@ -80,6 +83,10 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 20] = [
         include_str!("../../assets/skills/orbit/references/setup/first-run.md"),
     ),
     (
+        "orbit/references/setup/linux-sandbox.md",
+        include_str!("../../assets/skills/orbit/references/setup/linux-sandbox.md"),
+    ),
+    (
         "orbit/references/setup/configuration.md",
         include_str!("../../assets/skills/orbit/references/setup/configuration.md"),
     ),
@@ -92,6 +99,10 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 20] = [
         include_str!("../../assets/skills/orbit/references/setup/auto-tasks.md"),
     ),
     (
+        "orbit/references/setup/publication.md",
+        include_str!("../../assets/skills/orbit/references/setup/publication.md"),
+    ),
+    (
         "orbit/references/setup/maintenance.md",
         include_str!("../../assets/skills/orbit/references/setup/maintenance.md"),
     ),
@@ -102,6 +113,27 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 20] = [
     (
         "orbit/references/setup/remote-access.md",
         include_str!("../../assets/skills/orbit/references/setup/remote-access.md"),
+    ),
+    // The orchestrator's operating loop, layered on the primitives above.
+    (
+        "orbit-orchestrate/SKILL.md",
+        include_str!("../../assets/skills/orbit-orchestrate/SKILL.md"),
+    ),
+    (
+        "orbit-orchestrate/references/loop.md",
+        include_str!("../../assets/skills/orbit-orchestrate/references/loop.md"),
+    ),
+    (
+        "orbit-orchestrate/references/authorization.md",
+        include_str!("../../assets/skills/orbit-orchestrate/references/authorization.md"),
+    ),
+    (
+        "orbit-orchestrate/references/recovery.md",
+        include_str!("../../assets/skills/orbit-orchestrate/references/recovery.md"),
+    ),
+    (
+        "orbit-orchestrate/references/walkthroughs.md",
+        include_str!("../../assets/skills/orbit-orchestrate/references/walkthroughs.md"),
     ),
 ];
 
@@ -351,37 +383,43 @@ mod tests {
         );
     }
 
-    /// The router must link every shipped reference.
+    /// Each shipped skill's own router must link every one of its own
+    /// shipped references.
     ///
-    /// With one skill, progressive disclosure runs entirely through
-    /// `SKILL.md`'s reference table: a reference the router does not link is
-    /// unreachable, however good it is. This replaces the old per-skill
-    /// enumeration check, which goes vacuous once only one skill ships.
+    /// Per skill, progressive disclosure runs entirely through that skill's
+    /// `SKILL.md` reference table: a reference its own router does not link
+    /// is unreachable, however good it is. A skill may still link into
+    /// another skill's references (e.g. `orbit-orchestrate` reusing `orbit`'s
+    /// canonical docs) — those cross-skill links are not required here since
+    /// they are already covered by the target skill's own check.
     #[test]
     fn router_links_every_shipped_reference() {
-        let router_path = assets_skills_dir().join("orbit/SKILL.md");
-        let contents = std::fs::read_to_string(&router_path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", router_path.display()));
+        let mut missing: Vec<String> = Vec::new();
 
-        let mut missing: Vec<&str> = Vec::new();
-        for (relative, _) in DEFAULT_SKILL_FILES {
-            let Some(reference) = relative.strip_prefix("orbit/") else {
-                continue;
-            };
-            if reference == "SKILL.md" {
-                continue;
-            }
-            // The markdown link target, as written from the skill root.
-            if !contents.contains(&format!("({reference})")) {
-                missing.push(relative);
+        for skill_id in default_skill_ids() {
+            let router_path = assets_skills_dir().join(skill_id).join("SKILL.md");
+            let contents = std::fs::read_to_string(&router_path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", router_path.display()));
+
+            let prefix = format!("{skill_id}/");
+            for (relative, _) in DEFAULT_SKILL_FILES {
+                let Some(reference) = relative.strip_prefix(prefix.as_str()) else {
+                    continue;
+                };
+                if reference == "SKILL.md" {
+                    continue;
+                }
+                // The markdown link target, as written from the skill root.
+                if !contents.contains(&format!("({reference})")) {
+                    missing.push(relative.to_string());
+                }
             }
         }
 
         assert!(
             missing.is_empty(),
-            "router skill at {} does not link these shipped references, so they are \
-             unreachable: {missing:?}\nfix by adding a row to a ## References table.",
-            router_path.display(),
+            "a shipped skill's own router does not link these shipped references, so they are \
+             unreachable: {missing:?}\nfix by adding a row to that skill's ## References table.",
         );
     }
 

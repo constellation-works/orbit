@@ -15,6 +15,14 @@ use orbit_types::policy::ResolvedFsProfile;
 
 const TRUSTED_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
+/// Language-neutral stable workspace mount inside a managed Linux sandbox.
+/// Each worker's private namespace binds the real worktree here so toolchain
+/// caches that key on absolute paths can hit across worktrees. [ORB-11259]
+pub const LINUX_STABLE_WORKSPACE_MOUNT: &str = "/tmp/orbit-workspace";
+/// Language-neutral stable build-output mount (`<worktree>/target`) for the
+/// same path-normalization seam. Not a shared Cargo target directory.
+pub const LINUX_STABLE_BUILD_MOUNT: &str = "/tmp/orbit-build";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BwrapProbeOutcome {
     pub available: bool,
@@ -603,6 +611,9 @@ pub fn compile_linux_bwrap_argv(
 
     if let Some(cwd) = cwd {
         let cwd = canonical_existing(cwd, "sandbox cwd")?;
+        if managed_worktree && cwd_is_writable_root(&cwd, &writable_roots) {
+            append_stable_toolchain_mounts(&mut out, &cwd)?;
+        }
         out.push("--chdir".to_string());
         out.push(cwd.display().to_string());
     }
@@ -672,6 +683,40 @@ fn base_namespace_args() -> Vec<String> {
     .into_iter()
     .map(str::to_string)
     .collect()
+}
+
+fn cwd_is_writable_root(cwd: &Path, writable_roots: &[PathBuf]) -> bool {
+    writable_roots
+        .iter()
+        .any(|root| cwd.starts_with(root) || root.starts_with(cwd))
+}
+
+/// Bind the managed worktree (and its `target/` directory) at stable `/tmp`
+/// paths inside this sandbox's private tmpfs. Toolchain wrappers can rewrite
+/// absolute paths onto those mounts so compiler caches hit across worktrees
+/// without sharing a mutable Cargo target directory. [ORB-11259]
+fn append_stable_toolchain_mounts(out: &mut Vec<String>, cwd: &Path) -> Result<(), OrbitError> {
+    let target = cwd.join("target");
+    std::fs::create_dir_all(&target).map_err(|error| {
+        OrbitError::Execution(format!(
+            "create managed-worktree target dir `{}` for stable build mount: {error}",
+            target.display()
+        ))
+    })?;
+    let target = canonical_existing(&target, "stable build mount")?;
+    out.extend([
+        "--dir".to_string(),
+        LINUX_STABLE_WORKSPACE_MOUNT.to_string(),
+        "--bind".to_string(),
+        cwd.display().to_string(),
+        LINUX_STABLE_WORKSPACE_MOUNT.to_string(),
+        "--dir".to_string(),
+        LINUX_STABLE_BUILD_MOUNT.to_string(),
+        "--bind".to_string(),
+        target.display().to_string(),
+        LINUX_STABLE_BUILD_MOUNT.to_string(),
+    ]);
+    Ok(())
 }
 
 fn push_mount(args: &mut Vec<String>, option: &str, path: &Path) {

@@ -22,6 +22,10 @@ use orbit_core::OrbitRuntime;
 /// Diagnostics-stream read surface for [`OrbitRuntime`] (extension trait —
 /// the implementation moved out of orbit-core in [ORB-10016]).
 pub trait DiagnosticsCommands {
+    /// All `YYYY-MM` partitions that have a metrics log on disk, ascending.
+    /// Used to enumerate the lifetime population without guessing a fixed
+    /// number of trailing months.
+    fn list_metrics_months(&self) -> Result<Vec<String>, OrbitError>;
     /// All metrics entries recorded in `year_month` (`YYYY-MM`).
     fn read_metrics_entries(&self, year_month: &str) -> Result<Vec<MetricsEntry>, OrbitError>;
     /// Most recent `limit` metrics entries recorded in `year_month`.
@@ -41,6 +45,10 @@ pub trait DiagnosticsCommands {
 }
 
 impl DiagnosticsCommands for OrbitRuntime {
+    fn list_metrics_months(&self) -> Result<Vec<String>, OrbitError> {
+        list_jsonl_months(&self.data_root(), "metrics")
+    }
+
     fn read_metrics_entries(&self, year_month: &str) -> Result<Vec<MetricsEntry>, OrbitError> {
         read_jsonl_month::<MetricsEntry>(&self.data_root(), "metrics", year_month)
     }
@@ -64,6 +72,32 @@ impl DiagnosticsCommands for OrbitRuntime {
     ) -> Result<Vec<FrictionEntry>, OrbitError> {
         read_jsonl_month_limited::<FrictionEntry>(&self.data_root(), "friction", year_month, limit)
     }
+}
+
+/// Ascending list of `YYYY-MM` subdirectories under `state/diagnostics/<category>/`.
+fn list_jsonl_months(root: &Path, category: &str) -> Result<Vec<String>, OrbitError> {
+    let category_dir = root.join("state").join("diagnostics").join(category);
+    if !category_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut months: Vec<String> = fs::read_dir(&category_dir)
+        .map_err(|e| OrbitError::Io(e.to_string()))?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| is_year_month(name))
+        .collect();
+    months.sort();
+    Ok(months)
+}
+
+/// `true` for a `YYYY-MM` directory name (e.g. `2026-03`).
+fn is_year_month(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() == 7
+        && bytes[..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && bytes[5..].iter().all(u8::is_ascii_digit)
 }
 
 fn read_jsonl_month<T: DeserializeOwned>(
@@ -197,7 +231,7 @@ fn parse_jsonl_values<T: DeserializeOwned>(line: &str) -> Result<Vec<T>, serde_j
 mod tests {
     use serde_json::{Value, json};
 
-    use super::parse_jsonl_values;
+    use super::{is_year_month, list_jsonl_months, parse_jsonl_values};
 
     #[test]
     fn parse_jsonl_values_recovers_concatenated_objects() {
@@ -211,5 +245,40 @@ mod tests {
         let err = parse_jsonl_values::<Value>(r#"{"step":"one"}oops"#).unwrap_err();
 
         assert!(err.to_string().contains("trailing characters"));
+    }
+
+    #[test]
+    fn is_year_month_accepts_only_canonical_form() {
+        assert!(is_year_month("2026-03"));
+        assert!(!is_year_month("2026-3"));
+        assert!(!is_year_month("26-03"));
+        assert!(!is_year_month("2026/03"));
+        assert!(!is_year_month(""));
+    }
+
+    #[test]
+    fn list_jsonl_months_returns_sorted_existing_partitions() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let category_dir = root
+            .path()
+            .join("state")
+            .join("diagnostics")
+            .join("metrics");
+        std::fs::create_dir_all(category_dir.join("2026-01")).unwrap();
+        std::fs::create_dir_all(category_dir.join("2025-12")).unwrap();
+        std::fs::write(category_dir.join("not-a-month.txt"), "ignored").unwrap();
+
+        let months = list_jsonl_months(root.path(), "metrics").unwrap();
+
+        assert_eq!(months, vec!["2025-12".to_string(), "2026-01".to_string()]);
+    }
+
+    #[test]
+    fn list_jsonl_months_missing_category_dir_is_empty() {
+        let root = tempfile::tempdir().expect("tempdir");
+
+        let months = list_jsonl_months(root.path(), "metrics").unwrap();
+
+        assert!(months.is_empty());
     }
 }

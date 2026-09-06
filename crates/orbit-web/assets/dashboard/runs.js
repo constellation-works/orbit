@@ -17,6 +17,8 @@ const $ = (id) => document.getElementById(id);
 
 const CANCELLABLE_RUN_STATES = new Set(["pending", "running"]);
 const RESUMABLE_RUN_STATES = new Set(["failed", "interrupted", "timeout"]);
+const ACTIVE_RUN_STATES = new Set(["pending", "running"]);
+const RUN_FILTERS = new Set(["all", "active", "failed"]);
 
 const RUN_SORT_DEFAULT_DIR = {
   when: "desc",
@@ -30,6 +32,10 @@ const RUN_SORT_DEFAULT_DIR = {
 
 let runSort = { key: "when", dir: "desc" };
 const resumedRunIdsBySource = new Map();
+let runFilter = (() => {
+  const value = new URL(window.location.href).searchParams.get("run_state") || "all";
+  return RUN_FILTERS.has(value) ? value : "all";
+})();
 
 let _runsCtx = null;
 
@@ -42,9 +48,9 @@ function getActiveRunId() {
   return hasCtx("getActiveRunId") ? _runsCtx.getActiveRunId() : null;
 }
 
-function doNavigateToRun(runId) {
+function doNavigateToRun(runId, workspaceId = null) {
   if (hasCtx("navigateToRun")) {
-    try { _runsCtx.navigateToRun(runId); } catch (_) {}
+    try { _runsCtx.navigateToRun(runId, workspaceId); } catch (_) {}
   }
 }
 
@@ -98,7 +104,7 @@ function buildCancelRunButton(run, host) {
   btn.disabled = !runIsCancellable(run);
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    cancelRun(run.run_id, btn, host);
+    cancelRun(run, btn, host);
   });
   return btn;
 }
@@ -129,7 +135,18 @@ function buildResumeRunButton(run, host) {
   return btn;
 }
 
-async function cancelRun(runId, btn, host) {
+function runScopedPath(path, run) {
+  if (!run || !run.workspace_id) return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}workspace=${encodeURIComponent(run.workspace_id)}`;
+}
+
+function runIdentity(run) {
+  return `${run && run.workspace_id ? run.workspace_id : ""}:${run && run.run_id ? run.run_id : ""}`;
+}
+
+async function cancelRun(run, btn, host) {
+  const runId = run && run.run_id;
   if (!runId) return;
   const old = btn.textContent;
   btn.disabled = true;
@@ -138,11 +155,12 @@ async function cancelRun(runId, btn, host) {
     for (const node of host.querySelectorAll(".action-error")) node.remove();
   }
   try {
-    await postJson(`/api/runs/${encodeURIComponent(runId)}/cancel`);
+    await postJson(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/cancel`, run));
+    const refreshActiveDetail = !run.workspace_id && getActiveRunId() === runId;
     await Promise.all([
       doFetchAndRenderRuns(),
-      getActiveRunId() === runId ? doFetchAndRenderRunDetail() : Promise.resolve(),
-      getActiveRunId() === runId ? doFetchAndRenderRunEvents() : Promise.resolve(),
+      refreshActiveDetail ? doFetchAndRenderRunDetail() : Promise.resolve(),
+      refreshActiveDetail ? doFetchAndRenderRunEvents() : Promise.resolve(),
     ]);
   } catch (e) {
     if (host) {
@@ -166,9 +184,9 @@ async function replayRun(run, btn, host) {
     for (const node of host.querySelectorAll(".action-error")) node.remove();
   }
   try {
-    const payload = await postJson(`/api/runs/${encodeURIComponent(runId)}/replay`);
+    const payload = await postJson(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/replay`, run));
     if (!payload.run_id) throw new Error("replay response did not include run_id");
-    doNavigateToRun(payload.run_id);
+    doNavigateToRun(payload.run_id, run.workspace_id);
     doFetchAndRenderRuns().catch(console.error);
   } catch (e) {
     if (host) {
@@ -193,9 +211,9 @@ async function resumeRun(run, btn, host) {
     for (const node of host.querySelectorAll(".action-error")) node.remove();
   }
   try {
-    const payload = await postJson(`/api/job-runs/${encodeURIComponent(runId)}/resume`);
+    const payload = await postJson(runScopedPath(`/api/job-runs/${encodeURIComponent(runId)}/resume`, run));
     if (!payload.run_id) throw new Error("resume response did not include run_id");
-    resumedRunIdsBySource.set(runId, payload.run_id);
+    resumedRunIdsBySource.set(runIdentity(run), payload.run_id);
     await doFetchAndRenderRuns();
   } catch (e) {
     if (host) {
@@ -390,6 +408,57 @@ function sortedRunsForDisplay(runs) {
   return rows;
 }
 
+function runMatchesFilter(run) {
+  if (runFilter === "active") return ACTIVE_RUN_STATES.has(run && run.state);
+  if (runFilter === "failed") return run && run.state === "failed";
+  return true;
+}
+
+function setRunFilter(value) {
+  runFilter = RUN_FILTERS.has(value) ? value : "all";
+  const url = new URL(window.location.href);
+  if (runFilter === "all") url.searchParams.delete("run_state");
+  else url.searchParams.set("run_state", runFilter);
+  if (url.href !== window.location.href) history.replaceState(null, "", url);
+  renderRuns(hasCtx("getLastRuns") ? _runsCtx.getLastRuns() : []);
+  doFetchAndRenderRuns().catch((error) => console.error(error));
+}
+
+export function getRunFilter() {
+  return runFilter;
+}
+
+function runFilterControls() {
+  const controls = el("div", { class: "runs-filter", title: "Filter Recent Runs by state" });
+  controls.dataset.key = "runs-filter";
+  controls.dataset.hash = `runs-filter-${runFilter}`;
+  controls.appendChild(el("span", { class: "runs-filter-label", text: "state" }));
+  for (const [value, label] of [["all", "all"], ["active", "active"], ["failed", "failed"]]) {
+    const button = el("button", {
+      class: `runs-filter-button${runFilter === value ? " active" : ""}`,
+      text: label,
+    });
+    button.type = "button";
+    button.setAttribute("aria-pressed", runFilter === value ? "true" : "false");
+    button.addEventListener("click", () => setRunFilter(value));
+    controls.appendChild(button);
+  }
+  return controls;
+}
+
+function unavailableSourcesNode(unavailable) {
+  if (!Array.isArray(unavailable) || unavailable.length === 0) return null;
+  const names = unavailable.map((source) => source.workspace_name || source.workspace_id || "unknown");
+  const node = el("div", {
+    class: "runs-source-warning",
+    text: `Unavailable workspace${names.length === 1 ? "" : "s"}: ${names.join(", ")}`,
+    title: unavailable.map((source) => `${source.workspace_name || source.workspace_id}: ${source.error || "unavailable"}`).join("\n"),
+  });
+  node.dataset.key = "runs-source-warning";
+  node.dataset.hash = `${names.join("|")}-${unavailable.map((source) => source.error || "").join("|")}`;
+  return node;
+}
+
 function setRunSort(key) {
   if (runSort.key === key) {
     runSort = { key, dir: runSort.dir === "asc" ? "desc" : "asc" };
@@ -443,21 +512,29 @@ function runDurationCell(run) {
 export function renderRuns(runs) {
   const body = $("runs-body");
   const frag = document.createDocumentFragment();
-  
-  const sorted = sortedRunsForDisplay(runs);
+  const unavailable = hasCtx("getRunSourcesUnavailable") ? _runsCtx.getRunSourcesUnavailable() : [];
+  const meta = hasCtx("getRunsMeta") ? _runsCtx.getRunsMeta() : null;
+  const attributed = (runs || []).some((run) => !!run.workspace_id);
+  const sorted = sortedRunsForDisplay((runs || []).filter(runMatchesFilter));
   const top = sorted.slice(0, 20);
   if ($("diag-count")) {
-    $("diag-count").textContent = `${top.length}/${sorted.length}`;
+    const bounded = meta && meta.truncated ? "+" : "";
+    $("diag-count").textContent = `${top.length}/${sorted.length}${bounded}`;
   }
+  frag.appendChild(runFilterControls());
+  const unavailableNode = unavailableSourcesNode(unavailable);
+  if (unavailableNode) frag.appendChild(unavailableNode);
   if (top.length === 0) {
-    syncNodes(body, [el("div", { class: "empty-state" }, [
+    frag.appendChild(el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: "No job runs yet." })
-    ])]);
+      el("div", { class: "text", text: runFilter === "all" ? "No job runs yet." : `No ${runFilter} job runs.` })
+    ]));
+    syncNodes(body, Array.from(frag.children));
     return;
   }
-  const header = el("div", { class: "runs-row runs-header" }, [
+  const headerCells = [
     runHeaderCell("when", "when"),
+    attributed ? el("span", { text: "workspace" }) : null,
     runHeaderCell("job", "job"),
     runHeaderCell("run id", "run_id"),
     runHeaderCell("denials", "denials", { num: true }),
@@ -465,9 +542,10 @@ export function renderRuns(runs) {
     runHeaderCell("duration", "duration", { style: { textAlign: "right" } }),
     runHeaderCell("state", "state", { style: { textAlign: "right" } }),
     el("span", { text: "" }),
-  ]);
+  ];
+  const header = el("div", { class: `runs-row runs-header${attributed ? " workspace-attributed" : ""}` }, headerCells);
   header.dataset.key = "runs-header";
-  header.dataset.hash = `header-${runSort.key}-${runSort.dir}`;
+  header.dataset.hash = `header-${runSort.key}-${runSort.dir}-${attributed ? "workspace" : "scoped"}`;
   frag.appendChild(header);
   for (const r of top) {
     const ts = r.finished_at || r.started_at || r.scheduled_at || r.created_at;
@@ -494,11 +572,11 @@ export function renderRuns(runs) {
       });
       lineage.addEventListener("click", (e) => {
         e.stopPropagation();
-        doNavigateToRun(sourceId);
+        doNavigateToRun(sourceId, r.workspace_id);
       });
       runIdCell.appendChild(lineage);
     }
-    const resumedAsId = resumedRunIdsBySource.get(r.run_id);
+    const resumedAsId = resumedRunIdsBySource.get(runIdentity(r));
     if (resumedAsId) {
       const lineage = el("button", {
         class: "run-lineage resumed-as",
@@ -507,12 +585,13 @@ export function renderRuns(runs) {
       });
       lineage.addEventListener("click", (e) => {
         e.stopPropagation();
-        doNavigateToRun(resumedAsId);
+        doNavigateToRun(resumedAsId, r.workspace_id);
       });
       runIdCell.appendChild(lineage);
     }
-    const row = el("div", { class: "runs-row", title: `${r.run_id} (click to inspect)` }, [
+    const rowCells = [
       el("span", { class: "when", text: fmtTimestampValue(ts) }),
+      attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
       el("span", { class: "id", text: r.job_id }),
       runIdCell,
       runCountCell(friction.denials),
@@ -523,11 +602,12 @@ export function renderRuns(runs) {
         runIsCancellable(r) ? buildCancelRunButton(r, body) : null,
         runIsResumable(r) ? buildResumeRunButton(r, body) : null,
       ]),
-    ]);
-    row.dataset.key = `run-${r.run_id}`;
-    row.dataset.hash = `${r.run_id}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${friction.denials}-${friction.toolFails}-${friction.durationMs}-${friction.longRun}`;
+    ];
+    const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}`, title: `${r.run_id} (click to inspect)` }, rowCells);
+    row.dataset.key = `run-${runIdentity(r)}`;
+    row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${friction.denials}-${friction.toolFails}-${friction.durationMs}-${friction.longRun}`;
     row.style.cursor = "pointer";
-    row.addEventListener("click", () => doNavigateToRun(r.run_id));
+    row.addEventListener("click", () => doNavigateToRun(r.run_id, r.workspace_id));
     frag.appendChild(row);
   }
   syncNodes(body, Array.from(frag.children));

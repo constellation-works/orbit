@@ -10,6 +10,11 @@ Reference for Orbit's runtime config — the `config.toml` consumed by `orbit ru
 
 This doc focuses on the user-facing knobs: `[workflow]` and `[crews.*]`. Other sections are summarized at the end.
 
+Contributors adding a new execution lane or deterministic command executor should
+use the [executor onboarding runbook](runbooks/executor-onboarding.md). It
+documents the v2 seams and validation obligations; this reference remains the
+operator contract for configuring an already shipped lane.
+
 ## Where config lives
 
 Two paths are consulted, in order:
@@ -55,7 +60,7 @@ system_crew = "system"      # crew for recovery paths with no job step to name o
 - **`default_crew`** — name of the crew under `[crews.<name>]` used for any task whose own `crew` field is unset. Must match a defined crew or config load fails. See [Per-task crew override](#per-task-crew-override) for how individual tasks select a different crew.
 - **`system_crew`** — name of the crew for system activities that are synthesized at runtime and so have no job step to name a crew on, principally `step_failure_recovery`. Defaults to `system`. Shipped pipelines such as `task_pilot_pipeline` and `task_triage_pipeline` do **not** read this key: their steps name `crew: system` directly, so the definition states which crew does the work. Either way the crew is resolved at dispatch through an explicit crew input, so system work never inherits a failed task's crew or the workspace default. A missing or unusable crew leaves the original failed step failed and emits a diagnostic naming `workflow.system_crew` and the configured crew.
 
-  **The `system` crew.** Interactive `orbit init` (or `--force` on a fresh rewrite) asks which detected bounded family should back `[crews.system]`: Codex Luna (`gpt-5.6-luna`), Claude Sonnet, Gemini Flash (`gemini-3.7-flash`), Grok (`grok-4.6`), Copilot Haiku, or Cursor (`gpt-5`; Cursor has no stable cheap-tier alias). It does not offer Sol, Opus, Terra, or a free-form custom provider, and it never prompts for a QA crew. `workflow.system_crew` stays `system`; only the assignment behind that name is chosen. A host with exactly one of those families auto-accepts it; a host with none omits `[crews.system]` rather than inventing a provider. `--non-interactive` never prompts and still auto-seeds `[crews.system]` from the preference order: Codex Luna, then Claude Sonnet, then Grok, then Gemini Flash, then Copilot, then Cursor. Appending the newer lanes preserves every existing family's selection. To change what runs system work after init, edit `[crews.system]`. Configs written before this crew existed have no such table, so the name is resolved first onto the crew `system_crew` names when that crew exists. For Orbit's default or legacy lane names (`system` and `qa`), a missing crew falls back to an existing `qa` crew and then to the already-validated workspace default; the latter keeps old Gemini- and Grok-only configs working even though they never seeded `qa`. Unknown custom names are not substituted. A host that points `system_crew` at a defined cheap crew therefore keeps running system work there rather than being silently relocated. An explicit `[crews.system]` always wins. `[crews.qa]` remains a loadable compatibility lane for explicitly user-authored legacy configs, but fresh init never creates it.
+  **The `system` crew.** Interactive `orbit init` (or `--force` on a fresh rewrite) asks which detected bounded family should back `[crews.system]`: Codex Luna (`gpt-5.6-luna`), Claude Sonnet, Grok (`grok-4.6`), Antigravity Flash (`gemini-3.8-flash-low` via `agy`), Gemini Flash (`gemini-3.8-flash` on the legacy Gemini CLI), Copilot Haiku, Cursor (`gpt-5`; Cursor has no stable cheap-tier alias), or Pi (`sonnet`; Pi has no stable cheap-tier alias either). It does not offer Astra, Sol, Opus, Terra, or a free-form custom provider, and it never prompts for a QA crew. `workflow.system_crew` stays `system`; only the assignment behind that name is chosen. A host with exactly one of those families auto-accepts it; a host with none omits `[crews.system]` rather than inventing a provider. `--non-interactive` never prompts and still auto-seeds `[crews.system]` from the preference order: Codex Luna, then Claude Sonnet, then Grok, then Antigravity Flash, then Gemini Flash, then Copilot, then Cursor, then Pi. Appending the newer lanes preserves every existing family's selection. To change what runs system work after init, edit `[crews.system]`. Configs written before this crew existed have no such table, so the name is resolved first onto the crew `system_crew` names when that crew exists. For Orbit's default or legacy lane names (`system` and `qa`), a missing crew falls back to an existing `qa` crew and then to the already-validated workspace default; the latter keeps old Gemini- and Grok-only configs working even though they never seeded `qa`. Unknown custom names are not substituted. A host that points `system_crew` at a defined cheap crew therefore keeps running system work there rather than being silently relocated. An explicit `[crews.system]` always wins. `[crews.qa]` remains a loadable compatibility lane for explicitly user-authored legacy configs, but fresh init never creates it.
 
 ---
 
@@ -65,8 +70,9 @@ A **crew** is one provider-model assignment. Activities do not carry a model-sel
 
 | Field | Purpose | Values |
 |---|---|---|
-| `model` | Model identifier passed to the provider CLI | Provider-specific (e.g. `opus`, `sonnet`, `gpt-5.6-sol`, `gemini-3.7-flash`, `grok-4.6`) |
-| `provider` | Agent family | `claude`, `codex`, `gemini`, `grok`, `copilot`, `cursor` (the CLI-executable crew families; see [Provider identity and resolution](#provider-identity-and-resolution) for the full canonical set) |
+| `model` | Model identifier passed to the provider CLI | Provider-specific (e.g. `opus`, `sonnet`, `gpt-6-astra`, `gemini-3.8-flash-high`, `grok-4.6`) |
+| `provider` | Agent family or execution lane | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, `opencode` (the CLI-executable crew families; see [Provider identity and resolution](#provider-identity-and-resolution) for the full canonical set) |
+| `effort` | Optional provider reasoning effort | Claude/Codex: `low`, `medium`, `high`, `xhigh`, or `max`; Antigravity: `low`, `medium`, `high`; OpenCode: `high` or `max`; Grok: verified per model below |
 | `description` | Optional human-facing crew summary | Any non-empty string after trimming |
 | `tags` | Optional discovery labels | Array of strings; normalized, sorted, and deduplicated |
 
@@ -76,9 +82,34 @@ Example — the standard Codex Sol crew:
 [crews.sol]
 model = "gpt-5.6-sol"
 provider = "codex"
+effort = "high"
 description = "Systems implementation"
 tags = ["implementation", "review"]
 ```
+
+`effort` is omitted by default, which leaves the provider's existing model
+default unchanged. When set, Orbit validates it while loading `config.toml`
+and passes it through the provider's documented argv: Codex receives
+`model_reasoning_effort`, Claude receives `--effort`, Antigravity receives
+`--effort` (`low`/`medium`/`high` only), and Grok receives
+`--reasoning-effort`. The installed Claude CLI (2.1.261, checked September
+2026) advertises all five values, so Orbit forwards `low`, `medium`, `high`,
+`xhigh`, and `max` exactly; [Claude's effort documentation](https://code.claude.com/docs/en/model-config)
+notes that availability can still depend on the selected model. Grok Build
+1.0.13 advertises `--reasoning-effort` (with `--effort` as an alias), and
+`grok models` currently lists `grok-4.6` and `grok-4.5`. Orbit accepts `low`,
+`medium`, `high`, and `xhigh` for `grok-4.6`, and `low`, `medium`, and `high`
+for `grok-4.5`, matching [xAI's reasoning contract](https://docs.x.ai/developers/model-capabilities/text/reasoning).
+It rejects `max`, unsupported Grok model/effort pairs, Antigravity `xhigh`/`max`,
+OpenCode `low`/`medium`/`xhigh`,
+legacy Gemini CLI model ids on the Antigravity lane, and effort on other
+providers clearly rather than silently downgrading or ignoring a request. A
+selected activity crew (including `workflow.system_crew`) supplies its effort
+together with its provider and model, so it takes precedence over an activity's
+inline baseline in the same way as the rest of that assignment. For the
+standard Codex tiers, use the model-specific crew to choose capability first:
+Terra (`gpt-5.6-terra`) is the medium-low crew; `effort` adjusts the reasoning
+budget inside the chosen Codex model.
 
 Example — the standard Grok crew:
 
@@ -90,7 +121,9 @@ provider = "grok"
 
 The current Grok Build CLI lists `grok-4.6` as its default from `grok models`, so Orbit uses that live menu id. The older `grok-build` string is not retained as a default or alias.
 
-Fresh `orbit init` configuration advertises only detected provider CLIs. Claude seeds `opus`, `sonnet`, and `fable`; Codex seeds `sol`, `terra`, and `luna`; Gemini seeds `gemini`; Grok seeds `grok`; Copilot seeds `copilot`; and an installed `cursor-agent` seeds `cursor`. Copilot and Cursor are appended after the original four families, so installing either never changes the default crew, default provider, or system crew on a host that already has an earlier family. Interactive init still asks for the default crew (`[crews.custom]`) and, separately, for the system crew written as `[crews.system]`; it does not ask for QA. `--non-interactive` auto-seeds `[crews.system]` from the preference order above whenever a supported family is detected. The legacy `qa` name remains loadable when an existing user-authored config defines `[crews.qa]`, but init does not seed that table. If no supported provider CLI is detected, init leaves both the crew registry and `workflow.default_crew` unset instead of writing an unusable provider.
+Fresh `orbit init` configuration advertises only detected provider CLIs. Claude seeds `opus`, `sonnet`, and `fable`; Codex seeds `astra`, `sol`, `terra`, and `luna`; an installed `agy` seeds `antigravity`; Gemini CLI still seeds the legacy `gemini` crew when that binary is present; Grok seeds `grok`; Copilot seeds `copilot`; an installed `cursor-agent` seeds `cursor`; and an installed `pi` seeds `pi`. Antigravity occupies Gemini CLI's previous default-provider slot, so a host with both `agy` and `gemini` prefers Antigravity. Copilot, Cursor, and Pi remain appended after the original families. Interactive init still asks for the default crew (`[crews.custom]`) and, separately, for the system crew written as `[crews.system]`; it does not ask for QA. `--non-interactive` auto-seeds `[crews.system]` from the preference order above whenever a supported family is detected. The legacy `qa` name remains loadable when an existing user-authored config defines `[crews.qa]`, but init does not seed that table. If no supported provider CLI is detected, init leaves both the crew registry and `workflow.default_crew` unset instead of writing an unusable provider.
+
+The `astra` crew (`gpt-6-astra`) is the Codex fresh-config default; the existing `sol`, `terra`, and `luna` crews remain available. The Antigravity `antigravity` crew uses `gemini-3.8-flash-high` from `agy models` (verified against Antigravity CLI 1.1.27). The legacy `gemini` crew still uses `gemini-3.8-flash` for enterprise Gemini CLI. These exact IDs are not remapped: a crew that names `gemini-3.8-flash` on `provider = "antigravity"` fails with migration guidance. Existing explicit model pins are retained when their configuration loads.
 
 You can define any number of crews. Set the workspace-wide fallback with `workflow.default_crew`; assign a specific crew to individual tasks via the [per-task crew override](#per-task-crew-override). Crews are validated at load time: each crew must have non-empty `model` and `provider`; `workflow.default_crew` must name a defined crew.
 
@@ -135,6 +168,9 @@ Every `provider` string Orbit reads — in `[crews.<name>]`, in an activity's in
 | `ollama` | — | **unsupported at the Orbit CLI entry point** | no | **no** |
 | `openai_compat` | `openai-compat` | **no** (HTTP-only) | no | **no** |
 | `cursor` | — | yes (`cursor-agent`) | no | **no** |
+| `pi` | — | yes (`pi`) | no | **no** |
+| `antigravity` | — | yes (`agy`) | no | **no** |
+| `opencode` | — | yes (`opencode`) | no | **no** |
 
 - **Parsing is case- and whitespace-insensitive.** `Claude`, `  claude `, and `CLAUDE` all resolve to `claude`. `openai-compat` normalizes to `openai_compat`.
 - **Deprecated aliases resolve *and* warn.** The legacy vendor names normalize to their canonical id and log an `orbit.config.crew` deprecation warning (`{alias, canonical}`) — they never fail, but update the config:
@@ -146,13 +182,16 @@ Every `provider` string Orbit reads — in `[crews.<name>]`, in an activity's in
   | `google` | `gemini` |
   | `xai` | `grok` |
 
-  `copilot` and `cursor` have **no** aliases. `github`, `cursor-agent`, and
-  `anysphere` are not provider spellings, and the vendor that supplies a
-  session's underlying model never changes its execution-lane identity. See
-  [GitHub Copilot CLI](#github-copilot-cli) and
-  [Cursor Agent CLI](#cursor-agent-cli).
+  `copilot`, `cursor`, `pi`, `antigravity`, and `opencode` have **no** aliases.
+  `github`, `cursor-agent`, `anysphere`, `pi-coding-agent`, `earendil`, `agy`,
+  and `sst` are not provider spellings, and the vendor that supplies a session's
+  underlying model never changes its execution-lane identity. `google` still
+  aliases to `gemini` (the model family / legacy Gemini CLI), not Antigravity.
+  See [GitHub Copilot CLI](#github-copilot-cli),
+  [Cursor Agent CLI](#cursor-agent-cli), [Pi CLI](#pi-cli),
+  [Antigravity CLI](#antigravity-cli), and [OpenCode CLI](#opencode-cli).
 
-- **Canonical ≠ Worker-executable.** Orbit's canonical set is deliberately wider than what the model-neutral Worker leaf executor can run: `copilot`, `cursor`, `ollama`, and `openai_compat` are first-class Orbit providers but Worker does not execute them. This distinction is preserved on purpose — do not narrow the canonical set to Worker's subset. For `copilot` and `cursor` this is a *stable diagnostic*, not a fallback: a Worker-routed step naming either lane is refused by identity rather than silently re-pointed at another family.
+- **Canonical ≠ Worker-executable.** Orbit's canonical set is deliberately wider than what the model-neutral Worker leaf executor can run: `copilot`, `cursor`, `pi`, `antigravity`, `opencode`, `ollama`, and `openai_compat` are first-class Orbit providers but Worker does not execute them. This distinction is preserved on purpose — do not narrow the canonical set to Worker's subset. For `copilot`, `cursor`, `pi`, `antigravity`, and `opencode` this is a *stable diagnostic*, not a fallback: a Worker-routed step naming one of those lanes is refused by identity rather than silently re-pointed at another family.
 - **Known ≠ executable at this entry point.** The shared contract recognizes `ollama`, but the Orbit CLI capability set is the canonical cross-repo four; explicitly selecting `ollama` fails as `provider.unsupported` rather than falling back.
 - **`openai_compat` has no CLI runtime.** Every crew dispatches through the CLI agent path, so selecting it fails structurally (see below) rather than falling back.
 
@@ -170,7 +209,7 @@ Provider selection is **three composed steps**, not one. Describe them precisely
 
 **2 — Which crew an activity uses.** A non-empty `crew` in the activity's rendered input selects that named crew. Without one, the activity uses the run's resolved crew from step 1. This is the only activity-authoring routing mechanism. Activity and job assets that declare `role` are rejected with guidance to pass `crew` in the activity input instead.
 
-**3 — The activity crew's assignment overrides the inline baseline** (`resolve_from_config`). For each `(provider, model)` field independently: the selected crew value wins **when present**; otherwise the activity's inline `agent_loop` value stands. A crew assignment that omits a field (or whose `provider` string is unparseable) leaves the inline baseline in place — so a config typo never coerces dispatch onto a wrong runtime. This is also why **persisted provider identity is never re-defaulted** during reconciliation: a provider already frozen on a run record is reused verbatim, not reset to the enum default.
+**3 — The activity crew's assignment overrides the inline baseline** (`resolve_from_config`). For each `(provider, model, effort)` field independently: the selected crew value wins **when present**; otherwise the activity's inline `agent_loop` value stands. A crew assignment that omits a field (or whose `provider` string is unparseable) leaves the inline baseline in place — so a config typo never coerces dispatch onto a wrong runtime. This is also why **persisted provider identity is never re-defaulted** during reconciliation: a provider already frozen on a run record is reused verbatim, not reset to the enum default.
 
 ### The one setting that changes the default — `CONSTELLATION_DEFAULT_PROVIDER`
 
@@ -184,7 +223,7 @@ Explicit selections that are unsupported or unavailable **fail with a stable dia
 
 - `provider openai_compat is unsupported by the Orbit CLI entry point (HTTP-only)` — a CLI-executable dispatch selected an HTTP-only provider.
 - `provider ollama is unsupported by the Orbit CLI entry point` — a known provider is outside this entry point's capability set.
-- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor — no CLI runtime registered` — the provider string did not resolve to a canonical id.
+- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode — no CLI runtime registered` — the provider string did not resolve to a canonical id.
 
 An **unrecognized `[crews.<name>].provider` value** is the one non-fatal case: it is logged (`orbit.config.crew` warn) and that field falls back to the activity's inline `provider`, because a config typo should not coerce dispatch onto a wrong runtime — the inline value is the known-good identity, not a default guess.
 
@@ -386,6 +425,405 @@ Only an active Cursor executor receives write access to `$HOME/.cursor` for
 login state, CLI settings, permissions, and sessions. Other providers do not
 inherit that write grant. The worktree and all other paths remain governed by
 the activity filesystem profile.
+
+---
+
+## Pi CLI
+
+The `pi` provider launches the local `pi` binary (npm package
+`@earendil-works/pi-coding-agent`) as an Orbit-supervised worker. Everything
+below was verified against **Pi 0.85.1**: the README option tables,
+`src/cli/args.ts`, `src/modes/print-mode.ts`, and `docs/json.md`.
+
+### Installation and detection
+
+```sh
+npm install -g @earendil-works/pi-coding-agent
+pi --version
+```
+
+Ensure the install directory is on `PATH` before running `orbit init`. Fresh
+init detects `pi`, adds a `[crews.pi]` assignment, and can choose it only after
+every previously supported family in the preference order. Selecting `pi` when
+its binary is unavailable fails with a permanent diagnostic naming `pi`; Orbit
+never falls back to another provider.
+
+### Authentication and credential handling
+
+Pi supports two local authentication paths, and Orbit changes neither:
+
+1. Run `pi` once interactively and authenticate with its `/login` command. The
+   resulting credentials live under Pi's agent directory
+   (`$PI_CODING_AGENT_DIR`, default `$HOME/.pi/agent`).
+2. Export a vendor API key and explicitly pass it to the agent subprocess:
+
+   ```toml
+   [execution.env]
+   pass = ["ANTHROPIC_API_KEY"]
+   ```
+
+Orbit never renders Pi's `--api-key` flag and adds no `*_API_KEY` to the
+provider's required environment, so credential values do not enter task
+artifacts, audit argv, transcripts, or spawn errors. The operator opts in
+through the same child-environment policy used by every other secret. Logging
+in is an unsandboxed setup action, not part of a workflow turn.
+
+### Model and thinking selection
+
+Every Pi invocation receives `--model <pattern>` from its crew assignment.
+`--model` takes a *pattern*, which may carry a `provider/id` prefix, so the
+underlying vendor is selected inside the model string rather than through a
+second Orbit knob:
+
+```toml
+[crews.pi]
+model = "sonnet"
+provider = "pi"
+
+# Or pin the vendor explicitly:
+# model = "openai/gpt-4o"
+```
+
+Run `pi --list-models` to inspect the ids available to the authenticated
+account. **Choosing an Anthropic, OpenAI, or Google model never changes the
+provider identity**: the run remains a `pi` run with Pi authentication, state,
+audit attribution, and sandbox policy. Correspondingly, `anthropic`, `openai`,
+`google`, and `xai` remain deprecated aliases for *other* Orbit lanes and never
+resolve to `pi`.
+
+A crew `effort` is rendered as Pi's `--thinking <level>`. Pi validates that flag
+against a fixed, model-independent set — `off, minimal, low, medium, high,
+xhigh, max` — and rejects anything else with a diagnostic instead of ignoring
+it. Orbit's crew vocabulary (`low, medium, high, xhigh, max`) is a strict subset
+of that set, so every admissible crew effort reaches the CLI intact and an
+inadmissible one is refused at config load. Orbit renders `--thinking` as its
+own flag rather than using Pi's `<model>:<thinking>` shorthand, so the two crew
+fields stay independently readable in argv and audit records. Omitting `effort`
+omits the flag and leaves Pi's own default in place.
+
+### Headless execution, output, and session isolation
+
+The shipped direct-agent executor uses
+`--mode json --no-session --no-approve --offline`:
+
+- `--mode json` is Pi's non-interactive JSONL event stream.
+- `--no-session` makes every Orbit invocation an ephemeral session. Without it
+  Pi writes a session JSONL per run under its agent directory, and a later
+  `--continue` could resurrect one run's context inside another.
+- `--no-approve` denies project trust for the run rather than inheriting an
+  ambient decision from `~/.pi/agent/trust.json` or `defaultProjectTrust`. Pi
+  executes project-local `.pi` extensions once a checkout is trusted, and a
+  managed worktree is repository content Orbit does not vouch for. Context files
+  (`AGENTS.md` / `CLAUDE.md`) load *before* the trust decision, so repository
+  instructions still reach the agent. An operator who wants project-local Pi
+  resources overrides this on their own executor definition.
+- `--offline` suppresses Pi's startup network calls — the `pi.dev` version
+  check, package update checks, and the install/update telemetry ping. Model API
+  traffic is unaffected. Orbit sends no other outbound message on Pi's behalf.
+
+The Orbit prompt travels on standard input, never as a positional argument: Pi
+merges piped stdin into the initial prompt in every non-interactive mode.
+
+Orbit reads only terminal assistant `message_end` frames — the event Pi documents
+as the final authoritative message. The latest such frame controls completion:
+Orbit takes its `text` content blocks only when it is a clean answer, while a
+later failed, empty, or malformed assistant terminal frame invalidates earlier
+completion evidence. Everything else is dropped before any protocol read. That
+reduction is a correctness requirement, not tidying: Pi's `agent_end` frame
+replays the entire conversation including the user turn, and every Orbit prompt
+embeds a literal example response envelope, so a reverse envelope scan over the
+raw stream could read Orbit's own instructions back as the agent's completion
+evidence. `thinking` and `toolCall` blocks are dropped for the same reason. A
+non-zero exit, malformed JSONL, a `stopReason` of `error`/`aborted`, a stream
+with no terminal frame, or an absent Orbit completion envelope all fail closed.
+
+Because the reduction drops Pi's streaming control plane, Orbit does **not**
+claim provider-reported token usage for a Pi run; the invocation trace carries
+only what the Orbit response envelope itself declares. The raw stdout and stderr
+captures are still written to the audit blob store unmodified, so the full
+session log — including Pi's own authentication and policy diagnostics — remains
+available to an operator.
+
+### Tool integration: no native MCP
+
+**Pi ships no MCP client** ("No MCP" is an explicit design position in its
+README; MCP support would have to come from a third-party extension). Orbit does
+not inject one and does not claim to.
+
+This costs nothing for Orbit's own tools. A Pi run reaches them the same way
+every CLI agent path does: Orbit puts the dispatching `orbit` binary first on
+the child's `PATH` and exports `ORBIT_BIN`, and the execution envelope instructs
+the agent to call `orbit tool run <tool.name> --input '<json>'` through Pi's
+built-in `bash` tool. The same allowlist and caller-role gates apply as on the
+MCP surface, so the activity's tool grant is enforced identically.
+
+The practical limits, stated plainly:
+
+- Pi cannot receive an MCP-native tool schema, so tool discovery is what the
+  envelope names rather than a protocol-level list.
+- `orbit mcp setup` has no Pi client to configure and does not offer one.
+- An activity that grants `proc.spawn` must keep `bash` available; a crew that
+  narrowed Pi's tools with `--tools`/`--no-tools` on a custom executor
+  definition would cut off the Orbit tool path entirely.
+
+### Sandbox
+
+Only an active Pi executor receives write access to Pi's agent directory —
+`$PI_CODING_AGENT_DIR` when set, otherwise `$HOME/.pi` — for login credentials,
+settings, saved trust decisions, installed packages, and session state. Other
+providers do not inherit that grant, and Pi does not inherit theirs. The
+worktree and all other paths remain governed by the activity filesystem profile;
+Pi has no OS-level sandbox flag of its own, so the enclosing Orbit
+macOS/Linux sandbox is the only filesystem boundary and remains authoritative.
+
+---
+
+## Antigravity CLI
+
+The `antigravity` provider launches the local `agy` binary as an
+Orbit-supervised worker. This is Google's current terminal agent after the
+Gemini CLI transition for individual accounts (2026-06-18). It is **not** a
+rename of the `gemini` executor: the protocol, flags, MCP config, and model
+slugs are different.
+
+Gemini remains a **model family**. `gemini-*` model ids still attribute as
+`gemini`. `provider = "gemini"` still means the legacy Gemini CLI, which
+enterprise Gemini Code Assist and API-key deployments continue to support.
+Do not treat every Gemini API deployment as shut down.
+
+### Installation and detection
+
+Install from [Antigravity CLI](https://www.antigravity.google/docs/cli/headless/)
+and verify:
+
+```sh
+agy --version    # this change was verified against 1.1.27
+agy models
+```
+
+Ensure the installed directory is on `PATH` before `orbit init`. Fresh init
+detects `agy`, adds a `[crews.antigravity]` assignment, and prefers it over
+the legacy Gemini CLI when both binaries are present. Selecting `antigravity`
+when `agy` is missing fails with a permanent diagnostic naming `agy`; Orbit
+never falls back to `gemini` or another vendor.
+
+### Authentication and credential handling
+
+Authenticate once with an interactive `agy` session. Headless runs use that
+cached login under `$HOME/.gemini/antigravity-cli/`. Orbit never runs `agy`
+login, never rewrites credentials, and does not pass API keys on argv. A
+non-interactive run that is not already authenticated exits with an
+`authentication required` error instead of hanging. Permission denials in
+headless mode are printed to stderr and name the tool plus how to allow it.
+
+### Model and effort
+
+Every Antigravity invocation receives `--model <slug>` from its crew. The
+shipped crew uses a slug from `agy models`:
+
+```toml
+[crews.antigravity]
+model = "gemini-3.8-flash-high"
+provider = "antigravity"
+```
+
+Official headless docs list `--effort low|medium|high`. `xhigh` and `max` fail
+closed with migration guidance; they are not dropped or remapped. Bare Gemini
+CLI ids such as `gemini-3.8-flash` also fail closed: use a slug from
+`agy models`. Unknown `--model` values fail at the CLI rather than falling
+back. Running a Claude or GPT slug through `agy` does not change the
+execution-lane identity: the run remains `antigravity`.
+
+Migrate an old crew with `provider = "gemini"` by changing the provider to
+`antigravity` and the model to a current `agy models` slug. Customized
+`gemini` executor definitions and credentials are left intact.
+
+### Headless execution, output, MCP, and sandbox
+
+The shipped executor uses `--input-format stream-json --output-format
+stream-json --dangerously-skip-permissions`. The Orbit prompt is one
+documented stdin `user` event, then stdin is closed, so the envelope never
+enters argv. `--dangerously-skip-permissions` is the unattended analog of
+interactive Ask; Orbit's OS sandbox remains the filesystem/network boundary.
+Do not copy Gemini CLI flags (`--approval-mode yolo`, `-o json`,
+`--allowed-mcp-server-names`). Do not pass `agy --sandbox`; the outer Orbit
+sandbox is authoritative.
+
+`agy --print-timeout` defaults to five minutes. Orbit always passes an
+explicit `--print-timeout` derived from the remaining activity wall-clock
+deadline minus a 30-second shutdown margin, so a three-hour activity is not
+cut off at five minutes. A custom executor that already sets the flag keeps a
+shorter value and is capped if it exceeds the derived budget; the flag is
+never duplicated. Orbit's outer process timeout and cleanup remain
+authoritative if the CLI ignores the flag.
+
+On success `agy` emits a terminal `result` with `status: "SUCCESS"`, the
+assistant text in `response`, and token counts in `usage`. Orbit rejects
+`ERROR` / malformed / missing terminal objects as missing completion evidence.
+When `agy` exits non-zero with empty stderr and a terminal `ERROR` (for
+example `timeout waiting for response`), Orbit surfaces that bounded, redacted
+`error` string in run/task diagnostics and does not copy `response` or prompt
+text into the message.
+MCP for Antigravity is configured at `~/.gemini/config/mcp_config.json`
+(home) or `.agents/mcp_config.json` (workspace), not the legacy Gemini
+`.gemini/settings.json` `mcpServers` map.
+
+`$HOME/.gemini` is already a sandbox write grant (shared with the legacy
+Gemini CLI). Other providers do not receive extra Antigravity-only roots.
+
+---
+
+## OpenCode CLI
+
+The `opencode` provider launches the local `opencode` binary as an
+Orbit-supervised worker. Everything below was verified against **opencode
+1.18.29**: the published [CLI reference](https://opencode.ai/docs/cli/) and the
+upstream `packages/opencode/src/cli/cmd/run.ts` and
+`packages/core/src/global.ts` sources. OpenCode's hosted/served modes
+(`opencode serve`, `--attach`, `opencode web`) are not used.
+
+### Installation and detection
+
+```sh
+opencode --version   # this change was verified against 1.18.29
+opencode models
+```
+
+Fresh init detects `opencode`, adds a `[crews.opencode]` assignment, and can
+choose it only after every previously supported family in the preference order,
+so adding this lane cannot change what an already-provisioned host picks.
+Selecting `opencode` when its binary is unavailable fails with a permanent
+diagnostic naming `opencode`; Orbit never substitutes another provider.
+
+### Authentication and credential handling
+
+OpenCode supports two local authentication paths, and Orbit changes neither:
+
+1. Run `opencode auth login` once. The resulting credentials live in
+   `auth.json` under OpenCode's XDG **data** directory — `$XDG_DATA_HOME/opencode`,
+   default `$HOME/.local/share/opencode`.
+2. Export a vendor API key and explicitly pass it to the agent subprocess:
+
+   ```toml
+   [execution.env]
+   pass = ["ANTHROPIC_API_KEY"]
+   ```
+
+Orbit adds no `*_API_KEY` to the provider's required environment and never puts
+a credential on argv. An interactive `opencode auth login` is a separate,
+unsandboxed setup action that no Orbit workflow turn performs.
+
+### Model and variant selection
+
+Every OpenCode invocation receives `--model <provider>/<model>` from its crew
+assignment. The coordinate must be **fully qualified**: OpenCode splits on the
+first `/` and looks the leading segment up in its own provider catalog, so a
+bare model id does not resolve.
+
+```toml
+[crews.opencode]
+model = "anthropic/claude-sonnet-4-5"
+provider = "opencode"
+effort = "high"
+description = "OpenCode through its local CLI"
+tags = ["implementation"]
+```
+
+The crew chooses the `opencode` executor. The `anthropic/` prefix names the
+**model vendor inside the OpenCode lane** and **never changes the provider
+identity**: the run remains an `opencode` run for its authentication, state
+directories, audit attribution, and sandbox policy. Orbit renders no separate
+provider flag, and `anthropic`, `openai`, and `google` continue to resolve to
+their own executors rather than to `opencode`. Run `opencode models` to inspect
+the coordinates available to the authenticated account.
+
+A crew `effort` is rendered as OpenCode's `--variant <value>`, documented as
+"model variant (provider-specific reasoning effort, e.g., high, max, minimal)".
+Because OpenCode forwards that value verbatim to whichever model provider
+`--model` selected and publishes no provider-independent vocabulary, Orbit
+admits only `high` and `max`. `low`, `medium`, and `xhigh` are **rejected at
+configuration load** with a diagnostic — they are not remapped onto `minimal` or
+`high`, and they are never silently dropped at spawn. Omitting `effort` omits
+the flag and leaves OpenCode's own default in place.
+
+### Headless execution, output, and permissions
+
+The shipped executor supplies only static non-interactive flags:
+
+- `run` is the non-interactive subcommand; without it the CLI starts its TUI.
+- `--format json` is OpenCode's raw event stream: one JSON object per line,
+  shaped `{type, timestamp, sessionID, ...}`.
+- `--auto` auto-approves permission requests that are not explicitly denied.
+  This is **required** for unattended runs: without it OpenCode *auto-rejects*
+  every request and the turn cannot touch the worktree. It is the documented
+  non-interactive analog of an interactive approval, **not** a security
+  boundary — see [Sandbox](#sandbox-1) below.
+
+`--continue`, `--session`, and `--share` are deliberately absent: the first two
+would let one run's context resurface inside another, and `--share` publishes
+the session. Every Orbit invocation is a fresh session.
+
+The Orbit prompt travels on standard input, never as a positional argument.
+OpenCode reads piped stdin whenever stdin is not a TTY and uses it as the whole
+message when no positional `[message..]` is supplied, which keeps the execution
+envelope out of process listings, audit argv, and spawn diagnostics.
+
+Orbit reads only the assistant `text` parts of the event stream, concatenated in
+order. Dropping the rest is a correctness requirement, not tidying: `tool_use`
+frames carry full tool input and output, so an agent that reads its own task
+record or echoes the prompt through a shell tool replays Orbit's own execution
+envelope — including the literal example envelope in the response contract —
+inside a tool payload, and `reasoning` frames are the model thinking aloud,
+where a draft envelope is not an answer. A terminal `error` event clears any
+answer text already accumulated, so a partially written envelope from before a
+failure cannot be projected as success. OpenCode also exits non-zero on session
+failure, and the v2 runner fails closed on a non-zero exit even when stdout
+contains success-looking JSON; exit status and envelope are independent
+evidence and both must be valid.
+
+Because the reduction drops OpenCode's `step_finish` frames, Orbit does **not**
+claim provider-reported token usage for an OpenCode run; the invocation trace
+carries whatever the Orbit response envelope itself declares. Full stdout and
+stderr are still captured in the run's audit record, so OpenCode's own
+diagnostics remain available for debugging. `--print-logs` is not passed;
+OpenCode writes logs to its data directory's `log/` tree.
+
+### Tool integration: MCP is not auto-configured
+
+OpenCode has a native MCP client configured through its own `opencode.json`.
+**Orbit does not write, merge, or manage that file**, and `orbit mcp setup` does
+not offer an OpenCode target. An operator who wants OpenCode's MCP client
+pointed at an Orbit server configures it themselves.
+
+This costs nothing for Orbit's own tools. An OpenCode run reaches them the same
+way every non-MCP lane does: the execution envelope directs the agent to call
+`orbit tool run <tool.name> --input '<json>'` through OpenCode's shell tool,
+using the `orbit` binary supplied on its `PATH`. Tool grants and caller-role
+gates are still enforced by `orbit tool run`, so the activity's scoped authority
+is unchanged. Two consequences follow:
+
+- OpenCode cannot receive an MCP-native tool schema for Orbit's tools, so tool
+  discovery is what the envelope states rather than a negotiated list.
+- The route depends on OpenCode's shell tool being available. An operator who
+  has disabled it on a custom executor or in `opencode.json` breaks Orbit tool
+  access for that lane.
+
+### Sandbox
+
+Only an active OpenCode executor receives write access to OpenCode's XDG roots:
+`$XDG_DATA_HOME/opencode` (default `$HOME/.local/share/opencode`, holding
+`auth.json`, the session and message stores, and logs), the config root
+(`$OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`, else
+`$HOME/.config/opencode`), `$XDG_STATE_HOME/opencode`, and
+`$XDG_CACHE_HOME/opencode`. All four are granted because OpenCode creates the
+data, config, and state roots during startup — before it ever reads Orbit's
+envelope. Other providers do not inherit that grant, and OpenCode does not
+inherit theirs.
+
+The worktree and all other paths remain governed by the activity filesystem
+profile. `--auto` cannot grant filesystem access the enclosing sandbox denies:
+the Orbit macOS/Linux sandbox is the only filesystem boundary and remains
+authoritative.
 
 ---
 

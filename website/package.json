@@ -4,15 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "sync:design": "node ./scripts/sync-design-docs.mjs",
-    "sync:scoreboard": "node ./scripts/sync-scoreboard.mjs",
-    "predev": "npm run sync:design && npm run sync:scoreboard",
+    "predev": "node ./scripts/clean-legacy-metrics.mjs",
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
-    "prebuild": "npm run sync:design && npm run sync:scoreboard",
+    "prebuild": "node ./scripts/clean-legacy-metrics.mjs",
     "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
-    "prepreview": "npm run sync:design && npm run sync:scoreboard",
+    "prepreview": "node ./scripts/clean-legacy-metrics.mjs",
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",
-    "precheck": "npm run sync:design && npm run sync:scoreboard",
+    "precheck": "node ./scripts/clean-legacy-metrics.mjs",
     "check": "ASTRO_TELEMETRY_DISABLED=1 astro check"
   },
   "dependencies": {

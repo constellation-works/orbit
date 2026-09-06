@@ -75,17 +75,26 @@ impl TaskV2Store {
     /// validating the index for task B must not fail because task A is being
     /// created or deleted at that instant.
     fn index_is_usable(&self) -> Result<bool, OrbitError> {
+        if self.validated_envelopes()?.is_some() {
+            Ok(true)
+        } else {
+            self.rebuild_index_best_effort("missing or stale index")
+        }
+    }
+
+    /// Reuse the freshness scan for bounded selection, without reading bodies.
+    pub(super) fn validated_envelopes(&self) -> Result<Option<Vec<TaskEnvelopeV2>>, OrbitError> {
         let registered = self.registry.tasks_for_workspace(&self.workspace_id)?;
         let indexed = self
             .registry
             .indexed_task_versions_for_workspace(&self.workspace_id)?;
         if registered.len() != indexed.len() {
-            return self.rebuild_index_best_effort("index count mismatch");
+            return Ok(None);
         }
-
+        let mut envelopes = Vec::with_capacity(registered.len());
         for binding in registered {
-            let Some(indexed_updated_at) = indexed.get(&binding.task_id) else {
-                return self.rebuild_index_best_effort("missing index row");
+            let Some(version) = indexed.get(&binding.task_id) else {
+                return Ok(None);
             };
             let Some(envelope) = self
                 .bundle_store
@@ -93,11 +102,12 @@ impl TaskV2Store {
             else {
                 continue;
             };
-            if envelope.updated_at.to_rfc3339() != *indexed_updated_at {
-                return self.rebuild_index_best_effort("stale index row");
+            if envelope.updated_at.to_rfc3339() != *version {
+                return Ok(None);
             }
+            envelopes.push(envelope);
         }
-        Ok(true)
+        Ok(Some(envelopes))
     }
 
     /// Rebuild the generated index from the bundles, degrading to `false` (use
@@ -200,11 +210,15 @@ impl TaskV2Store {
         })
     }
 
+    /// Run `op` under this task's exclusive bundle lock.
+    ///
+    /// The lock target belongs to the bundle store, which hands the same file
+    /// to the shared lock its full-bundle reads take, so a write and a
+    /// concurrent read cannot disagree about what coordinates them.
     pub(crate) fn with_task_lock<T, F>(&self, id: &str, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
-        let lock_target = self.bundle_store.bundle_path(id)?.join("task.yaml");
-        with_exclusive_file_lock(&lock_target, "task artifact v2", op)
+        self.bundle_store.with_bundle_write_lock(id, op)
     }
 }

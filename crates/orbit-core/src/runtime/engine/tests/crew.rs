@@ -421,3 +421,77 @@ fn resolve_crew_for_task_reads_env_default_but_workspace_crew_wins() {
     // `[workflow].default_crew = "primary"` (workspace tier) beats the env tier.
     assert_eq!(crew.name, "primary");
 }
+
+/// [ORB-11242] The dispatch gate is keyed on the crew a task *actually*
+/// resolves to, so a task carrying an excluded crew cannot start a provider
+/// even though nothing about the activity mentions the restriction.
+#[test]
+fn run_crew_allowlist_refuses_a_task_crew_it_excludes() {
+    let (_root, runtime) = runtime_with_named_crews();
+    let task_id = add_task_with_crew(&runtime, "beta");
+    let input = json!({ "task_ids": [task_id], "allowed_crews": ["primary"] });
+
+    let error = RuntimeHost::agent_crew_config_for_input(&runtime, &input)
+        .expect_err("an excluded task crew must not dispatch");
+    let message = error.to_string();
+    assert!(message.contains("`beta`"), "{message}");
+    assert!(message.contains("beta-model"), "{message}");
+    assert!(message.contains("primary"), "{message}");
+}
+
+/// The permitted control for the refusal above, and the omitted-option case:
+/// both must dispatch exactly as they did before the allowlist existed.
+#[test]
+fn run_crew_allowlist_permits_a_listed_crew_and_ignores_an_absent_list() {
+    let (_root, runtime) = runtime_with_named_crews();
+    let task_id = add_task_with_crew(&runtime, "beta");
+
+    for input in [
+        json!({ "task_ids": [task_id], "allowed_crews": ["beta"] }),
+        json!({ "task_ids": [task_id], "allowed_crews": [] }),
+        json!({ "task_ids": [task_id], "allowed_crews": "" }),
+        json!({ "task_ids": [task_id] }),
+    ] {
+        let config = RuntimeHost::agent_crew_config_for_input(&runtime, &input)
+            .unwrap_or_else(|error| panic!("dispatch must succeed for {input}: {error}"))
+            .expect("crew config");
+        assert_eq!(config.model.as_deref(), Some("beta-model"), "{input}");
+        assert_eq!(config.provider, Some(Provider::Codex), "{input}");
+    }
+}
+
+/// A crew that is a different registry name for the same configured
+/// `(provider, model)` is permitted: the allowlist restricts provider usage,
+/// and naming a wrapper is not itself provider usage.
+#[test]
+fn run_crew_allowlist_matches_on_effective_configured_identity() {
+    let (_root, runtime) = runtime_with_named_crews();
+    // `system` is synthesized onto the same assignment as `primary`.
+    let task_id = add_task_with_crew(&runtime, "system");
+
+    let config = RuntimeHost::agent_crew_config_for_input(
+        &runtime,
+        &json!({ "task_ids": [task_id], "allowed_crews": ["primary"] }),
+    )
+    .expect("an alias of a permitted identity dispatches")
+    .expect("crew config");
+    assert_eq!(config.model.as_deref(), Some("default-model"));
+}
+
+/// A malformed allowlist fails the dispatch instead of being read as "no
+/// restriction", which would silently widen the window it was meant to narrow.
+#[test]
+fn run_crew_allowlist_fails_closed_on_a_malformed_or_unknown_entry() {
+    let (_root, runtime) = runtime_with_named_crews();
+    let task_id = add_task_with_crew(&runtime, "beta");
+
+    for input in [
+        json!({ "task_ids": [task_id], "allowed_crews": ["not-a-crew"] }),
+        json!({ "task_ids": [task_id], "allowed_crews": [""] }),
+        json!({ "task_ids": [task_id], "allowed_crews": [7] }),
+        json!({ "task_ids": [task_id], "allowed_crews": 7 }),
+    ] {
+        RuntimeHost::agent_crew_config_for_input(&runtime, &input)
+            .expect_err(&format!("a malformed allowlist must fail closed: {input}"));
+    }
+}

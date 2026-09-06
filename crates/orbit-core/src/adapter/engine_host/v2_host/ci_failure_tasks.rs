@@ -1,19 +1,19 @@
-//! `file_ci_failure_tasks` — turn one CI evidence snapshot into ordinary
-//! backlog tasks.
+//! `file_ci_failure_tasks` — turn one CI evidence snapshot into quarantined
+//! proposed tasks.
 //!
 //! The snapshot arrives from the host-owned `collect_ci_evidence` step, which
 //! ran `gh` outside any agent sandbox. Everything below is a pure function of
 //! that JSON plus the workspace's open tasks: cluster the current failures by
 //! root cause, drop the clusters a still-open task already covers, and file
-//! what is left as `backlog` bug tasks whose descriptions carry the evidence
-//! inline.
+//! what is left as `proposed` bug tasks whose descriptions carry the evidence
+//! inline. The CI sweep then pilots and revalidates those tasks before a
+//! separate admission boundary may expose them to backlog auto-drain.
 //!
-//! A filed task is deliberately unremarkable. It ships through the existing
-//! task PR pipeline with the ordinary agent baseline and no `required_tools`:
-//! the agent never has to query GitHub, because the answer is already in the
-//! description. Verification needs no new stage either — the fix opens a normal
-//! PR, CI runs on it, and if the failure is still current the next sweep sees
-//! it again.
+//! A filed task deliberately has no `required_tools`: the pilot and eventual
+//! implementation never have to query GitHub, because the original evidence
+//! is already in the description. It is not executable until a successful
+//! pilot has applied valid selectors, found the failure relevant to current
+//! integration code, and exercised explicit sweep promotion authority.
 //!
 //! # Two keys, on purpose
 //!
@@ -35,6 +35,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::OrbitRuntime;
+use crate::adapter::engine_host::v2_host::duplicate_tasks::{
+    CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateTaskLookup,
+    DuplicateTaskMatch, find_covering_task,
+};
 use crate::application::task::TaskAddParams;
 
 /// Wire contract with `collect_ci_evidence` (`orbit-engine`'s
@@ -79,17 +83,45 @@ pub(crate) fn file_ci_failure_tasks(
     runtime: &OrbitRuntime,
     input: &Value,
 ) -> Result<Value, OrbitError> {
-    file_ci_failure_tasks_with_add(runtime, input, |params| {
+    file_ci_failure_tasks_with_ops(runtime, input, runtime, |params| {
         runtime.add_task(params).map(|task| task.id)
     })
 }
 
+#[cfg(test)]
 pub(in crate::adapter::engine_host::v2_host) fn file_ci_failure_tasks_with_add<F>(
     runtime: &OrbitRuntime,
     input: &Value,
+    add_task: F,
+) -> Result<Value, OrbitError>
+where
+    F: FnMut(TaskAddParams) -> Result<String, OrbitError>,
+{
+    file_ci_failure_tasks_with_ops(runtime, input, runtime, add_task)
+}
+
+#[cfg(test)]
+pub(in crate::adapter::engine_host::v2_host) fn file_ci_failure_tasks_with_lookup<L>(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    lookup: &L,
+) -> Result<Value, OrbitError>
+where
+    L: DuplicateTaskLookup + ?Sized,
+{
+    file_ci_failure_tasks_with_ops(runtime, input, lookup, |params| {
+        runtime.add_task(params).map(|task| task.id)
+    })
+}
+
+fn file_ci_failure_tasks_with_ops<L, F>(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    lookup: &L,
     mut add_task: F,
 ) -> Result<Value, OrbitError>
 where
+    L: DuplicateTaskLookup + ?Sized,
     F: FnMut(TaskAddParams) -> Result<String, OrbitError>,
 {
     let evidence = input.get("ci_evidence").ok_or_else(|| {
@@ -128,8 +160,10 @@ where
             "clusters": 0,
             "filed_count": 0,
             "filed": [],
+            "pilot_candidates": [],
             "skipped_existing": [],
             "skipped_over_cap": [],
+            "deferred": [],
             "audit": audit,
             "detail": "no CI evidence was gathered, so no task was filed; this is not a CI pass",
         }));
@@ -160,27 +194,93 @@ where
         .into_iter()
         .map(normalize_retryable_error)
         .collect();
+    // A gap in one run's evidence is a fact about that run. Letting it also
+    // withhold every complete finding in the same snapshot is how a sweep that
+    // had three fully evidenced regressions in hand filed nothing at all.
+    let (mut snapshot_wide, mut run_errors) = partition_retryable_errors(&retryable_errors);
+    // An uninvestigated failure collection said nothing else about still needs
+    // its own reason; one that already has a recorded cause keeps that cause
+    // rather than being restated generically.
     for failure in &failures {
-        if failure.get("investigated").and_then(Value::as_bool) != Some(true) {
-            retryable_errors.push(json!({
-                "stage": "registration",
-                "operation": "current_failure_not_investigated",
-                "run_id": failure.get("run_id"),
-                "retryable": true,
-                "message": "a current CI failure has no complete investigation and cannot be filed safely",
-            }));
+        if failure.get("investigated").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let run_id = run_id_key(failure);
+        if run_id
+            .as_ref()
+            .is_some_and(|run_id| run_errors.contains_key(run_id))
+        {
+            continue;
+        }
+        let error = json!({
+            "stage": "registration",
+            "operation": "current_failure_not_investigated",
+            "run_id": failure.get("run_id"),
+            "retryable": true,
+            "message": "a current CI failure has no complete investigation and cannot be filed safely",
+        });
+        retryable_errors.push(error.clone());
+        match run_id {
+            Some(run_id) => run_errors.entry(run_id).or_default().push(error),
+            // Without a run ID there is nothing to defer *to*: the finding
+            // cannot be told apart from any other, so the snapshot is unsafe
+            // to file from at all.
+            None => snapshot_wide += 1,
         }
     }
-    if !retryable_errors.is_empty() {
+    if snapshot_wide > 0 {
+        // A snapshot this incomplete cannot be filed from at all: the listing
+        // that failed may be exactly the one holding the newer run that would
+        // have superseded a finding. Report every error, not just the
+        // snapshot-wide ones, so one payload explains the whole sweep.
         return Err(retryable_pipeline_error(
             "collection_or_investigation",
             &audit,
             retryable_errors,
         ));
     }
-    let clusters = cluster_failures(&failures);
+    let (complete, mut deferred) = split_deferred_failures(&failures, &run_errors);
+    // A run-scoped retryable error whose run never made it into
+    // `current_failures` at all — an in-flight run with an observed failed
+    // job but logs collection could not read yet — has no failure row for
+    // `split_deferred_failures` to attach it to. Losing it here is exactly
+    // how that mixed state would read as a clean `no_current_failure` instead
+    // of the retryable gap it is: surface it as its own deferred entry so the
+    // run ID and reason stay visible for a later sweep.
+    let matched_run_ids: BTreeSet<String> = failures.iter().filter_map(run_id_key).collect();
+    let evidence_deferred = evidence
+        .get("deferred")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for (run_id, reasons) in &run_errors {
+        if matched_run_ids.contains(run_id) {
+            continue;
+        }
+        let from_evidence = evidence_deferred
+            .iter()
+            .find(|entry| run_id_key(entry).as_deref() == Some(run_id));
+        let run_id_value = reasons
+            .first()
+            .and_then(|reason| reason.get("run_id"))
+            .cloned()
+            .or_else(|| from_evidence.and_then(|entry| entry.get("run_id")).cloned())
+            .unwrap_or(Value::Null);
+        deferred.push(json!({
+            "run_id": run_id_value,
+            "url": from_evidence.and_then(|entry| entry.get("url")).cloned().unwrap_or(Value::Null),
+            "workflow": from_evidence.and_then(|entry| entry.get("workflow")).cloned().unwrap_or(Value::Null),
+            "head_branch": from_evidence.and_then(|entry| entry.get("head_branch")).cloned().unwrap_or(Value::Null),
+            "ref_kind": from_evidence.and_then(|entry| entry.get("ref_kind")).cloned().unwrap_or(Value::Null),
+            "investigated": false,
+            "retryable": true,
+            "reasons": reasons,
+        }));
+    }
+    let audit = deferral_audit(audit, &deferred);
+    let clusters = cluster_failures(&complete);
 
-    if !failures.is_empty() && clusters.is_empty() {
+    if !complete.is_empty() && clusters.is_empty() {
         return Err(retryable_pipeline_error(
             "registration",
             &audit,
@@ -194,20 +294,33 @@ where
     }
 
     if clusters.is_empty() {
+        // Nothing was complete enough to file. The gaps are the whole result,
+        // so this stays a retryable error rather than a clean sweep.
+        if !deferred.is_empty() {
+            return Err(retryable_pipeline_error(
+                "collection_or_investigation",
+                &audit,
+                deferred_errors(&deferred),
+            ));
+        }
         return Ok(json!({
             "outcome": OUTCOME_NO_CURRENT_FAILURE,
             "capability": capability,
             "clusters": 0,
             "filed_count": 0,
             "filed": [],
+            "pilot_candidates": [],
             "skipped_existing": [],
             "skipped_over_cap": [],
+            "deferred": [],
             "audit": audit,
             "detail": "the queries ran and found no current, non-superseded failure",
         }));
     }
 
     let mut filed = Vec::new();
+    let mut pilot_candidates = Vec::new();
+    let mut pilot_candidate_ids = BTreeSet::new();
     let mut skipped_existing = Vec::new();
     let mut skipped_over_cap = Vec::new();
     // Two clusters in one snapshot can share a failure key when the same root
@@ -222,27 +335,77 @@ where
         .is_ok()
         .then(|| SYSTEM_CREW.to_string());
 
-    for cluster in &clusters {
-        if let Some(task_id) =
-            open_task_for_key(runtime, &cluster.failure_key).map_err(|error| {
+    // Complete every external lookup before the first task write. A transient
+    // duplicate-check failure must leave no partial filing or dedupe state.
+    let duplicate_matches = clusters
+        .iter()
+        .map(|cluster| {
+            find_covering_task(lookup, &cluster.duplicate_candidate()).map_err(|error| {
                 retryable_pipeline_error(
                     "dedupe_lookup",
                     &audit,
                     vec![json!({
                         "stage": "registration",
-                        "operation": "open_task_for_key",
+                        "operation": "find_covering_task",
                         "failure_key": cluster.failure_key,
                         "retryable": true,
                         "message": bounded_error(&error.to_string()),
                     })],
                 )
-            })?
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let duplicate_tasks = duplicate_matches
+        .iter()
+        .map(|duplicate_match| {
+            duplicate_match
+                .as_ref()
+                .map(|matched| {
+                    runtime.get_task(&matched.task_id).map_err(|error| {
+                        retryable_pipeline_error(
+                            "pilot_candidate_lookup",
+                            &audit,
+                            vec![json!({
+                                "stage": "registration",
+                                "operation": "reload_duplicate_task",
+                                "task_id": matched.task_id,
+                                "retryable": true,
+                                "message": bounded_error(&error.to_string()),
+                            })],
+                        )
+                    })
+                })
+                .transpose()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for ((cluster, duplicate_match), duplicate_task) in
+        clusters.iter().zip(duplicate_matches).zip(duplicate_tasks)
+    {
+        if let Some(DuplicateTaskMatch {
+            task_id,
+            match_kind,
+            evidence,
+        }) = duplicate_match
         {
+            if let Some(existing) = duplicate_task {
+                let expected_key_tag =
+                    format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", cluster.failure_key);
+                if existing.status == TaskStatus::Proposed
+                    && existing.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+                    && existing.tags.iter().any(|tag| tag == &expected_key_tag)
+                    && pilot_candidate_ids.insert(task_id.clone())
+                {
+                    pilot_candidates.push(cluster.filing_entry(&task_id));
+                }
+            }
             skipped_existing.push(json!({
                 "failure_key": cluster.failure_key,
                 "cluster_key": cluster.cluster_key,
                 "task_id": task_id,
                 "workflow": cluster.workflow,
+                "match_kind": match_kind,
+                "match_evidence": evidence,
             }));
             continue;
         }
@@ -256,6 +419,14 @@ where
                     .and_then(|entry| entry["task_id"].as_str())
                     .unwrap_or_default(),
                 "workflow": cluster.workflow,
+                "match_kind": "exact_key",
+                "match_evidence": {
+                    "fingerprint": "same_sweep_key",
+                    "matched_fields": [{
+                        "field": "failure_key",
+                        "value": cluster.failure_key,
+                    }],
+                },
             }));
             continue;
         }
@@ -285,7 +456,10 @@ where
             priority: TaskPriority::High,
             complexity: TaskComplexity::Unassessed,
             task_type: Some(TaskType::Bug),
-            status: Some(TaskStatus::Backlog),
+            // Filing is quarantine, not dispatch authorization. The
+            // task-pilot apply boundary is the only CI-sweep path that may
+            // promote a relevant, selector-backed repair to backlog.
+            status: Some(TaskStatus::Proposed),
             system_created: true,
             ..TaskAddParams::default()
         })
@@ -304,16 +478,10 @@ where
             )
         })?;
         filed_keys.insert(cluster.failure_key.clone());
-        filed.push(json!({
-            "task_id": task_id,
-            "failure_key": cluster.failure_key,
-            "cluster_key": cluster.cluster_key,
-            "workflow": cluster.workflow,
-            "job": cluster.job,
-            "step": cluster.step,
-            "tested_commit": cluster.tested_commit,
-            "run_urls": cluster.run_urls(),
-        }));
+        let filing = cluster.filing_entry(&task_id);
+        pilot_candidate_ids.insert(task_id);
+        pilot_candidates.push(filing.clone());
+        filed.push(filing);
     }
 
     let final_audit = filing_audit(audit, &filed, &skipped_existing);
@@ -323,11 +491,114 @@ where
         "clusters": clusters.len(),
         "filed_count": filed.len(),
         "filed": filed,
+        "pilot_candidates": pilot_candidates,
         "skipped_existing": skipped_existing,
         "skipped_over_cap": skipped_over_cap,
+        "deferred": deferred,
         "max_tasks": max_tasks,
         "audit": final_audit,
     }))
+}
+
+/// The run a snapshot entry — a retryable error or a current failure — is
+/// about, as a comparable key. Collection emits a numeric `run_id`; the
+/// version-1 `query_errors` shape used a string.
+fn run_id_key(entry: &Value) -> Option<String> {
+    match entry.get("run_id") {
+        Some(Value::Number(number)) => Some(number.to_string()),
+        Some(Value::String(text)) if !text.trim().is_empty() => Some(text.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// Split retryable errors by blast radius.
+///
+/// An error that names a run spoils that run's finding and nothing else. An
+/// error that names none — a repository read, a run listing, a pull-request
+/// listing — leaves the whole snapshot in doubt: any finding it did produce
+/// could be missing the newer run that would have superseded it, so filing
+/// from that snapshot is not safe.
+fn partition_retryable_errors(errors: &[Value]) -> (usize, BTreeMap<String, Vec<Value>>) {
+    let mut snapshot_wide = 0usize;
+    let mut by_run: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for error in errors {
+        match run_id_key(error) {
+            Some(run_id) => by_run.entry(run_id).or_default().push(error.clone()),
+            None => snapshot_wide += 1,
+        }
+    }
+    (snapshot_wide, by_run)
+}
+
+/// Separate the failures that can be filed from the ones whose evidence is
+/// incomplete.
+///
+/// Per-finding evidence requirements are unchanged: a failure is filed only
+/// when collection investigated it fully and no error is recorded against its
+/// run. What changes is that a deferred failure now says so in its own entry
+/// instead of silently withholding its neighbours.
+fn split_deferred_failures(
+    failures: &[Value],
+    run_errors: &BTreeMap<String, Vec<Value>>,
+) -> (Vec<Value>, Vec<Value>) {
+    let mut complete = Vec::new();
+    let mut deferred = Vec::new();
+    for failure in failures {
+        let reasons = run_id_key(failure)
+            .and_then(|run_id| run_errors.get(&run_id).cloned())
+            .unwrap_or_default();
+        let investigated = failure.get("investigated").and_then(Value::as_bool) == Some(true);
+        if reasons.is_empty() && investigated {
+            complete.push(failure.clone());
+            continue;
+        }
+        deferred.push(json!({
+            "run_id": failure.get("run_id"),
+            "url": failure.get("url"),
+            "workflow": failure.get("workflow"),
+            "head_branch": failure.get("head_branch"),
+            "ref_kind": failure.get("ref_kind"),
+            "investigated": investigated,
+            "retryable": true,
+            "reasons": if reasons.is_empty() {
+                vec![json!({
+                    "stage": "registration",
+                    "operation": "current_failure_not_investigated",
+                    "run_id": failure.get("run_id"),
+                    "retryable": true,
+                    "message": "a current CI failure has no complete investigation and cannot be filed safely",
+                })]
+            } else {
+                reasons
+            },
+        }));
+    }
+    (complete, deferred)
+}
+
+/// The deferred entries flattened back into the error list shape, for the
+/// ending where nothing could be filed at all.
+fn deferred_errors(deferred: &[Value]) -> Vec<Value> {
+    deferred
+        .iter()
+        .filter_map(|entry| entry.get("reasons").and_then(Value::as_array))
+        .flat_map(|reasons| reasons.iter().cloned())
+        .collect()
+}
+
+/// Make partial registration legible: an operator reading the audit must be
+/// able to tell "three findings, three filed" from "three findings filed and
+/// eleven still owed".
+fn deferral_audit(mut audit: Value, deferred: &[Value]) -> Value {
+    audit["deferred_failures"] = json!(deferred.len());
+    audit["deferred_failure_run_ids"] = json!(
+        deferred
+            .iter()
+            .filter_map(|entry| entry.get("run_id").cloned())
+            .collect::<Vec<_>>()
+    );
+    audit["retryable_errors"] = json!(deferred_errors(deferred).len());
+    audit
 }
 
 fn audit_summary(evidence: &Value, failures: &[Value]) -> Value {
@@ -360,6 +631,8 @@ fn audit_summary(evidence: &Value, failures: &[Value]) -> Value {
         "created_task_ids": [],
         "existing_task_skips": 0,
         "existing_task_owners": [],
+        "deferred_failures": 0,
+        "deferred_failure_run_ids": [],
         "retryable_errors": 0,
     })
 }
@@ -442,6 +715,31 @@ struct FailureCluster {
 }
 
 impl FailureCluster {
+    fn duplicate_candidate(&self) -> DuplicateCandidate {
+        let exact_tag = format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", self.failure_key);
+        let fingerprints = if self.signature_is_step_fallback {
+            // A step-name fallback contains no diagnostic. It is sufficient
+            // for exact-key idempotency but too weak for broader free-text
+            // coverage, where it could suppress an unrelated failure of the
+            // same generic CI step.
+            vec![CoverageFingerprint::new(
+                "ci_failure_unmatchable_fallback",
+                vec![CoverageAnchor::new("exact_failure_key", &exact_tag)],
+            )]
+        } else {
+            vec![CoverageFingerprint::new(
+                "ci_failure_root_cause",
+                vec![
+                    CoverageAnchor::new("workflow", format!("workflow {}", self.workflow)),
+                    CoverageAnchor::new("job", format!("failing job {}", self.job)),
+                    CoverageAnchor::new("step", format!("failing step {}", self.step)),
+                    CoverageAnchor::new("normalized_error_signature", &self.signature),
+                ],
+            )]
+        };
+        DuplicateCandidate::new(exact_tag, fingerprints)
+    }
+
     fn run_urls(&self) -> Vec<String> {
         self.runs
             .iter()
@@ -455,6 +753,19 @@ impl FailureCluster {
             .iter()
             .filter_map(|run| run.get("run_id").cloned())
             .collect()
+    }
+
+    fn filing_entry(&self, task_id: &str) -> Value {
+        json!({
+            "task_id": task_id,
+            "failure_key": self.failure_key,
+            "cluster_key": self.cluster_key,
+            "workflow": self.workflow,
+            "job": self.job,
+            "step": self.step,
+            "tested_commit": self.tested_commit,
+            "run_urls": self.run_urls(),
+        })
     }
 
     fn title(&self) -> String {
@@ -851,9 +1162,10 @@ const ERROR_MARKERS: &[&str] = &[
 /// again every hour. Prefer an `##[error]`-annotated line over an unanchored
 /// marker substring, except that GitHub's generic runner-completion annotation
 /// yields to a specific unannotated diagnostic immediately before it. Never
-/// sign off runner-bookkeeping (checkout, group headers, `env:`/`with:` dumps).
-/// With no usable line the step name alone is the signature — weaker, but
-/// stable, and still scoped by workflow and job.
+/// sign off runner-bookkeeping (checkout, group headers, `env:`/`with:` dumps)
+/// or libtest success/section lines whose names happen to contain a marker
+/// word. With no usable line the step name alone is the signature — weaker,
+/// but stable, and still scoped by workflow and job.
 fn error_signature(log_excerpt: &str, step: &str) -> ErrorSignature {
     let lines = classify_log_lines(log_excerpt);
     for (kind, line) in &lines {
@@ -1006,7 +1318,7 @@ fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
                 LineKind::ErrorAnnotated
             } else if is_runner_bookkeeping(&lowered) || lowered.contains("##[group]") {
                 LineKind::Bookkeeping
-            } else if ERROR_MARKERS.iter().any(|marker| lowered.contains(marker)) {
+            } else if is_error_marker_line(&lowered) {
                 LineKind::Marker
             } else {
                 LineKind::Content
@@ -1043,6 +1355,38 @@ fn is_run_command_payload(payload: &str) -> bool {
 
 fn is_runner_bookkeeping(lowered: &str) -> bool {
     lowered.starts_with("head is now at") || lowered.starts_with("syncing repository")
+}
+
+/// Unanchored marker hit that is an actual diagnostic, not a passing test or
+/// cargo/libtest section header. Those headers are identical across distinct
+/// panics, and success lines often contain `error`/`failure` in the test name.
+fn is_error_marker_line(lowered: &str) -> bool {
+    if is_libtest_non_diagnostic(lowered) {
+        return false;
+    }
+    ERROR_MARKERS.iter().any(|marker| lowered.contains(marker))
+}
+
+fn is_libtest_non_diagnostic(lowered: &str) -> bool {
+    let trimmed = lowered.trim();
+    matches!(trimmed, "failures:" | "errors:" | "successes:")
+        || trimmed.starts_with("test result:")
+        || is_successful_test_result(trimmed)
+}
+
+/// `test <name> ... ok` / `ignored`, with an optional timing suffix.
+fn is_successful_test_result(lowered: &str) -> bool {
+    let Some(rest) = lowered.strip_prefix("test ") else {
+        return false;
+    };
+    let Some((_, status)) = rest.rsplit_once(" ... ") else {
+        return false;
+    };
+    let status = status.trim();
+    status == "ok"
+        || status.starts_with("ok ")
+        || status == "ignored"
+        || status.starts_with("ignored ")
 }
 
 /// Cap `text` at `max_bytes` while keeping `anchor_line`, not the head.
@@ -1180,29 +1524,6 @@ fn digest(parts: &[&str]) -> String {
         .chars()
         .take(KEY_LEN)
         .collect()
-}
-
-/// The id of a still-open task already carrying this failure key, if any.
-fn open_task_for_key(
-    runtime: &OrbitRuntime,
-    failure_key: &str,
-) -> Result<Option<String>, OrbitError> {
-    let tag = format!("{CI_FAILURE_KEY_TAG_PREFIX}{failure_key}");
-    let tasks = runtime.list_tasks_by_tags(std::slice::from_ref(&tag))?;
-    Ok(tasks
-        .into_iter()
-        .find(|task| is_open_status(task.status))
-        .map(|task| task.id))
-}
-
-/// Statuses that count as "already being handled". Mirrors the auto-task
-/// `skip_if_open` rule: done, archived, and rejected are closed, and everything
-/// else is in flight.
-fn is_open_status(status: TaskStatus) -> bool {
-    !matches!(
-        status,
-        TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
-    )
 }
 
 fn bounded_u64(input: &Value, key: &str, default: u64, max: u64) -> Result<u64, OrbitError> {

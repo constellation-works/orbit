@@ -29,7 +29,7 @@ export default defineConfig({
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/danieljhkim/orbit',
+          href: 'https://github.com/constellation-works/orbit',
         },
       ],
       tableOfContents: {
@@ -73,6 +73,9 @@ export default defineConfig({
           items: [
             { slug: 'how-to', label: 'Overview' },
             { slug: 'how-to/task-lifecycle', label: 'Run a Task Lifecycle' },
+            { slug: 'how-to/continuous-delivery', label: 'Run Continuous Delivery' },
+            { slug: 'how-to/recurring-work', label: 'Schedule Recurring Work' },
+            { slug: 'how-to/task-publication', label: 'Publish and Restore Tasks' },
             { slug: 'how-to/write-activity', label: 'Write an Activity' },
             { slug: 'how-to/scoping-rules', label: 'Choose Scopes' },
             { slug: 'how-to/mcp-integration', label: 'Set Up MCP' },
@@ -87,19 +90,6 @@ export default defineConfig({
             { slug: 'reference/policy-format', label: 'Policy Format' },
             { slug: 'reference/config', label: 'Configuration' },
             { slug: 'reference/scoping', label: 'Scoping Rules' },
-          ],
-        },
-        {
-          label: 'Architecture',
-          items: [
-            { slug: 'architecture', label: 'Overview' },
-          ],
-        },
-        {
-          label: 'Metrics',
-          items: [
-            { slug: 'metrics/operations', label: 'Operations' },
-            { slug: 'metrics/scoreboard', label: 'Scoreboard' },
           ],
         },
         {

@@ -4,7 +4,7 @@ use chrono::Utc;
 use clap::Args;
 use orbit_cmd::agent_rules::{InjectionAction, inject_agent_rules};
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
-use orbit_common::fs::io::atomic_write_text;
+use orbit_common::fs::io::{atomic_write_bytes, atomic_write_text};
 use orbit_core::OrbitError;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_registry::workspace_registry;
@@ -63,12 +63,15 @@ pub struct WorkspaceInitArgs {
     /// No-op (kept for backwards compatibility — defaults are always refreshed on init)
     #[arg(long, hide = true)]
     pub refresh_defaults: bool,
-    /// Reconcile an already registered workspace after validating its complete
-    /// logical, checkout, and durable-identity binding, or replace a checkout
-    /// identity that no registration claims.
+    /// Reconcile an already registered workspace after validating its logical
+    /// and checkout binding. A missing or malformed identity is restored only
+    /// for that exact binding; malformed bytes are archived first. Also
+    /// replaces a checkout identity that no registration claims.
     #[arg(long)]
     pub force: bool,
 }
+
+pub(crate) const ONBOARDING_FINALIZE_GUIDANCE: &str = "review and commit generated definitions (.gitignore, .orbit/auto_tasks, .orbit/routines) before local workflows (Orbit does not auto-commit or discard operator changes)";
 
 impl WorkspaceInitArgs {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
@@ -86,6 +89,7 @@ impl WorkspaceInitArgs {
         println!("  id:        {}", init_result.id);
         println!("  root:      {}", init_result.root.display());
         println!("  orbit_dir: {}", init_result.orbit_dir.display());
+        println!("  onboarding: {ONBOARDING_FINALIZE_GUIDANCE}");
 
         if let Some(start) = task_id_start {
             let outcome =
@@ -219,6 +223,7 @@ impl WorkspaceInitArgs {
                     )));
                 }
 
+                let mut identity_recovery = None;
                 if reconciling_existing {
                     validate_existing_registration(
                         existing_workspace,
@@ -228,7 +233,7 @@ impl WorkspaceInitArgs {
                         &id,
                     )?;
                     if !registered_shared_root {
-                        validate_workspace_identity(orbit_dir, &id)?;
+                        identity_recovery = validate_or_recover_workspace_identity(orbit_dir, &id)?;
                     }
                 } else if !registered_shared_root
                     && let Some(identity) = read_workspace_identity(orbit_dir)?
@@ -374,6 +379,10 @@ impl WorkspaceInitArgs {
                     )?;
                 }
                 workspace_registry::save_registry_to(&registry, registry_path)?;
+                if let Some(recovery) = identity_recovery {
+                    preserve_corrupt_workspace_identity(orbit_dir, &recovery)?;
+                    write_workspace_identity(orbit_dir, &id)?;
+                }
                 Ok((reconciling_existing, registered_shared_root))
             })?;
         if !reconciling_existing && !registered_shared_root {
@@ -423,6 +432,11 @@ struct WorkspaceIdentityDocument<'a> {
 struct StoredWorkspaceIdentity {
     schema_version: u32,
     workspace_id: String,
+}
+
+enum WorkspaceIdentityRecovery {
+    Missing,
+    Corrupt(Vec<u8>),
 }
 
 fn validate_existing_registration(
@@ -483,21 +497,57 @@ fn read_workspace_identity(
     Ok(Some(identity))
 }
 
-fn validate_workspace_identity(orbit_dir: &Path, workspace_id: &str) -> Result<(), OrbitError> {
+/// A registered checkout may recover an identity that carries no competing
+/// claim. The registry binding is validated before this function is called;
+/// a parseable different workspace id remains an ownership conflict.
+fn validate_or_recover_workspace_identity(
+    orbit_dir: &Path,
+    workspace_id: &str,
+) -> Result<Option<WorkspaceIdentityRecovery>, OrbitError> {
     let path = orbit_dir.join("config.yaml");
-    let identity = read_workspace_identity(orbit_dir)?.ok_or_else(|| {
-        OrbitError::WorkspaceError(format!(
-            "cannot reconcile workspace '{workspace_id}': checkout identity '{}' is missing",
-            path.display()
-        ))
-    })?;
-    if identity.schema_version != 1 || identity.workspace_id != workspace_id {
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Some(WorkspaceIdentityRecovery::Missing));
+        }
+        Err(error) => return Err(OrbitError::Io(error.to_string())),
+    };
+    let identity: StoredWorkspaceIdentity = match serde_yaml::from_slice(&bytes) {
+        Ok(identity) => identity,
+        Err(_) => return Ok(Some(WorkspaceIdentityRecovery::Corrupt(bytes))),
+    };
+    if identity.workspace_id.trim().is_empty() {
+        return Ok(Some(WorkspaceIdentityRecovery::Corrupt(bytes)));
+    }
+    if identity.workspace_id != workspace_id {
         return Err(OrbitError::WorkspaceError(format!(
             "cannot reconcile workspace '{workspace_id}': checkout identity '{}' does not match",
             path.display()
         )));
     }
-    Ok(())
+    if identity.schema_version != 1 {
+        return Ok(Some(WorkspaceIdentityRecovery::Corrupt(bytes)));
+    }
+    Ok(None)
+}
+
+fn preserve_corrupt_workspace_identity(
+    orbit_dir: &Path,
+    recovery: &WorkspaceIdentityRecovery,
+) -> Result<(), OrbitError> {
+    let WorkspaceIdentityRecovery::Corrupt(bytes) = recovery else {
+        return Ok(());
+    };
+    let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.9fZ");
+    let archive = orbit_dir
+        .join("state/recovery/workspace-identity")
+        .join(format!("config.yaml.{timestamp}.corrupt"));
+    atomic_write_bytes(&archive, bytes).map_err(|error| {
+        OrbitError::Io(format!(
+            "archive corrupt workspace identity '{}' before recovery: {error}",
+            archive.display()
+        ))
+    })
 }
 
 fn validate_shared_root_identity(orbit_dir: &Path) -> Result<(), OrbitError> {

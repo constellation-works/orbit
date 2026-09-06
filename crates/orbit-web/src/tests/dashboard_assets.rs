@@ -1,13 +1,54 @@
 use axum::body::to_bytes;
 use axum::http::{HeaderValue, header};
 use axum::response::Response;
+use std::fs;
+use std::process::Command;
 
 use crate::{
-    DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_common_js, serve_diagnostics_js,
-    serve_index, serve_log_tail_js, serve_markdown_js, serve_marked_js, serve_operations_js,
-    serve_purify_js, serve_reliability_js, serve_router_js, serve_run_detail_js, serve_runs_js,
-    serve_scoreboard_js, serve_tasks_js,
+    DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_automation_js, serve_common_js,
+    serve_diagnostics_js, serve_index, serve_log_tail_js, serve_markdown_js, serve_marked_js,
+    serve_operations_js, serve_purify_js, serve_reliability_js, serve_router_js,
+    serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
 };
+
+// The recent-history, aggregate-request, and route-selection assertions
+// addressed by this task have three dispositions:
+// * Keep static source checks when the source itself is the product contract
+//   (embedded asset packaging, CSP/MIME, or required copy/markup).
+// * Replace behavior claims with the Node harness below, which imports the
+//   shipped ES modules and observes DOM state or requests.
+// * Delete implementation-shape checks (helper names, predicate placement, and
+//   exact call counts) once the observable behavior is covered. Those shapes
+//   are not dashboard contracts and should be free to change during refactors.
+fn run_dashboard_javascript_test(script: &str) {
+    let temp_dir =
+        tempfile::tempdir().expect("create temporary dashboard JavaScript test directory");
+    let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/dashboard");
+    for entry in fs::read_dir(&assets_dir).expect("read dashboard asset directory") {
+        let entry = entry.expect("read dashboard asset entry");
+        let path = entry.path();
+        if path.extension().is_some_and(|extension| extension == "js") {
+            let destination = temp_dir.path().join(entry.file_name());
+            fs::copy(&path, destination).expect("copy shipped dashboard JavaScript module");
+        }
+    }
+    fs::write(temp_dir.path().join("package.json"), r#"{"type":"module"}"#)
+        .expect("write temporary JavaScript module manifest");
+    let harness_path = temp_dir.path().join("dashboard-behavior.mjs");
+    fs::write(&harness_path, script).expect("write dashboard JavaScript behavior harness");
+
+    let output = Command::new("node")
+        .arg(&harness_path)
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("run Node dashboard behavior harness");
+    assert!(
+        output.status.success(),
+        "dashboard behavior harness failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
 
 #[tokio::test]
 async fn dashboard_html_and_js_routes_emit_csp() {
@@ -28,6 +69,7 @@ async fn dashboard_html_and_js_routes_emit_csp() {
         ("runs", serve_runs_js().await),
         ("run_detail", serve_run_detail_js().await),
         ("operations", serve_operations_js().await),
+        ("automation", serve_automation_js().await),
     ];
 
     for (name, response) in routes {
@@ -183,273 +225,6 @@ fn dashboard_run_resume_matches_runtime_guard_and_surfaces_lineage_and_errors() 
 }
 
 #[test]
-fn dashboard_guards_per_workspace_panels_in_aggregate_view() {
-    // ORB-00039: in the aggregate "All workspaces" view there is no concrete
-    // workspace, so the per-workspace endpoints (/api/crews, /api/tasks/locks,
-    // /api/audit/summary, /api/scoreboard) must not be
-    // fetched — they'd 400 — and their panels show a placeholder instead.
-    // Asserted against the embedded asset sources since the dashboard has no JS
-    // test runner (see dashboard_markdown_call_sites above).
-    let app = include_str!("../../assets/dashboard/app.js");
-    let common = include_str!("../../assets/dashboard/common.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
-
-    // A single aggregate-mode predicate, defined once and reused. ORB-00040 moved
-    // it into the shared leaf module (common.js) so audit.js and scoreboard.js can
-    // guard on the same live predicate; the raw check lives only inside the helper.
-    assert!(
-        common.contains("function isAggregateView()"),
-        "aggregate-mode check must be factored into isAggregateView() in common.js"
-    );
-    assert_eq!(
-        common
-            .matches("multiWorkspace && !currentWorkspace")
-            .count(),
-        1,
-        "the aggregate predicate must be defined once, not duplicated inline"
-    );
-    assert!(
-        !app.contains("function isAggregateView()"),
-        "isAggregateView() must be single-sourced in common.js, not redefined in app.js"
-    );
-    assert_eq!(
-        app.matches("const aggregate = isAggregateView();").count(),
-        2,
-        "isAggregateView() must gate both fetchAndRenderTasks and activeRefreshJobs"
-    );
-
-    // Aggregate mode renders placeholders instead of fetching the per-workspace
-    // summary panel.
-    assert!(
-        app.contains("renderAggregatePlaceholders()"),
-        "aggregate mode must render panel placeholders"
-    );
-    assert!(
-        common.contains("Select a workspace to view this panel"),
-        "skipped panels must show an inline placeholder prompt"
-    );
-    assert!(
-        css.contains(".panel-placeholder"),
-        "the aggregate placeholder must be styled"
-    );
-
-    // The per-workspace summary job is pushed only in the non-aggregate branch
-    // (previously an unconditional array literal with a trailing comma) — the
-    // old unconditional form must be gone.
-    assert!(
-        app.contains("jobs.push(fetchAndRenderSummary());"),
-        "fetchAndRenderSummary must be pushed conditionally, not unconditionally"
-    );
-    assert!(
-        !app.contains("fetchAndRenderSummary(),"),
-        "fetchAndRenderSummary must no longer be an unconditional job"
-    );
-
-    // Task locks and crews are skipped in aggregate mode; the aggregate task list
-    // (/api/tasks/all) still renders with a crew fallback rather than blocking.
-    assert!(
-        app.contains("if (!aggregate && !document.hidden) jobs.push(fetchAndRenderTaskLocks());"),
-        "task locks fetch must be skipped in aggregate mode"
-    );
-    assert!(
-        app.contains("const crews = aggregate ? Promise.resolve() : fetchAndCacheCrews();"),
-        "crews fetch must be skipped in aggregate mode so the task list still renders"
-    );
-}
-
-#[test]
-fn dashboard_guards_remaining_panels_in_aggregate_view() {
-    // ORB-00040: follow-up to ORB-00039. In the aggregate "All workspaces" view
-    // the Audit tab (/api/audit, /api/diagnostics/denials), the Knowledge tab
-    // (/api/frictions) and the scoreboard window
-    // selector (/api/scoreboard?window=...) still fired per-workspace endpoints
-    // that 400 and flipped conn-status to red. The isAggregateView() guard is
-    // extended to all of them, sharing one predicate from common.js. Asserted
-    // against the embedded asset sources (the dashboard has no JS test runner).
-    let app = include_str!("../../assets/dashboard/app.js");
-    let audit = include_str!("../../assets/dashboard/audit.js");
-    let scoreboard = include_str!("../../assets/dashboard/scoreboard.js");
-    let common = include_str!("../../assets/dashboard/common.js");
-
-    // The predicate + placeholder helper are shared from the leaf module so all
-    // three view modules guard on the same live state without a circular import.
-    assert!(
-        common.contains("export function isAggregateView()"),
-        "isAggregateView() must be exported from common.js for cross-module reuse"
-    );
-    assert!(
-        common.contains("export function setMultiWorkspace("),
-        "the multi-workspace flag setter must be exported from common.js"
-    );
-    assert!(
-        common.contains("export function renderPanelPlaceholder("),
-        "the shared placeholder renderer must be exported from common.js"
-    );
-    // Multi-workspace mode is fed once, from the workspace-discovery path.
-    assert!(
-        app.contains("setMultiWorkspace(dashboardWorkspaces.length > 1)"),
-        "aggregate mode must be driven by the discovered workspace count"
-    );
-
-    // Audit tab: both subtabs skip their per-workspace fetch and show a
-    // placeholder in aggregate mode (events -> /api/audit, policy -> denials).
-    assert!(
-        audit.contains("isAggregateView") && audit.contains("renderPanelPlaceholder"),
-        "audit.js must import the shared aggregate guard"
-    );
-    assert!(
-        audit.contains(r#"renderPanelPlaceholder("audit-body")"#),
-        "audit events subtab must show a placeholder in aggregate mode"
-    );
-    assert!(
-        audit.contains(r#"renderPanelPlaceholder("audit-policy-body")"#),
-        "audit policy subtab must show a placeholder in aggregate mode"
-    );
-
-    // Knowledge tab: the friction fetch is guarded at the chokepoint, so the
-    // auto-refresh, tab-activation and search-box entry points are all covered.
-    assert!(
-        app.contains(r#"renderPanelPlaceholder("frictions-body")"#),
-        "knowledge frictions must show a placeholder in aggregate mode"
-    );
-
-    // Scoreboard: the tab body shows a placeholder. Window clicks write shared
-    // dashboard state; the per-workspace fetch stays on the refresh path, which
-    // is already aggregate-guarded above.
-    assert!(
-        app.contains(r#"renderPanelPlaceholder("scoreboard-body")"#),
-        "scoreboard panel must show a placeholder in aggregate mode"
-    );
-    assert!(
-        !scoreboard.contains("fetchJson(`/api/scoreboard"),
-        "the scoreboard window selector must not fetch on its own"
-    );
-
-    // The guards read the live predicate before fetching (not a stale captured
-    // flag), so switching to "All workspaces" after a concrete selection is safe.
-    assert!(
-        app.matches("if (isAggregateView())").count() >= 1,
-        "the remaining knowledge fetch must guard on the live aggregate predicate"
-    );
-    assert!(
-        audit.matches("if (isAggregateView())").count() >= 2,
-        "both audit fetches must guard on the live aggregate predicate"
-    );
-}
-
-#[test]
-fn dashboard_guards_diagnostics_and_detail_panels_in_aggregate_view() {
-    // ORB-00044: follow-up to ORB-00039/00040 closing the two remaining
-    // aggregate-mode gaps. (1) The Diagnostics tab is fed exclusively by
-    // per-workspace endpoints (/api/job-runs plus /api/diagnostics/metrics,
-    // /errors, /friction and /implement_one all take the `Ws` extractor and 400
-    // without a concrete workspace), so in aggregate mode the whole tab branch
-    // of activeRefreshJobs is skipped and placeholders render instead. (2) The
-    // friction detail panel previously kept stale content with live resolve/patch
-    // buttons after switching to "All workspaces"; they now show the shared
-    // placeholder too. Asserted against the embedded asset sources (the
-    // dashboard has no JS test runner).
-    let app = include_str!("../../assets/dashboard/app.js");
-    let router = include_str!("../../assets/dashboard/router.js");
-
-    fn index_of(source: &str, name: &str, needle: &str) -> usize {
-        match source.find(needle) {
-            Some(index) => index,
-            None => panic!("{name} must contain `{needle}`"),
-        }
-    }
-
-    // Diagnostics: the aggregate guard sits at the top of the diagnostics
-    // branch, before any of the per-workspace fetch sites — every diagnostics
-    // fetch in activeRefreshJobs is unreachable in aggregate mode.
-    let branch = index_of(app, "app.js", r#"if (activeTab === "diagnostics") {"#);
-    let guard = index_of(
-        app,
-        "app.js",
-        "renderDiagnosticsPlaceholders();\n      return jobs;",
-    );
-    assert!(
-        branch < guard,
-        "the aggregate guard must live inside the diagnostics branch"
-    );
-    for fetch in [
-        "/api/diagnostics/metrics",
-        "/api/diagnostics/errors",
-        // ORB-10871: the incidents subtab is per-workspace too (`Ws` extractor).
-        "/api/audit/incidents",
-        "/api/diagnostics/implement_one",
-        "/api/tasks/completion-by-complexity",
-        "fetchAndRenderRuns()",
-    ] {
-        let fetch_at = index_of(app, "app.js", fetch);
-        assert!(
-            guard < fetch_at,
-            "diagnostics fetch `{fetch}` must come after the aggregate early-return"
-        );
-    }
-    // fetchAndRenderRuns (the "runs" subtab job, /api/job-runs +
-    // /api/diagnostics/friction) is only invoked from the guarded branch: one
-    // guarded call site plus the function definition itself.
-    assert_eq!(
-        app.matches("fetchAndRenderRuns()").count(),
-        2,
-        "fetchAndRenderRuns must have no unguarded call site"
-    );
-
-    // The placeholder helper covers both subtab bodies and the side card, and
-    // neutralizes the count.
-    assert!(
-        app.contains("function renderDiagnosticsPlaceholders()"),
-        "aggregate mode must render diagnostics placeholders"
-    );
-    for body in ["diag-body", "runs-body", "diag-implement-one-body"] {
-        assert!(
-            app.contains(&format!(r#"renderPanelPlaceholder("{body}")"#)),
-            "diagnostics {body} must show a placeholder in aggregate mode"
-        );
-    }
-
-    // A diagnostics subtab switch re-renders from the stale last* caches in
-    // router.js, so it guards on the same live predicate instead of repainting
-    // the previous workspace's rows over the placeholder.
-    assert!(
-        router.contains("isAggregateView"),
-        "router.js must import the shared aggregate guard"
-    );
-    for body in ["diag-body", "runs-body"] {
-        assert!(
-            router.contains(&format!(r#"renderPanelPlaceholder("{body}")"#)),
-            "router subtab switch must render the {body} placeholder in aggregate mode"
-        );
-    }
-    // ORB-10444 added the scoreboard subtab, so there are three re-render sites.
-    // ORB-10588's reliability subtab is deliberately not a fourth: it is served
-    // by a cross-workspace endpoint (`/api/metrics/reliability` takes the whole
-    // DashboardState, not the `Ws` extractor), so it holds no per-workspace
-    // state to placehold and stays live in the aggregate view.
-    assert_eq!(
-        router.matches("isAggregateView()").count(),
-        3,
-        "every per-workspace subtab re-render site in router.js must be guarded"
-    );
-
-    // Knowledge detail panels: each list guard also replaces its detail panel
-    // (which carries the per-workspace action buttons) with the placeholder.
-    assert!(
-        app.contains("function renderKnowledgeDetailPlaceholder(prefix)"),
-        "the detail-panel placeholder helper must exist"
-    );
-    assert!(
-        app.contains("renderPanelPlaceholder(`${prefix}-detail`)"),
-        "the helper must target the <prefix>-detail panels"
-    );
-    assert!(
-        app.contains(r#"renderKnowledgeDetailPlaceholder("friction")"#),
-        "the friction list guard must also clear the stale detail panel"
-    );
-}
-
-#[test]
 fn dashboard_renders_complexity_as_its_own_dimension() {
     let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
     assert!(
@@ -472,22 +247,79 @@ fn dashboard_renders_complexity_as_its_own_dimension() {
 }
 
 #[test]
-fn dashboard_recent_history_filters_before_limiting() {
-    // ORB-10311: the recent-history panel must exclude legacy bare `commented`
-    // stubs *before* applying the five-row limit, so meaningful status/workflow
-    // events cannot be displaced by comment noise. Asserted against the embedded
-    // asset source (the dashboard has no JS test runner).
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
-
-    let filter_at = tasks
-        .find(r#".filter((h) => h && h.event !== "commented")"#)
-        .expect("recent history must drop legacy `commented` stubs");
-    let slice_at = tasks
-        .find("meaningful.slice(-5).reverse()")
-        .expect("recent history must apply the five-row limit to the filtered list");
-    assert!(
-        filter_at < slice_at,
-        "the `commented`-stub filter must run before the recent-history slice"
+fn dashboard_shipped_javascript_observes_history_routes_and_aggregate_requests() {
+    run_dashboard_javascript_test(
+        r#"
+const nodes = [];
+class Node {
+  constructor(id = "") { this.id = id; this.children = []; this.dataset = {}; this.style = { setProperty: () => {} }; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.hidden = false; nodes.push(this); }
+  appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  prepend(child) { this.children.unshift(child); child.parentNode = this; }
+  remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get innerHTML() { return this.textContent; }
+  get firstChild() { return this.children[0] || null; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  get classList() { const self = this; return { add: (...c) => { self.className = `${self.className} ${c.join(" ")}`.trim(); }, remove: () => {}, toggle: (c, on) => { if (on) this.addClass(c); } }; }
+  addClass(c) { if (!this.className.split(/\\s+/).includes(c)) this.className = `${this.className} ${c}`.trim(); }
+  querySelectorAll() { return []; }
+  querySelector() { return null; }
+  contains(node) { return this === node || this.children.includes(node); }
+  focus() {}
+  closest() { return null; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+const tabs = ["tasks", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
+const panes = [...tabs, Object.assign(new Node(), { dataset: { tab: "run-detail" } })];
+globalThis.document = {
+  body: new Node("body"), hidden: false,
+  getElementById: get, createElement: () => new Node(), createElementNS: () => new Node(), createTextNode: (text) => Object.assign(new Node(), { textContent: text }), createDocumentFragment: () => new Node(),
+  querySelectorAll: (selector) => selector === ".tab" ? tabs : selector === ".tab-pane" ? panes : [],
+  querySelector: () => new Node(), addEventListener: () => {},
+};
+const location = new URL("http://dashboard.test/");
+globalThis.window = { location, innerHeight: 900, addEventListener: () => {}, matchMedia: () => ({ addEventListener: () => {}, matches: false }), localStorage: { getItem: () => null, setItem: () => {} } };
+globalThis.history = { replaceState: (_, __, url) => { location.href = String(url); } };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+globalThis.requestAnimationFrame = (fn) => fn();
+globalThis.setInterval = () => 0;
+globalThis.EventSource = class { constructor() {} close() {} };
+const requests = [];
+globalThis.fetch = async (path) => {
+  const url = String(path); requests.push(url);
+  const payload = url.startsWith("/api/workspaces") ? [{ id: "one", name: "one", status: "active", is_default: true }, { id: "two", name: "two", status: "active" }]
+    : url.startsWith("/api/tasks?") || url === "/api/tasks" ? { items: [], total: 0, limit: 50, truncated: false } : [];
+  return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
+};
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const { renderTasks } = await import("./tasks.js");
+const { initRouter, setActiveTab } = await import("./router.js");
+const historyTask = { id: "ORB-11196", title: "history", status: "review", history: [
+  { event: "status-1", at: "1", by: "a" }, { event: "status-2", at: "2", by: "b" }, { event: "status-3", at: "3", by: "c" }, { event: "status-4", at: "4", by: "d" }, { event: "status-5", at: "5", by: "e" }, { event: "status-6", at: "6", by: "f" }, { event: "commented", at: "7", by: "noise" }, { event: "commented", at: "8", by: "noise" },
+] };
+const taskContext = { getTasks: () => [historyTask], getSearchQuery: () => "", getActiveStatuses: () => new Set(["review"]), statusOrder: ["review"], statusUpdateTargets: [], fmtAbsTime: (value) => value, refreshDashboard: () => Promise.resolve() };
+renderTasks([historyTask], taskContext);
+const row = nodes.find((node) => node.className.includes("row") && node.listeners.click);
+row.listeners.click();
+const historyLines = nodes.filter((node) => node.className === "history-line").map((node) => node.textContent);
+if (historyLines.length !== 5 || historyLines.some((line) => line.includes("commented")) || !historyLines[0].includes("status-6") || !historyLines[4].includes("status-2")) throw new Error(`recent history rendered incorrectly: ${historyLines}`);
+let selected = null;
+initRouter({ setTab: (tab) => { selected = tab; }, getDiagSubtab: () => "runs", setDiagSubtab: () => {}, getOperationsSubtab: () => "routines", setOperationsSubtab: () => {}, getKnowledgeSubtab: () => "frictions", setKnowledgeSubtab: () => {}, getRunId: () => null, setRunId: () => {}, getRunSubtab: () => "steps", setRunSubtab: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {}, setRunLogs: () => {}, refreshDashboard: () => {}, fitLogPanelToViewport: () => {}, });
+setActiveTab("operations/auto-tasks", { refresh: false, updateHash: false });
+if (selected !== "operations" || !tabs.find((tab) => tab.dataset.tab === "operations").className.includes("active")) throw new Error("route did not select the Operations view");
+await import("./app.js");
+await tick(); await tick(); requests.length = 0;
+const selector = get("rail-workspace").children.find((child) => child.id === "workspace-select");
+selector.value = ""; selector.listeners.change(); await tick(); await tick();
+if (!requests.includes("/api/tasks/all") || requests.some((path) => ["/api/crews", "/api/tasks/locks", "/api/audit/summary"].some((forbidden) => path.startsWith(forbidden)))) throw new Error(`aggregate mode made incorrect requests: ${requests}`);
+"#,
     );
 }
 
@@ -517,7 +349,6 @@ fn dashboard_task_detail_shows_orchestrator_as_attribution_not_execution_crew() 
 #[tokio::test]
 async fn dashboard_top_level_nav_matches_the_operator_tabs() {
     let body = response_body(serve_index().await).await;
-    let router = include_str!("../../assets/dashboard/router.js");
 
     let nav: Vec<&str> = body
         .match_indices(r#"<button class="tab" data-tab=""#)
@@ -534,12 +365,6 @@ async fn dashboard_top_level_nav_matches_the_operator_tabs() {
         vec!["tasks", "audit", "diagnostics", "operations", "knowledge"]
     );
 
-    assert!(
-        router.contains(
-            r#"const TABS = ["tasks", "audit", "diagnostics", "operations", "knowledge", "run-detail"];"#
-        ),
-        "the router's tab list must match the nav (plus the hash-only run-detail route)"
-    );
     // Every routable tab must still have a pane to render into.
     for tab in [
         "tasks",
@@ -607,7 +432,9 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
         !operations.contains("hashchange") && !operations.contains("location.reload"),
         "refresh/back must not replay a toggle or mint POST"
     );
-    assert!(router.contains(r#"const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];"#));
+    assert!(
+        router.contains(r#"const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "auto-drain"];"#)
+    );
     assert!(router.contains(r#"hash = `#operations/${sub}`;"#));
     assert!(css.contains("@media (max-width: 720px)"));
     assert!(css.contains("@media (max-width: 600px)"));
@@ -615,6 +442,78 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(css.contains("body.operations-active"));
     assert!(css.contains(".operation-mint-warning"));
     assert!(router.contains(r#"classList.toggle("operations-active", top === "operations")"#));
+}
+
+/// ORB-11250: the bounded auto-delivery window action. Default completion
+/// (review) needs no operator authorization, the same as the ship endpoint;
+/// only the `--complete`-equivalent opt-in is separately governed. The panel
+/// reuses the mint/clock in-flight idiom — one fixed `pendingOperations` key,
+/// guard released in `finally` — rather than a per-row guard, since this is a
+/// single workspace-scoped action, not one per task.
+#[test]
+fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
+    let index = include_str!("../../assets/dashboard/index.html");
+    let operations = include_str!("../../assets/dashboard/operations.js");
+    let router = include_str!("../../assets/dashboard/router.js");
+
+    for id in [
+        "operations-auto-drain-main",
+        "auto-drain-panel",
+        "auto-drain-count",
+        "auto-drain-operation-feedback",
+        "auto-drain-body",
+    ] {
+        assert!(index.contains(&format!(r#"id="{id}""#)), "{id}");
+    }
+    assert!(
+        index.contains(r#"<button class="subtab" data-subtab="auto-drain" type="button">"#),
+        "auto-drain must be offered as an Operations subtab"
+    );
+    assert!(
+        router.contains(r#"const autoDrain = $("operations-auto-drain-main");"#)
+            && router.contains(r#"autoDrain.hidden = name !== "auto-drain";"#),
+        "the router must toggle the auto-drain main like its siblings"
+    );
+
+    assert!(
+        operations.contains(r#"postJson("/api/workflows/auto""#),
+        "starting the window must submit through the dashboard auto-drain endpoint"
+    );
+    assert!(
+        operations.contains(r#"fetchJson(`/api/workflows/auto/readiness"#),
+        "the panel must project the read-only readiness snapshot, not recompute eligibility"
+    );
+    assert!(
+        operations.contains("for_duration: autoDrainDuration"),
+        "the submitted duration must come from the bounded picker, not free text"
+    );
+    assert!(
+        operations.contains("complete: autoDrainComplete"),
+        "the completion opt-in must be explicit, not inferred"
+    );
+
+    // Duplicate-click guard: same fixed-key idiom as the clock/mint buttons.
+    assert!(operations.contains(r#"const key = "auto-drain:start";"#));
+    assert!(
+        operations.contains("if (pendingOperations.has(key)) return;")
+            && operations.contains("pendingOperations.add(key);")
+            && operations.contains("pendingOperations.delete(key);"),
+        "the start action must guard against a duplicate submission while one is pending"
+    );
+
+    // Explicit opt-in requires confirmation and states the run's scope.
+    assert!(operations.contains("window.confirm(confirmText)"));
+    assert!(
+        operations.contains("Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}")
+    );
+    assert!(
+        operations.contains("Proposed tasks are never drained automatically"),
+        "the panel must explain proposed tasks require separate authorization"
+    );
+
+    // Failure recovery: an error must surface, not silently no-op, and must
+    // not leave the guard held.
+    assert!(operations.contains("Auto-delivery window failed to start"));
 }
 
 /// The global `main` rule establishes the visible grid while this narrow
@@ -1823,6 +1722,11 @@ fn dashboard_scoreboard_highlights_are_accessible_and_honest() {
         "empty Review must distinguish no events from incomplete coverage"
     );
     assert!(
+        scoreboard.contains("coverage?.failure_incidents?.availability === \"unavailable\"")
+            && scoreboard.contains("failure-incident coverage is unavailable for this window"),
+        "empty Operations must distinguish no events from incomplete failure-incident coverage"
+    );
+    assert!(
         scoreboard.contains("orbit.task.* tool-call count")
             && scoreboard.contains("raw failed tool calls over total tool calls")
             && scoreboard.contains("append-only friction reports filed by this agent")
@@ -1858,6 +1762,210 @@ fn dashboard_scoreboard_highlights_are_accessible_and_honest() {
     }
 }
 
+/// ORB-11207: ORB-11201 made `/api/scoreboard` emit `null` (not `0`) for
+/// `failure_incidents`/`failure_incident_events` when the underlying audit
+/// query fails, plus a `coverage.failure_incidents` note. The dashboard used
+/// to coerce that `null` to `0`, rendering it as an indistinguishable `0/0`
+/// and letting the activity filter drop the row and the section badge claim
+/// observed-zero activity — reproducing exactly the confusion ORB-11201
+/// fixed. Exercised with the executable Node harness in the ORB-11196 style
+/// since the dashboard has no JS test runner.
+#[test]
+fn dashboard_scoreboard_renders_unavailable_failure_incidents_not_a_measured_zero() {
+    run_dashboard_javascript_test(
+        r#"
+const nodes = [];
+class Node {
+  constructor(id = "") { this.id = id; this.children = []; this.dataset = {}; this.style = { setProperty: () => {} }; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.hidden = false; nodes.push(this); }
+  appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  prepend(child) { this.children.unshift(child); child.parentNode = this; }
+  remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get innerHTML() { return this.textContent; }
+  get firstChild() { return this.children[0] || null; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  get classList() { const self = this; return { add: (...c) => { self.className = `${self.className} ${c.join(" ")}`.trim(); }, remove: () => {}, toggle: (c, on) => { if (on) this.addClass(c); } }; }
+  addClass(c) { if (!this.className.split(/\\s+/).includes(c)) this.className = `${this.className} ${c}`.trim(); }
+  querySelectorAll() { return []; }
+  querySelector() { return null; }
+  contains(node) { return this === node || this.children.includes(node); }
+  focus() {}
+  closest() { return null; }
+}
+globalThis.Node = Node;
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+globalThis.document = {
+  body: new Node("body"), hidden: false,
+  getElementById: get, createElement: () => new Node(), createElementNS: () => new Node(), createTextNode: (text) => Object.assign(new Node(), { textContent: text }), createDocumentFragment: () => new Node(),
+  querySelectorAll: () => [], querySelector: () => new Node(), addEventListener: () => {},
+};
+const location = new URL("http://dashboard.test/");
+globalThis.window = { location, innerHeight: 900, addEventListener: () => {}, matchMedia: () => ({ addEventListener: () => {}, matches: false }), localStorage: { getItem: () => null, setItem: () => {} } };
+globalThis.history = { replaceState: (_, __, url) => { location.href = String(url); } };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+globalThis.requestAnimationFrame = (fn) => fn();
+globalThis.setInterval = () => 0;
+globalThis.EventSource = class { constructor() {} close() {} };
+
+const { renderScoreboard } = await import("./scoreboard.js");
+
+// A quiet agent whose failure-incident fields are `null`: the audit query
+// failed for this window, so the source is unavailable, not a measured zero.
+function quietAgentWithUnavailableFailureIncidents() {
+  return {
+    tasks_created: 0, tasks_planned: 0, tasks_completed: 0,
+    tool_calls_by_surface: { graph: 0, task: 0 },
+    tool_calls: 0, failed_tool_calls: 0,
+    friction: { reported: 0 },
+    failure_incidents: null,
+    unexpected_failure_incidents: null,
+    failure_incident_events: null,
+  };
+}
+const summary = {
+  window: "24h",
+  agents: {
+    codex: quietAgentWithUnavailableFailureIncidents(),
+    claude: quietAgentWithUnavailableFailureIncidents(),
+    gemini: quietAgentWithUnavailableFailureIncidents(),
+    grok: quietAgentWithUnavailableFailureIncidents(),
+  },
+  coverage: {
+    failure_incidents: {
+      availability: "unavailable",
+      detail: "Audit failure-incident query failed for the requested window; failure_incidents, unexpected_failure_incidents, and failure_incident_events are omitted (null) rather than shown as zero.",
+    },
+  },
+};
+
+renderScoreboard(summary);
+
+const body = get("scoreboard-body");
+const table = body.children[0].children[0];
+if (!table || table.className !== "sb2-matrix") throw new Error("expected the scoreboard matrix table to render");
+const tbody = table.children[2];
+
+const failureRow = tbody.children.find((tr) => tr.dataset.key === "scoreboard-Operations-failure_incidents");
+if (!failureRow) throw new Error("the failure_incidents row must not be hidden by the activity filter when its source is unavailable");
+const rowText = failureRow.textContent;
+if (!rowText.includes("unavailable")) throw new Error(`expected an explicit unavailable indicator, got: ${rowText}`);
+if (rowText.includes("0/0")) throw new Error(`must not render an unavailable source as a measured 0/0, got: ${rowText}`);
+
+const operationsDivider = tbody.children.find((tr) => tr.className === "group" && tr.textContent.includes("Operations"));
+if (!operationsDivider) throw new Error("the Operations section divider must be present");
+if (operationsDivider.textContent.includes("no observed tool calls or friction this window")) {
+  throw new Error("the Operations badge must not assert observed-zero activity when failure-incident coverage is unavailable");
+}
+"#,
+    );
+}
+
+#[test]
+fn dashboard_aggregate_runs_keep_workspace_identity_filters_and_action_scope() {
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let router = include_str!("../../assets/dashboard/router.js");
+    assert!(css.contains(".runs-row.workspace-attributed"));
+    assert!(css.contains("@media (max-width: 760px)"));
+    assert!(css.contains("min-width: 900px"));
+    assert!(router.contains("function navigateToRunImpl(ctx, runId, workspaceId = null)"));
+    assert!(router.contains("setWorkspace(workspaceId);"));
+    assert!(router.contains("persistScopeToUrl();"));
+
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(id = "") { this.id = id; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; }
+  appendChild(child) { if (child == null) return child; if (child.parentNode) child.parentNode.removeChild(child); this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { if (child.parentNode) child.parentNode.removeChild(child); const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get innerHTML() { return this.textContent; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  get classList() { const self = this; return { add: (...classes) => { for (const c of classes) if (!self.className.split(/\s+/).includes(c)) self.className = `${self.className} ${c}`.trim(); }, toggle: (c, on) => { if (on) this.addClass(c); } }; }
+  addClass(c) { if (!this.className.split(/\s+/).includes(c)) this.className = `${this.className} ${c}`.trim(); }
+  querySelectorAll(selector) { const found = []; const visit = (node) => { for (const child of node.children) { if (selector === ".action-error" && child.className.split(/\s+/).includes("action-error")) found.push(child); visit(child); } }; visit(this); return found; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: () => new Node(),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+const location = new URL("http://dashboard.test/?run_state=active");
+globalThis.window = { location, innerWidth: 1200, confirm: () => true };
+globalThis.history = { replaceState: (_, __, url) => { location.href = String(url); } };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+const requests = [];
+globalThis.fetch = async (path) => {
+  requests.push(String(path));
+  const payload = { run_id: "jrun-next" };
+  return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
+};
+
+const runs = [
+  { workspace_id: "alpha", workspace_name: "Alpha", run_id: "jrun-shared", job_id: "ship", state: "running", created_at: "2026-09-05T03:00:00Z" },
+  { workspace_id: "beta", workspace_name: "Beta", run_id: "jrun-shared", job_id: "ship", state: "failed", created_at: "2026-09-05T03:00:00Z" },
+];
+let navigated = null;
+const { initRuns, renderRuns, buildReplayRunButton } = await import("./runs.js");
+initRuns({
+  getLastRuns: () => runs,
+  getRunsMeta: () => ({ truncated: false }),
+  getRunSourcesUnavailable: () => [{ workspace_id: "gone", workspace_name: "Gone", error: "query failed" }],
+  navigateToRun: (runId, workspaceId) => { navigated = { runId, workspaceId }; },
+  fetchAndRenderRuns: () => Promise.resolve(),
+  getActiveRunId: () => null,
+});
+renderRuns(runs);
+const body = get("runs-body");
+let rows = body.children.filter((node) => node.className.includes("runs-row workspace-attributed") && !node.className.includes("runs-header"));
+if (rows.length !== 1 || !rows[0].textContent.includes("Alpha")) throw new Error(`active filter rendered wrong rows: ${body.textContent}`);
+if (!body.textContent.includes("Unavailable workspace: Gone")) throw new Error("partial workspace failure was hidden");
+
+let controls = body.children.find((node) => node.className.includes("runs-filter"));
+controls.children.find((node) => node.textContent === "all").listeners.click();
+rows = body.children.filter((node) => node.className.includes("runs-row workspace-attributed") && !node.className.includes("runs-header"));
+if (rows.length !== 2) throw new Error("all filter did not render both duplicate run ids");
+if (new Set(rows.map((row) => row.dataset.key)).size !== 2) throw new Error("duplicate run ids collided across workspaces");
+rows.find((row) => row.textContent.includes("Beta")).listeners.click();
+if (!navigated || navigated.runId !== "jrun-shared" || navigated.workspaceId !== "beta") throw new Error(`wrong detail identity: ${JSON.stringify(navigated)}`);
+
+const betaActions = rows.find((row) => row.textContent.includes("Beta")).children.at(-1);
+betaActions.children.find((node) => node.className.includes("run-resume")).listeners.click({ stopPropagation() {} });
+const alphaActions = rows.find((row) => row.textContent.includes("Alpha")).children.at(-1);
+alphaActions.children.find((node) => node.className.includes("run-cancel")).listeners.click({ stopPropagation() {} });
+const replay = buildReplayRunButton(runs[1], new Node());
+replay.listeners.click({ stopPropagation() {} });
+await new Promise((resolve) => setTimeout(resolve, 0));
+if (!requests.includes("/api/job-runs/jrun-shared/resume?workspace=beta")) throw new Error(`resume lost workspace scope: ${requests}`);
+if (!requests.includes("/api/runs/jrun-shared/cancel?workspace=alpha")) throw new Error(`cancel lost workspace scope: ${requests}`);
+if (!requests.includes("/api/runs/jrun-shared/replay?workspace=beta")) throw new Error(`replay lost workspace scope: ${requests}`);
+
+controls = body.children.find((node) => node.className.includes("runs-filter"));
+controls.children.find((node) => node.textContent === "failed").listeners.click();
+if (new URL(location.href).searchParams.get("run_state") !== "failed") throw new Error("run filter was not persisted in reload-safe URL state");
+window.innerWidth = 480;
+renderRuns(runs);
+rows = body.children.filter((node) => node.className.includes("runs-row workspace-attributed") && !node.className.includes("runs-header"));
+if (rows.length !== 1 || !rows[0].textContent.includes("Beta")) throw new Error("narrow-screen render lost the filtered workspace row");
+"#,
+    );
+}
+
 async fn response_body(response: Response) -> String {
     let bytes = match to_bytes(response.into_body(), usize::MAX).await {
         Ok(bytes) => bytes,
@@ -1867,4 +1975,177 @@ async fn response_body(response: Response) -> String {
         Ok(body) => body,
         Err(error) => panic!("response body is not UTF-8: {error}"),
     }
+}
+
+#[test]
+fn state_automation_renders_unready_withheld_and_absolute_deadline() {
+    run_dashboard_javascript_test(
+        r#"
+import assert from 'node:assert/strict';
+class Element {
+  constructor(tag) { this.tag = tag; this.children = []; this.textContent = ''; this.dataset = {}; this.style = {}; }
+  appendChild(child) { this.children.push(child); return child; }
+  setAttribute(key, value) { this[key] = value; }
+  addEventListener() {}
+}
+globalThis.document = {createElement: tag => new Element(tag), createTextNode: text => ({textContent:text})};
+globalThis.window = {location: {search:''}};
+const {renderAutomation} = await import('./automation.js');
+const panel = renderAutomation({reason:'fresh_unready',state:{consumer:'host/ws/routine/pilot',members:{
+  pending:{}, assessed:{task:{ready:false,resulting_fingerprint:'f'}},withheld:{other:'human_block'},failed:{},
+  active:{member:{key:'task'},attempt:2,max_attempts:2,deadline:'2026-09-06T12:00:00Z',action_id:'run'}
+},unresolved:{}},receipts:[],waivers:[]});
+function text(node) { return [node.textContent,...(node.children||[]).map(text)].join(' '); }
+const rendered=text(panel);
+assert.match(rendered,/State automation/);
+assert.match(rendered,/fresh_unready/);
+assert.match(rendered,/human_block/);
+assert.match(rendered,/2026-09-06T12:00:00Z/);
+assert.match(rendered,/Unknown/);
+assert.match(rendered,/does not authorize promotion/);
+assert.doesNotMatch(rendered,/Examined through/);
+"#,
+    );
+}
+
+/// The task-detail image preview, driven through the shipped `tasks.js` module
+/// against a DOM double rather than asserted against source text: what matters
+/// is that a PNG artifact renders as an `<img>` a reader can actually see, that
+/// SVG still downloads, and that a decode failure degrades to the bytes.
+#[test]
+fn dashboard_task_detail_renders_image_artifacts_at_desktop_and_narrow_widths() {
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+    // Responsiveness is a stylesheet contract, so it is checked where it lives:
+    // the element scales to its column and keeps its aspect ratio, and narrow
+    // viewports bound the height so a tall screenshot cannot take over the page.
+    assert!(css.contains(".artifact-image"));
+    assert!(css.contains("max-width: 100%"));
+    assert!(css.contains("max-height: 60vh"));
+
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(tag = "") { this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.hidden = false; }
+  appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
+  replaceChildren(...nodes) { this.children = []; this._text = ""; for (const node of nodes) this.appendChild(node); }
+  removeChild(child) { this.children = this.children.filter((c) => c !== child); child.parentNode = null; return child; }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((c) => c.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get classList() { const self = this; return { add: (...c) => { self.className = `${self.className} ${c.join(" ")}`.trim(); }, remove: () => {}, toggle: () => {} }; }
+  querySelectorAll() { return []; }
+}
+const descend = (node, predicate) => {
+  for (const child of node.children || []) {
+    if (predicate(child)) return child;
+    const found = descend(child, predicate);
+    if (found) return found;
+  }
+  return null;
+};
+const byTag = (node, tag) => descend(node, (n) => n.tag === tag);
+globalThis.document = {
+  getElementById: () => new Node(),
+  createElement: (tag) => new Node(tag),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+globalThis.window = { location: new URL("http://dashboard.test/"), innerWidth: 1280 };
+
+const revoked = [];
+globalThis.URL.createObjectURL = (blob) => `blob:${blob.__kind}`;
+globalThis.URL.revokeObjectURL = (url) => revoked.push(url);
+
+// Byte-exact synthetic PNG: signature plus filler, the same fixture shape the
+// Rust tests use. Nothing here comes from a real user image.
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+
+const requested = [];
+function respondWith(kind, contentType) {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (name) => (name.toLowerCase() === "content-type" ? contentType : null) },
+    blob: async () => ({ __kind: kind }),
+    text: async () => "plain body",
+  };
+}
+let nextResponse = respondWith("png", "image/png");
+globalThis.fetch = async (path) => { requested.push(String(path)); return nextResponse; };
+
+const { buildArtifacts } = await import("./tasks.js");
+
+async function renderPreview(artifact, response) {
+  nextResponse = response;
+  const wrap = buildArtifacts({ id: "ORB-00042", artifacts: [artifact] });
+  const row = wrap.children[0];
+  const preview = wrap.children[1];
+  await row.listeners.click({ stopPropagation() {} });
+  return { wrap, row, preview };
+}
+
+// --- A PNG artifact renders as a real image with open/download controls -----
+const png = { path: "diagrams/flow.png", media_type: "image/png", size_bytes: PNG_BYTES.length };
+let { row, preview } = await renderPreview(png, respondWith("png", "image/png"));
+
+if (!requested.includes("/api/tasks/ORB-00042/artifacts/diagrams/flow.png"))
+  throw new Error(`preview did not fetch the artifact route: ${requested}`);
+if (!row.textContent.includes("image/png"))
+  throw new Error(`the metadata row must stay compact and typed: ${row.textContent}`);
+
+const img = byTag(preview, "img");
+if (!img) throw new Error(`a PNG artifact must render an <img>, got: ${preview.textContent}`);
+if (img.src !== "blob:png") throw new Error(`image src was not the fetched blob: ${img.src}`);
+if (img.alt !== "diagrams/flow.png") throw new Error(`image needs descriptive alt text: ${img.alt}`);
+if (!String(img.className).includes("artifact-image"))
+  throw new Error(`image must carry the responsive class: ${img.className}`);
+
+const collectLinks = (node) => {
+  const found = [];
+  const visit = (n) => { for (const c of n.children || []) { if (c.tag === "a") found.push(c); visit(c); } };
+  visit(node);
+  return found;
+};
+let links = collectLinks(preview);
+const open = links.find((a) => a.textContent === "Open");
+const download = links.find((a) => a.textContent === "Download");
+if (!open || open.href !== "blob:png" || open.target !== "_blank")
+  throw new Error("an image preview must offer an Open control in a new tab");
+if (!download || download.download !== "flow.png")
+  throw new Error("an image preview must offer a Download control with the file name");
+
+// --- A decode failure degrades to the bytes instead of a broken image -------
+img.listeners.error();
+if (byTag(preview, "img")) throw new Error("a failed image must be removed, not left broken");
+if (!preview.textContent.includes("could not be decoded"))
+  throw new Error(`a decode failure must be explained: ${preview.textContent}`);
+const fallback = collectLinks(preview).filter((a) => a.download === "flow.png");
+if (fallback.length !== 1)
+  throw new Error(`a failed image must still offer its bytes exactly once, got ${fallback.length}`);
+
+// --- Narrow viewport renders the same image element ------------------------
+window.innerWidth = 420;
+({ preview } = await renderPreview(png, respondWith("png", "image/png")));
+const narrowImg = byTag(preview, "img");
+if (!narrowImg || !String(narrowImg.className).includes("artifact-image"))
+  throw new Error("the narrow-width render lost the responsive image preview");
+
+// --- SVG is an image format that must still download, never render ---------
+window.innerWidth = 1280;
+const svg = { path: "diagrams/active.svg", media_type: "image/svg+xml", size_bytes: 40 };
+({ preview } = await renderPreview(svg, respondWith("svg", "application/octet-stream")));
+if (byTag(preview, "img"))
+  throw new Error("SVG hosts script and must never be rendered inline");
+const svgLink = collectLinks(preview).find((a) => a.download === "active.svg");
+if (!svgLink) throw new Error(`SVG must fall back to a download link: ${preview.textContent}`);
+
+// --- Text artifacts keep working ------------------------------------------
+const md = { path: "notes/summary.md", media_type: "text/markdown", size_bytes: 11 };
+({ preview } = await renderPreview(md, respondWith("md", "text/plain")));
+if (byTag(preview, "img")) throw new Error("a text artifact must not render as an image");
+if (!preview.textContent.includes("plain body"))
+  throw new Error(`text preview regressed: ${preview.textContent}`);
+"#,
+    );
 }

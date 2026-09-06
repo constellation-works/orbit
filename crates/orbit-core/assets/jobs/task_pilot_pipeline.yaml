@@ -5,9 +5,20 @@
 # proposed/backlog tasks in the active workspace with empty context_files,
 # excluding no-diff tasks. Explicit mode audits exactly the named workspace
 # tasks, including non-empty selectors.
-# Preparation never promotes or dispatches a task. Each read-only pilot
-# receives at most five tasks. The all-join makes any failed partition
-# fail the run before the context-only deterministic apply step can execute.
+# Preparation never promotes or dispatches a task. In a Git workspace it
+# fetches the landing branch and pins one source revision without changing
+# primary HEAD, index, or working files. An unfetchable remote fails before
+# any agent call. Each read-only pilot receives at most five tasks and runs
+# in an invocation-owned checkout at that pinned revision.
+# Prepare resolves an omitted base branch through the owning workspace's
+# `workflow.base_branch`; a non-empty run input remains an explicit override.
+# Any successful partition reaches apply even if another agent failed.
+# Apply isolates stale or malformed assessments by partition, applies
+# every independently valid partition, then a guard fails the total run when
+# any partition did not apply. Selector existence is validated against the
+# prepared source revision, not a later checkout. Apply normally changes only context_files. A CI sweep may pass its exact filing record plus
+# literal promotion authority; only then can apply promote a warning-free,
+# selector-backed proposed repair to backlog.
 #
 # Crew resolution
 # - The pilot step names the `system` crew directly, so this definition states
@@ -33,16 +44,22 @@ spec:
   default_input:
     task_ids: []
     workspace_path: .
-    base_branch: agent-main
     max_tasks: 50
     max_partition_size: 5
+    promotion_authorized: false
+    ci_sweep_filing: null
+    state_automation: null
+    source_revision: ""
 
   steps:
     - id: prepare
       target: activity:prepare_task_pilot
       default_input:
+        state_automation: "{{ input.state_automation }}"
+        source_revision: "{{ input.source_revision }}"
         task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ input.workspace_path }}"
+        base_branch: "{{ input.base_branch }}"
         max_tasks: "{{ input.max_tasks }}"
         max_partition_size: "{{ input.max_partition_size }}"
 
@@ -57,12 +74,14 @@ spec:
             task_ids: "{{ item.task_ids }}"
             partition_index: "{{ item.partition_index }}"
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
-            base_branch: "{{ input.base_branch }}"
+            base_branch: "{{ steps.prepare.output.source.base_branch }}"
+            source_revision: "{{ steps.prepare.output.source.source_revision }}"
+            inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
             # See the crew-resolution note at the top of this file.
             crew: system
       fan_in:
         join:
-          mode: all
+          mode: any
         collect: pilot_results
 
     - id: apply
@@ -71,3 +90,11 @@ spec:
         prepared: "{{ steps.prepare.output }}"
         results: "{{ steps.pilot_results.output }}"
         workspace_path: "{{ steps.prepare.output.workspace_path }}"
+        promotion_authorized: "{{ input.promotion_authorized }}"
+        ci_sweep_filing: "{{ input.ci_sweep_filing }}"
+
+    - id: require_apply_success
+      target: activity:pipeline_success_guard
+      default_input:
+        context: task-pilot partition apply
+        result: "{{ steps.apply.output }}"

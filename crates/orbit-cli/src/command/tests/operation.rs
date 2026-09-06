@@ -11,6 +11,7 @@ fn runtime_free_command_set_is_derived_from_operations() {
     let runtime_free: &[&[&str]] = &[
         &["orbit", "init"],
         &["orbit", "workspace", "init"],
+        &["orbit", "host", "show"],
         &["orbit", "mcp", "init"],
         &["orbit", "mcp", "remove"],
         &["orbit", "mcp", "serve"],
@@ -44,6 +45,10 @@ fn runtime_free_command_set_is_derived_from_operations() {
             "{args:?} must bootstrap a workspace runtime"
         );
     }
+    assert_eq!(
+        operation_for(&["orbit", "host", "rename", "old", "new"]).runtime_need,
+        RuntimeNeed::Required
+    );
 }
 
 #[test]
@@ -125,6 +130,10 @@ fn json_error_preferences_are_derived_from_operations() {
     );
     assert_eq!(
         operation_for(&["orbit", "friction", "list", "--json"]).json_error_preference,
+        Some(true)
+    );
+    assert_eq!(
+        operation_for(&["orbit", "host", "show", "--json"]).json_error_preference,
         Some(true)
     );
     assert_eq!(

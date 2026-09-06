@@ -3,7 +3,7 @@ name: code-review
 description: Post-merge code review of changes merged since the last completed sweep
 enabled: true
 schedule:
-  cron: 40 */6 * * *
+  cron: 40 * * * *
 template:
   title: Review recently merged changes
   description: |-
@@ -29,7 +29,7 @@ template:
       and list open review work with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked"],"tag":"code-review","model":"<agent-family>"}'`.
       File a finding with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"tags":["code-review"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.
     - Fail open. A window with no confirmed findings is a successful no-op. Do not
       invent work to justify the run.
@@ -75,7 +75,7 @@ template:
   priority: medium
   # The portable system lane is seeded per machine and compatibility-aliased
   # for configs written before that crew existed.
-  crew: opus
+  crew: terra
   status: backlog
 dedupe: skip_if_open
 created_by: system

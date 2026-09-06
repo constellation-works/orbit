@@ -77,6 +77,16 @@ The Tasks count states what it means instead of an ambiguous `N/50`: it names th
 
 The active status filter and search query are represented in the `#tasks` hash (mirroring the Audit tab's own hash-encoded filters) and restated as plain text next to the count, so the current view survives a reload or the browser's back/forward button and is legible without reading each chip's color. The selected workspace is likewise mirrored into the page's `?workspace=` query parameter on every change [ORB-10874].
 
+## 8a. Task Artifact Previews
+
+Artifact rows in task detail stay one compact line — path, media type, size — and fetch a payload only when clicked, so a task carrying a screenshot is no more expensive to scan than any other [ORB-11365].
+
+A supported raster artifact (`image/png`, `image/jpeg`, `image/gif`, `image/webp`) renders as an actual image rather than a download link. The preview scales to the detail column (`max-width: 100%`, `height: auto`) so it never forces the panel to scroll sideways, and it is never upscaled past its own resolution. Below 760px it takes the full column width and is capped at `60vh` so a tall screenshot cannot push the rest of the task off screen. A checkerboard background makes a transparent PNG read as transparent instead of as whatever the panel happens to sit on. Each preview carries Open (new tab) and Download controls, and the artifact path is the image's alt text — it is the only description the artifact has.
+
+When the browser cannot decode the bytes, the preview says so and still offers the file, rather than leaving a broken-image icon.
+
+The set of types rendered inline mirrors the server's `nosniff` allowlist exactly. `image/svg+xml` and `text/html` are absent from both: they are viewable formats that are also script hosts, so they stay downloads. Everything else keeps its existing text render or download link.
+
 ## 9. Operations
 
 Operations renders routine-definition state separately from the host sweep clock [ORB-10875]. Each routine row names its source workspace, cron schedule, catalog target, host pins, last scheduler evaluation/fire, linked run outcome, and next due slot. Definition `enabled` is the versioned switch; the clock card independently reports its native provider, configured/effective cadence, loaded/active health, and native last/next tick values when available.
@@ -91,6 +101,7 @@ Accessibility still needs a real WCAG pass; responsive behavior remains optimize
 
 ## Task References
 
+- [ORB-11365] added the responsive task-artifact image preview and its open/download controls.
 - [T20260427-29] introduced the Canon Refined UI direction.
 - [T20260428-13] unified dashboard denial sources for the policy drill-down.
 - [T20260428-15] compacted scoreboard ratio columns.

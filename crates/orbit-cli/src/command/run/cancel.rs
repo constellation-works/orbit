@@ -8,12 +8,13 @@ use crate::command::{CommandOut, CommandOutput, Execute, Payload, require_confir
 
 #[derive(Args)]
 #[command(
-    about = "Cancel a pending or running job run",
+    about = "Cancel a job run, or report its existing terminal outcome",
     after_help = "Cancels a job run that has not reached a terminal state: signals the \
 owner process of a running run (TERM then KILL), releases the run's task \
 reservations, and finalizes the run as `cancelled`. The primary remediation \
 for a stuck `pending` run with no live worker (orphan reconciliation also \
-clears those on workspace open).\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
+clears those on workspace open). A run that already finished returns a stable \
+`already_terminal` result without replacing its outcome.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
 )]
 pub struct RunCancelArgs {
     /// Job run ID to cancel
@@ -35,6 +36,7 @@ impl Execute for RunCancelArgs {
         if self.json {
             return Ok(Payload::document(json!({
                 "run_id": result.run_id,
+                "outcome": result.outcome,
                 "previous_state": result.previous_state,
                 "final_state": result.final_state,
                 "signal_attempted": result.signal_attempted,
@@ -42,10 +44,17 @@ impl Execute for RunCancelArgs {
             }))
             .into());
         }
-        println!(
-            "cancelled job run {} ({} -> {})",
-            result.run_id, result.previous_state, result.final_state
-        );
+        if result.outcome == "already_terminal" {
+            println!(
+                "job run {} was already terminal ({})",
+                result.run_id, result.final_state
+            );
+        } else {
+            println!(
+                "cancelled job run {} ({} -> {})",
+                result.run_id, result.previous_state, result.final_state
+            );
+        }
         if let Some(outcome) = &result.signal_outcome {
             println!("owner process signal outcome: {outcome}");
         }

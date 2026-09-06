@@ -37,7 +37,7 @@ fn patch_json(uri: &str, body: Value) -> Request<Body> {
         .expect("request")
 }
 
-fn seed_backlog_task(runtime: &OrbitRuntime, title: &str) -> orbit_core::Task {
+pub(super) fn seed_backlog_task(runtime: &OrbitRuntime, title: &str) -> orbit_core::Task {
     runtime
         .add_task(TaskAddParams {
             title: title.to_string(),
@@ -49,7 +49,7 @@ fn seed_backlog_task(runtime: &OrbitRuntime, title: &str) -> orbit_core::Task {
         .expect("seed backlog task")
 }
 
-fn seed_task_with_artifact(runtime: &OrbitRuntime) -> orbit_core::Task {
+pub(super) fn seed_task_with_artifact(runtime: &OrbitRuntime) -> orbit_core::Task {
     seed_task_with_artifact_payload(
         runtime,
         "subdir/file.json",
@@ -140,7 +140,10 @@ async fn request(runtime: OrbitRuntime, uri: &str) -> axum::response::Response {
 
 /// `request` against an already-shared runtime, so one fixture can serve several
 /// query variants without reseeding (ORB-10400's filter matrix).
-async fn request_shared(runtime: Arc<OrbitRuntime>, uri: &str) -> axum::response::Response {
+pub(super) async fn request_shared(
+    runtime: Arc<OrbitRuntime>,
+    uri: &str,
+) -> axum::response::Response {
     router()
         .with_state(crate::state::DashboardState::single(runtime))
         .oneshot(
@@ -639,7 +642,7 @@ async fn get_task_artifact_fails_closed_on_symlink_with_foreign_content() {
 /// Depth-first search for a file named `name` under `root`, skipping nothing.
 /// Test-only helper: the artifact bundle layout is an implementation detail of
 /// orbit-store, so the test discovers the blob instead of hardcoding the path.
-fn find_artifact_blob(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+pub(super) fn find_artifact_blob(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
     let entries = std::fs::read_dir(root).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();

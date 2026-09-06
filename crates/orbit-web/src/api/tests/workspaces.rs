@@ -7,10 +7,10 @@ use std::sync::{Arc, Barrier, Mutex};
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{ActorIdentity, OrbitRuntime, ShipMode, TaskStatus};
+use orbit_core::{ActorIdentity, JobRunState, OrbitRuntime, ShipMode, TaskStatus};
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 use serde_json::json;
 use tower::ServiceExt;
@@ -19,7 +19,7 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 
 use super::super::*;
-use super::test_support::body_json;
+use super::test_support::{body_json, seed_run, write_seeded_run};
 use crate::state::{DashboardState, RegistrySource, WsEntry};
 
 fn get(uri: &str) -> Request<Body> {
@@ -33,7 +33,7 @@ fn get(uri: &str) -> Request<Body> {
 /// Create an on-disk workspace under `base/<name>`, seed one in-progress task,
 /// and return `(orbit_dir, repo_root)`. The workspace persists after the
 /// runtime is dropped, so global mode can reopen it via `from_roots`.
-fn seed_workspace(global_root: &Path, base: &Path, name: &str) -> (PathBuf, PathBuf) {
+pub(super) fn seed_workspace(global_root: &Path, base: &Path, name: &str) -> (PathBuf, PathBuf) {
     let repo_root = base.join(name);
     let orbit_dir = repo_root.join(".orbit");
     std::fs::create_dir_all(&orbit_dir).expect("create .orbit");
@@ -58,7 +58,12 @@ fn seed_workspace(global_root: &Path, base: &Path, name: &str) -> (PathBuf, Path
     (orbit_dir, repo_root)
 }
 
-fn workspace_entry(id: &str, repo_root: PathBuf, orbit_dir: PathBuf, active: bool) -> WsEntry {
+pub(super) fn workspace_entry(
+    id: &str,
+    repo_root: PathBuf,
+    orbit_dir: PathBuf,
+    active: bool,
+) -> WsEntry {
     let binding = active.then(|| WorkspaceRuntimeBinding {
         logical_workspace_id: format!("ws_{id}"),
         workspace_id: format!("ws_{id}"),
@@ -194,6 +199,188 @@ async fn tasks_all_aggregates_active_workspaces_and_skips_inactive() {
             .as_str()
             .is_some_and(|dir| dir.ends_with(".orbit"))
     );
+}
+
+#[tokio::test]
+async fn job_runs_all_preserves_workspace_identity_order_bounds_and_unavailable_sources() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    let (alpha_orbit, alpha_repo) = seed_workspace(&global_root, tmp.path(), "alpha");
+    let (beta_orbit, beta_repo) = seed_workspace(&global_root, tmp.path(), "beta");
+
+    let alpha = OrbitRuntime::from_roots(&global_root, &alpha_orbit).expect("alpha runtime");
+    let beta = OrbitRuntime::from_roots(&global_root, &beta_orbit).expect("beta runtime");
+    let shared_time = Utc::now();
+    let mut alpha_duplicate = seed_run(&alpha, "jrun-shared", "aggregate", JobRunState::Pending);
+    alpha_duplicate.created_at = shared_time;
+    alpha_duplicate.scheduled_at = shared_time;
+    alpha_duplicate.started_at = None;
+    write_seeded_run(&alpha, &alpha_duplicate);
+    let mut beta_duplicate = seed_run(&beta, "jrun-shared", "aggregate", JobRunState::Failed);
+    beta_duplicate.created_at = shared_time;
+    beta_duplicate.scheduled_at = shared_time;
+    beta_duplicate.started_at = Some(shared_time);
+    beta_duplicate.finished_at = Some(shared_time);
+    write_seeded_run(&beta, &beta_duplicate);
+    let mut old = seed_run(&alpha, "jrun-old", "aggregate", JobRunState::Success);
+    old.created_at = shared_time - Duration::days(1);
+    old.scheduled_at = old.created_at;
+    old.started_at = Some(old.created_at);
+    old.finished_at = Some(old.created_at);
+    write_seeded_run(&alpha, &old);
+
+    let entries = vec![
+        workspace_entry("alpha", alpha_repo, alpha_orbit, true),
+        workspace_entry("beta", beta_repo, beta_orbit, true),
+        workspace_entry(
+            "gone",
+            tmp.path().join("missing"),
+            tmp.path().join("missing/.orbit"),
+            false,
+        ),
+    ];
+    let state = DashboardState::global(global_root, entries, Some("alpha".to_string()));
+    let bounded = router()
+        .with_state(state.clone())
+        .oneshot(get("/job-runs/all?limit=999"))
+        .await
+        .expect("bounded response");
+    let bounded = body_json(bounded).await;
+    assert_eq!(bounded["limit"], json!(HISTORY_MAX_LIMIT));
+    assert_eq!(bounded["items"].as_array().expect("bounded items").len(), 3);
+
+    let active = router()
+        .with_state(state.clone())
+        .oneshot(get("/job-runs/all?state=active&limit=2"))
+        .await
+        .expect("active response");
+    let active = body_json(active).await;
+    assert_eq!(active["state"], json!("active"));
+    assert_eq!(active["items"].as_array().expect("active items").len(), 1);
+    assert_eq!(active["items"][0]["workspace_id"], json!("alpha"));
+
+    let failed = router()
+        .with_state(state.clone())
+        .oneshot(get("/job-runs/all?state=failed&limit=2"))
+        .await
+        .expect("failed response");
+    let failed = body_json(failed).await;
+    assert_eq!(failed["state"], json!("failed"));
+    assert_eq!(failed["items"].as_array().expect("failed items").len(), 1);
+    assert_eq!(failed["items"][0]["workspace_id"], json!("beta"));
+
+    let invalid = router()
+        .with_state(state.clone())
+        .oneshot(get("/job-runs/all?state=terminal"))
+        .await
+        .expect("invalid response");
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+    let response = router()
+        .with_state(state)
+        .oneshot(get("/job-runs/all?limit=2"))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["limit"], json!(2));
+    assert_eq!(body["truncated"], json!(true));
+    let rows = body["items"].as_array().expect("items");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["run_id"], json!("jrun-shared"));
+    assert_eq!(rows[0]["workspace_id"], json!("alpha"));
+    assert_eq!(rows[1]["run_id"], json!("jrun-shared"));
+    assert_eq!(rows[1]["workspace_id"], json!("beta"));
+    assert!(rows.iter().all(|run| run["workspace_name"].is_string()));
+    assert_eq!(body["unavailable"][0]["workspace_id"], json!("gone"));
+    assert_eq!(
+        body["unavailable"][0]["error"],
+        json!("workspace is unavailable")
+    );
+}
+
+/// [ORB-11251] The store truncates each workspace's contribution to the
+/// aggregate list with `LIMIT` before this handler ever merges or re-sorts
+/// anything. If that per-workspace truncation still used `created_at`, an
+/// old run that only just finished after a newer run already completed
+/// could be dropped before its recency was ever compared to that newer
+/// run's — even though the dashboard's own recency contract ranks it first.
+/// This proves the top displayed run across two workspaces is selected by
+/// that same recency ordering *before* the per-workspace limit is applied,
+/// not after.
+#[tokio::test]
+async fn job_runs_all_selects_top_by_recency_before_per_workspace_limit() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    let (alpha_orbit, alpha_repo) = seed_workspace(&global_root, tmp.path(), "alpha");
+    let (beta_orbit, beta_repo) = seed_workspace(&global_root, tmp.path(), "beta");
+
+    let alpha = OrbitRuntime::from_roots(&global_root, &alpha_orbit).expect("alpha runtime");
+    let beta = OrbitRuntime::from_roots(&global_root, &beta_orbit).expect("beta runtime");
+    let now = Utc::now();
+
+    // Alpha holds both contenders: an old, long-running task that only just
+    // finished, and a newer task that finished earlier. Under a naive
+    // `created_at`-then-`LIMIT` query, the older/longer-running run would
+    // never make it out of alpha's own per-workspace page.
+    let mut old_long_running = seed_run(
+        &alpha,
+        "jrun-old-long-running",
+        "aggregate",
+        JobRunState::Success,
+    );
+    old_long_running.created_at = now - Duration::hours(2);
+    old_long_running.scheduled_at = old_long_running.created_at;
+    old_long_running.started_at = Some(old_long_running.created_at);
+    old_long_running.finished_at = Some(now);
+    write_seeded_run(&alpha, &old_long_running);
+
+    let mut new_short_running = seed_run(
+        &alpha,
+        "jrun-new-short-running",
+        "aggregate",
+        JobRunState::Success,
+    );
+    new_short_running.created_at = now - Duration::hours(1);
+    new_short_running.scheduled_at = new_short_running.created_at;
+    new_short_running.started_at = Some(new_short_running.created_at);
+    new_short_running.finished_at = Some(now - Duration::minutes(90));
+    write_seeded_run(&alpha, &new_short_running);
+
+    // Beta holds an unrelated run that finished before either alpha run, so
+    // the merge across workspaces stays exercised without becoming the top
+    // result itself.
+    let mut beta_run = seed_run(&beta, "jrun-beta-older", "aggregate", JobRunState::Success);
+    beta_run.created_at = now - Duration::hours(3);
+    beta_run.scheduled_at = beta_run.created_at;
+    beta_run.started_at = Some(beta_run.created_at);
+    beta_run.finished_at = Some(now - Duration::hours(2) - Duration::minutes(30));
+    write_seeded_run(&beta, &beta_run);
+
+    let entries = vec![
+        workspace_entry("alpha", alpha_repo, alpha_orbit, true),
+        workspace_entry("beta", beta_repo, beta_orbit, true),
+    ];
+    let state = DashboardState::global(global_root, entries, Some("alpha".to_string()));
+
+    let response = router()
+        .with_state(state)
+        .oneshot(get("/job-runs/all?limit=1"))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    let rows = body["items"].as_array().expect("items");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["run_id"],
+        json!("jrun-old-long-running"),
+        "the run that finished most recently must win, even though another run in the \
+         same workspace was created more recently"
+    );
+    assert_eq!(rows[0]["workspace_id"], json!("alpha"));
 }
 
 /// ORB-10008: workspace selection failures surface over HTTP as clean 4xx
@@ -357,7 +544,7 @@ async fn cross_workspace_dependency_resolves_global_status_not_missing() {
     // GET /tasks/<alpha-id>?workspace=alpha: the show projection reports the
     // identical cross-workspace dependency status.
     let response = router()
-        .with_state(state)
+        .with_state(state.clone())
         .oneshot(get(&format!("/tasks/{}?workspace=alpha", alpha_task.id)))
         .await
         .expect("response");
@@ -370,6 +557,19 @@ async fn cross_workspace_dependency_resolves_global_status_not_missing() {
         .map(|value| value.as_str().expect("dependency label"))
         .collect();
     assert_eq!(labels, vec![expected_label.as_str()]);
+    let aggregate = router()
+        .with_state(state)
+        .oneshot(get("/tasks/all"))
+        .await
+        .expect("aggregate response");
+    let body = body_json(aggregate).await;
+    let alpha_row = body
+        .as_array()
+        .expect("aggregate rows")
+        .iter()
+        .find(|row| row["id"] == alpha_task.id)
+        .expect("alpha row");
+    assert_eq!(alpha_row["resolved_dependencies"], json!([expected_label]));
 }
 
 /// ORB-00037: the pure display helper collapses `$HOME` to `~` and otherwise
@@ -872,13 +1072,14 @@ fn concurrent_refresh_and_reads_stay_consistent() {
     assert!(Arc::ptr_eq(&alpha0, &alpha1), "idempotent runtime cache");
 }
 
-/// Dashboard task titles for a runtime, read through the shared JSON projection
-/// (the same one `/api/tasks/all` uses) so a runtime's binding is observable.
+/// Metadata selection used by the aggregate exposes a runtime's binding.
 fn runtime_task_titles(runtime: &OrbitRuntime) -> Vec<String> {
-    super::super::tasks::list_tasks_json(runtime)
-        .expect("list tasks json")
-        .iter()
-        .map(|t| t["title"].as_str().expect("title").to_string())
+    runtime
+        .task_candidates(&Default::default(), orbit_core::DEFAULT_TASK_LIST_LIMIT)
+        .expect("list candidates")
+        .items
+        .into_iter()
+        .map(|task| task.title)
         .collect()
 }
 
@@ -1099,4 +1300,55 @@ fn malformed_refresh_emits_credential_safe_diagnostic() {
     // Keep-last-valid: the previous snapshot is untouched.
     assert_eq!(state.entries().len(), 1);
     assert_eq!(state.entries()[0].id, "alpha");
+}
+
+/// A broken registered checkout must not prevent the dashboard from starting
+/// for its healthy peers. Its identity is never accepted from the registry:
+/// without a readable config it remains listed but unavailable, and the
+/// operator receives a diagnostic naming the affected checkout.
+#[tokio::test]
+async fn registry_startup_skips_unresolvable_checkout_and_serves_healthy_workspace() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    let (_alpha_orbit, alpha_repo) = seed_workspace(&global_root, tmp.path(), "alpha");
+    let (beta_orbit, beta_repo) = seed_workspace(&global_root, tmp.path(), "beta");
+    std::fs::remove_file(beta_orbit.join("config.yaml")).expect("remove beta identity");
+    write_registry(
+        &global_root,
+        &[("alpha", &alpha_repo), ("beta", &beta_repo)],
+    );
+
+    let buf = SharedBuf::default();
+    let subscriber = Registry::default().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(buf.clone()),
+    );
+    let state = tracing::subscriber::with_default(subscriber, || registry_state(&global_root));
+
+    assert_eq!(route_status(&state, "alpha").await, StatusCode::OK);
+    assert_eq!(route_status(&state, "beta").await, StatusCode::BAD_REQUEST);
+
+    let response = router()
+        .with_state(state)
+        .oneshot(get("/workspaces"))
+        .await
+        .expect("response");
+    let listed = body_json(response).await;
+    let beta = listed
+        .as_array()
+        .expect("workspace array")
+        .iter()
+        .find(|workspace| workspace["id"] == json!("beta"))
+        .expect("broken workspace remains visible");
+    assert_eq!(beta["status"], json!("invalid"));
+
+    let logged = String::from_utf8(buf.0.lock().expect("buffer lock").clone()).expect("utf8");
+    assert!(
+        logged.contains("registered workspace is unavailable")
+            && logged.contains("beta/.orbit")
+            && logged.contains("workspace config is missing"),
+        "startup must identify the skipped checkout for operators, got {logged:?}"
+    );
 }

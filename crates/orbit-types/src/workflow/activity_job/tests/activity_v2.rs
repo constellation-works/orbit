@@ -80,12 +80,13 @@ fn provider_capability_predicates_match_contract() {
     // the only variants allowed to exist without a row are the ones named here.
     // An accidental new variant still fails this test.
     //
-    // Copilot and Cursor are such identities. Adding either upstream is a
-    // cross-system change (Worker and Bridge resolve against the same rows);
-    // until that lands, Orbit can dispatch them while Worker correctly refuses
-    // them — which is what `is_worker_executable() == false` encodes.
-    // [ORB-10946] [ORB-10945]
-    const ORBIT_ONLY_PROVIDERS: &[&str] = &["copilot", "cursor"];
+    // Copilot, Cursor, Pi, Antigravity, and OpenCode are such identities.
+    // Adding any of them upstream is a cross-system change (Worker and Bridge
+    // resolve against the same rows); until that lands, Orbit can dispatch them
+    // while Worker correctly refuses them — which is what
+    // `is_worker_executable() == false` encodes.
+    // [ORB-10946] [ORB-10945] [ORB-11296] [ORB-11299] [ORB-11295]
+    const ORBIT_ONLY_PROVIDERS: &[&str] = &["copilot", "cursor", "pi", "antigravity", "opencode"];
 
     for name in &known {
         assert!(
@@ -172,6 +173,53 @@ fn provider_capability_predicates_match_contract() {
             "vendor alias '{vendor_alias}' must not resolve to Cursor",
         );
     }
+
+    let pi = Provider::parse("pi").expect("pi is canonical");
+    assert_eq!(pi.as_str(), "pi");
+    assert_eq!(pi.to_string(), "pi");
+    assert!(pi.has_cli_runtime(), "Orbit ships a Pi CLI runtime");
+    assert!(
+        !pi.is_worker_executable(),
+        "Worker has no Pi lane, so it must refuse rather than fall back",
+    );
+    for spelling in ["pi-coding-agent", "earendil", "pi_cli"] {
+        assert!(
+            Provider::parse(spelling).is_err(),
+            "'{spelling}' must not alias the Pi provider",
+        );
+    }
+    // Pi's own `--provider` flag names the *model vendor* behind a run
+    // (`anthropic`, `openai`, `google`, ...). Those spellings are Orbit
+    // aliases for other execution lanes and must keep resolving there, so a
+    // crew cannot reach the Pi lane by naming a vendor. [ORB-11296]
+    for vendor_alias in ["anthropic", "openai", "google", "xai"] {
+        let resolved = Provider::resolve_name(vendor_alias).expect("vendor alias resolves");
+        assert_ne!(
+            resolved.provider, pi,
+            "vendor alias '{vendor_alias}' must not resolve to Pi",
+        );
+    }
+
+    let antigravity = Provider::parse("antigravity").expect("antigravity is canonical");
+    assert_eq!(antigravity.as_str(), "antigravity");
+    assert_eq!(antigravity.to_string(), "antigravity");
+    assert!(
+        antigravity.has_cli_runtime(),
+        "Orbit ships an Antigravity CLI runtime"
+    );
+    assert!(
+        !antigravity.is_worker_executable(),
+        "Worker has no Antigravity lane, so it must refuse rather than fall back",
+    );
+    for spelling in ["agy", "antigravity-cli", "google-antigravity"] {
+        assert!(
+            Provider::parse(spelling).is_err(),
+            "'{spelling}' must not alias the Antigravity provider",
+        );
+    }
+    let google = Provider::resolve_name("google").expect("google still aliases to gemini");
+    assert_eq!(google.provider, Provider::Gemini);
+    assert_ne!(google.provider, antigravity);
 }
 
 #[test]

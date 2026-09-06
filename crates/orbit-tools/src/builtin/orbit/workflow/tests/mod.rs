@@ -50,7 +50,7 @@ fn managed_run_rejects_dispatch_before_host_resolution() {
 }
 
 #[test]
-fn ship_schema_has_no_retired_review_controls() {
+fn ship_schema_is_review_only_and_has_no_retired_review_controls() {
     let schema = OrbitWorkflowShipTool.schema();
     let names = schema
         .parameters
@@ -60,6 +60,15 @@ fn ship_schema_has_no_retired_review_controls() {
 
     assert!(!names.contains(&"review"));
     assert!(!names.contains(&"review_crew"));
+    assert!(!names.contains(&"completion"));
+    assert!(names.contains(&"allowed_crews"));
+    assert!(schema.description.contains("review-only"));
+    assert!(schema.description.contains("does not accept completion"));
+    assert!(
+        schema
+            .description
+            .contains("orbit run ship <task-id> --complete")
+    );
 }
 
 #[test]

@@ -37,6 +37,7 @@ pub struct RoutineStatus {
     pub next_due: Option<String>,
     /// Most recent fire attempt recorded on this host.
     pub last_fire: Option<RoutineFireRecord>,
+    pub automation: Option<serde_json::Value>,
 }
 
 impl RoutineStatus {
@@ -104,6 +105,9 @@ pub fn routine_statuses_with_providers(
             &registry_view,
         );
         let pinned_to_host = validation.eligible;
+        let automation=(routine.definition.trigger.deliveries_landed.is_some() || routine.definition.trigger.state.is_some()).then(|| {
+            discovered.entries.iter().find(|(_,runtime)|runtime.shared_root()==routine.source_orbit_dir).map_or_else(||serde_json::json!({"reason":"source_unavailable"}),|(_,runtime)|match crate::application::automation::inspect_routine(runtime,&routine.definition,now_utc) {Ok(value)=>serde_json::json!(value),Err(error)=>serde_json::json!({"reason":"state_unavailable","error":error.to_string()})})
+        });
         statuses.push(RoutineStatus {
             routine,
             pinned_to_host,
@@ -113,6 +117,7 @@ pub fn routine_statuses_with_providers(
             last_evaluated_slot: cursor.and_then(|cursor| cursor.last_slot),
             next_due,
             last_fire,
+            automation,
         });
     }
 

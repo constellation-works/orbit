@@ -8,9 +8,6 @@ pass = [
     "__CF_USER_TEXT_ENCODING",
 ]
 
-[execution.codex]
-sandbox = "danger-full-access"
-
 [workflow]
 auto_ship = true
 base_branch = "agent-main"
@@ -32,6 +29,11 @@ backend = "cli"
 model = "claude-fable-5-1"
 provider = "claude"
 
+[crews.astra]
+backend = "cli"
+model = "gpt-6-astra"
+provider = "codex"
+
 [crews.sol]
 backend = "cli"
 model = "gpt-5.6-sol"
@@ -47,15 +49,15 @@ backend = "cli"
 model = "gpt-5.6-luna"
 provider = "codex"
 
-[crews.gemini]
-backend = "cli"
-model = "gemini-3.7-flash"
-provider = "gemini"
-
 [crews.grok]
 backend = "cli"
 model = "grok-4.6"
 provider = "grok"
+
+[crews.gemini-flash]
+backend = "cli"
+model = "gemini-3.8-flash-high"
+provider = "antigravity"
 
 
 [pr]
