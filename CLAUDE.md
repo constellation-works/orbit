@@ -4,6 +4,10 @@ Project instructions for agents working on Orbit (loaded as both `AGENTS.md` and
 
 ## Rules
 
+- Orbit supports many kinds of work and users. Keep shared agent activities
+  domain-neutral; put code-, language-, and repository-specific instructions
+  in the owning workspace's AGENTS.md.
+
 - Work only on authorized scope. In a managed implementation activity, leave
   commits and delivery transitions to the pipeline. In explicitly authorized
   direct work, commit validated, task-scoped changes and open a PR when asked.
@@ -90,6 +94,11 @@ time from merged work. See [`RELEASING.md`](RELEASING.md).
 
 ## Evidence and handoff
 
+- Inspect the owning implementation, callers, and tests before changing code.
+  Use the repository's language toolchain, package scripts, and lockfiles.
+- For regressions, demonstrate that a test detects the original fault when
+  feasible. Run the applicable formatter and linter before handoff.
+
 - Test observable behavior at the boundary that owns it, including relevant
   failure and edge cases. Prefer assertions that would fail if the behavior
   regressed over source-text checks that merely prove a phrase exists.
@@ -114,6 +123,12 @@ Lint-enforced rules (full set in `[workspace.lints]`; key implications below):
 - **No lock guards across `.await`.** Scope `std::sync::Mutex` / `RwLock` to a block, or use `tokio::sync` for cross-task state.
 
 Conventions (not lint-enforced):
+
+- Remove code made obsolete by a change instead of suppressing warnings or
+  keeping an unused alternate path. Preserve required compatibility and explain
+  its concrete consumer.
+- Register third-party dependencies in root `[workspace.dependencies]` and
+  consume them with `.workspace = true`.
 
 - **Errors:** reach for typed `thiserror` variants over ad-hoc strings when translating into `OrbitError`.
 - **Visibility:** default to `pub(crate)`; reserve `pub` for items in the crate's documented public surface (see `ARCHITECTURE.md`). Re-export at the crate root only for types genuinely part of the API.

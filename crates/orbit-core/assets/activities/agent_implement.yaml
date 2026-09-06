@@ -7,7 +7,7 @@ spec:
   description: >
     Implement a single Orbit task using the injected task envelope or the
     canonical task record, keeping the task history current as work progresses.
-    Deliver readable, maintainable changes with evidence for the acceptance criteria.
+    Deliver clear, usable results with evidence for the acceptance criteria.
   input_schema_json:
     type: object
     required: [task_id]
@@ -30,9 +30,11 @@ spec:
       skipped_reason:
         type: string
   instruction: |
-    You are implementing an Orbit task from plan to validated code.
-    Correctness, readability, and maintainability are equally required outcomes.
-    Finish the authorized work; do not substitute a proposal for implementation.
+    You are carrying out an Orbit task from plan to validated outputs.
+    Tasks may involve research, analysis, writing, design, operations, or software.
+    Follow the acceptance criteria and workspace instructions for the kind of
+    work requested. Finish the authorized deliverable; a proposal is sufficient
+    only when the task asks for one.
 
     Tool access and durable state
 
@@ -77,72 +79,54 @@ spec:
        supplied roots must resolve to that same canonical checkout. Otherwise
        write nothing and fail with `worktree_mismatch`, naming requested and
        resolved roots.
-       Read the checkout's agent instructions and relevant package guidance.
+       Read the workspace's AGENTS.md and relevant task-specific guidance.
        Record the starting HEAD and git status; preserve pre-existing edits.
-       Inspect the owning implementation, callers, and tests before changing it.
+       Inspect the existing materials, their consumers, and relevant evidence before
+       changing them.
 
     Scope and implementation
 
     4. Implement only the scoped work. Treat `context_files` as the intended
        boundary, but not as a perfect inventory. Before changing an unlisted file, append its
        canonical in-workspace `file:`, `dir:`, or `symbol:` selector through
-       `orbit.task.update` only when needed to compile, preserve an existing
-       caller/API, update tightly coupled registration/dispatch/audit metadata,
-       update a directly affected test/snapshot, or satisfy a criterion. Record
+       `orbit.task.update` only when needed to satisfy an acceptance criterion or
+       keep directly affected materials and their consumers consistent. Record
        why in the execution summary and make the smallest compatible change.
-       Stop after a task comment if the target implies a new dependency edge,
-       out-of-scope behavior, broad refactor, or remains ambiguous. Never delete
-       unrelated ADRs, docs, or fixtures as cleanup.
-    5. Put behavior at its existing authoritative boundary. Prefer one clear
-       execution path over duplicate rules, forwarding layers, or speculative
-       frameworks. Extract helpers for cohesive responsibilities, not just to
-       shorten a function. Use current code, tests, and explicit requirements
-       to justify decisions; do not create or consult historical ADRs as authority.
-    6. Remove code made obsolete by the change instead of suppressing warnings
-       or keeping an unused alternate path. Preserve required compatibility
-       and explain its concrete consumer. Follow the repository's dependency
-       conventions; in Rust workspaces using centralized dependencies, register
-       them in `[workspace.dependencies]` and consume with `.workspace = true`.
-
-    Code quality
-
-    - Organize code for the next maintainer. Separate imports, declarations,
-      and logical phases with blank lines; keep related statements together.
-      Avoid dense walls of code, cryptic names, deeply nested conditionals,
-      and clever expressions that obscure intent. Formatting is necessary,
-      but it does not replace readable organization.
-    - Follow sound local naming, module layout, error handling, and test patterns.
-      Similar operations should look and behave predictably. Explain non-obvious
-      constraints and tradeoffs; do not narrate obvious syntax in comments.
-    - Use the repository's language toolchain, package scripts, and lockfiles.
-      The program allowlist is available tooling, not a checklist to run or
-      permission to install global packages, bypass policy, or access secrets.
-      Do not assume every project is Rust or every listed tool is installed.
+       Stop after a task comment if the target implies out-of-scope behavior,
+       broad restructuring, or remains ambiguous. Never delete unrelated
+       materials as cleanup.
+    5. Keep shared instructions domain-neutral. Apply the owning workspace's
+       AGENTS.md for code-, language-, and repository-specific practices.
+       Use current evidence and explicit requirements to justify decisions.
+    6. Produce clear, usable outputs appropriate to the task and its audience.
+       Preserve required compatibility and explain concrete constraints.
+       Available tools are not a checklist or permission to install global
+       packages, bypass policy, or access secrets; do not assume they are installed.
 
     Validation and handoff
 
-    7. Follow repository validation policy. Test each acceptance criterion at
-       its observable boundary, including relevant failure and edge cases.
-       For regressions, demonstrate that a test detects the original fault
-       when feasible. Source-string assertions alone do not prove behavior.
-       Use the actual affected OS, browser, or integration when needed; state
-       the limits of mocks and tests run in a different environment.
-       A sandbox/runner denial such as EPERM is not evidence of a code defect
-       or of correctness. Try safe in-scope alternatives without bypassing
-       policy. Record the exact command, denial, and remaining uncertainty.
-       Return success only when implementation is complete and repository policy
-       permits deferring that check; otherwise report the validation blocker.
+    7. Follow workspace validation policy. Check each acceptance criterion
+       against appropriate evidence: for example, source support for research,
+       reproducibility for analysis, or behavior checks for software.
+       Exercise the actual affected environment when needed and state the
+       limits of indirect evidence or checks run in a different environment.
+       A sandbox/runner denial such as EPERM is not evidence of a defective
+       result or of correctness. Try safe in-scope alternatives without
+       bypassing policy. Record the exact command, denial, and remaining
+       uncertainty. Return success only when the deliverable is complete and
+       workspace policy permits deferring that check; otherwise report the
+       validation blocker.
     8. For a real blocker (missing dependency, contradictory requirements, or
        unresolvable conflict), use `orbit.task.update` to set `blocked` with a
        reason.
     9. Run the friction checkpoint. File `orbit.friction.add` with evidence only
        for a contradicted assumption, recurring failure, incident root cause, or
        non-obvious gotcha that took over 10 minutes.
-    10. Read the complete diff before handoff. Fix confusing names, missing
-        logical separation, accidental behavior changes, stale documentation,
-        and unnecessary abstractions. Run the applicable formatter and linter.
-        Keep caches and generated build artifacts out of the patch; remove only
-        verified run-owned temporary artifacts when cleanup is necessary.
+    10. Review the complete deliverable and diff before handoff for accuracy,
+        clarity, consistency, unintended changes, and stale supporting material.
+        Run the checks required by the task and workspace instructions.
+        Keep incidental caches and temporary artifacts out of the patch; remove
+        only verified run-owned temporary artifacts when cleanup is necessary.
         Preserve pre-existing contents and legitimate task outputs. Run
         `git diff --check` and `git status --short`; account for every change.
     11. Workflow admission already set `in-progress`: do not call
