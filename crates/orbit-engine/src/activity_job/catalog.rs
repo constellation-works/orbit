@@ -621,6 +621,7 @@ fn resolve_ref(
     Ok(TargetStep {
         spec: activity.spec.clone(),
         activity_name: Some(name.to_string()),
+        input_schema_json: Some(activity.input_schema_json.clone()),
         fs_profile: activity.fs_profile.clone(),
         default_input: r.default_input,
         timeout_seconds: r.timeout_seconds,

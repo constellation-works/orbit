@@ -741,6 +741,7 @@ fn recovery_job(
             body: JobV2StepBody::Target(TargetStep {
                 spec: deterministic_activity(step_action, None).spec,
                 activity_name: None,
+                input_schema_json: None,
                 fs_profile: step_fs_profile.map(str::to_string),
                 default_input: None,
                 timeout_seconds: 0,

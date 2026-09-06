@@ -192,6 +192,7 @@ impl Visit for FieldCapture {
 pub(super) enum Action {
     Ok(Value),
     Err(DispatchError),
+    EchoInput,
     SleepOk { ms: u64, value: Value },
     SleepInputMsThenEcho { ms_field: &'static str },
 }
@@ -293,6 +294,7 @@ impl RuntimeHost for ScriptedHost {
         let result = match next {
             Some(Action::Ok(value)) => Ok(value),
             Some(Action::Err(err)) => Err(err),
+            Some(Action::EchoInput) => Ok(input.clone()),
             Some(Action::SleepOk { ms, value }) => {
                 std::thread::sleep(Duration::from_millis(ms));
                 Ok(value)
@@ -355,6 +357,7 @@ pub(super) fn deterministic_target(action: &str) -> TargetStep {
             config: Value::Null,
         }),
         activity_name: None,
+        input_schema_json: None,
         fs_profile: None,
         default_input: None,
         timeout_seconds: 0,
