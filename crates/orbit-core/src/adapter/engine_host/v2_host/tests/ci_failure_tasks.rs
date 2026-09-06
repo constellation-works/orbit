@@ -1027,6 +1027,150 @@ fn same_failure_under_a_different_commit_message_reuses_the_failure_key() {
     );
 }
 
+/// Captured Coverage / Collect workspace coverage shape from ORB-11340:
+/// passing libtest names that contain `error`/`failure`, then `failures:`,
+/// the panic, cargo wrappers, and GitHub's generic exit trailer. Collection
+/// often drops the `test … FAILED` line with the middle of the log.
+fn orb_11340_style_rust_test_log(passing: &[&str], failing: &str) -> String {
+    let prefix = |msg: &str| {
+        format!(
+            "Coverage (informational)\tCollect workspace coverage\t2026-09-06T00:12:19.7226670Z {msg}\n"
+        )
+    };
+    let mut out = String::new();
+    out.push_str(&prefix(
+        "##[group]Run cargo llvm-cov --workspace --locked --no-report",
+    ));
+    for name in passing {
+        out.push_str(&prefix(&format!("test {name} ... ok")));
+    }
+    out.push_str(&prefix(""));
+    out.push_str(&prefix("failures:"));
+    out.push_str(&prefix(""));
+    out.push_str(&prefix(&format!("---- {failing} stdout ----")));
+    out.push_str(&prefix(""));
+    out.push_str(&prefix(&format!(
+        "thread '{failing}' (10411) panicked at crates/orbit-cli/tests/mcp_roundtrip.rs:1416:33:"
+    )));
+    out.push_str(&prefix(
+        "spawn destination-issued command: Os { code: 26, kind: ExecutableFileBusy, message: \"Text file busy\" }",
+    ));
+    out.push_str(&prefix(
+        "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+    ));
+    out.push_str(&prefix(""));
+    out.push_str(&prefix("failures:"));
+    out.push_str(&prefix(&format!("    {failing}")));
+    out.push_str(&prefix(""));
+    out.push_str(&prefix(
+        "test result: FAILED. 46 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 81.42s",
+    ));
+    out.push_str(&prefix(""));
+    out.push_str(&prefix(
+        "error: test failed, to rerun pass `-p orbit-cli --test mcp_roundtrip`",
+    ));
+    out.push_str(&prefix(
+        "error: process didn't exit successfully: `/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo test --tests --manifest-path /home/runner/work/orbit/orbit/Cargo.toml --target-dir /home/runner/work/orbit/orbit/target/llvm-cov-target --workspace --locked` (exit status: 101)",
+    ));
+    out.push_str(&prefix("##[error]Process completed with exit code 101."));
+    out
+}
+
+const ORB_11340_PASSING: &[&str] = &[
+    "unmanaged_orbit_workspace_env_does_not_bind_mcp",
+    "mcp_serve_error_paths_return_tool_errors_and_keep_serving",
+    "task_show_is_global_by_default_across_tool_run_and_mcp",
+];
+
+const ORB_11340_FAILING: &str = "a_forced_command_ignores_the_command_the_caller_asked_for";
+
+#[test]
+fn passing_test_names_with_error_words_are_not_the_signature() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let log = orb_11340_style_rust_test_log(ORB_11340_PASSING, ORB_11340_FAILING);
+
+    let (_output, description) = filed_description(&runtime, &log);
+    let signature = signature_line(&description).to_ascii_lowercase();
+    assert!(
+        signature.contains(ORB_11340_FAILING) && signature.contains("panicked"),
+        "signature must be the panic diagnostic: {signature}"
+    );
+    assert!(
+        !signature.contains("mcp_serve_error_paths")
+            && !signature.contains("... ok")
+            && !signature.contains("keep_serving"),
+        "a passing test whose name contains error must not be the signature: {signature}"
+    );
+    assert!(
+        !signature.contains("process completed"),
+        "generic runner trailer must not be the signature: {signature}"
+    );
+}
+
+#[test]
+fn distinct_rust_panics_with_the_same_passing_preamble_keep_distinct_keys() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let foo_log = orb_11340_style_rust_test_log(ORB_11340_PASSING, ORB_11340_FAILING);
+    let bar_log = orb_11340_style_rust_test_log(
+        ORB_11340_PASSING,
+        "another_forced_command_ignores_the_command_the_caller_asked_for",
+    );
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![
+            failure(10, "ci", "coverage", "collect coverage", &foo_log, CHECKOUT),
+            failure(11, "ci", "coverage", "collect coverage", &bar_log, CHECKOUT),
+        ])}),
+    );
+
+    assert_eq!(first["filed_count"], json!(2));
+    let filed = first["filed"].as_array().expect("filed");
+    assert_ne!(filed[0]["failure_key"], filed[1]["failure_key"]);
+    for (task_id, needle) in filed_task_ids(&first).iter().zip([
+        ORB_11340_FAILING,
+        "another_forced_command_ignores_the_command_the_caller_asked_for",
+    ]) {
+        let description = runtime
+            .get_task(task_id)
+            .expect("read filed task")
+            .description;
+        let signature = signature_line(&description).to_ascii_lowercase();
+        assert!(
+            signature.contains(needle) && signature.contains("panicked"),
+            "each panic must be its own signature: {signature}"
+        );
+        assert!(
+            !signature.contains("mcp_serve_error_paths"),
+            "shared passing preamble must not become the signature: {signature}"
+        );
+    }
+
+    let renamed_preamble = orb_11340_style_rust_test_log(
+        &[
+            "renamed_mcp_serve_error_paths_return_tool_errors_and_keep_serving",
+            "workspace_init_mcp_config_reaches_a_governed_tool_over_the_real_transport",
+        ],
+        ORB_11340_FAILING,
+    );
+    let repeated = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            12,
+            "ci",
+            "coverage",
+            "collect coverage",
+            &renamed_preamble,
+            NEXT_HEAD,
+        )])}),
+    );
+    assert_eq!(repeated["filed_count"], json!(0));
+    assert_eq!(
+        repeated["skipped_existing"][0]["failure_key"], filed[0]["failure_key"],
+        "the same panic must retain its failure key across passing-test names, run ids, and commits"
+    );
+}
+
 #[test]
 fn query_error_prevents_filing_and_remains_retryable() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
