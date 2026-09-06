@@ -119,6 +119,25 @@ owns today:
 Any additional operator-authored paths require an explicit repository policy; do not
 assume workspace initialization commits them.
 
+#### Finalizing generated onboarding files
+
+`orbit workspace init` updates `.gitignore` and creates untracked definition files under
+`.orbit/auto_tasks/` and `.orbit/routines/`. Orbit intentionally does not auto-commit,
+stash, or discard working-tree modifications.
+
+For local delivery (`--ship-mode local`), the base branch landing checkout must be clean
+to ensure safe fast-forward merges. Operators should review and finalize generated
+onboarding definitions before dispatching local implementation workflows:
+
+```bash
+git add .gitignore .orbit/auto_tasks .orbit/routines
+git commit -m "chore: initialize Orbit workspace definitions"
+```
+
+If local shipping is attempted while the landing checkout remains dirty, the workflow
+fails early before agent implementation runs, reporting the unmerged or dirty landing
+state so operators can safely commit or remediate the files without lost work.
+
 ### Recover a missing or corrupt checkout identity
 
 Do not hand-create `.orbit/config.yaml` or edit `workspaces.json`. First preserve any

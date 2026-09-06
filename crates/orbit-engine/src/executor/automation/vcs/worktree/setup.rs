@@ -15,6 +15,7 @@ use super::dependency_delivery::{
     DependencyDeliveryMode, dependency_delivery_mode_from_input,
     ensure_dependencies_delivered_into_base,
 };
+use super::merge::{checkout_holding_branch, ensure_clean_checkout};
 use super::{WorktreeIdentity, is_registered_worktree};
 
 const DEFAULT_BASE: &str = "main";
@@ -39,6 +40,14 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
         .unwrap_or_else(|| DEFAULT_BASE.to_string());
     let base_sync_mode = base_sync_mode_from_input(input)?;
     let dependency_delivery_mode = dependency_delivery_mode_from_input(input)?;
+    let landing_mode = match (
+        input_string_field(input, "landing_mode"),
+        input_string_field(input, "ship_mode"),
+    ) {
+        (Some(mode), _) => Some(("landing_mode", mode)),
+        (None, Some(mode)) => Some(("ship_mode", mode)),
+        (None, None) => None,
+    };
 
     let repo_root_str = host.repo_root()?;
     let repo_root = Path::new(&repo_root_str);
@@ -69,6 +78,26 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
             &start_point,
             &base_sha,
         )?;
+    }
+
+    // ORB-11373: when delivering into a local checkout, verify that the landing
+    // base checkout is clean before creating the worktree or admitting tasks.
+    // An initialized dirty base (e.g. from `workspace init`) will deterministically
+    // fail the final merge step, so catch it early before expensive agent runs.
+    if let Some((field, mode)) = landing_mode {
+        match mode.as_str() {
+            "local" => {
+                let base_checkout = checkout_holding_branch(repo_root, &base)?
+                    .unwrap_or_else(|| repo_root.to_path_buf());
+                ensure_clean_checkout(&base_checkout, "base branch checkout")?;
+            }
+            "pr" => {}
+            other => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "input.{field} must be 'local' or 'pr', got '{other}'"
+                )));
+            }
+        }
     }
 
     let branch_name = branch_name_for_tasks(&identity.branch_prefix, task_ids);

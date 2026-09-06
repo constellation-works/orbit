@@ -10,7 +10,9 @@ use orbit_types::workspace::{
 
 use crate::tests::env_isolation::EnvGuard;
 
-use super::super::init::{WorkspaceInitArgs, canonical_workspace_id};
+use super::super::init::{
+    ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id,
+};
 use super::super::list::{format_workspace_list, workspace_list_json};
 use super::super::role::CliCheckoutRole;
 use super::super::show::format_workspace_show;
@@ -1786,4 +1788,63 @@ fn nameless_tmp_workspace_registers_only_in_isolated_registry() {
         sentinel,
         "workspace init must never mutate the operator's real registry"
     );
+}
+
+#[test]
+fn workspace_init_guidance_and_generated_onboarding_files_lifecycle() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    let global = home.path().join(".orbit");
+    std::fs::create_dir_all(&global).expect("create global orbit");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_guidance\"\nhost_id = \"guidance-host\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("write host identity");
+
+    // Initialize git repo
+    let git_init = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(workspace.path())
+        .status()
+        .expect("git init");
+    assert!(git_init.success());
+
+    // Verify guidance explicitly explains generated files and operator remediation
+    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".gitignore"));
+    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".orbit/auto_tasks"));
+    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".orbit/routines"));
+    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains("review and commit"));
+    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains("does not auto-commit or discard"));
+
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
+    WorkspaceInitArgs {
+        name: Some("guidance-test".to_string()),
+        base_branch: Some("agent-main".to_string()),
+        ship_mode: Some("local".to_string()),
+        role: None,
+        owner: None,
+        task_id_start: None,
+        mcp: false,
+        inject_agent_rules: false,
+        refresh_defaults: false,
+        force: false,
+    }
+    .execute_without_runtime(None)
+    .expect("workspace init");
+
+    // Verify the generated files exist
+    assert!(workspace.path().join(".gitignore").exists());
+    assert!(workspace.path().join(".orbit/auto_tasks").is_dir());
+    assert!(workspace.path().join(".orbit/routines").is_dir());
+
+    // Git status shows dirt from generated files
+    let status_output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(workspace.path())
+        .output()
+        .expect("git status");
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+    assert!(status_str.contains(".gitignore"), "git status: {status_str}");
+    assert!(status_str.contains(".orbit/"), "git status: {status_str}");
 }
