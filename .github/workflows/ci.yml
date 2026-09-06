@@ -276,87 +276,36 @@ jobs:
         if: always()
         run: df -h /
 
-      - name: Create orbit task on CI failure
-        if: failure() && github.event_name == 'pull_request'
+      # CI runners report bounded provenance only. The host-owned
+      # `ci_failure_sweep_pipeline` queries GitHub and is the sole authority
+      # that may create durable Orbit remediation tasks. [ORB-11383]
+      - name: Report CI failure for host sweep
+        if: failure()
         env:
           WORKFLOW: ${{ format('{0}', github.workflow) }}
-          PR_NUMBER: ${{ format('{0}', github.event.pull_request.number) }}
-          BRANCH: ${{ format('{0}', github.head_ref) }}
-          SHA: ${{ format('{0}', github.event.pull_request.head.sha) }}
+          EVENT: ${{ format('{0}', github.event_name) }}
+          JOB: ${{ format('{0}', github.job) }}
+          REF: ${{ format('{0}', github.ref_name) }}
+          EVENT_SHA: ${{ format('{0}', github.sha) }}
+          PR_HEAD_SHA: ${{ format('{0}', github.event.pull_request.head.sha) }}
           RUN_ID: ${{ format('{0}', github.run_id) }}
+          RUN_ATTEMPT: ${{ format('{0}', github.run_attempt) }}
         run: |
-          # This step must never fail the job. A missing checkout, a merged PR,
-          # or a missing orbit binary are skip conditions, not new reds.
+          # This step must never change the job conclusion. `github.sha` can
+          # be a PR merge SHA, so retain it separately from both the PR head
+          # and the commit the runner actually checked out.
           set +e
-          report() { echo "Create orbit task on CI failure: $*"; }
-
-          if [ ! -f Cargo.toml ]; then
-            report "skipping because no checkout is present"
-            exit 0
-          fi
-
-          if [ -n "${PR_NUMBER:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && command -v gh >/dev/null 2>&1; then
-            merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .merged 2>/dev/null)"
-            if [ "$merged" = "true" ]; then
-              report "skipping because PR #${PR_NUMBER} is already merged"
-              exit 0
+          tested_sha="unavailable"
+          if command -v git >/dev/null 2>&1; then
+            candidate="$(git rev-parse HEAD 2>/dev/null)"
+            if [ -n "$candidate" ]; then
+              tested_sha="$candidate"
             fi
           fi
-
-          orbit_bin=""
-          if command -v orbit >/dev/null 2>&1; then
-            orbit_bin="$(command -v orbit)"
-          elif [ -x "${HOME}/.orbit/bin/orbit" ]; then
-            orbit_bin="${HOME}/.orbit/bin/orbit"
-          elif [ -x target/debug/orbit ]; then
-            orbit_bin="$(pwd)/target/debug/orbit"
-          elif [ -x target/release/orbit ]; then
-            orbit_bin="$(pwd)/target/release/orbit"
-          fi
-          if [ -z "$orbit_bin" ]; then
-            report "skipping because orbit CLI is not available (will not compile from source)"
-            exit 0
-          fi
-
-          workspace="${GITHUB_WORKSPACE:-}"
-          case "$workspace" in
-            /*) ;;
-            *) workspace="$(pwd -P)" ;;
-          esac
-
           run_url="${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${RUN_ID:-}"
-          description="$(printf '%s\n' \
-            "## Problem" \
-            "CI failed on PR #${PR_NUMBER} (\`${BRANCH}\`)." \
-            "" \
-            "Commit: \`${SHA}\`" \
-            "Run: ${run_url}")"
-
-          payload="$(jq -n \
-            --arg title "CI failure: ${WORKFLOW} on PR #${PR_NUMBER}" \
-            --arg description "$description" \
-            --arg branch "${BRANCH:-}" \
-            --arg workspace "$workspace" \
-            '{
-              title: $title,
-              description: $description,
-              acceptance_criteria: ["CI passes on branch \($branch)"],
-              context_files: ["file:.github/workflows/ci.yml"],
-              workspace: $workspace,
-              priority: "high",
-              type: "bug",
-              model: "github-actions",
-              tags: ["ci"]
-            }'
-          )"
-          if [ -z "$payload" ]; then
-            report "skipping because payload construction failed"
-            exit 0
-          fi
-
-          "$orbit_bin" tool run orbit.task.add --input "$payload"
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            report "orbit.task.add failed with exit ${status}; not failing the job"
-          fi
+          printf '%s\n' \
+            "CI failure reported for host-owned ci_failure_sweep_pipeline; durable filing happens only on the Orbit host." \
+            "workflow=${WORKFLOW:-} event=${EVENT:-} job=${JOB:-} ref=${REF:-}" \
+            "run_id=${RUN_ID:-} run_attempt=${RUN_ATTEMPT:-} run_url=${run_url}" \
+            "event_sha=${EVENT_SHA:-} pr_head_sha=${PR_HEAD_SHA:-} tested_sha=${tested_sha}"
           exit 0
