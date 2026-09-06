@@ -536,7 +536,7 @@ impl CheckoutEvidenceCollector {
             return;
         }
         if let Some(command) = &command_output {
-            self.record_evidence_line(&command);
+            self.record_evidence_line(command);
         }
         self.record_evidence_line(payload);
         let named = named_checkout_commit(
