@@ -4,9 +4,7 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use orbit_types::workflow::AutoTaskSchedule;
 
-use crate::application::auto_tasks::schedule::{
-    AutoTaskDueDecision, decide_due, validate_schedule,
-};
+use crate::auto_tasks::schedule::{AutoTaskDueDecision, decide_due, validate_schedule};
 
 fn at(y: i32, m: u32, d: u32, h: u32, min: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(y, m, d, h, min, 0)

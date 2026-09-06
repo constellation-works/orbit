@@ -40,10 +40,13 @@ allowed_internal_deps() {
     orbit-engine)
       echo "orbit-agent orbit-common orbit-exec orbit-store orbit-tools orbit-types"
       ;;
+    orbit-automation)
+      echo "orbit-common orbit-store orbit-types"
+      ;;
     orbit-core)
       # ORB-10617: Linux sandbox regression tests compose Core with Exec; this
       # remains test-only and does not widen Core's production dependency graph.
-      echo "orbit-common orbit-config orbit-search orbit-engine orbit-exec orbit-policy orbit-store orbit-tools orbit-types"
+      echo "orbit-automation orbit-common orbit-config orbit-search orbit-engine orbit-exec orbit-policy orbit-store orbit-tools orbit-types"
       ;;
     orbit-cmd)
       # The shared application composition layer joins Core runtime kernels to

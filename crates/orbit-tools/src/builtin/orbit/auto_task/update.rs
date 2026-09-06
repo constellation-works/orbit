@@ -8,7 +8,7 @@ pub struct OrbitAutoTaskUpdateTool;
 
 impl Tool for OrbitAutoTaskUpdateTool {
     fn schema(&self) -> ToolSchema {
-        let parameters = vec![
+        let parameters = vec![ToolParam {name:"waive_batch".into(),description:"Explicit settled-batch waiver: { batch_id, reason }. Cannot be combined with definition edits; advances no coverage.".into(),param_type:"object".into(),required:false},
             ToolParam {
                 name: "name".to_string(),
                 description: "Definition name. Required.".to_string(),
@@ -24,7 +24,7 @@ impl Tool for OrbitAutoTaskUpdateTool {
             ToolParam {
                 name: "schedule".to_string(),
                 description:
-                    "New schedule object: `{ cron: string }` or `{ every_minutes: number }`."
+                    "New schedule object: `{ cron: string }` `{ every_minutes: number }`, or `{ deliveries_landed: { owner_machine, branch, threshold, max_wait_minutes, coverage, max_items?, retries? } }` (coverage: integrated_qa_v1 or landed_code_review_v1)."
                         .to_string(),
                 param_type: "object".to_string(),
                 required: false,

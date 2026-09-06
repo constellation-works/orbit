@@ -152,7 +152,7 @@ impl RegisteredRuntimeFactory {
                 OrbitRuntime::initialize_from_resolved_roots(roots, binding)
             };
             return runtime.map(|runtime| {
-                attach_workspace_catalog(
+                attach_registry_context(
                     runtime.with_coordination_write_owner(replica_owner),
                     &global_root,
                 )
@@ -211,7 +211,7 @@ impl RegisteredRuntimeFactory {
                 &roots.local_root,
             ),
         }?;
-        Ok(attach_workspace_catalog(
+        Ok(attach_registry_context(
             runtime.with_coordination_write_owner(replica_owner),
             &roots.global_root,
         ))
@@ -226,7 +226,7 @@ impl RegisteredRuntimeFactory {
         let binding = workspace_runtime_binding(workspace, checkout)?;
         OrbitRuntime::from_roots_with_binding(global_root, &checkout.orbit_dir, binding).map(
             |runtime| {
-                attach_workspace_catalog(
+                attach_registry_context(
                     runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
                     global_root,
                 )
@@ -248,7 +248,7 @@ impl RegisteredRuntimeFactory {
             binding,
         )
         .map(|runtime| {
-            attach_workspace_catalog(
+            attach_registry_context(
                 runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
                 global_root,
             )
@@ -268,7 +268,7 @@ impl RegisteredRuntimeFactory {
             local_root,
             binding,
         )
-        .map(|runtime| attach_workspace_catalog(runtime, global_root))
+        .map(|runtime| attach_registry_context(runtime, global_root))
     }
 
     /// Bind a CLI `orbit tool run` invocation to the workspace named in `input`.
@@ -669,4 +669,15 @@ fn binding_for_registry_roots(
         }
     }
     Ok(None)
+}
+
+/// Assemble registry-derived facts at the existing runtime composition boundary.
+fn attach_registry_context(runtime: OrbitRuntime, global_root: &Path) -> OrbitRuntime {
+    let machine_id = load_host_identity(global_root)
+        .ok()
+        .map(|identity| identity.machine_id);
+    attach_workspace_catalog(
+        runtime.with_automation_machine_identity(machine_id),
+        global_root,
+    )
 }

@@ -50,6 +50,8 @@ impl RoutineShowArgs {
             "paused_at": status.paused_at,
             "effective": status.effective(),
             "cron": definition.trigger.cron,
+            "trigger": definition.trigger,
+            "automation": status.automation,
             "missed_run": definition.trigger.missed_run,
             "target": definition.target.as_ref_string(),
             "policy": definition.policy,
@@ -78,6 +80,15 @@ impl RoutineShowArgs {
             status.routine.origin.as_str()
         );
         let _ = writeln!(out, "Target: {}", definition.target.as_ref_string());
+        if let Some(diagnostic) = &status.automation {
+            let _ = writeln!(
+                out,
+                "Delivery automation: {}",
+                serde_json::to_string_pretty(diagnostic)
+                    .map_err(|e| OrbitError::InvalidInput(e.to_string()))?
+            );
+        }
+
         let _ = writeln!(
             out,
             "Trigger: cron \"{}\" (missed_run: {})",

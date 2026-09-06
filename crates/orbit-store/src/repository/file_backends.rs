@@ -19,6 +19,14 @@ use crate::repository::task::TaskV2Store;
 use crate::scope::{ScopeStrategy, ScopedStore, resolve};
 
 impl TaskStoreBackend for TaskV2Store {
+    fn create_task_idempotent(
+        &self,
+        params: TaskCreateParams,
+        key: &str,
+    ) -> Result<Task, OrbitError> {
+        self.create_task_with_key(params, Some(key))
+    }
+
     fn task_candidates(
         &self,
         filter: &crate::contracts::TaskListFilter,

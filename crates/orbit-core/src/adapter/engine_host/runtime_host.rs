@@ -36,6 +36,13 @@ use crate::application::task::{
 use crate::runtime::engine::paths::{codex_workspace_write_writable_dirs, current_repo_root};
 
 impl RuntimeHost for OrbitRuntime {
+    fn record_direct_landing_intent(
+        &self,
+        request: &orbit_types::workflow::automation::DirectLandingRequest,
+    ) -> Result<(), OrbitError> {
+        crate::application::automation::record_direct_landing_intent(self, request)
+    }
+
     fn insert_job_run(
         &self,
         job_id: &str,

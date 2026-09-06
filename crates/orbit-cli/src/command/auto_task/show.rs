@@ -12,6 +12,9 @@ pub struct AutoTaskShowArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+    /// Preview the baseline and source observations without admitting actions.
+    #[arg(long)]
+    pub preview: bool,
 }
 
 impl Execute for AutoTaskShowArgs {
@@ -20,8 +23,35 @@ impl Execute for AutoTaskShowArgs {
             OrbitError::InvalidInput(format!("no such auto-task '{}'", self.name))
         })?;
 
-        let doc = definition_to_json(&definition);
+        let mut doc = definition_to_json(&definition);
+        if let orbit_core::AutoTaskSchedule::Deliveries { deliveries_landed } = &definition.schedule
+        {
+            doc["automation"] = serde_json::to_value(orbit_core::application::automation::inspect(
+                runtime,
+                "auto-task",
+                &definition.name,
+                deliveries_landed,
+                definition.enabled,
+                chrono::Utc::now(),
+            )?)
+            .map_err(|e| OrbitError::InvalidInput(e.to_string()))?;
+        }
 
+        if self.preview
+            && matches!(
+                definition.schedule,
+                orbit_core::AutoTaskSchedule::Deliveries { .. }
+            )
+        {
+            doc["automation"] =
+                serde_json::to_value(orbit_core::application::automation::evaluate_auto_task(
+                    runtime,
+                    &definition,
+                    true,
+                    chrono::Utc::now(),
+                )?)
+                .map_err(|e| OrbitError::InvalidInput(e.to_string()))?;
+        }
         use std::fmt::Write as _;
         let mut out = String::new();
         let _ = writeln!(
@@ -44,6 +74,14 @@ impl Execute for AutoTaskShowArgs {
         );
         let _ = writeln!(out, "  dedupe: {:?}", definition.dedupe);
         let _ = writeln!(out, "  template: {}", definition.template.title);
+        if let Some(automation) = doc.get("automation") {
+            let _ = writeln!(
+                out,
+                "  automation: {}",
+                serde_json::to_string_pretty(automation)
+                    .map_err(|e| OrbitError::InvalidInput(e.to_string()))?
+            );
+        }
         Ok(Payload::detail(doc, out).into())
     }
 }

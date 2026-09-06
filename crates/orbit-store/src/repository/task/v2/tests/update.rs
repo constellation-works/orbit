@@ -218,6 +218,7 @@ fn artifact_update_writes_manifest_and_sorted_text_artifacts() {
         .upsert_task_artifacts(
             "ORB-00000",
             &TaskArtifactUpdateParams {
+                owner_run_id: None,
                 actor: "codex:gpt-5.5".to_string(),
                 upsert_artifacts: vec![
                     TaskArtifact::from_text("./reports/summary.md", "summary v1\n"),
@@ -231,6 +232,7 @@ fn artifact_update_writes_manifest_and_sorted_text_artifacts() {
         .upsert_task_artifacts(
             "ORB-00000",
             &TaskArtifactUpdateParams {
+                owner_run_id: None,
                 actor: "codex:gpt-5.5".to_string(),
                 upsert_artifacts: vec![TaskArtifact::from_text(
                     "reports/summary.md",
@@ -277,6 +279,7 @@ fn artifact_update_writes_manifest_and_sorted_text_artifacts() {
         .upsert_task_artifacts(
             "ORB-00000",
             &TaskArtifactUpdateParams {
+                owner_run_id: None,
                 actor: "codex:gpt-5.5".to_string(),
                 upsert_artifacts: vec![TaskArtifact::from_text("../escape.txt", "")],
             },
@@ -438,4 +441,49 @@ fn history_update_applies_when_the_expectation_holds_or_is_absent() {
             .status,
         TaskStatus::Archived
     );
+}
+
+#[test]
+fn executor_origin_is_store_authored_and_normalized_alias_cannot_forge_it() {
+    use orbit_types::workflow::automation::{EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission};
+    let temp = TempDir::new().unwrap();
+    let store = store(&temp);
+    let task = store
+        .create_task(create_params("Coverage", TaskStatus::Backlog))
+        .unwrap();
+    let params = TaskArtifactUpdateParams {
+        actor: "codex".into(),
+        owner_run_id: Some("trusted-run".into()),
+        upsert_artifacts: vec![TaskArtifact::from_text(
+            "./automation-coverage.json",
+            "evidence",
+        )],
+    };
+    store.upsert_task_artifacts(&task.id, &params).unwrap();
+    let files = store.get_task_artifacts(&task.id).unwrap().unwrap();
+    let witness = files
+        .iter()
+        .find(|a| a.path == EVIDENCE_AUTHORITY_ARTIFACT)
+        .unwrap();
+    let origin: EvidenceSubmission = serde_json::from_slice(&witness.content).unwrap();
+    assert_eq!(origin.run_id, "trusted-run");
+    assert_eq!(origin.action_id, task.id);
+    for path in [
+        EVIDENCE_AUTHORITY_ARTIFACT.to_string(),
+        format!("./{EVIDENCE_AUTHORITY_ARTIFACT}"),
+    ] {
+        assert!(
+            store
+                .upsert_task_artifacts(
+                    &task.id,
+                    &TaskArtifactUpdateParams {
+                        actor: "attacker".into(),
+                        owner_run_id: None,
+                        upsert_artifacts: vec![TaskArtifact::from_text(&path, "forged")]
+                    }
+                )
+                .is_err()
+        );
+    }
+    assert_eq!(store.get_task_artifacts(&task.id).unwrap().unwrap(), files);
 }

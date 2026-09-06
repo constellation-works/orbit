@@ -1,0 +1,27 @@
+[package]
+name = "orbit-automation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[package.metadata.orbit]
+stability = "internal"
+
+[lints]
+workspace = true
+
+[dependencies]
+orbit-common = { path = "../orbit-common" }
+orbit-types = { path = "../orbit-types" }
+orbit-store = { path = "../orbit-store" }
+chrono.workspace = true
+croner.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

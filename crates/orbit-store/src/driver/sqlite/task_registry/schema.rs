@@ -7,6 +7,13 @@ use super::util::now_string;
 pub(super) fn apply_schema(conn: &Connection) -> Result<(), OrbitError> {
     migrate_path_coupled_workspace_bindings(conn)?;
     migrate_allocator_state_v5(conn)?;
+    // Additive v6: permanent action-to-task reservations survive bundle recovery.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_action_keys (
+      workspace_id TEXT NOT NULL, action_key TEXT NOT NULL, task_id TEXT NOT NULL UNIQUE,
+      input_digest TEXT NOT NULL, PRIMARY KEY(workspace_id,action_key));",
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS allocator_state (

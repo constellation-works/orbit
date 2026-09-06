@@ -16,29 +16,36 @@ related_artifacts: [ORB-11315, ORB-11314, ORB-11316]
 
 # Automation Triggers — Design
 
-**Proposed; no runtime implementation or supported new YAML.** Section 1 records
-current behavior inspected at `c286142bce2f40af854bf1071c2809ac5c101f39` on
-2026-09-05. All subsequent sections specify the candidate contract for
-[ORB-11315], subject to design approval and separately scoped implementation.
-Historical ADRs are not inputs to this proposal.
+**Delivery triggers implemented in [ORB-11330]; pilot/triage triggers remain proposals.**
+The supported configuration, evidence contract and operational limits are in
+[Operations](5_operations.md). Later sections retain the broader design intent;
+the schema-v2 YAML in section 8 is illustrative and is not accepted configuration.
+Historical ADRs are not inputs to this design.
 
 ## 1. Current implementation and gaps
 
-| Source | Verified behavior and relevant gap |
-| --- | --- |
-| [Routine types](../../../crates/orbit-types/src/workflow/routine.rs), [sweep](../../../crates/orbit-core/src/application/routines/sweep.rs), [store](../../../crates/orbit-store/src/driver/sqlite/routine_store/mod.rs) | Cron, host pins, baseline, overlap, missed-run and retry policies. Fire intent and slot advance share a transaction. Dispatch has no input payload. Ambiguous stale intents become terminal errors; some unresolved dispatches release at timeout without proof of stopped work. |
-| [Routine composition](../../../crates/orbit-cmd/src/registry_routines.rs), [clock](../../../crates/orbit-core/src/application/routines/clock.rs) | Registered source workspaces, host-local sweep lock, OS wakeup, no resident Orbit daemon. Core receives registry-neutral placement/runtime inputs. |
-| [Auto-task types](../../../crates/orbit-types/src/workflow/auto_task.rs), [schedule](../../../crates/orbit-core/src/application/auto_tasks/schedule.rs), [scheduler](../../../crates/orbit-core/src/application/auto_tasks/scheduler.rs), [state](../../../crates/orbit-core/src/application/auto_tasks/state.rs) | Cron/every_minutes, first-observation baseline, catch-up collapse. `skip_if_open` preserves due work; mint then cursor write are separate. JSON cursor updates lock the file, but do not atomically claim a mint. Missing/malformed cursor data currently becomes empty state. |
-| [QA default](../../../crates/orbit-core/assets/auto_tasks/qa-sweep.yaml), [review default](../../../crates/orbit-core/assets/auto_tasks/code-review.yaml) | Both disabled, time-triggered, `system` crew, `no-diff-expected`. QA asks for hands-on validation. Review derives its last-reviewed commit from a completed sweep's prose summary; neither has typed immutable coverage. |
-| [PR completion](../../../crates/orbit-engine/src/executor/automation/vcs/pr/complete.rs), [dependency delivery](../../../crates/orbit-engine/src/executor/automation/vcs/worktree/dependency_delivery.rs) | Completion reads back merged state, with an explicit no-diff exception. Dependency readiness uses reachable task markers, allowing absent evidence. Neither establishes a canonical delivery-count ledger; done status and task-marker counts are insufficient. |
-| [Task history/artifacts](../../../crates/orbit-types/src/task/artifacts.rs), [run state](../../../crates/orbit-types/src/workflow/run_state.rs), [child dispatch](../../../crates/orbit-types/src/workflow/child_dispatch.rs) | Durable task events, immutable run initial input, step results and child IDs exist. Generic artifacts are not already trigger batches or coverage certificates. Child phase `terminal` does not alone prove the child succeeded or stopped. |
-| [Pilot](../../../crates/orbit-core/assets/jobs/task_pilot_pipeline.yaml), [prepare](../../../crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot.rs), [source](../../../crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/source.rs), [apply](../../../crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/apply.rs) | Automatic discovery requires proposed/backlog and empty selectors, excludes no-diff tasks, caps at 50 with partitions of five. Explicit IDs allow existing selectors. Source is pinned. Snapshot drift checks title/status/tags/context, not full task meaning. Valid partitions can apply even when the whole run fails. |
-| [Failure coupling](../../../crates/orbit-core/src/runtime/task/block_on_run_failure.rs), [triage](../../../crates/orbit-core/src/adapter/engine_host/v2_host/triage.rs), [triage job](../../../crates/orbit-core/assets/jobs/task_triage_pipeline.yaml) | Failed/timeout/cancelled coupled runs block eligible tasks; interrupted runs remain resumable. Triage selects blocked coupled failures, suppresses already-diagnosed run IDs, and bounds environmental re-backlogs (default two). Output caps do not bound the full task scan. |
-| [Triage worker](../../../crates/orbit-core/assets/activities/triage_failed_runs.yaml), [recovery](../../../crates/orbit-engine/src/activity_job/job_executor/recovery.rs), [authority](../../../crates/orbit-core/src/runtime/authorization.rs) | Recovery already exists. Triage may reconcile a listed task to done with conclusive landing evidence; other dispositions pass through deterministic apply. That narrow exception is real despite the job's simpler read-only description. No trigger may broaden it. |
-
-The [routines vision](../routines/3_vision.md) previously assumed event triggers
-require a daemon. Durable state reconciliation only requires the existing clock;
-immediate notification is a separate latency optimization.
+- `orbit-automation` owns the extracted routine and auto-task scheduling rules,
+  plus the shared delivery evaluator and deterministic coverage validator. Core
+  supplies source facts, executor authority, ordinary task creation and job submission.
+- Existing cron/interval YAML, cursor semantics, manual mint and host placement
+  remain compatible. Legacy cursor I/O is owned by Store. Legacy time-triggered
+  defaults remain unchanged; the delivery QA/review defaults are separately disabled.
+- Store persists consumer checkpoints, immutable batches/receipts and direct
+  delivery intents in the existing host SQLite database. The existing task
+  allocation authority and job store persist action-key admission. No new database
+  or clock loop is introduced.
+- PR membership is provider-verified; Git first-parent ranges order obligations.
+  Authorized direct intents become deliveries only after verified branch landing.
+  Pending evidence survives partial pages. Task status, markers, epic closures
+  and no-diff completion cannot manufacture a delivery.
+- The existing artifact tool records trusted executor origin in a Store-authored
+  artifact. The owner checks assignment, exact frozen input/revisions, completeness
+  and provenance before accepting an immutable receipt. Job-only consumers use
+  persisted step results. QA and review remain independent.
+- The broader pilot freshness, incident triage, review exclusion certificates,
+  policy-driven waiver/migration workflows and usage accounting below remain
+  separately owned proposals. No such certificate currently excludes a delivery;
+  missing usage is unknown.
 
 ## 2. Shared contract and ownership
 
@@ -57,16 +64,18 @@ change must not invoke a model. Evaluation returns `not_due`, `pending`, `due`,
 `deferred`, or `invalid`, with stable reason codes and source evidence. It cannot
 promote, complete, or diagnose tasks itself.
 
-Core application owns shared evaluation and action adaptation. Routines retain
+The internal `orbit-automation` crate owns shared evaluation, discovery and
+scheduling policy [ORB-11330]. Core composes explicit source descriptions,
+authoritative evidence and narrow task/job lifecycle adapters. Routines retain
 job submission; auto-tasks retain the single template-to-task creation boundary.
-Their existing sweep entrypoints call the same evaluator for their own consumers;
+Their existing sweep entrypoints invoke Automation for their own consumers;
 neither additionally dispatches the other's consumers. No second ticking loop.
-Store contracts/drivers own atomic claims and durable checkpoints; workflow types
-own serializable contracts; Engine retains process, retry, and job execution.
-Cmd retains registry/host composition. These directions follow
-[ARCHITECTURE.md](../../../ARCHITECTURE.md); no new crate/dependency edge is needed.
-The future persistence migration must update architecture documentation in its
-implementation PR. This documentation change creates no persisted runtime artifact.
+Store contracts/drivers own cursor I/O, atomic claims and durable checkpoints;
+workflow types own serializable contracts; Engine retains execution. Cmd retains
+registry/host composition and clock installation. The enforced direction is
+Core -> Automation -> Store/Common/Types, with no reverse Core/Engine edge.
+The extraction preserves legacy time-trigger semantics; delivery-trigger and
+coverage rules now have one implementation; the broader non-delivery contracts below remain proposals.
 
 Consumer identity is `(authority machine, workspace ID, definition kind, name)`.
 An immutable definition epoch binds trigger semantics, target/template, and
@@ -193,10 +202,11 @@ code batches accept all required range obligations together; partial progress is
 saved as evidence but retries retain the full range. Pilot and triage can accept
 independent per-member results, retrying only unresolved members.
 
-The initial batch retry default is one additional action attempt with five-minute
-backoff; lower consumer/job limits win. Capture an aggregate deadline and remaining
-attempt budget across recovery, resume and replacement so a new run ID cannot
-reset the budget. This shared accounting does not exist today.
+Delivery retries are opt-in (default zero), with five-minute backoff and a frozen
+24-hour automatic-retry deadline. The captured attempt budget survives restarts;
+routine retry limits can reduce it. Ordinary job admission still applies its
+existing capacity and grant limits. Broader configurable aggregate deadlines
+remain future work.
 
 Failure retains the batch and coverage gap. Retry the same immutable input after
 applicable execution recovery settles, within one durable batch budget. An open

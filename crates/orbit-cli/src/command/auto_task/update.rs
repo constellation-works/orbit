@@ -25,6 +25,9 @@ pub struct AutoTaskUpdateArgs {
     /// New interval in minutes (mutually exclusive with `--cron`)
     #[arg(long = "every-minutes")]
     pub every_minutes: Option<u64>,
+    /// Delivery trigger JSON: owner_machine, branch, threshold, max_wait_minutes, coverage; optional max_items/retries.
+    #[arg(long)]
+    pub deliveries_landed: Option<String>,
     /// New dedupe policy
     #[arg(long, value_enum)]
     pub dedupe: Option<DedupePolicy>,
@@ -58,6 +61,12 @@ pub struct AutoTaskUpdateArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+    /// Waive a settled failed delivery batch, retaining its coverage gap.
+    #[arg(long, requires = "waiver_reason")]
+    pub waive_batch: Option<String>,
+    /// Required explanation for a batch waiver.
+    #[arg(long, requires = "waive_batch")]
+    pub waiver_reason: Option<String>,
 }
 
 impl AutoTaskUpdateArgs {
@@ -76,7 +85,11 @@ impl AutoTaskUpdateArgs {
 
 impl Execute for AutoTaskUpdateArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let schedule = resolve_schedule(self.cron.clone(), self.every_minutes)?;
+        let schedule = resolve_schedule(
+            self.cron.clone(),
+            self.every_minutes,
+            self.deliveries_landed.clone(),
+        )?;
 
         // A template patch merges onto the current template so a single field
         // can be retuned without re-supplying the rest.
@@ -117,6 +130,12 @@ impl Execute for AutoTaskUpdateArgs {
         let definition = runtime.auto_task_update(
             &self.name,
             AutoTaskUpdateParams {
+                waive_batch: self.waive_batch.map(|batch_id| {
+                    orbit_types::workflow::automation::WaiveBatchRequest {
+                        batch_id,
+                        reason: self.waiver_reason.unwrap_or_default(),
+                    }
+                }),
                 description: self.description,
                 schedule,
                 dedupe: self.dedupe,

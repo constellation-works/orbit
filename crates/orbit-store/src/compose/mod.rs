@@ -173,3 +173,16 @@ pub fn layered_policy_def_store(
 #[cfg(test)]
 #[cfg(test)]
 mod tests;
+
+/// Legacy cursor file persistence, retained for rollback compatibility.
+pub mod auto_task {
+    pub use crate::driver::file::auto_task::{cursor_state_path, load_cursor_state, upsert_cursor};
+}
+
+/// Open automation contracts over the already-configured host store.
+pub fn automation_store(
+    store: Store,
+) -> Result<Arc<dyn crate::contracts::AutomationStoreBackend>, orbit_common::OrbitError> {
+    crate::driver::sqlite::automation::initialize(&store)?;
+    Ok(Arc::new(store))
+}

@@ -720,5 +720,6 @@ pub fn scan_checkout_evidence(log: &str, max_lines: usize) -> CheckoutEvidence {
     collector.finish()
 }
 
+pub(crate) mod landing;
 #[cfg(test)]
 mod tests;

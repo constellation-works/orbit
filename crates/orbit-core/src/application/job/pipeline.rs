@@ -58,6 +58,7 @@ struct PipelineSubmission<'a> {
     input: Value,
     resume: Option<&'a ResumePlan>,
     actor: Option<&'a str>,
+    action_key: Option<&'a str>,
 }
 
 /// Trusted context for a pipeline child submitted by a running v2 activity.
@@ -316,6 +317,7 @@ impl OrbitRuntime {
             input: plan.input.clone(),
             resume: Some(&plan),
             actor,
+            action_key: None,
         })
     }
 
@@ -356,6 +358,7 @@ impl OrbitRuntime {
             input: input.clone(),
             resume: None,
             actor,
+            action_key: None,
         });
         self.record_submission_audit(&job_name, &input, actor, &result)?;
         result
@@ -378,6 +381,24 @@ impl OrbitRuntime {
         Ok((asset.name, asset.spec, yaml))
     }
 
+    pub(crate) fn submit_automation_pipeline_run(
+        &self,
+        job_name: &str,
+        input: Value,
+        key: &str,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let result = self.submit_persisted_pipeline_run(PipelineSubmission {
+            job_name,
+            definition: SubmittedDefinition::Catalog,
+            input: input.clone(),
+            resume: None,
+            actor: Some("automation"),
+            action_key: Some(key),
+        });
+        self.record_submission_audit(job_name, &input, Some("automation"), &result)?;
+        result
+    }
+
     pub fn submit_pipeline_run(
         &self,
         job_name: &str,
@@ -391,6 +412,7 @@ impl OrbitRuntime {
             input: input.clone(),
             resume: None,
             actor,
+            action_key: None,
         });
 
         self.record_pipeline_audit(
@@ -435,6 +457,7 @@ impl OrbitRuntime {
                 input: input.clone(),
                 resume: None,
                 actor,
+                action_key: None,
             },
             Some(admission),
         );
@@ -527,6 +550,7 @@ impl OrbitRuntime {
             input,
             resume,
             actor,
+            action_key,
         } = submission;
         let result = (|| {
             let spec = match &definition {
@@ -557,6 +581,10 @@ impl OrbitRuntime {
                     ChildJobRunAdmissionOutcome::Admitted(run) => *run,
                     ChildJobRunAdmissionOutcome::AdmissionsStopped => return Ok(None),
                 }
+            } else if let Some(key) = action_key {
+                self.stores()
+                    .jobs()
+                    .insert_automation_job_run(job_name, input.clone(), key)?
             } else {
                 let run = self.stores().jobs().insert_job_run(
                     job_name,
@@ -587,7 +615,11 @@ impl OrbitRuntime {
                 .list_pending_or_running_job_runs(job_name)?;
             let queued = !pipeline_run_is_runnable(&active_runs, &run.run_id, spec.max_active_runs);
 
-            if let Err(error) = self.spawn_pipeline_worker(&run.run_id, actor) {
+            // A repeated automation admission resolves the original run. Only
+            // pending runs need delivery; the existing Start CAS fences workers.
+            if (action_key.is_none() || run.state == JobRunState::Pending)
+                && let Err(error) = self.spawn_pipeline_worker(&run.run_id, actor)
+            {
                 let worker_log = pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id);
                 let message = format!(
                     "pipeline worker for run '{}' could not start from registered workspace '{}': \
@@ -599,7 +631,6 @@ impl OrbitRuntime {
                 let _ = self.finalize_pipeline_worker_startup_failure(&run, &message, actor);
                 return Err(error);
             }
-
             Ok(Some(PipelineInvokeResult {
                 run_id: run.run_id,
                 job_name: job_name.to_string(),

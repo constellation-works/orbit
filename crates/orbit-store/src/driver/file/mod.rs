@@ -14,3 +14,5 @@ pub(crate) mod skill_store;
 pub(crate) mod sort;
 pub(crate) mod task_bundle;
 pub(crate) mod workspace_binding;
+
+pub(crate) mod auto_task;

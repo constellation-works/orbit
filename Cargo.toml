@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/orbit-agent",
+  "crates/orbit-automation",
   "crates/orbit-cli",
   "crates/orbit-cmd",
   "crates/orbit-common",

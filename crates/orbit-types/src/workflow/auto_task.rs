@@ -70,8 +70,12 @@ pub struct AutoTaskDefinition {
 /// When a definition is due. Exactly one form is present per definition; the
 /// scheduler's due-math (orbit-core) collapses catch-up fires either way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum AutoTaskSchedule {
+    /// Verified landings, independent of task completion.
+    Deliveries {
+        deliveries_landed: super::automation::DeliveryTrigger,
+    },
     /// Standard 5-field cron expression, evaluated in host-local time.
     Cron { cron: String },
     /// Fire every N minutes, anchored at the definition's first-observed slot.
@@ -159,6 +163,7 @@ impl AutoTaskDefinition {
             )));
         }
         match &self.schedule {
+            AutoTaskSchedule::Deliveries { deliveries_landed } => deliveries_landed.validate()?,
             AutoTaskSchedule::Cron { cron } if cron.trim().is_empty() => {
                 return Err(WorkflowError::Invalid(format!(
                     "auto-task '{}' schedule.cron must not be empty",

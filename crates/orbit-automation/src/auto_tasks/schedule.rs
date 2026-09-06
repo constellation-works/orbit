@@ -4,14 +4,14 @@
 //!
 //! Catch-up always collapses: fires missed while the host was down produce a
 //! single make-up task, not one per missed slot. Cron schedules reuse the
-//! routine due-math (`crate::application::routines::due`) under [`MissedRunPolicy::CatchUpOnce`];
+//! routine due-math (`crate::routines::due`) under [`MissedRunPolicy::CatchUpOnce`];
 //! interval schedules fire at most one task for the most recent boundary.
 
 use chrono::{DateTime, Duration, Local, Utc};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{AutoTaskSchedule, MissedRunPolicy};
 
-use crate::application::routines::due::{DueDecision, due_decision, parse_cron};
+use crate::routines::due::{DueDecision, due_decision, parse_cron};
 
 /// Outcome of the due check for one definition on one scheduler pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +27,9 @@ pub enum AutoTaskDueDecision {
 /// at write time rather than silently never firing.
 pub fn validate_schedule(schedule: &AutoTaskSchedule) -> Result<(), OrbitError> {
     match schedule {
+        AutoTaskSchedule::Deliveries { deliveries_landed } => {
+            deliveries_landed.validate().map_err(Into::into)
+        }
         AutoTaskSchedule::Cron { cron } => {
             parse_cron(cron)?;
             Ok(())
@@ -54,6 +57,9 @@ pub fn decide_due(
 ) -> Result<AutoTaskDueDecision, OrbitError> {
     let lower_bound = last_slot.unwrap_or(baseline);
     match schedule {
+        AutoTaskSchedule::Deliveries { .. } => Err(OrbitError::InvalidInput(
+            "delivery schedules require source evaluation".into(),
+        )),
         AutoTaskSchedule::Cron { cron } => decide_cron(cron, lower_bound, now),
         AutoTaskSchedule::Interval { every_minutes } => {
             decide_interval(*every_minutes, baseline, lower_bound, now)

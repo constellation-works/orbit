@@ -42,6 +42,16 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
     let base_checkout = checkout_holding_branch(&repo_root, &base)?.unwrap_or(repo_root.clone());
     ensure_clean_checkout(&base_checkout, "base branch checkout")?;
     merge_with_rebase_retry(
+        &|before, after| {
+            host.record_direct_landing_intent(
+                &orbit_types::workflow::automation::DirectLandingRequest {
+                    run_id: run_id.into(),
+                    branch: base.clone(),
+                    before_commit: before,
+                    after_commit: after,
+                },
+            )
+        },
         &repo_root,
         &base_checkout,
         &workspace_path,
@@ -79,6 +89,7 @@ fn checkout_base_branch(
 }
 
 fn merge_with_rebase_retry(
+    record_intent: &dyn Fn(String, String) -> Result<(), OrbitError>,
     repo_root: &Path,
     base_checkout: &Path,
     workspace_path: &Path,
@@ -102,6 +113,16 @@ fn merge_with_rebase_retry(
             if base_sync_mode == BaseSyncMode::Remote {
                 fast_forward_local_base_to_remote(base_checkout, base, &start_point)?;
             }
+        }
+        let before = git_output(base_checkout, &["rev-parse", "HEAD"])?;
+        let after = git_output(workspace_path, &["rev-parse", "HEAD"])?;
+        if before.trim() != after.trim()
+            && git_command_success(
+                repo_root,
+                &["merge-base", "--is-ancestor", before.trim(), after.trim()],
+            )?
+        {
+            record_intent(before.trim().into(), after.trim().into())?;
         }
         if git_command_success(base_checkout, &["merge", "--ff-only", workspace_branch])? {
             return Ok(());

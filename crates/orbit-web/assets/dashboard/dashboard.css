@@ -4330,3 +4330,9 @@
         .incident-surface { flex: 1 1 100%; }
         .incident-actions > * { flex: 1 1 100%; }
       }
+
+/* Delivery diagnostics remain readable on narrow operation cards. */
+.automation-diagnostic { margin-top: 1rem; max-width: 100%; }
+.automation-diagnostic summary { cursor: pointer; font-weight: 600; }
+.automation-diagnostic pre { max-height: 18rem; overflow: auto; padding: .75rem; }
+.automation-diagnostic p, .automation-diagnostic .operation-field-value { overflow-wrap: anywhere; }
