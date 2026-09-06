@@ -50,33 +50,55 @@ default_crew = "sol"
 
 | Field | Purpose |
 |---|---|
-| `provider` | Agent family. CLI-executable families are `claude`, `codex`, `gemini`, `grok`, `copilot`, and `cursor`. |
+| `provider` | Agent family. CLI-executable families are `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, and `opencode`. |
 | `model` | Model identifier passed to the provider CLI. |
 | `effort` | Optional reasoning effort. See below. |
 | `description` | Optional human-facing summary. |
 | `tags` | Optional discovery labels. |
 
+`ollama` and `openai_compat` are recognized provider ids that no shipped crew
+uses: `openai_compat` has no CLI runtime, and Orbit ships no `ollama` executor
+definition or crew. Config load accepts a crew naming either one — the failure
+comes later, at dispatch, rather than the run being remapped onto another
+family. `gemini` is the legacy Google lane —
+`orbit init` prefers `antigravity` when `agy` is installed. For the full
+catalog, the deprecated vendor aliases, and a starter crew per executor, see
+[Agents](../../concepts/agents/#set-up-an-executor).
+
 Crew precedence at dispatch is: an explicit crew on the activity input, then the
 task's `crew` field, then `[workflow] default_crew`.
+
+`[workflow] default_crew` is required as soon as you define any `[crews.*]`
+table, so a crew snippet is only loadable together with the crew it defaults to.
 
 ### Reasoning effort
 
 `effort` is omitted by default, which leaves the provider's own model default
 alone. When set, Orbit validates it while loading `config.toml` and passes it
-through the provider's documented argument — Codex receives
-`model_reasoning_effort`, Claude receives `--effort`, and Grok receives
-`--reasoning-effort`.
+through the provider's documented argument.
 
-| Provider | Accepted values |
-|---|---|
-| `claude`, `codex` | `low`, `medium`, `high`, `xhigh`, `max` |
-| `grok` with `grok-4.6` | `low`, `medium`, `high`, `xhigh` |
-| `grok` with `grok-4.5` | `low`, `medium`, `high` |
-| others | Not supported — configuring `effort` is rejected. |
+| Provider | Accepted values | Rendered as |
+|---|---|---|
+| `claude` | `low`, `medium`, `high`, `xhigh`, `max` | `--effort` |
+| `codex` | `low`, `medium`, `high`, `xhigh`, `max` | `--config model_reasoning_effort` |
+| `pi` | `low`, `medium`, `high`, `xhigh`, `max` | `--thinking` |
+| `antigravity` | `low`, `medium`, `high` | `--effort` |
+| `opencode` | `high`, `max` | `--variant` |
+| `grok` with `grok-4.6` | `low`, `medium`, `high`, `xhigh` | `--reasoning-effort` |
+| `grok` with `grok-4.5` | `low`, `medium`, `high` | `--reasoning-effort` |
+| others | Not supported — configuring `effort` is rejected. | — |
+
+The narrower sets are narrow on purpose. `antigravity` omits `xhigh`/`max`
+because `agy --effort` does not define them; `opencode` omits everything but
+`high`/`max` because `--variant` is forwarded verbatim to whichever model
+provider `--model` selected and OpenCode publishes no provider-independent
+vocabulary. Grok is the only model-specific case, and effort is verified only
+for `grok-4.5` and `grok-4.6` — any other Grok model with `effort` set is
+rejected.
 
 Orbit rejects an unsupported provider/model/effort combination outright rather
-than silently downgrading or ignoring it. Availability can still depend on the
-selected model on the provider's side.
+than silently downgrading, remapping, or ignoring it. Availability can still
+depend on the selected model on the provider's side.
 
 Choose capability with the model first, then use `effort` to adjust the
 reasoning budget inside it.
