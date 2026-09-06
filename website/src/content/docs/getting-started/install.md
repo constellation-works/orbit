@@ -100,9 +100,13 @@ lets an agent dispatch workflows and run governed operations. Plain
 
 ## Prerequisites
 
-You need an authenticated provider CLI — `claude`, `codex`, `gemini`, or `grok`
-— because agent activities dispatch through it. PR mode additionally needs the
-GitHub CLI (`gh`) authenticated in the environment where Orbit runs.
+You need at least one authenticated provider CLI, because agent activities
+dispatch through it. `orbit init` probes `PATH` for `claude`, `codex`, `agy`
+(Antigravity), `gemini`, `grok`, `copilot`, `cursor-agent`, `pi`, and
+`opencode`, and seeds crews for the ones it finds. The
+[setup explorer](../../concepts/agents/#set-up-an-executor) shows each
+executor's binary and a starter crew. PR mode additionally needs the GitHub CLI
+(`gh`) authenticated in the environment where Orbit runs.
 
 Orbit itself installs without Rust. You only need a Rust toolchain to build from
 source or contribute to the workspace.
