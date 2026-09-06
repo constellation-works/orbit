@@ -815,6 +815,30 @@ fn default_jobs_only_reference_registered_deterministic_actions() {
     }
 }
 
+/// [ORB-11325] No shipped job's `when:` / `break_when:` may read
+/// `steps.<id>.output` for a step that itself carries a `when:` — that step
+/// can be skipped, and `condition::evaluate_bool_expr` renders the whole
+/// expression before parsing it, so the reference fails with
+/// `template.rs`'s "no data recorded for step" error on exactly the branch
+/// where the referenced step would have been skipped. `validate_job` is the
+/// catalog-load gate; no shipped job is exempted from it.
+#[test]
+fn default_jobs_only_read_step_output_from_always_run_steps() {
+    let catalog = default_activity_catalog();
+
+    for (job_name, yaml) in DEFAULT_JOB_FILES {
+        let mut asset = load_job_asset(yaml)
+            .unwrap_or_else(|err| panic!("default job {job_name} should parse: {err}"));
+        resolve_job_target_refs(&mut asset.spec, &catalog)
+            .unwrap_or_else(|err| panic!("default job {job_name} refs resolve: {err}"));
+        orbit_engine::validate_job(&asset.spec).unwrap_or_else(|err| {
+            panic!(
+                "default job {job_name} reads a conditional step's output from a when/break_when: {err}"
+            )
+        });
+    }
+}
+
 /// Companion to the job sweep above: a seeded deterministic activity that
 /// no shipped job targets yet must still be dispatchable, or the first job
 /// to bind it inherits the same skew.
@@ -1094,6 +1118,11 @@ fn gate_pipeline_releases_reservation_before_child_success_guard() {
     );
 
     let dispatch = &asset.spec.steps[dispatch_index];
+    // No `when:` of its own (ORB-11325): `starvation_check`'s complementary
+    // `when: reserved == false` always fails and halts the run before this
+    // step would otherwise be reached on that branch, which is what lets
+    // `release_reservation` safely read `steps.dispatch_child.output`.
+    assert_eq!(dispatch.when.as_deref(), None);
     match &dispatch.body {
         JobV2StepBody::TargetRef(target) => {
             assert_eq!(target.target, "activity:invoke_and_wait");
@@ -1134,10 +1163,11 @@ fn gate_pipeline_releases_reservation_before_child_success_guard() {
     }
 
     let guard = &asset.spec.steps[guard_index];
-    assert_eq!(
-        guard.when.as_deref(),
-        Some("{{ steps.reserve.output.reserved }} == true")
-    );
+    // No `when:` of its own: reaching this step already implies
+    // `reserve.output.reserved == true`, since `starvation_check`'s
+    // complementary `when: reserved == false` always fails and halts the run
+    // on the other branch (ORB-11325).
+    assert_eq!(guard.when.as_deref(), None);
     match &guard.body {
         JobV2StepBody::TargetRef(target) => {
             assert_eq!(target.target, "activity:pipeline_success_guard");
