@@ -515,6 +515,110 @@ fn forced_workspace_reconciliation_preserves_registry_and_identity_on_validation
 }
 
 #[test]
+fn force_recovers_empty_or_missing_identity_only_for_the_exact_registration() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    let global = home.path().join(".orbit");
+    std::fs::create_dir_all(&global).expect("create global orbit");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_identity_recovery\"\nhost_id = \"identity-recovery\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("write host identity");
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
+    let args = |force| WorkspaceInitArgs {
+        name: Some("identity-recovery".to_string()),
+        base_branch: None,
+        ship_mode: None,
+        role: None,
+        owner: None,
+        task_id_start: None,
+        mcp: false,
+        inject_agent_rules: false,
+        refresh_defaults: false,
+        force,
+    };
+
+    args(false)
+        .execute_without_runtime(None)
+        .expect("initial workspace init");
+    let registry_path = global.join("workspaces.json");
+    let registry_without_refresh_time = || {
+        let mut registry: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&registry_path).expect("read registry for comparison"),
+        )
+        .expect("parse registry for comparison");
+        for workspace in registry["workspaces"]
+            .as_array_mut()
+            .expect("workspace registry array")
+        {
+            workspace
+                .as_object_mut()
+                .expect("workspace registry object")
+                .remove("updated_at");
+        }
+        registry
+    };
+    let registry_before = registry_without_refresh_time();
+    let identity_path = workspace.path().join(".orbit/config.yaml");
+    let expected_id = canonical_workspace_id("identity-recovery");
+
+    std::fs::write(&identity_path, []).expect("truncate identity to zero bytes");
+    let error = args(false)
+        .execute_without_runtime(None)
+        .expect_err("recovery must require force")
+        .to_string();
+    assert!(error.contains("rerun with --force"), "unexpected: {error}");
+    assert_eq!(
+        std::fs::read(&identity_path).expect("read refused empty identity"),
+        Vec::<u8>::new()
+    );
+
+    args(true)
+        .execute_without_runtime(None)
+        .expect("force must recover an empty identity for the exact registration");
+    let recovered = std::fs::read_to_string(&identity_path).expect("read recovered identity");
+    assert!(recovered.contains(&format!("workspace_id: {expected_id}")));
+    let evidence_dir = workspace
+        .path()
+        .join(".orbit/state/recovery/workspace-identity");
+    let evidence = std::fs::read_dir(&evidence_dir)
+        .expect("read identity recovery evidence")
+        .map(|entry| entry.expect("read evidence entry").path())
+        .collect::<Vec<_>>();
+    assert_eq!(evidence.len(), 1, "unexpected evidence: {evidence:?}");
+    assert_eq!(
+        std::fs::read(&evidence[0]).expect("read archived corrupt identity"),
+        Vec::<u8>::new(),
+        "the exact corrupt bytes must be preserved before recovery"
+    );
+    assert_eq!(
+        registry_without_refresh_time(),
+        registry_before,
+        "identity recovery must preserve the global registration"
+    );
+
+    std::fs::remove_file(&identity_path).expect("remove identity for missing recovery");
+    args(true)
+        .execute_without_runtime(None)
+        .expect("force must recover a missing identity for the exact registration");
+    let recovered = std::fs::read_to_string(&identity_path).expect("read recovered identity");
+    assert!(recovered.contains(&format!("workspace_id: {expected_id}")));
+    assert_eq!(
+        std::fs::read_dir(&evidence_dir)
+            .expect("read evidence after missing recovery")
+            .count(),
+        1,
+        "a missing identity has no corrupt bytes to archive"
+    );
+    assert_eq!(
+        registry_without_refresh_time(),
+        registry_before,
+        "missing-identity recovery must preserve the global registration"
+    );
+}
+
+#[test]
 fn multi_host_workspace_init_persists_an_explicit_local_owner() {
     let workspace = tempdir().expect("workspace tempdir");
     let home = tempdir().expect("home tempdir");
@@ -1395,6 +1499,19 @@ fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
     assert!(
         child_identity.contains(&format!("workspace_id: {child_id}")),
         "child repository must own its workspace identity: {child_identity}"
+    );
+    std::fs::write(child_orbit.join("config.yaml"), [])
+        .expect("truncate child identity for recovery");
+    let mut child_recovery = init("independent-child");
+    child_recovery.force = true;
+    child_recovery
+        .execute_without_runtime(None)
+        .expect("recover exactly registered child identity");
+    assert_eq!(
+        std::fs::read_to_string(child_orbit.join("config.yaml"))
+            .expect("read recovered child identity"),
+        child_identity,
+        "child recovery must restore its own identity"
     );
     for state_dir in ["resources", "tasks", "state"] {
         assert!(

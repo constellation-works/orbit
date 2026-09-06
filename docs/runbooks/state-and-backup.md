@@ -4,8 +4,8 @@ summary: Locate Orbit state and perform WAL-safe backups, explicit task publicat
 tags: [operations, backup, restore, state, sqlite, task-publication]
 paths: ["crates/orbit-common/src/types/workspace.rs", "crates/orbit-config/src/**", "crates/orbit-registry/**", "crates/orbit-store/**", "crates/orbit-web/src/state.rs"]
 related_features: [orbit-core, remote-access, task-publication]
-related_artifacts: [ORB-10014, ORB-10294, ORB-10473, ORB-11077]
-last_validated: 2026-08-30
+related_artifacts: [ORB-10014, ORB-10294, ORB-10473, ORB-11077, ORB-11376]
+last_validated: 2026-09-06
 ---
 
 # Inventory and Protect Orbit State
@@ -118,6 +118,26 @@ owns today:
 
 Any additional operator-authored paths require an explicit repository policy; do not
 assume workspace initialization commits them.
+
+### Recover a missing or corrupt checkout identity
+
+Do not hand-create `.orbit/config.yaml` or edit `workspaces.json`. First preserve any
+incident evidence outside the checkout when an investigation requires an operator-owned
+copy. Then, from the registered checkout root, rerun the original initializer arguments
+with `--force`, including the registered `--name`:
+
+```bash
+orbit workspace init --name <registered-name> --force
+```
+
+Recovery is accepted only when the global registry unambiguously matches both that logical
+workspace and the current checkout's repository/data-root paths. A missing or malformed
+identity is restored atomically from that binding. Malformed bytes (including a zero-byte
+file) are first archived beneath
+`.orbit/state/recovery/workspace-identity/config.yaml.<timestamp>.corrupt`; a missing file
+has no bytes to archive. A parseable identity naming another workspace is still refused,
+even with `--force`. Valid identity, parent-workspace identity, and unrelated registry
+records are not recovery inputs and are not rewritten. [ORB-11376]
 
 ## Back up Orbit
 

@@ -13,7 +13,6 @@ spec:
     - .orbit/**
     - "!.orbit/auto_tasks/**"
     - "!.orbit/routines/**"
-    - "!.orbit/config.yaml"
     - "!.orbit/config.toml"
     - "!.orbit/resources/**"
     - "**/.env"

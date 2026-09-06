@@ -382,7 +382,7 @@ fn managed_worktree_without_an_fs_profile_can_write_under_docs() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn resolve_executor_sandbox_orders_versioned_orbit_exceptions_after_default_deny() {
+fn resolved_sandbox_never_materializes_checkout_identity_as_a_write_anchor() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     seed_executor(
         &runtime,
@@ -397,10 +397,8 @@ fn resolve_executor_sandbox_orders_versioned_orbit_exceptions_after_default_deny
         std::fs::create_dir_all(worktree.join(".orbit").join(directory))
             .expect("create worktree Orbit fixture");
     }
-    for file in ["config.yaml", "config.toml"] {
-        std::fs::write(worktree.join(".orbit").join(file), "versioned = true")
-            .expect("create versioned config fixture");
-    }
+    std::fs::write(worktree.join(".orbit/config.toml"), "versioned = true")
+        .expect("create versioned config fixture");
 
     let resolved = runtime
         .resolve_executor_sandbox("claude", None, Some(&worktree))
@@ -418,7 +416,6 @@ fn resolve_executor_sandbox_orders_versioned_orbit_exceptions_after_default_deny
     for allowed in [
         format!("{}/auto_tasks/**", orbit.display()),
         format!("{}/routines/**", orbit.display()),
-        format!("{}/config.yaml", orbit.display()),
         format!("{}/config.toml", orbit.display()),
         format!("{}/resources/**", orbit.display()),
     ] {
@@ -428,6 +425,24 @@ fn resolve_executor_sandbox_orders_versioned_orbit_exceptions_after_default_deny
             .unwrap_or_else(|| panic!("versioned exception `{allowed}` missing from {modify:?}"));
         assert!(deny_pos < allow_pos, "exception must follow default deny");
     }
+    let identity = orbit.join("config.yaml");
+    assert!(
+        linux_bwrap_write_grant_diagnostic(&resolved.fs_profile, &identity)
+            .expect("diagnose runtime identity")
+            .is_some(),
+        "checkout-local runtime identity must remain read-only"
+    );
+    let prepared = prepare_linux_bwrap_write_grants(&resolved.fs_profile, &worktree)
+        .expect("prepare versioned write grants");
+    assert!(
+        !identity.exists(),
+        "an absent runtime identity must never become an empty sandbox anchor"
+    );
+    assert!(
+        prepared.created.iter().all(|path| path != &identity),
+        "runtime identity appeared in prepared anchors: {:?}",
+        prepared.created
+    );
     for protected in [
         format!("{}/state/**", orbit.display()),
         format!("{}/tasks/**", orbit.display()),
