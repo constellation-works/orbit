@@ -425,6 +425,7 @@ fn resolve_workspace_ship_input(
             runtime.workflow_base_branch(),
             &[],
             COMPLETION_IS_NEVER_WORKSPACE_RESOLVED,
+            &[],
         )
         .map_err(|error| DispatchError::DeterministicActionFailed {
             action: action.to_string(),
@@ -437,6 +438,7 @@ fn resolve_workspace_ship_input(
         runtime.workflow_base_branch(),
         &[],
         COMPLETION_IS_NEVER_WORKSPACE_RESOLVED,
+        &[],
     )
     .map_err(|error| DispatchError::DeterministicActionFailed {
         action: action.to_string(),

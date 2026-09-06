@@ -36,6 +36,7 @@ pub(super) fn ship(
             .map_or(ShipMode::Pr, |binding| binding.ship_mode),
     };
     let base = optional_string(&input, "base")?;
+    let allowed_crews = parse_string_array_field(&input, "allowed_crews")?;
     let actor = actor(runtime, agent.as_deref(), model.as_deref());
     let claim_token = optional_string(&input, "claim_token")?;
     let invoke = runtime.submit_ship_run(
@@ -45,6 +46,7 @@ pub(super) fn ship(
         // [ORB-11187] Completion authority is an operator decision made at the
         // CLI; this tool surface does not advertise or accept it.
         crate::application::workflow::CompletionPolicy::Review,
+        &allowed_crews,
         Some(&actor),
         claim_token.as_deref(),
     )?;

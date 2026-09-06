@@ -40,6 +40,7 @@ fn ship_error(runtime: &OrbitRuntime, claim_token: Option<&str>) -> OrbitError {
             Some("main"),
             &[],
             CompletionPolicy::Review,
+            &[],
             Some("test"),
             claim_token,
         )
@@ -135,6 +136,7 @@ fn a_discovery_mode_submission_carrying_no_task_ids_is_covered() {
             Some("main"),
             &[],
             CompletionPolicy::Review,
+            &[],
             Some("test"),
             None,
         )
@@ -299,6 +301,7 @@ fn a_refused_dispatch_is_recorded_as_denied_without_the_holders_token() {
         Some("main"),
         std::slice::from_ref(&task_id),
         CompletionPolicy::Review,
+        &[],
         Some("test"),
         None,
     );

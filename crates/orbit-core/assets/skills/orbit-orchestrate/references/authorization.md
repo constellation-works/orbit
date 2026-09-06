@@ -10,6 +10,7 @@ authorized delivery through `done`:
 
 ```bash
 orbit run ship <task-id> --complete
+orbit run ship <task-id> --allow-crew <crew-a>,<crew-b>
 orbit run auto --for 3h --concurrency 7 --complete
 orbit run auto --for 3h --concurrency 7 --complete --allow-crew <crew-a>,<crew-b>
 ```
@@ -56,7 +57,9 @@ to raise capacity. Discover whether the installed version supports a live
 update, and follow its advertised command and authority requirements.
 
 `--allow-crew` is an **allowlist**: it permits the named configured crews and
-excludes others. Tasks outside it are skipped, not automatically remapped.
+excludes others. On an explicit `ship`, an excluded task is refused before its
+run is created; on an auto drain, excluded backlog tasks are skipped. Neither
+path automatically remaps a task.
 It is scoped to the run and checked against resolved crew identity, including
 system activities; it does not cancel already-running workers. Diagnose with:
 

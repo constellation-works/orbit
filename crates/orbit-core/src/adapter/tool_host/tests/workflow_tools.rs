@@ -275,6 +275,34 @@ fn ship_tool_inherits_the_shared_in_flight_guard() {
     );
 }
 
+#[test]
+fn ship_tool_parses_and_rejects_an_unknown_crew_allowlist_before_dispatch() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, _repo_root) = test_runtime();
+
+    let error = run_tool_as_operator(
+        &runtime,
+        "orbit.workflow.ship",
+        json!({
+            "task_ids": ["TST-00001"],
+            "mode": "pr",
+            "allowed_crews": ["not-a-configured-crew"],
+        }),
+    )
+    .expect_err("an unknown MCP crew allowlist must fail before dispatch");
+    assert!(
+        error.to_string().contains("not-a-configured-crew"),
+        "{error}"
+    );
+    assert!(
+        runtime
+            .list_job_runs(crate::application::job::JobRunListParams::default())
+            .expect("list runs")
+            .is_empty(),
+        "a rejected MCP allowlist must not create a run"
+    );
+}
+
 /// ORB-10540: the guard is narrow. Inside the same managed envelope that
 /// refuses ship and resume, the read-only verbs still answer — a blanket
 /// in-run denial would break run observation for every agent.
