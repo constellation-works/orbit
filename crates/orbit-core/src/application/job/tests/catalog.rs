@@ -447,9 +447,9 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_partial_join_partitions(
     let asset = load_job_asset(yaml).expect("task pilot pipeline parses");
     let defaults = asset.spec.default_input.as_ref().expect("default input");
     assert_eq!(defaults["task_ids"], json!([]));
-    assert!(
-        defaults.get("base_branch").is_none(),
-        "zero-input task-pilot runs must resolve the branch from their owning workspace"
+    assert_eq!(
+        defaults["base_branch"], "",
+        "an empty sentinel must satisfy template rendering while leaving branch resolution to prepare"
     );
     assert_eq!(defaults["max_partition_size"], 5);
     assert_eq!(defaults["promotion_authorized"], false);
