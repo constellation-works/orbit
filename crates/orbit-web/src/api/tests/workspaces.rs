@@ -1301,3 +1301,54 @@ fn malformed_refresh_emits_credential_safe_diagnostic() {
     assert_eq!(state.entries().len(), 1);
     assert_eq!(state.entries()[0].id, "alpha");
 }
+
+/// A broken registered checkout must not prevent the dashboard from starting
+/// for its healthy peers. Its identity is never accepted from the registry:
+/// without a readable config it remains listed but unavailable, and the
+/// operator receives a diagnostic naming the affected checkout.
+#[tokio::test]
+async fn registry_startup_skips_unresolvable_checkout_and_serves_healthy_workspace() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    let (_alpha_orbit, alpha_repo) = seed_workspace(&global_root, tmp.path(), "alpha");
+    let (beta_orbit, beta_repo) = seed_workspace(&global_root, tmp.path(), "beta");
+    std::fs::remove_file(beta_orbit.join("config.yaml")).expect("remove beta identity");
+    write_registry(
+        &global_root,
+        &[("alpha", &alpha_repo), ("beta", &beta_repo)],
+    );
+
+    let buf = SharedBuf::default();
+    let subscriber = Registry::default().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(buf.clone()),
+    );
+    let state = tracing::subscriber::with_default(subscriber, || registry_state(&global_root));
+
+    assert_eq!(route_status(&state, "alpha").await, StatusCode::OK);
+    assert_eq!(route_status(&state, "beta").await, StatusCode::BAD_REQUEST);
+
+    let response = router()
+        .with_state(state)
+        .oneshot(get("/workspaces"))
+        .await
+        .expect("response");
+    let listed = body_json(response).await;
+    let beta = listed
+        .as_array()
+        .expect("workspace array")
+        .iter()
+        .find(|workspace| workspace["id"] == json!("beta"))
+        .expect("broken workspace remains visible");
+    assert_eq!(beta["status"], json!("invalid"));
+
+    let logged = String::from_utf8(buf.0.lock().expect("buffer lock").clone()).expect("utf8");
+    assert!(
+        logged.contains("registered workspace is unavailable")
+            && logged.contains("beta/.orbit")
+            && logged.contains("workspace config is missing"),
+        "startup must identify the skipped checkout for operators, got {logged:?}"
+    );
+}
