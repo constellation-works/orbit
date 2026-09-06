@@ -45,8 +45,10 @@ orbit update --json               # machine-readable report
    complete replacement or the complete previous executable; the retained backup is not consumed
    and no workspace state is touched.
 7. Run `orbit migrate --confirm`, then `orbit workspace sync` — **using the newly installed
-   binary**, in the current workspace. Only the new binary carries the migrations and managed
-   asset definitions for the version being installed.
+   binary**, in the selected workspace. Orbit passes the resolved root to both subprocesses;
+   an explicit `--root` remains authoritative even when `ORBIT_ROOT` names another workspace.
+   Only the new binary carries the migrations and managed asset definitions for the version
+   being installed.
 
 Migration runs before managed-asset sync because a layout migration can move the directories
 those assets live in.
@@ -60,16 +62,19 @@ names the step that failed.
 Re-running `orbit update` is the resume. At the installed version it skips the replacement and
 re-runs the same idempotent convergence steps, so a run that failed at `migrate --confirm` or
 `workspace sync` is finished by running it again — or by running that one command directly and
-reading its diagnostics.
+reading its diagnostics. When `--root` or `ORBIT_ROOT` selected the workspace, recovery output
+includes that root explicitly, so retrying from a different checkout does not silently switch the
+workspace being repaired.
 
 The outgoing executable stays at `<orbit>.previous`. Restore it only if `.orbit/` state was not
 migrated: once a migration has been applied, an older binary refuses to open the workspace by
 design. See [Respect the downgrade guard](#respect-the-downgrade-guard).
 
-`orbit update` converges **the workspace you run it from**. Run it (or `orbit migrate --confirm`
-and `orbit workspace sync`) from each other registered workspace after upgrading, and restart
-long-lived Orbit services and pipeline workers so newly dispatched agents inherit the
-replacement build.
+Without a root override, `orbit update` converges **the workspace you run it from**. `ORBIT_ROOT`
+selects an environment-only override, while an explicit `--root` takes precedence over it. Run
+the update (or `orbit migrate --confirm` and `orbit workspace sync`) for each other registered
+workspace after upgrading, and restart long-lived Orbit services and pipeline workers so newly
+dispatched agents inherit the replacement build.
 
 ### Downgrades
 

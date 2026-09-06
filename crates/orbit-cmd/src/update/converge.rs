@@ -64,10 +64,19 @@ impl ConvergenceStep {
     }
 }
 
-/// Run `orbit <args>` with `executable`, in `cwd`, and record the outcome.
-pub fn run_step(executable: &Path, cwd: &Path, args: &[&str]) -> ConvergenceStep {
+/// Run an Orbit convergence command in `cwd`, retaining an explicit root when selected.
+pub fn run_step(
+    executable: &Path,
+    cwd: &Path,
+    root_argument: Option<&Path>,
+    args: &[&str],
+) -> ConvergenceStep {
     let command = args.join(" ");
-    let output = run_process(Command::new(executable).args(args).current_dir(cwd));
+    let mut process = Command::new(executable);
+    if let Some(root) = root_argument {
+        process.arg("--root").arg(root);
+    }
+    let output = run_process(process.args(args).current_dir(cwd));
     match output {
         Ok(output) if output.status.success() => ConvergenceStep {
             command,

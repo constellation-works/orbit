@@ -25,7 +25,7 @@ use tempfile::TempDir;
 
 use crate::update::channel::InstallChannel;
 use crate::update::source::{DirectoryReleaseSource, MIRROR_LATEST_FILE, ReleaseSource};
-use crate::update::{UpdateEnvironment, UpdateRequest};
+use crate::update::{UpdateEnvironment, UpdateRequest, UpdateWorkspace};
 
 /// A throwaway keypair generated for these tests. It is not the release
 /// signing key and no published artifact will ever verify against it.
@@ -190,6 +190,17 @@ impl Fixture {
         self.environment_with_workspace(None)
     }
 
+    /// Build an environment with independently selected cwd and Orbit root.
+    pub fn environment_for_workspace(&self, cwd: PathBuf, root: PathBuf) -> UpdateEnvironment {
+        let mut environment = self.environment_without_workspace();
+        environment.workspace = Some(UpdateWorkspace {
+            cwd,
+            root_argument: Some(root.clone()),
+            root,
+        });
+        environment
+    }
+
     fn environment_with_workspace(&self, workspace_cwd: Option<PathBuf>) -> UpdateEnvironment {
         UpdateEnvironment {
             install_channel: InstallChannel::Managed {
@@ -201,7 +212,11 @@ impl Fixture {
             source: Box::new(DirectoryReleaseSource::new(self.mirror.clone())),
             trusted_keys: test_trusted_keys(),
             today: NaiveDate::from_ymd_opt(2026, 9, 5).expect("valid date"),
-            workspace_cwd,
+            workspace: workspace_cwd.map(|cwd| UpdateWorkspace {
+                root_argument: Some(cwd.join(".orbit")),
+                root: cwd.join(".orbit"),
+                cwd,
+            }),
         }
     }
 
@@ -220,6 +235,19 @@ impl Fixture {
             .lines()
             .map(str::to_string)
             .collect()
+    }
+
+    /// Expected invocation log entry for a convergence command.
+    pub fn invocation(&self, version: &str, command: &str) -> String {
+        format!(
+            "{version}: --root {} {command}",
+            self.workspace.join(".orbit").display()
+        )
+    }
+
+    /// Root selected for fixture convergence.
+    pub fn workspace_root(&self) -> PathBuf {
+        self.workspace.join(".orbit")
     }
 
     /// Path the outgoing executable is preserved at.
@@ -318,7 +346,9 @@ fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
     format!(
         "#!/bin/sh\n\
          if [ \"$1\" = --version ]; then echo 'orbit {version}'; exit 0; fi\n\
-         echo \"{version}: $*\" >> '{log}'\n\
+         all_args=\"$*\"\n\
+         if [ \"$1\" = --root ]; then shift 2; fi\n\
+         echo \"{version}: $all_args\" >> '{log}'\n\
          {failure}exit 0\n",
         log = log.display()
     )
