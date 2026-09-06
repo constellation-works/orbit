@@ -6,10 +6,13 @@
 //! testable at all — the flow runs the installed binary, so the installed
 //! binary has to be something a test can write and observe.
 
+use std::fmt::{self, Debug};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Barrier};
 
 use chrono::NaiveDate;
+use orbit_common::OrbitError;
 use orbit_common::security::release::{
     RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME, TrustedReleaseKey,
 };
@@ -21,7 +24,7 @@ use rsa::signature::{SignatureEncoding, Signer};
 use tempfile::TempDir;
 
 use crate::update::channel::InstallChannel;
-use crate::update::source::{DirectoryReleaseSource, MIRROR_LATEST_FILE};
+use crate::update::source::{DirectoryReleaseSource, MIRROR_LATEST_FILE, ReleaseSource};
 use crate::update::{UpdateEnvironment, UpdateRequest};
 
 /// A throwaway keypair generated for these tests. It is not the release
@@ -204,11 +207,10 @@ impl Fixture {
 
     /// What the installed executable reports for `--version`.
     pub fn installed_reports(&self) -> String {
-        let output = std::process::Command::new(&self.executable)
-            .arg("--version")
-            .output()
-            .expect("run installed binary");
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
+        format!(
+            "orbit {}",
+            crate::update::converge::probe_version(&self.executable).expect("run installed binary")
+        )
     }
 
     /// Every argv the fake binaries have been invoked with, in order.
@@ -242,6 +244,58 @@ impl Fixture {
 /// A default request: latest version, apply, no downgrade.
 pub fn request() -> UpdateRequest {
     UpdateRequest::default()
+}
+
+/// Parks `latest_version` on `paused` until `resume`, then returns a frozen
+/// version. Lets another update finish between snapshot and lock without
+/// timing sleeps.
+pub struct PausingLatestSource {
+    inner: Box<dyn ReleaseSource>,
+    latest: String,
+    paused: Arc<Barrier>,
+    resume: Arc<Barrier>,
+}
+
+impl PausingLatestSource {
+    pub fn wrap(
+        inner: Box<dyn ReleaseSource>,
+        latest: impl Into<String>,
+        paused: Arc<Barrier>,
+        resume: Arc<Barrier>,
+    ) -> Self {
+        Self {
+            inner,
+            latest: latest.into(),
+            paused,
+            resume,
+        }
+    }
+}
+
+impl Debug for PausingLatestSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PausingLatestSource")
+            .field("inner", &self.inner)
+            .field("latest", &self.latest)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ReleaseSource for PausingLatestSource {
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+
+    fn latest_version(&self) -> Result<String, OrbitError> {
+        self.paused.wait();
+        self.resume.wait();
+        Ok(self.latest.clone())
+    }
+
+    fn fetch(&self, version: &str, asset: &str) -> Result<Vec<u8>, OrbitError> {
+        self.inner.fetch(version, asset)
+    }
 }
 
 fn sign(message: &[u8]) -> Vec<u8> {

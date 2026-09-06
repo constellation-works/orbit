@@ -2,9 +2,11 @@
 //!
 //! The command is one linear pipeline with an explicit, idempotent order:
 //! decide the target version, refuse a channel Orbit does not own, take the
-//! update lock, stage and authenticate the archive, swap it in atomically,
-//! confirm the new executable reports the version that was asked for, then let
-//! *that* executable migrate `.orbit/` state and reconcile managed assets.
+//! update lock, re-read the installed version (resolving a replaced Linux
+//! inode back to the live path), then stage and authenticate the archive,
+//! swap it in atomically, confirm the new executable reports the version
+//! that was asked for, then let *that* executable migrate `.orbit/` state
+//! and reconcile managed assets.
 //!
 //! Migration runs before managed-asset sync because a layout migration can
 //! move the directories those assets live in; converging assets first would
@@ -64,7 +66,9 @@ pub struct UpdateRequest {
 pub struct UpdateEnvironment {
     /// The executable to replace.
     pub executable: PathBuf,
-    /// The version that executable reports today.
+    /// Process snapshot of the running binary's version (`CARGO_PKG_VERSION`
+    /// in production). `--check` uses this; mutation uses the on-disk
+    /// version re-read under the install lock.
     pub current_version: String,
     /// Release target triple for this platform.
     pub target_triple: String,
@@ -83,8 +87,10 @@ pub struct UpdateEnvironment {
 impl UpdateEnvironment {
     /// Read this process's own installation, platform, and workspace.
     pub fn from_process(root_override: Option<&Path>) -> Result<Self, OrbitError> {
-        let executable = std::env::current_exe()
-            .map_err(|error| OrbitError::Io(format!("cannot locate the running orbit: {error}")))?;
+        let executable =
+            converge::resolve_installed_executable(&std::env::current_exe().map_err(|error| {
+                OrbitError::Io(format!("cannot locate the running orbit: {error}"))
+            })?);
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
         let workspace_cwd =
             RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?
@@ -177,7 +183,7 @@ pub fn run_update(
     environment: &UpdateEnvironment,
     request: &UpdateRequest,
 ) -> Result<UpdateReport, OrbitError> {
-    let current = ReleaseVersion::parse(&environment.current_version)?;
+    let snapshot = ReleaseVersion::parse(&environment.current_version)?;
     let target = match &request.target_version {
         Some(requested) => ReleaseVersion::parse(requested)?,
         None => ReleaseVersion::parse(&environment.source.latest_version()?)?,
@@ -195,7 +201,7 @@ pub fn run_update(
         release_source: environment.source.describe(),
         target: environment.target_triple.clone(),
         asset: asset.clone(),
-        current_version: current.to_string(),
+        current_version: snapshot.to_string(),
         target_version: target.to_string(),
         outcome: UpdateOutcome::AlreadyCurrent,
         replaced: false,
@@ -210,7 +216,7 @@ pub fn run_update(
         // Read-only: report what an update would do, including for a channel
         // Orbit does not own. Refusing here would make "is there an update?"
         // fail for a reason that has nothing to do with the answer.
-        report.outcome = if target == current {
+        report.outcome = if target == snapshot {
             UpdateOutcome::AlreadyCurrent
         } else {
             UpdateOutcome::UpdateAvailable
@@ -225,14 +231,6 @@ pub fn run_update(
     {
         return Err(error);
     }
-    if target < current && !request.allow_downgrade {
-        return Err(OrbitError::InvalidInput(format!(
-            "refusing to replace orbit {current} with the older release {target}; \
-             an older binary cannot open workspace state a newer one has already migrated. \
-             Pass --allow-downgrade to attempt it anyway (it is checked against this \
-             workspace before anything is replaced)"
-        )));
-    }
 
     let install_dir = environment.executable.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
@@ -242,17 +240,47 @@ pub fn run_update(
     })?;
     let _lock = UpdateLock::acquire(install_dir)?;
 
+    // Another update may have finished between the process snapshot and this
+    // lock. Version decisions follow the live installed path, not the running
+    // inode or the compile-time snapshot.
+    let executable = converge::resolve_installed_executable(&environment.executable);
+    let current = locked_installed_version(&executable)?;
+    report.executable = executable.clone();
+    report.current_version = current.to_string();
+    if current != snapshot {
+        tracing::info!(
+            snapshot = %snapshot,
+            installed = %current,
+            executable = %executable.display(),
+            "installed orbit version changed before the update lock was acquired"
+        );
+    }
+
+    if target < current && !request.allow_downgrade {
+        return Err(OrbitError::InvalidInput(format!(
+            "refusing to replace orbit {current} with the older release {target}; \
+             an older binary cannot open workspace state a newer one has already migrated. \
+             Pass --allow-downgrade to attempt it anyway (it is checked against this \
+             workspace before anything is replaced)"
+        )));
+    }
+
     if target == current {
         // Not a no-op: re-running `orbit update` at the installed version is
         // the documented way to finish a run whose convergence failed.
-        return Ok(finish(environment, report, UpdateOutcome::AlreadyCurrent));
+        return Ok(finish(
+            environment,
+            &executable,
+            report,
+            UpdateOutcome::AlreadyCurrent,
+        ));
     }
 
     let staged = stage_release(
         environment.source.as_ref(),
         &target.to_string(),
         &asset,
-        &environment.executable,
+        &executable,
         environment.trusted_keys,
         environment.today,
     )?;
@@ -263,26 +291,26 @@ pub fn run_update(
         assert_downgrade_is_compatible(environment, staged.path(), &current, &target)?;
     }
 
-    let backup = backup_path(&environment.executable);
-    staged.commit(&environment.executable, &backup)?;
+    let backup = backup_path(&executable);
+    staged.commit(&executable, &backup)?;
     report.replaced = true;
     report.backup_path = Some(backup.clone());
 
     // Nothing has touched `.orbit/` yet, so a binary that does not identify
     // itself as the requested version is still safely reversible.
-    let installed = converge::probe_version(&environment.executable)
-        .and_then(|reported| ReleaseVersion::parse(&reported));
+    let installed =
+        converge::probe_version(&executable).and_then(|reported| ReleaseVersion::parse(&reported));
     match installed {
         Ok(installed) if installed == target => {}
         Ok(installed) => {
-            restore_backup(&environment.executable, &backup)?;
+            restore_backup(&executable, &backup)?;
             return Err(OrbitError::Execution(format!(
                 "the release published as {target} reports itself as {installed}; \
                  restored the previous executable and changed no workspace state"
             )));
         }
         Err(error) => {
-            restore_backup(&environment.executable, &backup)?;
+            restore_backup(&executable, &backup)?;
             return Err(OrbitError::Execution(format!(
                 "the installed release could not be verified ({error}); \
                  restored the previous executable and changed no workspace state"
@@ -290,16 +318,28 @@ pub fn run_update(
         }
     }
 
-    Ok(finish(environment, report, UpdateOutcome::Updated))
+    Ok(finish(
+        environment,
+        &executable,
+        report,
+        UpdateOutcome::Updated,
+    ))
+}
+
+/// Probe the on-disk executable after the install lock is held.
+fn locked_installed_version(executable: &Path) -> Result<ReleaseVersion, OrbitError> {
+    let reported = converge::probe_version(executable)?;
+    ReleaseVersion::parse(&reported)
 }
 
 /// Run the convergence steps and settle the outcome.
 fn finish(
     environment: &UpdateEnvironment,
+    executable: &Path,
     mut report: UpdateReport,
     success_outcome: UpdateOutcome,
 ) -> UpdateReport {
-    report.steps = converge_workspace(environment);
+    report.steps = converge_workspace(environment, executable);
     let failed: Vec<&str> = report
         .steps
         .iter()
@@ -316,7 +356,7 @@ fn finish(
 }
 
 /// Migrate `.orbit/` state, then reconcile managed assets — in that order.
-fn converge_workspace(environment: &UpdateEnvironment) -> Vec<ConvergenceStep> {
+fn converge_workspace(environment: &UpdateEnvironment, executable: &Path) -> Vec<ConvergenceStep> {
     const STEPS: [&[&str]; 2] = [&["migrate", "--confirm"], &["workspace", "sync"]];
     let Some(cwd) = environment.workspace_cwd.as_deref() else {
         return STEPS
@@ -332,7 +372,7 @@ fn converge_workspace(environment: &UpdateEnvironment) -> Vec<ConvergenceStep> {
     };
     let mut steps = Vec::new();
     for args in STEPS {
-        let step = run_step(&environment.executable, cwd, args);
+        let step = run_step(executable, cwd, args);
         let stop = step.failed();
         steps.push(step);
         if stop {

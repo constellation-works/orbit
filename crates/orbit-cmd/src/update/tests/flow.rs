@@ -1,8 +1,13 @@
 use std::path::Path;
+use std::sync::{Arc, Barrier};
 
 use crate::update::channel::InstallChannel;
-use crate::update::tests::fixture::{FakeBinary, Fixture, request, tar_gz, tar_gz_named};
-use crate::update::{EXIT_NEEDS_RECOVERY, EXIT_UPDATE_AVAILABLE, UpdateOutcome, run_update};
+use crate::update::tests::fixture::{
+    FakeBinary, Fixture, PausingLatestSource, request, tar_gz, tar_gz_named,
+};
+use crate::update::{
+    EXIT_NEEDS_RECOVERY, EXIT_UPDATE_AVAILABLE, UpdateEnvironment, UpdateOutcome, run_update,
+};
 
 #[test]
 fn updating_to_latest_replaces_the_binary_then_migrates_before_syncing_assets() {
@@ -395,6 +400,183 @@ fn a_second_concurrent_update_is_refused_rather_than_queued() {
     assert_eq!(fixture.installed_reports(), "orbit 0.18.0");
     drop(held);
     run_update(&fixture.environment(), &request()).expect("update after the lock is released");
+}
+
+#[test]
+fn a_stale_writer_refuses_to_replace_a_newer_install() {
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    fixture.publish("0.20.0", FakeBinary::Healthy);
+
+    let error = with_stale_discovery(
+        &fixture,
+        "0.19.0",
+        |environment| run_update(environment, &request()).expect_err("stale writer must refuse"),
+        || {
+            let mut newer = request();
+            newer.target_version = Some("0.20.0".to_string());
+            let report =
+                run_update(&fixture.environment(), &newer).expect("interloper installs 0.20");
+            assert_eq!(report.outcome, UpdateOutcome::Updated);
+            assert_eq!(fixture.installed_reports(), "orbit 0.20.0");
+        },
+    );
+
+    assert!(error.to_string().contains("--allow-downgrade"), "{error}");
+    assert!(error.to_string().contains("0.20"), "{error}");
+    assert!(error.to_string().contains("0.19"), "{error}");
+    assert_eq!(fixture.installed_reports(), "orbit 0.20.0");
+    assert!(
+        !fixture
+            .invocations()
+            .iter()
+            .any(|line| line.starts_with("0.19.0:")),
+        "stale 0.19 writer must not run against the 0.20 install: {:?}",
+        fixture.invocations()
+    );
+}
+
+#[test]
+fn a_stale_writer_reconverges_when_the_lock_already_holds_the_target() {
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+
+    let report = with_stale_discovery(
+        &fixture,
+        "0.19.0",
+        |environment| run_update(environment, &request()).expect("stale writer reconverges"),
+        || {
+            let mut newer = request();
+            newer.target_version = Some("0.19.0".to_string());
+            run_update(&fixture.environment(), &newer).expect("interloper installs 0.19");
+        },
+    );
+
+    assert_eq!(report.outcome, UpdateOutcome::AlreadyCurrent);
+    assert!(!report.replaced);
+    assert_eq!(report.current_version, "0.19.0");
+    assert_eq!(fixture.installed_reports(), "orbit 0.19.0");
+    let migrate = fixture
+        .invocations()
+        .iter()
+        .filter(|line| line.as_str() == "0.19.0: migrate --confirm")
+        .count();
+    assert_eq!(migrate, 2, "{:?}", fixture.invocations());
+}
+
+#[test]
+fn a_stale_writer_upgrades_from_the_locked_installed_version() {
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    fixture.publish("0.20.0", FakeBinary::Healthy);
+
+    let report = with_stale_discovery(
+        &fixture,
+        "0.20.0",
+        |environment| run_update(environment, &request()).expect("stale writer upgrades"),
+        || {
+            let mut middle = request();
+            middle.target_version = Some("0.19.0".to_string());
+            run_update(&fixture.environment(), &middle).expect("interloper installs 0.19");
+        },
+    );
+
+    assert_eq!(report.outcome, UpdateOutcome::Updated);
+    assert!(report.replaced);
+    assert_eq!(report.current_version, "0.19.0");
+    assert_eq!(report.target_version, "0.20.0");
+    assert_eq!(fixture.installed_reports(), "orbit 0.20.0");
+}
+
+#[test]
+fn a_stale_permitted_downgrade_still_preflights_the_workspace() {
+    let fixture = Fixture::new("0.19.0");
+    fixture.publish("0.18.0", FakeBinary::MigrationFails);
+    fixture.publish("0.20.0", FakeBinary::Healthy);
+
+    let mut stale_request = request();
+    stale_request.allow_downgrade = true;
+
+    let error = with_stale_discovery(
+        &fixture,
+        "0.18.0",
+        |environment| run_update(environment, &stale_request).expect_err("incompatible downgrade"),
+        || {
+            let mut newer = request();
+            newer.target_version = Some("0.20.0".to_string());
+            run_update(&fixture.environment(), &newer).expect("interloper installs 0.20");
+        },
+    );
+
+    assert!(
+        error.to_string().contains("cannot open this workspace"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("nothing was replaced"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("0.20"), "{error}");
+    assert_eq!(fixture.installed_reports(), "orbit 0.20.0");
+    assert!(
+        fixture
+            .invocations()
+            .iter()
+            .any(|line| line.as_str() == "0.18.0: migrate --dry-run"),
+        "{:?}",
+        fixture.invocations()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn replacement_uses_the_live_path_when_current_exe_is_a_deleted_inode() {
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    let mut environment = fixture.environment();
+    environment.executable = environment.executable.with_file_name("orbit (deleted)");
+
+    let report = run_update(&environment, &request()).expect("resolves live path");
+
+    assert_eq!(report.outcome, UpdateOutcome::Updated);
+    assert_eq!(report.executable, fixture.executable);
+    assert_eq!(fixture.installed_reports(), "orbit 0.19.0");
+}
+
+/// Run `stale` parked in `latest_version` while `interloper` installs under
+/// the same lock, then resume. `stale` must call `latest_version`.
+fn with_stale_discovery<R, S, I>(
+    fixture: &Fixture,
+    frozen_latest: &str,
+    stale: S,
+    interloper: I,
+) -> R
+where
+    R: Send,
+    S: FnOnce(&UpdateEnvironment) -> R + Send,
+    I: FnOnce(),
+{
+    let paused = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    let mut environment = fixture.environment();
+    let inner = environment.source;
+    environment.source = Box::new(PausingLatestSource::wrap(
+        inner,
+        frozen_latest,
+        Arc::clone(&paused),
+        Arc::clone(&resume),
+    ));
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(|| stale(&environment));
+        paused.wait();
+        let interloper_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(interloper));
+        resume.wait();
+        let stale_result = handle.join().expect("stale writer thread");
+        if let Err(payload) = interloper_result {
+            std::panic::resume_unwind(payload);
+        }
+        stale_result
+    })
 }
 
 #[test]

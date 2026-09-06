@@ -6,7 +6,7 @@
 //! so asking the outgoing process to converge state would apply the version
 //! the operator is leaving.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
@@ -88,6 +88,36 @@ pub fn run_step(executable: &Path, cwd: &Path, args: &[&str]) -> ConvergenceStep
             detail: Some(format!("failed to run '{}': {error}", executable.display())),
         },
     }
+}
+
+/// Path of the installed executable that version checks and replacement use.
+///
+/// Linux exposes a process whose executable inode was unlinked as
+/// `/installed/path (deleted)`. That names the still-running image, not the
+/// file now sitting at the install location. After another `orbit update`
+/// has replaced the binary, mutation decisions must follow the live path.
+/// A real file whose name ends in ` (deleted)` is left alone.
+pub fn resolve_installed_executable(executable: &Path) -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let current_path_is_missing = matches!(
+            std::fs::metadata(executable),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        );
+        if current_path_is_missing
+            && let Some(installed_path) = executable
+                .as_os_str()
+                .as_bytes()
+                .strip_suffix(b" (deleted)")
+        {
+            return PathBuf::from(OsString::from_vec(installed_path.to_vec()));
+        }
+    }
+
+    executable.to_path_buf()
 }
 
 /// Ask `executable` what version it is.
