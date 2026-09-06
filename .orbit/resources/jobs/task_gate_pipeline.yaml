@@ -42,6 +42,13 @@
 #   `release_reservation` frees the reservation immediately before
 #   `require_child_success` fails the gate on a non-succeeded child. TTL
 #   remains the fallback for abandoned/crashed runs.
+# - `dispatch_child` and `require_child_success` carry no `when:` of their
+#   own: `starvation_check`'s `when: reserved == false` is the exact
+#   complement, and `gate_starvation_fail` always errors, which halts the run
+#   before these steps would otherwise be reached on that branch (ORB-11325).
+#   That makes `dispatch_child` a step `release_reservation` may safely read
+#   `steps.dispatch_child.output` from — see design doc §8.2 on why a
+#   condition may only read the output of a step that always runs.
 
 schemaVersion: 2
 kind: Job
@@ -97,7 +104,6 @@ spec:
         max_wait_seconds: "{{ input.max_wait_seconds }}"
 
     - id: dispatch_child
-      when: "{{ steps.reserve.output.reserved }} == true"
       target: activity:invoke_and_wait
       default_input:
         job_name: "task_{{ input.mode }}_pipeline"
@@ -120,7 +126,6 @@ spec:
         reservation_id: "{{ steps.reserve.output.reservation_id }}"
 
     - id: require_child_success
-      when: "{{ steps.reserve.output.reserved }} == true"
       target: activity:pipeline_success_guard
       default_input:
         context: task_gate_pipeline child run

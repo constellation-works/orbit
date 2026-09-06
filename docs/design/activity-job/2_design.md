@@ -528,6 +528,16 @@ Direct agent responses are advisory audit/diagnostic data. Workflows gate on dur
 
 After [T20260509-11], the shipped condition grammar remains equality-only (`==` / `!=`, combined with `&&` / `||`); skip-on-empty guards express emptiness as `!= 0` or `!= []` rather than numeric comparisons, preserving the `orbit run ship` auto-mode empty-backlog no-op behavior.
 
+**A step output read by any `when:` / `break_when:` condition must belong to a step that always runs** (ORB-11325). Two facts combine to make this a hard requirement rather than a style preference: `condition::evaluate_bool_expr` (`crates/orbit-engine/src/condition.rs`) renders the *whole* expression through the template engine before it parses it, so there is no short-circuit — both sides of `&&` / `||` render even when the left side alone would decide the result — and a step skipped by `when:` records no output at all, so any reference to it resolves to `template.rs`'s `no data recorded for step '{step_id}'` error. Together, a condition that reads `steps.<id>.output` for a step that itself carries a `when:` fails at runtime on exactly the branch where the referenced step would have been skipped — the branch an author is least likely to exercise first, since the happy path usually runs it.
+
+The working alternative is to end the run on the stranding branch instead of skipping past the reader: give the branch that would leave the reference unresolved its own unconditional failure (as `task_gate_pipeline`'s `starvation_check` does — its `when:` is the exact complement of the gated step's, and its activity always errors, so the run never reaches a downstream reader on that branch). Three plausible-looking workarounds do not help, and are not worth retrying:
+
+- `A == x && B != true` — no short-circuit, so `B` still renders even when `A == x` is already false.
+- Gating the reading step with the same `when:` as the referenced step — the reading step's own `when:` is still evaluated (and rendered) for every run, so the reference inside it still renders and still fails when the referenced step was skipped.
+- A single-iteration `loop:` wrapping just the referenced step as a grouping construct — this only renames which id is skippable. If the loop step itself carries the `when:` that used to guard the body step, then when that condition is false the *loop* is skipped, the body step never runs, and a reader outside the loop still finds no data recorded for the body step's id. Wrapping the referenced step *and every reader of its output* together in the same guarded block does work (nothing outside the block needs the skipped id), but wrapping only the referenced step does not.
+
+Catalog load enforces this: `validate_job` (`crates/orbit-engine/src/activity_job/job_executor/validate.rs`) walks every step's `when:` and every loop's `break_when:` for `steps.<id>.output` references and rejects the job, naming both the reading and the referenced step, when the referenced step itself carries a `when:`.
+
 The retry wrapper re-runs the whole step body up to `max_attempts`, with exponential or linear backoff. Some errors bypass retry:
 
 - tool denial

@@ -20,7 +20,117 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
     for step in &job.steps {
         validate_step(step)?;
     }
+    validate_step_output_readiness(job)?;
     Ok(())
+}
+
+/// [ORB-11325] Reject a job whose `when:` / `break_when:` reads
+/// `steps.<id>.output` for a step that itself carries a `when:`.
+///
+/// `condition::evaluate_bool_expr` renders the whole expression before it
+/// parses it, so both sides of `&&` / `||` render unconditionally; a step
+/// skipped by `when:` records no output at all, so a reference to it fails
+/// with `template.rs`'s "no data recorded for step" error — and fails on
+/// exactly the branch where the referenced step would have been skipped,
+/// which is the branch an author is least likely to exercise first. See
+/// design doc §8.2 for the working alternative and the workarounds that do
+/// not help.
+fn validate_step_output_readiness(job: &JobV2) -> Result<(), DispatchError> {
+    let mut carries_when = HashMap::new();
+    for step in &job.steps {
+        record_step_when(step, &mut carries_when);
+    }
+    for step in &job.steps {
+        check_step_output_refs(step, &carries_when)?;
+    }
+    Ok(())
+}
+
+fn record_step_when(step: &JobV2Step, carries_when: &mut HashMap<String, bool>) {
+    carries_when.insert(step.id.clone(), step.when.is_some());
+    match &step.body {
+        JobV2StepBody::Parallel { parallel } => {
+            for branch in &parallel.branches {
+                record_step_when(branch, carries_when);
+            }
+        }
+        JobV2StepBody::FanOut { fan_out, .. } => record_step_when(&fan_out.worker, carries_when),
+        JobV2StepBody::Loop { loop_ } => {
+            for body in &loop_.steps {
+                record_step_when(body, carries_when);
+            }
+        }
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
+    }
+}
+
+fn check_step_output_refs(
+    step: &JobV2Step,
+    carries_when: &HashMap<String, bool>,
+) -> Result<(), DispatchError> {
+    if let Some(expr) = &step.when {
+        check_expr_output_refs(&step.id, expr, carries_when)?;
+    }
+    match &step.body {
+        JobV2StepBody::Parallel { parallel } => {
+            for branch in &parallel.branches {
+                check_step_output_refs(branch, carries_when)?;
+            }
+        }
+        JobV2StepBody::FanOut { fan_out, .. } => {
+            check_step_output_refs(&fan_out.worker, carries_when)?;
+        }
+        JobV2StepBody::Loop { loop_ } => {
+            if let Some(expr) = &loop_.break_when {
+                check_expr_output_refs(&step.id, expr, carries_when)?;
+            }
+            for body in &loop_.steps {
+                check_step_output_refs(body, carries_when)?;
+            }
+        }
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
+    }
+    Ok(())
+}
+
+fn check_expr_output_refs(
+    referencing_step: &str,
+    expr: &str,
+    carries_when: &HashMap<String, bool>,
+) -> Result<(), DispatchError> {
+    for referenced_step in output_step_refs(expr) {
+        if carries_when.get(&referenced_step).copied().unwrap_or(false) {
+            return Err(DispatchError::JobValidation(format!(
+                "step `{referencing_step}` reads `steps.{referenced_step}.output`, but step \
+                 `{referenced_step}` carries its own `when:` and may be skipped — a `when:` or \
+                 `break_when:` condition may only read the output of a step that always runs"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Extract every `steps.<id>.output...` reference from the `{{ }}` template
+/// tokens in a `when:` / `break_when:` expression, mirroring the token shape
+/// `template::resolve_token` parses at render time.
+fn output_step_refs(expr: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    let mut remaining = expr;
+    while let Some(start) = remaining.find("{{") {
+        let after_start = &remaining[start + 2..];
+        let Some(end) = after_start.find("}}") else {
+            break;
+        };
+        let token = after_start[..end].trim();
+        let mut parts = token.split('.');
+        if parts.next() == Some("steps")
+            && let (Some(step_id), Some("output")) = (parts.next(), parts.next())
+        {
+            refs.push(step_id.to_string());
+        }
+        remaining = &after_start[end + 2..];
+    }
+    refs
 }
 
 /// [ORB-10385] Reject a job whose resolved activities name deterministic
