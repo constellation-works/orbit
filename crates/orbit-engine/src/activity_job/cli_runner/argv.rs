@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 
 use orbit_exec::{
     bwrap_program_for_audit, claude_state_dir_from_env, compile_linux_bwrap_argv,
@@ -99,6 +100,18 @@ pub(super) fn apply_provider_static_arg_fixups(provider: &str, static_args: &mut
     if provider == "claude" {
         rewrite_claude_debug_file_path(static_args);
     }
+}
+
+/// Per-invocation argv fixups that depend on the remaining spawn deadline.
+///
+/// Today this only merges Antigravity `--print-timeout` so `agy`'s documented
+/// 5m default cannot cut off a longer Orbit activity budget. [ORB-11337]
+pub(super) fn apply_provider_runtime_arg_fixups(
+    provider: &str,
+    args: &mut Vec<String>,
+    remaining_deadline: Duration,
+) {
+    orbit_agent::apply_antigravity_print_timeout(provider, args, remaining_deadline);
 }
 
 /// Replace the value following any `--debug-file` token in `static_args`

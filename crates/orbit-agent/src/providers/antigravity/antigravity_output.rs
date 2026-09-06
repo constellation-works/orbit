@@ -9,6 +9,11 @@
 
 use serde_json::Value;
 
+/// Upper bound on a provider `error` string copied into a diagnostic. The CLI
+/// runner bounds and redacts again; this keeps the extracted text from ever
+/// carrying a prompt or response transcript. [ORB-11337]
+const TERMINAL_ERROR_LIMIT_CHARS: usize = 400;
+
 /// Return the terminal `result` payload when `agy` completed successfully.
 ///
 /// The returned JSON keeps `response` (and `structured_output` when present)
@@ -53,4 +58,55 @@ fn terminal_result(stdout: &[u8]) -> Option<Value> {
 fn is_json_envelope(value: &Value) -> bool {
     value.get("status").and_then(Value::as_str).is_some()
         && (value.get("response").is_some() || value.get("error").is_some())
+}
+
+/// Extract a bounded Antigravity terminal `error` for a failed run.
+///
+/// Reads only `status` and `error`. The `response` field is never copied, so a
+/// failed terminal cannot leak prompt or completion transcripts into
+/// diagnostics. SUCCESS terminals yield `None`.
+pub(crate) fn antigravity_terminal_error(stdout: &[u8]) -> Option<String> {
+    let result = terminal_result(stdout)?;
+    let status = result.get("status").and_then(Value::as_str)?;
+    if status == "SUCCESS" {
+        return None;
+    }
+    let error_text = terminal_error_text(result.get("error"));
+    let text = if error_text.is_empty() {
+        format!("Antigravity terminal status {status}")
+    } else {
+        error_text
+    };
+    Some(bound_terminal_error(&text))
+}
+
+/// Provider-gated diagnostic for a nonzero CLI exit whose stderr is empty.
+pub fn antigravity_terminal_error_diagnostic(provider: &str, stdout: &[u8]) -> Option<String> {
+    if provider != "antigravity" && provider != "agy" {
+        return None;
+    }
+    let error = antigravity_terminal_error(stdout)?;
+    Some(format!("Antigravity terminal error: {error}"))
+}
+
+fn terminal_error_text(error: Option<&Value>) -> String {
+    match error {
+        Some(Value::String(text)) => text.trim().to_string(),
+        Some(Value::Object(object)) => object
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+fn bound_terminal_error(text: &str) -> String {
+    let bounded: String = text.chars().take(TERMINAL_ERROR_LIMIT_CHARS).collect();
+    if bounded.chars().count() < text.chars().count() {
+        format!("{bounded}…")
+    } else {
+        bounded
+    }
 }

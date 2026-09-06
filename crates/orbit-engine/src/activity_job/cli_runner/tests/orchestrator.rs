@@ -3775,6 +3775,113 @@ fn run_cli_backend_redacts_token_shaped_argv_in_audit() {
     );
 }
 
+#[test]
+fn run_cli_backend_passes_derived_antigravity_print_timeout() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("agy");
+    write_executable(&script, "#!/bin/sh\ncat > /dev/null\nexit 0\n");
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-agy-print-timeout",
+        "antigravity:gemini-3.8-flash-high",
+        sink_for_writer,
+    ));
+    let audit_for_assert = Arc::clone(&audit);
+    let host = TestHost::with_command(script.display().to_string());
+    let spec = test_agent_loop_spec_for("antigravity", Duration::from_secs(3 * 60 * 60));
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "job-agy-print-timeout",
+        audit,
+        &serde_json::json!({"prompt": "do it"}),
+        None,
+    )
+    .expect("run cli backend");
+    assert!(!outcome.success);
+
+    let events = audit_for_assert.events_snapshot().expect("audit snapshot");
+    let argv = events
+        .iter()
+        .find_map(|event| match &event.kind {
+            V2AuditEventKind::CliInvocationStarted { argv_redacted, .. } => {
+                Some(argv_redacted.clone())
+            }
+            _ => None,
+        })
+        .expect("started event");
+    assert!(
+        argv.windows(2)
+            .any(|pair| pair == ["--print-timeout", "2h59m30s"]),
+        "long budgets must raise --print-timeout above the 5m default: {argv:?}"
+    );
+    assert_eq!(
+        argv.iter()
+            .filter(|arg| arg.as_str() == "--print-timeout" || arg.starts_with("--print-timeout="))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn run_cli_backend_surfaces_antigravity_timeout_terminal_error_when_stderr_empty() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("agy");
+    let stdout = serde_json::json!({
+        "event": "result",
+        "result": {
+            "status": "ERROR",
+            "response": "secret-transcript should not appear in diagnostics",
+            "error": "timeout waiting for response"
+        }
+    })
+    .to_string();
+    write_executable(
+        &script,
+        &format!("#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{stdout}'\nexit 1\n"),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-agy-timeout-error",
+        "antigravity:gemini-3.8-flash-high",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let spec = test_agent_loop_spec_for("antigravity", Duration::from_secs(60));
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "job-agy-timeout-error",
+        audit,
+        &serde_json::json!({"prompt": "do it"}),
+        None,
+    )
+    .expect("run cli backend");
+
+    assert!(!outcome.success);
+    assert_eq!(outcome.output["timed_out"], false);
+    assert_eq!(outcome.output["exit_code"], 1);
+    let message = outcome.message.expect("provider diagnostic");
+    assert!(
+        message.contains("timeout waiting for response"),
+        "{message}"
+    );
+    assert!(
+        message.contains("cli subprocess exited with code Some(1)"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("secret-transcript"),
+        "response transcript leaked into diagnostics: {message}"
+    );
+}
+
 /// [ORB-10746] The `error_max_turns` ending: exit 0, `is_error: true`, no
 /// envelope in either `result` or `structured_output`. Structured output stops
 /// a model from *answering in prose*; it cannot stop a run from hitting its

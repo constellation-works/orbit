@@ -191,6 +191,17 @@ fn command_construction_matches_the_shipped_headless_contract() {
     assert!(!argv.iter().any(|arg| arg == "--sandbox"));
     assert!(!argv.iter().any(|arg| arg == "-p" || arg == "--print"));
     assert!(
+        argv.windows(2)
+            .any(|args| args == ["--print-timeout", "30s"]),
+        "60s remaining deadline minus 30s margin must be explicit: {argv:?}"
+    );
+    assert_eq!(
+        argv.iter()
+            .filter(|arg| arg.as_str() == "--print-timeout" || arg.starts_with("--print-timeout="))
+            .count(),
+        1
+    );
+    assert!(
         !argv.iter().any(|arg| arg.contains(PROMPT_SECRET)),
         "prompt must not enter argv",
     );
@@ -251,6 +262,61 @@ fn malformed_or_incomplete_output_never_succeeds() {
             "invalid Antigravity output must fail: {body}"
         );
     }
+}
+
+#[test]
+fn long_budget_is_not_capped_by_the_default_five_minute_print_timeout() {
+    let body = format!(
+        r#"print_timeout=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--print-timeout" ]; then print_timeout="$arg"; fi
+  case "$arg" in --print-timeout=*) print_timeout="${{arg#--print-timeout=}}" ;; esac
+  prev="$arg"
+done
+case "$print_timeout" in
+  ""|5m|5m0s|300s)
+    printf '%s\n' '{{"event":"result","result":{{"status":"ERROR","response":"","error":"timeout waiting for response"}}}}'
+    exit 1
+    ;;
+esac
+{success}"#,
+        success = success_body()
+    );
+    let harness = Harness::new(&body);
+    let outcome = dispatch(&harness, spec(3 * 60 * 60));
+    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
+    let argv = harness.argv();
+    assert!(
+        argv.windows(2)
+            .any(|args| args == ["--print-timeout", "2h59m30s"]),
+        "3h remaining deadline must raise --print-timeout above 5m: {argv:?}"
+    );
+}
+
+#[test]
+fn timeout_terminal_error_with_empty_stderr_fails_without_exposing_transcript() {
+    let body = format!(
+        r#"printf '%s\n' '{{"event":"result","result":{{"status":"ERROR","response":"{SUCCESS_ENVELOPE}","error":"timeout waiting for response"}}}}'
+exit 1"#
+    );
+    let harness = Harness::new(&body);
+    let outcome = dispatch(&harness, spec(60));
+    assert!(!outcome.success);
+    assert_eq!(outcome.output["timed_out"], serde_json::Value::Bool(false));
+    assert_eq!(outcome.output["exit_code"], serde_json::json!(1));
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        message.contains("timeout waiting for response"),
+        "empty stderr must still surface the terminal error: {message}"
+    );
+    assert!(!message.contains(PROMPT_SECRET));
+    assert!(!message.contains("edited"));
+    let rendered = serde_json::to_string(&outcome.output).expect("serialize output");
+    assert!(
+        !rendered.contains(PROMPT_SECRET),
+        "prompt must not appear in durable diagnostics"
+    );
 }
 
 #[test]

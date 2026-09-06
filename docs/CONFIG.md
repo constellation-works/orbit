@@ -649,9 +649,21 @@ Do not copy Gemini CLI flags (`--approval-mode yolo`, `-o json`,
 `--allowed-mcp-server-names`). Do not pass `agy --sandbox`; the outer Orbit
 sandbox is authoritative.
 
+`agy --print-timeout` defaults to five minutes. Orbit always passes an
+explicit `--print-timeout` derived from the remaining activity wall-clock
+deadline minus a 30-second shutdown margin, so a three-hour activity is not
+cut off at five minutes. A custom executor that already sets the flag keeps a
+shorter value and is capped if it exceeds the derived budget; the flag is
+never duplicated. Orbit's outer process timeout and cleanup remain
+authoritative if the CLI ignores the flag.
+
 On success `agy` emits a terminal `result` with `status: "SUCCESS"`, the
 assistant text in `response`, and token counts in `usage`. Orbit rejects
 `ERROR` / malformed / missing terminal objects as missing completion evidence.
+When `agy` exits non-zero with empty stderr and a terminal `ERROR` (for
+example `timeout waiting for response`), Orbit surfaces that bounded, redacted
+`error` string in run/task diagnostics and does not copy `response` or prompt
+text into the message.
 MCP for Antigravity is configured at `~/.gemini/config/mcp_config.json`
 (home) or `.agents/mcp_config.json` (workspace), not the legacy Gemini
 `.gemini/settings.json` `mcpServers` map.

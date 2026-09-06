@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::process::Stdio;
+use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 use crate::activity_job::load_activity_asset;
@@ -26,7 +27,8 @@ use orbit_types::workflow::{ActivityV2Spec, ExecutorSandboxKind};
 #[cfg(target_os = "linux")]
 use super::super::argv::try_audit_argv_for_dispatch;
 use super::super::argv::{
-    audit_argv_for_dispatch, neutralize_inner_sandbox, rewrite_debug_file_value,
+    apply_provider_runtime_arg_fixups, audit_argv_for_dispatch, neutralize_inner_sandbox,
+    rewrite_debug_file_value,
 };
 use super::test_support::sandbox_for_test;
 #[cfg(target_os = "linux")]
@@ -554,6 +556,42 @@ fn rewrite_debug_file_value_ignores_dangling_flag() {
         args, original,
         "trailing --debug-file with no value must not panic or rewrite"
     );
+}
+
+#[test]
+fn apply_provider_runtime_arg_fixups_sets_antigravity_print_timeout() {
+    let mut args = vec![
+        "--input-format".to_string(),
+        "stream-json".to_string(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+    ];
+    apply_provider_runtime_arg_fixups("antigravity", &mut args, Duration::from_secs(3 * 60 * 60));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--print-timeout", "2h59m30s"]),
+        "long budgets must raise --print-timeout above the 5m default: {args:?}"
+    );
+    assert_eq!(
+        args.iter()
+            .filter(|arg| arg.as_str() == "--print-timeout" || arg.starts_with("--print-timeout="))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn apply_provider_runtime_arg_fixups_keeps_a_shorter_executor_print_timeout() {
+    let mut args = vec!["--print-timeout".to_string(), "45s".to_string()];
+    apply_provider_runtime_arg_fixups("antigravity", &mut args, Duration::from_secs(3 * 60 * 60));
+    assert_eq!(args, vec!["--print-timeout".to_string(), "45s".to_string()]);
+}
+
+#[test]
+fn apply_provider_runtime_arg_fixups_ignores_other_providers() {
+    let mut args = vec!["--json".to_string()];
+    apply_provider_runtime_arg_fixups("codex", &mut args, Duration::from_secs(3600));
+    assert_eq!(args, vec!["--json".to_string()]);
 }
 
 #[test]

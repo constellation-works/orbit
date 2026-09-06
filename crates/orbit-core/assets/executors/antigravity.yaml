@@ -11,6 +11,10 @@ spec:
   # unattended analog of interactive Ask; Orbit's OS sandbox remains the
   # filesystem/network boundary. Do not pass Gemini CLI flags
   # (`--approval-mode`, `-o json`, `--allowed-mcp-server-names`) or `agy --sandbox`.
+  # `--print-timeout` is injected per invocation from the remaining activity
+  # deadline minus a 30s shutdown margin; do not hard-code the documented 5m
+  # default here. Custom executor values are merged (shorter wins, longer is
+  # capped) without duplicating the flag.
   args:
     - --input-format
     - stream-json
