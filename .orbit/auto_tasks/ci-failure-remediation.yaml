@@ -20,9 +20,10 @@ template:
        Cover failures for the current heads of `agent-main`, `main`, and every
        open pull request, including informational jobs such as coverage rather
        than looking only at required checks or the main `ci` job.
-    2. The PR-only `Create orbit task on CI failure` step in
-       `.github/workflows/ci.yml` is an input and coverage signal. Search open
-       Orbit tasks for its run URL, PR number, SHA, and failure signature.
+    2. The fail-open CI failure report in `.github/workflows/ci.yml` records
+       runner provenance only; it never creates Orbit tasks. Durable filing is
+       owned by the host-side `ci_failure_sweep_pipeline`. Search open Orbit
+       tasks for the report's run URL, job, SHAs, and failure signature.
        Reference matching tasks in the execution summary; do not create
        another task for the same run or root cause. This remediation task owns
        the repair and must not fan a red-run cluster out into more failure
