@@ -17,6 +17,9 @@ env:
   # line-tables-only (deps included) — 50–70% smaller target/.
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  # [ORB-11390] The protected SSH process-metadata regression may self-skip in
+  # restricted local/agent sandboxes, but ubuntu-latest must exercise it.
+  ORBIT_REQUIRE_PROTECTED_SSH_REGRESSION: "1"
   NEXTEST_VERSION: 0.9.136
   NEXTEST_LINUX_SHA256: a098eed56f2dd88c7fdca1e554a6b99fa1ffbd2a7a1c41b865700112981f6f52
   CARGO_DENY_VERSION: 0.19.9

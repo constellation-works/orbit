@@ -28,6 +28,8 @@ use tempfile::{TempDir, tempdir};
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(target_os = "linux")]
 const EXEC_BUSY_RETRY_WINDOW: Duration = Duration::from_secs(2);
+#[cfg(target_os = "linux")]
+const REQUIRE_PROTECTED_SSH_REGRESSION_ENV: &str = "ORBIT_REQUIRE_PROTECTED_SSH_REGRESSION";
 
 /// Path of the checked-in `tools/list` snapshot, relative to the crate root.
 const SNAPSHOT_RELATIVE_PATH: &str = "tests/snapshots/mcp_tools_list.json";
@@ -1053,27 +1055,73 @@ fn a_fresh_test_launcher_waits_for_a_writer_to_close() {
 /// expose no mapped supplementary group cannot exercise the kernel boundary;
 /// those hosts leave the Linux deployment test to unrestricted CI.
 #[cfg(target_os = "linux")]
-fn install_test_ssh_launcher(workspace: &McpWorkspace) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
+#[derive(Debug)]
+enum ProtectedSshRegressionUnavailable {
+    NoNewPrivileges,
+    NoMappedSupplementaryGroup,
+    GroupOwnershipDenied(std::io::Error),
+}
 
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    if status.lines().any(|line| line == "NoNewPrivs:\t1") {
-        return None;
+#[cfg(target_os = "linux")]
+impl std::fmt::Display for ProtectedSshRegressionUnavailable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoNewPrivileges => formatter
+                .write_str("NoNewPrivs is enabled, so Linux will ignore the launcher's setgid bit"),
+            Self::NoMappedSupplementaryGroup => formatter
+                .write_str("no mapped supplementary group differs from the process's real group"),
+            Self::GroupOwnershipDenied(error) => write!(
+                formatter,
+                "the runner denied changing the owned launcher to a supplementary group: {error}"
+            ),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn install_test_ssh_launcher(
+    workspace: &McpWorkspace,
+) -> Result<PathBuf, ProtectedSshRegressionUnavailable> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let status = std::fs::read_to_string("/proc/self/status")
+        .expect("read Linux process status for the setgid capability probe");
+    let no_new_privileges = status
+        .lines()
+        .find_map(|line| line.strip_prefix("NoNewPrivs:"))
+        .and_then(|value| value.trim().parse::<u8>().ok())
+        .expect("Linux process status must report NoNewPrivs as an integer");
+    if no_new_privileges == 1 {
+        return Err(ProtectedSshRegressionUnavailable::NoNewPrivileges);
     }
     // Safety: the first call queries the required length; the second writes
     // exactly that many gid_t entries into the allocated vector.
     let group_count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
-    if group_count <= 0 {
-        return None;
+    assert!(
+        group_count >= 0,
+        "getgroups length query failed: {}",
+        std::io::Error::last_os_error()
+    );
+    if group_count == 0 {
+        return Err(ProtectedSshRegressionUnavailable::NoMappedSupplementaryGroup);
     }
     let mut groups = vec![0 as libc::gid_t; group_count as usize];
     let read = unsafe { libc::getgroups(group_count, groups.as_mut_ptr()) };
-    if read != group_count {
-        return None;
-    }
+    assert!(
+        read >= 0,
+        "getgroups failed: {}",
+        std::io::Error::last_os_error()
+    );
+    assert_eq!(
+        read, group_count,
+        "getgroups returned an unstable group count"
+    );
     // Safety: getgid only reads the process's real group credential.
     let real_group = unsafe { libc::getgid() };
-    let launcher_group = groups.into_iter().find(|group| *group != real_group)?;
+    let launcher_group = groups
+        .into_iter()
+        .find(|group| *group != real_group)
+        .ok_or(ProtectedSshRegressionUnavailable::NoMappedSupplementaryGroup)?;
     let launcher = workspace.home.join("orbit-mcp-ssh-launcher");
     std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &launcher).expect("copy tested Orbit launcher");
     let path = std::ffi::CString::new(launcher.as_os_str().as_encoded_bytes())
@@ -1081,11 +1129,28 @@ fn install_test_ssh_launcher(workspace: &McpWorkspace) -> Option<PathBuf> {
     // Safety: the path is a live NUL-terminated filesystem path; -1 preserves
     // the owner and the selected gid is one of this process's groups.
     if unsafe { libc::chown(path.as_ptr(), !0 as libc::uid_t, launcher_group) } != 0 {
-        return None;
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EPERM) {
+            return Err(ProtectedSshRegressionUnavailable::GroupOwnershipDenied(
+                error,
+            ));
+        }
+        panic!("change test launcher group failed: {error}");
     }
     std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o2555))
         .expect("protect test SSH launcher");
-    Some(launcher)
+    let metadata = std::fs::metadata(&launcher).expect("inspect protected test SSH launcher");
+    assert_eq!(
+        metadata.gid(),
+        launcher_group,
+        "the protected test launcher must retain the selected supplementary group"
+    );
+    assert_eq!(
+        metadata.mode() & 0o7777,
+        0o2555,
+        "the protected test launcher must retain its setgid mode"
+    );
+    Ok(launcher)
 }
 
 /// Use the production Tier 2 issuer and renderer to recover the complete
@@ -1093,7 +1158,9 @@ fn install_test_ssh_launcher(workspace: &McpWorkspace) -> Option<PathBuf> {
 /// additionally verifies `/etc/passwd`, which an unprivileged test cannot
 /// change; the launch and acceptance path below are otherwise the shipped one.
 #[cfg(target_os = "linux")]
-fn generated_forced_command(workspace: &McpWorkspace) -> Option<GeneratedForcedCommand> {
+fn try_generated_forced_command(
+    workspace: &McpWorkspace,
+) -> Result<GeneratedForcedCommand, ProtectedSshRegressionUnavailable> {
     let launcher = install_test_ssh_launcher(workspace)?;
     let key = workspace.home.join("caller.pub");
     std::fs::write(&key, format!("{CALLER_PUBLIC_KEY}\n")).expect("write caller public key");
@@ -1123,7 +1190,7 @@ fn generated_forced_command(workspace: &McpWorkspace) -> Option<GeneratedForcedC
         .split_once("\",command=\"")
         .and_then(|(_, line)| line.split_once("\",").map(|(command, _)| command))
         .expect("a forced command in the authorized_keys line");
-    Some(GeneratedForcedCommand {
+    Ok(GeneratedForcedCommand {
         argv: forced_command
             .split_ascii_whitespace()
             .map(ToOwned::to_owned)
@@ -1131,6 +1198,11 @@ fn generated_forced_command(workspace: &McpWorkspace) -> Option<GeneratedForcedC
         forced_command: forced_command.to_string(),
         acceptance_token,
     })
+}
+
+#[cfg(target_os = "linux")]
+fn generated_forced_command(workspace: &McpWorkspace) -> Option<GeneratedForcedCommand> {
+    try_generated_forced_command(workspace).ok()
 }
 
 /// [ORB-11184] Setup must reject the ordinary binary before it rotates the
@@ -1256,6 +1328,7 @@ ssh_key_fingerprint = "{CALLER_KEY_FINGERPRINT}"
 /// copied public argv still cannot reconstruct a key-bound session.
 #[cfg(target_os = "linux")]
 #[test]
+#[allow(clippy::print_stdout)]
 fn process_metadata_does_not_supply_a_replayable_key_bound_identity() {
     let workspace = McpWorkspace::init();
     write_callers(
@@ -1269,10 +1342,21 @@ ssh_key_fingerprint = "{CALLER_KEY_FINGERPRINT}"
 "#
         ),
     );
-    let generated = generated_forced_command(&workspace).expect(
-        "the Linux security regression requires an unrestricted runner where setgid is enabled \
-         and a mapped supplementary group is available",
-    );
+    let generated = match try_generated_forced_command(&workspace) {
+        Ok(generated) => generated,
+        Err(reason) => {
+            assert!(
+                std::env::var_os(REQUIRE_PROTECTED_SSH_REGRESSION_ENV).is_none(),
+                "the protected SSH process-metadata regression is required on this runner but \
+                 cannot execute: {reason}"
+            );
+            println!(
+                "skipping protected SSH process-metadata regression: {reason}; \
+                 unrestricted CI requires this test to execute"
+            );
+            return;
+        }
+    };
     let mut legitimate = workspace.serve_with_generated_command(&generated);
 
     let stop = workspace.home.join("stop-proc-scanner");
