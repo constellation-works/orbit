@@ -92,14 +92,17 @@ impl FakeDispatch {
     fn submit_count(&self) -> usize {
         self.submits.borrow().len()
     }
+
     fn set_state(&self, run_id: &str, state: JobRunState) {
         self.states.borrow_mut().insert(run_id.to_string(), state);
     }
+
     fn set_liveness(&self, run_id: &str, liveness: RunOwnerLiveness) {
         self.liveness
             .borrow_mut()
             .insert(run_id.to_string(), liveness);
     }
+
     /// Make the next `submit` calls fail (dispatch-time error) until cleared.
     fn set_fail(&self, fail: bool) {
         self.fail_submit.set(fail);

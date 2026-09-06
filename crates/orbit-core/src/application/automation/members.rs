@@ -1,4 +1,5 @@
 //! Narrow Core adapter for the shared state scheduling domain.
+
 use super::{consumer_key, preparation, source::Source};
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
@@ -30,7 +31,9 @@ pub(crate) fn evaluate(
         .state
         .as_ref()
         .ok_or_else(|| OrbitError::InvalidInput("not a state routine".into()))?;
+
     let consumer = consumer_key(runtime, "routine", &definition.name)?;
+
     // Timing edits apply to pending work; the active attempt retains its budget.
     let epoch = definition_epoch(&(
         &trigger.kind,
@@ -39,9 +42,12 @@ pub(crate) fn evaluate(
         &definition.target,
     ))
     .map_err(automation_error_to_orbit)?;
+
     let owned = Some(trigger.owner_machine.as_str()) == runtime.automation_machine_identity();
+
     let mut effective = trigger.clone();
     effective.retries = effective.retries.min(definition.policy.retries.max);
+
     members::evaluate(
         runtime.automation_store()?.as_ref(),
         &Host {
@@ -59,14 +65,17 @@ pub(crate) fn evaluate(
     )
     .map_err(automation_error_to_orbit)
 }
+
 struct Host<'a> {
     runtime: &'a OrbitRuntime,
     trigger: &'a StateTrigger,
 }
+
 impl MemberHost for Host<'_> {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
         Source::new(&self.runtime.paths().repo_root).head(branch)
     }
+
     fn observe(
         &self,
         after: Option<&str>,
@@ -76,6 +85,7 @@ impl MemberHost for Host<'_> {
             .map(serde_json::from_str)
             .transpose()
             .map_err(|e| AutomationError::Evidence(format!("invalid task continuation: {e}")))?;
+
         let tasks = self.runtime.task_candidates(
             &TaskListFilter {
                 scan_before,
@@ -89,22 +99,27 @@ impl MemberHost for Host<'_> {
             },
             50,
         )?;
+
         let next = if tasks.total > tasks.items.len() {
             tasks
                 .items
                 .last()
-                .map(|t| serde_json::to_string(&(t.created_at, &t.id)))
+                .map(|last| serde_json::to_string(&(last.created_at, &last.id)))
                 .transpose()
                 .map_err(|e| AutomationError::Evidence(e.to_string()))?
         } else {
             None
         };
+
         let (_, source) = self.head(&self.trigger.branch)?;
+
         let mut candidates = Vec::new();
         let mut incident_inventory = None;
         let mut withheld = BTreeMap::new();
+
         for envelope in tasks.items {
             let task = self.runtime.get_task(&envelope.id)?;
+
             match self.trigger.kind {
                 StateTriggerKind::PreparationEligible => {
                     if !orbit_automation::members::preparation::eligible(&task) {
@@ -132,25 +147,34 @@ impl MemberHost for Host<'_> {
                 StateTriggerKind::ExecutionFailed => {
                     match super::incidents::observe(self.runtime, &task) {
                         Ok((key, evidence)) => {
-                            if candidates.iter().any(|m: &StateMember| m.key == key) {
+                            if candidates
+                                .iter()
+                                .any(|other: &StateMember| other.key == key)
+                            {
                                 continue;
                             }
+
+                            // The full cohort is hydrated at most once per page.
                             if incident_inventory.is_none() {
                                 incident_inventory = Some(super::incidents::members(self.runtime)?);
                             }
+
                             let task_ids = incident_inventory
                                 .as_ref()
                                 .and_then(|inventory| inventory.get(&key))
                                 .cloned()
                                 .unwrap_or_default();
+
                             if task_ids.len() > 50 {
                                 withheld.insert(task.id, "incident_member_budget".into());
                                 continue;
                             }
+
                             if task_ids.is_empty() {
                                 withheld.insert(task.id, "incident_recovery_pending".into());
                                 continue;
                             }
+
                             candidates.push(StateMember {
                                 fingerprint: key.clone(),
                                 key,
@@ -168,18 +192,22 @@ impl MemberHost for Host<'_> {
                 }
             }
         }
+
         Ok(MemberPage {
             candidates,
             withheld,
             next,
         })
     }
+
     fn admission_deferral(&self, member: &StateMember) -> Result<Option<String>, AutomationError> {
         if self.trigger.kind == StateTriggerKind::ExecutionFailed
             && super::incidents::members(self.runtime)?.get(&member.key) != Some(&member.task_ids)
         {
             return Ok(Some("incident_membership_or_recovery_changed".into()));
         }
+
+        // Re-derive the material now: a member whose input moved may not be admitted.
         for id in &member.task_ids {
             let task = self.runtime.get_task(id)?;
             let current = match self.trigger.kind {
@@ -197,12 +225,15 @@ impl MemberHost for Host<'_> {
                     }
                 }
             };
+
             if current != member.fingerprint {
                 return Ok(Some("material_changed".into()));
             }
         }
+
         Ok(None)
     }
+
     fn lookup(&self, attempt: &MemberAttempt) -> Result<Option<String>, AutomationError> {
         self.runtime
             .stores()
@@ -210,44 +241,74 @@ impl MemberHost for Host<'_> {
             .automation_job_for_key(&attempt.action_key)
             .map_err(Into::into)
     }
+
     fn admit(&self, attempt: &MemberAttempt) -> Result<String, AutomationError> {
         self.runtime.ensure_coordination_task_write_permitted()?;
+
         let state = self
             .runtime
             .automation_store()?
             .automation_state(&attempt.consumer)?
             .ok_or_else(|| AutomationError::Deferred("claim_missing".into()))?;
-        if state.members.as_ref().and_then(|m| m.active.as_ref()) != Some(attempt) {
+        if state
+            .members
+            .as_ref()
+            .and_then(|members| members.active.as_ref())
+            != Some(attempt)
+        {
             return Err(AutomationError::Deferred("claim_superseded".into()));
         }
+
+        // Pin the source the attempt froze so the run can still reach it later.
         Source::new(&self.runtime.paths().repo_root).git(&[
             "update-ref",
             &format!("refs/orbit/automation/{}", attempt.id),
             &attempt.member.source.commit,
         ])?;
-        self.runtime.submit_automation_pipeline_run(self.trigger.job_name(), json!({
-            "state_automation": attempt, "task_ids": attempt.member.task_ids,
-            "source_revision": attempt.member.source.commit, "base_branch": self.trigger.branch,
-            "max_tasks": attempt.member.task_ids.len(), "promotion_authorized": false,
-            "automation_origin": if self.trigger.kind == StateTriggerKind::ExecutionFailed {"triage"} else {"preparation"},
-        }), &attempt.action_key).map(|r|r.run_id).map_err(Into::into)
+
+        let origin = if self.trigger.kind == StateTriggerKind::ExecutionFailed {
+            "triage"
+        } else {
+            "preparation"
+        };
+
+        self.runtime
+            .submit_automation_pipeline_run(
+                self.trigger.job_name(),
+                json!({
+                    "state_automation": attempt,
+                    "task_ids": attempt.member.task_ids,
+                    "source_revision": attempt.member.source.commit,
+                    "base_branch": self.trigger.branch,
+                    "max_tasks": attempt.member.task_ids.len(),
+                    "promotion_authorized": false,
+                    "automation_origin": origin,
+                }),
+                &attempt.action_key,
+            )
+            .map(|run| run.run_id)
+            .map_err(Into::into)
     }
+
     fn outcome(&self, attempt: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {
         let Some(id) = attempt.action_id.as_deref() else {
             return Ok(MemberOutcome::Pending);
         };
+
         let run = self.runtime.show_job_run(id)?;
         let expected =
             serde_json::to_value(attempt).map_err(|e| AutomationError::Evidence(e.to_string()))?;
+
         if run
             .input
             .as_ref()
-            .and_then(|v| v.get("state_automation"))
-            .and_then(|v| v.get("action_key"))
+            .and_then(|input| input.get("state_automation"))
+            .and_then(|automation| automation.get("action_key"))
             != expected.get("action_key")
         {
             return Err(AutomationError::Evidence("job_input_mismatch".into()));
         }
+
         if let Some(state) = self.runtime.read_run_state(id)? {
             // Only the exact canonical deterministic apply step can provide this
             // record. Agent prose and unrelated output keys are never searched.
@@ -264,6 +325,7 @@ impl MemberHost for Host<'_> {
                 return Ok(MemberOutcome::Applied(evidence));
             }
         }
+
         if run.state.is_terminal()
             && crate::application::job::run_owner_liveness(&run)
                 == crate::application::job::RunOwnerLiveness::Stopped
@@ -272,6 +334,7 @@ impl MemberHost for Host<'_> {
                 "stopped_without_member_evidence".into(),
             ));
         }
+
         Ok(MemberOutcome::Pending)
     }
 }
@@ -281,15 +344,23 @@ pub(crate) fn claim(
     runtime: &OrbitRuntime,
     value: &Value,
 ) -> Result<Option<MemberAttempt>, OrbitError> {
-    let Some(value) = value.get("state_automation").filter(|v| !v.is_null()) else {
+    let Some(value) = value
+        .get("state_automation")
+        .filter(|claim| !claim.is_null())
+    else {
         return Ok(None);
     };
+
     let submitted: MemberAttempt = serde_json::from_value(value.clone())
         .map_err(|e| OrbitError::InvalidInput(e.to_string()))?;
+
     let state = runtime
         .automation_store()?
         .automation_state(&submitted.consumer)?
         .ok_or_else(|| OrbitError::InvalidInput("state claim missing".into()))?;
+
+    // Preparation material is derived from the branch head, so a moved head
+    // invalidates the claim; incident material is not tied to the head.
     if submitted.kind == StateTriggerKind::PreparationEligible
         && Source::new(&runtime.paths().repo_root)
             .head(&state.branch)
@@ -301,10 +372,12 @@ pub(crate) fn claim(
             "state-trigger source changed".into(),
         ));
     }
+
     let active = state
         .members
-        .and_then(|m| m.active)
+        .and_then(|members| members.active)
         .ok_or_else(|| OrbitError::InvalidInput("state claim missing".into()))?;
+
     if active.kind != submitted.kind
         || active.id != submitted.id
         || active.member != submitted.member
@@ -317,5 +390,6 @@ pub(crate) fn claim(
             "state claim stale or expired".into(),
         ));
     }
+
     Ok(Some(active))
 }

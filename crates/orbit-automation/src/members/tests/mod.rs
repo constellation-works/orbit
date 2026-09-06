@@ -10,6 +10,7 @@ struct Host {
     deferral: RefCell<Option<String>>,
     lose_ack: RefCell<bool>,
 }
+
 impl Host {
     fn new() -> Self {
         Self {
@@ -22,6 +23,7 @@ impl Host {
         }
     }
 }
+
 impl MemberHost for Host {
     fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
         Ok((
@@ -32,6 +34,7 @@ impl MemberHost for Host {
             },
         ))
     }
+
     fn observe(&self, _: Option<&str>, now: DateTime<Utc>) -> Result<MemberPage, AutomationError> {
         Ok(MemberPage {
             candidates: vec![StateMember {
@@ -47,12 +50,15 @@ impl MemberHost for Host {
             next: None,
         })
     }
+
     fn admission_deferral(&self, _: &StateMember) -> Result<Option<String>, AutomationError> {
         Ok(self.deferral.borrow().clone())
     }
+
     fn lookup(&self, attempt: &MemberAttempt) -> Result<Option<String>, AutomationError> {
         Ok(self.actions.borrow().get(&attempt.action_key).cloned())
     }
+
     fn admit(&self, attempt: &MemberAttempt) -> Result<String, AutomationError> {
         let id = self
             .actions
@@ -65,6 +71,7 @@ impl MemberHost for Host {
         }
         Ok(id)
     }
+
     fn outcome(&self, _: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {
         if let Some(evidence) = self.evidence.borrow().clone() {
             Ok(MemberOutcome::Applied(evidence))
@@ -75,6 +82,7 @@ impl MemberHost for Host {
         }
     }
 }
+
 fn trigger() -> StateTrigger {
     StateTrigger {
         kind: StateTriggerKind::PreparationEligible,
@@ -87,6 +95,7 @@ fn trigger() -> StateTrigger {
         deadline_minutes: 30,
     }
 }
+
 fn tick(store: &dyn AutomationStoreBackend, host: &Host, minute: i64) -> AutomationDiagnostic {
     evaluate(
         store,
@@ -102,6 +111,7 @@ fn tick(store: &dyn AutomationStoreBackend, host: &Host, minute: i64) -> Automat
     )
     .unwrap()
 }
+
 #[test]
 fn fresh_unready_post_apply_does_not_loop_and_new_material_debounces() {
     let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
@@ -136,6 +146,7 @@ fn fresh_unready_post_apply_does_not_loop_and_new_material_debounces() {
     assert_eq!(tick(store.as_ref(), &host, 61).reason, "debouncing");
     assert_eq!(tick(store.as_ref(), &host, 63).reason, "fired");
 }
+
 #[test]
 fn restart_preserves_attempt_budget_deadline_and_failed_input() {
     let dir = tempfile::tempdir().unwrap();
@@ -172,6 +183,7 @@ fn restart_preserves_attempt_budget_deadline_and_failed_input() {
     assert_eq!(tick(store.as_ref(), &host, 501).reason, "fired");
     assert_eq!(tick(store.as_ref(), &host, 503).reason, "batch_pending");
 }
+
 #[test]
 fn crash_after_admission_recovers_key_before_new_authority_check() {
     let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
@@ -198,6 +210,7 @@ fn crash_after_admission_recovers_key_before_new_authority_check() {
     assert_eq!(tick(store.as_ref(), &host, 3).reason, "batch_pending");
     assert_eq!(host.actions.borrow().len(), 1);
 }
+
 #[test]
 fn forged_member_output_never_advances_coverage() {
     let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
@@ -241,6 +254,7 @@ fn forged_member_output_never_advances_coverage() {
             .is_empty()
     );
 }
+
 #[test]
 fn incident_identity_uses_cause_and_episode_and_requires_settled_authority() {
     use crate::members::incidents::{IncidentFacts, incident_key};
