@@ -217,6 +217,16 @@ for retired_path in \
   fi
 done
 
+# State consumers share Automation's evaluator and Store checkpoint owner.
+# Core may gather authoritative facts, but must not grow a second checkpoint
+# implementation or hashing/coverage acceptance path [ORB-11331].
+if rg -n 'automation_commit\(|Sha256' \
+  "$repo_root/crates/orbit-core/src/application/automation" \
+  --glob '*.rs' --glob '!**/tests/**'; then
+  echo "Core automation must use the shared scheduling/checkpoint contract"
+  fail=1
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   exit 1
 fi

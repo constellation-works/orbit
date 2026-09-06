@@ -4,7 +4,10 @@
 // Extracted legacy projections retain their existing documentation coverage.
 #![allow(missing_docs)]
 pub mod auto_tasks;
+mod checkpoint;
 pub mod delivery;
 mod error;
 pub mod routines;
 pub use error::{AutomationError, automation_error_to_orbit};
+
+pub mod members;

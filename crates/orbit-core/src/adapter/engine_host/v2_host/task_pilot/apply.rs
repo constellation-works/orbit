@@ -24,6 +24,7 @@ struct PreparedTaskSnapshot {
     status: TaskStatus,
     title: String,
     tags: Vec<String>,
+    material: Option<(String, String)>,
 }
 
 struct ValidatedTask {
@@ -75,6 +76,8 @@ pub(in super::super) fn apply(
         .get("results")
         .and_then(Value::as_array)
         .ok_or_else(|| action_failed(action, "`results` must be an array"))?;
+    let claim = crate::application::automation::members::claim(runtime, prepared_value)
+        .map_err(|error| action_failed(action, error.to_string()))?;
     let source = SourceSnapshot::from_prepared(prepared_value, action)?;
     if let Some(source) = &source {
         source.ensure_commit(action, &workspace_root)?;
@@ -103,6 +106,13 @@ pub(in super::super) fn apply(
                     status,
                     title,
                     tags,
+                    material: entry
+                        .get("material_fingerprint")
+                        .and_then(Value::as_str)
+                        .zip(source.as_ref().map(|s| s.source_revision.as_str()))
+                        .map(|(fingerprint, revision)| {
+                            (fingerprint.to_string(), revision.to_string())
+                        }),
                 },
             ))
         })
@@ -140,6 +150,7 @@ pub(in super::super) fn apply(
     let mut partition_decisions = Vec::with_capacity(expected_partitions.len());
     let mut task_results = Vec::with_capacity(prepared_before.len());
     let mut ci_sweep_admission = Vec::new();
+    let mut resulting_fingerprints = BTreeMap::new();
 
     for (position, expected) in expected_partitions.iter().enumerate() {
         let expected_index = expected
@@ -345,7 +356,7 @@ pub(in super::super) fn apply(
                     break;
                 }
             };
-            if let Some(reason) = task_snapshot_drift(&current, snapshot) {
+            if let Some(reason) = task_snapshot_drift(runtime, &current, snapshot) {
                 stale.push(stale_task(task_id, reason.0, reason.1));
                 continue;
             }
@@ -389,8 +400,9 @@ pub(in super::super) fn apply(
             continue;
         }
 
-        match apply_partition(runtime, &prepared_before, &validated) {
-            Ok(ApplyPartitionOutcome::Applied) => {
+        match apply_partition(runtime, &prepared_before, &validated, prepared_value) {
+            Ok(ApplyPartitionOutcome::Applied(fingerprints)) => {
+                resulting_fingerprints.extend(fingerprints);
                 let mut applied_task_ids = Vec::with_capacity(validated.len());
                 for mut task in validated {
                     let changed = prepared_before[&task.task_id].context_files != task.after;
@@ -461,7 +473,40 @@ pub(in super::super) fn apply(
         )
     });
 
+    let member_evidence = claim.filter(|_| succeeded).and_then(|claim| {
+        let id = claim.member.task_ids.first()?;
+        let resulting = resulting_fingerprints.get(id)?;
+        let assessment = task_results
+            .iter()
+            .find(|v| v["task_id"].as_str() == Some(id))?;
+        Some(orbit_types::workflow::automation::members::MemberEvidence {
+            action_id: claim.action_id.unwrap_or_default(),
+            attempt_id: claim.id,
+            member_key: claim.member.key,
+            input_fingerprint: claim.member.fingerprint,
+            resulting_fingerprint: resulting.clone(),
+            ready: assessment["disposition"] == "selectors"
+                && [
+                    "blocked_by",
+                    "adr_conflicts",
+                    "utility_warnings",
+                    "surface_warnings",
+                ]
+                .iter()
+                .all(|field| {
+                    assessment
+                        .get(field)
+                        .and_then(Value::as_array)
+                        .is_some_and(Vec::is_empty)
+                })
+                && ["duplicate_of", "already_landed"]
+                    .iter()
+                    .all(|field| assessment.get(field).is_none_or(Value::is_null)),
+            result: assessment.clone(),
+        })
+    });
     Ok(json!({
+        "member_evidence": member_evidence,
         "status": status,
         "error": error,
         "mode": mode,
@@ -482,7 +527,7 @@ pub(in super::super) fn apply(
 }
 
 enum ApplyPartitionOutcome {
-    Applied,
+    Applied(BTreeMap<String, String>),
     Stale(Vec<Value>),
 }
 
@@ -490,19 +535,30 @@ fn apply_partition(
     runtime: &OrbitRuntime,
     snapshots: &BTreeMap<String, PreparedTaskSnapshot>,
     tasks: &[ValidatedTask],
+    prepared: &Value,
 ) -> Result<ApplyPartitionOutcome, OrbitError> {
     let mut task_ids = tasks
         .iter()
         .map(|task| task.task_id.clone())
         .collect::<Vec<_>>();
     task_ids.sort();
+    let mut lock_ids = task_ids.clone();
+    for id in &task_ids {
+        lock_ids.extend(runtime.get_task(id)?.dependencies());
+    }
+    lock_ids.sort();
+    lock_ids.dedup();
     let mut outcome = None;
     let mut operation = || {
+        crate::application::automation::members::claim(runtime, prepared)?;
+        let mut fingerprints = BTreeMap::new();
         let mut stale = Vec::new();
         for task_id in &task_ids {
             match runtime.get_task(task_id) {
                 Ok(current) => {
-                    if let Some(reason) = task_snapshot_drift(&current, &snapshots[task_id]) {
+                    if let Some(reason) =
+                        task_snapshot_drift(runtime, &current, &snapshots[task_id])
+                    {
                         stale.push(stale_task(task_id, reason.0, reason.1));
                     }
                 }
@@ -536,10 +592,22 @@ fn apply_partition(
                 )?;
             }
         }
-        outcome = Some(ApplyPartitionOutcome::Applied);
+        for task in tasks {
+            if let Some((_, revision)) = &snapshots[&task.task_id].material {
+                let current = runtime.get_task(&task.task_id)?;
+                fingerprints.insert(
+                    task.task_id.clone(),
+                    crate::application::automation::preparation::fingerprint(
+                        runtime, &current, revision,
+                    )
+                    .map_err(orbit_automation::automation_error_to_orbit)?,
+                );
+            }
+        }
+        outcome = Some(ApplyPartitionOutcome::Applied(fingerprints));
         Ok(())
     };
-    with_task_locks(runtime, &task_ids, 0, &mut operation)?;
+    with_task_locks(runtime, &lock_ids, 0, &mut operation)?;
     outcome.ok_or_else(|| {
         OrbitError::Execution("task-pilot partition operation did not run".to_string())
     })
@@ -562,10 +630,23 @@ fn with_task_locks(
 }
 
 fn task_snapshot_drift(
+    runtime: &OrbitRuntime,
     current: &Task,
     snapshot: &PreparedTaskSnapshot,
 ) -> Option<(&'static str, &'static str)> {
-    if current.context_files != snapshot.context_files {
+    if snapshot
+        .material
+        .as_ref()
+        .is_some_and(|(expected, revision)| {
+            crate::application::automation::preparation::fingerprint(runtime, current, revision)
+                .map_or(true, |fingerprint| &fingerprint != expected)
+        })
+    {
+        Some((
+            "material_changed",
+            "task meaning or dependency evidence changed after preparation",
+        ))
+    } else if current.context_files != snapshot.context_files {
         Some((
             "context_files_changed",
             "task context_files changed after preparation",

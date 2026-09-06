@@ -46,7 +46,18 @@ pub(super) fn prepare(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     let workspace_root = requested_workspace_root(runtime, action, input)?;
+    let claim = crate::application::automation::members::claim(runtime, input)
+        .map_err(|error| action_failed(action, error.to_string()))?;
     let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
+    if let Some(claim) = &claim
+        && (source.as_ref().map(|s| &s.source_revision) != Some(&claim.member.source.commit)
+            || input.get("task_ids") != Some(&json!(claim.member.task_ids)))
+    {
+        return Err(action_failed(
+            action,
+            "state-trigger source or task membership changed",
+        ));
+    }
     let max_partition_size = bounded_usize(
         action,
         input,
@@ -65,7 +76,7 @@ pub(super) fn prepare(
     let explicit_mode = !explicit_task_ids.is_empty();
     let active_preparations = active_task_pilot_preparations(runtime, action, &workspace_root)?;
 
-    let (mode, task_ids, task_snapshots, excluded) = if explicit_mode {
+    let (mode, task_ids, mut task_snapshots, excluded) = if explicit_mode {
         let all_tasks = runtime
             .list_tasks()
             .map_err(|error| action_failed(action, format!("list workspace tasks: {error}")))?;
@@ -189,6 +200,27 @@ pub(super) fn prepare(
         ));
     }
 
+    if let Some(source) = &source {
+        for snapshot in &mut task_snapshots {
+            let task = runtime
+                .get_task(snapshot["task_id"].as_str().unwrap_or_default())
+                .map_err(|error| action_failed(action, error.to_string()))?;
+            let fingerprint = crate::application::automation::preparation::fingerprint(
+                runtime,
+                &task,
+                &source.source_revision,
+            )
+            .map_err(|error| action_failed(action, error.to_string()))?;
+            if claim
+                .as_ref()
+                .is_some_and(|claim| claim.member.fingerprint != fingerprint)
+            {
+                return Err(action_failed(action, "state-trigger task meaning changed"));
+            }
+            snapshot["material_fingerprint"] = json!(fingerprint);
+        }
+    }
+
     let partitions = task_ids
         .chunks(max_partition_size)
         .enumerate()
@@ -201,6 +233,7 @@ pub(super) fn prepare(
         .collect::<Vec<_>>();
 
     Ok(json!({
+        "state_automation": claim,
         "mode": mode,
         "workspace_path": workspace_root,
         "source": source.as_ref().map(SourceSnapshot::to_json).unwrap_or_else(|| {

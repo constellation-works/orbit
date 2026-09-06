@@ -71,8 +71,7 @@ pub struct WorkspaceInitArgs {
     pub force: bool,
 }
 
-pub(crate) const ONBOARDING_FINALIZE_GUIDANCE: &str =
-    "review and commit generated definitions (.gitignore, .orbit/auto_tasks, .orbit/routines) before local workflows (Orbit does not auto-commit or discard operator changes)";
+pub(crate) const ONBOARDING_FINALIZE_GUIDANCE: &str = "review and commit generated definitions (.gitignore, .orbit/auto_tasks, .orbit/routines) before local workflows (Orbit does not auto-commit or discard operator changes)";
 
 impl WorkspaceInitArgs {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {

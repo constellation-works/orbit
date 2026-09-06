@@ -16,7 +16,7 @@ related_artifacts: [ORB-11315, ORB-11314, ORB-11316]
 
 # Automation Triggers — Design
 
-**Delivery triggers implemented in [ORB-11330]; pilot/triage triggers remain proposals.**
+**Delivery triggers are implemented in [ORB-11330]; bounded state consumers in [ORB-11331].**
 The supported configuration, evidence contract and operational limits are in
 [Operations](5_operations.md). Later sections retain the broader design intent;
 the schema-v2 YAML in section 8 is illustrative and is not accepted configuration.
@@ -25,7 +25,7 @@ Historical ADRs are not inputs to this design.
 ## 1. Current implementation and gaps
 
 - `orbit-automation` owns the extracted routine and auto-task scheduling rules,
-  plus the shared delivery evaluator and deterministic coverage validator. Core
+  plus delivery and state-member evaluation and their deterministic coverage validators. Core
   supplies source facts, executor authority, ordinary task creation and job submission.
 - Existing cron/interval YAML, cursor semantics, manual mint and host placement
   remain compatible. Legacy cursor I/O is owned by Store. Legacy time-triggered
@@ -42,7 +42,8 @@ Historical ADRs are not inputs to this design.
   artifact. The owner checks assignment, exact frozen input/revisions, completeness
   and provenance before accepting an immutable receipt. Job-only consumers use
   persisted step results. QA and review remain independent.
-- The broader pilot freshness, incident triage, review exclusion certificates,
+- State-member pilot freshness and bounded causal triage use the same Store
+  checkpoint path [ORB-11331]. Broader multi-member coordination, review exclusion certificates,
   policy-driven waiver/migration workflows and usage accounting below remain
   separately owned proposals. No such certificate currently excludes a delivery;
   missing usage is unknown.
@@ -235,7 +236,7 @@ input/results and a stable creation key; scheduler records hold coordination and
 references. Forward-only store migrations and a recoverable cross-store protocol
 are required: task bundles and scheduler SQLite are not one current transaction.
 
-The Core boundary claims pending members and writes batch intent with compare-
+The Automation boundary claims pending members through Store and writes batch intent with compare-
 and-swap plus unique keys. It releases database locks before external I/O. A
 routine's job submit and the common task creation path must accept a durable
 action key `(consumer, epoch, batch, attempt)` and return the previously created

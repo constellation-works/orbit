@@ -21,6 +21,11 @@ describes a candidate design, not an available command or accepted runtime
 contract. [Current behavior](./2_design.md) provides the source evidence. The
 proposal reuses the existing pipeline engine and admission/recovery boundaries.
 
+State preparation now has a shared material fingerprint and accepted readiness
+record in `orbit-automation` [ORB-11331]. Mode integration must consume that
+record and separately recheck its grant; populated selectors or wrapper success
+are insufficient. See [implemented state operations](../automation-triggers/5_operations.md).
+
 ## 1. Open Questions
 
 1. **Names:** adopt supervised/autonomous, or another pair that communicates

@@ -10,9 +10,7 @@ use orbit_types::workspace::{
 
 use crate::tests::env_isolation::EnvGuard;
 
-use super::super::init::{
-    ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id,
-};
+use super::super::init::{ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id};
 use super::super::list::{format_workspace_list, workspace_list_json};
 use super::super::role::CliCheckoutRole;
 use super::super::show::format_workspace_show;
@@ -1845,6 +1843,9 @@ fn workspace_init_guidance_and_generated_onboarding_files_lifecycle() {
         .output()
         .expect("git status");
     let status_str = String::from_utf8_lossy(&status_output.stdout);
-    assert!(status_str.contains(".gitignore"), "git status: {status_str}");
+    assert!(
+        status_str.contains(".gitignore"),
+        "git status: {status_str}"
+    );
     assert!(status_str.contains(".orbit/"), "git status: {status_str}");
 }

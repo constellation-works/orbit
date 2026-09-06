@@ -16,11 +16,12 @@ related_artifacts: [ORB-11315, ORB-11295, ORB-11314, ORB-11316]
 
 # Automation Triggers — Overview
 
-**Proposed; documentation only.** Share the decision that work is due across
-routines and auto-tasks while preserving their different actions: invoke a job
-or mint a task. The existing sweep clock can reconcile durable state in bounded
-passes. A new resident daemon is not required. Astra formulated this proposal
-for [ORB-11315]; no definition, scheduler, authority, or runtime state is changed.
+Delivery triggers are implemented in [ORB-11330]; state preparation and failure
+triage are implemented in [ORB-11331]. The shared `orbit-automation` domain uses
+the existing sweep clock, Core action adapters and Store checkpoints. See
+[Operations](5_operations.md) for accepted configuration and limits. The broader
+batching and mode design below retains future intent; no live definition is
+automatically migrated or enabled.
 
 ## 1. Motivation
 

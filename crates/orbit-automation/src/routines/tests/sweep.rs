@@ -694,3 +694,39 @@ fn dry_run_records_no_state() {
     assert!(fires(&store, "nightly").is_empty());
     assert_eq!(dispatch.submit_count(), 0);
 }
+
+#[test]
+fn state_and_temporal_owners_of_same_pipeline_are_withheld_in_preview() {
+    let mut legacy = routine("legacy", "* * * * *", true, "forbid", 0);
+    legacy.definition.target =
+        orbit_types::workflow::RoutineTarget::Job("task_pilot_pipeline".into());
+    let mut state = legacy.clone();
+    state.definition.name = "state-pilot".into();
+    state.definition.trigger.cron.clear();
+    state.definition.trigger.state =
+        Some(orbit_types::workflow::automation::members::StateTrigger {
+            kind: orbit_types::workflow::automation::members::StateTriggerKind::PreparationEligible,
+            owner_machine: "test-machine".into(),
+            branch: "agent-main".into(),
+            debounce_minutes: 2,
+            max_wait_minutes: 10,
+            max_items: 50,
+            retries: 1,
+            deadline_minutes: 90,
+        });
+    let reports = run_sweep_core(
+        &store(),
+        HOST,
+        &collection(vec![legacy, state]),
+        &FakeDispatch::default(),
+        SweepOptions { dry_run: true },
+        ts(2026, 9, 6, 0, 0, 0),
+    )
+    .unwrap();
+    assert_eq!(reports.len(), 2);
+    assert!(
+        reports
+            .iter()
+            .all(|r| r.reason.as_deref() == Some("duplicate_routine_ownership"))
+    );
+}

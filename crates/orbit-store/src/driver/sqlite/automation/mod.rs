@@ -16,6 +16,9 @@ pub(crate) fn initialize(store: &Store) -> Result<(), OrbitError> {
             CREATE TABLE automation_waivers (batch_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, batch_json TEXT NOT NULL, waiver_json TEXT NOT NULL);
             CREATE TABLE automation_job_keys (workspace_id TEXT NOT NULL, action_key TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(workspace_id,action_key));")
                 .map_err(|e| OrbitError::Store(e.to_string()))
+        }), FeatureMigration::new(2, "retry_lineage_index", |conn| {
+            conn.execute_batch("CREATE INDEX IF NOT EXISTS job_runs_retry_lineage ON job_runs(workspace_id,retry_source_run_id)")
+                .map_err(|error| OrbitError::Store(error.to_string()))
         })])
 }
 fn encode<T: serde::Serialize>(value: &T) -> Result<String, OrbitError> {
@@ -82,7 +85,11 @@ impl AutomationStoreBackend for Store {
         })
     }
     fn automation_initialize(&self, state: &AutomationState) -> Result<bool, OrbitError> {
-        if state.generation != 0
+        if state
+            .members
+            .as_ref()
+            .is_some_and(|members| members != &Default::default())
+            || state.generation != 0
             || state.baseline != state.observed
             || state.baseline != state.covered
             || state.active.is_some()
@@ -117,7 +124,12 @@ impl AutomationStoreBackend for Store {
             let changed=conn.execute("UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",params![next.generation,encode(next)?,previous.consumer,previous.generation,encode(previous)?]).map_err(|e|OrbitError::Store(e.to_string()))?;
             if changed==0 { return Ok(false); }
             if let Some(receipt)=receipt {
-                conn.execute("INSERT INTO automation_coverage VALUES (?1,?2,?3,?4,?5)",params![receipt.batch_id, previous.consumer,encode(&previous.active)?,encode(receipt)?,receipt.accepted_at.to_rfc3339()]).map_err(|e|OrbitError::Store(e.to_string()))?;
+                // Preserve shipped delivery receipt bytes; member records carry
+                // only their frozen action, never the unrelated consumer inventory.
+                let batch_json = if let Some(members) = &previous.members {
+                    encode(&serde_json::json!({"state_member": members.active}))?
+                } else { encode(&previous.active)? };
+                conn.execute("INSERT INTO automation_coverage VALUES (?1,?2,?3,?4,?5)",params![receipt.batch_id, previous.consumer,batch_json,encode(receipt)?,receipt.accepted_at.to_rfc3339()]).map_err(|e|OrbitError::Store(e.to_string()))?;
             }
             Ok(true)
         })
@@ -150,6 +162,9 @@ fn validate_transition(
         || next.pending_commits.len() > 5000
     {
         return Err(invalid());
+    }
+    if previous.members.is_some() || next.members.is_some() {
+        return members::validate(previous, next, receipt);
     }
     if let Some(old) = &previous.active {
         if let Some(new) = &next.active {
@@ -243,3 +258,5 @@ mod intents;
 #[cfg(test)]
 mod tests;
 mod waivers;
+
+mod members;

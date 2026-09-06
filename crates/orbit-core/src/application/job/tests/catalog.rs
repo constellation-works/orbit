@@ -439,7 +439,7 @@ fn default_job_target_refs_resolve_against_default_activities() {
 /// detected at `orbit init`; everywhere else it is a hard dispatch failure,
 /// and the `all` join turns that into a whole-run failure.
 #[test]
-fn task_pilot_pipeline_resolves_system_crew_and_bounded_all_join_partitions() {
+fn task_pilot_pipeline_resolves_system_crew_and_bounded_partial_join_partitions() {
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_pilot_pipeline").then_some(*yaml))
@@ -475,7 +475,7 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_all_join_partitions() {
     assert_eq!(fan_out.max_workers, 5);
     assert_eq!(
         fan_in.join,
-        orbit_types::workflow::activity_job::JoinMode::All
+        orbit_types::workflow::activity_job::JoinMode::Any
     );
     assert_eq!(fan_in.collect.as_deref(), Some("pilot_results"));
     let JobV2StepBody::TargetRef(pilot) = &fan_out.worker.body else {

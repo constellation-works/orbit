@@ -201,6 +201,101 @@ no automatic GC policy is added here.
 The source currently understands GitHub PR evidence and authorized local direct
 landings. Other/manual direct changes stay unresolved until an authoritative
 receipt exists. History rewrites pause rather than silently reset. Automatic
-policy migration, pilot/triage triggers, before-PR exclusion producers and
+policy migration, before-PR exclusion producers and
 complete usage accounting remain separately scoped work. No review exclusions are
 inferred from tags or summaries, and QA coverage never substitutes for review.
+
+## State preparation and failure triage [ORB-11331]
+
+The same routine sweep now accepts `trigger.state` with one of two kinds. Core
+supplies authoritative task envelopes, pinned source and run/history evidence;
+`orbit-automation::members` owns due decisions, material fingerprints, incident
+identity, frozen attempts and receipt acceptance. Store uses its existing
+consumer/coverage transaction and generation fence. No new database or clock is
+introduced. Source retention uses the existing `refs/orbit/automation/` namespace.
+
+Migration is an explicit edit of a selected routine. Disable its old temporal
+owner, settle any existing run, and replace only that definition's trigger.
+Preserve the user's hosts and policy. Do not run both old and new definitions;
+a sweep preview reports `duplicate_routine_ownership` for enabled definitions
+sharing the same source and target when one uses state scheduling. Existing
+shipped pilot/triage cron definitions remain unchanged and no live routine is
+enabled by this implementation.
+
+```yaml
+schemaVersion: 1
+name: state-pilot
+enabled: false
+hosts: [your-host-id]
+target: job:task_pilot_pipeline
+trigger:
+  state:
+    kind: preparation_eligible
+    owner_machine: hm_your_registered_machine
+    branch: agent-main
+    debounce_minutes: 2
+    max_wait_minutes: 10
+    max_items: 50
+    retries: 1
+    deadline_minutes: 90
+policy:
+  overlap: forbid
+  timeout_minutes: 90
+  retries: {max: 1, backoff_minutes: 5}
+```
+
+For failure triage use `kind: execution_failed`, `target:
+job:task_triage_pipeline`, and a suitable aggregate deadline such as 30 minutes.
+Cron, deliveries and state triggers are mutually exclusive; state kinds have
+fixed pipeline targets, require one owner and forbid overlap. Retry limits are
+the minimum of the trigger and routine policy. Each consumer admits one member
+at a time, so a preparation action is a one-task pilot partition. `max_items`
+bounds the candidate admission checks in a pass, not worker concurrency. The
+source page contains at most 50 task envelopes and retains a continuation.
+
+Preparation includes populated selectors when their assessment is missing or
+stale. The material fingerprint covers task meaning, criteria, plan, selectors,
+relationships, dependency decisions, task/crew assignment, resolved model/provider,
+required tools, tags, pinned repository instructions and source revision. Comments,
+audit writes, priority and execution summaries do not invalidate it. Accepted
+apply records certify the resulting fingerprint, retaining the original input
+and exact resulting assessment in immutable receipt bytes. A fresh unready result
+is an assessment, and does not repeatedly dispatch. Changing a material input
+creates new work; the quiet period coalesces edits up to the maximum wait.
+
+Triage requires the current workflow-failure history event and coupling. Later
+human blocks, cancellations, diagnostic-origin runs, active recovery and missing
+lineage are withheld. Retry roots and an explicitly recorded blocking child cause
+identify the incident; uncertain multiple-child causality is `incident_unresolved`.
+The source adapter follows exact indexed retry-child edges, bounds an episode at
+1,000 runs and reports a scan-budget limit rather than guessing when reached.
+Incident membership is gathered from at most 1,000 current blocked tasks, including
+wrappers sharing a child cause; any unsettled member withholds the whole incident.
+An incident can include at most 50 tasks. Larger inventories remain withheld.
+Normal stale-owner reconciliation and the existing evidence-gated already-landed path remain in
+place. Disposition writes hold the task lock and recheck current failure intent;
+only the existing bounded environmental re-backlog rule can move a task.
+
+Action-key lookup recovers a run admitted before its scheduler acknowledgement.
+Retries preserve consumed attempts and an absolute deadline across restarts;
+failed inputs stay visible and unchanged exhausted inputs do not refire. An
+unrelated pending member can proceed after an exhausted member. Successful apply
+step evidence is read independently of wrapper status. Pilot fan-in accepts any
+successful partition so apply can retain valid results before the final guard
+reports missing or invalid partitions.
+
+`orbit routine show --json`, routine status and the dashboard expose the shared
+state projection: pending fingerprints, fresh/unready assessments, withheld
+reasons, consumed attempts, absolute deadlines, continuation and immutable
+receipt links. Usage stays unknown when no measurement exists. Readiness is
+positive evidence only; this trigger grants no promotion, commit, merge or
+implementation authority. Operation-mode grants remain separate work.
+
+Keep definitions disabled for rollout review. Inspect `orbit routine list`,
+`orbit routine show <name> --json`, and the existing `orbit sweep --dry-run`
+preview before deliberate enablement. Timing edits retain active budgets. Changes
+to trigger kind, owner, target or branch return `definition_changed`; restore the
+original definition to settle it rather than deleting state. Rollback disables
+new admissions and preserves receipts; a binary without state-trigger support
+rejects the unknown configuration key. General multi-member batching, automatic
+host/epoch transfer and automatic promotion are not part of this implementation.

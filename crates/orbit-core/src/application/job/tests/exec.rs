@@ -1537,6 +1537,16 @@ fn seed_failed_triage_candidate(runtime: &OrbitRuntime, title: &str) -> String {
         .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
         .expect("mark failed pipeline run running");
     runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some(Some(run.run_id.clone())),
+                ..Default::default()
+            },
+        )
+        .expect("couple blocked task to failed run");
+    runtime
         .finalize_job_run_with_reservation_cleanup(
             &run.run_id,
             JobRunState::Failed,
@@ -1545,16 +1555,6 @@ fn seed_failed_triage_candidate(runtime: &OrbitRuntime, title: &str) -> String {
             TaskReservationReleaseReason::RunTerminal,
         )
         .expect("finalize failed pipeline run");
-    runtime
-        .update_task(
-            &task.id,
-            TaskUpdateParams {
-                status: Some(TaskStatus::Blocked),
-                job_run_id: Some(Some(run.run_id)),
-                ..Default::default()
-            },
-        )
-        .expect("couple blocked task to failed run");
     task.id
 }
 

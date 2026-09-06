@@ -41,6 +41,9 @@ pub fn inspect_routine(
     definition: &RoutineDefinition,
     now: DateTime<Utc>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
+    if definition.trigger.state.is_some() {
+        return super::members::evaluate(runtime, definition, true, now);
+    }
     let trigger = definition
         .trigger
         .deliveries_landed

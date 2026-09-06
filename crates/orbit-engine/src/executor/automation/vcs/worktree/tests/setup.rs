@@ -11,9 +11,7 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{
-    ExternalRef, Task, TaskArtifact, TaskPriority, TaskStatus, TaskType,
-};
+use orbit_types::task::{ExternalRef, Task, TaskArtifact, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::JobRun;
 use tempfile::tempdir;
 

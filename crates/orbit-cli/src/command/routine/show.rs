@@ -83,21 +83,30 @@ impl RoutineShowArgs {
         if let Some(diagnostic) = &status.automation {
             let _ = writeln!(
                 out,
-                "Delivery automation: {}",
+                "Automation: {}",
                 serde_json::to_string_pretty(diagnostic)
                     .map_err(|e| OrbitError::InvalidInput(e.to_string()))?
             );
         }
 
-        let _ = writeln!(
-            out,
-            "Trigger: cron \"{}\" (missed_run: {})",
-            definition.trigger.cron,
-            match definition.trigger.missed_run {
-                orbit_core::MissedRunPolicy::CatchUpOnce => "catch_up_once",
-                orbit_core::MissedRunPolicy::Skip => "skip",
-            }
-        );
+        if let Some(trigger) = &definition.trigger.state {
+            let _ = writeln!(
+                out,
+                "State trigger: {}",
+                serde_json::to_string(trigger)
+                    .map_err(|e| OrbitError::InvalidInput(e.to_string()))?
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "Trigger: cron \"{}\" (missed_run: {})",
+                definition.trigger.cron,
+                match definition.trigger.missed_run {
+                    orbit_core::MissedRunPolicy::CatchUpOnce => "catch_up_once",
+                    orbit_core::MissedRunPolicy::Skip => "skip",
+                }
+            );
+        }
         let _ = writeln!(
             out,
             "Policy: timeout {}m, retries max {} (backoff {}m), overlap {}",

@@ -77,15 +77,24 @@ fn create_backlog_task(
 /// environmental-looking failing step, and finalize the run as failed. The
 /// coupling-out hook moves the task to `blocked`. Returns the run id.
 fn fail_pipeline_run_for_task(runtime: &OrbitRuntime, task_id: &str) -> String {
+    fail_pipeline_attempt(runtime, task_id, None, std::process::id())
+}
+
+fn fail_pipeline_attempt(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    retry: Option<String>,
+    pid: u32,
+) -> String {
     let run = runtime
         .stores()
         .jobs()
-        .insert_job_run(PIPELINE_JOB, 1, Utc::now(), None, None)
+        .insert_job_run(PIPELINE_JOB, 1, Utc::now(), None, retry)
         .expect("insert pipeline run");
     runtime
         .stores()
         .jobs()
-        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .mark_job_run_running(&run.run_id, Utc::now(), pid)
         .expect("mark run running");
     runtime
         .apply_task_automation_update(
@@ -607,4 +616,132 @@ fn explicit_task_ids_narrow_the_scan_but_keep_the_guards() {
     let output = list_candidates(&runtime, json!({ "task_ids": [listed, hand_blocked] }));
     assert_eq!(output["candidate_count"], json!(1));
     assert_eq!(output["candidates"][0]["task_id"], json!(listed));
+}
+
+#[test]
+fn later_human_block_with_same_run_id_is_not_rebacklogged() {
+    let (_root, runtime, repo) = test_runtime();
+    let task_id = create_backlog_task(&runtime, &repo, "human-intent");
+    fail_pipeline_run_for_task(&runtime, &task_id);
+    let prepared = list_candidates(&runtime, json!({}));
+    runtime
+        .update_task(
+            &task_id,
+            crate::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Blocked),
+                comment: Some("Wait for a product decision".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let applied = apply_dispositions(
+        &runtime,
+        json!({
+            "candidates": prepared["candidates"], "dispositions": [environmental_disposition(&task_id)]
+        }),
+    );
+    assert_eq!(applied["rebacklogged_count"], 0);
+    assert_eq!(
+        runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Blocked
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn state_incident_waits_for_exact_retry_lineage_and_retains_episode_identity() {
+    use crate::application::automation::incidents::observe;
+    let (_root, runtime, repo) = test_runtime();
+    let task = create_backlog_task(&runtime, &repo, "state-retry");
+    let first = fail_pipeline_attempt(&runtime, &task, None, i32::MAX as u32);
+    let original = observe(&runtime, &runtime.get_task(&task).unwrap()).unwrap();
+    let retry = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(PIPELINE_JOB, 2, Utc::now(), None, Some(first.clone()))
+        .unwrap();
+    assert!(observe(&runtime, &runtime.get_task(&task).unwrap()).is_err());
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&retry.run_id, Utc::now(), i32::MAX as u32)
+        .unwrap();
+    runtime
+        .finalize_job_run_with_reservation_cleanup(
+            &retry.run_id,
+            JobRunState::Failed,
+            Utc::now(),
+            Some(1),
+            TaskReservationReleaseReason::RunTerminal,
+        )
+        .unwrap();
+    assert_eq!(
+        original.0,
+        observe(&runtime, &runtime.get_task(&task).unwrap())
+            .unwrap()
+            .0
+    );
+    let last = fail_pipeline_attempt(&runtime, &task, Some(first.clone()), i32::MAX as u32);
+    let retried = observe(&runtime, &runtime.get_task(&task).unwrap()).unwrap();
+    assert_eq!(original.0, retried.0);
+    assert_eq!(retried.1["episode"], first);
+    assert_eq!(retried.1["cause_run_id"], last);
+    // Unrelated in-flight work does not make this causal episode unsettled.
+    runtime
+        .stores()
+        .jobs()
+        .insert_job_run(PIPELINE_JOB, 1, Utc::now(), None, None)
+        .unwrap();
+    assert!(observe(&runtime, &runtime.get_task(&task).unwrap()).is_ok());
+}
+
+#[test]
+#[cfg(unix)]
+fn state_incident_collapses_parent_child_and_withholds_live_parent() {
+    use crate::application::automation::incidents::observe;
+    use orbit_types::workflow::{ChildDispatch, ChildDispatchPhase, PipelineState};
+    let (_root, runtime, repo) = test_runtime();
+    let child_task = create_backlog_task(&runtime, &repo, "child");
+    let child = fail_pipeline_attempt(&runtime, &child_task, None, i32::MAX as u32);
+    let expected = observe(&runtime, &runtime.get_task(&child_task).unwrap())
+        .unwrap()
+        .0;
+    let mut expected_members = vec![child_task.clone()];
+    for (hint, pid, allowed) in [
+        ("stopped-parent", i32::MAX as u32, true),
+        ("live-parent", std::process::id(), false),
+    ] {
+        let parent_task = create_backlog_task(&runtime, &repo, hint);
+        let parent = fail_pipeline_attempt(&runtime, &parent_task, None, pid);
+        let mut state = PipelineState::new(parent.clone(), PIPELINE_JOB.into(), json!({}));
+        let mut dispatch = ChildDispatch::submitted(
+            child.clone(),
+            PIPELINE_JOB.into(),
+            "invoke".into(),
+            true,
+            false,
+            Utc::now(),
+        );
+        dispatch.phase = ChildDispatchPhase::Terminal;
+        dispatch.child_status = Some("failed".into());
+        state.record_child_dispatch(dispatch);
+        runtime.write_run_state(&parent, &state).unwrap();
+        let observed = observe(&runtime, &runtime.get_task(&parent_task).unwrap());
+        if allowed {
+            assert_eq!(observed.unwrap().0, expected);
+            expected_members.push(parent_task);
+            expected_members.sort();
+            assert_eq!(
+                crate::application::automation::incidents::members(&runtime).unwrap()[&expected],
+                expected_members
+            );
+        } else {
+            assert!(observed.is_err());
+        }
+    }
+    assert!(
+        !crate::application::automation::incidents::members(&runtime)
+            .unwrap()
+            .contains_key(&expected)
+    );
 }

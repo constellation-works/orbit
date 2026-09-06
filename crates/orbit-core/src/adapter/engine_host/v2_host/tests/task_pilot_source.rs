@@ -526,3 +526,273 @@ fn non_git_workspace_still_uses_filesystem_existence() {
     let output = apply_selectors(&runtime, &prepared, &task, vec!["file:src/alpha.rs"]);
     assert_eq!(output["status"], "succeeded");
 }
+
+#[test]
+fn material_criteria_edit_invalidates_real_pilot_apply() {
+    let fixture = remote_landing_fixture();
+    let prepared = prepare_landing(&fixture).unwrap();
+    assert!(prepared["tasks"][0]["material_fingerprint"].is_string());
+    fixture
+        .runtime
+        .update_task(
+            &fixture.task.id,
+            crate::application::task::TaskUpdateParams {
+                acceptance_criteria: Some(vec!["A different material requirement".into()]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let applied = apply_selectors(
+        &fixture.runtime,
+        &prepared,
+        &fixture.task,
+        vec!["file:src/merged.rs"],
+    );
+    assert_eq!(applied["status"], "failed");
+    assert_eq!(
+        applied["skipped_stale_partitions"][0]["stale_tasks"][0]["reason"],
+        "material_changed"
+    );
+    assert!(
+        fixture
+            .runtime
+            .get_task(&fixture.task.id)
+            .unwrap()
+            .context_files
+            .is_empty()
+    );
+}
+
+#[test]
+fn comment_and_summary_leave_material_fingerprint_unchanged() {
+    let fixture = remote_landing_fixture();
+    let before = prepare_landing(&fixture).unwrap();
+    fixture
+        .runtime
+        .update_task(
+            &fixture.task.id,
+            crate::application::task::TaskUpdateParams {
+                comment: Some("Progress only".into()),
+                execution_summary: Some("Instrumentation only".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let after = prepare_landing(&fixture).unwrap();
+    assert_eq!(
+        before["tasks"][0]["material_fingerprint"],
+        after["tasks"][0]["material_fingerprint"]
+    );
+}
+
+#[test]
+fn state_member_apply_preserves_resulting_provenance_without_promotion() {
+    use orbit_engine::RuntimeHost;
+    use orbit_types::workflow::automation::{members::*, *};
+    let mut fixture = remote_landing_fixture();
+    fixture.runtime = fixture
+        .runtime
+        .with_automation_machine_identity(Some("fixture".into()));
+    // State consumers pin the configured local integration ref.
+    let source = SourceRevision {
+        commit: fixture.stale_sha.clone(),
+        tree: git(&fixture.repo, &["rev-parse", "HEAD^{tree}"]),
+    };
+    let fingerprint = crate::application::automation::preparation::fingerprint(
+        &fixture.runtime,
+        &fixture.task,
+        &source.commit,
+    )
+    .unwrap();
+    let now = chrono::Utc::now();
+    let member = StateMember {
+        key: fixture.task.id.clone(),
+        task_ids: vec![fixture.task.id.clone()],
+        fingerprint,
+        source: source.clone(),
+        evidence: json!({}),
+        first_seen: now,
+        changed_at: now,
+    };
+    let consumer =
+        crate::application::automation::consumer_key(&fixture.runtime, "routine", "pilot").unwrap();
+    let trigger = StateTrigger {
+        kind: StateTriggerKind::PreparationEligible,
+        owner_machine: "fixture".into(),
+        branch: LANDING.into(),
+        debounce_minutes: 2,
+        max_wait_minutes: 10,
+        max_items: 50,
+        retries: 1,
+        deadline_minutes: 30,
+    };
+    let definition: orbit_types::workflow::RoutineDefinition = serde_json::from_value(json!({
+        "schemaVersion":1,"name":"pilot","enabled":true,"hosts":["fixture"],"target":"job:task_pilot_pipeline",
+        "trigger":{"state":trigger},"policy":{"overlap":"forbid","retries":{"max":1,"backoff_minutes":5},"timeout_minutes":30}
+    })).unwrap();
+    let epoch = orbit_automation::delivery::definition_epoch(&(
+        &trigger.kind,
+        &trigger.owner_machine,
+        &trigger.branch,
+        &definition.target,
+    ))
+    .unwrap();
+    let store = fixture.runtime.automation_store().unwrap();
+    let state = AutomationState {
+        members: Some(MemberState::default()),
+        consumer: consumer.clone(),
+        epoch,
+        repository: "fixture".into(),
+        branch: LANDING.into(),
+        generation: 0,
+        baseline: source.clone(),
+        observed: source.clone(),
+        covered: source,
+        pending_commits: vec![],
+        pending: vec![],
+        waived: vec![],
+        unresolved: Default::default(),
+        associations: Default::default(),
+        active: None,
+    };
+    assert!(store.automation_initialize(&state).unwrap());
+    let claim = MemberAttempt {
+        consumer: consumer.clone(),
+        kind: StateTriggerKind::PreparationEligible,
+        id: "fixture-attempt".into(),
+        member: member.clone(),
+        attempt: 1,
+        max_attempts: 2,
+        deadline: now + chrono::Duration::minutes(30),
+        retry_after: now,
+        action_key: "fixture-key".into(),
+        action_id: None,
+        exhausted: false,
+    };
+    let mut claimed = state.clone();
+    claimed.generation += 1;
+    claimed
+        .members
+        .as_mut()
+        .unwrap()
+        .pending
+        .insert(member.key.clone(), member);
+    claimed.members.as_mut().unwrap().active = Some(claim.clone());
+    assert!(store.automation_commit(&state, &claimed, None).unwrap());
+    let run = fixture
+        .runtime
+        .stores()
+        .jobs()
+        .insert_automation_job_run(
+            "task_pilot_pipeline",
+            json!({"state_automation":claim}),
+            "fixture-key",
+        )
+        .unwrap();
+    let mut admitted = claimed.clone();
+    admitted.generation += 1;
+    admitted
+        .members
+        .as_mut()
+        .unwrap()
+        .active
+        .as_mut()
+        .unwrap()
+        .action_id = Some(run.run_id.clone());
+    assert!(store.automation_commit(&claimed, &admitted, None).unwrap());
+    let input = json!({"state_automation":claim,"task_ids":[fixture.task.id],"workspace_path":fixture.repo,"base_branch":LANDING,"source_revision":fixture.stale_sha});
+    assert!(
+        fixture
+            .runtime
+            .run_deterministic(
+                "prepare_task_pilot",
+                &json!({}),
+                &input,
+                fixture
+                    .runtime
+                    .tool_context_for_activity(Some("wrong-run"), None, None, None)
+            )
+            .is_err()
+    );
+    let prepared = fixture
+        .runtime
+        .run_deterministic(
+            "prepare_task_pilot",
+            &json!({}),
+            &input,
+            fixture
+                .runtime
+                .tool_context_for_activity(Some(&run.run_id), None, None, None),
+        )
+        .unwrap();
+    let result = apply_selectors(
+        &fixture.runtime,
+        &prepared,
+        &fixture.task,
+        vec!["file:src/existing.rs"],
+    );
+    assert_eq!(result["status"], "succeeded");
+    let evidence: MemberEvidence =
+        serde_json::from_value(result["member_evidence"].clone()).unwrap();
+    assert_eq!(evidence.input_fingerprint, claim.member.fingerprint);
+    assert_ne!(evidence.input_fingerprint, evidence.resulting_fingerprint);
+    let task = fixture.runtime.get_task(&fixture.task.id).unwrap();
+    assert_eq!(task.status, TaskStatus::Backlog);
+    assert_eq!(
+        evidence.resulting_fingerprint,
+        crate::application::automation::preparation::fingerprint(
+            &fixture.runtime,
+            &task,
+            &fixture.stale_sha
+        )
+        .unwrap()
+    );
+    assert_eq!(evidence.action_id, run.run_id);
+    let mut pipeline = orbit_types::workflow::PipelineState::new(
+        run.run_id.clone(),
+        run.job_id.clone(),
+        json!({"state_automation":claim}),
+    );
+    pipeline.record_step(
+        2,
+        orbit_types::workflow::JobRunState::Success,
+        Some(result),
+        None,
+    );
+    fixture
+        .runtime
+        .write_run_state(&run.run_id, &pipeline)
+        .unwrap();
+    fixture
+        .runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, now, std::process::id())
+        .unwrap();
+    fixture
+        .runtime
+        .finalize_job_run_with_reservation_cleanup(
+            &run.run_id,
+            orbit_types::workflow::JobRunState::Failed,
+            chrono::Utc::now(),
+            Some(1),
+            orbit_store::TaskReservationReleaseReason::RunTerminal,
+        )
+        .unwrap();
+    let diagnostic = crate::application::automation::evaluate_routine(
+        &fixture.runtime,
+        &definition,
+        false,
+        now + chrono::Duration::minutes(1),
+    )
+    .unwrap();
+    assert_eq!(diagnostic.receipts.len(), 1);
+    assert!(diagnostic.state.unwrap().members.unwrap().active.is_none());
+    let receipt = store
+        .automation_receipts(&consumer, 20)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let accepted: MemberEvidence = serde_json::from_slice(&receipt.evidence).unwrap();
+    assert_eq!(accepted, evidence);
+}
