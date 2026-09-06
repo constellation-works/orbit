@@ -1090,6 +1090,20 @@
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
+        "allowed_crews": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation."
+        },
         "base": {
           "description": "Optional base branch override.",
           "type": "string"
