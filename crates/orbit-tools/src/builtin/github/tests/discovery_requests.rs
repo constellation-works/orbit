@@ -4,7 +4,7 @@
 
 use serde_json::json;
 
-use crate::builtin::github::{dependabot_alerts, pr_list, run_list, run_logs, run_view};
+use crate::builtin::github::{dependabot_alerts, logs, pr_list, run_list, run_view};
 
 #[test]
 fn dependabot_alert_request_is_bounded_and_projects_compact_evidence() {
@@ -289,11 +289,11 @@ fn a_cancelled_job_counts_as_unsuccessful() {
 
 #[test]
 fn run_logs_defaults_to_failed_steps_and_accepts_the_full_log() {
-    let failed = run_logs::build_exec_request(&json!({ "run": "99" })).expect("request");
+    let failed = logs::run_log_request(&json!({ "run": "99" })).expect("request");
     assert!(failed.args.iter().any(|arg| arg == "--log-failed"));
     assert!(!failed.args.iter().any(|arg| arg == "--log"));
 
-    let all = run_logs::build_exec_request(&json!({ "run": "99", "scope": "all", "job": "5" }))
+    let all = logs::run_log_request(&json!({ "run": "99", "scope": "all", "job": "5" }))
         .expect("request");
     assert!(all.args.iter().any(|arg| arg == "--log"));
     assert!(all.args.iter().any(|arg| arg == "--job"));
@@ -302,7 +302,7 @@ fn run_logs_defaults_to_failed_steps_and_accepts_the_full_log() {
 
 #[test]
 fn run_logs_rejects_an_unknown_scope() {
-    let error = run_logs::build_exec_request(&json!({ "run": "99", "scope": "everything" }))
+    let error = logs::run_log_request(&json!({ "run": "99", "scope": "everything" }))
         .expect_err("an unknown scope must be rejected");
 
     assert!(error.to_string().contains("scope"), "{error}");

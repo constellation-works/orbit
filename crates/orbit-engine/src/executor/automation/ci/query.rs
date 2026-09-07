@@ -11,14 +11,18 @@
 //! `orbit_tools::github_cli`, so the shape of a `gh` call has exactly one
 //! owner in the workspace.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
-use orbit_exec::{NoSandbox, run_process, run_process_streaming_stdout};
+use orbit_exec::{NoSandbox, run_process};
 use orbit_tools::{check_exec_result, github_cli};
 use serde_json::{Value, json};
+
+/// Which slice of a run's log to read, and the read itself, are owned by
+/// `orbit_tools::github_cli` so the stages and the `github.*` tools cannot
+/// drift apart on scope, bounding, or fallback.
+pub(super) use github_cli::LogScope;
 
 /// Whether a GitHub CLI exists on this host and holds usable credentials.
 ///
@@ -46,30 +50,21 @@ impl AuthStatus {
     }
 }
 
-/// Which slice of a run's log to read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LogScope {
-    /// Failed steps only — the working default, and where the error signature
-    /// lives.
-    Failed,
-    /// The whole run log. The checkout step normally *succeeds*, so this is
-    /// the only scope that can evidence the commit a runner actually tested.
-    All,
-}
-
-impl LogScope {
-    fn as_input_value(self) -> &'static str {
-        match self {
-            Self::Failed => "failed",
-            Self::All => "all",
-        }
-    }
-}
-
 /// One run log, with a bounded human excerpt and separately bounded checkout
 /// evidence extracted while the source stream is drained.
-#[derive(Debug, Clone, Default)]
+/// Deliberately not `Default`: a `RunLog` whose `source` is unset would carry
+/// no answer to "where did these bytes come from", which is exactly the
+/// question this type now exists to settle.
+#[derive(Debug, Clone)]
 pub(super) struct RunLog {
+    /// Which query produced `text`: the run-scoped log, or one job's own log
+    /// after the run-scoped read came back empty.
+    pub(super) source: String,
+    /// Identity of the job whose log was read, when the fallback supplied it.
+    pub(super) source_jobs: Vec<Value>,
+    /// Why the fallback recovered nothing. Present only when the read ends
+    /// with no text at all, so the run's evidence gap can name its own cause.
+    pub(super) fallback_error: Option<String>,
     pub(super) text: String,
     pub(super) truncated: bool,
     pub(super) total_bytes: usize,
@@ -81,9 +76,6 @@ pub(super) struct RunLog {
     pub(super) checkout_evidence_source_truncated: bool,
     pub(super) checkout_evidence_display_truncated: bool,
 }
-
-/// Cap on returned checkout-evidence lines, mirroring `github.run.logs`.
-const MAX_EVIDENCE_LINES: usize = 40;
 
 /// The reads the CI stages are allowed to make.
 ///
@@ -219,36 +211,26 @@ impl CiQueries for HostCiQueries {
         scope: LogScope,
         max_bytes: usize,
     ) -> Result<RunLog, OrbitError> {
-        let mut request =
-            github_cli::run_logs_request(&json!({"run": run_id, "scope": scope.as_input_value()}))?;
-        request.current_dir = Some(self.repo_root.to_string_lossy().into_owned());
-        let (result, log) =
-            run_process_streaming_stdout(&request, &NoSandbox, move |mut stdout| {
-                let mut collector =
-                    github_cli::StreamedLogCollector::new(max_bytes, MAX_EVIDENCE_LINES);
-                let mut chunk = [0_u8; 4096];
-                loop {
-                    let read = stdout.read(&mut chunk).map_err(|error| {
-                        OrbitError::Execution(format!("failed reading gh run log: {error}"))
-                    })?;
-                    if read == 0 {
-                        return Ok(collector.finish());
-                    }
-                    collector.push(&chunk[..read]);
-                }
-            })?;
-        check_exec_result(&result, "gh run view --log")?;
+        let requests = github_cli::RunLogRequests::from_input(
+            &json!({"run": run_id, "scope": scope.as_str()}),
+        )?
+        .in_directory(&self.repo_root.to_string_lossy());
+        let read = github_cli::read_run_log(&requests, github_cli::LogReadBounds::new(max_bytes))?;
+
         Ok(RunLog {
-            text: log.text,
-            truncated: log.truncated,
-            total_bytes: log.total_bytes,
-            returned_bytes: log.returned_bytes,
-            checkout_commits: log.checkout_evidence.commits,
-            checkout_evidence: log.checkout_evidence.lines,
-            checkout_evidence_complete: log.checkout_evidence.complete,
-            checkout_evidence_scanned_bytes: log.checkout_evidence.scanned_bytes,
-            checkout_evidence_source_truncated: log.checkout_evidence.source_truncated,
-            checkout_evidence_display_truncated: log.checkout_evidence.display_truncated,
+            source: read.source.to_string(),
+            source_jobs: read.source_jobs,
+            fallback_error: read.fallback_error,
+            text: read.log.text,
+            truncated: read.log.truncated,
+            total_bytes: read.log.total_bytes,
+            returned_bytes: read.log.returned_bytes,
+            checkout_commits: read.log.checkout_evidence.commits,
+            checkout_evidence: read.log.checkout_evidence.lines,
+            checkout_evidence_complete: read.log.checkout_evidence.complete,
+            checkout_evidence_scanned_bytes: read.log.checkout_evidence.scanned_bytes,
+            checkout_evidence_source_truncated: read.log.checkout_evidence.source_truncated,
+            checkout_evidence_display_truncated: read.log.checkout_evidence.display_truncated,
         })
     }
 
@@ -272,8 +254,11 @@ impl CiQueries for HostCiQueries {
 #[cfg(test)]
 pub(super) fn bounded_run_log(raw: &str, max_bytes: usize) -> RunLog {
     let bounded = github_cli::bound_log_text(raw, max_bytes);
-    let evidence = github_cli::scan_checkout_evidence(raw, MAX_EVIDENCE_LINES);
+    let evidence = github_cli::scan_checkout_evidence(raw, github_cli::MAX_EVIDENCE_LINES);
     RunLog {
+        source: github_cli::SOURCE_RUN_LOG.to_string(),
+        source_jobs: Vec::new(),
+        fallback_error: None,
         text: bounded.text,
         truncated: bounded.truncated,
         total_bytes: bounded.total_bytes,

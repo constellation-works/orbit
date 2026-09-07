@@ -63,7 +63,7 @@ fn project_job(job: &Value, run_url: &Value) -> Value {
 /// `cancelled` and `timed_out` count: a run that never produced a verdict is
 /// not a green run, and treating it as one is how a red pipeline gets reported
 /// as clean.
-fn is_unsuccessful(conclusion: &Value) -> bool {
+pub(super) fn is_unsuccessful(conclusion: &Value) -> bool {
     matches!(
         conclusion.as_str(),
         Some("failure" | "cancelled" | "timed_out" | "action_required" | "startup_failure")

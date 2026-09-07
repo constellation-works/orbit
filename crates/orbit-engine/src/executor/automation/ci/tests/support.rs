@@ -28,6 +28,10 @@ pub(super) struct FakeQueries {
     pub(super) run_view_errors: HashMap<String, String>,
     pub(super) branch_head_errors: HashMap<String, String>,
     pub(super) log_errors: HashMap<(String, bool), String>,
+    /// Logs the per-job fallback recovered, with the job identity it read.
+    pub(super) job_log_fallbacks: HashMap<(String, bool), (String, Vec<Value>)>,
+    /// Reads that ended with no text because the fallback recovered none.
+    pub(super) log_fallback_errors: HashMap<(String, bool), String>,
 }
 
 impl FakeQueries {
@@ -107,6 +111,33 @@ impl FakeQueries {
             .insert((run_id.to_string(), all_scope), log.to_string());
         self
     }
+
+    /// Script a read whose run-scoped query came back empty and whose evidence
+    /// came from one job's own log instead.
+    pub(super) fn with_job_log_fallback(
+        mut self,
+        run_id: &str,
+        all_scope: bool,
+        log: &str,
+        jobs: Vec<Value>,
+    ) -> Self {
+        self.job_log_fallbacks
+            .insert((run_id.to_string(), all_scope), (log.to_string(), jobs));
+        self
+    }
+
+    /// Script a read that recovered nothing: the run-scoped query was empty
+    /// and the fallback could not stand in for it.
+    pub(super) fn with_log_fallback_error(
+        mut self,
+        run_id: &str,
+        all_scope: bool,
+        message: &str,
+    ) -> Self {
+        self.log_fallback_errors
+            .insert((run_id.to_string(), all_scope), message.to_string());
+        self
+    }
 }
 
 impl CiQueries for FakeQueries {
@@ -166,12 +197,17 @@ impl CiQueries for FakeQueries {
         {
             return Err(OrbitError::Execution(message.clone()));
         }
-        let raw = self
-            .logs
-            .get(&(run_id.to_string(), scope == LogScope::All))
-            .cloned()
-            .unwrap_or_default();
-        Ok(super::super::query::bounded_run_log(&raw, max_bytes))
+        let key = (run_id.to_string(), scope == LogScope::All);
+        if let Some((raw, jobs)) = self.job_log_fallbacks.get(&key) {
+            let mut log = super::super::query::bounded_run_log(raw, max_bytes);
+            log.source = orbit_tools::github_cli::SOURCE_JOB_API_LOG.to_string();
+            log.source_jobs = jobs.clone();
+            return Ok(log);
+        }
+        let raw = self.logs.get(&key).cloned().unwrap_or_default();
+        let mut log = super::super::query::bounded_run_log(&raw, max_bytes);
+        log.fallback_error = self.log_fallback_errors.get(&key).cloned();
+        Ok(log)
     }
 
     fn remote_branch_head(&self, branch: &str) -> Result<Option<String>, OrbitError> {

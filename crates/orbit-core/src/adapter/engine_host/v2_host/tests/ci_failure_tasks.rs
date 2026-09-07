@@ -415,6 +415,47 @@ fn a_filed_task_is_a_proposed_bug_carrying_usable_evidence() {
 }
 
 #[test]
+fn an_excerpt_recovered_from_a_job_log_is_labelled_as_the_whole_job_log() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut recovered = failure(
+        10,
+        "ci",
+        "docs",
+        "cargo doc",
+        "2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to \
+         private item `reject_root_override`\n",
+        CHECKOUT,
+    );
+    // Collection could not read the run-scoped failed-step log and recovered
+    // the excerpt from the failed job's own log instead.
+    recovered["log_source"] = json!("job_api_log");
+    recovered["log_source_jobs"] = json!([{
+        "job_id": 101_560_010_340_u64,
+        "name": "docs",
+        "conclusion": "failure",
+        "url": "https://github.com/acme/orbit/actions/runs/10/job/101560010340",
+    }]);
+
+    let output = file(&runtime, json!({"ci_evidence": snapshot(vec![recovered])}));
+
+    assert_eq!(output["filed_count"], json!(1));
+    let task_id = filed_task_ids(&output).remove(0);
+    let description = runtime
+        .get_task(&task_id)
+        .expect("read filed task")
+        .description;
+    assert!(
+        description.contains("reject_root_override"),
+        "the recovered diagnostic must reach the filed task:\n{description}"
+    );
+    assert!(
+        description.contains("whole log of job `docs` (id `101560010340`)")
+            && description.contains("job log API"),
+        "a whole-job log must not be presented as a failed-step excerpt:\n{description}"
+    );
+}
+
+#[test]
 fn live_run_fixture_files_once_with_complete_actionable_evidence() {
     const RUN_ID: u64 = 33_358_160_088;
     const JOB_ID: u64 = 99_384_177_985;

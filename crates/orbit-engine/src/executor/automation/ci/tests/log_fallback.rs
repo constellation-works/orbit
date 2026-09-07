@@ -1,0 +1,211 @@
+//! Collection when a run-scoped log read comes back empty.
+//!
+//! `orbit-tools` owns recovering the bytes from a job's own log; what these
+//! tests pin is the half collection owns: fallback evidence has to reach the
+//! snapshot as a real, investigated failure with its own provenance, and a run
+//! whose fallback recovered nothing must not withhold another run's complete
+//! finding.
+
+use serde_json::{Value, json};
+
+use super::super::collect::collect;
+use super::support::{FakeQueries, failed_job, run};
+
+const HEAD: &str = "1111111111111111111111111111111111111111";
+const CHECKOUT: &str = "3d9fc7c65934cdc98cec3954a37e10ba6d387e55";
+
+fn input() -> Value {
+    json!({"integration_branch": "topic"})
+}
+
+/// A job log as the log API serves it: no job/step columns, the checkout the
+/// runner recorded for itself, and the diagnostic at the end.
+fn job_log() -> String {
+    format!(
+        "2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n\
+         2026-09-06T21:15:34.9602377Z {CHECKOUT}\n\
+         2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n\
+         2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n\
+         2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+    )
+}
+
+fn source_job() -> Value {
+    json!({
+        "job_id": 101560010340_u64,
+        "name": "docs",
+        "conclusion": "failure",
+        "url": "https://github.com/acme/orbit/actions/runs/10/job/101560010340",
+    })
+}
+
+fn failing_run(run_id: u64) -> Value {
+    run(
+        run_id,
+        "ci",
+        HEAD,
+        "completed",
+        Some("failure"),
+        "2026-09-06T21:15:00Z",
+    )
+}
+
+fn failure_by_id(evidence: &Value, run_id: u64) -> Option<&Value> {
+    evidence["current_failures"]
+        .as_array()
+        .expect("current failures")
+        .iter()
+        .find(|failure| failure["run_id"] == json!(run_id))
+}
+
+#[test]
+fn a_run_whose_logs_came_from_a_job_investigates_with_that_evidence() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![failing_run(10)]])
+        .with_run_view(
+            "10",
+            json!({"failed_jobs": [failed_job(101560010340, "docs")]}),
+        )
+        .with_job_log_fallback("10", false, &job_log(), vec![source_job()]);
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    let failure = failure_by_id(&evidence, 10).expect("run 10 is a current failure");
+    assert_eq!(failure["investigated"], json!(true));
+    assert_eq!(failure["log_source"], json!("job_api_log"));
+    assert_eq!(failure["log_source_jobs"], json!([source_job()]));
+    assert!(
+        failure["log_excerpt"]
+            .as_str()
+            .is_some_and(|log| log.contains("reject_root_override")
+                && log.contains("crates/orbit-web/src/connect.rs:92")),
+        "the recovered diagnostic must reach the snapshot: {}",
+        failure["log_excerpt"]
+    );
+    // The commit under test is read from the runner's own output, not from the
+    // event-reported head SHA the run advertised.
+    assert_eq!(failure["actual_checkout_shas"], json!([CHECKOUT]));
+    assert_ne!(failure["actual_checkout_shas"], json!([HEAD]));
+    assert_eq!(failure["checkout_identity"]["state"], json!("observed"));
+    assert_eq!(
+        failure["checkout_identity"]["provenance"]["read_via"],
+        json!("job_api_log")
+    );
+    assert_eq!(
+        failure["checkout_identity"]["provenance"]["jobs"],
+        json!([source_job()])
+    );
+    assert_eq!(evidence["outcome_hint"], json!("current_failures"));
+    assert_eq!(evidence["retryable_errors"], json!([]));
+    // Evidence recovered from the failed job's own log already carries the
+    // checkout, so no full-log read had to be spent on it.
+    assert_eq!(evidence["truncation"]["checkout_log_reads"], json!(0));
+}
+
+#[test]
+fn a_failed_fallback_names_its_cause_and_never_reads_as_a_clean_run() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![failing_run(10)]])
+        .with_run_view(
+            "10",
+            json!({"failed_jobs": [failed_job(101560010340, "docs")]}),
+        )
+        .with_log_fallback_error(
+            "10",
+            false,
+            "job 101560010340 (`docs`): Not Found (HTTP 404)",
+        )
+        .with_log_fallback_error(
+            "10",
+            true,
+            "job 101560010340 (`docs`): Not Found (HTTP 404)",
+        );
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    assert_eq!(evidence["outcome_hint"], json!("retryable_error"));
+    // The run stays listed — a failed completed run is still red — but it is
+    // explicitly not investigated, so nothing downstream can file it as an
+    // evidenced regression.
+    let failure = failure_by_id(&evidence, 10).expect("the red run stays visible");
+    assert_eq!(failure["investigated"], json!(false));
+    assert_eq!(failure["log_excerpt"], json!(""));
+    assert_eq!(failure["actual_checkout_shas"], json!([]));
+    let errors = evidence["retryable_errors"]
+        .as_array()
+        .expect("retryable errors");
+    let log_error = errors
+        .iter()
+        .find(|error| error["operation"] == json!("run_logs"))
+        .expect("the empty log read is reported");
+    let message = log_error["message"].as_str().expect("message");
+    assert!(
+        message.contains("query returned no failed-step log text")
+            && message.contains("per-job log fallback recovered none")
+            && message.contains("Not Found (HTTP 404)"),
+        "the gap must name the fallback's own outcome: {message}"
+    );
+}
+
+#[test]
+fn one_runs_failed_fallback_does_not_withhold_anothers_complete_finding() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![
+            failing_run(10),
+            run(
+                11,
+                "docs",
+                HEAD,
+                "completed",
+                Some("failure"),
+                "2026-09-06T21:16:00Z",
+            ),
+        ]])
+        .with_run_view(
+            "10",
+            json!({"failed_jobs": [failed_job(101560010340, "docs")]}),
+        )
+        .with_run_view("11", json!({"failed_jobs": [failed_job(202, "build")]}))
+        .with_log_fallback_error(
+            "10",
+            false,
+            "job 101560010340 (`docs`): Not Found (HTTP 404)",
+        )
+        .with_log_fallback_error(
+            "10",
+            true,
+            "job 101560010340 (`docs`): Not Found (HTTP 404)",
+        )
+        .with_job_log_fallback("11", false, &job_log(), vec![source_job()]);
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    // The run whose fallback recovered nothing carries no evidence and is not
+    // investigated; it still must not silence the run beside it.
+    let incomplete = failure_by_id(&evidence, 10).expect("the red run stays visible");
+    assert_eq!(incomplete["investigated"], json!(false));
+    assert_eq!(incomplete["log_excerpt"], json!(""));
+    let complete = failure_by_id(&evidence, 11).expect("run 11 is still a current failure");
+    assert_eq!(complete["investigated"], json!(true));
+    assert_eq!(complete["log_source"], json!("job_api_log"));
+    assert_eq!(complete["actual_checkout_shas"], json!([CHECKOUT]));
+    assert_eq!(
+        evidence["summary"]["investigated_failure_run_ids"],
+        json!([11])
+    );
+    assert!(
+        evidence["retryable_errors"]
+            .as_array()
+            .expect("retryable errors")
+            .iter()
+            .all(|error| error["run_id"] == json!(10)),
+        "run 11's evidence is complete, so it owns no error: {}",
+        evidence["retryable_errors"]
+    );
+}
