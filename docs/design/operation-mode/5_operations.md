@@ -299,18 +299,19 @@ A push between inspection and mutation is rejected by the provider. Gated runs
 wait locally for pending checks; they never enable auto-merge or enter a merge
 queue. Queue-only branches and other unsupported synchronous merges fail closed,
 leaving the task in review. Ungated runs retain ordinary `gh pr merge` and
-repository-enabled auto-merge. See the [provider merge contract](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
+repository-enabled auto-merge. See the
+[provider merge contract](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
 
-Completion refuses to repair a conflicting reviewed PR (a conflict repair is unreviewed content),
-and after the verified merge reads the merge commit, fetches it, and records
-a landing: `fast_forward`, `squash`, `merge_commit`, or `rebase` when the
-landing started from the reviewed base tree and produced the reviewed final
-tree, otherwise uncovered with `base_changed`, `candidate_changed`,
-`objects_missing`, or `mapping_unknown`. An externally completed merge (including
-one observed while polling) is recorded as uncovered with `external_landing_race`;
-the landing audit includes `managed_merge`, which requires a conditional mutation
-response matching the subsequently observed merge commit. A landing is never
-fabricated.
+Completion refuses to repair a conflicting reviewed PR (a conflict repair is
+unreviewed content), and after the verified merge reads the merge commit,
+fetches it, and records a landing: `fast_forward`, `squash`, `merge_commit`,
+or `rebase` when the landing started from the reviewed base tree and produced
+the reviewed final tree, otherwise uncovered with `base_changed`,
+`candidate_changed`, `objects_missing`, or `mapping_unknown`. An externally
+completed merge (including one observed while polling) is recorded as uncovered
+with `external_landing_race`; the landing audit includes `managed_merge`, which
+requires a conditional mutation response matching the subsequently observed
+merge commit. A landing is never fabricated.
 
 ### Delivery coverage
 

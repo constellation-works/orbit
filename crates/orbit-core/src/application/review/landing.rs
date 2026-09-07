@@ -40,12 +40,14 @@ pub(crate) fn record_review_landing(
     let store = runtime.review_store()?;
     let branch = request.base.trim_start_matches("origin/").to_string();
     let landing = match request.landed_commit.as_deref() {
-        landed_commit if !request.managed_merge => uncovered(
+        // A merge this completion did not perform conditionally landed
+        // content the gate never authorized, whatever tree it produced.
+        Some(landed_commit) if !request.managed_merge => uncovered(
             &certificate,
             request,
             &branch,
             SourceRevision {
-                commit: landed_commit.unwrap_or_default().to_string(),
+                commit: landed_commit.to_string(),
                 tree: String::new(),
             },
             ReviewInvalidation::ExternalLandingRace,
