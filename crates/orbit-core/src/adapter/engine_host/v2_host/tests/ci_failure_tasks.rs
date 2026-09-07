@@ -2415,3 +2415,147 @@ fn compiler_proof_preserves_case_coordinates_checkout_and_secondary_errors() {
         assert_eq!(output["filed_count"], 2, "{difference}: {output}");
     }
 }
+
+fn region_finding() -> Value {
+    let raw = format!(
+        "##[group]Run cargo nextest run\n{}\
+         thread 'first_failure' panicked at tests/golden.rs:12:5:\n\
+         assertion failed: tool_list.plain.txt golden drift\nleft: {}\nright: expected\n\
+         thread 'second_failure' panicked at tests/other.rs:20:7:\n\
+         assertion failed: second condition\n\
+         ##[error]Process completed with exit code 100.\n",
+        "PASS ordinary_test\n".repeat(20_000),
+        "large assertion ".repeat(10_000)
+    );
+    let mut collector = orbit_tools::github_cli::StreamedLogCollector::new(128, 40);
+    for chunk in raw.as_bytes().chunks(4096) {
+        collector.push(chunk);
+    }
+    let log = collector.finish();
+    let mut finding = failure(10, "CI", "Check", "Run tests", &log.text, CHECKOUT);
+    let mut unit = log.failure_regions.expect("selected regions");
+    unit["job_id"] = finding["job_id"].clone();
+    unit["step"] = json!("Run tests");
+    finding["diagnostic_unit"] = unit;
+    finding["log_source_complete"] = json!(log.source_complete);
+    finding["log_truncated"] = json!(log.truncated);
+    finding
+}
+
+#[test]
+fn oversized_regions_file_all_failures_and_explicit_omissions_then_dedupe() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let evidence = snapshot(vec![region_finding()]);
+    let first = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(first["filed_count"], 1);
+    let id = filed_task_ids(&first).remove(0);
+    let task = runtime.get_task(&id).expect("task");
+    for expected in [
+        "first_failure",
+        "second_failure",
+        "golden.rs:12:5",
+        "other.rs:20:7",
+        "golden drift",
+        "full command was not retained",
+        "assertion payload bytes",
+        "right: expected",
+    ] {
+        assert!(
+            task.description.contains(expected),
+            "missing {expected}: {}",
+            task.description
+        );
+    }
+    assert!(task.required_tools.is_empty());
+    let second = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(second["filed_count"], 0);
+    assert_eq!(second["skipped_existing"][0]["task_id"], id);
+}
+
+#[test]
+fn failure_regions_reject_false_completeness_missing_accounting_and_foreign_identity() {
+    for fault in [
+        "complete",
+        "command",
+        "selection",
+        "source",
+        "job",
+        "untruncated_foreign",
+        "checkout",
+        "step",
+        "accounting",
+        "assertions",
+        "size",
+    ] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let mut finding = region_finding();
+        match fault {
+            "complete" => finding["diagnostic_unit"]["complete"] = json!(true),
+            "command" => finding["diagnostic_unit"]["command_complete"] = json!(false),
+            "selection" => finding["diagnostic_unit"]["selection_complete"] = json!(false),
+            "source" => finding["log_source_complete"] = json!(false),
+            "job" => finding["diagnostic_unit"]["job_id"] = json!(920),
+            "untruncated_foreign" => {
+                finding["diagnostic_unit"]["job_id"] = json!(920);
+                finding["log_truncated"] = json!(false);
+            }
+            "checkout" => finding["checkout_identity"]["provenance"]["job_id"] = json!(920),
+            "step" => finding["diagnostic_unit"]["step"] = json!("Other"),
+            "accounting" => finding["diagnostic_unit"]["omitted_bytes"] = json!(0),
+            "assertions" => {
+                finding["diagnostic_unit"]["assertion_payload_omitted_bytes"] = Value::Null
+            }
+            _ => finding["diagnostic_unit"]["returned_bytes"] = json!(1),
+        }
+        let error = file_error(&runtime, json!({"ci_evidence": snapshot(vec![finding])}));
+        assert!(error.contains("job_evidence_identity"), "{fault}: {error}");
+    }
+}
+
+/// Consumes the exact production snapshot exported by the engine replay.
+/// Both filings use only this disposable runtime's registry and task store.
+#[test]
+#[ignore = "requires ORBIT_CI_REPLAY_OUTPUT and ORBIT_CI_REPLAY_REPORT"]
+fn replay_exact_guardrail_snapshot_through_disposable_filing() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let path = std::env::var("ORBIT_CI_REPLAY_OUTPUT").expect("collection snapshot path");
+    let evidence: Value =
+        serde_json::from_slice(&std::fs::read(path).expect("snapshot")).expect("JSON");
+    let first = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(first["filed_count"], 1, "{first}");
+    let id = filed_task_ids(&first).remove(0);
+    let task = runtime.get_task(&id).expect("repair task");
+    for expected in [
+        "101876457414",
+        "34165795036",
+        "Check / Clippy / Test",
+        "Run CI guardrails",
+        "3ffa0fd3aaa535867c9e060c7ec600a33d7f2be6",
+        "plain_and_json_forms_match_their_goldens",
+        "output_goldens.rs:321:5",
+        "tool_list.plain.txt",
+        "full command was not retained",
+        "assertion payload bytes",
+    ] {
+        assert!(
+            task.description.contains(expected),
+            "missing {expected}: {}",
+            task.description
+        );
+    }
+    assert!(
+        !task
+            .description
+            .contains("eb26940c037ce255b6c28c0378c9276ab38cc75e")
+    );
+    assert!(task.required_tools.is_empty());
+    let second = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(second["filed_count"], 0);
+    assert_eq!(second["skipped_existing"][0]["task_id"], id);
+    let report = json!({"first_filing": first, "repeat_filing": second, "offline_task_description": task.description, "required_tools": task.required_tools});
+    std::fs::write(
+        std::env::var("ORBIT_CI_REPLAY_REPORT").expect("report path"),
+        serde_json::to_vec_pretty(&report).expect("report JSON"),
+    )
+    .expect("write replay report");
+}

@@ -506,3 +506,129 @@ fn selected_command_preserves_unicode_and_redacts_secrets_across_chunk_boundarie
     assert!(unit.contains("[REDACTED_SECRET]"));
     assert!(!unit.contains("ghp_"));
 }
+
+fn oversized_test_command() -> String {
+    format!(
+        "##[group]Run cargo nextest run\n##[endgroup]\n{}\n\
+         FAIL [ 0.1s] suite first_failure\n\
+         thread 'first_failure' panicked at tests/golden.rs:12:5:\n\
+         assertion `left == right` failed: tool_list.plain.txt golden drift\n\
+           left: {}\n  right: expected golden\n\
+         {}\n\
+         FAIL [ 0.2s] suite second_failure\n\
+         thread 'second_failure' panicked at tests/other.rs:20:7:\n\
+         assertion failed: second condition\n\
+         Summary [ 1.0s] 2 tests run: 2 failed\n\
+         ##[error]Process completed with exit code 100.\n",
+        "PASS ordinary_test\n".repeat(20_000),
+        "café ".repeat(20_000),
+        "PASS another_test\n".repeat(100),
+    )
+}
+
+#[test]
+fn oversized_command_keeps_all_failure_regions_and_counts_assertion_omissions() {
+    let raw = oversized_test_command();
+    for chunk_size in [1, 7, 4096] {
+        let mut collector = StreamedLogCollector::new(128, 40);
+        for chunk in raw.as_bytes().chunks(chunk_size) {
+            collector.push(chunk);
+        }
+        let log = collector.finish();
+        assert!(log.source_complete);
+        assert!(log.diagnostic.is_none());
+        let regions = log.failure_regions.expect("bounded failure regions");
+        assert_eq!(regions["complete"], false);
+        assert_eq!(regions["command_complete"], true);
+        assert_eq!(regions["selection_complete"], true);
+        assert_eq!(regions["command_bytes"], raw.len());
+        assert_eq!(
+            regions["retained_source_bytes"].as_u64().expect("retained")
+                + regions["omitted_bytes"].as_u64().expect("omitted"),
+            raw.len() as u64
+        );
+        assert!(
+            regions["assertion_payload_omitted_bytes"]
+                .as_u64()
+                .expect("assertions")
+                > 100_000
+        );
+        let text = regions["text"].as_str().expect("text");
+        for expected in [
+            "first_failure",
+            "second_failure",
+            "golden.rs:12:5",
+            "other.rs:20:7",
+            "golden drift",
+            "right: expected",
+            "Summary",
+            "exit code 100",
+            "assertion payload bytes omitted",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        assert!(text.len() < 4_000);
+    }
+}
+
+#[test]
+fn partial_regions_never_override_missing_source_ambiguous_commands_or_hidden_columns() {
+    let raw = oversized_test_command();
+    for invalid in [
+        format!("{raw}{raw}"),
+        format!("{raw}##[warning]Log output was truncated\n"),
+        raw.replace("##[error]Process completed with exit code 100.\n", ""),
+        format!("{raw}partial line"),
+        raw.replace("PASS another_test", "error: too many distinct failures")
+            .repeat(2),
+        // A conflicting column in discarded chatter must still invalidate
+        // attribution, even though the retained failure lines all match.
+        raw.lines()
+            .enumerate()
+            .map(|(index, line)| {
+                format!(
+                    "{}\tTests\t{line}\n",
+                    if index == 500 { "Other" } else { "CI" }
+                )
+            })
+            .collect(),
+    ] {
+        let mut collector = StreamedLogCollector::new(128, 40);
+        collector.push(invalid.as_bytes());
+        let log = collector.finish();
+        assert!(log.diagnostic.is_none());
+        assert!(log.failure_regions.is_none());
+    }
+}
+
+#[test]
+fn failure_region_overflow_defers_instead_of_losing_secondary_failures() {
+    let raw = format!(
+        "##[group]Run tests\n{}##[error]Process completed with exit code 1.\n",
+        "thread 'another_failure' panicked at tests/example.rs:1:1:\n".repeat(10_000)
+    );
+    let mut collector = StreamedLogCollector::new(128, 40);
+    collector.push(raw.as_bytes());
+    let log = collector.finish();
+    assert!(log.source_complete);
+    assert!(log.diagnostic.is_none());
+    assert!(log.failure_regions.is_none());
+}
+
+#[test]
+fn assertion_prefix_never_leaks_a_secret_cut_at_the_retention_boundary() {
+    let raw = oversized_test_command().replace(
+        &"café ".repeat(20_000),
+        &format!(
+            "{}ghp_{} {}",
+            "x ".repeat(245),
+            "a".repeat(36),
+            "tail ".repeat(20_000)
+        ),
+    );
+    let mut collector = StreamedLogCollector::new(128, 40);
+    collector.push(raw.as_bytes());
+    let log = collector.finish();
+    let regions = log.failure_regions.expect("regions");
+    assert!(!regions["text"].as_str().expect("text").contains("ghp_"));
+}

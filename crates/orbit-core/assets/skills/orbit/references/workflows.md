@@ -95,20 +95,39 @@ assertion payload help text; the raw excerpt stays in the description.
 CI evidence schema 2 binds each failure row to one failed job: both log scopes
 select that job, and checkout provenance carries its job ID. A separate
 `diagnostic_unit` retains a complete runner command from its `Run` group through
-its nonzero process completion, up to 256 KiB. Exactly one failing command and
-one known failed step are required; primary log columns must also match that
-job and step. Filing uses this unit for the signature while `log_excerpt`,
-`log_truncated`, and byte counts continue to describe the bounded head/tail
-display. Raw selected evidence (with secrets redacted) stays in the snapshot;
-task descriptions apply their own 4,000-byte diagnostic display cap.
+its nonzero process completion, up to 256 KiB (`kind: runner_command`,
+`complete: true`). When retention exceeds that limit, collection can instead
+supply `kind: runner_failure_regions`, `complete: false`, with
+`command_complete: true` and `selection_complete: true`: the command boundaries
+and every recognized failure anchor were scanned, but the command was not fully
+retained. Regions keep the command header, anchored test failures, panics,
+assertions and compiler errors, their next 11 context lines, summaries and exit.
+Gaps carry byte-omission markers; large left/right assertion payloads retain a
+512-byte prefix and explicitly count omitted payload bytes. The structured
+`command_bytes`, `retained_source_bytes`, `omitted_bytes`,
+`assertion_payload_omitted_bytes` and `failure_anchor_count` make these limits
+auditable. A failure-anchor count includes repeated reports of the same test.
+The standalone log tool exposes this alternative as `failure_regions`.
+
+Exactly one failing command and one known failed step are required; all primary
+command log columns, including omitted lines, must match that job and step.
+Filing validates the evidence contract and uses selected evidence for signatures;
+`log_excerpt`, `log_truncated`, and byte counts still describe the head/tail
+display. Complete command descriptions use a 4,000-byte diagnostic display cap.
+Failure-region descriptions retain the entire bounded selection (at most 64 KiB)
+and its omission accounting so offline workers receive every selected failure.
+Partial command retention cannot establish a complete compiler set for cross-job
+compiler deduplication. Existing complete-command compiler proofs are unchanged.
 
 Each process stdout read stops with a retryable error beyond 8 MiB (at most one
 4 KiB lookahead chunk); the existing process timeout still applies. Command
-selection uses at most two 256 KiB unit buffers and a 16 KiB line buffer.
-Overlong/invalid source lines, explicit log truncation notices, missing command
-boundaries, multiple failing commands, unknown/ambiguous failed steps, incomplete
-checkout identity, and exhausted read budgets defer that job. Oversized commands
-are not sliced into apparently complete evidence. No extra queries or retries
+selection uses at most two 256 KiB full-command buffers, two 64 KiB region
+buffers and a 16 KiB line buffer. Only left/right assertion payloads may exceed
+the line buffer; other overlong/invalid lines fail closed. Explicit source
+truncation notices, missing command boundaries, multiple failing commands,
+unknown/ambiguous failed steps, incomplete checkout identity, exhausted read
+budgets and failure-region overflow defer that job. Oversized commands are never
+labelled fully retained. No extra queries or retries
 are introduced; complete siblings still file. `max_job_log_reads` caps failed-job
 reads across the snapshot (default
 6, maximum 25); `max_checkout_log_reads` separately caps additional same-job

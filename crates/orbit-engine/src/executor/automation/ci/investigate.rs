@@ -147,7 +147,7 @@ fn investigate_job<Q: CiQueries + ?Sized>(
                     "investigation",
                     "job_log_truncated",
                     failure.get("run_id"),
-                    "job log source or display is incomplete and no complete bound diagnostic unit is available",
+                    "job log source or display is incomplete and no actionable bound diagnostic evidence is available",
                 );
             }
             failure["log_source_complete"] = json!(log.source_complete);
@@ -334,7 +334,15 @@ fn set_checkout_identity(failure: &mut Value, scope: &str, log: &super::query::R
 /// gh output also carries job/step columns; reject conflicting labels rather
 /// than borrowing a different step's command. Raw fallback logs have no columns.
 fn bound_diagnostic(log: &super::query::RunLog, failure: &Value, job_id: u64) -> Option<Value> {
-    let text = log.diagnostic.as_ref()?;
+    if !log.source_complete {
+        return None;
+    }
+    let mut unit = if let Some(text) = &log.diagnostic {
+        json!({"kind": "runner_command", "complete": true, "text": text, "returned_bytes": text.len()})
+    } else {
+        log.failure_regions.clone()?
+    };
+    let text = unit["text"].as_str()?;
     let job = failure["failed_jobs"].as_array()?.first()?;
     let steps = job["failed_steps"].as_array()?;
     if steps.len() != 1 {
@@ -352,12 +360,7 @@ fn bound_diagnostic(log: &super::query::RunLog, failure: &Value, job_id: u64) ->
             }
         }
     }
-    Some(json!({
-        "kind": "runner_command",
-        "complete": true,
-        "job_id": job_id,
-        "step": step,
-        "text": text,
-        "returned_bytes": text.len(),
-    }))
+    unit["job_id"] = json!(job_id);
+    unit["step"] = json!(step);
+    Some(unit)
 }

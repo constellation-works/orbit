@@ -32,6 +32,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_tools::github_cli::strip_ansi_sequences;
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -632,15 +633,22 @@ fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<&'static str
     {
         return Some("failed step identity is missing or ambiguous within this job");
     }
-    if let Some(text) = complete_diagnostic(failure)
+    if failure["diagnostic_unit"]["kind"] == "runner_failure_regions"
+        && selected_diagnostic(failure).is_none()
+    {
+        return Some(
+            "failure regions have invalid completeness, omission accounting or attribution",
+        );
+    }
+    if let Some(text) = selected_diagnostic(failure)
         && error_signature(text, &value_string(&job["failed_steps"][0], "name")).step_fallback
     {
-        return Some("complete command contains no concrete diagnostic");
+        return Some("selected evidence contains no concrete diagnostic");
     }
     if failure["log_source_complete"] == false {
         return Some("job log source is incomplete");
     }
-    if complete_diagnostic(failure).is_none()
+    if selected_diagnostic(failure).is_none()
         && (value_string(failure, "log_excerpt").trim().is_empty()
             || failure.get("log_truncated").and_then(Value::as_bool) != Some(false))
     {
@@ -669,20 +677,52 @@ fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<&'static str
 }
 
 /// Additive schema-2 evidence. Old snapshots remain conservative when their
-/// display was truncated; only a completely captured, correctly bound unit
-/// can replace that display for diagnosis and stable-key calculation.
-fn complete_diagnostic(failure: &Value) -> Option<&str> {
+/// display was truncated; a complete command or explicitly partial failure
+/// regions from a completely scanned command can replace that display.
+fn selected_diagnostic(failure: &Value) -> Option<&str> {
     let unit = &failure["diagnostic_unit"];
     let job = failure["failed_jobs"].as_array()?.first()?;
     let step = job["failed_steps"].as_array()?.first()?["name"].as_str()?;
     let text = unit["text"].as_str()?;
-    (unit["kind"] == "runner_command"
-        && unit["complete"] == true
+    let complete_command = unit["kind"] == "runner_command" && unit["complete"] == true;
+    let failure_regions = valid_failure_regions(unit) && failure["log_source_complete"] == true;
+    ((complete_command || failure_regions)
         && unit["job_id"].as_u64()? == failure["job_id"].as_u64()?
         && unit["step"].as_str()? == step
         && !text.trim().is_empty()
         && text.len() <= 262_144)
         .then_some(text)
+}
+
+/// Region completeness describes selection and command boundaries, never full
+/// retention. Reject malformed or contradictory omission accounting at filing.
+fn valid_failure_regions(unit: &Value) -> bool {
+    let Some(total) = unit["command_bytes"].as_u64() else {
+        return false;
+    };
+    let Some(retained) = unit["retained_source_bytes"].as_u64() else {
+        return false;
+    };
+    let Some(omitted) = unit["omitted_bytes"].as_u64() else {
+        return false;
+    };
+    let Some(assertions) = unit["assertion_payload_omitted_bytes"].as_u64() else {
+        return false;
+    };
+    unit["kind"] == "runner_failure_regions"
+        && unit["complete"] == false
+        && unit["command_complete"] == true
+        && unit["selection_complete"] == true
+        && retained > 0
+        && omitted > 0
+        && retained.checked_add(omitted) == Some(total)
+        && assertions <= omitted
+        && unit["failure_anchor_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+        && unit["text"].as_str().is_some_and(|text| {
+            text.len() <= 65_536 && unit["returned_bytes"].as_u64() == Some(text.len() as u64)
+        })
 }
 
 /// The deferred entries flattened back into the error list shape, for the
@@ -822,6 +862,7 @@ struct FailureCluster {
     /// the step into one `failure_key` is the weaker identity, not a quote.
     signature_is_step_fallback: bool,
     log_excerpt: String,
+    failure_region_note: Option<String>,
     log_truncated: bool,
     /// The job whose own log supplied the excerpt, when the run-scoped read
     /// returned nothing and collection recovered it per job. Such an excerpt is
@@ -1113,7 +1154,17 @@ impl FailureCluster {
                 }
             }
         } else {
-            let excerpt = render_failed_step_excerpt(&self.log_excerpt, DESCRIPTION_LOG_BYTES);
+            let excerpt = if let Some(note) = &self.failure_region_note {
+                out.push_str(note);
+                // Already capped at 64 KiB by collection and checked again at
+                // filing. Keep every selected failure for the offline worker.
+                FailedStepExcerpt {
+                    body: self.log_excerpt.clone(),
+                    has_anchor: true,
+                }
+            } else {
+                render_failed_step_excerpt(&self.log_excerpt, DESCRIPTION_LOG_BYTES)
+            };
             if !excerpt.body.trim().is_empty() {
                 out.push_str("```\n");
                 out.push_str(&excerpt.body);
@@ -1127,8 +1178,8 @@ impl FailureCluster {
             }
             if self.log_truncated {
                 out.push_str(
-                    "\n_The collection display was truncated. Complete selected command evidence, \
-                     when available, is used for diagnosis; the description has its own display cap._\n",
+                    "\n_The collection display was truncated. Selected evidence is used for diagnosis; \
+                     its retention limits are independent of that display._\n",
                 );
             }
             if let Some(job) = &self.log_source_job {
@@ -1326,13 +1377,15 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         }
         let workflow = value_string(failure, "workflow");
         let (job, step) = failing_job_and_step(failure);
-        let log_excerpt = complete_diagnostic(failure)
+        let log_excerpt = selected_diagnostic(failure)
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| value_string(failure, "log_excerpt"));
         let signature = error_signature(&log_excerpt, &step);
         let tested_commit = tested_commit(failure);
 
-        let compiler_cause = compiler_cause(&log_excerpt);
+        let regions = valid_failure_regions(&failure["diagnostic_unit"]);
+        // Partial command retention cannot prove an exhaustive compiler set.
+        let compiler_cause = (!regions).then(|| compiler_cause(&log_excerpt)).flatten();
         let legacy_key = compiler_cause.as_ref().map(|_| {
             let lines = classify_log_lines(&log_excerpt);
             let legacy = legacy_signature(&lines, &step);
@@ -1365,6 +1418,14 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
                 legacy_keys: BTreeSet::new(),
                 signature_is_step_fallback: signature.step_fallback,
                 log_excerpt,
+                failure_region_note: regions.then(|| {
+                    let unit = &failure["diagnostic_unit"];
+                    format!(
+                        "_Failure regions from a completely scanned command; the full command was not retained. {} of {} source bytes omitted, including {} assertion payload bytes. All {} recognized failure anchors and bounded context are retained (64 KiB selection limit)._\n\n",
+                        unit["omitted_bytes"], unit["command_bytes"],
+                        unit["assertion_payload_omitted_bytes"], unit["failure_anchor_count"],
+                    )
+                }),
                 log_truncated: failure
                     .get("log_truncated")
                     .and_then(Value::as_bool)
@@ -2223,46 +2284,6 @@ fn log_payload(line: &str) -> &str {
 /// the raw line so evidence is not discarded.
 fn signature_payload(line: &str) -> String {
     strip_ansi_sequences(log_payload(line)).to_ascii_lowercase()
-}
-
-/// CSI/OSC sequences only. The raw log line remains in the task description.
-///
-/// Walks characters rather than bytes: a truncated or malformed escape in a
-/// runner log must not split a multi-byte character.
-fn strip_ansi_sequences(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch != '\u{1b}' {
-            out.push(ch);
-            continue;
-        }
-        match chars.next() {
-            // CSI: parameters and intermediates, then one final character.
-            Some('[') => {
-                for ch in chars.by_ref() {
-                    if ('\u{40}'..='\u{7e}').contains(&ch) {
-                        break;
-                    }
-                }
-            }
-            // OSC: runs to BEL or the ST terminator.
-            Some(']') => {
-                while let Some(ch) = chars.next() {
-                    if ch == '\u{07}' {
-                        break;
-                    }
-                    if ch == '\u{1b}' && chars.peek() == Some(&'\\') {
-                        chars.next();
-                        break;
-                    }
-                }
-            }
-            // A lone escape, or a two-character sequence: drop both.
-            _ => {}
-        }
-    }
-    out
 }
 
 /// Collapse the parts of a log line that vary between identical failures:
