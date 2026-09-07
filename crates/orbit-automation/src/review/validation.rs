@@ -181,8 +181,10 @@ fn explained(record: &ReviewValidation) -> bool {
 /// Whether a later record is the required check the superseded attempt was
 /// replaced by. Order carries the meaning: a supersession must be resolved
 /// after it, never by a check recorded before it. The later record must
-/// name the same check: the same command, or the same non-empty `check`
-/// identity when the command or environment was corrected. Any later
+/// name the same check: the same command when both records have no `check`,
+/// or the same non-empty `check` identity when both records provide one and
+/// the command or environment was corrected. Check identities and commands
+/// are separate namespaces, so one cannot impersonate the other. Any later
 /// required pass is not enough.
 fn replaced_by_required_check(superseded: &ReviewValidation, later: &[ReviewValidation]) -> bool {
     let Some(identity) = replacement_identity(superseded) else {
@@ -195,21 +197,28 @@ fn replaced_by_required_check(superseded: &ReviewValidation, later: &[ReviewVali
     })
 }
 
-/// The identity a superseded attempt and its replacement share.
+/// The namespaced identity a superseded attempt and its replacement share.
 ///
-/// A present `check` is the identity when it is non-empty after trim.
-/// Otherwise the command string is the identity, so a same-command rerun
-/// still binds. An empty or whitespace-only `check` is invalid and matches
-/// nothing.
-fn replacement_identity(record: &ReviewValidation) -> Option<&str> {
+/// A present `check` is the identity when it is non-empty after trim;
+/// otherwise the command string is the identity, so a same-command rerun
+/// still binds. These forms deliberately remain distinct even when their
+/// strings are equal. An empty or whitespace-only `check` is invalid and
+/// matches nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplacementIdentity<'a> {
+    Check(&'a str),
+    Command(&'a str),
+}
+
+fn replacement_identity(record: &ReviewValidation) -> Option<ReplacementIdentity<'_>> {
     match record.check.as_deref() {
         Some(value) => {
             let trimmed = value.trim();
-            (!trimmed.is_empty()).then_some(trimmed)
+            (!trimmed.is_empty()).then_some(ReplacementIdentity::Check(trimmed))
         }
         None => {
             let command = record.command.as_str();
-            (!command.trim().is_empty()).then_some(command)
+            (!command.trim().is_empty()).then_some(ReplacementIdentity::Command(command))
         }
     }
 }
