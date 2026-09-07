@@ -1,3 +1,4 @@
+use crate::OrbitError;
 use crate::protocol::yaml::{parse_local_routine_yaml, parse_routine_yaml};
 use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy, RoutineTarget};
 
@@ -70,6 +71,32 @@ target: job:docs_reindex
     )
     .expect_err("unknown trigger field must fail");
     assert!(error.to_string().contains("jitter_seconds"), "{error}");
+}
+
+#[test]
+fn rejects_duration_values_above_one_week() {
+    for (field, policy) in [
+        ("timeout_minutes", "timeout_minutes: 1000000000000000"),
+        (
+            "backoff_minutes",
+            "retries: { max: 1, backoff_minutes: 1000000000000000 }",
+        ),
+    ] {
+        let error = parse_routine_yaml(&format!(
+            "schemaVersion: 1\n\
+             name: reindex\n\
+             hosts: [dk-server-1]\n\
+             trigger:\n  cron: \"*/30 * * * *\"\n\
+             target: job:docs_reindex\n\
+             policy:\n  {policy}\n"
+        ))
+        .expect_err("duration above one week must fail");
+
+        assert!(
+            matches!(error, OrbitError::InvalidInput(ref message) if message.contains(field)),
+            "{error}"
+        );
+    }
 }
 
 #[test]
