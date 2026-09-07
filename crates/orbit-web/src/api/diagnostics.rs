@@ -16,7 +16,10 @@ use super::{
     DiagnosticsQuery, HISTORY_DEFAULT_LIMIT, bounded_limit, current_year_month_utc,
     map_runtime_error, month_bounds_utc, server_error, validate_year_month,
 };
-use crate::log_format::{Filters as LogFilters, read_recent_rendered_events, resolve_log_path};
+use crate::log_format::{
+    Filters as LogFilters, format_message_html, format_source, read_recent_matching_events,
+    resolve_log_path,
+};
 
 pub(super) async fn list_diagnostics_metrics(
     Ws(runtime): Ws,
@@ -344,26 +347,52 @@ pub(super) fn global_error_rows_from_path(
     limit: usize,
 ) -> Result<Vec<Value>, orbit_core::OrbitError> {
     let filters = LogFilters::from_query_parts(None, Some("error".to_string()), None)?;
-    let events = read_recent_rendered_events(path, &filters, limit)
+    // Read the raw JSONL events so run/task/step/provider survive; the
+    // rendered log-tail shape drops those fields.
+    let events = read_recent_matching_events(path, &filters, limit)
         .map_err(|e| orbit_core::OrbitError::Io(format!("read log {}: {e}", path.display())))?;
     Ok(events
         .into_iter()
-        .map(|event| {
-            json!({
-                "ts": event.ts,
-                "source": "process",
-                "message": strip_htmlish(&event.message_html),
-                "event_id": null,
-                "job_run": null,
-                "step": null,
-                "step_index": null,
-                "task_id": null,
-                "provider": null,
-                "blob_ref": null,
-                "target": event.source,
-            })
-        })
+        .map(|event| process_error_row(&event))
         .collect())
+}
+
+fn process_error_row(event: &Value) -> Value {
+    let ts = event.get("timestamp").and_then(Value::as_str).unwrap_or("");
+    let target = event.get("target").and_then(Value::as_str).unwrap_or("-");
+    let empty_fields = Value::Object(Default::default());
+    let fields = event.get("fields").unwrap_or(&empty_fields);
+    let job_run = optional_log_field(fields, &["job_run_id", "run_id"]);
+    let affiliation = if job_run.is_some() {
+        "run"
+    } else {
+        "unaffiliated"
+    };
+
+    json!({
+        "ts": ts,
+        "source": "process",
+        "message": strip_htmlish(&format_message_html(target, fields)),
+        "event_id": null,
+        "job_run": job_run,
+        "step": optional_log_field(fields, &["step_id", "step", "activity_id"]),
+        "step_index": null,
+        "task_id": optional_log_field(fields, &["task_id"]),
+        "provider": optional_log_field(fields, &["provider"]),
+        "blob_ref": null,
+        "target": format_source(target, fields),
+        "affiliation": affiliation,
+    })
+}
+
+fn optional_log_field<'a>(fields: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| {
+        fields
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
 }
 
 fn agent_stderr_error_rows(

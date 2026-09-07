@@ -142,11 +142,11 @@ pub(crate) fn resolve_log_path(override_path: Option<&Path>) -> Result<PathBuf, 
     })
 }
 
-pub(crate) fn read_recent_rendered_events(
+pub(crate) fn read_recent_matching_events(
     path: &Path,
     filters: &Filters,
     limit: usize,
-) -> io::Result<Vec<RenderedLogEvent>> {
+) -> io::Result<Vec<Value>> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -157,13 +157,24 @@ pub(crate) fn read_recent_rendered_events(
     for line in reader.lines() {
         let line = line?;
         if let Some(event) = parse_matching_event(&line, filters) {
-            kept.push(render_log_event_for_web(&event));
+            kept.push(event);
             if kept.len() > limit {
                 kept.remove(0);
             }
         }
     }
     Ok(kept)
+}
+
+pub(crate) fn read_recent_rendered_events(
+    path: &Path,
+    filters: &Filters,
+    limit: usize,
+) -> io::Result<Vec<RenderedLogEvent>> {
+    Ok(read_recent_matching_events(path, filters, limit)?
+        .into_iter()
+        .map(|event| render_log_event_for_web(&event))
+        .collect())
 }
 
 pub(crate) fn parse_matching_event(raw: &str, filters: &Filters) -> Option<Value> {
