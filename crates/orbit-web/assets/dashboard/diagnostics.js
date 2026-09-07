@@ -98,13 +98,13 @@ function getDiagErrorsColumns(ctx) {
   ];
 }
 
-function renderDiagnosticsTable(rows, columns, ctx) {
+function renderDiagnosticsTable(rows, columns, ctx, emptyText) {
   const body = $("diag-body");
   
   if (!rows || rows.length === 0) {
     syncNodes(body, [el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: "No entries this month." })
+      el("div", { class: "text", text: emptyText || "No entries this month." })
     ])]);
     return;
   }
@@ -428,7 +428,14 @@ function renderDiagnostics(ctx = {}) {
   }
 
   const rows = last[sub] || [];
-  $("diag-count").textContent = `${rows.length}`;
+  const count = $("diag-count");
+  if (sub === "errors") {
+    count.textContent = `${rows.length} error events this month`;
+    count.title = `Step and event failures for the current month, capped at the diag URL parameter (default 50). Distinct from header Failed runs (${getWindow()} Failed, Timeout, and Interrupted job runs) and Recent Runs' failed filter (durable Failed job runs, no window).`;
+  } else {
+    count.textContent = `${rows.length} metric entries this month`;
+    count.title = "Invocation metrics for the current month.";
+  }
   const columns =
     sub === "metrics"
       ? getDiagMetricsColumns(ctx)
@@ -437,6 +444,9 @@ function renderDiagnostics(ctx = {}) {
     rows,
     columns,
     ctx,
+    sub === "errors"
+      ? "No error events this month (step/event failures, not job-run states)."
+      : "No metric entries this month.",
   );
 
   renderDiagnosticsSideCard(last, ctx);

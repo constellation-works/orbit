@@ -2037,6 +2037,163 @@ if (rows.length !== 1 || !rows[0].textContent.includes("Beta")) throw new Error(
     );
 }
 
+/// ORB-11561: Recent Runs used to limit first, then filter to failed in the
+/// browser, so an older Failed run outside the newest success/active slice
+/// rendered as 0/0. Loading and mismatched-filter paints must not look like
+/// that empty result either.
+#[test]
+fn dashboard_failed_runs_filter_before_limit_and_label_distinct_scopes() {
+    let app = include_str!("../../assets/dashboard/app.js");
+    let runs = include_str!("../../assets/dashboard/runs.js");
+    let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
+    let index = include_str!("../../assets/dashboard/index.html");
+
+    assert!(
+        app.contains(
+            r#"`/api/job-runs?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`"#
+        ),
+        "single-workspace Recent Runs must send the active state filter to the server"
+    );
+    assert!(
+        !runs.contains("${top.length}/${sorted.length}"),
+        "the old ambiguous N/M run count shorthand must be gone"
+    );
+    assert!(
+        runs.contains("export function formatRunCount(")
+            && runs.contains("shown")
+            && runs.contains("total")
+            && runs.contains("server limit"),
+        "run counts must use explicit shown/total/server-limit language"
+    );
+    assert!(
+        index.contains("Failed, timeout, and interrupted job runs in the selected window"),
+        "the Failed runs header tile must explain its windowed population"
+    );
+    assert!(
+        diagnostics
+            .contains("No error events this month (step/event failures, not job-run states)."),
+        "Errors empty copy must name the month-scoped event population"
+    );
+
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(id = "") { this.id = id; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; }
+  appendChild(child) { if (child == null) return child; if (child.parentNode) child.parentNode.removeChild(child); this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { if (child.parentNode) child.parentNode.removeChild(child); const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get innerHTML() { return this.textContent; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  get classList() { const self = this; return { add: (...classes) => { for (const c of classes) if (!self.className.split(/\s+/).includes(c)) self.className = `${self.className} ${c}`.trim(); }, toggle: (c, on) => { if (on) this.addClass(c); } }; }
+  addClass(c) { if (!this.className.split(/\s+/).includes(c)) this.className = `${this.className} ${c}`.trim(); }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: () => new Node(),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+const location = new URL("http://dashboard.test/?run_state=failed");
+globalThis.window = { location, innerWidth: 1200, confirm: () => true };
+globalThis.history = { replaceState: (_, __, url) => { location.href = String(url); } };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+
+const { initRuns, renderRuns, formatRunCount } = await import("./runs.js");
+const { renderDiagnostics } = await import("./diagnostics.js");
+
+if (formatRunCount(20, 25, { total: 81, limit: 25, truncated: true }) !== "20 shown (of 25 fetched) · 81 total · server limit 25") {
+  throw new Error(`formatRunCount missed shown/total/limit language: ${formatRunCount(20, 25, { total: 81, limit: 25, truncated: true })}`);
+}
+
+let loading = true;
+let lastRuns = [];
+let lastMeta = { state: "all", total: 4, limit: 3, truncated: true };
+let navigated = null;
+initRuns({
+  getLastRuns: () => lastRuns,
+  getRunsMeta: () => lastMeta,
+  getRunsLoading: () => loading,
+  markRunsLoading: () => { loading = true; },
+  getRunSourcesUnavailable: () => [],
+  navigateToRun: (runId, workspaceId) => { navigated = { runId, workspaceId }; },
+  fetchAndRenderRuns: () => Promise.resolve(),
+  getActiveRunId: () => null,
+});
+
+renderRuns(lastRuns);
+const loadingBody = get("runs-body").textContent;
+if (loadingBody.includes("No failed job runs")) throw new Error("loading painted a zero-failure empty state");
+if (get("diag-count").textContent !== "…") throw new Error(`loading count was treated as zero: ${get("diag-count").textContent}`);
+if (!get("runs-body").children.some((node) => node.className.includes("skeleton-state"))) {
+  throw new Error("loading must keep the skeleton, not an empty result");
+}
+
+loading = false;
+lastRuns = [];
+lastMeta = { state: "failed", total: 0, limit: 25, truncated: false };
+renderRuns(lastRuns);
+const emptyText = get("runs-body").textContent;
+if (!emptyText.includes("No failed job runs (durable Failed state, no time window).")) {
+  throw new Error(`empty copy did not name the failed-run scope: ${emptyText}`);
+}
+if (!emptyText.includes("Header Failed runs counts Failed, Timeout, and Interrupted")) {
+  throw new Error("scope note must explain header vs Recent Runs vs Errors");
+}
+if (!get("diag-count").textContent.includes("0 shown") || !get("diag-count").textContent.includes("0 total")) {
+  throw new Error(`empty count must still say shown/total, got ${get("diag-count").textContent}`);
+}
+
+lastRuns = [
+  { run_id: "jrun-older-failed", job_id: "ship", state: "failed", created_at: "2026-09-07T10:00:00Z", finished_at: "2026-09-07T10:01:00Z" },
+];
+lastMeta = { state: "failed", total: 1, limit: 3, truncated: false };
+renderRuns(lastRuns);
+const failedRows = get("runs-body").children.filter((node) => node.className.includes("runs-row") && !node.className.includes("runs-header"));
+if (failedRows.length !== 1 || !failedRows[0].textContent.includes("jrun-older-failed")) {
+  throw new Error("server-filtered failed payload must keep a failure older than the recent success slice");
+}
+failedRows[0].listeners.click();
+if (!navigated || navigated.runId !== "jrun-older-failed") {
+  throw new Error(`failed-run drilldown did not open the older failure: ${JSON.stringify(navigated)}`);
+}
+
+lastRuns = Array.from({ length: 25 }, (_, index) => ({
+  run_id: `jrun-failed-${index}`,
+  job_id: "ship",
+  state: "failed",
+  created_at: "2026-09-07T12:00:00Z",
+}));
+lastMeta = { state: "failed", total: 81, limit: 25, truncated: true };
+renderRuns(lastRuns);
+if (!get("diag-count").textContent.includes("server limit 25") || !get("diag-count").textContent.includes("81 total")) {
+  throw new Error(`truncated count missing shown/total/limit: ${get("diag-count").textContent}`);
+}
+if (!get("runs-body").textContent.includes("Raise the runs URL parameter to load older matches")) {
+  throw new Error("truncated results must explain how to find older failures");
+}
+
+renderDiagnostics({
+  getActiveDiagSubtab: () => "errors",
+  getLastDiagnostics: () => ({ metrics: [], errors: [], incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] }),
+});
+if (!get("diag-body").textContent.includes("No error events this month (step/event failures, not job-run states).")) {
+  throw new Error(`errors empty copy was wrong: ${get("diag-body").textContent}`);
+}
+if (get("diag-count").textContent !== "0 error events this month") {
+  throw new Error(`errors count must name its month-scoped population, got ${get("diag-count").textContent}`);
+}
+"#,
+    );
+}
+
 async fn response_body(response: Response) -> String {
     let bytes = match to_bytes(response.into_body(), usize::MAX).await {
         Ok(bytes) => bytes,

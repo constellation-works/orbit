@@ -414,18 +414,76 @@ function runMatchesFilter(run) {
   return true;
 }
 
-function setRunFilter(value) {
+export function setRunFilter(value) {
   runFilter = RUN_FILTERS.has(value) ? value : "all";
   const url = new URL(window.location.href);
   if (runFilter === "all") url.searchParams.delete("run_state");
   else url.searchParams.set("run_state", runFilter);
   if (url.href !== window.location.href) history.replaceState(null, "", url);
+  if (hasCtx("markRunsLoading")) _runsCtx.markRunsLoading();
   renderRuns(hasCtx("getLastRuns") ? _runsCtx.getLastRuns() : []);
   doFetchAndRenderRuns().catch((error) => console.error(error));
 }
 
 export function getRunFilter() {
   return runFilter;
+}
+
+export function formatRunCount(shown, fetched, meta) {
+  if (meta && Number.isFinite(meta.total)) {
+    const base = shown === fetched
+      ? `${shown} shown`
+      : `${shown} shown (of ${fetched} fetched)`;
+    return meta.truncated
+      ? `${base} · ${meta.total} total · server limit ${meta.limit}`
+      : `${base} · ${meta.total} total`;
+  }
+  if (meta && meta.truncated) {
+    return `${shown} shown · server limit ${meta.limit || fetched} · older matching runs not loaded`;
+  }
+  return shown === fetched
+    ? `${shown} shown`
+    : `${shown} shown of ${fetched} fetched`;
+}
+
+function runsAreLoading(runs, meta) {
+  if (!(hasCtx("getRunsLoading") && _runsCtx.getRunsLoading())) return false;
+  const loadedState = meta && meta.state;
+  return !runs || runs.length === 0 || (loadedState && loadedState !== runFilter);
+}
+
+function runsEmptyText() {
+  if (runFilter === "failed") {
+    return "No failed job runs (durable Failed state, no time window).";
+  }
+  if (runFilter === "active") {
+    return "No pending or running job runs.";
+  }
+  return "No job runs in this workspace.";
+}
+
+function runsScopeNote() {
+  return el("div", {
+    class: "runs-scope-note",
+    text: "Recent Runs lists durable job-run states with no time window (most recent page). Header Failed runs counts Failed, Timeout, and Interrupted job runs in the selected window. Errors lists step/event failures for the current month.",
+  });
+}
+
+function runsLimitNote(meta) {
+  if (!meta || !meta.truncated) return null;
+  const total = Number.isFinite(meta.total) ? ` of ${meta.total}` : "";
+  return el("div", {
+    class: "runs-limit-note",
+    text: `Showing the most recent ${meta.limit} matching runs${total}. Raise the runs URL parameter to load older matches.`,
+  });
+}
+
+function runsLoadingSkeleton() {
+  return el("div", { class: "skeleton-state" }, [
+    el("div", { class: "skeleton skeleton-row" }),
+    el("div", { class: "skeleton skeleton-row", style: { width: "80%" } }),
+    el("div", { class: "skeleton skeleton-row", style: { width: "90%" } }),
+  ]);
 }
 
 function runFilterControls() {
@@ -515,19 +573,28 @@ export function renderRuns(runs) {
   const unavailable = hasCtx("getRunSourcesUnavailable") ? _runsCtx.getRunSourcesUnavailable() : [];
   const meta = hasCtx("getRunsMeta") ? _runsCtx.getRunsMeta() : null;
   const attributed = (runs || []).some((run) => !!run.workspace_id);
-  const sorted = sortedRunsForDisplay((runs || []).filter(runMatchesFilter));
-  const top = sorted.slice(0, 20);
+  const loading = runsAreLoading(runs, meta);
+  const filtered = (runs || []).filter(runMatchesFilter);
+  const sorted = sortedRunsForDisplay(filtered);
+  const top = sorted;
   if ($("diag-count")) {
-    const bounded = meta && meta.truncated ? "+" : "";
-    $("diag-count").textContent = `${top.length}/${sorted.length}${bounded}`;
+    $("diag-count").textContent = loading ? "…" : formatRunCount(top.length, sorted.length, meta);
   }
   frag.appendChild(runFilterControls());
+  frag.appendChild(runsScopeNote());
   const unavailableNode = unavailableSourcesNode(unavailable);
   if (unavailableNode) frag.appendChild(unavailableNode);
+  const limitNote = loading ? null : runsLimitNote(meta);
+  if (limitNote) frag.appendChild(limitNote);
+  if (loading) {
+    frag.appendChild(runsLoadingSkeleton());
+    syncNodes(body, Array.from(frag.children));
+    return;
+  }
   if (top.length === 0) {
     frag.appendChild(el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: runFilter === "all" ? "No job runs yet." : `No ${runFilter} job runs.` })
+      el("div", { class: "text", text: runsEmptyText() }),
     ]));
     syncNodes(body, Array.from(frag.children));
     return;

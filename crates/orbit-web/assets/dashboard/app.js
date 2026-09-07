@@ -10,7 +10,7 @@ import { initLogTail, fitLogPanelToViewport } from './log-tail.js';
 import { renderDiagnostics } from './diagnostics.js';
 import { renderMarkdown } from './markdown.js';
 import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './router.js';
-import { initRuns, getRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
+import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
 import { fetchAndRenderOperations, initOperations } from './operations.js';
 import {
   renderRunDetailEmpty,
@@ -77,6 +77,7 @@ let lastTasks = [];
 let lastTasksMeta = null;
 let lastRuns = [];
 let lastRunsMeta = null;
+let lastRunsLoading = true;
 let lastRunSourcesUnavailable = [];
 let lastDiagnostics = { metrics: [], errors: [], incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] };
 let lastFrictionPayload = { stats: {}, tags: [], items: [] };
@@ -209,10 +210,16 @@ function runsContext() {
     getActiveRunId,
     getLastRuns: () => lastRuns,
     getRunsMeta: () => lastRunsMeta,
+    getRunsLoading: () => lastRunsLoading,
+    markRunsLoading,
     getRunSourcesUnavailable: () => lastRunSourcesUnavailable,
     fmtTimestamp,
     fmtDuration,
   };
+}
+
+function markRunsLoading() {
+  lastRunsLoading = true;
 }
 
 function runDetailContext() {
@@ -1151,6 +1158,7 @@ function buildWorkspaceSelector() {
     // also discarded in fetchAndRenderRuns, so it cannot repaint stale rows.
     lastRuns = [];
     lastRunsMeta = null;
+    lastRunsLoading = true;
     lastRunSourcesUnavailable = [];
     renderRuns(lastRuns);
     refreshDashboard();
@@ -1337,6 +1345,7 @@ function fetchAndRenderRuns() {
   const requestedWorkspace = getWorkspace();
   const requestedAggregate = isAggregateView();
   const runFilter = getRunFilter();
+  lastRunsLoading = true;
   const scopeIsCurrent = () =>
     requestedWorkspace === getWorkspace() &&
     requestedAggregate === isAggregateView() &&
@@ -1349,14 +1358,20 @@ function fetchAndRenderRuns() {
         unavailable: Array.isArray(payload && payload.unavailable) ? payload.unavailable : [],
       }))
     : Promise.all([
-        fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}`),
+        fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`),
         fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`),
-      ]).then(([runs, frictionRows]) => ({ runs, frictionRows, meta: null, unavailable: [] }));
+      ]).then(([payload, frictionRows]) => ({
+        runs: listItems(payload),
+        frictionRows,
+        meta: payload,
+        unavailable: [],
+      }));
 
   return request.then(({ runs, frictionRows, meta, unavailable }) => {
     if (!scopeIsCurrent()) return;
     lastRuns = mergeRunsWithFriction(runs, frictionRows);
     lastRunsMeta = meta;
+    lastRunsLoading = false;
     lastRunSourcesUnavailable = unavailable;
     renderRuns(lastRuns);
   }).catch((error) => {
@@ -1364,6 +1379,7 @@ function fetchAndRenderRuns() {
       const workspace = dashboardWorkspaces.find((entry) => entry.id === requestedWorkspace);
       lastRuns = [];
       lastRunsMeta = null;
+      lastRunsLoading = false;
       lastRunSourcesUnavailable = [{
         workspace_id: requestedWorkspace,
         workspace_name: requestedAggregate ? "All workspaces" : (workspace && workspace.name) || requestedWorkspace || "workspace",
@@ -1486,8 +1502,20 @@ function renderHealthStrip(data) {
   } else {
     tile.classList.remove("tile-alert");
   }
+  const windowLabel = data.window || getWindow();
   const failed = $("tile-failed");
-  if (failed) failed.classList.toggle("tile-alert", (data.failed_runs || 0) > 0);
+  if (failed) {
+    failed.classList.toggle("tile-alert", (data.failed_runs || 0) > 0);
+    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Distinct from Recent Runs' failed filter (durable Failed state, no window, most recent page) and Errors (step/event failures this month). Click to open failed runs.`;
+    failed.style.cursor = "pointer";
+    if (!failed.dataset.failedNavBound) {
+      failed.dataset.failedNavBound = "1";
+      failed.addEventListener("click", () => {
+        setRunFilter("failed");
+        sAT("diagnostics/runs");
+      });
+    }
+  }
 
   setRailCount("rail-count-audit", data.events);
   setRailCount("rail-count-diagnostics", data.failed_runs, true);
