@@ -272,7 +272,6 @@ fn bound_runtime(
             logical_workspace_id: workspace_id.clone(),
             owner_machine_id: None,
             workspace_id,
-            owner_machine_id: None,
             repo_root: repo.clone(),
             ship_mode: orbit_types::workflow::ShipMode::Pr,
             base_branch: branch.map(ToOwned::to_owned),
