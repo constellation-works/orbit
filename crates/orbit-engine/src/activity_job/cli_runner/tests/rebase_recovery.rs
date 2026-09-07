@@ -75,6 +75,20 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
                 &["merge-base", "--is-ancestor", &recovery.target, "HEAD"],
             );
             assert_eq!(git_head(&recovery.fixture.primary), recovery.target);
+            assert_eq!(
+                fs::read_to_string(recovery.fixture.assigned.join("candidate.txt")).unwrap(),
+                "nonconflicting candidate\n"
+            );
+            let persisted: serde_json::Value =
+                serde_json::from_slice(&fs::read(script.with_extension("sync_base.json")).unwrap())
+                    .unwrap();
+            assert_eq!(persisted["head_sha"], git_head(&recovery.fixture.assigned));
+            assert_eq!(persisted["head_sha_before"], recovery.original);
+            assert_eq!(persisted["original_base_sha"], recovery.original_base);
+            assert_eq!(persisted["base_sha"], recovery.target);
+            assert_eq!(persisted["task_ids"], serde_json::json!(["T-recovery"]));
+            assert_eq!(persisted["run_id"], "run-rebase-recovery");
+            assert_eq!(persisted["rewritten"], true);
         }
     }
 }
@@ -241,6 +255,39 @@ fn conflict_recovery_reports_additional_conflicts_without_a_second_agent_attempt
     assert!(!git_bytes(&recovery.fixture.assigned, &["ls-files", "-u"]).is_empty());
 }
 
+#[test]
+fn recovery_cannot_report_success_when_completion_checkpoint_cannot_be_persisted() {
+    let recovery = stopped_rebase_fixture(false);
+    let script = recovery.fixture.root().join("codex");
+    write_executable(
+        &script,
+        r##"#!/bin/sh
+set -eu
+cat > /dev/null
+printf 'candidate and target\n' > README.md
+printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
+"##,
+    );
+    let mut host = TestHost::with_command(script.display().to_string());
+    host.workspace_root = Some(recovery.fixture.primary.clone());
+    host.task_context = Some(serde_json::json!({"checkpoint_denied": true}));
+    let error = run_cli_backend(
+        &host,
+        &test_agent_loop_spec(Duration::from_secs(30)),
+        "pr_conflict_recovery",
+        "run-rebase-recovery",
+        test_audit("run-checkpoint-denied", "codex"),
+        &conflict_recovery_input(&recovery),
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("checkpoint storage unavailable"),
+        "{error}"
+    );
+    assert!(!script.with_extension("sync_base.json").exists());
+}
+
 struct StoppedRebaseFixture {
     fixture: LinkedWorktreeFixture,
     original: String,
@@ -257,7 +304,12 @@ fn stopped_rebase_fixture(additional_candidate_commit: bool) -> StoppedRebaseFix
         .trim()
         .to_string();
     fs::write(fixture.assigned.join("README.md"), "candidate one\n").unwrap();
-    git_ok(&fixture.assigned, &["add", "README.md"]);
+    fs::write(
+        fixture.assigned.join("candidate.txt"),
+        "nonconflicting candidate\n",
+    )
+    .unwrap();
+    git_ok(&fixture.assigned, &["add", "README.md", "candidate.txt"]);
     git_ok(&fixture.assigned, &["commit", "-m", "candidate one"]);
     if additional_candidate_commit {
         fs::write(fixture.assigned.join("README.md"), "candidate two\n").unwrap();

@@ -1193,3 +1193,66 @@ fn orbit_workspace_selector_reports_the_logical_catalog_id() {
         "nested tool calls must carry the logical catalog ID, not the checkout identity"
     );
 }
+
+#[test]
+fn recovered_rebase_checkpoint_survives_restart_without_completing_the_step() {
+    use orbit_types::workflow::{JobRunState, PipelineState};
+
+    let (root, runtime) = test_runtime();
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    let mut state = PipelineState::new(
+        run.run_id.clone(),
+        run.job_id.clone(),
+        json!({"task_ids": ["T-recovery"]}),
+    );
+    state.record_step(
+        3,
+        JobRunState::Success,
+        Some(json!({"head_sha": "before"})),
+        None,
+    );
+    runtime
+        .stores()
+        .jobs()
+        .write_run_state(&run.run_id, &state)
+        .unwrap();
+    let output = json!({
+        "run_id": run.run_id,
+        "head_sha_before": "before",
+        "head_sha": "after",
+        "base_sha": "target",
+        "remote_sha_before": "remote",
+    });
+    runtime
+        .checkpoint_rebase_recovery(&run.run_id, "sync_base", &output)
+        .unwrap();
+    drop(runtime);
+
+    let reopened = OrbitRuntime::from_roots(
+        &root.path().join("global"),
+        &root.path().join("repo/.orbit"),
+    )
+    .unwrap();
+    let durable = RuntimeHost::read_run_state(&reopened, &run.run_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(durable.rebase_recovery_checkpoints["sync_base"], output);
+    assert_eq!(durable.step_outputs, state.step_outputs);
+    assert_eq!(durable.step_states, state.step_states);
+    assert_eq!(durable.next_step_index, 4);
+    assert!(durable.failure_activity_checkpoint.is_none());
+    assert!(
+        reopened
+            .checkpoint_rebase_recovery("missing-run", "sync_base", &output)
+            .is_err()
+    );
+}

@@ -17,6 +17,11 @@ pub(super) fn recover_or_return_original(
     if attempt_recovery_activity(step, ctx, &recovery, &original_err, attempt, max_attempts) {
         match run_step_body(step, ctx) {
             Ok(outcome) if outcome.success => return Ok(outcome),
+            // Once VCS recovery succeeded, the old conflict is resolved. A
+            // stale base or other new failure must describe the remaining state.
+            result if matches!(original_err, DispatchError::RecoverableVcsConflict { .. }) => {
+                return result;
+            }
             Ok(_) | Err(_) => {}
         }
     }

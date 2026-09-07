@@ -351,6 +351,28 @@ fn published_pr_conflict_reuses_pinned_rebase_branch_and_pr_on_completion_retry(
         String::from_utf8_lossy(&continued.stderr)
     );
 
+    let run_id = input["job_run_id"].as_str().unwrap();
+    crate::context::RuntimeHost::checkpoint_rebase_recovery(
+        &host,
+        run_id,
+        "complete_pr",
+        &json!({
+            "run_id": run_id,
+            "step_id": "complete_pr",
+            "workspace_path": workspace.repo,
+            "task_ids": ["T1"],
+            "head": input["head"],
+            "head_sha_before": published_head_sha,
+            "original_base_sha": conflict.original_base_sha,
+            "base_ref": "refs/remotes/origin/agent-main",
+            "base_sha": conflict.target_base_sha,
+            "remote_sha_before": published_head_sha,
+            "head_sha": git(&workspace.repo, &["rev-parse", "HEAD"]),
+            "rewritten": true,
+        }),
+    )
+    .unwrap();
+
     host.queue_pr_status([state("DIRTY"), state("CLEAN"), merged_state()]);
     let output = pr_complete(&host, &input).expect("retry merges recovered published PR");
 

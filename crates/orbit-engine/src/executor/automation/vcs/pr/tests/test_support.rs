@@ -40,6 +40,7 @@ pub struct VcsCall {
 }
 
 pub struct PrOpenTestHost {
+    run_states: Mutex<HashMap<String, orbit_types::workflow::PipelineState>>,
     tasks: Mutex<Vec<Task>>,
     job_runs: Mutex<Vec<JobRun>>,
     comments: Mutex<HashMap<String, Vec<TaskComment>>>,
@@ -62,6 +63,7 @@ impl PrOpenTestHost {
         let data_root = repo_root.join(".orbit-test-data");
         let scoreboard_dir = data_root.join("scoreboard");
         Self {
+            run_states: Mutex::new(HashMap::new()),
             tasks: Mutex::new(tasks),
             job_runs: Mutex::new(Vec::new()),
             comments: Mutex::new(HashMap::new()),
@@ -254,6 +256,33 @@ impl PrOpenTestHost {
 }
 
 impl RuntimeHost for PrOpenTestHost {
+    fn read_run_state(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::PipelineState>, OrbitError> {
+        Ok(self.run_states.lock().unwrap().get(run_id).cloned())
+    }
+
+    fn checkpoint_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), crate::DispatchError> {
+        let mut states = self.run_states.lock().unwrap();
+        let state = states.entry(run_id.to_string()).or_insert_with(|| {
+            orbit_types::workflow::PipelineState::new(
+                run_id.to_string(),
+                "task_pr_pipeline".to_string(),
+                json!({}),
+            )
+        });
+        state
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), output.clone());
+        Ok(())
+    }
+
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
         Ok(self
             .job_runs

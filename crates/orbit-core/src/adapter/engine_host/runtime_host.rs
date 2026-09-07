@@ -665,6 +665,42 @@ impl RuntimeHost for OrbitRuntime {
             })
     }
 
+    fn checkpoint_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        self.stores()
+            .jobs()
+            .update_run_state(run_id, &mut |run_state, state| {
+                if run_state != orbit_types::workflow::JobRunState::Running {
+                    return Err(orbit_common::OrbitError::Execution(
+                        "rebase recovery run is no longer running".to_string(),
+                    ));
+                }
+                state
+                    .rebase_recovery_checkpoints
+                    .insert(step_id.to_string(), output.clone());
+                state.updated_at = Utc::now();
+                Ok(())
+            })
+            .and_then(|updated| {
+                if matches!(updated, orbit_types::workflow::RunStateUpdate::Updated) {
+                    Ok(())
+                } else {
+                    Err(orbit_common::OrbitError::Execution(
+                        "rebase recovery has no durable run state".to_string(),
+                    ))
+                }
+            })
+            .map_err(|error| {
+                DispatchError::JobExecution(format!(
+                    "persist rebase recovery checkpoint (run {run_id}, step `{step_id}`): {error}"
+                ))
+            })
+    }
+
     fn tool_context_for_activity(
         &self,
         run_id: Option<&str>,

@@ -161,6 +161,26 @@ impl RuntimeHost for ResumeFailureHost {
                     workspace_path,
                     &["-c", "core.editor=true", "rebase", "--continue"],
                 );
+                let run_id = input["run_id"].as_str().unwrap();
+                let prepared = &input["failed_step_input"];
+                self.checkpoint_rebase_recovery(
+                    run_id,
+                    "sync_base",
+                    &json!({
+                        "run_id": run_id,
+                        "step_id": "sync_base",
+                        "workspace_path": workspace_path,
+                        "task_ids": [TASK_ID],
+                        "head": prepared["head"],
+                        "head_sha_before": prepared["head_sha"],
+                        "original_base_sha": input["original_base_sha"],
+                        "base_ref": prepared["base_ref"],
+                        "base_sha": prepared["base_sha"],
+                        "remote_sha_before": prepared["remote_sha"],
+                        "head_sha": git(workspace_path, &["rev-parse", "HEAD"]),
+                        "rewritten": true,
+                    }),
+                )?;
                 Ok(json!({"recovered": true}))
             }
             "git_push" => crate::executor::automation::vcs::push_batch_changes(self, input)
@@ -225,6 +245,22 @@ impl RuntimeHost for ResumeFailureHost {
             .ok_or_else(|| DispatchError::JobExecution(format!("missing state for {run_id}")))?;
         state.record_step(step_index, JobRunState::Success, Some(output.clone()), None);
         state.sync_pipeline(pipeline_snapshot.clone());
+        Ok(())
+    }
+
+    fn checkpoint_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        self.run_states
+            .lock()
+            .unwrap()
+            .get_mut(run_id)
+            .unwrap()
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), output.clone());
         Ok(())
     }
 

@@ -609,18 +609,27 @@ impl WorktreeBoundaryGuard {
         recovery_step_id: Option<&str>,
         task_ids: &[String],
     ) -> Result<(), DispatchError> {
-        if self.rebase_recovery.is_some() && recovery_succeeded {
+        let completion = if self.rebase_recovery.is_some() && recovery_succeeded {
             let step_id = recovery_step_id.ok_or_else(|| {
                 DispatchError::CliInvocationPermanent(
                     "conflict recovery is missing its failed step identity".to_string(),
                 )
             })?;
-            self.complete_rebase_recovery(host, step_id, task_ids)?;
+            Some((
+                step_id,
+                self.complete_rebase_recovery(host, step_id, task_ids)?,
+            ))
+        } else {
+            None
+        };
+        self.verify()?;
+        if let Some((step_id, output)) = completion {
+            host.checkpoint_rebase_recovery(&self.run_id, step_id, &output)?;
         }
-        self.verify()
+        Ok(())
     }
 
-    pub(crate) fn verify(self) -> Result<(), DispatchError> {
+    pub(crate) fn verify(&self) -> Result<(), DispatchError> {
         let assigned_after = git_fingerprint(&self.assigned_root)?;
         let primary_after = git_fingerprint(&self.primary_root)?;
         let assigned_history_changed = assigned_after.head != self.assigned_before.head

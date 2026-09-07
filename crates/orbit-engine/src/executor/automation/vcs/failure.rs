@@ -104,7 +104,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
                 .to_string(),
         ));
     }
-    if conflicting_paths.is_empty() {
+    if conflicting_paths.is_empty() && rebase_aborted {
         conflicting_paths = conflicts_from_error(error_message);
     }
 
@@ -221,7 +221,9 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         "failed_step_id": failed_step_id,
         "branch": head,
         "head_sha": head_sha,
-        "original_base_sha": original_base_sha,
+        // Resume authenticates against the immutable worktree base, even when
+        // a recovered rebase moved the candidate's merge base forward.
+        "original_base_sha": input_string_field(worktree, "base_sha").unwrap_or(original_base_sha),
         "target_base_sha": target_base_sha,
         "conflicting_paths": conflicting_paths,
         "committed_files": committed_files,

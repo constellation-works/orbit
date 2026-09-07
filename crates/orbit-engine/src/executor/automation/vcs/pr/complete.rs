@@ -428,6 +428,7 @@ fn refresh_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
     }
 
     let rebase_input = json!({
+        "run_id": input.get("run_id").cloned().unwrap_or(Value::Null),
         "job_run_id": input.get("job_run_id").cloned().unwrap_or(Value::Null),
         "completed_task_ids": input.get("completed_task_ids").cloned().unwrap_or(Value::Null),
         "workspace_path": workspace_path,

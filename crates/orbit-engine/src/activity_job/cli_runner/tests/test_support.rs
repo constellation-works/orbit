@@ -261,6 +261,29 @@ impl TestHost {
 }
 
 impl RuntimeHost for TestHost {
+    fn checkpoint_rebase_recovery(
+        &self,
+        _run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        if self
+            .task_context
+            .as_ref()
+            .is_some_and(|context| context["checkpoint_denied"] == true)
+        {
+            return Err(DispatchError::JobExecution(
+                "checkpoint storage unavailable".to_string(),
+            ));
+        }
+        fs::write(
+            Path::new(&self.command).with_extension(format!("{step_id}.json")),
+            serde_json::to_vec(output).unwrap(),
+        )
+        .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+        Ok(())
+    }
+
     fn run_deterministic(
         &self,
         _action: &str,

@@ -198,8 +198,48 @@ fn recovered_rebase_continues_remaining_handoff_phases_without_replay() {
         String::from_utf8_lossy(&output.stderr)
     );
 
+    let error = rebase_pr_branch(&host, &rebase_input)
+        .expect_err("manual continuation lacks host provenance");
+    assert!(
+        error
+            .to_string()
+            .contains("no exact host-validated recovery checkpoint")
+    );
+    let run_id = rebase_input["job_run_id"].as_str().unwrap();
+    crate::context::RuntimeHost::checkpoint_rebase_recovery(
+        &host,
+        run_id,
+        "sync_base",
+        &json!({
+            "run_id": run_id,
+            "step_id": "sync_base",
+            "workspace_path": workspace.repo,
+            "task_ids": rebase_input["completed_task_ids"],
+            "head": rebase_input["head"],
+            "head_sha_before": rebase_input["head_sha"],
+            "base_ref": rebase_input["base_ref"],
+            "base_sha": rebase_input["base_sha"],
+            "remote_sha_before": rebase_input["remote_sha"],
+            "head_sha": git(&workspace.repo, &["rev-parse", "HEAD"]),
+            "rewritten": true,
+        }),
+    )
+    .unwrap();
     let synced = rebase_pr_branch(&host, &rebase_input).expect("reuse recovered rewrite");
     assert_eq!(synced["decision"], json!("reused_recovery"));
+    let recovered_head = git(&workspace.repo, &["rev-parse", "HEAD"]);
+    git(
+        &workspace.repo,
+        &["commit", "--allow-empty", "-m", "unattributed replacement"],
+    );
+    let replacement_error = rebase_pr_branch(&host, &rebase_input).unwrap_err();
+    assert!(
+        replacement_error
+            .to_string()
+            .contains("no exact host-validated recovery checkpoint")
+    );
+    git(&workspace.repo, &["reset", "--hard", &recovered_head]);
+
     assert_eq!(synced["rewritten"], json!(true));
     assert_eq!(
         git(
