@@ -579,10 +579,11 @@ function fetchAndRenderAutoDrain() {
 }
 
 // ORB-11332: operation mode. The panel projects `orbit operation explain`
-// (every resolved field with its winning source, the active grant, caps, and
-// limiting reasons) and offers the two governed grant controls. Enablement is
-// deliberately not a dashboard action: a grant names a finite task set and
-// explicit rights, which is an operator decision made from the CLI or MCP.
+// (current preferences, the captured grant policy when one is active, caps,
+// and limiting reasons) and offers the two governed grant controls.
+// Enablement is deliberately not a dashboard action: a grant names a finite
+// task set and explicit rights, which is an operator decision made from the
+// CLI or MCP.
 const OPERATION_MODE_CONTROLS = {
   stop: {
     label: "Stop grant",
@@ -601,6 +602,23 @@ function policyField(policy, name, label) {
   const value = entry.value ?? "—";
   const source = entry.source ? ` [${entry.source}]` : "";
   return field(label, `${value}${source}`);
+}
+
+function policyGrid(policy) {
+  return el("div", { class: "operation-grid" }, [
+    policyField(policy, "preset", "Preset"),
+    policyField(policy, "preparation", "Preparation"),
+    policyField(policy, "promotion", "Promotion"),
+    policyField(policy, "completion", "Completion"),
+    policyField(policy, "recovery", "Recovery"),
+    policyField(policy, "leaf_ceiling", "Leaf ceiling"),
+    policyField(policy, "review_policy", "Review policy"),
+    policyField(policy, "review_crew", "Review crew"),
+    policyField(policy, "review_reviewer_starts", "Reviewer starts / lineage"),
+    policyField(policy, "review_repair_cycles", "Repair cycles / lineage"),
+    policyField(policy, "review_minutes", "Review minutes / lineage"),
+    policyField(policy, "delivery_cap", "Delivery cap"),
+  ]);
 }
 
 function operationControlButton(payload, kind) {
@@ -656,30 +674,31 @@ function renderOperationMode(payload) {
   const policy = payload.policy || {};
   const authority = payload.authority || {};
   const delivery = payload.delivery || {};
-  body.append(
-    el("div", { class: "operation-grid" }, [
-      policyField(policy, "preset", "Preset"),
-      policyField(policy, "preparation", "Preparation"),
-      policyField(policy, "promotion", "Promotion"),
-      policyField(policy, "completion", "Completion"),
-      policyField(policy, "recovery", "Recovery"),
-      policyField(policy, "leaf_ceiling", "Leaf ceiling"),
-      policyField(policy, "review_policy", "Review policy"),
-      policyField(policy, "review_crew", "Review crew"),
-      policyField(policy, "review_reviewer_starts", "Reviewer starts / lineage"),
-      policyField(policy, "review_repair_cycles", "Repair cycles / lineage"),
-      policyField(policy, "review_minutes", "Review minutes / lineage"),
-      policyField(policy, "delivery_cap", "Delivery cap"),
-    ]),
-    el("div", { class: "operation-grid" }, [
-      field("Effective completion", `${delivery.effective_completion ?? "—"}${delivery.cap ? ` (cap: ${delivery.cap})` : ""}`),
-      field("Grant", authority.grant_id ?? "none"),
-      field("Admission", authority.admission ?? "none"),
-      field("Rights", Array.isArray(authority.rights) && authority.rights.length ? authority.rights.join(", ") : "—"),
-      field("Scope", Array.isArray(authority.task_ids) ? `${authority.task_ids.length} task(s)` : "—"),
-      field("Expires", authority.expires_at ? time(authority.expires_at) : "—"),
-    ]),
-  );
+  const grantPolicy = authority.policy;
+  if (grantPolicy) {
+    body.append(
+      el("p", {
+        class: "operation-control-note",
+        text: "Active grant policy (captured at enablement; retuning preferences does not change it).",
+      }),
+      policyGrid(grantPolicy),
+      el("p", {
+        class: "operation-control-note",
+        text: "Current preferences (apply to a future grant only).",
+      }),
+      policyGrid(policy),
+    );
+  } else {
+    body.appendChild(policyGrid(policy));
+  }
+  body.appendChild(el("div", { class: "operation-grid" }, [
+    field("Effective completion", `${delivery.effective_completion ?? "—"}${delivery.cap ? ` (cap: ${delivery.cap})` : ""}`),
+    field("Grant", authority.grant_id ?? "none"),
+    field("Admission", authority.admission ?? "none"),
+    field("Rights", Array.isArray(authority.rights) && authority.rights.length ? authority.rights.join(", ") : "—"),
+    field("Scope", Array.isArray(authority.task_ids) ? `${authority.task_ids.length} task(s)` : "—"),
+    field("Expires", authority.expires_at ? time(authority.expires_at) : "—"),
+  ]));
   const reasons = Array.isArray(payload.limiting_reasons) ? payload.limiting_reasons : [];
   body.appendChild(el("p", {
     class: "operation-control-note",

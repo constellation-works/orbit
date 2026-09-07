@@ -2255,6 +2255,12 @@ fn dashboard_operation_mode_panel_is_explained_governed_and_guarded() {
         "the panel must state that preferences activate nothing and merge is never granted"
     );
     assert!(
+        operations.contains("Active grant policy (captured at enablement")
+            && operations.contains("Current preferences (apply to a future grant only).")
+            && operations.contains("const grantPolicy = authority.policy"),
+        "an active grant must show the captured policy separately from current preferences"
+    );
+    assert!(
         !operations.contains("/api/operation/enable"),
         "enablement stays a CLI/MCP operator decision"
     );
@@ -2290,8 +2296,8 @@ let confirmed = false;
 globalThis.window = { confirm: () => { confirmed = true; return true; }, location: new URL("http://dashboard.test/"), addEventListener: () => {}, localStorage: { getItem: () => null, setItem: () => {} } };
 const requests = [];
 const explanation = {
-  policy: { preset: { value: "autonomous", source: "workspace" }, leaf_ceiling: { value: 10, source: "preset:autonomous@workspace" }, preparation: { value: "automatic", source: "preset:autonomous@workspace" }, promotion: { value: "automatic", source: "preset:autonomous@workspace" }, completion: { value: "done", source: "preset:autonomous@workspace" }, recovery: { value: "scheduled", source: "preset:autonomous@workspace" }, review_policy: { value: "before-pr", source: "workspace" }, review_crew: { value: "reviewers", source: "workspace" }, review_reviewer_starts: { value: 2, source: "built-in" }, review_repair_cycles: { value: 2, source: "built-in" }, review_minutes: { value: 30, source: "built-in" }, delivery_cap: { value: "review", source: "built-in" } },
-  authority: { grant_id: "ogrant-1", status: "active", admission: "open", rights: ["prepare", "promote"], task_ids: ["ORB-1", "ORB-2"], expires_at: "2026-09-07T12:00:00Z", revision: 3 },
+  policy: { preset: { value: "supervised", source: "workspace" }, leaf_ceiling: { value: 5, source: "preset:supervised@workspace" }, preparation: { value: "manual", source: "preset:supervised@workspace" }, promotion: { value: "separate_approval", source: "preset:supervised@workspace" }, completion: { value: "review", source: "preset:supervised@workspace" }, recovery: { value: "existing", source: "preset:supervised@workspace" }, review_policy: { value: "after-landing", source: "workspace" }, review_crew: { value: "reviewers", source: "workspace" }, review_reviewer_starts: { value: 2, source: "built-in" }, review_repair_cycles: { value: 2, source: "built-in" }, review_minutes: { value: 30, source: "built-in" }, delivery_cap: { value: "done", source: "workspace" } },
+  authority: { grant_id: "ogrant-1", status: "active", admission: "open", rights: ["prepare", "promote"], task_ids: ["ORB-1", "ORB-2"], expires_at: "2026-09-07T12:00:00Z", revision: 3, policy: { preset: { value: "autonomous", source: "workspace" }, leaf_ceiling: { value: 10, source: "preset:autonomous@workspace" }, preparation: { value: "automatic", source: "preset:autonomous@workspace" }, promotion: { value: "automatic", source: "preset:autonomous@workspace" }, completion: { value: "done", source: "preset:autonomous@workspace" }, recovery: { value: "scheduled", source: "preset:autonomous@workspace" }, review_policy: { value: "before-pr", source: "workspace" }, review_crew: { value: "reviewers", source: "workspace" }, review_reviewer_starts: { value: 2, source: "built-in" }, review_repair_cycles: { value: 2, source: "built-in" }, review_minutes: { value: 30, source: "built-in" }, delivery_cap: { value: "review", source: "built-in" } } },
   delivery: { effective_completion: "review", cap: "delivery_cap_review" },
   limiting_reasons: ["delivery_cap_review"],
   controls_authorized: true,
@@ -2311,7 +2317,7 @@ initOperations({ getWorkspaces: () => [{ id: "one", name: "one", status: "active
 await fetchAndRenderOperationMode();
 const body = get("operation-mode-body");
 const text = body.textContent;
-for (const expected of ["autonomous [workspace]", "10 [preset:autonomous@workspace]", "before-pr [workspace]", "reviewers [workspace]", "Reviewer starts / lineage", "2 [built-in]", "30 [built-in]", "review (cap: delivery_cap_review)", "ogrant-1", "Limiting reasons: delivery_cap_review", "prepare, promote", "2 task(s)"]) {
+for (const expected of ["Active grant policy (captured at enablement", "Current preferences (apply to a future grant only).", "autonomous [workspace]", "10 [preset:autonomous@workspace]", "before-pr [workspace]", "supervised [workspace]", "5 [preset:supervised@workspace]", "after-landing [workspace]", "reviewers [workspace]", "Reviewer starts / lineage", "2 [built-in]", "30 [built-in]", "review (cap: delivery_cap_review)", "ogrant-1", "Limiting reasons: delivery_cap_review", "prepare, promote", "2 task(s)"]) {
   if (!text.includes(expected)) throw new Error(`panel is missing ${JSON.stringify(expected)} in: ${text}`);
 }
 if (!get("operation-mode-count").textContent.includes("open")) throw new Error("count must show the grant admission");
