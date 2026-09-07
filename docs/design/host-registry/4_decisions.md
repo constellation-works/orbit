@@ -24,7 +24,7 @@ must not become a replica protocol. The federated MCP contract itself lives in
 
 **Context.** Host and workspace values are shared across Store, Registry, Core and presentation crates, but file lifecycle needs one owner.
 
-**Decision.** orbit-common owns persistence-neutral DTOs and validators. orbit-registry owns host.toml and workspaces.json. orbit-cmd owns the join from selected registry state to Core runtime state. CLI, Web and MCP remain outer callers.
+**Decision.** orbit-types owns persistence-neutral host/workspace identity DTOs and validators. orbit-registry owns host.toml and workspaces.json. orbit-cmd owns the join from selected registry state to Core runtime state. CLI, Web and MCP remain outer callers.
 
 **Consequences.** Dependency direction stays acyclic and lookup semantics are reusable. Cost: adding a registry field may require coordinated DTO, persistence and composition changes.
 
