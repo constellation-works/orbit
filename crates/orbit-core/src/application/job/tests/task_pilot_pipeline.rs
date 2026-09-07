@@ -170,7 +170,13 @@ fn shipped_task_pilot_job_renders_omitted_and_empty_workspace_branch_inputs() {
 
 #[test]
 fn shipped_task_pilot_job_honors_an_explicit_alternate_branch() {
-    assert_job_resolves_branch("main", json!({ "base_branch": "release" }), "release");
+    let alternate_branch = format!("alternate-{}", std::process::id());
+
+    assert_job_resolves_branch(
+        "main",
+        json!({ "base_branch": alternate_branch.clone() }),
+        &alternate_branch,
+    );
 }
 
 #[test]
