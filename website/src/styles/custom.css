@@ -268,7 +268,7 @@ body {
 }
 
 .orbit-hero-install-prompt {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   flex: 0 0 auto;
 }
 
@@ -376,7 +376,7 @@ body {
 /* The mono strip under the hero CTAs naming the provider CLIs Orbit drives. */
 .orbit-hero-providers {
   align-items: center;
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   display: flex;
   flex-wrap: wrap;
   font-family: var(--sl-font-mono);
@@ -426,7 +426,7 @@ body {
 .orbit-terminal-bar {
   align-items: center;
   border-bottom: 1px solid var(--sl-color-hairline-light);
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   display: flex;
   font-family: var(--sl-font-mono);
   font-size: 0.72rem;
@@ -451,7 +451,7 @@ body {
 }
 
 .orbit-terminal-prompt {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
 }
 
 .orbit-terminal-cmd {
@@ -463,7 +463,7 @@ body {
 }
 
 .orbit-terminal-head {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
 }
 
 .orbit-terminal-gap {
@@ -484,7 +484,7 @@ body {
 
 .orbit-section-title {
   align-items: center;
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   display: flex;
   font-size: 0.78rem;
   font-weight: 600;
@@ -657,7 +657,7 @@ body {
 }
 
 .orbit-flow-cmd-prompt {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   flex: 0 0 auto;
 }
 
@@ -845,7 +845,7 @@ body {
 
 .orbit-docs-group-title {
   border-bottom: 1px solid var(--sl-color-hairline-light);
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   font-family: var(--sl-font-mono);
   font-size: 0.72rem;
   letter-spacing: 0.08em;
