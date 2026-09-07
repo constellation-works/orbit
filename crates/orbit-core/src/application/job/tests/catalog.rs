@@ -2493,6 +2493,10 @@ fn pr_pipelines_complete_only_when_authorized_and_handle_no_diff_without_a_pr() 
             assert_eq!(no_diff.target, "activity:pr_complete");
             let input = no_diff.default_input.as_ref().expect("no-diff input");
             assert_eq!(input["no_diff_expected"], true);
+            assert_eq!(
+                input["already_landed_checkpoint"],
+                "{{ steps.commit.output }}"
+            );
             assert!(
                 input.get("pr_number").is_none(),
                 "{job_name} no-diff completion must not require a nonexistent PR"

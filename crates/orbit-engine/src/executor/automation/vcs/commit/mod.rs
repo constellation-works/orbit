@@ -1,3 +1,4 @@
+pub(super) mod already_landed;
 mod author;
 mod git_ops;
 mod message;
@@ -263,6 +264,27 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         }
         if no_diff_expected || allow_empty {
             return Ok(skipped_no_diff_expected_result(&task.id));
+        }
+        if input.get("verify_already_landed").and_then(Value::as_bool) == Some(true)
+            && let Some(base_sha) = base_sha.as_deref()
+        {
+            return already_landed::verify(
+                host,
+                &task,
+                &workspace_path,
+                input_string_field(input, "run_id")
+                    .as_deref()
+                    .unwrap_or(batch_id),
+                base_sha,
+            )
+            .map_err(|error| {
+                match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
+                    Ok(OrbitError::Execution(observed)) => {
+                        OrbitError::Execution(format!("{observed}; {error}"))
+                    }
+                    Ok(observed) | Err(observed) => observed,
+                }
+            });
         }
         return Err(empty_stage_error(
             &task.id,
