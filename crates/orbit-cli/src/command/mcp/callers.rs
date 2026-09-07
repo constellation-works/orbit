@@ -142,6 +142,9 @@ fn list(path: &Path) -> CommandOut {
         if let Some(workspaces) = &row.workspaces {
             println!("    workspaces: {}", workspaces.join(", "));
         }
+        if let Some(workspaces) = &row.agent_invoke_workspaces {
+            println!("    agent_invoke_workspaces: {}", workspaces.join(", "));
+        }
         if let Some(fingerprint) = &row.ssh_key_fingerprint {
             println!("    ssh_key_fingerprint: {fingerprint}");
         }
@@ -202,20 +205,19 @@ fn check(path: &Path, machine_id: &str) -> CommandOut {
             capability_list(&grant.elsewhere)
         );
     }
-    println!(
-        "agent_invoke: {}",
-        match grant.agent_invoke_mode {
-            Some(RemoteAgentInvokeMode::KeyBound) => {
-                "configured for the listed workspaces in key-bound mode; admission requires a \
-                 destination-issued forced-command session"
-            }
-            Some(RemoteAgentInvokeMode::Cooperative) => {
-                "configured for the listed workspaces in cooperative mode; identity remains \
-                 self-asserted and the SSH OS-account/operator channel is the trust boundary"
-            }
-            None => "not granted",
-        }
-    );
+    match (&grant.agent_invoke_workspaces, grant.agent_invoke_mode) {
+        (Some(workspaces), Some(RemoteAgentInvokeMode::KeyBound)) => println!(
+            "agent_invoke: configured for {} in key-bound mode; admission requires a \
+             destination-issued forced-command session",
+            workspaces.iter().cloned().collect::<Vec<_>>().join(", ")
+        ),
+        (Some(workspaces), Some(RemoteAgentInvokeMode::Cooperative)) => println!(
+            "agent_invoke: configured for {} in cooperative mode; identity remains self-asserted \
+             and the SSH OS-account/operator channel is the trust boundary",
+            workspaces.iter().cloned().collect::<Vec<_>>().join(", ")
+        ),
+        _ => println!("agent_invoke: not granted"),
+    }
     // Both requests, because the grant is a ceiling and the caller's argv is
     // the other half of the intersection: printing only one would read as the
     // answer to a question the caller did not ask.
