@@ -112,7 +112,7 @@ if same_inode "$STABLE_SRC/Cargo.toml" "$repo_root/Cargo.toml" && same_inode "$S
     rewritten+=("$(rewrite_value "$arg")")
   done
   set -- "${rewritten[@]}"
-  # Bash 3.2 has no mapfile, and macOS env does not provide GNU env -0.
+  # Bash 3.2 lacks array loading, and macOS env does not provide GNU env -0.
   # compgen emits exported names without touching their values, so indirect
   # expansion keeps spaces, equals signs, newlines, and empty values intact.
   while IFS= read -r name; do
