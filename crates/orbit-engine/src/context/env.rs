@@ -4,6 +4,16 @@
 //! The `env_set` / `ORBIT_*` run-state resolution that used to live here served
 //! the v1 executor transport and was deleted with it in [ORB-10395]; v2 dispatch
 //! builds its child environment in `crate::activity_job::cli_runner`.
+//!
+//! Parent-environment admission of `ORBIT_*` names is the explicit allowlist in
+//! `orbit_common::security::child_env`, not a prefix wildcard. This module
+//! builds only the provenance subset of that list: `ORBIT_RUN_ID`,
+//! `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_AGENT_NAME`, `ORBIT_AGENT_MODEL`,
+//! `ORBIT_SESSION_ID`, `ORBIT_TASK_ID`, `ORBIT_ACTIVE_TASK_ID`. Locators and
+//! activity bindings (`ORBIT_ROOT`, `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`,
+//! `ORBIT_WORKTREE_ROOT`, `ORBIT_BIN`, `ORBIT_STEP_INDEX`,
+//! `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_*`, `ORBIT_SEARCH_COMPANION*`) are
+//! injected by the CLI runner or forwarded from the parent when present.
 
 #[derive(Debug, Default)]
 pub(crate) struct ProvenanceEnv<'a> {

@@ -10,11 +10,13 @@
 //!
 //! Admission control here is therefore membership in an explicit set of names:
 //! the documented baseline below, the operator's configured pass list, the
-//! extras a provider declares it requires, and Orbit's own `ORBIT_*`
-//! execution-envelope namespace. Credential-name and value-shape heuristics
-//! are deliberately *not* consulted — they cannot classify names an operator's
-//! environment actually uses, and treating them as a gate is what let the
-//! bypass exist.
+//! extras a provider declares it requires, and the named `ORBIT_*` execution
+//! envelope below. The `ORBIT_` prefix is *not* a wildcard: privilege-bearing
+//! names in that namespace (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`,
+//! `ORBIT_MCP_SSH_ACCEPTANCE`) must not reach an untrusted child.
+//! Credential-name and value-shape heuristics are deliberately *not*
+//! consulted — they cannot classify names an operator's environment actually
+//! uses, and treating them as a gate is what let the bypass exist.
 //!
 //! [`inherited_child_env`] is the explicit opt-out for an operator who really
 //! does want full inheritance.
@@ -33,15 +35,47 @@ pub const AGENT_SUBPROCESS_BASELINE_VARS: &[&str] = &[
     "HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR", "TZ", "USER",
 ];
 
-/// Orbit's own execution-envelope namespace. A managed run exports run, task,
-/// and session identity to its child through these names, and the child reaches
-/// back into Orbit with them, so the whole prefix is admitted as one unit.
-const ORBIT_ENVELOPE_PREFIX: &str = "ORBIT_";
+/// Exact envelope names a managed run exports or forwards into a child.
+///
+/// The provenance subset (`ORBIT_RUN_ID`, `ORBIT_MANAGED_RUN_CONTEXT`,
+/// `ORBIT_AGENT_NAME`, `ORBIT_AGENT_MODEL`, `ORBIT_SESSION_ID`, `ORBIT_TASK_ID`,
+/// `ORBIT_ACTIVE_TASK_ID`) is built in `orbit-engine` `context/env.rs`. The
+/// remaining names are locators and activity bindings the CLI runner injects
+/// (and that a parent process may already hold). Privilege-bearing names in the
+/// same `ORBIT_` namespace are absent from this list on purpose.
+const ORBIT_ENVELOPE_VARS: &[&str] = &[
+    "ORBIT_RUN_ID",
+    "ORBIT_MANAGED_RUN_CONTEXT",
+    "ORBIT_AGENT_NAME",
+    "ORBIT_AGENT_MODEL",
+    "ORBIT_SESSION_ID",
+    "ORBIT_TASK_ID",
+    "ORBIT_ACTIVE_TASK_ID",
+    "ORBIT_ROOT",
+    "ORBIT_REGISTRY_ROOT",
+    "ORBIT_WORKSPACE",
+    "ORBIT_WORKTREE_ROOT",
+    "ORBIT_BIN",
+    "ORBIT_STEP_INDEX",
+    "ORBIT_TASK_ACTOR_KIND",
+];
+
+/// Envelope families admitted by prefix because the engine treats them as
+/// groups (`ORBIT_ACTIVITY_ID` / `_TOOLS` / `_FS_PROFILE`, and the search
+/// companion override cluster).
+const ORBIT_ENVELOPE_PREFIXES: &[&str] = &["ORBIT_ACTIVITY_", "ORBIT_SEARCH_COMPANION"];
+
+fn is_orbit_envelope_name(name: &str) -> bool {
+    ORBIT_ENVELOPE_VARS.contains(&name)
+        || ORBIT_ENVELOPE_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+}
 
 /// The environment an allowlist-governed agent subprocess is launched with:
 /// [`AGENT_SUBPROCESS_BASELINE_VARS`], the configured `pass` names, the
-/// `extras` a provider declares it requires, and every `ORBIT_*` variable —
-/// each included only when the parent process actually holds it.
+/// `extras` a provider declares it requires, and the named Orbit execution
+/// envelope — each included only when the parent process actually holds it.
 ///
 /// Names outside that set are absent from the result, so the caller can launch
 /// the child from a cleared environment and get exactly this.
@@ -67,9 +101,7 @@ pub fn allowlisted_child_env_from(
         .collect();
     let mut env: BTreeMap<String, String> = parent
         .iter()
-        .filter(|(name, _)| {
-            admitted.contains(name.as_str()) || name.starts_with(ORBIT_ENVELOPE_PREFIX)
-        })
+        .filter(|(name, _)| admitted.contains(name.as_str()) || is_orbit_envelope_name(name))
         .cloned()
         .collect();
     backfill_login_identity(&mut env);
