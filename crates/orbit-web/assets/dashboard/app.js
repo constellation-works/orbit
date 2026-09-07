@@ -761,10 +761,11 @@ function wireFrictionResponsiveDetail() {
    GET /api/tasks/:id is workspace-scoped. A raw fetch without ?workspace=
    hits the server default (often not the selected workspace) and reports an
    existing task as not found — the Diagnostics jump failure on ws_orbit.
-   - Only fires on exact ^ORB-\d{5}$ (case-insens) after trim/upper.
+   - Only fires on a task id shaped like ^[A-Z]{2,5}-\d+$ (case-insens)
+     after trim/upper.
    - 250ms debounce; Enter looks up immediately.
-   - Lookup uses the selected workspace first; a confirmed miss then probes
-     other active workspaces and adopts the owner.
+   - Lookup uses the selected workspace first when one is selected; aggregate
+     mode probes active workspaces and adopts the owner.
    - Stale replies after a workspace change or a newer lookup are ignored.
    - Not-found is reserved for a confirmed miss; loading / 403 / 5xx / network
      have distinct copy.
@@ -774,7 +775,7 @@ function wireGlobalTaskResolver() {
   if (!input) return;
   let debounce = null;
   let lookupSeq = 0;
-  const ID_RE = /^ORB-\d{5}$/i;
+  const ID_RE = /^[A-Z]{2,5}-\d+$/i;
 
   function lookupWrap() {
     return input.parentNode;
@@ -894,24 +895,26 @@ function wireGlobalTaskResolver() {
     };
 
     showLookupStatus("pending", `Looking up ${id}\u2026`);
-    let primary;
-    try {
-      primary = await fetchTaskInWorkspace(id, workspaceAtStart);
-    } catch {
+    if (workspaceAtStart) {
+      let primary;
+      try {
+        primary = await fetchTaskInWorkspace(id, workspaceAtStart);
+      } catch {
+        if (discardIfStale()) return;
+        showLookupStatus("error", `Network error resolving ${id}`);
+        return;
+      }
       if (discardIfStale()) return;
-      showLookupStatus("error", `Network error resolving ${id}`);
-      return;
-    }
-    if (discardIfStale()) return;
-    if (primary.res.ok && primary.body && primary.body.id) {
-      openLookedUpTask(primary.body, primary.workspaceId || workspaceAtStart);
-      return;
-    }
+      if (primary.res.ok && primary.body && primary.body.id) {
+        openLookedUpTask(primary.body, primary.workspaceId);
+        return;
+      }
 
-    const classified = classifyLookupFailure(primary.res, primary.body, id);
-    if (classified.kind !== "missing") {
-      showLookupStatus("error", classified.message);
-      return;
+      const classified = classifyLookupFailure(primary.res, primary.body, id);
+      if (classified.kind !== "missing") {
+        showLookupStatus("error", classified.message);
+        return;
+      }
     }
 
     const others = otherActiveWorkspaces(workspaceAtStart);
@@ -957,7 +960,10 @@ function wireGlobalTaskResolver() {
       return;
     }
     const candidate = raw.toUpperCase();
-    if (!ID_RE.test(candidate)) return;
+    if (!ID_RE.test(candidate)) {
+      lookupSeq += 1;
+      return;
+    }
     debounce = setTimeout(() => lookupTask(candidate), 250);
   }
 
