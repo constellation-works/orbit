@@ -22,12 +22,12 @@ The live implementation has four layers.
 
 | Layer | Owns | Must not own |
 |---|---|---|
-| orbit-common | Host and workspace DTOs, identifier validation, lifecycle enums, schema constants | Files, runtime construction, transport |
+| orbit-types | Host and workspace identity DTOs, identifier validation, lifecycle enums, schema constants | Files, runtime construction, transport |
 | orbit-registry | Machine identity lifecycle; workspace catalog parsing, mutation, validation, health and file I/O | CLI orchestration, MCP framing, Core execution |
 | orbit-cmd | Registry-aware selection and Core runtime construction | Registry schemas or persistence |
 | CLI, Web and MCP server | User/API inputs, presentation, refresh timing and request dispatch | Alternate catalog semantics |
 
-HostIdentity and host.toml I/O live in orbit-registry. Shared primitives such as validate_machine_id, validate_host_id and the machine-ID namespace constants live in orbit-common so identity validation remains persistence-neutral.
+HostIdentity and host.toml I/O live in orbit-registry. Shared primitives such as validate_machine_id, validate_host_id and the machine-ID namespace constants live in orbit-types so identity validation remains persistence-neutral.
 
 ## 2. Machine identity
 
@@ -77,7 +77,7 @@ An identity-bearing machine must use explicit ownership data:
 
 - an owner checkout has no checkout-level owner_machine_id, and the logical owner must equal the local machine_id;
 - a replica checkout names a non-local owner_machine_id, and that value must equal the logical workspace owner;
-- all persisted machine IDs pass the same orbit-common validator;
+- all persisted machine IDs pass the same orbit-types validator;
 - ownership is never inferred from paths, Git remotes, SSH destinations or caller audit labels.
 
 Installations without host identity retain a narrow standalone compatibility path: a missing checkout role may canonicalize to owner. Once host identity exists, missing or contradictory roles and missing logical owners fail closed.
