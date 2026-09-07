@@ -1,8 +1,9 @@
 //! Read/cascade operations over the index.
 //!
 //! `model_ids` reports the distinct embedding models present in the index.
-//! `delete_source` cascades both the vector rows and the FTS5 rows for a
-//! given `(source_kind, source_id)`. `stats` aggregates row counts by
+//! `delete_source` cascades both the vector rows and the chunk rows (and with
+//! them, through the `corpus_fts` triggers, the FTS5 index) for a given
+//! `(source_kind, source_id)`. `stats` aggregates row counts by
 //! `(source_kind, model_id)` and counts orphaned `task` rows whose
 //! `source_id` is no longer in the live task corpus.
 
@@ -67,7 +68,7 @@ impl VectorStore {
         )
         .map_err(|error| OrbitError::Store(error.to_string()))?;
         conn.execute(
-            "DELETE FROM corpus_fts WHERE source_kind = ?1 AND source_id = ?2",
+            "DELETE FROM chunks WHERE source_kind = ?1 AND source_id = ?2",
             params![source_kind, source_id],
         )
         .map_err(|error| OrbitError::Store(error.to_string()))?;

@@ -8,6 +8,8 @@ pub struct Bm25Hit {
     pub source_kind: String,
     pub source_id: String,
     pub field: String,
+    /// `chunks.id`, which is also the matching `corpus_fts` rowid — the direct
+    /// address a snippet lookup uses instead of re-deriving the chunk.
     pub rowid: i64,
     pub rank: usize,
 }
@@ -32,9 +34,15 @@ pub fn bm25_top_k(
         let mut stmt = conn
             .prepare(
                 r#"
-                    SELECT source_kind, source_id, field, rowid, bm25(corpus_fts) AS rank
+                    SELECT
+                        chunks.source_kind,
+                        chunks.source_id,
+                        chunks.field,
+                        chunks.id,
+                        bm25(corpus_fts) AS rank
                     FROM corpus_fts
-                    WHERE corpus_fts MATCH ?1 AND source_kind = ?2
+                    JOIN chunks ON chunks.id = corpus_fts.rowid
+                    WHERE corpus_fts MATCH ?1 AND chunks.source_kind = ?2
                     ORDER BY rank
                     LIMIT ?3
                 "#,
@@ -48,8 +56,14 @@ pub fn bm25_top_k(
         let mut stmt = conn
             .prepare(
                 r#"
-                    SELECT source_kind, source_id, field, rowid, bm25(corpus_fts) AS rank
+                    SELECT
+                        chunks.source_kind,
+                        chunks.source_id,
+                        chunks.field,
+                        chunks.id,
+                        bm25(corpus_fts) AS rank
                     FROM corpus_fts
+                    JOIN chunks ON chunks.id = corpus_fts.rowid
                     WHERE corpus_fts MATCH ?1
                     ORDER BY rank
                     LIMIT ?2
@@ -111,7 +125,7 @@ fn snippet_by_rowid(store: &VectorStore, rowid: i64) -> Result<Option<String>, O
         .lock()
         .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
     conn.query_row(
-        "SELECT content FROM corpus_fts WHERE rowid = ?1",
+        "SELECT content FROM chunks WHERE id = ?1",
         params![rowid],
         |row| row.get::<_, String>(0),
     )
@@ -136,10 +150,8 @@ fn snippet_by_chunk_idx(
     conn.query_row(
         r#"
             SELECT content
-            FROM corpus_fts
-            WHERE source_kind = ?1 AND source_id = ?2 AND field = ?3
-            ORDER BY rowid
-            LIMIT 1 OFFSET ?4
+            FROM chunks
+            WHERE source_kind = ?1 AND source_id = ?2 AND field = ?3 AND chunk_idx = ?4
         "#,
         params![source_kind, source_id, field, chunk_idx as i64],
         |row| row.get::<_, String>(0),

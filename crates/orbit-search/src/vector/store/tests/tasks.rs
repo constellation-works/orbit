@@ -94,7 +94,7 @@ fn reindex_tasks_removes_legacy_field_rows_after_rename() {
         .query_row(
             r#"
                     SELECT COUNT(*)
-                    FROM corpus_fts
+                    FROM chunks
                     WHERE source_kind = 'task'
                       AND source_id = 'T1'
                       AND field IN ('purpose', 'summary', 'acceptance_criteria')
