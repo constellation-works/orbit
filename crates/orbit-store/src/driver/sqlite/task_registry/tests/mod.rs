@@ -1,4 +1,7 @@
 // Content moved from tests.rs per ORB-00231
+
+mod schema;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
