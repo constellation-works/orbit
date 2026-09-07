@@ -25,6 +25,21 @@ template:
     does not need that flag and does not prompt non-interactively in
     practice.
 
+    Similarly, in agent-executor sandboxes and linked job-run worktrees, the
+    repository's managed `.git` mount is read-only by design and must not be
+    worked around by chmod or host-side gitdir writes. Commands that write to
+    `.git` fail (such as `git worktree add` or `git checkout --`).
+    Instead:
+    - To build an arbitrary baseline revision without writing `.git` or creating
+      `.git/worktrees/*`, extract an archive to a scratch directory:
+      `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base`,
+      then build there with a separate `CARGO_TARGET_DIR`.
+    - To revert a modified tracked file when `git checkout -- <path>` fails
+      because it cannot acquire `index.lock`, restore it from the commit tree:
+      `git show HEAD:<path> > <path>`.
+    - Read-only inspection commands such as `git status --short` succeed with
+      `GIT_OPTIONAL_LOCKS=0`.
+
     Before filing anything, search open Orbit tasks tagged `qa-sweep`. For each
     real issue that is not already filed, create an Orbit task yourself through
     the Orbit MCP tools or the equivalent `orbit tool run orbit.task.add`
