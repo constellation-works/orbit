@@ -657,6 +657,59 @@ fn stale_partition_does_not_discard_independent_valid_partition() {
 }
 
 #[test]
+fn all_stale_partition_diagnostic_identifies_zero_apply() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/new.rs");
+    let task = seed_task(&runtime, "status changed", TaskStatus::Backlog, &[], &[]);
+    let snapshot = prepared(&runtime, &repo_root, std::slice::from_ref(&task.id));
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("operator advances task status");
+
+    let output = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": snapshot,
+            "results": [partition_result(
+                0,
+                std::slice::from_ref(&task.id),
+                vec![selector_assessment(&task, vec!["file:src/new.rs"])],
+            )],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("stale outcome is retained as a durable failed decision");
+
+    let error = output["error"]
+        .as_str()
+        .expect("all-stale apply carries a diagnostic");
+    assert_eq!(output["status"], "failed");
+    assert_eq!(
+        output["skipped_stale_partitions"].as_array().unwrap().len(),
+        1
+    );
+    assert!(error.contains("1 partition(s) were skipped as stale"));
+    assert!(error.contains("status_changed"));
+    assert!(error.contains(&task.id));
+    assert!(
+        !error.contains("valid partitions were applied"),
+        "zero-apply diagnostic must not claim that valid partitions were applied: {error}"
+    );
+    assert_eq!(
+        runtime.get_task(&task.id).unwrap().status,
+        TaskStatus::InProgress
+    );
+    assert!(runtime.get_task(&task.id).unwrap().context_files.is_empty());
+}
+
+#[test]
 fn malformed_partition_does_not_discard_independent_valid_partition() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "src/new.rs");
