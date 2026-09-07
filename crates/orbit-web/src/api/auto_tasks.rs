@@ -428,7 +428,7 @@ fn schedule_summary(schedule: &AutoTaskSchedule) -> String {
         AutoTaskSchedule::Deliveries {
             deliveries_landed: t,
         } => format!(
-            "{} deliveries on {} ({:?})",
+            "{} deliveries on {} ({})",
             t.threshold, t.branch, t.coverage
         ),
         AutoTaskSchedule::Cron { cron } => format!("cron {cron}"),
