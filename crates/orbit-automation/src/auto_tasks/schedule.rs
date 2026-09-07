@@ -23,8 +23,8 @@ pub enum AutoTaskDueDecision {
 }
 
 /// Validate a schedule fail-closed: a cron form must parse as a 5-field cron,
-/// an interval must be non-zero. CRUD calls this so a bad schedule is rejected
-/// at write time rather than silently never firing.
+/// an interval must be non-zero. CRUD and the loader call this so a bad
+/// schedule is rejected before it can silently never fire.
 pub fn validate_schedule(schedule: &AutoTaskSchedule) -> Result<(), OrbitError> {
     match schedule {
         AutoTaskSchedule::Deliveries { deliveries_landed } => {
