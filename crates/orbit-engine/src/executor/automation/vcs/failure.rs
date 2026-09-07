@@ -11,7 +11,7 @@ use crate::executor::automation::input::{
 };
 
 use super::commit::commit_failure_candidate;
-use super::freshness::{commit_sha, original_base_sha};
+use super::freshness::{commit_sha, original_base_sha, remote_branch_sha};
 use super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
@@ -283,10 +283,7 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
     let pushed = push_batch_changes_inner(
         host,
-        &json!({
-            "branch": head,
-            "workspace_path": workspace_path,
-        }),
+        &review_gate_preservation_push_input(input, &head, workspace_path, &head_sha)?,
         workspace_path,
     )?;
 
@@ -343,6 +340,63 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         "pr_created": false,
         "task_status": "blocked",
     }))
+}
+
+/// Push input for a review-gate preservation.
+///
+/// First-time (missing origin) and fast-forward pushes ignore the lease
+/// fields. A diverged origin is replaced only when the lease names the exact
+/// remote SHA `git_push` currently observes. `rewrite_performed` is set by
+/// this handoff even when this run's `sync_base` did not rewrite: a previous
+/// preservation (or re-implementation onto the same head) still has to replace
+/// the published candidate.
+fn review_gate_preservation_push_input(
+    input: &Value,
+    branch: &str,
+    workspace_path: &Path,
+    local_sha: &str,
+) -> Result<Value, OrbitError> {
+    let mut push_input = json!({
+        "branch": branch,
+        "workspace_path": workspace_path,
+    });
+    if let Some((head_before, expected_remote_sha)) =
+        review_gate_rewrite_lease(input, branch, workspace_path, local_sha)?
+    {
+        push_input["rewrite_performed"] = json!(true);
+        push_input["rewrite_head_before"] = json!(head_before);
+        push_input["expected_remote_sha"] = json!(expected_remote_sha);
+    }
+    Ok(push_input)
+}
+
+fn review_gate_rewrite_lease(
+    input: &Value,
+    branch: &str,
+    workspace_path: &Path,
+    local_sha: &str,
+) -> Result<Option<(String, String)>, OrbitError> {
+    let checkpointed_remote = pipeline_checkpoint_string(input, "sync_base", "remote_sha_before")
+        .or_else(|| pipeline_checkpoint_string(input, "prepare_branch", "remote_sha"));
+    let expected_remote_sha = match checkpointed_remote {
+        Some(sha) => sha,
+        None => match remote_branch_sha(workspace_path, branch)? {
+            Some(sha) => sha,
+            None => return Ok(None),
+        },
+    };
+
+    let head_before = pipeline_checkpoint_string(input, "sync_base", "head_sha_before")
+        .filter(|sha| sha != local_sha)
+        .or_else(|| (expected_remote_sha != local_sha).then(|| expected_remote_sha.clone()));
+    Ok(head_before.map(|head_before| (head_before, expected_remote_sha)))
+}
+
+fn pipeline_checkpoint_string(input: &Value, step: &str, field: &str) -> Option<String> {
+    input
+        .get("pipeline")
+        .and_then(|pipeline| pipeline.get(step))
+        .and_then(|checkpoint| input_string_field(checkpoint, field))
 }
 
 fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
