@@ -306,6 +306,54 @@ fn latest_non_failing_run_supersedes_older_failures_on_the_same_head() {
 }
 
 #[test]
+fn green_integration_does_not_suppress_a_red_release_head() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", OLD)
+        .with_runs(vec![vec![
+            run_on_branch(
+                200,
+                "ci",
+                "topic",
+                HEAD,
+                "completed",
+                Some("success"),
+                "2026-08-31T02:00:00Z",
+            ),
+            run_on_branch(
+                100,
+                "ci",
+                "main",
+                OLD,
+                "completed",
+                Some("failure"),
+                "2026-08-31T01:00:00Z",
+            ),
+        ]])
+        .with_run_view("100", json!({"failed_jobs": [failed_job(5, "build")]}))
+        .with_log("100", false, "ci\tbuild\tred release assertion failed\n")
+        .with_log(
+            "100",
+            true,
+            "ci\tCheckout\tHEAD is now at 2222222222222222222222222222222222222222\n",
+        );
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    assert_eq!(current_ids(&evidence), [100]);
+    assert_eq!(
+        evidence["current_failures"][0]["head_branch"],
+        json!("main")
+    );
+    assert_eq!(
+        evidence["current_failures"][0]["ref_kind"],
+        json!("release")
+    );
+    assert_eq!(evidence["outcome_hint"], json!("current_failures"));
+    assert_eq!(evidence["stale_or_superseded"], json!([]));
+}
+
+#[test]
 fn unrelated_pull_request_success_does_not_suppress_an_integration_failure() {
     let queries = FakeQueries::authenticated()
         .with_head("topic", HEAD)

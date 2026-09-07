@@ -152,6 +152,53 @@ impl OrbitRuntime {
         })
     }
 
+    /// Stop admissions on every live coordinator admitted under `grant_id`
+    /// [ORB-11332]. Called by grant stop and revocation; a coordinator bound
+    /// to another grant, or to none, is left alone.
+    pub(crate) fn stop_grant_bound_drains(
+        &self,
+        grant_id: &str,
+        actor: &str,
+        source: &str,
+        reason: Option<&str>,
+    ) -> Result<Vec<DrainAdmissionsStopChange>, OrbitError> {
+        let request = DrainAdmissionsStopRequest {
+            actor,
+            source,
+            reason,
+            claim_token: None,
+        };
+        let request_id = audit_execution_id("admissions_stop");
+        let drain_job_id = workflow_job_id(AUTO_WORKFLOW_ALIAS)?;
+        let coordinators = self
+            .stores()
+            .jobs()
+            .list_pending_or_running_job_runs(drain_job_id)?
+            .into_iter()
+            .filter(|run| {
+                run.input
+                    .as_ref()
+                    .map(orbit_types::workflow::OperationAdmission::from_run_input)
+                    .and_then(Result::ok)
+                    .flatten()
+                    .is_some_and(|admission| admission.grant_id == grant_id)
+            })
+            .collect::<Vec<_>>();
+        let mut changes = Vec::with_capacity(coordinators.len());
+        for run in coordinators {
+            let change = self.apply_stop_to_coordinator(&run, request)?;
+            self.record_stop_completion(
+                Some(&change.run_id),
+                &request_id,
+                change.outcome,
+                json!({ "job_id": change.job_id, "grant_id": grant_id }),
+                None,
+            )?;
+            changes.push(change);
+        }
+        Ok(changes)
+    }
+
     /// Whether this run's persisted control forbids further auto admissions.
     pub(crate) fn drain_admissions_stopped(&self, run_id: &str) -> bool {
         self.read_run_state(run_id)

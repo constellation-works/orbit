@@ -1,0 +1,11 @@
+Show one operation-mode grant
+
+Usage: orbit operation show [OPTIONS] <ID>
+
+Arguments:
+  <ID>  Grant ID, as printed by `orbit operation list`
+
+Options:
+      --json         Output as JSON
+      --root <ROOT>  Override the Orbit root directory (highest precedence)
+  -h, --help         Print help

@@ -1,7 +1,7 @@
 github.auth.status	-	Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error — both are reported so a caller can record a capability-unavailable outcome instead of mistaking it for a clean result.
 github.pr.list	-	List pull requests with their current head SHAs. Defaults to open pull requests.
 github.run.list	-	List recent GitHub Actions workflow runs with each run's reported head SHA. Filter by branch, workflow, status/conclusion, and event.
-github.run.logs	run:string	Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is drained incrementally; checkout extraction stops after 8 MiB and reports incomplete evidence rather than retaining an unbounded log.
+github.run.logs	run:string	Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is drained incrementally; checkout extraction stops after 8 MiB and reports incomplete evidence rather than retaining an unbounded log. When the run-scoped read succeeds with no output at all, the excerpt is recovered from the log API of a job the run itself reported failed, and `source` says so.
 github.run.view	run:string	Inspect one GitHub Actions workflow run: its reported head SHA, event, branch, and every job with its URL, steps, and conclusions. Unsuccessful jobs and steps are also collected separately.
 orbit.agent.invoke	prompt:string, cwd:string	Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability. Track it with `orbit.workflow.run.show`, read output with `orbit run logs <RUN_ID>`, and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.
 orbit.auto_task.list	-	List every auto-task definition in this workspace.
@@ -10,6 +10,11 @@ orbit.command.exec	argv:string|string[], working_directory:string	Execute a comm
 orbit.friction.add	body:string, model:string	Append a friction report
 orbit.friction.list	-	List friction records
 orbit.friction.update	id:string	Update triage metadata for a friction record
+orbit.operation.enable	task_ids:string|string[], window:string, rights:string|string[]	Enable a scoped operation-mode grant: a finite task set, separate prepare/promote/complete rights, and a bounded admission window. Captures the effective policy once; changing a preference later does not change the grant
+orbit.operation.explain	-	Explain the effective operation policy: every field with its winning source, the active grant, caps, and limiting reasons
+orbit.operation.list	-	List this workspace's recent operation-mode grants, newest first
+orbit.operation.revoke	-	Hard-revoke a grant: no further privileged actions, including completion of admitted work. Records the reason and stops bound drains
+orbit.operation.stop	-	Stop new admissions and promotion under a grant. Admitted work keeps its captured bounds, including completion; this is not cancellation
 orbit.pipeline.invoke	job_name:string, input:object	Submit a durable pipeline run and return immediately with its run ID.
 orbit.pipeline.wait	run_ids:string|string[]	Block until the supplied pipeline runs reach terminal state or timeout.
 orbit.search	-	Search tasks, docs, and frictions. Decision records are indexed as ordinary docs; hybrid vector ranking applies to indexed tasks and docs.

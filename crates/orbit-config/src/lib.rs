@@ -39,12 +39,15 @@
 //! - `registry` — the fixed-key registry and its admitted [`ConfigSnapshot`].
 //! - `layering` — document reading, per-key merge, replace-only rules, and
 //!   source provenance.
+//! - `operation` — typed operation-mode preferences and their layered
+//!   preset-reset resolution [ORB-11332].
 //! - `resolved` — the consumer-facing [`ResolvedConfig`] views.
 //! - `persistence` — artifact path resolution from the two roots.
 //! - `store` — comment-preserving [`ConfigStore`] edits and atomic save.
 //! - `seed` — rendering and writing a fresh default `config.toml`.
 
 mod layering;
+pub mod operation;
 mod persistence;
 mod raw;
 mod registry;
@@ -60,6 +63,11 @@ use orbit_common::OrbitError;
 pub use layering::{
     ConfigValueSource, ConfigValueSourceKind, EffectiveConfig, EffectiveConfigValue,
     load_effective_config,
+};
+pub use operation::{
+    CompletionPreference, DeliveryCap, OPERATION_POLICY_VERSION, OperationField,
+    OperationFieldSource, OperationLayer, OperationLayerSource, OperationPolicy, OperationPreset,
+    PreparationPreference, PromotionPreference, RecoveryPreference, ReviewPolicy,
 };
 pub use persistence::PersistenceConfig;
 pub use raw::CrewSeed;

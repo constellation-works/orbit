@@ -88,8 +88,8 @@ pub struct ConnectArgs {
 ///
 /// A top-level `--root` is rejected rather than ignored: this command reads no
 /// local `.orbit/` state, so there is no data directory for it to override,
-/// and the flag used to name the *remote* workspace here (ORB-11388). See
-/// [`reject_root_override`].
+/// and the flag previously used to name the *remote* workspace is now
+/// `--workspace`.
 pub fn connect(args: ConnectArgs, root_override: Option<&Path>) -> Result<(), OrbitError> {
     reject_root_override(root_override)?;
     let local_port = select_local_port(args.port)?;

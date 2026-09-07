@@ -160,6 +160,7 @@ where
             "clusters": 0,
             "filed_count": 0,
             "filed": [],
+            "pilot_candidate_count": 0,
             "pilot_candidates": [],
             "skipped_existing": [],
             "skipped_over_cap": [],
@@ -309,6 +310,7 @@ where
             "clusters": 0,
             "filed_count": 0,
             "filed": [],
+            "pilot_candidate_count": 0,
             "pilot_candidates": [],
             "skipped_existing": [],
             "skipped_over_cap": [],
@@ -491,6 +493,7 @@ where
         "clusters": clusters.len(),
         "filed_count": filed.len(),
         "filed": filed,
+        "pilot_candidate_count": pilot_candidates.len(),
         "pilot_candidates": pilot_candidates,
         "skipped_existing": skipped_existing,
         "skipped_over_cap": skipped_over_cap,
@@ -711,6 +714,11 @@ struct FailureCluster {
     signature_is_step_fallback: bool,
     log_excerpt: String,
     log_truncated: bool,
+    /// The job whose own log supplied the excerpt, when the run-scoped read
+    /// returned nothing and collection recovered it per job. Such an excerpt is
+    /// the whole job's log, not just its failed steps, and the description says
+    /// so rather than presenting it as a failed-step quote.
+    log_source_job: Option<String>,
     runs: Vec<Value>,
 }
 
@@ -764,8 +772,23 @@ impl FailureCluster {
             "job": self.job,
             "step": self.step,
             "tested_commit": self.tested_commit,
+            "run_ids": self.run_ids(),
             "run_urls": self.run_urls(),
+            "ref_kinds": self.distinct_run_strings("ref_kind"),
+            "head_branches": self.distinct_run_strings("head_branch"),
         })
+    }
+
+    fn distinct_run_strings(&self, field: &str) -> Vec<String> {
+        self.runs
+            .iter()
+            .filter_map(|run| run.get(field).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     fn title(&self) -> String {
@@ -902,6 +925,12 @@ impl FailureCluster {
                      the omitted region is marked inline._\n",
                 );
             }
+            if let Some(job) = &self.log_source_job {
+                out.push_str(&format!(
+                    "\n_The run-scoped failed-step log came back empty, so this excerpt is the \
+                     whole log of job {job}, read from the job log API._\n"
+                ));
+            }
         }
 
         let stale = self.stale_evidence(evidence);
@@ -977,6 +1006,20 @@ impl FailureCluster {
             })
             .unwrap_or_default()
     }
+}
+
+/// The job whose own log supplied this failure's excerpt, if the run-scoped
+/// read produced nothing and collection fell back per job.
+fn job_log_source(failure: &Value) -> Option<String> {
+    if value_string(failure, "log_source") != "job_api_log" {
+        return None;
+    }
+    let job = failure.get("log_source_jobs")?.as_array()?.first()?;
+    Some(format!(
+        "`{}` (id `{}`)",
+        display(&value_string(job, "name")),
+        display(&value_string(job, "job_id")),
+    ))
 }
 
 fn render_run(run: &Value) -> String {
@@ -1100,6 +1143,7 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
                     .get("log_truncated")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                log_source_job: job_log_source(failure),
                 runs: Vec::new(),
             }
         });

@@ -6,7 +6,7 @@ use crate::delivery::{definition_epoch, digest};
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::{members::*, *};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub mod incidents;
 pub mod preparation;
@@ -27,6 +27,14 @@ pub enum MemberOutcome {
     Failed(String),
 }
 
+pub enum MemberAdmission {
+    Admit,
+    /// The member is still authoritative, but cannot be admitted yet.
+    Withhold(String),
+    /// The member no longer describes authoritative source state.
+    Retire(String),
+}
+
 pub trait MemberHost {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError>;
 
@@ -36,7 +44,7 @@ pub trait MemberHost {
         now: DateTime<Utc>,
     ) -> Result<MemberPage, AutomationError>;
 
-    fn admission_deferral(&self, member: &StateMember) -> Result<Option<String>, AutomationError>;
+    fn admission(&self, member: &StateMember) -> Result<MemberAdmission, AutomationError>;
 
     fn lookup(&self, attempt: &MemberAttempt) -> Result<Option<String>, AutomationError>;
 
@@ -52,6 +60,41 @@ pub struct MemberEvaluation<'a> {
     pub enabled: bool,
     pub dry_run: bool,
     pub now: DateTime<Utc>,
+    /// Resolved operation-mode scheduling preferences and admission scope
+    /// supplied by Core [ORB-11332]. Empty constraints leave the trigger's
+    /// own timing untouched.
+    pub constraints: MemberConstraints,
+}
+
+/// Operation-mode inputs to the shared due decision [ORB-11332].
+///
+/// Core resolves preferences and the active grant; this evaluator only applies
+/// them. A member inside `scope` becomes due once it has settled for
+/// `due_after_seconds`, in addition to the trigger's own debounce/max-wait
+/// rule. Members outside the scope, and every member when the scope is
+/// empty, keep the operator's routine timing unchanged, so a grant can only
+/// accelerate the work it names and never gates an independently enabled
+/// routine. Constraints never grant authority: admission still goes through
+/// [`MemberHost::admission`] and the pipeline's own checks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberConstraints {
+    /// Task ids the active grant covers.
+    pub scope: BTreeSet<String>,
+    /// Seconds after the last material change before an in-scope member is
+    /// due. `None` applies no acceleration.
+    pub due_after_seconds: Option<u64>,
+}
+
+impl MemberConstraints {
+    /// Whether the constraints accelerate `member`.
+    fn accelerates(&self, member: &StateMember, now: DateTime<Utc>) -> bool {
+        let Some(due_after) = self.due_after_seconds else {
+            return false;
+        };
+        member.task_ids.iter().any(|id| self.scope.contains(id))
+            && now.signed_duration_since(member.changed_at).num_seconds()
+                >= i64::try_from(due_after).unwrap_or(i64::MAX)
+    }
 }
 
 pub fn evaluate(
@@ -66,6 +109,7 @@ pub fn evaluate(
         enabled,
         dry_run,
         now,
+        constraints,
     } = request;
 
     trigger.validate().map_err(orbit_common::OrbitError::from)?;
@@ -140,6 +184,9 @@ pub fn evaluate(
         }
 
         members.withheld.remove(&member.key);
+        for task_id in &member.task_ids {
+            members.withheld.remove(task_id);
+        }
 
         // Already assessed at exactly this fingerprint: nothing left to apply.
         if members
@@ -215,6 +262,7 @@ pub fn evaluate(
                 >= i64::from(trigger.debounce_minutes)
                 || now.signed_duration_since(member.first_seen).num_minutes()
                     >= i64::from(trigger.max_wait_minutes)
+                || constraints.accelerates(member, now)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -241,20 +289,25 @@ pub fn evaluate(
         return diagnostic(store, consumer, reason, Some(state));
     }
 
-    // Take the first due member Core will admit; each refusal is recorded as withheld.
+    // Take the first due member Core will admit. Temporary refusals remain
+    // visible, while obsolete source identities are retired from durable state.
     let mut candidate = None;
     let mut next = state.clone();
 
     for member in candidates.into_iter().take(trigger.max_items) {
-        if let Some(reason) = host.admission_deferral(&member)? {
-            let members = member_state(&mut next)?;
-            if reason == "task_ineligible" {
-                members.pending.remove(&member.key);
+        match host.admission(&member)? {
+            MemberAdmission::Admit => {
+                candidate = Some(member);
+                break;
             }
-            members.withheld.insert(member.key, reason);
-        } else {
-            candidate = Some(member);
-            break;
+            MemberAdmission::Withhold(reason) => {
+                member_state(&mut next)?.withheld.insert(member.key, reason);
+            }
+            MemberAdmission::Retire(_) => {
+                let members = member_state(&mut next)?;
+                members.pending.remove(&member.key);
+                members.withheld.remove(&member.key);
+            }
         }
     }
 
@@ -316,8 +369,11 @@ fn admit(
         .and_then(|members| members.active.as_ref())
         .ok_or_else(|| AutomationError::Deferred("claim_missing".into()))?;
 
-    if let Some(reason) = host.admission_deferral(&active.member)? {
-        return diagnostic(store, &consumer, &reason, Some(state));
+    match host.admission(&active.member)? {
+        MemberAdmission::Admit => {}
+        MemberAdmission::Withhold(reason) | MemberAdmission::Retire(reason) => {
+            return diagnostic(store, &consumer, &reason, Some(state));
+        }
     }
 
     if dry_run {
@@ -366,15 +422,21 @@ fn reconcile(
             return commit(store, &state, next, None);
         }
 
-        if now >= active.deadline || host.admission_deferral(&active.member)?.is_some() {
+        let admission = host.admission(&active.member)?;
+        if now >= active.deadline || !matches!(&admission, MemberAdmission::Admit) {
             let mut next = state.clone();
             let members = member_state(&mut next)?;
             if let Some(mut expired) = members.active.take() {
                 expired.exhausted = true;
-                members.withheld.insert(
-                    expired.member.key.clone(),
-                    "input_stale_or_deadline_expired".into(),
-                );
+                if matches!(&admission, MemberAdmission::Retire(_)) {
+                    members.pending.remove(&expired.member.key);
+                    members.withheld.remove(&expired.member.key);
+                } else {
+                    members.withheld.insert(
+                        expired.member.key.clone(),
+                        "input_stale_or_deadline_expired".into(),
+                    );
+                }
                 members.failed.insert(expired.member.key.clone(), expired);
             }
 

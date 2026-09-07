@@ -271,8 +271,33 @@ pub(super) fn list_triage_candidates(
             }));
             continue;
         }
+        // [ORB-11332] A failed run admitted under an operation-mode grant
+        // draws its diagnosis from the task's aggregate recovery allowance,
+        // reserved here before the triage agent is dispatched. A spent
+        // allowance is an escalation, not a candidate.
+        let reservation =
+            crate::application::operation::triage_recovery_reservation(runtime, &task.id, &run)
+                .map_err(|error| action_failed(action, error.to_string()))?;
+        if let Some(reason) = reservation
+            .as_ref()
+            .and_then(|reservation| reservation.exhausted)
+        {
+            exhausted.push(json!({
+                "task_id": task.id,
+                "run_id": run_id,
+                "rebacklog_count": rebacklog_count,
+                "reason": reason,
+            }));
+            continue;
+        }
         if candidates.len() < max_tasks {
-            candidates.push(candidate_json(task, &run, rebacklog_count, max_rebacklogs));
+            let mut candidate = candidate_json(task, &run, rebacklog_count, max_rebacklogs);
+            if let Some(episode) = reservation.and_then(|reservation| reservation.episode)
+                && let Some(object) = candidate.as_object_mut()
+            {
+                object.insert("recovery_episode".to_string(), json!(episode));
+            }
+            candidates.push(candidate);
         }
     }
 
@@ -407,6 +432,20 @@ pub(super) fn apply_triage_dispositions(
             &mut seen_task_ids,
             max_rebacklogs,
         );
+        // [ORB-11332] The diagnosis and its disposition are one episode;
+        // settle its wall time now so a requeue cannot start a fresh count.
+        if let Some(snapshot) = candidate_run_by_task.get(task_id)
+            && let Err(error) = crate::application::operation::settle_triage_episode(
+                runtime,
+                task_id,
+                &snapshot.run_id,
+            )
+        {
+            tracing::warn!(
+                task_id,
+                "triage recovery episode settlement failed: {error}"
+            );
+        }
         record(&mut results, &mut counts, task_id, outcome);
     }
 

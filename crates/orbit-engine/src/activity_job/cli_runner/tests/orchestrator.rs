@@ -779,9 +779,26 @@ fn run_cli_backend_keeps_opted_out_declared_failure_advisory() {
 fn run_cli_backend_completion_gate_demotes_a_declared_failure_envelope() {
     let temp = tempdir().expect("tempdir");
     let script = temp.path().join("codex");
+    let envelope = serde_json::json!({
+        "schemaVersion": 1,
+        "status": "failed",
+        "result": {},
+        "error": {
+            "code": "macos_validation_unavailable",
+            "message": format!(
+                "sandbox-exec is unavailable; token=sk-test-redaction {}",
+                "x".repeat(2 * 1024)
+            ),
+        },
+    });
+    let stdout_file = temp.path().join("stdout.json");
+    fs::write(&stdout_file, envelope.to_string()).expect("write envelope fixture");
     write_executable(
         &script,
-        "#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{\"schemaVersion\":1,\"status\":\"failed\",\"result\":{},\"error\":{\"code\":\"blocked\",\"message\":\"cannot proceed\"}}'\n",
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\ncat '{}'\n",
+            stdout_file.display()
+        ),
     );
 
     let sink = Arc::new(RecordingSink::default());
@@ -816,6 +833,16 @@ fn run_cli_backend_completion_gate_demotes_a_declared_failure_envelope() {
     let message = outcome.message.expect("declared failure message");
     assert!(message.contains("declared envelope status"), "{message}");
     assert!(message.contains("failed"), "{message}");
+    assert!(
+        message.contains("error.code=macos_validation_unavailable"),
+        "{message}"
+    );
+    assert!(message.contains("sandbox-exec is unavailable"), "{message}");
+    assert!(!message.contains("sk-test-redaction"), "{message}");
+    assert!(
+        message.len() < 1_300,
+        "diagnostic must remain bounded: {message}"
+    );
 }
 
 /// `timeout` is just as terminal as `failed` when the provider reports it in
@@ -856,6 +883,62 @@ fn run_cli_backend_completion_gate_demotes_a_declared_timeout_envelope() {
     let message = outcome.message.expect("declared timeout message");
     assert!(message.contains("declared envelope status"), "{message}");
     assert!(message.contains("timeout"), "{message}");
+    assert!(message.contains("error.code=deadline"), "{message}");
+    assert!(message.contains("error.message=timed out"), "{message}");
+}
+
+#[test]
+fn run_cli_backend_demotes_declared_failure_with_missing_or_malformed_error_details() {
+    for (fixture, error) in [
+        ("missing", serde_json::Value::Null),
+        ("malformed", serde_json::json!({"code": 42, "message": []})),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        let script = temp.path().join("codex");
+        let envelope = serde_json::json!({
+            "schemaVersion": 1,
+            "status": "failed",
+            "result": {},
+            "error": error,
+        });
+        let stdout_file = temp.path().join("stdout.json");
+        fs::write(&stdout_file, envelope.to_string()).expect("write envelope fixture");
+        write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\ncat > /dev/null\ncat '{}'\n",
+                stdout_file.display()
+            ),
+        );
+
+        let sink = Arc::new(RecordingSink::default());
+        let sink_for_writer: Arc<dyn AuditSink> = sink;
+        let audit = Arc::new(V2AuditWriter::new(
+            format!("job-declared-failure-{fixture}"),
+            "codex:gpt-5.5",
+            sink_for_writer,
+        ));
+        let host = TestHost::with_command(script.display().to_string());
+
+        let outcome = run_cli_backend(
+            &host,
+            &test_agent_loop_spec(Duration::from_secs(5)),
+            "test_activity",
+            &format!("job-declared-failure-{fixture}"),
+            audit,
+            &serde_json::json!({"task_id": "ORB-11439"}),
+            None,
+        )
+        .expect("run cli backend");
+
+        assert!(!outcome.success, "{fixture} error must still demote exit 0");
+        assert_eq!(outcome.output["response_envelope_status"], "failed");
+        let message = outcome.message.expect("declared failure message");
+        assert!(
+            message.contains("declared envelope error details unavailable"),
+            "{message}"
+        );
+    }
 }
 
 /// A provider that interleaves a wrapped tool's stdout with its own protocol
@@ -3575,6 +3658,92 @@ fn run_cli_backend_passes_model_to_grok_and_captures_well_formed_stdout() {
         argv.get(model_idx + 1).map(String::as_str),
         Some("grok-build")
     );
+}
+
+#[test]
+fn run_cli_backend_uses_grok_final_text_not_wrapper_metadata() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    let grok_stdout = serde_json::json!({
+        "text": "{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"source\":\"final-text\"},\"error\":null}",
+        "stopReason": "EndTurn",
+        "thought": "{\"schemaVersion\":1,\"status\":\"failed\",\"result\":{},\"error\":{\"code\":\"metadata\",\"message\":\"ignore\",\"details\":null}}",
+        "toolCalls": [{"result": "{\"schemaVersion\":1,\"status\":\"failed\",\"result\":{},\"error\":{\"code\":\"tool\",\"message\":\"ignore\",\"details\":null}}"}],
+    })
+    .to_string();
+    write_executable(
+        &script,
+        &format!("#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{grok_stdout}'\n"),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-grok-final-text",
+        "grok:grok-build",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.require_completion_envelope = true;
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "test_activity",
+        "job-grok-final-text",
+        audit,
+        &serde_json::json!({"prompt": "respond"}),
+        None,
+    )
+    .expect("run cli backend");
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(outcome.output["source"], "final-text");
+    assert_eq!(outcome.output["response_envelope_status"], "success");
+}
+
+#[test]
+fn run_cli_backend_preserves_grok_failed_final_text() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    let grok_stdout = serde_json::json!({
+        "text": "{\"schemaVersion\":1,\"status\":\"failed\",\"result\":{},\"error\":{\"code\":\"final_failure\",\"message\":\"final answer failed\",\"details\":null}}",
+        "stopReason": "EndTurn",
+        "thought": "{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"source\":\"metadata\"},\"error\":null}",
+    })
+    .to_string();
+    write_executable(
+        &script,
+        &format!("#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{grok_stdout}'\n"),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-grok-final-failure",
+        "grok:grok-build",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.require_completion_envelope = true;
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "test_activity",
+        "job-grok-final-failure",
+        audit,
+        &serde_json::json!({"prompt": "respond"}),
+        None,
+    )
+    .expect("run cli backend");
+
+    assert!(!outcome.success);
+    assert_eq!(outcome.output["response_envelope_status"], "failed");
+    let message = outcome.message.expect("failed final answer diagnostic");
+    assert!(message.contains("final_failure"), "{message}");
 }
 
 #[test]

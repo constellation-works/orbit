@@ -1000,20 +1000,23 @@ fn investigate<Q: CiQueries + ?Sized>(
             failure["log_total_bytes"] = json!(log.total_bytes);
             failure["log_returned_bytes"] = json!(log.returned_bytes);
             failure["log_scope"] = json!("failed");
+            failure["log_source"] = json!(log.source);
+            failure["log_source_jobs"] = json!(log.source_jobs);
             failure["actual_checkout_shas"] = json!(log.checkout_commits);
             failure["checkout_evidence"] = json!(log.checkout_evidence);
             failure["checkout_evidence_scope"] = json!("failed");
             set_checkout_identity(failure, "failed", &log);
-            // `gh` can succeed with empty stdout when the run's logs are gone
-            // (retention). That is not a captured excerpt; record it so the
-            // filed task can say why the block is empty.
+            // A read that ends with no text at all is not a captured excerpt,
+            // and the per-job fallback has already had its turn. Record why,
+            // so the filed task can say what is missing and the sweep never
+            // reads silence as a clean run.
             if log.text.trim().is_empty() {
                 push_retryable_error(
                     retryable_errors,
                     "investigation",
                     "run_logs",
                     failure.get("run_id"),
-                    "query returned no failed-step log text",
+                    &with_fallback_cause("query returned no failed-step log text", &log),
                 );
             }
         }
@@ -1084,7 +1087,7 @@ fn investigate<Q: CiQueries + ?Sized>(
                     "registration",
                     "checkout_evidence",
                     failure.get("run_id"),
-                    "run logs contained no actual checkout SHA",
+                    &with_fallback_cause("run logs contained no actual checkout SHA", &log),
                 );
             }
         }
@@ -1100,6 +1103,20 @@ fn investigate<Q: CiQueries + ?Sized>(
         }
     }
     failure["investigated"] = json!(retryable_errors.len() == errors_before);
+}
+
+/// An evidence gap, extended with the fallback's own outcome when there was
+/// one.
+///
+/// An empty log read is not proof that a run's logs expired: it is also how
+/// the `gh run view --log*` blind spot presents, and the per-job fallback runs
+/// precisely then. Whichever way the gap arose, the reader is told which query
+/// fell short rather than being left to assume retention.
+fn with_fallback_cause(gap: &str, log: &super::query::RunLog) -> String {
+    match &log.fallback_error {
+        Some(reason) => format!("{gap}; the per-job log fallback recovered none either: {reason}"),
+        None => gap.to_string(),
+    }
 }
 
 fn set_checkout_identity(failure: &mut Value, scope: &str, log: &super::query::RunLog) {
@@ -1121,6 +1138,10 @@ fn set_checkout_identity(failure: &mut Value, scope: &str, log: &super::query::R
         "observed_shas": log.checkout_commits,
         "provenance": {
             "source": "runner_log",
+            // Which query the runner log was read through, and the job whose
+            // own log supplied it when the run-scoped read returned nothing.
+            "read_via": log.source,
+            "jobs": log.source_jobs,
             "scope": scope,
             "complete": log.checkout_evidence_complete,
             "scanned_bytes": log.checkout_evidence_scanned_bytes,

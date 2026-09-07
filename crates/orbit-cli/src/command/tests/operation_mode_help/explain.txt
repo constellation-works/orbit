@@ -1,0 +1,23 @@
+Explain the effective operation policy and authority
+
+Usage: orbit operation explain [OPTIONS]
+
+Options:
+      --preset <PRESET>
+          Run-layer preset override: supervised or autonomous (resets the preset-managed fields)
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+      --completion <COMPLETION>
+          Run-layer completion preference: review or done (an explicit done past the delivery cap is refused)
+      --leaf-ceiling <LEAF_CEILING>
+          Run-layer ceiling on concurrently live leaf runs
+      --recovery-episodes <RECOVERY_EPISODES>
+          Run-layer recovery episodes allowed per task
+      --recovery-minutes <RECOVERY_MINUTES>
+          Run-layer recovery wall-time minutes allowed per task
+      --review-policy <REVIEW_POLICY>
+          Run-layer review policy: none or after-landing (before-pr is not yet supported at admission)
+      --json
+          Output as JSON
+  -h, --help
+          Print help

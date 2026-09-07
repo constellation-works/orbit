@@ -160,6 +160,7 @@ pub(crate) fn build_context_from_roots(
     let crews = runtime_config.crews.clone();
     let default_crew = runtime_config.default_crew.clone();
     let system_crew = runtime_config.system_crew.clone();
+    let operation = runtime_config.operation.clone();
 
     Ok(OrbitContext::new(
         paths,
@@ -194,6 +195,7 @@ pub(crate) fn build_context_from_roots(
             crews,
             default_crew,
             system_crew,
+            operation,
         ),
     ))
 }

@@ -146,12 +146,19 @@ pub fn execute_job_with_resume(
         _ => None,
     };
 
+    let pipeline = seed_pipeline_from_resume(job, resume);
+    if let Some(resume) = resume {
+        crate::executor::automation::vcs::reconcile_resumed_failure_handoff(
+            host, job, run_id, resume, &pipeline,
+        )?;
+    }
+
     let ctx = ExecCtx {
         run_id: run_id.to_string(),
         audit: audit.clone(),
         host,
         input: base_input.clone(),
-        pipeline: Arc::new(Mutex::new(seed_pipeline_from_resume(job, resume))),
+        pipeline: Arc::new(Mutex::new(pipeline)),
         recovery_activity,
         failure_activity,
         item: None,

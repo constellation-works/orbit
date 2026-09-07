@@ -35,8 +35,9 @@ trap 'rm -rf -- "$fixture_root"' EXIT
 
 "$repo_root/scripts/sync-plugin-skills.sh" --check >/dev/null
 cp -R "$repo_root/plugin" "$fixture_root/plugin"
-mkdir -p "$fixture_root/npm"
+mkdir -p "$fixture_root/npm" "$fixture_root/.claude-plugin"
 cp "$repo_root/npm/package.json" "$fixture_root/npm/package.json"
+cp "$repo_root/.claude-plugin/marketplace.json" "$fixture_root/.claude-plugin/marketplace.json"
 
 "$validator" "$fixture_root"
 
@@ -101,14 +102,13 @@ if (cursor_plugin / ".cursor-plugin").exists():
     errors.append("local Cursor plugin must not grow a .cursor-plugin surface")
 if not skill.is_file():
     errors.append("local Cursor plugin does not expose plugin/skills/orbit/SKILL.md")
+npm_version = json.loads((base_fixture / "npm" / "package.json").read_text(encoding="utf-8"))["version"]
+expected_args = ["-y", f"@orbit-tools/cli@{npm_version}", "mcp", "serve"]
 orbit_mcp = mcp.get("mcpServers", {}).get("orbit", {})
-if orbit_mcp.get("command") != "npx" or orbit_mcp.get("args") != [
-    "-y",
-    "@orbit-tools/cli@latest",
-    "mcp",
-    "serve",
-]:
-    errors.append("local Cursor plugin MCP launch drifted from the portable npx contract")
+if orbit_mcp.get("command") != "npx" or orbit_mcp.get("args") != expected_args:
+    errors.append("local Cursor plugin MCP launch drifted from the release-version npx pin")
+if plugin_manifest.get("author", {}).get("name") != "constellation-works":
+    errors.append("local Cursor plugin author is not constellation-works")
 
 plugin_blob = (cursor_plugin / "plugin.json").read_text(encoding="utf-8")
 mcp_blob = (cursor_plugin / "mcp.json").read_text(encoding="utf-8")
@@ -136,6 +136,42 @@ payload = json.loads((broken / "plugin" / "mcp.json").read_text(encoding="utf-8"
 payload["mcpServers"]["orbit"]["command"] = "node"
 (broken / "plugin" / "mcp.json").write_text(json.dumps(payload), encoding="utf-8")
 expect_failure(broken, "MCP launch", "mcp command drift")
+
+# Negative: stale @latest launch pin.
+broken = clone_fixture("stale-latest-pin")
+payload = json.loads((broken / "plugin" / "mcp.json").read_text(encoding="utf-8"))
+payload["mcpServers"]["orbit"]["args"] = ["-y", "@orbit-tools/cli@latest", "mcp", "serve"]
+(broken / "plugin" / "mcp.json").write_text(json.dumps(payload), encoding="utf-8")
+expect_failure(broken, "stale launch pin", "stale @latest pin")
+
+# Negative: historical 0.5.1 launch pin.
+broken = clone_fixture("stale-051-pin")
+payload = json.loads((broken / "plugin" / "mcp.json").read_text(encoding="utf-8"))
+payload["mcpServers"]["orbit"]["args"] = ["-y", "@orbit-tools/cli@0.5.1", "mcp", "serve"]
+(broken / "plugin" / "mcp.json").write_text(json.dumps(payload), encoding="utf-8")
+expect_failure(broken, "stale launch pin", "stale 0.5.1 pin")
+
+# Negative: missing required mcp.json.
+broken = clone_fixture("missing-mcp")
+(broken / "plugin" / "mcp.json").unlink()
+expect_failure(broken, "plugin/mcp.json is missing", "missing mcp.json")
+
+# Negative: missing required plugin.json.
+broken = clone_fixture("missing-plugin-manifest")
+(broken / "plugin" / "plugin.json").unlink()
+expect_failure(broken, "plugin/plugin.json is missing", "missing plugin.json")
+
+# Negative: malformed plugin.json.
+broken = clone_fixture("malformed-plugin-manifest")
+(broken / "plugin" / "plugin.json").write_text("{not-json", encoding="utf-8")
+expect_failure(broken, "not valid JSON", "malformed plugin.json")
+
+# Negative: ownership drift away from constellation-works.
+broken = clone_fixture("owner-drift")
+payload = json.loads((broken / "plugin" / "plugin.json").read_text(encoding="utf-8"))
+payload["author"] = {"name": "danieljhkim", "url": "https://github.com/danieljhkim"}
+(broken / "plugin" / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
+expect_failure(broken, "constellation-works", "owner drift")
 
 # Negative: absolute path in the Agent Plugin MCP config.
 broken = clone_fixture("absolute-path")

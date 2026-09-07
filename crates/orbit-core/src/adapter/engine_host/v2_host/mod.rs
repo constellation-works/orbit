@@ -21,7 +21,7 @@ pub(super) mod scan_unresolved;
 pub(super) mod task_context;
 pub(super) mod task_pilot;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
 pub(super) mod triage;

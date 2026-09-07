@@ -188,6 +188,23 @@ pub const DASHBOARD_AUTO_DRAIN_COMPLETE: GovernedOperation = GovernedOperation {
     rationale: "opting into automatic completion authorizes review -> done for every task the drain window ships, not only the ones visible at submission",
 };
 
+/// Stop new admissions under an operation-mode grant from the dashboard
+/// [ORB-11332].
+pub const DASHBOARD_OPERATION_STOP: GovernedOperation = GovernedOperation {
+    id: "operation.stop",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "stopping a grant ends scoped automation for the workspace; only an operator decides that",
+};
+
+/// Hard-revoke an operation-mode grant from the dashboard [ORB-11332].
+pub const DASHBOARD_OPERATION_REVOKE: GovernedOperation = GovernedOperation {
+    id: "operation.revoke",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "revocation withdraws completion authority from admitted work; only an operator decides that",
+};
+
 /// Every governed operation, declared exactly once.
 ///
 /// This is the single enumerable place the required capability lives. A call
@@ -236,6 +253,24 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
         rationale: "retuning a live drain's worker ceiling changes how much work the workspace starts",
+    },
+    GovernedOperation {
+        id: "orbit.operation.enable",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "enabling a grant authorizes automatic preparation, promotion, and possibly completion for a task set without asking again",
+    },
+    GovernedOperation {
+        id: "orbit.operation.stop",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "stopping a grant ends scoped automation for the workspace",
+    },
+    GovernedOperation {
+        id: "orbit.operation.revoke",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "revocation withdraws completion authority from admitted work",
     },
     GovernedOperation {
         id: "orbit.agent.invoke",
@@ -320,6 +355,8 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_AUTO_TASK_TOGGLE,
     DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_DRAIN_COMPLETE,
+    DASHBOARD_OPERATION_STOP,
+    DASHBOARD_OPERATION_REVOKE,
 ];
 
 /// Look up the governed tool operation for `tool_name`, if any.

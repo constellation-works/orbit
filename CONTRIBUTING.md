@@ -1,6 +1,13 @@
-# Contributing to Orbit
+# Orbit Internal Development Standards
 
-Thanks for contributing to Orbit.
+Orbit does not accept external pull requests. Development follows a
+single-writer pipeline that executes on a trusted host; running submitted code
+from an untrusted branch there would expose the maintainer's credentials.
+Unsolicited pull requests will be closed.
+
+GitHub issues remain open for bug reports and feature requests. Outside input
+reaches Orbit through issues; implementation is handled by the maintainer and
+Orbit's own agents.
 
 ## Principles
 
@@ -15,7 +22,8 @@ Thanks for contributing to Orbit.
 cargo test --workspace
 ```
 
-Use targeted tests while iterating, then run the full workspace suite before landing a change.
+Use targeted tests while iterating, then run the full workspace suite before
+landing an internal change.
 
 ## Toolchain (MSRV)
 
@@ -70,7 +78,7 @@ on every PR (via `scripts/ci-guardrails.sh`) and locally with `make audit`. The
 policy lives in [`deny.toml`](deny.toml): it denies crates with an open RUSTSEC
 advisory or a yanked version, and restricts licenses to a reviewed allow-list.
 
-Run it before landing a dependency change:
+Run it before landing an internal dependency change:
 
 ```bash
 cargo install cargo-deny --locked   # one-time

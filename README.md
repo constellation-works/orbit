@@ -57,7 +57,7 @@ Or ask your agent: "create an orbit task to refactor the authentication logic in
 
 ### Agent plugins
 
-Use a plugin to attach Orbit's MCP tools and `orbit` skill to one agent without the CLI on `$PATH`; use the CLI install for the dashboard and cross-agent workspace setup. All three load `plugin/skills/orbit` and launch `npx -y @orbit-tools/cli@latest mcp serve`.
+Use a plugin to attach Orbit's MCP tools and `orbit` skill to one agent without the CLI on `$PATH`; use the CLI install for the dashboard and cross-agent workspace setup. All three load `plugin/skills/orbit` and launch the npm CLI pinned to that release (`npx -y @orbit-tools/cli@<version> mcp serve`). Cursor's public marketplace listing is a separate human-reviewed catalog update; a git tag does not publish it.
 
 ```bash
 # Claude Code

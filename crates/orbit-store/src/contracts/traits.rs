@@ -504,12 +504,40 @@ pub struct ChildJobRunAdmissionParams {
     pub attempt: u32,
     pub scheduled_at: DateTime<Utc>,
     pub input: Option<Value>,
+    /// The operation-mode grant this admission must still satisfy, when the
+    /// parent was admitted under one [ORB-11332]. `None` keeps the
+    /// pre-existing stop-only guard.
+    pub authority: Option<ChildAdmissionAuthority>,
+}
+
+/// The grant-bound facts a child admission is rechecked against inside the
+/// admission transaction: grant validity at `now`, exact revision, finite
+/// scope, an unclaimed task, and free leaf capacity [ORB-11332].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildAdmissionAuthority {
+    pub grant_id: String,
+    pub grant_revision: u32,
+    /// The task this child would carry. `Some` only for a leaf child: it is
+    /// checked against the grant scope and against live claims of the same
+    /// job. Nested children (gate, PR) inherit their parent's claim.
+    pub task_id: Option<String>,
+    /// Effective ceiling on live runs of the child's job. `Some` only for a
+    /// leaf child; nested children are not counted as leaf capacity.
+    pub leaf_ceiling: Option<u32>,
+    pub now: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChildJobRunAdmissionOutcome {
     Admitted(Box<JobRun>),
     AdmissionsStopped,
+    /// The grant-bound recheck refused the child; `reason` is one of
+    /// `grant_missing`, `grant_revision_changed`, `grant_expired`,
+    /// `grant_stopped`, `grant_revoked`, `outside_grant_scope`,
+    /// `task_claimed`, or `capacity_saturated`.
+    Refused {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone)]

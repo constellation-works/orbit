@@ -227,6 +227,25 @@ if rg -n 'automation_commit\(|Sha256' \
   fail=1
 fi
 
+# Operation mode composes authority over the shared scheduling domain
+# [ORB-11332]. Core's operation module may consume accepted assessments and
+# hand the evaluator constraints, but must not grow its own evaluator,
+# fingerprint, checkpoint, or coverage acceptance; Automation must never read
+# grants, so authority stays in Core/Store.
+if rg -n 'automation_commit\(|Sha256|fn evaluate\b|fn fingerprint\b|definition_epoch' \
+  "$repo_root/crates/orbit-core/src/application/operation" \
+  --glob '*.rs' --glob '!**/tests/**'; then
+  echo "Core operation mode must use the shared automation evaluator and checkpoint contract"
+  fail=1
+fi
+
+if rg -n 'OperationGrant|operation_grant|OperationStoreBackend' \
+  "$repo_root/crates/orbit-automation/src" \
+  --glob '*.rs' --glob '!**/tests/**'; then
+  echo "orbit-automation must not read operation-mode grants; authority is composed in Core"
+  fail=1
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   exit 1
 fi

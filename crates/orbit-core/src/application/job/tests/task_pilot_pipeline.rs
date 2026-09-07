@@ -130,8 +130,13 @@ fn execute_task_pilot_job(
 
 fn assert_job_resolves_branch(config_branch: &str, input: Value, expected_branch: &str) {
     let fixture = task_pilot_job_fixture(config_branch, expected_branch);
-    let run_id = format!("task-pilot-{config_branch}-{expected_branch}");
-    let outcome = execute_task_pilot_job(&fixture, input, &run_id)
+    let run_id = fixture
+        ._root
+        .path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("fixture root has a UTF-8 basename");
+    let outcome = execute_task_pilot_job(&fixture, input, run_id)
         .expect("shipped task-pilot job must render and reach preparation");
 
     assert!(outcome.success, "pipeline outcome: {outcome:?}");
@@ -160,9 +165,9 @@ fn assert_job_resolves_branch(config_branch: &str, input: Value, expected_branch
 fn shipped_task_pilot_job_renders_omitted_and_empty_workspace_branch_inputs() {
     for (config_branch, input) in [
         ("main", json!({})),
-        ("main", json!({ "base_branch": "" })),
+        ("main", json!({ "base_branch": String::new() })),
         ("agent-main", json!({})),
-        ("agent-main", json!({ "base_branch": "" })),
+        ("agent-main", json!({ "base_branch": String::new() })),
     ] {
         assert_job_resolves_branch(config_branch, input, config_branch);
     }
@@ -170,18 +175,27 @@ fn shipped_task_pilot_job_renders_omitted_and_empty_workspace_branch_inputs() {
 
 #[test]
 fn shipped_task_pilot_job_honors_an_explicit_alternate_branch() {
-    assert_job_resolves_branch("main", json!({ "base_branch": "release" }), "release");
+    let alternate_branch = format!("alternate-{}", std::process::id());
+
+    assert_job_resolves_branch(
+        "main",
+        json!({ "base_branch": alternate_branch.clone() }),
+        &alternate_branch,
+    );
 }
 
 #[test]
 fn shipped_task_pilot_job_rejects_an_unavailable_explicit_branch() {
     let fixture = task_pilot_job_fixture("main", "main");
-    let error = execute_task_pilot_job(
-        &fixture,
-        json!({ "base_branch": "missing-branch" }),
-        "task-pilot-missing-branch",
-    )
-    .expect_err("an unavailable explicit branch must fail before pilot dispatch");
+    let run_id = fixture
+        ._root
+        .path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("fixture root has a UTF-8 basename");
+    let error =
+        execute_task_pilot_job(&fixture, json!({ "base_branch": "missing-branch" }), run_id)
+            .expect_err("an unavailable explicit branch must fail before pilot dispatch");
     let message = error.to_string();
 
     assert!(message.contains("could not fetch"), "{message}");

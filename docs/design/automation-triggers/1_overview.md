@@ -57,8 +57,8 @@ Delivery-triggered review is not a replacement for required PR review or QA.
 | Incident | One execution failure cause with explicit child/wrapper/retry lineage and bounded diagnosis. |
 | Fresh assessment | Assessment of the current material task/source contract, including a valid decision to leave work unready. |
 
-[Operation mode](../operation-mode/3_vision.md) supplies optional defaults and
-scoped authorization; triggers decide when work is due. Its review-policy
+[Operation mode](../operation-mode/5_operations.md) supplies optional defaults
+and scoped authorization [ORB-11332]; triggers decide when work is due. Its review-policy
 extension owns review meaning and content-specific exclusions. Neither proposal
 must land first: absent mode support, explicit definition values and existing
 authority suffice. Unknown review coverage remains uncovered.

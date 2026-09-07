@@ -7,28 +7,6 @@ use crate::TIMEOUT_DEFAULT_MS;
 const DEFAULT_LIMIT: u64 = 100;
 const MAX_LIMIT: u64 = 100;
 
-fn repository_path(input: &Value) -> Result<String, OrbitError> {
-    let Some(raw) = input.get("repo").and_then(Value::as_str) else {
-        return Ok("{owner}/{repo}".to_string());
-    };
-    let repo = raw.trim();
-    let mut parts = repo.split('/');
-    let owner = parts.next().unwrap_or_default();
-    let name = parts.next().unwrap_or_default();
-    let valid_part = |part: &str| {
-        !part.is_empty()
-            && part
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-    };
-    if parts.next().is_some() || !valid_part(owner) || !valid_part(name) {
-        return Err(OrbitError::InvalidInput(format!(
-            "invalid `repo`: \"{repo}\"; expected owner/name using ASCII letters, digits, '.', '-', or '_'"
-        )));
-    }
-    Ok(repo.to_string())
-}
-
 /// Build one bounded Dependabot-alert API request. This builder is deliberately
 /// unregistered: only engine-private host automation calls it.
 pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
@@ -48,7 +26,7 @@ pub fn build_secret_scanning_request(input: &Value) -> Result<ExecRequest, Orbit
 }
 
 fn build_alert_request(input: &Value, family: &str) -> Result<ExecRequest, OrbitError> {
-    let endpoint = format!("repos/{}/{family}/alerts", repository_path(input)?);
+    let endpoint = format!("repos/{}/{family}/alerts", super::repository_path(input)?);
     let limit = super::bounded_limit(input, "limit", DEFAULT_LIMIT, MAX_LIMIT)?;
     let args = vec![
         "api".to_string(),
@@ -76,7 +54,7 @@ pub fn build_secret_locations_request(input: &Value) -> Result<ExecRequest, Orbi
     let limit = super::bounded_limit(input, "limit", DEFAULT_LIMIT, MAX_LIMIT)?;
     let endpoint = format!(
         "repos/{}/secret-scanning/alerts/{number}/locations",
-        repository_path(input)?
+        super::repository_path(input)?
     );
     Ok(super::gh_exec_request(
         vec![

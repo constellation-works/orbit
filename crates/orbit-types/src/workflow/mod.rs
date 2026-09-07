@@ -6,6 +6,7 @@ mod child_dispatch;
 mod error;
 mod executor_def;
 mod job;
+pub mod operation;
 mod routine;
 mod run_state;
 mod ship;
@@ -47,11 +48,18 @@ pub use job::{
     RunEvent, RunStateUpdate, StepCondition, default_job_max_active_runs, default_max_iterations,
     default_retry_backoff_seconds,
 };
+pub use operation::{
+    GrantAdmission, GrantLimits, GrantRights, GrantStatus, GrantTransition, MAX_GRANT_SCOPE_TASKS,
+    MAX_GRANT_WINDOW_SECONDS, OPERATION_ADMISSION_KEY, OperationAdmission, OperationGrant,
+    RecoveryEpisode, RecoveryEpisodeKind, RecoveryLedger, RecoveryReservation,
+};
 pub use routine::{
     MissedRunPolicy, OverlapPolicy, ROUTINE_SCHEMA_VERSION, RoutineDefinition, RoutinePolicy,
     RoutineRetries, RoutineTarget, RoutineTrigger,
 };
-pub use run_state::{DrainAdmissionsStop, DrainWorkerLimit, PipelineState};
+pub use run_state::{
+    DrainAdmissionsStop, DrainWorkerLimit, FailureActivityCheckpoint, PipelineState,
+};
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;
 

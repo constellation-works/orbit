@@ -1,0 +1,12 @@
+Hard-revoke a grant (admitted work loses privileged actions)
+
+Usage: orbit operation revoke [OPTIONS]
+
+Options:
+      --id <ID>                    Grant ID; defaults to the workspace's active grant
+      --root <ROOT>                Override the Orbit root directory (highest precedence)
+      --reason <REASON>            Reason recorded with the revocation
+      --if-revision <IF_REVISION>  Apply only if the grant is still at this revision
+      --claim-token <CLAIM_TOKEN>  Token for this workspace's exclusive claim, when another operator holds one
+      --json                       Output as JSON
+  -h, --help                       Print help

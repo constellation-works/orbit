@@ -69,6 +69,10 @@ pub use application::job::{
     DrainAdmissionsStopRequest, DrainAdmissionsStopResult, DrainWorkerLimitChange,
     DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry, RemainingDrainChild,
 };
+pub use application::operation::{
+    OperationDrainRequest, OperationDrainResult, OperationGrantControlRequest,
+    OperationGrantControlResult,
+};
 pub use application::search::{
     GlobalSearchHit, GlobalSearchKind, GlobalSearchParams, HitWorkspace, WorkspaceSearchReport,
     task_selectors_contain_path,

@@ -31,7 +31,7 @@ CLI behavior, state layout, or recovery semantics change.
 | [Prepare a Linux Host for Sandboxed Dispatch](./runbooks/linux-sandbox.md) | Install and verify the Bubblewrap host prerequisite that Orbit's Linux sandbox fails closed without. |
 | [Inspect and Retain Logs](./runbooks/logging.md) | Locate, filter, rotate, and retain Orbit process and routine-sweep logs. |
 | [Post-v0.18.0 release survey](./runbooks/release-survey.md) | Post-v0.18.0 release survey and breaking-change handoff. |
-| [Release Orbit](./runbooks/release.md) | Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, and npm. |
+| [Release Orbit](./runbooks/release.md) | Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, npm, and the human Cursor marketplace follow-up. |
 | [Inventory and Protect Orbit State](./runbooks/state-and-backup.md) | Locate Orbit state and perform WAL-safe backups, explicit task publication, restores, and task migrations. |
 | [Recover Stuck Job Runs](./runbooks/stuck-job-runs.md) | Diagnose, cancel, resume, or replay pending and running Orbit job runs. |
 | [Publish Orbit Tasks to a Dedicated Repository](./runbooks/task-publication.md) | Bind, authenticate, publish, verify, inspect, and recover an Orbit task-publication repository. |
@@ -72,7 +72,7 @@ a conservative title/status fallback.
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Accepted | codex |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Draft | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Accepted | codex |
-| [Operation Mode](./design/operation-mode/1_overview.md) | Proposed operation-mode presets and independent review timing, scoped repair, and delivery coverage through existing Orbit pipelines. | Draft | codex |
+| [Operation Mode](./design/operation-mode/1_overview.md) | Operation-mode presets, scoped grants and bounded recovery (shipped in ORB-11332) plus the still-proposed review timing, scoped repair, and delivery coverage. | Accepted | codex |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of four hand-copied layers. | Accepted | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional application, runtime, adapter, bootstrap, and composition boundaries inside orbit-core. | Accepted | codex |
 | [Orbit Docs](./design/orbit-docs/1_overview.md) | Orbit Docs — the human-authored workspace corpus and how operators and agents retrieve from it. | Draft | claude |

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,6 +10,7 @@ use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{ExternalRef, Task, TaskArtifact, TaskPriority, TaskStatus, TaskType};
+use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -25,6 +27,8 @@ pub struct CommitTestHost {
     repo_root: PathBuf,
     data_root: PathBuf,
     scoreboard_dir: PathBuf,
+    job_runs: Mutex<Vec<JobRun>>,
+    run_states: Mutex<HashMap<String, PipelineState>>,
 }
 
 impl CommitTestHost {
@@ -38,6 +42,8 @@ impl CommitTestHost {
             repo_root,
             data_root,
             scoreboard_dir,
+            job_runs: Mutex::new(Vec::new()),
+            run_states: Mutex::new(HashMap::new()),
         }
     }
 
@@ -48,6 +54,39 @@ impl CommitTestHost {
 
     pub fn persisted_summaries(&self) -> Vec<(String, String)> {
         self.persisted_summaries.lock().unwrap().clone()
+    }
+
+    pub fn with_run_state(
+        self,
+        run_id: &str,
+        retry_source_run_id: Option<&str>,
+        state: PipelineState,
+    ) -> Self {
+        let now = Utc::now();
+        self.job_runs.lock().unwrap().push(JobRun {
+            run_id: run_id.to_string(),
+            job_id: state.job_id.clone(),
+            attempt: 1,
+            state: JobRunState::Failed,
+            scheduled_at: now,
+            started_at: Some(now),
+            finished_at: Some(now),
+            duration_ms: Some(1),
+            created_at: now,
+            pid: None,
+            pid_start_time: None,
+            input: Some(state.initial_input.clone()),
+            retry_source_run_id: retry_source_run_id.map(ToOwned::to_owned),
+            knowledge_metrics: None,
+            resolved_crew: None,
+            crew_model: None,
+            steps: Vec::new(),
+        });
+        self.run_states
+            .lock()
+            .unwrap()
+            .insert(run_id.to_string(), state);
+        self
     }
 
     pub fn task_execution_summary(&self, task_id: &str) -> String {
@@ -62,6 +101,20 @@ impl CommitTestHost {
 }
 
 impl RuntimeHost for CommitTestHost {
+    fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
+        Ok(self
+            .job_runs
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|run| run.run_id == run_id)
+            .cloned())
+    }
+
+    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
+        Ok(self.run_states.lock().unwrap().get(run_id).cloned())
+    }
+
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         self.tasks
             .lock()

@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::super::input::{canonicalize_existing_dir, input_string_field, required_job_run_id};
+use super::failure::commit_head_matches_failure_handoff;
 use super::git::{git_output, git_success};
 use super::handoff::reject_failed_delivery;
 use author::{append_co_author_trailers, commit_author_for_tasks};
@@ -220,7 +221,16 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             if no_diff_expected {
                 return Ok(skipped_no_diff_expected_result(&task.id));
             }
-            if !allow_moved_head {
+            let preserved_failure_head = commit_head_matches_failure_handoff(
+                host,
+                input,
+                &task,
+                batch_id,
+                &workspace_path,
+                &base_sha,
+                &head_sha,
+            )?;
+            if !preserved_failure_head && !allow_moved_head {
                 return Err(changed_head_error(
                     &task.id,
                     &workspace_path,

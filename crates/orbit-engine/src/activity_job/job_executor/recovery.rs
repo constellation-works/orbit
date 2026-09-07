@@ -1,4 +1,5 @@
 use super::*;
+use crate::context::StepRecoveryAdmission;
 
 const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 
@@ -52,6 +53,45 @@ pub(super) fn attempt_recovery_activity(
         && !matches!(original_err, DispatchError::RecoverableVcsConflict { .. })
     {
         return false;
+    }
+
+    // [ORB-11332] Reserve the aggregate recovery episode before any worker
+    // exists. A denial keeps the original error authoritative; the host has
+    // already recorded the escalation on the task.
+    let recovery_started = std::time::Instant::now();
+    match ctx.host.authorize_step_recovery(&ctx.run_id, &step.id) {
+        Ok(StepRecoveryAdmission::Allowed | StepRecoveryAdmission::Reserved { .. }) => {}
+        Ok(StepRecoveryAdmission::Denied { reason }) => {
+            tracing::warn!(
+                target: "orbit.engine.job_executor",
+                run_id = %ctx.run_id,
+                failed_step_id = %step.id,
+                recovery_activity = %recovery.name,
+                reason = %reason,
+                "step recovery denied by the operation-mode recovery budget; preserving original step outcome"
+            );
+            emit_job_event_lossy(
+                &ctx.audit,
+                ctx.task_id(),
+                V2AuditEventKind::StepRecoveryAttempted {
+                    step_id: step.id.clone(),
+                    recovery_activity: recovery.name.clone(),
+                    recovery_succeeded: false,
+                },
+            );
+            return false;
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.engine.job_executor",
+                run_id = %ctx.run_id,
+                failed_step_id = %step.id,
+                recovery_activity = %recovery.name,
+                error = %error,
+                "step recovery authorization failed; preserving original step outcome"
+            );
+            return false;
+        }
     }
 
     let mut input = serde_json::json!({
@@ -159,6 +199,21 @@ pub(super) fn attempt_recovery_activity(
         host: Some(ctx.host),
     });
 
+    // Wall time counts whether or not the hook succeeded; a crash or timeout
+    // spends the allowance like any other attempt.
+    if let Err(error) =
+        ctx.host
+            .settle_step_recovery(&ctx.run_id, &step.id, recovery_started.elapsed().as_secs())
+    {
+        tracing::warn!(
+            target: "orbit.engine.job_executor",
+            run_id = %ctx.run_id,
+            failed_step_id = %step.id,
+            error = %error,
+            "step recovery settlement failed"
+        );
+    }
+
     let recovery_succeeded = match dispatch {
         Ok(dispatch) if dispatch.success => {
             // [ORB-00414] Best-effort dispatch-invocation persistence (a DB
@@ -235,6 +290,23 @@ pub(super) fn attempt_failure_activity(
     match dispatch {
         Ok(dispatch) => {
             persist_dispatch_invocation(ctx, &failure.name, &input, &dispatch);
+            if dispatch.success
+                && let Err(error) = ctx.host.checkpoint_failure_activity(
+                    &ctx.run_id,
+                    &failure.name,
+                    &step.id,
+                    &dispatch.output,
+                )
+            {
+                tracing::warn!(
+                    target: "orbit.engine.job_executor",
+                    run_id = %ctx.run_id,
+                    failed_step_id = %step.id,
+                    failure_activity = %failure.name,
+                    error = %error,
+                    "terminal failure activity evidence could not be checkpointed; preserving original step error"
+                );
+            }
             if !dispatch.success {
                 tracing::warn!(
                     target: "orbit.engine.job_executor",

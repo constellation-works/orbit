@@ -1,10 +1,10 @@
 ---
 type: runbook
-summary: Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, and npm.
+summary: Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, npm, and the human Cursor marketplace follow-up.
 tags: [operations, release, plugins, npm, signing]
-paths: [".github/workflows/release.yml", "plugin/**", "npm/**", "scripts/release-check.sh"]
+paths: [".github/workflows/release.yml", "plugin/**", "npm/**", "scripts/release-check.sh", "scripts/cursor-marketplace-followup.sh"]
 related_features: [orbit-docs-plugin]
-last_validated: 2026-08-23
+last_validated: 2026-09-06
 ---
 
 # Release Orbit
@@ -63,6 +63,9 @@ date has passed or its `revoked_at` field is set.
      marker; published npm versions are immutable.
    - Update `.version` in `plugin/.claude-plugin/plugin.json`,
      `plugin/.codex-plugin/plugin.json`, and `plugin/plugin.json`.
+   - Pin MCP launch args in `plugin/mcp.json`, `plugin/.mcp.json`, and
+     `plugin/.codex-plugin/plugin.json` to
+     `npx -y @orbit-tools/cli@<version> mcp serve`. Do not use `@latest`.
    - Run `cargo update --workspace` to refresh `Cargo.lock` without
      third-party dependency drift.
 
@@ -129,8 +132,9 @@ date has passed or its `revoked_at` field is set.
    ```
 
    Manual publication cannot use GitHub OIDC provenance. Keep the interval
-   between the GitHub Release and npm publish short; until npm updates,
-   `npx -y @orbit-tools/cli@latest` still selects the previous release.
+   between the GitHub Release and npm publish short; plugin MCP configs pin
+   `@orbit-tools/cli@<version>`, so a marketplace or plugin install before npm
+   publish cannot fetch that exact package.
 
 10. **Verify after npm publish.**
 
@@ -144,6 +148,51 @@ date has passed or its `revoked_at` field is set.
    with the release tag in its `tag` input. The tag-triggered run often starts
    before npm publish and is expected to fail its version assertion; the
    post-publish versioned run must be green.
+
+11. **Submit the Cursor marketplace follow-up.** This is not a package
+    publish. See [Cursor marketplace listing](#cursor-marketplace-listing).
+
+## Cursor marketplace listing
+
+Cursor's curated catalog is human-reviewed and is not updated by the tag
+workflow, GitHub Release, Homebrew tap, or npm publish. The
+`cursor-marketplace-followup` job in
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml) only
+reminds: it runs after `publish-release` with `continue-on-error: true`, so a
+missing acknowledgement cannot retract artifacts. It never submits forms,
+sends email, retags, or republishes npm.
+
+Required procedure after the git tag and matching `@orbit-tools/cli`
+version exist:
+
+1. Submit or update [https://cursor.com/marketplace/publish](https://cursor.com/marketplace/publish)
+   using [https://github.com/constellation-works/orbit](https://github.com/constellation-works/orbit)
+   and the `plugin/` subdirectory (Agent Plugins 1.0 `plugin.json` and
+   `mcp.json` at the plugin root). Do not add `plugin/.cursor-plugin`.
+2. Identify stale listing **2280865**, which still installs/describes
+   `danieljhkim/orbit` at **0.5.1**. Leave that historical provenance in place;
+   active distribution ownership is `constellation-works`.
+3. Install through Cursor plugin search (not only a local
+   `~/.cursor/plugins/local/orbit` symlink) and verify the listed version plus
+   MCP surface match this release:
+   `npx -y @orbit-tools/cli@<version> mcp serve`.
+4. If review stalls, escalate to `marketplace-publishing@cursor.com`. Do not
+   send that mail from CI or assume a public catalog push API exists.
+5. When the version-specific submission is done, add
+   `.github/cursor-marketplace-followup/<version>.ack` containing
+   `version=<version>` to the maintained `agent-main` branch. Do not move the
+   immutable release tag to add this receipt. Re-run that tag's
+   `cursor-marketplace-followup` job after the receipt merges: the job checks
+   out `agent-main` for the receipt and passes the original tag version to the
+   validator. The ack records the follow-up; it does not mean the curated
+   listing is live.
+
+Local check without external writes:
+
+```bash
+./scripts/cursor-marketplace-followup.sh
+./scripts/test-cursor-marketplace-followup.sh
+```
 
 ## Publish the Official MCP Registry record
 
@@ -283,17 +332,24 @@ used together.
 - `.version` in the Claude, Codex, and Agent Plugins 1.0 manifests;
 - the server name, package identity, launch arguments, and both version fields
   in `server.json`;
+- Cursor/Claude/Codex MCP launch pins
+  (`npx -y @orbit-tools/cli@<version> mcp serve`, never `@latest`);
+- active distribution ownership (`constellation-works` /
+  `https://github.com/constellation-works`) on plugin authors, Codex
+  `developerName`, and `.claude-plugin/marketplace.json`;
 - `npm view @orbit-tools/cli version`, when npm is available;
 - the latest `gh release list -L 1` tag, when GitHub CLI access is available.
 
 It also runs both plugin validators and the canonical-skill mirror drift check.
 Missing `npm` or `gh` skips that remote source with a stderr note. Local
-Cargo/npm/plugin/registry-metadata drift always fails.
+Cargo/npm/plugin/registry-metadata drift always fails. The Cursor marketplace
+acknowledgement is intentionally **not** part of `make release-check`; it is a
+post-publish reminder so tagging is not blocked on catalog review.
 
 Claude Code installs through `/plugin marketplace add constellation-works/orbit` and
 `/plugin install orbit`; Codex installs through its Git marketplace commands.
 Cursor uses `~/.cursor/plugins/local/orbit` pointing at `plugin/`, whose root
 `plugin.json` and `mcp.json` are the Agent Plugins 1.0 contract. Public Cursor
-Marketplace publication remains a human follow-up.
+Marketplace publication remains a human follow-up as documented above.
 
 <!-- ORB-10995 -->

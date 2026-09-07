@@ -46,6 +46,14 @@ spec:
         type: string
       decision:
         type: string
+      task_id:
+        type: string
+      handoff_run_id:
+        type: string
+      checkpoint_owner:
+        type: string
+      preservation_commit_created:
+        type: boolean
       branch:
         type: string
       head_sha:

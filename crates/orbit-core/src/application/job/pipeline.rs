@@ -30,9 +30,14 @@ use orbit_types::workflow::activity_job::{
     TRUSTED_HOST_ADMISSION_KEY, run_input_declares_trusted_host, validate_job_retired_sessions,
 };
 
+use orbit_types::workflow::OPERATION_ADMISSION_KEY;
+
 use crate::OrbitRuntime;
 use crate::application::job::exec::V2RunFinalizationOptions;
 use crate::application::job::resume::ResumePlan;
+use crate::application::operation::{
+    child_admission_authority, inherit_child_admission, reserved_operation_key_error,
+};
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -71,6 +76,14 @@ pub(crate) fn reserved_trusted_host_key_error(job_name: &str) -> OrbitError {
     ))
 }
 
+/// Whether caller-shaped run input names the reserved operation-mode
+/// admission key [ORB-11332].
+fn run_input_declares_operation_admission(input: &Value) -> bool {
+    input
+        .get(OPERATION_ADMISSION_KEY)
+        .is_some_and(|value| !value.is_null())
+}
+
 /// One durable pipeline submission: what to run, with what input, and how the
 /// detached worker will find the definition again.
 struct PipelineSubmission<'a> {
@@ -84,6 +97,28 @@ struct PipelineSubmission<'a> {
     /// [ORB-11354]. Only it may carry [`TRUSTED_HOST_ADMISSION_KEY`] in its
     /// input; every other submission is refused for supplying it.
     trusted_host: bool,
+    /// Whether this submission is the grant-bound drain coordinator
+    /// [ORB-11332]. Only it (and the parent-authorized child path, which
+    /// copies the parent's snapshot) may carry [`OPERATION_ADMISSION_KEY`].
+    operation_bound: bool,
+}
+
+/// What a parent-authorized child submission produced.
+#[derive(Debug, Clone)]
+pub(crate) enum ChildSubmission {
+    Submitted(PipelineInvokeResult),
+    /// The atomic admission refused the child; `reason` is
+    /// `admissions_stopped` or one of the grant-bound refusals.
+    Skipped(String),
+}
+
+impl ChildSubmission {
+    fn run_id(&self) -> Option<&str> {
+        match self {
+            ChildSubmission::Submitted(result) => Some(result.run_id.as_str()),
+            ChildSubmission::Skipped(_) => None,
+        }
+    }
 }
 
 impl<'a> PipelineSubmission<'a> {
@@ -98,6 +133,7 @@ impl<'a> PipelineSubmission<'a> {
             actor,
             action_key: None,
             trusted_host: false,
+            operation_bound: false,
         }
     }
 }
@@ -286,7 +322,7 @@ impl OrbitRuntime {
     /// Canonical registry names are persisted rather than the operator's
     /// spelling, so the durable run input says exactly which configured crews
     /// the window permits regardless of the alias that was typed.
-    pub(super) fn canonical_allowed_crews(
+    pub(crate) fn canonical_allowed_crews(
         &self,
         allowed_crews: &[String],
     ) -> Result<Vec<String>, OrbitError> {
@@ -533,6 +569,23 @@ impl OrbitRuntime {
         result
     }
 
+    /// The only submission permitted to write [`OPERATION_ADMISSION_KEY`]:
+    /// the grant-bound drain coordinator [ORB-11332]. Children inherit the
+    /// snapshot at the parent-authorized admission path, never from input.
+    pub(crate) fn submit_operation_bound_pipeline_run(
+        &self,
+        job_name: &str,
+        input: Value,
+        actor: Option<&str>,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let result = self.submit_persisted_pipeline_run(PipelineSubmission {
+            operation_bound: true,
+            ..PipelineSubmission::catalog(job_name, input.clone(), actor)
+        });
+        self.record_submission_audit(job_name, &input, actor, &result)?;
+        result
+    }
+
     pub fn submit_pipeline_run(
         &self,
         job_name: &str,
@@ -580,7 +633,7 @@ impl OrbitRuntime {
         priority: Option<&str>,
         actor: Option<&str>,
         admission: &ChildPipelineAdmission,
-    ) -> Result<Option<PipelineInvokeResult>, OrbitError> {
+    ) -> Result<ChildSubmission, OrbitError> {
         let result = self.submit_persisted_pipeline_run_with_admission(
             PipelineSubmission::catalog(job_name, input.clone(), actor),
             Some(admission),
@@ -588,11 +641,7 @@ impl OrbitRuntime {
 
         self.record_pipeline_audit(
             "pipeline.invoke",
-            result
-                .as_ref()
-                .ok()
-                .and_then(|value| value.as_ref())
-                .map(|value| value.run_id.as_str()),
+            result.as_ref().ok().and_then(ChildSubmission::run_id),
             actor,
             match &result {
                 Ok(_) => AuditEventStatus::Success,
@@ -603,12 +652,11 @@ impl OrbitRuntime {
                 "job_name": job_name,
                 "priority": priority,
                 "parent_run_id": admission.parent_run_id,
-                "outcome": if matches!(&result, Ok(None)) { "admissions_stopped" } else { "submitted" },
-                "run_id": result
-                    .as_ref()
-                    .ok()
-                    .and_then(|value| value.as_ref())
-                    .map(|value| value.run_id.clone()),
+                "outcome": match &result {
+                    Ok(ChildSubmission::Skipped(reason)) => reason.as_str(),
+                    _ => "submitted",
+                },
+                "run_id": result.as_ref().ok().and_then(ChildSubmission::run_id),
                 "input_hash": input_hash(&input),
             }),
             result.as_ref().err().map(|error| error.to_string()),
@@ -655,19 +703,19 @@ impl OrbitRuntime {
         &self,
         submission: PipelineSubmission<'_>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
-        self.submit_persisted_pipeline_run_with_admission(submission, None)?
-            .ok_or_else(|| {
-                OrbitError::Execution(
-                    "unconditional pipeline submission was refused as stopped".to_string(),
-                )
-            })
+        match self.submit_persisted_pipeline_run_with_admission(submission, None)? {
+            ChildSubmission::Submitted(result) => Ok(result),
+            ChildSubmission::Skipped(reason) => Err(OrbitError::Execution(format!(
+                "unconditional pipeline submission was refused as {reason}"
+            ))),
+        }
     }
 
     fn submit_persisted_pipeline_run_with_admission(
         &self,
         submission: PipelineSubmission<'_>,
         admission: Option<&ChildPipelineAdmission>,
-    ) -> Result<Option<PipelineInvokeResult>, OrbitError> {
+    ) -> Result<ChildSubmission, OrbitError> {
         let PipelineSubmission {
             job_name,
             definition,
@@ -676,6 +724,7 @@ impl OrbitRuntime {
             actor,
             action_key,
             trusted_host,
+            operation_bound,
         } = submission;
         // [ORB-11354] The reserved admission key is writable by exactly one
         // caller. Refusing it here — on the single path every submission
@@ -685,6 +734,37 @@ impl OrbitRuntime {
         if !trusted_host && run_input_declares_trusted_host(&input) {
             return Err(reserved_trusted_host_key_error(job_name));
         }
+        // [ORB-11332] The operation-mode snapshot follows the same rule: the
+        // grant-bound coordinator writes it, a resume carries its persisted
+        // run input forward unchanged, and a parent-authorized child inherits
+        // exactly its parent's snapshot. Any other input that names it is
+        // refused rather than trusted.
+        let (input, authority) = match admission {
+            Some(admission) => {
+                match child_admission_authority(self, &admission.parent_run_id, job_name, &input)? {
+                    Some((snapshot, authority)) => {
+                        let mut input = input;
+                        inherit_child_admission(&mut input, &snapshot)?;
+                        (input, Some(authority))
+                    }
+                    None => {
+                        if run_input_declares_operation_admission(&input) {
+                            return Err(reserved_operation_key_error(job_name));
+                        }
+                        (input, None)
+                    }
+                }
+            }
+            None => {
+                if !operation_bound
+                    && resume.is_none()
+                    && run_input_declares_operation_admission(&input)
+                {
+                    return Err(reserved_operation_key_error(job_name));
+                }
+                (input, None)
+            }
+        };
         let result = (|| {
             let spec = match &definition {
                 SubmittedDefinition::Catalog => self.load_v2_job_asset_by_name(job_name)?.1,
@@ -710,9 +790,15 @@ impl OrbitRuntime {
                         attempt: 1,
                         scheduled_at: submitted_at,
                         input: Some(input.clone()),
+                        authority: authority.clone(),
                     })? {
                     ChildJobRunAdmissionOutcome::Admitted(run) => *run,
-                    ChildJobRunAdmissionOutcome::AdmissionsStopped => return Ok(None),
+                    ChildJobRunAdmissionOutcome::AdmissionsStopped => {
+                        return Ok(ChildSubmission::Skipped("admissions_stopped".to_string()));
+                    }
+                    ChildJobRunAdmissionOutcome::Refused { reason } => {
+                        return Ok(ChildSubmission::Skipped(reason));
+                    }
                 }
             } else if let Some(key) = action_key {
                 self.stores()
@@ -764,7 +850,7 @@ impl OrbitRuntime {
                 let _ = self.finalize_pipeline_worker_startup_failure(&run, &message, actor);
                 return Err(error);
             }
-            Ok(Some(PipelineInvokeResult {
+            Ok(ChildSubmission::Submitted(PipelineInvokeResult {
                 run_id: run.run_id,
                 job_name: job_name.to_string(),
                 submitted_at: submitted_at.to_rfc3339(),
@@ -775,11 +861,7 @@ impl OrbitRuntime {
         if let Some(plan) = resume {
             self.record_pipeline_audit(
                 "pipeline.resume",
-                result
-                    .as_ref()
-                    .ok()
-                    .and_then(|value| value.as_ref())
-                    .map(|value| value.run_id.as_str()),
+                result.as_ref().ok().and_then(ChildSubmission::run_id),
                 actor,
                 match &result {
                     Ok(_) => AuditEventStatus::Success,
@@ -792,11 +874,7 @@ impl OrbitRuntime {
                     "attempt": plan.attempt,
                     "resumed_from_checkpoints": plan.resume_state.is_some(),
                     "checkpoint_batch_id": plan.checkpoint_batch_id,
-                    "run_id": result
-                        .as_ref()
-                        .ok()
-                        .and_then(|value| value.as_ref())
-                        .map(|value| value.run_id.clone()),
+                    "run_id": result.as_ref().ok().and_then(ChildSubmission::run_id),
                 }),
                 result.as_ref().err().map(|error| error.to_string()),
             )?;
@@ -1929,7 +2007,7 @@ fn input_hash(input: &Value) -> String {
 /// which is what makes an omitted option indistinguishable from the behavior
 /// that predated it. Pure, so the durable contract this shape represents can
 /// be asserted without submitting a run.
-pub(super) fn workspace_auto_run_input(
+pub(crate) fn workspace_auto_run_input(
     for_seconds: Option<u64>,
     max_active_leaf_runs: Option<u32>,
     completion: crate::application::workflow::CompletionPolicy,

@@ -28,6 +28,7 @@ use orbit_types::workflow::activity_job::{
 
 use crate::ConfigRoots;
 use crate::layering::{load_layered_resolved, value_at_path};
+use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
 use crate::raw::{RawCrewEntry, RawRuntimeConfig, RawTaskSection};
 use crate::registry::{ConfigSnapshot, DEFAULT_WORKFLOW_SYSTEM_CREW, LEGACY_WORKFLOW_SYSTEM_CREW};
@@ -77,6 +78,10 @@ pub struct ResolvedConfig {
     /// deferred to dispatch so a bad system crew does not stop unrelated
     /// activity execution.
     pub system_crew: String,
+    /// Resolved operation-mode preferences with per-field provenance
+    /// (`[operation]`; built-in supervised). Preferences only: authority is
+    /// a separate grant [ORB-11332].
+    pub operation: OperationPolicy,
     /// Optional floor for the local task-id allocator (`[tasks] id_start`).
     /// Applied forward-only on runtime build so machines can hold disjoint id
     /// ranges. `None` leaves the allocator untouched.
@@ -103,6 +108,7 @@ impl ResolvedConfig {
             crews: default_crews(),
             default_crew: snapshot.workflow_default_crew.clone(),
             system_crew: snapshot.workflow_system_crew.clone(),
+            operation: OperationPolicy::built_in(),
             tasks_id_start: snapshot.tasks_id_start,
             snapshot,
         }
@@ -163,6 +169,12 @@ impl ResolvedConfig {
         )?;
         let mut crews = crews_from_raw(parsed.crews.as_ref())?;
         let snapshot = ConfigSnapshot::admit(&document, config_path, &crews)?;
+        // One document is one layer. The layered loader replaces this with
+        // the exact global/workspace resolution; a single file (or the
+        // store's pre-write validation) resolves it as the workspace layer.
+        let operation_layer = OperationLayer::from_document(&document, config_path)?;
+        let operation =
+            OperationPolicy::resolve(&[(OperationLayerSource::Workspace, &operation_layer)]);
         alias_system_crew(
             &mut crews,
             &snapshot.workflow_system_crew,
@@ -195,6 +207,7 @@ impl ResolvedConfig {
             crews,
             default_crew: snapshot.workflow_default_crew.clone(),
             system_crew: snapshot.workflow_system_crew.clone(),
+            operation,
             tasks_id_start: snapshot.tasks_id_start,
             snapshot,
         })
