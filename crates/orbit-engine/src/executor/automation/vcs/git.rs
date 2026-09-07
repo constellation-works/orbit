@@ -2,6 +2,10 @@ use std::path::Path;
 use std::process::Command;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::git::{
+    GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, should_retry_git_ref_cas,
+    with_git_fetch_lock,
+};
 use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use serde_json::Value;
@@ -137,33 +141,44 @@ pub(crate) fn git_command_success(current_dir: &Path, args: &[&str]) -> Result<b
     Ok(result.success)
 }
 
-pub(in crate::executor::automation) fn fetch_remote_base(
-    repo_root: &Path,
-    base: &str,
-) -> Result<(), OrbitError> {
+/// Fetch `origin/<branch>` into the local remote-tracking ref.
+///
+/// Serializes with other Orbit-owned fetches through the git-common-dir
+/// lock so linked worktrees and task-pilot prepare do not CAS-fail the
+/// same `refs/remotes/origin/*` ref.
+pub fn fetch_remote_base(repo_root: &Path, base: &str) -> Result<(), OrbitError> {
     let branch = normalize_base_branch(base)?;
-    let result = run_process(
-        &git_request(
-            repo_root,
-            &[
-                "fetch",
-                "origin",
-                &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"),
-            ],
-            60_000,
-        ),
-        &NoSandbox,
-    )?;
+    with_git_fetch_lock(repo_root, || fetch_remote_base_locked(repo_root, &branch))
+}
 
-    if !result.success {
-        return Err(OrbitError::Execution(format!(
-            "failed to fetch remote base 'origin/{branch}' in '{}': {}",
-            repo_root.display(),
-            result.stderr.trim()
-        )));
+fn fetch_remote_base_locked(repo_root: &Path, branch: &str) -> Result<(), OrbitError> {
+    let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+    let mut last_stderr = String::new();
+    for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
+        let result = run_process(
+            &git_request(repo_root, &["fetch", "origin", &spec], 60_000),
+            &NoSandbox,
+        )?;
+        if result.success {
+            return Ok(());
+        }
+        last_stderr = result.stderr.trim().to_string();
+        if should_retry_git_ref_cas(attempt, &last_stderr) {
+            tracing::warn!(
+                attempt,
+                branch,
+                "retrying origin fetch after git ref update contention"
+            );
+            std::thread::sleep(git_fetch_cas_retry_delay());
+            continue;
+        }
+        break;
     }
 
-    Ok(())
+    Err(OrbitError::Execution(format!(
+        "failed to fetch remote base 'origin/{branch}' in '{}': {last_stderr}",
+        repo_root.display()
+    )))
 }
 
 pub(in crate::executor::automation) fn resolve_worktree_start_point(
