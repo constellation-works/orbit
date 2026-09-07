@@ -667,6 +667,59 @@ fn sync_reclaims_stale_intent_and_dispatched_past_timeout() {
     );
 }
 
+#[test]
+fn malformed_timeout_in_one_dispatched_fire_reports_only_that_routine() {
+    let store = store();
+    let dispatch = FakeDispatch::default();
+    let mut malformed = routine("malformed", "* * * * *", true, "forbid", 0);
+    malformed.definition.policy.timeout_minutes = 1_000_000_000_000_000;
+    let coll = collection(vec![
+        malformed,
+        routine("healthy", "* * * * *", true, "forbid", 0),
+    ]);
+
+    let slot = ts(2026, 1, 1, 0, 5, 0).to_rfc3339();
+    store
+        .routine_record_fire_intent(&RoutineFireIntentParams {
+            routine_name: "malformed".to_string(),
+            slot: slot.clone(),
+            attempt: 1,
+            source_workspace: "polaris".to_string(),
+        })
+        .unwrap();
+    store
+        .routine_mark_fire_dispatched("malformed", &slot, 1, "malformed-run")
+        .unwrap();
+
+    let reports = run_sweep_core(
+        &store,
+        HOST,
+        &coll,
+        &dispatch,
+        SweepOptions::default(),
+        Utc::now(),
+    )
+    .expect("malformed policy is isolated to its routine");
+
+    let malformed_report = reports
+        .iter()
+        .find(|report| report.routine == "malformed")
+        .expect("malformed routine report");
+    assert_eq!(malformed_report.action, "error");
+    assert!(
+        malformed_report
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("policy.timeout_minutes"))
+    );
+    assert!(
+        reports
+            .iter()
+            .filter(|report| report.routine != "malformed")
+            .all(|report| report.action != "error")
+    );
+}
+
 // ---- dispatch-error retry --------------------------------------------------
 
 #[test]
