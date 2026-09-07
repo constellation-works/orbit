@@ -25,11 +25,30 @@ fn store() -> std::sync::Arc<dyn ReviewStoreBackend> {
     compose::review_store(Store::open_in_memory().unwrap()).unwrap()
 }
 
+fn budget(minutes: u32) -> ReviewBudget {
+    ReviewBudget {
+        reviewer_starts: 2,
+        repair_cycles: 2,
+        minutes,
+    }
+}
+
 fn reserve(
     store: &dyn ReviewStoreBackend,
     run_id: &str,
     candidate: &str,
     digest: &str,
+) -> ReviewReservation {
+    reserve_at(store, run_id, candidate, digest, budget(30), Utc::now())
+}
+
+fn reserve_at(
+    store: &dyn ReviewStoreBackend,
+    run_id: &str,
+    candidate: &str,
+    digest: &str,
+    budget: ReviewBudget,
+    now: chrono::DateTime<Utc>,
 ) -> ReviewReservation {
     let task_ids = vec!["ORB-1".to_string()];
     store
@@ -41,12 +60,8 @@ fn reserve(
                 run_id,
                 task_meaning_digest: digest,
                 candidate: &revision(candidate),
-                budget: ReviewBudget {
-                    reviewer_starts: 2,
-                    repair_cycles: 2,
-                    minutes: 30,
-                },
-                now: Utc::now(),
+                budget,
+                now,
             },
         )
         .unwrap()
@@ -190,6 +205,85 @@ fn wall_time_exhaustion_refuses_a_further_start() {
         panic!("minutes are spent");
     };
     assert_eq!(reason, "review_minutes_exhausted");
+}
+
+#[test]
+fn interrupted_candidate_invalidation_charges_elapsed_once_and_exhausts_captured_minutes() {
+    let store = store();
+    let t0 = Utc::now();
+    let ReviewReservation::Reserved { attempt } =
+        reserve_at(store.as_ref(), "run-1", "impl", "meaning", budget(1), t0)
+    else {
+        panic!("reserve");
+    };
+
+    let later = t0 + Duration::minutes(5);
+    let ReviewReservation::Exhausted { reason, consumed } = reserve_at(
+        store.as_ref(),
+        "run-2",
+        "impl-2",
+        "meaning",
+        budget(30),
+        later,
+    ) else {
+        panic!("five minutes against a one-minute captured budget must exhaust");
+    };
+    assert_eq!(reason, "review_minutes_exhausted");
+    assert_eq!(consumed.seconds, 5 * 60);
+    assert_eq!(consumed.reviewer_starts, 1);
+
+    let ledger = store.review_ledger(WORKSPACE, LINEAGE).unwrap().unwrap();
+    assert_eq!(
+        ledger.budget.minutes, 1,
+        "a later request cannot expand the captured budget"
+    );
+    assert_eq!(ledger.attempts.len(), 1);
+    assert_eq!(ledger.attempts[0].elapsed_seconds, Some(5 * 60));
+    assert_eq!(
+        ledger.attempts[0].state,
+        ReviewAttemptState::Settled {
+            verdict: ReviewVerdict::Incomplete
+        }
+    );
+
+    // Replaying settlement of the interrupted attempt does not charge again.
+    let replayed = store
+        .review_settle(
+            WORKSPACE,
+            &ReviewSettlement {
+                lineage_key: LINEAGE,
+                attempt_id: &attempt.attempt_id,
+                verdict: ReviewVerdict::PassedWithoutRepairs,
+                repair_cycles: 9,
+                elapsed_seconds: 900,
+                now: later + Duration::minutes(1),
+            },
+        )
+        .unwrap();
+    assert_eq!(replayed.consumed_seconds, 5 * 60);
+    assert_eq!(replayed.attempts[0].elapsed_seconds, Some(5 * 60));
+    assert_eq!(
+        replayed.attempts[0].state,
+        ReviewAttemptState::Settled {
+            verdict: ReviewVerdict::Incomplete
+        }
+    );
+}
+
+#[test]
+fn remaining_at_counts_open_attempt_elapsed_without_settling() {
+    let store = store();
+    let t0 = Utc::now();
+    let ReviewReservation::Reserved { .. } =
+        reserve_at(store.as_ref(), "run-1", "impl", "meaning", budget(1), t0)
+    else {
+        panic!("reserve");
+    };
+    let ledger = store.review_ledger(WORKSPACE, LINEAGE).unwrap().unwrap();
+    assert_eq!(ledger.remaining().seconds, 60);
+    assert_eq!(ledger.remaining_at(t0).seconds, 60);
+    assert_eq!(ledger.remaining_at(t0 + Duration::seconds(40)).seconds, 20);
+    assert_eq!(ledger.remaining_at(t0 + Duration::minutes(2)).seconds, 0);
 }
 
 #[test]

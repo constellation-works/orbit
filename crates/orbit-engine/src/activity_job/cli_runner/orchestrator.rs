@@ -92,6 +92,13 @@ pub fn run_cli_backend(
         Some(requested) => requested.min(declared_timeout_seconds),
         None => declared_timeout_seconds,
     };
+    // A reviewer invocation may carry the captured leftover lineage
+    // allowance. It can only shorten the same ceiling; a zero leftover
+    // still gets one second so the process is not unbounded.
+    let timeout_seconds = match input.get("remaining_seconds").and_then(Value::as_u64) {
+        Some(remaining) => timeout_seconds.min(remaining.max(1)),
+        None => timeout_seconds,
+    };
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
 
     let task_ids = task_ids_from_input(input);

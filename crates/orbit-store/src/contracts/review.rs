@@ -47,7 +47,9 @@ pub trait ReviewStoreBackend: Send + Sync {
 
     /// Reserve a reviewer start. An open attempt for the same candidate and
     /// task meaning is resumed rather than charged again; a different
-    /// candidate settles the open attempt as incomplete first.
+    /// candidate settles the open attempt as incomplete, charging elapsed
+    /// wall time from `started_at` to `now` once, then applies the captured
+    /// budget to the new start.
     fn review_reserve(
         &self,
         workspace_id: &str,

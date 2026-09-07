@@ -361,3 +361,44 @@ fn an_ordinary_activity_ignores_a_requested_timeout() {
         .expect("started event");
     assert_eq!(observed, 45_000);
 }
+
+/// Captured leftover review minutes may only shorten the activity ceiling.
+#[test]
+fn remaining_seconds_can_only_shorten_the_declared_bound() {
+    let temp = tempdir().expect("tempdir");
+    let host = TestHost::with_command(echoing_provider(temp.path()));
+    let spec = test_agent_loop_spec(Duration::from_secs(60));
+
+    for (remaining, expected_ms) in [(30_u64, 30_000_u64), (600, 60_000), (0, 1_000)] {
+        let (audit, _sink) = writer("job-review-remaining");
+        run_cli_backend(
+            &host,
+            &spec,
+            "agent_review_repair",
+            "job-review-remaining",
+            audit.clone(),
+            &serde_json::json!({
+                "prompt": "x",
+                "remaining_seconds": remaining
+            }),
+            None,
+        )
+        .expect("run");
+        let observed = audit
+            .events_snapshot()
+            .expect("events snapshot")
+            .iter()
+            .find_map(|event| match &event.kind {
+                V2AuditEventKind::CliInvocationStarted {
+                    wall_clock_timeout_ms,
+                    ..
+                } => Some(*wall_clock_timeout_ms),
+                _ => None,
+            })
+            .expect("started event");
+        assert_eq!(
+            observed, expected_ms,
+            "remaining {remaining}s against a 60s declared bound"
+        );
+    }
+}
