@@ -73,7 +73,9 @@ impl Tool for OrbitAgentInvokeTool {
                 "Submit an asynchronous agent invocation for exploration or debugging and return \
                  its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as \
                  the same OS user as Orbit, so it can reach anything that user can; it is \
-                 admitted per invocation and requires operator capability. Track it with \
+                 admitted per invocation and requires operator capability. Remote callers also \
+                 require a destination-issued key-bound identity and an explicit workspace-scoped \
+                 `agent_invoke` grant. Track it with \
                  `orbit.workflow.run.show`, read output with `orbit run logs <RUN_ID>`, and stop \
                  it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, \
                  and dispatches nothing."

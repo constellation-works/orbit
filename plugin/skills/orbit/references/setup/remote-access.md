@@ -76,6 +76,38 @@ the destination grant, with ordinary tool policy still enforced. A malformed
 file fails closed. Inspect the check result and session audit evidence when a
 workflow tool is absent or denied; do not treat changing remote argv as a fix.
 
+### Remote host-agent invocation
+
+Remote `orbit_agent_invoke` is a narrower grant than remote operator access.
+The destination accepts it only for a key-bound SSH MCP identity, and only when
+the matched caller row explicitly enables the operation on named workspaces:
+
+```toml
+default = "deny"
+
+[[callers]]
+machine_id = "<caller-machine-id>"
+label = "<display-name>"
+capabilities = ["agent", "operator"]
+workspaces = ["<allowed-workspace-id>"]
+ssh_key_fingerprint = "SHA256:<caller-public-key-fingerprint>"
+agent_invoke = true
+```
+
+All four restrictions are required: operator capability, an explicit workspace
+list, a pinned SSH key, and `agent_invoke = true`. The file default can never
+grant this operation. Generate and install the destination-issued forced
+command with `orbit mcp callers authorize`, then reconnect the MCP session so
+it resolves the current policy. `orbit mcp callers check <caller-machine-id>`
+shows the configured scope. To revoke, remove the row or set
+`agent_invoke = false`, then reconnect; the next invocation is denied.
+
+This is an authenticated caller and an accident-resistant admission path, not
+process isolation. The invoked provider still runs outside Orbit's filesystem
+sandbox as the same operating-system user as the destination Orbit process and
+can access everything that user can. Keep the prompt read-only when that is the
+intent; a tool declaration does not confine the provider's own shell.
+
 There are two identity strengths. Ordinary SSH proxy identity is a self-asserted
 audit label, suitable for cooperative operators with shell access; it is not
 proof against a caller naming a different machine. Key-bound acceptance uses a

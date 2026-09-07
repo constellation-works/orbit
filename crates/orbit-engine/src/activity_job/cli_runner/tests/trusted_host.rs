@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_agent::loop_engine::audit::AuditSink;
+use orbit_types::tool::CallerIdentityProof;
 use orbit_types::workflow::activity_job::{
     TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission, V2AuditEventKind,
 };
@@ -20,8 +21,10 @@ use super::test_support::{RecordingSink, TestHost, test_agent_loop_spec, write_e
 
 fn admission() -> TrustedHostAdmission {
     TrustedHostAdmission {
-        authorized_by: "human".to_string(),
-        authorizer_provenance: "interactive-terminal".to_string(),
+        authorized_by: "hm_mac".to_string(),
+        authorizer_provenance: "remote-grant".to_string(),
+        caller_machine_id: Some("hm_mac".to_string()),
+        caller_identity: Some(CallerIdentityProof::KeyBound),
         authorized_at: "2026-09-06T00:00:00Z".to_string(),
         workspace_path: "/checkout".to_string(),
         cwd: "/checkout".to_string(),
@@ -84,21 +87,27 @@ fn an_admitted_invocation_runs_without_a_sandbox_and_records_its_authorizer() {
                 activity_name,
                 authorized_by,
                 authorizer_provenance,
+                caller_machine_id,
+                caller_identity,
                 cwd,
                 ..
             } => Some((
                 activity_name.clone(),
                 authorized_by.clone(),
                 authorizer_provenance.clone(),
+                caller_machine_id.clone(),
+                *caller_identity,
                 cwd.clone(),
             )),
             _ => None,
         })
         .expect("an unsandboxed invocation must announce itself in the run trail");
     assert_eq!(admitted.0, "agent_invoke");
-    assert_eq!(admitted.1, "human");
-    assert_eq!(admitted.2, "interactive-terminal");
-    assert_eq!(admitted.3, "/checkout");
+    assert_eq!(admitted.1, "hm_mac");
+    assert_eq!(admitted.2, "remote-grant");
+    assert_eq!(admitted.3.as_deref(), Some("hm_mac"));
+    assert_eq!(admitted.4, Some(CallerIdentityProof::KeyBound));
+    assert_eq!(admitted.5, "/checkout");
 
     // The absence of a sandbox is stated, not left to be inferred from a
     // missing field, so a reader can tell it apart from an executor that never

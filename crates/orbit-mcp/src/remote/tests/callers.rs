@@ -236,6 +236,89 @@ workspaces = ["ws_orbit"]
 }
 
 #[test]
+fn agent_invoke_is_an_explicit_key_bound_workspace_grant() {
+    let (_dir, path) = write(&format!(
+        r#"
+default = "deny"
+
+[[callers]]
+machine_id = "hm_beta"
+capabilities = ["agent", "operator"]
+workspaces = ["ws_orbit"]
+ssh_key_fingerprint = "{PINNED}"
+agent_invoke = true
+"#,
+    ));
+    let file = load_callers(&path).expect("scoped remote invocation grant");
+    let policy = SessionCapabilityPolicy::from_grant(
+        McpSessionAuthority::Operator,
+        file.resolve(&RemoteCallerIdentity::key_bound(
+            "hm_beta",
+            observed(PINNED),
+        )),
+    );
+
+    let on_workspace = policy
+        .grant_for(Some("ws_orbit"))
+        .expect("remote grant on workspace");
+    assert!(on_workspace.agent_invoke);
+    assert_eq!(on_workspace.identity, CallerIdentityProof::KeyBound);
+
+    let elsewhere = policy
+        .grant_for(Some("ws_other"))
+        .expect("remote grant outside narrowing");
+    assert!(!elsewhere.agent_invoke);
+    assert!(policy.effective_for(Some("ws_other")).is_empty());
+}
+
+#[test]
+fn incomplete_agent_invoke_grants_fail_the_callers_file_closed() {
+    for (contents, expected) in [
+        (
+            format!(
+                r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent"]
+workspaces = ["ws_orbit"]
+ssh_key_fingerprint = "{PINNED}"
+agent_invoke = true
+"#,
+            ),
+            "operator",
+        ),
+        (
+            format!(
+                r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+ssh_key_fingerprint = "{PINNED}"
+agent_invoke = true
+"#,
+            ),
+            "workspaces",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+workspaces = ["ws_orbit"]
+agent_invoke = true
+"#
+            .to_string(),
+            "ssh_key_fingerprint",
+        ),
+    ] {
+        let (_dir, path) = write(&contents);
+        let error = load_callers(&path).expect_err("incomplete grant must fail closed");
+
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn a_local_session_keeps_argv_authority_and_stamps_no_grant() {
     let policy = SessionCapabilityPolicy::local(McpSessionAuthority::Operator);
     let mut context = ToolSessionContext::default();

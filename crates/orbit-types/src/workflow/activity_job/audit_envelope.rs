@@ -194,6 +194,12 @@ pub enum V2AuditEventKind {
         authorized_by: String,
         /// How the authorization chokepoint resolved that operator.
         authorizer_provenance: String,
+        /// Destination-resolved remote caller, absent for local admission.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller_machine_id: Option<String>,
+        /// How the destination established the remote caller identity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller_identity: Option<crate::tool::CallerIdentityProof>,
         /// RFC 3339 timestamp the admission was stamped.
         authorized_at: String,
         /// Canonical checkout the invocation was admitted against.

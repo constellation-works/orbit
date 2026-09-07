@@ -71,8 +71,8 @@ struct RuntimeOrbitToolHost {
     /// The tool chokepoint resolves capabilities before dispatch, but its
     /// answer is a yes/no it does not pass on. `orbit.agent.invoke` needs the
     /// caller itself, because it records the authorizing operator on a durable
-    /// admission and refuses federated callers the ordinary registry would
-    /// allow.
+    /// admission and verifies the operation-specific identity and workspace
+    /// scope of a remote caller the ordinary registry would otherwise allow.
     session_context: ToolSessionContext,
 }
 

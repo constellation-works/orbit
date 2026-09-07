@@ -74,7 +74,7 @@ not a rewrite of failed history.
 | `ci_failure_sweep_pipeline` | File GitHub Actions findings as proposed, pilot them, and admit only current warning-free repairs to backlog; never implements them. |
 | `dependabot_alert_sweep_pipeline` | Collect Dependabot/code/secret-scanning evidence and file remediation tasks. |
 | `worktree_gc_pipeline` | Reclaim settled worktrees. |
-| `agent_invoke_pipeline` | One operator-admitted agent invocation for exploration or debugging, run on the host outside the executor sandbox. Submit it with `orbit run agent` / `orbit_agent_invoke`, never `orbit run job`: it needs a per-invocation operator admission, changes no task, and is not resumable. See [tool-surface.md](tool-surface.md). |
+| `agent_invoke_pipeline` | One operator-admitted agent invocation for exploration or debugging, run on the host outside the executor sandbox. Submit it with `orbit run agent` / `orbit_agent_invoke`, never `orbit run job`: it needs a per-invocation local admission or an explicit key-bound remote callers-file grant, changes no task, and is not resumable. See [tool-surface.md](tool-surface.md). |
 
 Inspect any of them with `orbit job show <id>` before invoking — the step list is
 the contract.
