@@ -239,6 +239,25 @@ if rg -n 'automation_commit\(|Sha256|fn evaluate\b|fn fingerprint\b|definition_e
   fail=1
 fi
 
+# Before-PR review [ORB-11333] composes authority and Git evidence in Core and
+# persists through Store; the coverage acceptance and exclusion rules, task
+# meaning digests, and landing classification stay in Automation's `review`
+# module. Core's review module must not grow its own digest, validator,
+# checkpoint, or evaluator.
+if rg -n 'automation_commit\(|Sha256|fn evaluate\b|fn exclusion\b|fn certificate_acceptable\b|fn task_meaning_digest\b|definition_epoch' \
+  "$repo_root/crates/orbit-core/src/application/review" \
+  --glob '*.rs' --glob '!**/tests/**'; then
+  echo "Core review must use orbit-automation's shared coverage rules and Store persistence"
+  fail=1
+fi
+
+if rg -n 'ReviewStoreBackend|review_certificate_record|review_reserve' \
+  "$repo_root/crates/orbit-automation/src" \
+  --glob '*.rs' --glob '!**/tests/**'; then
+  echo "orbit-automation must not persist review evidence; Store owns ledgers and certificates"
+  fail=1
+fi
+
 if rg -n 'OperationGrant|operation_grant|OperationStoreBackend' \
   "$repo_root/crates/orbit-automation/src" \
   --glob '*.rs' --glob '!**/tests/**'; then

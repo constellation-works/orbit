@@ -22,7 +22,7 @@ Options:
       --recovery-minutes <RECOVERY_MINUTES>
           Run-layer recovery wall-time minutes allowed per task
       --review-policy <REVIEW_POLICY>
-          Run-layer review policy: none or after-landing (before-pr is not yet supported at admission)
+          Run-layer review policy: none, before-pr (holds PR creation for a fresh reviewer), or after-landing
       --claim-token <CLAIM_TOKEN>
           Token for this workspace's exclusive claim, when another operator holds one
       --json

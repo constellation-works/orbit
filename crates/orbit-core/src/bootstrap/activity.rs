@@ -129,6 +129,18 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/pr_promote.yaml"),
     ),
     (
+        "review_gate_admit",
+        include_str!("../../assets/activities/review_gate_admit.yaml"),
+    ),
+    (
+        "agent_review_repair",
+        include_str!("../../assets/activities/agent_review_repair.yaml"),
+    ),
+    (
+        "review_gate_settle",
+        include_str!("../../assets/activities/review_gate_settle.yaml"),
+    ),
+    (
         "prepare_task_pilot",
         include_str!("../../assets/activities/prepare_task_pilot.yaml"),
     ),
@@ -253,6 +265,9 @@ backend = "cli"
             // chooses one per submission, and an omitted choice falls through
             // to the run's crew exactly like every other activity here.
             ("agent_invoke", ("codex", "gpt-5.6-sol".to_string())),
+            // [ORB-11333] The reviewer names no crew literally either: the
+            // gate injects the configured `operation.review_crew` per run.
+            ("agent_review_repair", ("codex", "gpt-5.6-sol".to_string())),
             ("epic_orchestrator", ("codex", "gpt-5.6-sol".to_string())),
             (
                 "step_failure_recovery",

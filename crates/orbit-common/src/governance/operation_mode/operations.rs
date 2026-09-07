@@ -73,8 +73,7 @@ const COMPLETION_HELP: &str = "Run-layer completion preference: review or done (
 const LEAF_CEILING_HELP: &str = "Run-layer ceiling on concurrently live leaf runs";
 const RECOVERY_EPISODES_HELP: &str = "Run-layer recovery episodes allowed per task";
 const RECOVERY_MINUTES_HELP: &str = "Run-layer recovery wall-time minutes allowed per task";
-const REVIEW_POLICY_HELP: &str =
-    "Run-layer review policy: none or after-landing (before-pr is not yet supported at admission)";
+const REVIEW_POLICY_HELP: &str = "Run-layer review policy: none, before-pr (holds PR creation for a fresh reviewer), or after-landing";
 const CLAIM_TOKEN_HELP: &str =
     "Token for this workspace's exclusive claim, when another operator holds one";
 const GRANT_ID_HELP: &str = "Grant ID; defaults to the workspace's active grant";

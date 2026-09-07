@@ -160,8 +160,10 @@ content. Trigger code consumes that validated result; it does not infer review
 from a tag, patch ID, timestamp, or task status. Exclude proven patch coverage
 from redundant review counts, retain neighboring context, and keep QA independent.
 For six deliveries with four valid review exclusions, review threshold three sees
-two; the next uncovered delivery makes it due. QA can count all seven. With no
-operation-mode implementation, no such certificates means no exclusions.
+two; the next uncovered delivery makes it due. QA can count all seven.
+[ORB-11333] implements this: certificates are produced by the before-PR gate
+and consumed as `excluded` state and batch `exclusions`; see
+[Operations](./5_operations.md#before-pr-coverage-exclusions-orb-11333).
 
 ## 4. Observation, dispatch, and successful coverage
 

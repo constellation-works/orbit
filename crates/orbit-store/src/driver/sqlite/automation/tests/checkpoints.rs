@@ -19,6 +19,7 @@ fn state() -> AutomationState {
         pending_commits: vec![],
         pending: vec![],
         waived: vec![],
+        excluded: vec![],
         unresolved: Default::default(),
         associations: Default::default(),
         active: None,

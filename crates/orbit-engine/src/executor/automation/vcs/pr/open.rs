@@ -60,6 +60,10 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     // later step would report success against a PR nobody merges again.
     ensure_base_can_still_land(&context.workspace_path, "pr_open", base, base_sha, input)
         .map_err(|error| (FailedHandoffPhase::ObsoleteBase, error))?;
+    // [ORB-11333] A before-PR gate binds to exact head and base commits. The
+    // PR is only opened for the candidate the reviewer actually settled.
+    ensure_reviewed_candidate(&context.workspace_path, input, base_sha)
+        .map_err(|error| (FailedHandoffPhase::StaleReviewGate, error))?;
     let freshness = branch_freshness_against_ref(&context.workspace_path, head, base_ref, base_sha)
         .map_err(invalid_prepare)?;
     if freshness.commits_behind != 0 || freshness.commits_ahead == 0 {
@@ -203,6 +207,40 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
         })?;
     let (number, viewed_url) = view_pr(host, workspace_path, url)?;
     Ok((number, viewed_url.or_else(|| Some(url.to_string())), true))
+}
+
+/// Refuse to publish when the checked-out head or the pinned base differ from
+/// the candidate the review gate settled. An empty `reviewed_head_sha` means
+/// no gate applied to this run.
+pub(in crate::executor::automation::vcs) fn ensure_reviewed_candidate(
+    workspace_path: &std::path::Path,
+    input: &Value,
+    base_sha: &str,
+) -> Result<(), OrbitError> {
+    let Some(reviewed_head) = input_string_field(input, "reviewed_head_sha")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    if head_sha != reviewed_head {
+        return Err(OrbitError::Execution(format!(
+            "review_gate_stale: checked-out head {head_sha} is not the reviewed candidate \
+             {reviewed_head}; the gate must settle the current candidate before a PR is opened"
+        )));
+    }
+    if let Some(reviewed_base) = input_string_field(input, "reviewed_base_sha")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        && reviewed_base != base_sha
+    {
+        return Err(OrbitError::Execution(format!(
+            "review_gate_stale: base {base_sha} is not the reviewed base {reviewed_base}; a \
+             candidate rebased onto a different base needs a fresh review"
+        )));
+    }
+    Ok(())
 }
 
 fn invalid_prepare(error: OrbitError) -> (FailedHandoffPhase, OrbitError) {

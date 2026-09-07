@@ -35,7 +35,18 @@ allowance of §3.6 (episodes and wall time; not provider cost), stages 1–4 of
 that existing projections could carry. Open questions 1, 2, 4, 5, 6 (stop and
 expiry semantics) and 7 were decided conservatively as documented there;
 question 5 was answered with a separate `--grant` binding rather than a
-tri-state `--completion` flag. Everything in §3.10–3.15 remains proposed.
+tri-state `--completion` flag.
+
+**Implemented by [ORB-11333]** (see [Operations §10](./5_operations.md)):
+the independent review policy of §3.10, the fresh reviewer, direct repairs,
+and four verdicts of §3.11, the lineage budgets and restart reconciliation of
+§3.12, the exact-tree coverage of §3.13, the exclusion handoff to the shared
+delivery evaluator of §3.14, and the projections of §3.15. Open questions 8,
+9, and 10 were decided conservatively: budgets are attempts and wall time
+(no metered cost), coverage is exact base/final tree equality, `before-pr`
+is refused on the local route, and reviewer repairs receive no second
+independent review. Content-equivalence beyond exact trees and cohort
+evaluation (§3.15's measures) remain proposed.
 
 ## 1. Open Questions
 

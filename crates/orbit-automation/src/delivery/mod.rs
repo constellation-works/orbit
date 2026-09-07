@@ -105,6 +105,7 @@ pub fn evaluate(
                 pending_commits: vec![],
                 pending: vec![],
                 waived: vec![],
+                excluded: vec![],
                 unresolved: Default::default(),
                 associations: Default::default(),
                 active: None,
@@ -173,7 +174,7 @@ pub fn evaluate(
     // Backpressure pauses observation, never admission of already retained debt.
     if state.pending.len() < 950 && state.pending_commits.len() <= 4800 {
         let page = host.observe(&trigger.branch, &state)?;
-        let next = observe::apply(&state, page)?;
+        let next = observe::apply(&state, page, trigger.coverage, now)?;
         state = if dry_run {
             next
         } else {
@@ -261,6 +262,21 @@ pub fn evaluate(
         ));
     }
 
+    // Excluded landings inside the range travel with the batch as readable
+    // context; they are not obligations and the evidence never lists them.
+    let exclusions = state
+        .excluded
+        .iter()
+        .filter(|excluded| {
+            excluded
+                .delivery
+                .commits
+                .iter()
+                .all(|sha| commits.contains(sha))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
     let mut batch = CoverageBatch {
         schema_version: 1,
         id: String::new(),
@@ -273,6 +289,7 @@ pub fn evaluate(
         through_inclusive: through,
         commits,
         deliveries,
+        exclusions,
         created_at: now,
         max_attempts: trigger.retries + 1,
         retry_until: now + chrono::Duration::hours(24),
@@ -386,6 +403,13 @@ fn reconcile(
             });
             next.pending.retain(|delivery| {
                 !delivery
+                    .commits
+                    .iter()
+                    .all(|sha| active.batch.commits.contains(sha))
+            });
+            next.excluded.retain(|excluded| {
+                !excluded
+                    .delivery
                     .commits
                     .iter()
                     .all(|sha| active.batch.commits.contains(sha))

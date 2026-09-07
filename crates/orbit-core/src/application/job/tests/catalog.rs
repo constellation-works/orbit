@@ -1057,6 +1057,12 @@ fn pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints() {
                 "activity:git_rebase",
                 Some("pr_conflict_recovery")
             ),
+            // ORB-11333: the before-PR review gate always runs between the
+            // final base sync and publication; a non-pass fails the settle
+            // step so the failure handoff preserves the candidate.
+            ("review_gate_admit", "activity:review_gate_admit", None),
+            ("review", "activity:agent_review_repair", None),
+            ("review_gate_settle", "activity:review_gate_settle", None),
             ("push", "activity:git_push", Some("step_failure_recovery")),
             ("pr_open", "activity:pr_open", Some("step_failure_recovery")),
             (
@@ -1757,8 +1763,9 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
     );
     let asset = load_job_asset(yaml).expect("epic pipeline parses");
     assert_eq!(asset.spec.max_active_runs, 1);
-    // ORB-11187 added the two authorized PR completion steps.
-    assert_eq!(asset.spec.steps.len(), 15);
+    // ORB-11187 added the two authorized PR completion steps; ORB-11333 added
+    // the three before-PR review gate steps.
+    assert_eq!(asset.spec.steps.len(), 18);
     let root_step_ids = asset
         .spec
         .steps
@@ -1775,6 +1782,9 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
             "commit_delivery",
             "prepare_branch",
             "sync_base",
+            "review_gate_admit",
+            "review",
+            "review_gate_settle",
             "push",
             "pr_open",
             "promote_pr",
@@ -1918,17 +1928,19 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
     let pr_when = Some(
         "{{ steps.resolve_ship_input.output.mode }} == pr && {{ steps.commit_delivery.output.skipped_no_diff_expected }} != true",
     );
+    // ORB-11333: the three review-gate steps sit between sync_base and push
+    // and run unconditionally, so only the PR handoff steps carry `pr_when`.
     for (index, id) in [
-        "prepare_branch",
-        "sync_base",
-        "push",
-        "pr_open",
-        "promote_pr",
+        ("prepare_branch", 5),
+        ("sync_base", 6),
+        ("push", 10),
+        ("pr_open", 11),
+        ("promote_pr", 12),
     ]
     .into_iter()
-    .enumerate()
+    .map(|(id, index)| (index, id))
     {
-        let step = &asset.spec.steps[5 + index];
+        let step = &asset.spec.steps[index];
         assert_eq!(step.id, id);
         assert_eq!(step.when.as_deref(), pr_when);
         let JobV2StepBody::TargetRef(target) = &step.body else {
@@ -1952,7 +1964,7 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
         }
     }
 
-    let promote_no_diff = &asset.spec.steps[10];
+    let promote_no_diff = &asset.spec.steps[13];
     assert_eq!(
         promote_no_diff.when.as_deref(),
         Some(
@@ -1971,7 +1983,7 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
         "review"
     );
 
-    let merge = &asset.spec.steps[13];
+    let merge = &asset.spec.steps[16];
     assert_eq!(
         merge.when.as_deref(),
         Some("{{ steps.resolve_ship_input.output.mode }} == local")
@@ -1990,7 +2002,7 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
         "{{ steps.resolve_ship_input.output.base_branch }}"
     );
 
-    let mark_done = &asset.spec.steps[14];
+    let mark_done = &asset.spec.steps[17];
     assert_eq!(
         mark_done.when.as_deref(),
         Some("{{ steps.resolve_ship_input.output.mode }} == local")

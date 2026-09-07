@@ -14,7 +14,7 @@ mod inspect;
 pub(crate) mod members;
 pub(crate) mod preparation;
 mod provider;
-mod source;
+pub(crate) mod source;
 mod task;
 #[cfg(test)]
 mod tests;
@@ -177,6 +177,10 @@ impl DeliveryHost for Host<'_> {
             state,
             &mut page,
         )?;
+        // [ORB-11333] Accepted before-PR certificates become exclusions only
+        // after the shared rule proves the landed trees; the evaluator then
+        // applies them for review consumers alone.
+        crate::application::review::exclusions(self.runtime, &self.source, state, &mut page)?;
 
         Ok(page)
     }

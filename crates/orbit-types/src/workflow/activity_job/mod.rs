@@ -39,6 +39,8 @@ macro_rules! deterministic_action_catalog {
                 ReleaseLocks => "release_locks",
                 ReserveLocks => "reserve_locks",
                 ResolveWorkspaceShipInput => "resolve_workspace_ship_input",
+                ReviewGateAdmit => "review_gate_admit",
+                ReviewGateSettle => "review_gate_settle",
                 RevertOnRed => "revert_on_red",
                 RunAutoTaskScheduler => "run_auto_task_scheduler",
                 ScanUnresolvedWork => "scan_unresolved_work",

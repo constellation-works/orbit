@@ -127,13 +127,8 @@ impl OrbitRuntime {
         }
 
         let policy = self.operation_policy().with_run_layer(&request.run_layer);
-        if !policy.review_policy.value.supported() {
-            return Err(OrbitError::InvalidInput(format!(
-                "operation.review_policy '{}' is not supported at admission until the review \
-                 gate ships; choose 'none' or 'after-landing'",
-                policy.review_policy.value.as_str()
-            )));
-        }
+        // [ORB-11333] `before-pr` is captured like any other review timing;
+        // the gate itself checks the reviewer crew at admission of each run.
         // An explicit escalation past the repository cap is refused rather
         // than silently reduced; a configured preference is capped and the
         // cap is disclosed by the captured policy.

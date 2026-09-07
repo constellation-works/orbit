@@ -333,7 +333,7 @@
           "type": "integer"
         },
         "review_policy": {
-          "description": "Run-layer review policy: none or after-landing (before-pr is not yet supported at admission)",
+          "description": "Run-layer review policy: none, before-pr (holds PR creation for a fresh reviewer), or after-landing",
           "type": "string"
         },
         "rights": {
@@ -408,7 +408,7 @@
           "type": "integer"
         },
         "review_policy": {
-          "description": "Run-layer review policy: none or after-landing (before-pr is not yet supported at admission)",
+          "description": "Run-layer review policy: none, before-pr (holds PR creation for a fresh reviewer), or after-landing",
           "type": "string"
         },
         "workspace": {

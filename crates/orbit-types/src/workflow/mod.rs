@@ -7,6 +7,7 @@ mod error;
 mod executor_def;
 mod job;
 pub mod operation;
+mod review;
 mod routine;
 mod run_state;
 mod ship;
@@ -52,6 +53,15 @@ pub use operation::{
     GrantAdmission, GrantLimits, GrantRights, GrantStatus, GrantTransition, MAX_GRANT_SCOPE_TASKS,
     MAX_GRANT_WINDOW_SECONDS, OPERATION_ADMISSION_KEY, OperationAdmission, OperationGrant,
     RecoveryEpisode, RecoveryEpisodeKind, RecoveryLedger, RecoveryReservation,
+};
+pub use review::{
+    CommitIdentity, DEFAULT_REVIEW_MINUTES, DEFAULT_REVIEW_REPAIR_CYCLES,
+    DEFAULT_REVIEW_REVIEWER_STARTS, FindingDisposition, LandingTransformation,
+    REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
+    REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewAssurance, ReviewAttempt, ReviewAttemptState,
+    ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewFinding, ReviewInvalidation,
+    ReviewLanding, ReviewLedger, ReviewManifest, ReviewReport, ReviewReservation, ReviewTiming,
+    ReviewValidation, ReviewVerdict, ReviewerIdentity, ValidationOutcome,
 };
 pub use routine::{
     MissedRunPolicy, OverlapPolicy, ROUTINE_SCHEMA_VERSION, RoutineDefinition, RoutinePolicy,

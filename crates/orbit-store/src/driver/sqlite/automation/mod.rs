@@ -318,6 +318,22 @@ fn validate_transition(
             return Err(invalid());
         }
 
+        let retained_exclusions = previous
+            .excluded
+            .iter()
+            .filter(|excluded| {
+                !excluded
+                    .delivery
+                    .commits
+                    .iter()
+                    .all(|sha| active.batch.commits.contains(sha))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if next.excluded != retained_exclusions {
+            return Err(invalid());
+        }
+
         if !previous.pending_commits.starts_with(&active.batch.commits)
             || next.pending_commits != previous.pending_commits[active.batch.commits.len()..]
         {
@@ -333,6 +349,10 @@ fn validate_transition(
                 .pending
                 .iter()
                 .any(|delivery| !next.pending.contains(delivery))
+            || previous
+                .excluded
+                .iter()
+                .any(|excluded| !next.excluded.contains(excluded))
         {
             return Err(invalid());
         }

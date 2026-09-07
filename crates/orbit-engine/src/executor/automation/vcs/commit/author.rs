@@ -42,6 +42,17 @@ impl GitAuthor {
     }
 }
 
+/// The reviewer's own agent-family identity [ORB-11333]. Repair commits
+/// are never amended into implementer commits; this author string is what
+/// keeps the two distinguishable through squash and rebase evidence.
+pub(super) fn reviewer_author(reviewer_model: &str) -> GitAuthor {
+    let family = implementer_family(reviewer_model).unwrap_or_else(|| author_slug(reviewer_model));
+    GitAuthor::new(
+        format!("{family}-reviewer"),
+        format!("{family}-reviewer@orbit.local"),
+    )
+}
+
 pub(super) fn git_author_for_task(task: &Task) -> Option<GitAuthor> {
     git_author_for_implemented_by(task.implemented_by.as_deref())
 }

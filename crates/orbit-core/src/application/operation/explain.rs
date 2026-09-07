@@ -95,9 +95,13 @@ impl OrbitRuntime {
         } else {
             None
         };
-        let review_reason = (policy.review_policy.value == ReviewPolicy::BeforePr).then(|| {
-            limiting_reasons.push("review_before_pr_unsupported".to_string());
-            "review_before_pr_unsupported"
+        // [ORB-11333] A before-PR gate needs an explicitly configured
+        // reviewer crew; without one every gated delivery escalates.
+        let review_reason = (policy.review_policy.value == ReviewPolicy::BeforePr
+            && policy.review_crew.value.is_none())
+        .then(|| {
+            limiting_reasons.push("review_crew_unconfigured".to_string());
+            "review_crew_unconfigured"
         });
 
         let drain = self.explain_live_drain()?;
@@ -137,8 +141,12 @@ impl OrbitRuntime {
             },
             "review": {
                 "policy": policy.review_policy.value,
-                "supported": policy.review_policy.value.supported(),
+                "policy_source": policy.review_policy.source.label(),
+                "gates_pr": policy.review_policy.value == ReviewPolicy::BeforePr,
                 "crew": policy.review_crew.value,
+                "crew_source": policy.review_crew.source.label(),
+                "budget": policy.review_budget(),
+                "contract_version": orbit_types::workflow::REVIEW_CONTRACT_VERSION,
                 "reason": review_reason,
             },
             "drain": drain,

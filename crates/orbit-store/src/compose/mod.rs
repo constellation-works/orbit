@@ -187,6 +187,14 @@ pub fn automation_store(
     Ok(Arc::new(store))
 }
 
+/// Open before-PR review ledger/certificate contracts over the host store.
+pub fn review_store(
+    store: Store,
+) -> Result<Arc<dyn crate::contracts::ReviewStoreBackend>, orbit_common::OrbitError> {
+    crate::driver::sqlite::review::initialize(&store)?;
+    Ok(Arc::new(store))
+}
+
 /// Open operation-mode grant/ledger contracts over the configured host store.
 pub fn operation_store(
     store: Store,

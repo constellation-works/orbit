@@ -1,0 +1,55 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: review_gate_settle
+spec:
+  type: deterministic
+  description: >
+    Settle the admitted before-PR review attempt: read the reviewer's
+    persisted report, commit any reviewer changes as separately attributed
+    repair commits, cross-check the claimed verdict against the repository,
+    validation records, task meaning, and the lineage budget, then issue the
+    certificate and settle the ledger. A pass returns the reviewed head and
+    base the PR steps recheck; any other verdict fails the step so the
+    failure handoff preserves the candidate without publishing a PR.
+  input_schema_json:
+    type: object
+    required: [job_run_id, completed_task_ids, workspace_path, admission]
+    properties:
+      job_run_id:
+        type: string
+      completed_task_ids:
+        type: array
+        items:
+          type: string
+      workspace_path:
+        type: string
+      base:
+        type: string
+      base_sync:
+        type: string
+        enum: [remote, local]
+      admission:
+        type: object
+        description: The review_gate_admit output for this run.
+  output_schema_json:
+    type: object
+    required: [gate, reviewed_head_sha, reviewed_base_sha]
+    properties:
+      gate:
+        type: string
+        enum: [passed, not_required]
+      verdict:
+        type: string
+      assurance:
+        type: string
+      attempt_id:
+        type: string
+      reviewed_head_sha:
+        type: string
+      reviewed_base_sha:
+        type: string
+      final_candidate_tree:
+        type: string
+  action: review_gate_settle
+  config: {}

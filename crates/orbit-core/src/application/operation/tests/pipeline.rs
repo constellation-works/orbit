@@ -186,6 +186,7 @@ fn seed_assessment(fixture: &Fixture, task_id: &str, fingerprint: &str, ready: b
                 pending_commits: Vec::new(),
                 pending: Vec::new(),
                 waived: Vec::new(),
+                excluded: Vec::new(),
                 unresolved: BTreeMap::new(),
                 associations: BTreeMap::new(),
                 active: None,

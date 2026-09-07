@@ -7,11 +7,11 @@ status: Accepted
 feature: operation-mode
 doc_role: operations
 type: design
-summary: Shipped operation-mode contract — typed preferences, scoped grants, grant-bound drains, bounded recovery, surfaces, observability, and rollback.
+summary: Shipped operation-mode contract — typed preferences, scoped grants, grant-bound drains, bounded recovery, the before-PR review gate with delivery coverage, surfaces, observability, and rollback.
 tags: [operation-mode, automation, authorization, recovery, operations]
-paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/operation/**", "crates/orbit-store/src/driver/sqlite/operation/**", "crates/orbit-automation/src/members/**"]
+paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/operation/**", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/operation/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/members/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, routines]
-related_artifacts: [ORB-11332, ORB-11331, ORB-11330]
+related_artifacts: [ORB-11333, ORB-11332, ORB-11331, ORB-11330]
 ---
 
 # Operation Mode — Operations [ORB-11332]
@@ -44,6 +44,9 @@ keys and out-of-range values fail config load.
 | `operation.recovery_minutes_per_task` | 1..=1440 (30) | yes |
 | `operation.review_policy` | `none` (default), `after-landing`, `before-pr` | no |
 | `operation.review_crew` | crew name | no |
+| `operation.review_reviewer_starts` | 1..=10 (2) | no |
+| `operation.review_repair_cycles` | 0..=10 (2) | no |
+| `operation.review_minutes` | 1..=1440 (30) | no |
 | `operation.delivery_cap` | `review` (default), `done` | no |
 
 `orbit config show` lists the explicit `operation.*` values with their file
@@ -52,11 +55,14 @@ with a `built-in` source because no explicit value survived. The *effective*
 values and their winning source (`workspace`, `global`, `preset:autonomous@workspace`,
 `run`) come from `orbit operation explain`.
 
-`before-pr` is accepted in configuration so the contract exists, but it is
-not supported at admission: enablement refuses it until the review gate
-ships. `delivery_cap` defaults to `review`, so an autonomous `completion =
-done` preference is capped at review until the workspace explicitly raises
-the cap. The cap is disclosed in the explanation.
+`before-pr` holds PR creation for a fresh reviewer (§10, [ORB-11333]); it
+needs an explicit `review_crew`, and the explanation reports
+`review_crew_unconfigured` until one is set. The three `review_*` budgets
+bound one delivery candidate lineage. `delivery_cap` defaults to `review`, so
+an autonomous `completion = done` preference is capped at review until the
+workspace explicitly raises the cap. The cap is disclosed in the explanation.
+The resolved-policy version is 2; version-1 grants fail closed and must be
+replaced.
 
 ## 2. Authority: grants
 
@@ -72,7 +78,7 @@ non-empty task set (proposed or backlog tasks, at most 50), a window of at
 most 24 hours, and at least one right; it resolves the effective policy
 once (config layers plus the request's run layer), refuses an explicit
 escalation past the delivery cap (`--completion done` or `--right complete`
-under `delivery_cap = review`), refuses `before-pr`, captures the numeric
+under `delivery_cap = review`), captures the numeric
 limits (leaf ceiling bounded by the leaf job's hard limit), and persists
 the grant with its versioned policy snapshot. One active grant per
 workspace; enabling a replacement requires stopping the old one first. The
@@ -200,8 +206,146 @@ remain. An older binary rejects the unknown `[operation]` keys at config
 load and cannot enforce grants, so stop or revoke with a supporting binary
 before downgrading.
 
-## 10. Still proposed
+## 10. Independent review policy [ORB-11333]
 
-Standing or dynamic scopes, federation-wide enrollment, `before-pr` review
-and content-specific coverage, provider cost reservations, and automatic
-migration of legacy sweeps remain in [the vision](./3_vision.md).
+Review timing is captured once per delivery run and never re-read. Every
+submission in the delivery family (`workspace_auto_pipeline`,
+`task_auto_pipeline`, `task_gate_pipeline`, `task_pr_pipeline`,
+`epic_pipeline`, `task_local_pipeline`) carries a versioned `review`
+snapshot in its immutable input: timing and its source, the configured
+reviewer crew and its source, the lineage budget, and the policy version. A
+parent-authorized child inherits its parent's snapshot exactly; a grant-bound
+run resolves from the grant's captured policy; any other submission resolves
+from the workspace preferences at that moment. Ordinary input naming the
+reserved `review` key is refused, and a resume keeps its persisted input, so
+rolling a preference back to `none` never weakens a gate that is already
+active and switching to `before-pr` never gates a run already admitted.
+`before-pr` is refused at submission for `task_local_pipeline`; the epic
+pipeline refuses it when its route resolves to local.
+
+### The gate
+
+`task_pr_pipeline` and `epic_pipeline` run three steps after the final base
+synchronization and before push/PR creation: `review_gate_admit`,
+`review` (`agent_review_repair`), and `review_gate_settle`. Under `none`,
+`after-landing`, or a checked no-diff exemption the gate reports
+`applies: false` and publication proceeds unchanged with no certificate.
+
+Admission pins the candidate (base and head commits and trees, every
+implementation commit with the attribution Git recorded), digests each task's
+meaning (title, description, criteria, plan, selectors, tags, relations, type;
+never comments, summaries, status, or priority), resolves the configured
+review crew on this host inside the run's `allowed_crews`, reserves a reviewer
+start against the lineage ledger, and writes `review-manifest.json` on every
+task under the run's authority. An unconfigured, unresolvable, or excluded crew
+escalates (`review_crew_unconfigured`, `review_crew_unavailable`,
+`review_crew_excluded`); the gate never substitutes the implementer. A
+restart before settlement resumes the open attempt for the same candidate
+and task meaning without consuming another start; a different candidate
+settles the interrupted attempt as `incomplete` first.
+
+The reviewer is a fresh invocation with its own instruction, tool allowlist,
+and 30-minute wall clock. It reads the manifest, verifies claims against code,
+repairs only concrete in-scope defects directly in the worktree, runs
+validation, and persists `review-report.json` (schema version 1: verdict,
+findings with dispositions, validation records with `passed` / `failed` /
+`denied` / `not_run`, escalation). It never runs Git writes, changes task
+lifecycle, approves, or merges.
+
+Settlement rechecks the checked-out head against the admitted candidate,
+reads the report with its artifact provenance (missing, predating the
+attempt, wrong attempt, or unreadable is `incomplete`), commits every
+uncommitted change as one repair commit authored `<family>-reviewer
+<<family>-reviewer@orbit.local>` with the Orbit committer and an
+`Orbit-Review-Attempt` trailer, and cross-checks the claim: a pass with
+open findings, a claimed repair that changed nothing, a claimed clean pass
+that changed the tree, repairs outside the task selectors, a spent repair
+cycle, a failed or denied validation, or any task-meaning change other than
+selectors added through the task API downgrades the verdict to `incomplete`
+with the reason recorded. Verdicts are `passed_without_repairs`
+(`independent_review`), `passed_with_repairs`
+(`independent_review_with_self_authored_repairs`; the repairs were validated,
+not independently reviewed), `changes_required`, and `incomplete`. The
+certificate (`review-gate.json`, recorded immutably in the host store and
+indexed by final candidate tree when passed) binds verdict, reviewer
+identity, base, reviewed and final candidate, implementation and repair
+commits, findings, validation, consumed budget, and escalation. Settlement is
+idempotent: a replay reconciles the recorded certificate.
+
+A pass returns `reviewed_head_sha` / `reviewed_base_sha`; `pr_open` refuses
+(`review_gate_stale`, phase `stale-review-gate`) when the checked-out head or
+pinned base differ. A non-pass fails the step; the failure handoff commits
+leftover reviewer work under the reviewer identity, pushes the candidate
+branch, blocks the task with `review_gate_escalation`, and opens no PR.
+Passing grants no lifecycle transition; `completion: review` still stops at
+the handoff.
+
+### Budgets
+
+The ledger is keyed by workspace, sorted task set, and base branch. It spans
+retries, interruptions, candidate invalidations, and delivery lineage; nothing
+resets it. Reviewer starts are reserved before a reviewer launches, repair
+cycles and wall seconds settle with the attempt, and exhaustion escalates
+(`review_budget_exhausted: review_starts_exhausted |
+review_minutes_exhausted`). Provider token/cost caps are not enforced; usage
+stays unknown.
+
+### Managed completion and landing
+
+`pr_complete` under a gate pins the provider-reported PR head against the
+reviewed head before merging (`review_gate_stale` on a moved head), refuses
+to repair a conflicting reviewed PR (a conflict repair is unreviewed content),
+and after the verified merge reads the merge commit, fetches it, and records
+a landing: `fast_forward`, `squash`, `merge_commit`, or `rebase` when the
+landing started from the reviewed base tree and produced the reviewed final
+tree, otherwise uncovered with `base_changed`, `candidate_changed`,
+`objects_missing`, or `mapping_unknown`. A landing is never fabricated.
+
+### Delivery coverage
+
+Delivery observation asks the host store for passed certificates whose final
+tree equals the landed tree, verifies the certificate objects still exist and
+every task still has the reviewed meaning, and lets
+`orbit_automation::review::exclusion` decide: same base tree, same final
+tree, no contradicting managed landing. Only a `landed_code_review_v1`
+consumer excludes; QA counts every landing. Excluded landings leave
+`pending`, live in the consumer's `excluded` list, do not count toward the
+threshold, travel with the frozen batch as readable context (`exclusions`),
+are absent from `examined_deliveries`, and retire with the range that
+contains them. Later edits, task drift, a different base, an unreviewed
+conflict repair, missing objects, or an external landing race keep the
+landing an ordinary obligation. Exclusions apply when a landing is first
+observed; a certificate that arrives later does not rewrite pending debt.
+
+### Surfaces
+
+`orbit operation explain` and the dashboard operation panel show the review
+policy, crew, and budgets with their sources and report
+`review_crew_unconfigured`. `orbit task show --json`, the task API, and the
+task detail view carry a `review` block: verdict, assurance, reviewer
+(including `same_model_as_implementer`), base/reviewed/final candidate,
+implementation and repair commits, findings, validation, consumed and
+remaining budget, landings, and stale-gate reasons. Auto-task inspection and
+the automation panel show `excluded` landings with their certificate. Audit
+rows `review.gate` cover admit, settle, and landing. Task artifacts
+`review-manifest.json`, `review-report.json`, and `review-gate.json` are the
+durable evidence.
+
+### Compatibility and rollback
+
+Existing runs without a `review` snapshot behave exactly as before. The
+seeded cron `code-review` auto-task and any custom definition stay untouched;
+migrating to delivery-triggered review remains the explicit edit described in
+[delivery automation operations](../automation-triggers/5_operations.md).
+To roll back, set `review_policy` to `none` or `after-landing`: future
+submissions capture the new timing, admitted runs keep their gate, and
+certificates, ledgers, and landings stay readable. An older binary rejects
+the new `[operation]` keys at config load and cannot settle an in-flight
+gate; drain gated runs with a supporting binary before downgrading.
+
+## 11. Still proposed
+
+Standing or dynamic scopes, federation-wide enrollment, provider cost
+reservations, content-equivalence coverage beyond exact trees, a second
+independent review of reviewer repairs, and automatic migration of legacy
+sweeps remain in [the vision](./3_vision.md).

@@ -100,6 +100,19 @@ pub enum StepRecoveryAdmission {
     Denied { reason: String },
 }
 
+/// What completion observed about a reviewed candidate's managed landing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewLandingRequest {
+    pub run_id: String,
+    pub task_ids: Vec<String>,
+    pub workspace_path: std::path::PathBuf,
+    pub pr_number: String,
+    pub base: String,
+    pub reviewed_head_sha: String,
+    /// The merge commit the provider reported, when it reported one.
+    pub landed_commit: Option<String>,
+}
+
 /// The single capability boundary between the job executor and its runtime.
 ///
 /// Deterministic actions, task/run persistence, environment resolution, agent
@@ -265,6 +278,14 @@ pub trait RuntimeHost: Send + Sync {
         _run_id: &str,
         _task_ids: &[String],
     ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    // ── Before-PR review coverage [ORB-11333] ───────────────────────────
+
+    /// Record how a reviewed candidate actually landed after a managed
+    /// merge. Hosts without review evidence keep the pre-existing behavior.
+    fn record_review_landing(&self, _request: &ReviewLandingRequest) -> Result<(), OrbitError> {
         Ok(())
     }
 

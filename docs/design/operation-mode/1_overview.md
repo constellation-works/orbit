@@ -7,7 +7,7 @@ status: Accepted
 feature: operation-mode
 doc_role: overview
 type: design
-summary: Operation-mode presets, scoped grants and bounded recovery (shipped in ORB-11332) plus the still-proposed review timing, scoped repair, and delivery coverage.
+summary: Operation-mode presets, scoped grants and bounded recovery (shipped in ORB-11332) plus the before-PR review gate, reviewer repairs, lineage budgets and exact-tree delivery coverage (shipped in ORB-11333).
 tags: [operation-mode, automation, authorization, review-policy]
 paths: ["crates/orbit-core/assets/jobs/**", "crates/orbit-core/src/application/job/**", "crates/orbit-config/src/**"]
 related_features: [activity-job, routines, task-artifacts, auditability]
@@ -29,10 +29,13 @@ explicit grant. Nothing is activated by default.
 
 [ORB-11316] extends this same proposal with **review-policy**, independently
 selectable as **none**, **before-pr**, or **after-landing** under either preset.
-Before-PR review adds a fresh reviewer who checks the implementation, makes
-bounded scoped repairs, and validates the final candidate. After-landing review
-examines accumulated uncovered deliveries. Neither review timing nor a reviewer
-verdict grants merge permission.
+[ORB-11333] implements it: before-PR review admits a fresh, separately
+configured reviewer who checks the implementation, makes bounded scoped
+repairs committed under its own identity, and validates the final candidate
+before the PR opens; passed certificates exclude exactly reproduced landings
+from redundant after-landing review while QA stays independent. Neither review
+timing nor a reviewer verdict grants merge permission. See
+[Operations §10](./5_operations.md).
 
 ## 1. Motivation
 

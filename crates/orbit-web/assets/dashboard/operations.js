@@ -665,6 +665,10 @@ function renderOperationMode(payload) {
       policyField(policy, "recovery", "Recovery"),
       policyField(policy, "leaf_ceiling", "Leaf ceiling"),
       policyField(policy, "review_policy", "Review policy"),
+      policyField(policy, "review_crew", "Review crew"),
+      policyField(policy, "review_reviewer_starts", "Reviewer starts / lineage"),
+      policyField(policy, "review_repair_cycles", "Repair cycles / lineage"),
+      policyField(policy, "review_minutes", "Review minutes / lineage"),
       policyField(policy, "delivery_cap", "Delivery cap"),
     ]),
     el("div", { class: "operation-grid" }, [

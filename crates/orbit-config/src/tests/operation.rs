@@ -200,13 +200,42 @@ fn explanation_names_each_winning_source_and_the_cap() {
         "preset:autonomous@global"
     );
     assert_eq!(explanation["review_policy"]["value"], "before-pr");
-    assert_eq!(explanation["review_policy"]["supported"], false);
+    assert_eq!(explanation["review_policy"]["source"], "global");
+    assert_eq!(explanation["review_reviewer_starts"]["value"], 2);
+    assert_eq!(explanation["review_reviewer_starts"]["source"], "built-in");
     assert_eq!(explanation["effective_completion"]["value"], "review");
     assert_eq!(
         explanation["effective_completion"]["cap"],
         "delivery_cap_review"
     );
-    assert_eq!(explanation["version"], 1);
+    assert_eq!(explanation["version"], 2);
+}
+
+#[test]
+fn review_budgets_are_independent_bounded_fields() {
+    let config = load(
+        "[operation]\nreview_reviewer_starts = 3\nreview_minutes = 45\n",
+        "[operation]\npreset = \"autonomous\"\nreview_repair_cycles = 0\n",
+    );
+
+    let budget = config.operation.review_budget();
+    assert_eq!(budget.reviewer_starts, 3);
+    assert_eq!(budget.repair_cycles, 0);
+    assert_eq!(budget.minutes, 45);
+    assert_eq!(
+        config.operation.review_reviewer_starts.source.label(),
+        "global"
+    );
+    assert_eq!(
+        config.operation.review_repair_cycles.source.label(),
+        "workspace"
+    );
+
+    let error = load_error("[operation]\nreview_reviewer_starts = 0\n", "");
+    assert!(
+        error.contains("operation.review_reviewer_starts has invalid value 0"),
+        "{error}"
+    );
 }
 
 #[test]

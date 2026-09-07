@@ -16,7 +16,9 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
-use crate::context::{PrConfig, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate};
+use crate::context::{
+    PrConfig, ReviewLandingRequest, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
+};
 
 use super::super::super::freshness::BranchFreshness;
 use super::super::super::operations;
@@ -51,6 +53,7 @@ pub struct PrOpenTestHost {
     queued_vcs_results: Mutex<HashMap<String, VecDeque<Result<Value, String>>>>,
     pr_exists: Mutex<bool>,
     activity_updates: Mutex<Vec<(String, TaskActivityUpdate)>>,
+    review_landings: Mutex<Vec<ReviewLandingRequest>>,
 }
 
 impl PrOpenTestHost {
@@ -71,7 +74,15 @@ impl PrOpenTestHost {
             queued_vcs_results: Mutex::new(HashMap::new()),
             pr_exists: Mutex::new(false),
             activity_updates: Mutex::new(Vec::new()),
+            review_landings: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn review_landings(&self) -> Vec<ReviewLandingRequest> {
+        self.review_landings
+            .lock()
+            .expect("review landings lock")
+            .clone()
     }
 
     pub fn with_activity_implementer(mut self, agent: &str, model: &str) -> Self {
@@ -344,6 +355,14 @@ impl RuntimeHost for PrOpenTestHost {
             task.implemented_by = Some(model);
         }
         Ok(task.clone())
+    }
+
+    fn record_review_landing(&self, request: &ReviewLandingRequest) -> Result<(), OrbitError> {
+        self.review_landings
+            .lock()
+            .expect("review landings lock")
+            .push(request.clone());
+        Ok(())
     }
 
     fn apply_task_automation_update(
