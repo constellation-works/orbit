@@ -54,6 +54,15 @@ pub(super) fn ensure_orbit_gitignore_entry(
     write_orbit_gitignore_entry(&gitignore_path)
 }
 
+/// Whether workspace initialization manages checkout-local Orbit definitions.
+///
+/// This is the same condition that determines whether initialization writes
+/// the managed `.gitignore` entry, so onboarding guidance can describe only
+/// files that were actually created in the checkout.
+pub(super) fn manages_checkout_local_orbit_files(workspace_root: &Path, orbit_dir: &Path) -> bool {
+    orbit_gitignore_root(workspace_root, orbit_dir).is_some()
+}
+
 fn orbit_gitignore_root<'a>(workspace_root: &'a Path, orbit_dir: &'a Path) -> Option<&'a Path> {
     // Legacy: walking up from a subdir, orbit_dir is `<repo>/.orbit` whose
     // parent is a git repo root.

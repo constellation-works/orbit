@@ -19,7 +19,10 @@ use crate::command::init::agent_detect::{RealAgentEnvProbe, detect};
 use crate::command::init::config_seed_from_detection;
 
 use super::role::CliCheckoutRole;
-use super::support::{detect_git_remote, dir_name_or_fallback, ensure_orbit_gitignore_entry};
+use super::support::{
+    detect_git_remote, dir_name_or_fallback, ensure_orbit_gitignore_entry,
+    manages_checkout_local_orbit_files,
+};
 use crate::command::{CommandOut, CommandOutput};
 
 #[derive(Args)]
@@ -72,6 +75,18 @@ pub struct WorkspaceInitArgs {
 }
 
 pub(crate) const ONBOARDING_FINALIZE_GUIDANCE: &str = "review and commit generated definitions (.gitignore, .orbit/auto_tasks, .orbit/routines) before local workflows (Orbit does not auto-commit or discard operator changes)";
+const RELOCATED_ROOT_ONBOARDING_GUIDANCE: &str = "review generated Orbit definitions in the configured Orbit root before local workflows (Orbit does not auto-commit or discard operator changes)";
+
+pub(crate) fn onboarding_finalize_guidance(
+    workspace_root: &Path,
+    orbit_dir: &Path,
+) -> &'static str {
+    if manages_checkout_local_orbit_files(workspace_root, orbit_dir) {
+        ONBOARDING_FINALIZE_GUIDANCE
+    } else {
+        RELOCATED_ROOT_ONBOARDING_GUIDANCE
+    }
+}
 
 impl WorkspaceInitArgs {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
@@ -89,7 +104,10 @@ impl WorkspaceInitArgs {
         println!("  id:        {}", init_result.id);
         println!("  root:      {}", init_result.root.display());
         println!("  orbit_dir: {}", init_result.orbit_dir.display());
-        println!("  onboarding: {ONBOARDING_FINALIZE_GUIDANCE}");
+        println!(
+            "  onboarding: {}",
+            onboarding_finalize_guidance(&init_result.root, &init_result.orbit_dir)
+        );
 
         if let Some(start) = task_id_start {
             let outcome =
