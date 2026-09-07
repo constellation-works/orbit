@@ -145,6 +145,14 @@ fn list(path: &Path) -> CommandOut {
         if let Some(fingerprint) = &row.ssh_key_fingerprint {
             println!("    ssh_key_fingerprint: {fingerprint}");
         }
+        println!(
+            "    agent_invoke: {}",
+            if row.agent_invoke {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
     }
     Ok(CommandOutput::Silent)
 }
@@ -189,6 +197,15 @@ fn check(path: &Path, machine_id: &str) -> CommandOut {
             capability_list(&grant.elsewhere)
         );
     }
+    println!(
+        "agent_invoke: {}",
+        if grant.agent_invoke {
+            "configured for the listed workspaces; admission additionally requires a key-bound \
+             session"
+        } else {
+            "not granted"
+        }
+    );
     // Both requests, because the grant is a ceiling and the caller's argv is
     // the other half of the intersection: printing only one would read as the
     // answer to a question the caller did not ask.
@@ -308,6 +325,11 @@ fn authorize(global_root: &Path, callers_path: &Path, args: &CallersAuthorizeArg
         "The forced command requests operator authority, but does not grant it: the matched row \
          in the callers file remains the ceiling, so agent-only and deny rows cannot become \
          operator sessions."
+    );
+    eprintln!(
+        "Remote `orbit.agent.invoke` remains denied unless the matched row also sets \
+         `agent_invoke = true`, grants `operator`, pins this key, and narrows `workspaces` to the \
+         destination workspace IDs. That extra grant never comes from the file default."
     );
     // The row guidance is written against what is actually in the file: a
     // template that restated `capabilities` would invite an operator to paste

@@ -148,6 +148,13 @@ pub struct RemoteCallerGrant {
     /// How [`Self::caller_machine_id`] was established [ORB-11053].
     #[serde(default)]
     pub identity: CallerIdentityProof,
+    /// Whether the destination explicitly permits this caller to submit the
+    /// trusted-host agent-invocation operation in the resolved workspace.
+    ///
+    /// This stays separate from `operator`: ordinary operator capability does
+    /// not imply permission to start an unsandboxed provider process remotely.
+    #[serde(default)]
+    pub agent_invoke: bool,
 }
 
 /// How a destination established the caller identity it resolved a grant for.

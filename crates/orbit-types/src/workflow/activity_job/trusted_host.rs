@@ -32,6 +32,7 @@
 //! definition that declares the flag without an admission fails closed rather
 //! than degrading to a sandboxed run, so a broken admission path is loud.
 
+use crate::tool::CallerIdentityProof;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -57,6 +58,14 @@ pub struct TrustedHostAdmission {
     /// How the authorization chokepoint resolved that operator
     /// (`interactive-terminal`, `operator-override`, `session`).
     pub authorizer_provenance: String,
+    /// Destination-resolved remote caller identity, when this admission came
+    /// through authenticated SSH MCP rather than a local operator surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_machine_id: Option<String>,
+    /// Strength of the remote identity proof. Remote admission requires
+    /// `key-bound`; it is retained so the durable run proves that decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_identity: Option<CallerIdentityProof>,
     /// RFC 3339 timestamp of the admission.
     pub authorized_at: String,
     /// Canonical workspace checkout the invocation was admitted against.

@@ -72,9 +72,11 @@ What it is not:
 
 - It is **not** a task, and it performs no task transition. It does not commit,
   push, open or merge a pull request, or dispatch further work.
-- It is **not** available to a managed run or to a federated caller. Each
-  invocation is admitted separately by an operator present on the machine that
-  will run it, and the admission covers that invocation only.
+- It is **not** available to a managed run. A local operator may admit one
+  directly. A remote operator may admit one only through a destination-issued,
+  key-bound SSH MCP identity whose callers-file row explicitly enables
+  `agent_invoke` for the resolved workspace. Ordinary remote `operator`
+  capability is not enough. Each admission covers one invocation only.
 - It is **not** resumable. A resumed run would carry an admission nobody granted
   now; submit a new invocation instead.
 
@@ -91,8 +93,10 @@ without terminating its envelope stopped mid-turn: the run records `failed`, and
 the exit code alone is never evidence the investigation succeeded.
 
 Remote sessions are additionally capped by the destination's caller policy.
-See [remote-access.md](setup/remote-access.md). Do not relaunch a server with
-more privileges to work around a denied call.
+The durable admission and `trusted_host.execution_admitted` event retain the
+destination-resolved caller machine ID, its key-bound identity proof, the
+workspace checkout, and cwd. See [remote-access.md](setup/remote-access.md). Do
+not relaunch a server with more privileges to work around a denied call.
 
 ## Common MCP arguments
 

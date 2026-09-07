@@ -48,6 +48,8 @@ pub(super) fn invoke(
         "timeout_seconds": submission.timeout_seconds,
         "authorized_by": submission.admission.authorized_by,
         "authorizer_provenance": submission.admission.authorizer_provenance,
+        "caller_machine_id": submission.admission.caller_machine_id,
+        "caller_identity": submission.admission.caller_identity,
         "workspace_path": submission.admission.workspace_path,
         "cwd": submission.admission.cwd,
         "sandboxed": false,

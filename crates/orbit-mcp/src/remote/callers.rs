@@ -97,6 +97,11 @@ pub struct CallerRow {
     /// not evidence of a mismatch.
     #[serde(default)]
     pub ssh_key_fingerprint: Option<String>,
+    /// Explicitly admits `orbit.agent.invoke` for this caller on the row's
+    /// narrowed workspaces. Requires operator capability, a workspace
+    /// narrowing, and a key-bound identity.
+    #[serde(default)]
+    pub agent_invoke: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
@@ -192,6 +197,37 @@ fn validate_callers(file: &CallersFile, path: &Path) -> Result<(), OrbitError> {
                     row.machine_id
                 ),
             ));
+        }
+        if row.agent_invoke {
+            if !row.capabilities.iter().any(|value| value == "operator") {
+                return Err(invalid(
+                    path,
+                    format!(
+                        "caller '{}' enables `agent_invoke` without the `operator` capability",
+                        row.machine_id
+                    ),
+                ));
+            }
+            if row.workspaces.is_none() {
+                return Err(invalid(
+                    path,
+                    format!(
+                        "caller '{}' enables `agent_invoke` without a `workspaces` narrowing; \
+                         remote trusted-host execution must name its destination workspaces",
+                        row.machine_id
+                    ),
+                ));
+            }
+            if row.ssh_key_fingerprint.is_none() {
+                return Err(invalid(
+                    path,
+                    format!(
+                        "caller '{}' enables `agent_invoke` without `ssh_key_fingerprint`; \
+                         remote trusted-host execution requires a key-bound caller identity",
+                        row.machine_id
+                    ),
+                ));
+            }
         }
     }
     Ok(())
@@ -304,6 +340,9 @@ pub struct ResolvedCallerGrant {
     /// The `ws_*` IDs [`Self::granted`] applies to. `None` means every
     /// workspace on this destination.
     pub workspaces: Option<BTreeSet<String>>,
+    /// Whether the matched row explicitly admits trusted-host agent
+    /// invocation on its covered workspaces.
+    pub agent_invoke: bool,
     /// Whether a row matched, or the file default answered.
     pub matched: bool,
 }
@@ -324,6 +363,15 @@ impl ResolvedCallerGrant {
             }
             _ => self.granted.clone(),
         }
+    }
+
+    /// Whether the explicit agent-invocation grant covers `workspace_id`.
+    pub fn agent_invoke_for_workspace(&self, workspace_id: Option<&str>) -> bool {
+        self.agent_invoke
+            && match (&self.workspaces, workspace_id) {
+                (Some(covered), Some(workspace_id)) => covered.contains(workspace_id),
+                (Some(_), None) | (None, _) => false,
+            }
     }
 }
 
@@ -349,6 +397,7 @@ impl CallersFile {
                 granted: default.clone(),
                 elsewhere: default,
                 workspaces: None,
+                agent_invoke: false,
                 matched: false,
             };
         };
@@ -371,6 +420,7 @@ impl CallersFile {
                 .workspaces
                 .as_ref()
                 .map(|workspaces| workspaces.iter().cloned().collect()),
+            agent_invoke: row.agent_invoke,
             matched: true,
         }
     }
@@ -519,6 +569,7 @@ impl SessionCapabilityPolicy {
             granted_capabilities: grant.for_workspace(workspace_id),
             source: CALLERS_FILE_DISPLAY.to_string(),
             identity: grant.identity,
+            agent_invoke: grant.agent_invoke_for_workspace(workspace_id),
         })
     }
 
