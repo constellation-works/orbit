@@ -1,3 +1,10 @@
+---
+type: design
+summary: "Delivery automation operations [ORB-11330]"
+tags: [automation-triggers]
+last_validated: 2026-09-07
+---
+
 # Delivery automation operations [ORB-11330]
 
 Delivery triggers are opt-in. The existing sweep clock evaluates routines; the

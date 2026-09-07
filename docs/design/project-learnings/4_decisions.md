@@ -4,7 +4,7 @@ type: design
 title: "Project Learnings — Decisions"
 owner: claude
 last_updated: 2026-08-13
-last_validated: 2026-08-13
+last_validated: 2026-09-07
 status: Superseded
 feature: project-learnings
 doc_role: decisions
@@ -58,7 +58,7 @@ Storage choice. Three plausible shapes:
 2. **Native primitive in `orbit-store`.** YAML on disk + SQLite index, mirroring tasks. Structured fields (`scope`, `evidence`, `status`), atomic mutations via `orbit.learning.*` tools, indexable for sub-10ms lookups. Implementation cost is real but reuses the existing layered store pattern.
 3. **Hybrid: markdown bodies + YAML metadata.** Markdown for content, YAML frontmatter for structure. Familiar to many tools. Splits concerns awkwardly when programmatic mutations write to one half and humans edit the other.
 
-The injection layers ([2_design.md §4](./2_design.md)) are the forcing function. Layer 1 has to query "which learnings match this task's context_files" before agent spawn; layer 2 has to do the same per MCP call. Both are hot paths. Grepping markdown frontmatter on every spawn or every tool call is the wrong shape — it makes every layer pay a full filesystem walk for what should be an indexed lookup.
+The injection layers (the retired `2_design.md §4`) are the forcing function. Layer 1 has to query "which learnings match this task's context_files" before agent spawn; layer 2 has to do the same per MCP call. Both are hot paths. Grepping markdown frontmatter on every spawn or every tool call is the wrong shape — it makes every layer pay a full filesystem walk for what should be an indexed lookup.
 
 A flat-markdown approach can be retrofitted with an index, but at that point it's a native primitive with extra steps and a less convenient on-disk format.
 
@@ -87,7 +87,7 @@ Where do learning records live on disk?
 
 Per the Scoping Rules table in [CLAUDE.md](../../../CLAUDE.md), tasks are `WorkspaceOnly` and live in `.orbit/tasks/` checked in. Job runs are also `WorkspaceOnly` but under `.orbit/state/`, gitignored, because they're execution artifacts. Learnings sit closer to tasks in shape — durable project artifacts authored over time — so the task locality is the right precedent.
 
-The cross-workspace case ([3_vision.md §1.4](./3_vision.md)) is real but secondary: most learnings are repo-specific, and the cross-cutting ones are best handled by tag-driven promotion later, not by making the default storage location global.
+The cross-workspace case (the retired `3_vision.md §1.4`) is real but secondary: most learnings are repo-specific, and the cross-cutting ones are best handled by tag-driven promotion later, not by making the default storage location global.
 
 ### Decision
 Phase 1 stores learnings at `.orbit/learnings/<id>.yaml`, scoped `WorkspaceOnly` per the Scoping Rules table, checked into git. The SQLite index lives under `.orbit/state/` and is rebuildable from the YAML; it does not need to be checked in.
@@ -126,13 +126,13 @@ Phase 1's binding constraint is: ship before semantic-search reaches Accepted ([
 ### Decision
 Phase 1 supports two scope axes, evaluated as logical OR: path globs (matched via the `orbit-policy` glob engine) and tags (matched as exact strings). Ranking is `updated_at` desc with optional `priority` tagging as a tie-breaker. The schema reserves `scope.symbols` and `scope.semantic_seed` fields for phase 2 forward compatibility, but neither is read in phase 1.
 
-Phase 2 ([3_vision.md §1.1](./3_vision.md), [§1.2](./3_vision.md)) layers symbol-aware scope and semantic ranking once semantic-search ships.
+Phase 2 (the retired `3_vision.md §1.1` and `§1.2`) layers symbol-aware scope and semantic ranking once semantic-search ships.
 
 ### Consequences
 - Phase 1 is implementable in parallel with semantic-search work, not gated on it.
 - Path globs cover the common case (most learnings are file-area-scoped) and tags cover the cross-cutting case.
 - The schema is forward-compatible; phase 2 is additive, not a migration.
-- Cost: recency-only ranking has known failure modes ([3_vision.md §1.2](./3_vision.md)) — old-but-important learnings get out-ranked by recent-but-marginal ones. Path globs are brittle to renames; the documented mitigation is "run `orbit learning prune --stale-only` after refactors that move files," which is operational discipline, not automation. Both costs are accepted as the price of shipping phase 1 ahead of semantic-search.
+- Cost: recency-only ranking has known failure modes (the retired `3_vision.md §1.2`) — old-but-important learnings get out-ranked by recent-but-marginal ones. Path globs are brittle to renames; the documented mitigation is "run `orbit learning prune --stale-only` after refactors that move files," which is operational discipline, not automation. Both costs are accepted as the price of shipping phase 1 ahead of semantic-search.
 
 ---
 
@@ -142,7 +142,7 @@ Phase 2 ([3_vision.md §1.1](./3_vision.md), [§1.2](./3_vision.md)) layers symb
 **Recorded:** 2026-08-13 · [T20260510-11], [ORB-10736]
 
 ### Context
-The push-injection layer ([2_design.md §4](./2_design.md)) has multiple natural placements, each with different coverage:
+The push-injection layer (the retired `2_design.md §4`) has multiple natural placements, each with different coverage:
 
 - **Engine pre-prompt only.** Inject when `orbit-engine` spawns an agent for a task. Universal across agents. Coarse: fires once at task start, before the agent has read its way to the relevant code, so narrow learnings (file-path-scoped) may not surface for the file the agent edits ten tool calls in.
 - **MCP-sidecar only.** Attach `learnings` to MCP tool responses that reference paths. Cross-agent. Misses Claude Code's built-in `Edit | Write | Read`, which agents use far more than they call MCP file tools.
@@ -157,7 +157,7 @@ Phase 1 ships all three layers active simultaneously. Each layer consults a per-
 ### Consequences
 - Coverage is robust: even if one layer misfires or a vendor lacks hook support, the others provide a baseline.
 - Agents see relevant learnings at multiple natural moments — task start, MCP tool call, individual edit — without being drowned in repeats (dedup set).
-- The architecture admits a future "layer 4" (Orbit-side proxy for agents without hooks) without restructuring, but doesn't require it ([3_vision.md §1.5](./3_vision.md)).
+- The architecture admits a future "layer 4" (Orbit-side proxy for agents without hooks) without restructuring, but doesn't require it (the retired `3_vision.md §1.5`).
 - Cost: three injection sites means three places to maintain. A schema change to learning records (new field surfaced at injection time) requires touching `orbit-engine`, `orbit-mcp`, and the Claude Code hook script. The dedup set is agent-local; if context is compressed mid-session, the set may reset and the same learning may inject twice. Both costs are accepted as the price of robust coverage; collapsing to a single layer would mean choosing one failure mode (vendor lock-in, coarse scope, or missing built-in tools) and living with it.
 
 ---
