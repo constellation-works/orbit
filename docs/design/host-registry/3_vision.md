@@ -4,12 +4,12 @@ type: design
 title: "Host Registry — Vision"
 owner: codex
 last_updated: 2026-08-23
-last_validated: 2026-08-15
+last_validated: 2026-09-07
 status: Accepted
 feature: host-registry
 doc_role: vision
 tags: [host-registry, machine-identity, workspace-catalog]
-paths: ["crates/orbit-common/src/types/host.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs"]
+paths: ["crates/orbit-types/src/identity/host.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
 related_artifacts: [ORB-11008, ORB-11009]
 ---
