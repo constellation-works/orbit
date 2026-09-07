@@ -7,14 +7,14 @@ use chrono::Utc;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::automation::{AutomationState, Delivery, SourcePage};
 use orbit_types::workflow::{
-    REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, ReviewAttemptState, ReviewCertificate,
-    ReviewVerdict,
+    REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, ReviewAttemptState,
+    ReviewCertificate, ReviewVerdict, ValidationOutcome, ValidationRole,
 };
 use serde_json::{Value, json};
 
 use super::{
     Fixture, GATED_CONFIG, admit_input, admitted_run, fixture, git, implement_candidate, report,
-    seed_task, settle_input, write_report,
+    seed_task, settle_input, validation, write_report,
 };
 use crate::application::automation::source::Source;
 use crate::application::review::{exclusions, review_gate_admit, review_gate_settle};
@@ -437,6 +437,157 @@ fn inconsistent_claims_and_denied_validation_are_downgraded_honestly() {
         "{error}"
     );
     assert_eq!(denied.certificate().verdict, ReviewVerdict::Incomplete);
+}
+
+#[test]
+fn a_negative_control_and_a_scope_exclusion_pass_alongside_required_checks() {
+    // ORB-11511: the reviewer honestly recorded the superseded assertion as
+    // failed (which is what proves the regression) and the unauthorized
+    // deployment as not run. Neither is a required candidate check, so the
+    // pass is correct and the record stays auditable.
+    let gated = gated_fixture(GATED_CONFIG);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+
+    let mut claim = report(attempt_id, ReviewVerdict::PassedWithoutRepairs, false);
+    claim.validation = vec![
+        validation(
+            "make ci-fast",
+            ValidationOutcome::Passed,
+            ValidationRole::Required,
+            None,
+        ),
+        validation(
+            "make ci-lint",
+            ValidationOutcome::Passed,
+            ValidationRole::Required,
+            None,
+        ),
+        validation(
+            "grep -q 'Strict-Transport-Security' old-config",
+            ValidationOutcome::Failed,
+            ValidationRole::ExpectedFailure,
+            Some("negative control: the superseded assertion must no longer hold"),
+        ),
+        validation(
+            "wrangler deploy",
+            ValidationOutcome::NotRun,
+            ValidationRole::Excluded,
+            Some("live deployment is explicitly outside the authorized scope"),
+        ),
+    ];
+    write_report(&gated.fixture.runtime, &gated.task_id, &claim);
+
+    let settled = gated.settle(&admission).expect("settle");
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["verdict"], "passed_without_repairs");
+
+    let certificate = gated.certificate();
+    assert!(certificate.validation_complete);
+    assert_eq!(certificate.escalation, None);
+    assert_eq!(
+        certificate.validation, claim.validation,
+        "every raw observation and its classification survive into the certificate"
+    );
+
+    let comments = gated
+        .fixture
+        .runtime
+        .get_task_comments(&gated.task_id)
+        .expect("comments");
+    assert!(
+        comments.last().is_some_and(|comment| comment
+            .message
+            .contains("4 record(s) [2 required, 1 expected_failure, 1 excluded]")),
+        "the classification breakdown is disclosed on the task"
+    );
+
+    // The deterministic consumer reads the same contract: this certificate
+    // is spendable coverage for the landing that reproduces it.
+    let source = Source::new(&gated.fixture.repo);
+    let repository = source.repository().expect("repository");
+    let delivery = land_squash(&gated, &repository);
+    let (state, mut page) = page_for(&delivery);
+    exclusions(&gated.fixture.runtime, &source, &state, &mut page).expect("exclusions");
+    assert!(
+        page.exclusions.contains_key(&delivery.key),
+        "a controlled and scope-excluded validation set still covers its landing"
+    );
+}
+
+#[test]
+fn classifications_that_contradict_their_outcome_or_explain_nothing_are_refused() {
+    // A negative control that passed disproves what it was recorded for.
+    let contradicted = gated_fixture(GATED_CONFIG);
+    let admission = contradicted.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+    let mut claim = report(attempt_id, ReviewVerdict::PassedWithoutRepairs, false);
+    claim.validation.push(validation(
+        "cargo test old_assertion",
+        ValidationOutcome::Passed,
+        ValidationRole::ExpectedFailure,
+        Some("the pre-fix reproduction must fail"),
+    ));
+    write_report(&contradicted.fixture.runtime, &contradicted.task_id, &claim);
+    let error = contradicted.settle(&admission).expect_err("contradicted");
+    assert!(
+        error.to_string().contains("validation_contradicted"),
+        "{error}"
+    );
+    assert_eq!(
+        contradicted.certificate().verdict,
+        ReviewVerdict::Incomplete
+    );
+
+    // An exclusion with nothing explaining it is not a scope decision.
+    let unexplained = gated_fixture(GATED_CONFIG);
+    let admission = unexplained.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+    let mut claim = report(attempt_id, ReviewVerdict::PassedWithoutRepairs, false);
+    claim.validation.push(validation(
+        "wrangler deploy",
+        ValidationOutcome::NotRun,
+        ValidationRole::Excluded,
+        None,
+    ));
+    write_report(&unexplained.fixture.runtime, &unexplained.task_id, &claim);
+    let error = unexplained.settle(&admission).expect_err("unexplained");
+    assert!(
+        error.to_string().contains("validation_unexplained"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_legacy_report_without_classifications_keeps_its_conservative_reading() {
+    // Evidence written before the contract names no role, so every command
+    // it lists is still a required check.
+    let gated = gated_fixture(GATED_CONFIG);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+    let legacy = json!({
+        "schema_version": REVIEW_CONTRACT_VERSION,
+        "attempt_id": attempt_id,
+        "verdict": "passed_without_repairs",
+        "summary": "Checked the change against the criteria.",
+        "findings": [],
+        "validation": [
+            {"command": "make ci-fast", "outcome": "passed"},
+            {"command": "deploy to production", "outcome": "not_run"},
+        ],
+    });
+    write_report(
+        &gated.fixture.runtime,
+        &gated.task_id,
+        &serde_json::from_value(legacy).expect("legacy report"),
+    );
+    let error = gated.settle(&admission).expect_err("conservative");
+    assert!(
+        error
+            .to_string()
+            .contains("required check `deploy to production` is not_run"),
+        "{error}"
+    );
 }
 
 #[test]

@@ -226,11 +226,67 @@ pub enum ValidationOutcome {
     NotRun,
 }
 
+impl ValidationOutcome {
+    /// Stable label for projections and escalation reasons.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ValidationOutcome::Passed => "passed",
+            ValidationOutcome::Failed => "failed",
+            ValidationOutcome::Denied => "denied",
+            ValidationOutcome::NotRun => "not_run",
+        }
+    }
+}
+
+/// What a recorded validation command is evidence of.
+///
+/// An outcome alone cannot say whether a failure was a defect or the point
+/// of the check, and an honest `not_run` entry for an action nobody
+/// authorized must not become a requirement merely by being listed. The
+/// reviewer therefore classifies each record and settlement judges the
+/// outcome against that claim.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationRole {
+    /// A check the final candidate must pass. Records written before this
+    /// classification existed carry no role and are read as required, so
+    /// older evidence keeps its conservative meaning.
+    #[default]
+    Required,
+    /// A negative control that must fail on the candidate: the superseded
+    /// assertion, the pre-fix reproduction, the counterfactual. The failure
+    /// is the positive evidence, and a pass contradicts the claim.
+    ExpectedFailure,
+    /// An action outside the authorized scope, deliberately not performed.
+    /// It supplies no coverage and imposes no requirement.
+    Excluded,
+    /// A superseded attempt kept for history: a diagnostic run that a later
+    /// required check on the final candidate replaced. It never erases the
+    /// observation and never substitutes for that later check.
+    Superseded,
+}
+
+impl ValidationRole {
+    /// Stable label for projections and escalation reasons.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ValidationRole::Required => "required",
+            ValidationRole::ExpectedFailure => "expected_failure",
+            ValidationRole::Excluded => "excluded",
+            ValidationRole::Superseded => "superseded",
+        }
+    }
+}
+
 /// One validation record in the reviewer report or the certificate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewValidation {
     pub command: String,
     pub outcome: ValidationOutcome,
+    /// What the record is evidence of; absent in legacy evidence, which is
+    /// then read as a required check.
+    #[serde(default)]
+    pub role: ValidationRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }

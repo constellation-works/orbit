@@ -16,7 +16,7 @@ use orbit_engine::RuntimeHost;
 use orbit_types::task::{Task, TaskArtifact, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{
     FindingDisposition, JobRun, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT, ReviewFinding,
-    ReviewReport, ReviewValidation, ReviewVerdict, ValidationOutcome,
+    ReviewReport, ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -206,10 +206,26 @@ pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -
         validation: vec![ReviewValidation {
             command: "make ci-fast".to_string(),
             outcome: ValidationOutcome::Passed,
+            role: ValidationRole::Required,
             note: None,
         }],
         escalation: (verdict == ReviewVerdict::ChangesRequired)
             .then(|| "decide whether the note is required".to_string()),
+    }
+}
+
+/// One classified validation record for a reviewer report.
+pub(super) fn validation(
+    command: &str,
+    outcome: ValidationOutcome,
+    role: ValidationRole,
+    note: Option<&str>,
+) -> ReviewValidation {
+    ReviewValidation {
+        command: command.to_string(),
+        outcome,
+        role,
+        note: note.map(ToString::to_string),
     }
 }
 

@@ -83,18 +83,40 @@ spec:
        and anything you are unsure about stay open findings.
     4. Run the repository's required validation on the final worktree state
        (for this repository at least `make ci-fast` and `make ci-lint`, plus the
-       focused tests for the change). Record every command with outcome
-       `passed`, `failed`, `denied` (the runner refused it), or `not_run`. Never
-       record a skipped or denied command as passed.
+       focused tests for the change). Record every command you ran or could not
+       run with outcome `passed`, `failed`, `denied` (the runner refused it), or
+       `not_run`. Never record a skipped or denied command as passed, and never
+       drop a record to make the set look clean.
+
+       Classify each record with `role`, which says what it is evidence of.
+       Omitting `role` means `required`. Every role other than `required` needs
+       a `note` explaining it, or the gate refuses the record:
+
+       - `required`: the final candidate must pass it. Any other outcome, an
+         unavailable runner included, blocks the pass.
+       - `expected_failure`: a negative control that must fail, such as the
+         superseded assertion or the pre-fix reproduction. Its `failed` outcome
+         is positive evidence; a `passed` outcome contradicts the claim.
+       - `excluded`: an action outside the authorized scope that you
+         deliberately did not perform, such as a live deployment. Record it as
+         `not_run` (or `denied`); it supplies no coverage and creates no
+         requirement. Never perform an unauthorized action to clear a record.
+       - `superseded`: an earlier diagnostic attempt a later required check
+         replaced, such as a run in a misconfigured environment you then
+         corrected. Keep it and record the replacing required check after it.
+
+       At least one `required` record must pass, or the review establishes
+       nothing about the candidate.
     5. Choose the verdict honestly:
-       - `passed_without_repairs`: no defects, every validation passed, you
-         changed nothing.
-       - `passed_with_repairs`: every finding is `repaired`, every validation
-         passed on the repaired tree, and you changed files.
+       - `passed_without_repairs`: no defects, every required check passed,
+         every other record consistent with its role, you changed nothing.
+       - `passed_with_repairs`: every finding is `repaired`, every required
+         check passed on the repaired tree, and you changed files.
        - `changes_required`: findings remain open that you may not or could not
          repair; set `escalation` to the decision needed.
        - `incomplete`: the review could not be completed (missing evidence,
-         denied validation, ambiguous intent, mismatch); set `escalation`.
+         a denied required check, ambiguous intent, mismatch); set
+         `escalation`.
     6. Write the report to a temporary file and attach it with
        `orbit.task.artifact.put` (`id` = `task_id`, `path` = `report_artifact`)
        using exactly this shape:
@@ -105,7 +127,8 @@ spec:
                      "paths":["src/x.rs"],
                      "disposition":{"kind":"open|repaired"}}],
         "validation":[{"command":"make ci-fast","outcome":"passed|failed|denied|not_run",
-                       "note":"optional"}],
+                       "role":"required|expected_failure|excluded|superseded",
+                       "note":"required unless the role is `required`"}],
         "escalation":"<required decision, when not a pass>"}
 
        Attach the report for every task id in `task_ids`.

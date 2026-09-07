@@ -1,5 +1,7 @@
 //! Shared review coverage rules [ORB-11333].
 
+mod validation;
+
 use super::*;
 use chrono::{TimeZone, Utc};
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
@@ -7,6 +9,7 @@ use orbit_types::workflow::automation::{Delivery, SourceRevision};
 use orbit_types::workflow::{
     LandingTransformation, REVIEW_CONTRACT_VERSION, ReviewAssurance, ReviewBudget,
     ReviewConsumption, ReviewValidation, ReviewVerdict, ReviewerIdentity, ValidationOutcome,
+    ValidationRole,
 };
 
 fn now() -> chrono::DateTime<Utc> {
@@ -68,6 +71,7 @@ fn certificate(verdict: ReviewVerdict) -> ReviewCertificate {
         validation: vec![ReviewValidation {
             command: "make ci-fast".into(),
             outcome: ValidationOutcome::Passed,
+            role: ValidationRole::Required,
             note: None,
         }],
         validation_complete: true,
@@ -170,6 +174,45 @@ fn only_passed_and_fully_validated_certificates_are_acceptable() {
     assert_eq!(
         certificate_acceptable(&stale_contract),
         Err(ReviewInvalidation::MappingUnknown)
+    );
+}
+
+#[test]
+fn coverage_reads_the_same_validation_contract_the_gate_settled_under() {
+    // A certificate the gate passed under the repaired contract stays
+    // acceptable coverage: the negative control and the excluded deployment
+    // do not make it incomplete.
+    let mut classified = certificate(ReviewVerdict::PassedWithoutRepairs);
+    classified.validation.extend([
+        ReviewValidation {
+            command: "grep -q 'Strict-Transport-Security' old-config".into(),
+            outcome: ValidationOutcome::Failed,
+            role: ValidationRole::ExpectedFailure,
+            note: Some("negative control: the superseded assertion must fail".into()),
+        },
+        ReviewValidation {
+            command: "wrangler deploy".into(),
+            outcome: ValidationOutcome::NotRun,
+            role: ValidationRole::Excluded,
+            note: Some("live deployment is outside the authorized scope".into()),
+        },
+    ]);
+    assert!(certificate_acceptable(&classified).is_ok());
+
+    // The flag alone never carries a certificate whose records contradict it.
+    let mut contradicted = classified.clone();
+    contradicted.validation[1].outcome = ValidationOutcome::Passed;
+    assert!(contradicted.validation_complete);
+    assert_eq!(
+        certificate_acceptable(&contradicted),
+        Err(ReviewInvalidation::ValidationIncomplete)
+    );
+
+    let mut unexplained = classified;
+    unexplained.validation[2].note = None;
+    assert_eq!(
+        certificate_acceptable(&unexplained),
+        Err(ReviewInvalidation::ValidationIncomplete)
     );
 }
 

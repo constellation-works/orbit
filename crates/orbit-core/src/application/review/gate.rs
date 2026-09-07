@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use chrono::Utc;
-use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
+use orbit_automation::review::{
+    combined_task_meaning_digest, task_meaning_digest, validation_evidence, validation_role_counts,
+};
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::overlaps;
 use orbit_engine::DispatchError;
@@ -21,7 +23,7 @@ use orbit_types::workflow::{
     CommitIdentity, FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
     REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewAttempt,
     ReviewAttemptState, ReviewCertificate, ReviewLedger, ReviewManifest, ReviewReport,
-    ReviewReservation, ReviewVerdict, ReviewerIdentity, ValidationOutcome,
+    ReviewReservation, ReviewVerdict, ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -940,28 +942,14 @@ impl Judgement {
             }
             _ => {}
         }
+        // A pass rests on what the records establish, not on their count:
+        // a required check must have passed, while a declared negative
+        // control, an excluded action, and a superseded attempt carry their
+        // own consistency rules. Delivery coverage reads the same function.
         if self.verdict.passed() {
-            let denied = self
-                .validation
-                .iter()
-                .any(|record| record.outcome == ValidationOutcome::Denied);
-            let all_passed = !self.validation.is_empty()
-                && self
-                    .validation
-                    .iter()
-                    .all(|record| record.outcome == ValidationOutcome::Passed);
-            if denied {
-                self.downgrade(
-                    "validation_unavailable: a required validation command was denied by the \
-                     runner; the candidate is kept for unrestricted validation",
-                );
-            } else if !all_passed {
-                self.downgrade(
-                    "validation_incomplete: a pass needs every recorded validation command to \
-                     pass on the final candidate",
-                );
-            } else {
-                self.validation_complete = true;
+            match validation_evidence(&self.validation) {
+                Ok(()) => self.validation_complete = true,
+                Err(defect) => self.downgrade(&defect.reason()),
             }
         }
     }
@@ -1043,7 +1031,7 @@ fn verdict_comment(certificate: &ReviewCertificate, reviewed: &CandidateIdentity
          - Final candidate: `{}`\n\
          - Reviewer repair commits: {}\n\
          - Findings: {} ({} open)\n\
-         - Validation on final candidate: {} record(s), complete: {}\n\
+         - Validation on final candidate: {} record(s) [{}], complete: {}\n\
          - Consumed: {} reviewer start(s), {} repair cycle(s), {}s of {} min\n\
          - Escalation: {}\n\n\
          Reviewer repairs were validated but not independently reviewed; this verdict is \
@@ -1071,6 +1059,7 @@ fn verdict_comment(certificate: &ReviewCertificate, reviewed: &CandidateIdentity
             .filter(|finding| finding.disposition == FindingDisposition::Open)
             .count(),
         certificate.validation.len(),
+        validation_roles(&certificate.validation),
         certificate.validation_complete,
         certificate.consumed.reviewer_starts,
         certificate.consumed.repair_cycles,
@@ -1078,6 +1067,21 @@ fn verdict_comment(certificate: &ReviewCertificate, reviewed: &CandidateIdentity
         certificate.budget.minutes,
         certificate.escalation.as_deref().unwrap_or("none"),
     )
+}
+
+/// The classification breakdown of a validation set, so a reader sees which
+/// records were required checks and which were controls or exclusions
+/// without opening the certificate.
+fn validation_roles(records: &[orbit_types::workflow::ReviewValidation]) -> String {
+    let counts = validation_role_counts(records);
+    if counts.is_empty() {
+        return "none".to_string();
+    }
+    counts
+        .into_iter()
+        .map(|(role, count)| format!("{count} {}", role.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Write a gate artifact under the executor run's authority.

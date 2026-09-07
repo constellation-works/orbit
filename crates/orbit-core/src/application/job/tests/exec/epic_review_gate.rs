@@ -15,6 +15,7 @@ use orbit_types::task::{ExternalRef, Task, TaskArtifact, TaskPriority, TaskStatu
 use orbit_types::workflow::{
     FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_REPORT_ARTIFACT,
     ReviewFinding, ReviewReport, ReviewValidation, ReviewVerdict, ValidationOutcome,
+    ValidationRole,
 };
 use serde_json::{Value, json};
 
@@ -222,6 +223,7 @@ impl<'a> ScriptedEpicReviewHost<'a> {
             validation: vec![ReviewValidation {
                 command: "make ci-fast".to_string(),
                 outcome: ValidationOutcome::Passed,
+                role: ValidationRole::Required,
                 note: None,
             }],
             escalation: (self.reviewer.verdict == ReviewVerdict::ChangesRequired)

@@ -11,7 +11,7 @@ summary: Shipped operation-mode contract — typed preferences, scoped grants, g
 tags: [operation-mode, automation, authorization, recovery, operations]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/operation/**", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/operation/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/members/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, routines]
-related_artifacts: [ORB-11333, ORB-11332, ORB-11331, ORB-11330]
+related_artifacts: [ORB-11528, ORB-11333, ORB-11332, ORB-11331, ORB-11330]
 ---
 
 # Operation Mode — Operations [ORB-11332]
@@ -258,8 +258,40 @@ and 30-minute wall clock. It reads the manifest, verifies claims against code,
 repairs only concrete in-scope defects directly in the worktree, runs
 validation, and persists `review-report.json` (schema version 1: verdict,
 findings with dispositions, validation records with `passed` / `failed` /
-`denied` / `not_run`, escalation). It never runs Git writes, changes task
-lifecycle, approves, or merges.
+`denied` / `not_run` and the `role` each is evidence of, escalation). It never
+runs Git writes, changes task lifecycle, approves, or merges.
+
+### What the validation records establish [ORB-11528]
+
+An honest reviewer records more than the checks that had to pass, so each
+validation record also carries a `role` saying what it is evidence of, and
+`orbit_automation::review::validation_evidence` decides what the set
+establishes. Settlement and delivery coverage both read that one function, so
+a certificate cannot mean one thing when it is issued and another when it is
+spent.
+
+| `role` | Meaning | Passing requires |
+| --- | --- | --- |
+| `required` (default) | A check the final candidate must pass | `passed`; `failed`, `denied`, and `not_run` all block |
+| `expected_failure` | A negative control — the superseded assertion, the pre-fix reproduction | `failed`; any other outcome contradicts the claim |
+| `excluded` | An action outside the authorized scope, deliberately not performed | `not_run` or `denied`; actually running it contradicts the exclusion |
+| `superseded` | A diagnostic attempt a later required check replaced | a later record in the list that is `required` and `passed` |
+
+At least one `required` record must have passed, so a set of controls and
+exclusions alone is never coverage. Every role other than `required` must
+carry a `note`; an unexplained reclassification is refused rather than
+trusted. A record written before this contract carries no role and is read as
+a required check, so older evidence keeps its conservative meaning. The
+certificate keeps every raw observation with its classification — a superseded
+failure is preserved, never erased — and the verdict comment discloses the
+breakdown. A denied required check keeps its own `validation_unavailable`
+reason: the runner refused, which is neither a defect in the candidate nor
+evidence about it.
+
+The contract version stays 1: a record carrying no role decides exactly as it
+did before, so no existing certificate is reinterpreted and none has to be
+reissued. Candidates already refused under the old rule recover through a
+fresh run, not by editing stored evidence.
 
 Settlement rechecks the checked-out head against the admitted candidate,
 reads the report with its artifact provenance (missing, predating the
@@ -269,10 +301,10 @@ uncommitted change as one repair commit authored `<family>-reviewer
 `Orbit-Review-Attempt` trailer, and cross-checks the claim: a pass with
 open findings, a claimed repair that changed nothing, a claimed clean pass
 that changed the tree, repairs outside the task selectors, a spent repair
-cycle, a failed or denied validation, or any task-meaning change other than
-selectors added through the task API downgrades the verdict to `incomplete`
-with the reason recorded. Verdicts are `passed_without_repairs`
-(`independent_review`), `passed_with_repairs`
+cycle, validation records that do not establish the candidate (above), or any
+task-meaning change other than selectors added through the task API
+downgrades the verdict to `incomplete` with the reason recorded. Verdicts are
+`passed_without_repairs` (`independent_review`), `passed_with_repairs`
 (`independent_review_with_self_authored_repairs`; the repairs were validated,
 not independently reviewed), `changes_required`, and `incomplete`. The
 certificate (`review-gate.json`, recorded immutably in the host store and
