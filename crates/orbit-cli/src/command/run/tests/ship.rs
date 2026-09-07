@@ -70,6 +70,7 @@ fn ship_auto_mode_preserves_local_mode_and_base_override() {
         json!({
             "mode": "local",
             "base_branch": "main",
+            "base_sync": "local",
         })
     );
 }
@@ -107,6 +108,7 @@ fn explicit_ship_preserves_local_mode_and_base_override() {
         json!({
             "mode": "local",
             "base_branch": "main",
+            "base_sync": "local",
             "task_ids": ["T20260425-2010"],
         })
     );
@@ -253,6 +255,7 @@ fn interactive_ship_inherits_the_shared_in_flight_guard() {
         json!({
             "mode": "local",
             "base_branch": "main",
+            "base_sync": "local",
             "task_ids": [task_id],
         })
     );
