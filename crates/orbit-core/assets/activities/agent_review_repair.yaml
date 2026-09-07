@@ -116,6 +116,11 @@ spec:
        - `superseded`: an earlier diagnostic attempt a later required check
          replaced, such as a run in a misconfigured environment you then
          corrected. Keep it and record the replacing required check after it.
+         The replacement must name the same check: the same `command`, or the
+         same non-empty `check` identity when the command or environment was
+         corrected. An unrelated later pass (for example `cargo fmt --check`
+         after a failed `cargo test`) does not replace it. A missing, empty,
+         or one-sided `check` identity fails closed.
 
        At least one `required` record must pass, or the review establishes
        nothing about the candidate.
@@ -140,6 +145,7 @@ spec:
                      "disposition":{"kind":"open|repaired"}}],
         "validation":[{"command":"make ci-fast","outcome":"passed|failed|denied|not_run",
                        "role":"required|expected_failure|excluded|superseded",
+                       "check":"optional identity shared with the replacing required check",
                        "note":"required unless the role is `required`"}],
         "escalation":"<required decision, when not a pass>"}
 

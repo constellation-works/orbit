@@ -208,6 +208,7 @@ pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -
             outcome: ValidationOutcome::Passed,
             role: ValidationRole::Required,
             note: None,
+            check: None,
         }],
         escalation: (verdict == ReviewVerdict::ChangesRequired)
             .then(|| "decide whether the note is required".to_string()),
@@ -226,6 +227,7 @@ pub(super) fn validation(
         outcome,
         role,
         note: note.map(ToString::to_string),
+        check: None,
     }
 }
 

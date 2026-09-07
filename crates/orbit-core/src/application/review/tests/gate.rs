@@ -594,6 +594,93 @@ fn a_legacy_report_without_classifications_keeps_its_conservative_reading() {
 }
 
 #[test]
+fn a_superseded_test_is_not_replaced_by_an_unrelated_formatter() {
+    let gated = gated_fixture(GATED_CONFIG);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+
+    let mut claim = report(attempt_id, ReviewVerdict::PassedWithoutRepairs, false);
+    claim.validation = vec![
+        validation(
+            "cargo test",
+            ValidationOutcome::Failed,
+            ValidationRole::Superseded,
+            Some("rerun after repair"),
+        ),
+        validation(
+            "cargo fmt --check",
+            ValidationOutcome::Passed,
+            ValidationRole::Required,
+            None,
+        ),
+    ];
+    write_report(&gated.fixture.runtime, &gated.task_id, &claim);
+
+    let error = gated.settle(&admission).expect_err("unrelated formatter");
+    assert!(
+        error
+            .to_string()
+            .contains("superseded attempt `cargo test` is followed by no related required check"),
+        "{error}"
+    );
+    let certificate = gated.certificate();
+    assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
+    assert!(!certificate.validation_complete);
+    assert_eq!(
+        certificate.validation, claim.validation,
+        "the failed test observation is preserved on the incomplete certificate"
+    );
+}
+
+#[test]
+fn a_superseded_attempt_is_replaced_by_a_related_corrected_rerun() {
+    let gated = gated_fixture(GATED_CONFIG);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+
+    let mut claim = report(attempt_id, ReviewVerdict::PassedWithoutRepairs, false);
+    claim.validation = vec![
+        validation(
+            "cargo test --package orbit-core",
+            ValidationOutcome::Failed,
+            ValidationRole::Superseded,
+            Some("sandbox allowlist leak; rerun below in a corrected environment"),
+        ),
+        validation(
+            "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+            ValidationOutcome::Passed,
+            ValidationRole::Required,
+            None,
+        ),
+    ];
+    claim.validation[0].check = Some("orbit-core-tests".into());
+    claim.validation[1].check = Some("orbit-core-tests".into());
+    write_report(&gated.fixture.runtime, &gated.task_id, &claim);
+
+    let settled = gated.settle(&admission).expect("related rerun settles");
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["verdict"], "passed_without_repairs");
+
+    let certificate = gated.certificate();
+    assert!(certificate.validation_complete);
+    assert_eq!(certificate.escalation, None);
+    assert_eq!(
+        certificate.validation, claim.validation,
+        "the failed observation and the corrected rerun both survive into the certificate"
+    );
+
+    let source = Source::new(&gated.fixture.repo);
+    let repository = source.repository().expect("repository");
+    let delivery = land_squash(&gated, &repository);
+    let (state, mut page) = page_for(&delivery);
+    exclusions(&gated.fixture.runtime, &source, &state, &mut page).expect("exclusions");
+    assert!(
+        page.exclusions.contains_key(&delivery.key),
+        "a related corrected rerun still covers its landing"
+    );
+}
+
+#[test]
 fn budgets_persist_across_attempts_and_interrupted_attempts_resume() {
     let gated = gated_fixture(
         "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"implementer\"\n[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"reviewers\"\nreview_reviewer_starts = 1\n",

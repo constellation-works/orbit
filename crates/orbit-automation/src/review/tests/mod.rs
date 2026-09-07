@@ -73,6 +73,7 @@ fn certificate(verdict: ReviewVerdict) -> ReviewCertificate {
             outcome: ValidationOutcome::Passed,
             role: ValidationRole::Required,
             note: None,
+            check: None,
         }],
         validation_complete: true,
         reviewer: ReviewerIdentity {
@@ -189,12 +190,14 @@ fn coverage_reads_the_same_validation_contract_the_gate_settled_under() {
             outcome: ValidationOutcome::Failed,
             role: ValidationRole::ExpectedFailure,
             note: Some("negative control: the superseded assertion must fail".into()),
+            check: None,
         },
         ReviewValidation {
             command: "wrangler deploy".into(),
             outcome: ValidationOutcome::NotRun,
             role: ValidationRole::Excluded,
             note: Some("live deployment is outside the authorized scope".into()),
+            check: None,
         },
     ]);
     assert!(certificate_acceptable(&classified).is_ok());
@@ -214,6 +217,62 @@ fn coverage_reads_the_same_validation_contract_the_gate_settled_under() {
         certificate_acceptable(&unexplained),
         Err(ReviewInvalidation::ValidationIncomplete)
     );
+}
+
+#[test]
+fn coverage_refuses_a_superseded_test_replaced_only_by_an_unrelated_formatter() {
+    let mut loophole = certificate(ReviewVerdict::PassedWithoutRepairs);
+    loophole.validation = vec![
+        ReviewValidation {
+            command: "cargo test".into(),
+            outcome: ValidationOutcome::Failed,
+            role: ValidationRole::Superseded,
+            note: Some("rerun after repair".into()),
+            check: None,
+        },
+        ReviewValidation {
+            command: "cargo fmt --check".into(),
+            outcome: ValidationOutcome::Passed,
+            role: ValidationRole::Required,
+            note: None,
+            check: None,
+        },
+    ];
+    assert_eq!(
+        certificate_acceptable(&loophole),
+        Err(ReviewInvalidation::ValidationIncomplete),
+        "an unrelated later formatter cannot certify a superseded test"
+    );
+}
+
+#[test]
+fn coverage_accepts_a_superseded_attempt_replaced_by_a_related_corrected_rerun() {
+    let mut related = certificate(ReviewVerdict::PassedWithoutRepairs);
+    related.validation = vec![
+        ReviewValidation {
+            command: "cargo test --package orbit-core".into(),
+            outcome: ValidationOutcome::Failed,
+            role: ValidationRole::Superseded,
+            note: Some("sandbox allowlist leak; rerun below in a corrected environment".into()),
+            check: Some("orbit-core-tests".into()),
+        },
+        ReviewValidation {
+            command: "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core".into(),
+            outcome: ValidationOutcome::Passed,
+            role: ValidationRole::Required,
+            note: None,
+            check: Some("orbit-core-tests".into()),
+        },
+    ];
+    assert!(
+        certificate_acceptable(&related).is_ok(),
+        "a shared check identity binds a corrected command as the replacement"
+    );
+    assert_eq!(
+        related.validation[0].command, "cargo test --package orbit-core",
+        "the failed observation remains on the certificate"
+    );
+    assert_eq!(related.validation[0].outcome, ValidationOutcome::Failed);
 }
 
 #[test]

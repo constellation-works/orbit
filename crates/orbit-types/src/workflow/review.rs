@@ -261,8 +261,10 @@ pub enum ValidationRole {
     /// It supplies no coverage and imposes no requirement.
     Excluded,
     /// A superseded attempt kept for history: a diagnostic run that a later
-    /// required check on the final candidate replaced. It never erases the
-    /// observation and never substitutes for that later check.
+    /// required check on the final candidate replaced. Replacement is the
+    /// later record that names the same check, not any later required pass.
+    /// It never erases the observation and never substitutes for that later
+    /// check.
     Superseded,
 }
 
@@ -289,6 +291,14 @@ pub struct ReviewValidation {
     pub role: ValidationRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Identity of the logical check this record belongs to. A superseded
+    /// attempt is replaced only by a later required passing record with the
+    /// same identity. When omitted, the command string is the identity, so a
+    /// same-command rerun still binds. An explicit value lets a corrected
+    /// command or environment replace the attempt without quoting the old
+    /// command. Empty or whitespace-only values match nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
 }
 
 /// How a finding was closed, if at all.
