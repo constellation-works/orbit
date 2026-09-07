@@ -43,7 +43,7 @@ keys and out-of-range values fail config load.
 | `operation.recovery_episodes_per_task` | 0..=10 (2) | yes |
 | `operation.recovery_minutes_per_task` | 1..=1440 (30) | yes |
 | `operation.review_policy` | `none` (default), `after-landing`, `before-pr` | no |
-| `operation.review_crew` | crew name | no |
+| `operation.review_crew` | crew name (before-PR review only) | no |
 | `operation.review_reviewer_starts` | 1..=10 (2) | no |
 | `operation.review_repair_cycles` | 0..=10 (2) | no |
 | `operation.review_minutes` | 1..=1440 (30) | no |
@@ -61,8 +61,12 @@ edits and `--preset` previews apply to a future grant only.
 
 `before-pr` holds PR creation for a fresh reviewer (§10, [ORB-11333]); it
 needs an explicit `review_crew`, and the explanation reports
-`review_crew_unconfigured` until one is set. The three `review_*` budgets
-bound one delivery candidate lineage. `delivery_cap` defaults to `review`, so
+`review_crew_unconfigured` until one is set. `review_crew` applies to that
+before-PR reviewer only: `after-landing` review is not run by this policy but by
+the `delivery-code-review` auto-task, which mints its tasks with the crew in its
+own template, so setting `review_crew` does not change who reviews landed work
+(see [delivery automation operations](../automation-triggers/5_operations.md)).
+The three `review_*` budgets bound one delivery candidate lineage. `delivery_cap` defaults to `review`, so
 an autonomous `completion = done` preference is capped at review until the
 workspace explicitly raises the cap. The cap is disclosed in the explanation.
 The resolved-policy version is 2; version-1 grants fail closed and must be

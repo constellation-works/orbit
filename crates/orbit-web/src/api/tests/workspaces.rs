@@ -67,6 +67,7 @@ pub(super) fn workspace_entry(
     let binding = active.then(|| WorkspaceRuntimeBinding {
         logical_workspace_id: format!("ws_{id}"),
         workspace_id: format!("ws_{id}"),
+        owner_machine_id: None,
         repo_root: repo_root.clone(),
         ship_mode: ShipMode::Local,
     });

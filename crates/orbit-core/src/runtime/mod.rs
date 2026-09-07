@@ -105,6 +105,11 @@ pub struct WorkspaceRuntimeBinding {
     /// Checkout identity from `.orbit/config.yaml`, which the task registry
     /// partitions by (L-0098: it may differ from `logical_workspace_id`).
     pub workspace_id: String,
+    /// Registered owner of the logical workspace. Automation resolves the
+    /// default owner of a delivery definition from it, so an unambiguously
+    /// owned workspace needs no redundant per-definition configuration.
+    /// Absent on standalone registries that predate host identity.
+    pub owner_machine_id: Option<String>,
     pub repo_root: PathBuf,
     pub ship_mode: ShipMode,
 }
@@ -117,6 +122,7 @@ pub fn workspace_runtime_binding(
     Ok(WorkspaceRuntimeBinding {
         logical_workspace_id: workspace.id.clone(),
         workspace_id: workspace_id_for_orbit_dir(&checkout.orbit_dir)?,
+        owner_machine_id: workspace.owner_machine_id.clone(),
         repo_root: checkout.repo_root.clone(),
         ship_mode: resolved_ship_mode(workspace),
     })
@@ -161,6 +167,7 @@ impl OrbitRuntime {
         let binding = WorkspaceRuntimeBinding {
             logical_workspace_id: "ws_memory".to_string(),
             workspace_id: "ws_memory".to_string(),
+            owner_machine_id: None,
             repo_root: data_root.to_path_buf(),
             ship_mode: ShipMode::Local,
         };
@@ -204,6 +211,15 @@ impl OrbitRuntime {
         self.automation_machine_identity.as_deref()
     }
 
+    /// Registered owner of the bound workspace, when composition supplied a
+    /// binding that names one. Delivery automation resolves its default owner
+    /// from this rather than from cwd or the running executor.
+    pub(crate) fn workspace_owner_machine_id(&self) -> Option<&str> {
+        self.workspace_binding
+            .as_ref()
+            .and_then(|binding| binding.owner_machine_id.as_deref())
+    }
+
     /// Attach the declared remote owner for a replica checkout. This is set by
     /// the registry-owning composition layer, never inferred by Core.
     pub fn with_coordination_write_owner(mut self, owner_machine_id: Option<String>) -> Self {
@@ -245,6 +261,24 @@ impl OrbitRuntime {
 
     pub(crate) fn coordination_task_reads_visible(&self) -> bool {
         self.coordination_write_owner.is_none()
+    }
+
+    /// The remote owner declared for a replica checkout, if this is one.
+    pub(crate) fn coordination_write_owner(&self) -> Option<&str> {
+        self.coordination_write_owner.as_deref()
+    }
+
+    /// Test seam: restate the registered workspace owner that registry
+    /// composition supplies in production, so ownership resolution can be
+    /// exercised on an in-memory runtime.
+    #[cfg(test)]
+    pub(crate) fn with_workspace_owner_machine_id(mut self, owner: Option<&str>) -> Self {
+        if let Some(binding) = self.workspace_binding.as_ref() {
+            let mut rebound = (**binding).clone();
+            rebound.owner_machine_id = owner.map(ToOwned::to_owned);
+            self.workspace_binding = Some(Arc::new(rebound));
+        }
+        self
     }
 
     /// Returns in-process events recorded during this session only. Not persisted across process

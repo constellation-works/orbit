@@ -244,6 +244,7 @@ fn workspace_ship_input_prefers_the_registry_neutral_runtime_binding() {
         WorkspaceRuntimeBinding {
             logical_workspace_id: "ws_bound".to_string(),
             workspace_id: "ws_bound".to_string(),
+            owner_machine_id: None,
             repo_root: repo,
             ship_mode: ShipMode::Pr,
         },

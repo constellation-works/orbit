@@ -23,7 +23,7 @@ pub struct AutoTaskAddArgs {
     /// Interval in minutes (mutually exclusive with `--cron`)
     #[arg(long = "every-minutes")]
     pub every_minutes: Option<u64>,
-    /// Delivery trigger JSON: owner_machine, branch, threshold, max_wait_minutes, coverage; optional max_items/retries.
+    /// Delivery trigger JSON: branch, threshold, max_wait_minutes, coverage; optional owner_machine (defaults to this workspace's registered owner machine), max_items, retries.
     #[arg(long)]
     pub deliveries_landed: Option<String>,
     /// Title of each minted task

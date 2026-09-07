@@ -199,7 +199,7 @@ define_config_settings! {
     },
     operation_review_crew: Option<String> => String {
         key: "operation.review_crew", value_type: "string",
-        description: "Crew selected for automatic review. Independent of the preset.",
+        description: "Crew selected for before-PR automatic review. Independent of the preset. After-landing review runs from its delivery auto-task and uses that definition's template crew.",
         resolve: |raw: Option<String>| operation::review_crew(raw),
     },
     operation_review_minutes: Option<u32> => u32 {

@@ -56,6 +56,10 @@ pub fn definition_epoch<T: serde::Serialize>(definition: &T) -> Result<String, A
         .map_err(|e| AutomationError::Evidence(e.to_string()))
 }
 
+/// An edited definition pauses new admission until it is restored. Hosts that
+/// layer their own reasons over this one report it ahead of theirs.
+pub const DEFINITION_CHANGED: &str = "definition_changed";
+
 /// Inputs supplied by the existing sweep clock.
 pub struct Evaluation<'a> {
     pub consumer: &'a str,
@@ -139,7 +143,7 @@ pub fn evaluate(
     }
 
     if state.epoch != epoch || state.branch != trigger.branch {
-        return diagnostic(store, consumer, "definition_changed", Some(state));
+        return diagnostic(store, consumer, DEFINITION_CHANGED, Some(state));
     }
 
     if !enabled {
