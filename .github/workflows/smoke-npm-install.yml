@@ -43,14 +43,67 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Download and verify the pinned MCP publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          publisher_version="v1.8.1"
+          linux_amd64_sha256="a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc"
+          darwin_arm64_sha256="e45e520892460732a4bdf37255576415d4a53ec171f8b913faf15bb1aef7cb77"
+
+          resolve_publisher() {
+            case "$1" in
+              Linux:x86_64)
+                publisher_asset="mcp-publisher_linux_amd64.tar.gz"
+                publisher_sha256="$linux_amd64_sha256"
+                ;;
+              Darwin:arm64)
+                publisher_asset="mcp-publisher_darwin_arm64.tar.gz"
+                publisher_sha256="$darwin_arm64_sha256"
+                ;;
+              *)
+                echo "Unsupported MCP publisher platform: $1" >&2
+                return 1
+                ;;
+            esac
+          }
+
+          verify_sha256() {
+            local archive="$1"
+            local expected_sha256="$2"
+            local actual_sha256
+
+            actual_sha256="$(shasum -a 256 "$archive" | awk '{print $1}')"
+            [[ "$actual_sha256" == "$expected_sha256" ]]
+          }
+
+          if resolve_publisher "Windows:x86_64"; then
+            echo "unsupported MCP publisher platform unexpectedly resolved" >&2
+            exit 1
+          fi
+
+          test_archive="$(mktemp)"
+          archive="$(mktemp)"
+          trap 'rm -f "$test_archive" "$archive"' EXIT
+          printf '%s\n' 'not the MCP publisher' > "$test_archive"
+          if verify_sha256 "$test_archive" "$linux_amd64_sha256"; then
+            echo "MCP publisher checksum mismatch unexpectedly passed" >&2
+            exit 1
+          fi
+
+          resolve_publisher "$(uname -s):$(uname -m)"
+          publisher_url="https://github.com/modelcontextprotocol/registry/releases/download/${publisher_version}/${publisher_asset}"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            "$publisher_url" --output "$archive"
+          verify_sha256 "$archive" "$publisher_sha256"
+          tar xzf "$archive" mcp-publisher
+          chmod 755 mcp-publisher
+
       - name: Validate MCP Registry metadata
         shell: bash
         run: |
           set -euo pipefail
-          archive="$(mktemp)"
-          trap 'rm -f "$archive"' EXIT
-          curl -LsSf "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" -o "$archive"
-          tar xzf "$archive" mcp-publisher
           ./mcp-publisher validate server.json
 
       - name: Run npm install smoke
