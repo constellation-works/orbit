@@ -57,6 +57,7 @@ async fn task_response_benchmark() {
                     owner_machine_id: None,
                     repo_root,
                     ship_mode: ShipMode::Local,
+                    base_branch: None,
                 }),
             }
         })

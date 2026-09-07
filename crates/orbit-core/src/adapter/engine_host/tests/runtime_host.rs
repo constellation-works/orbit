@@ -1179,6 +1179,7 @@ fn orbit_workspace_selector_reports_the_logical_catalog_id() {
             owner_machine_id: None,
             repo_root: repo,
             ship_mode: ShipMode::Local,
+            base_branch: None,
         },
     )
     .expect("bound runtime");

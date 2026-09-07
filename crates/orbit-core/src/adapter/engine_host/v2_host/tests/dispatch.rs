@@ -247,6 +247,7 @@ fn workspace_ship_input_prefers_the_registry_neutral_runtime_binding() {
             owner_machine_id: None,
             repo_root: repo,
             ship_mode: ShipMode::Pr,
+            base_branch: None,
         },
     )
     .expect("bound runtime");

@@ -43,6 +43,7 @@ fn registry_neutral_binding_controls_workspace_id_repo_root_and_ship_mode() {
         owner_machine_id: None,
         repo_root: custom_repo_root.clone(),
         ship_mode: ShipMode::Pr,
+        base_branch: None,
     };
     let runtime =
         OrbitRuntime::from_roots_with_binding(&global_root, &workspace_root, binding.clone())
@@ -78,6 +79,7 @@ fn registry_neutral_binding_rejects_a_conflicting_workspace_config() {
             owner_machine_id: None,
             repo_root: root.path().join("repo"),
             ship_mode: ShipMode::Local,
+            base_branch: None,
         },
     )
     .err()
