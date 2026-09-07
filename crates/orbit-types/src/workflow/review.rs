@@ -507,6 +507,18 @@ pub struct ReviewAttempt {
     pub elapsed_seconds: Option<u64>,
 }
 
+impl ReviewAttempt {
+    /// Recorded elapsed time once settled, or wall time from `started_at` to
+    /// `now` while the attempt is still open. A clock behind `started_at`
+    /// counts as zero rather than wrapping.
+    pub fn elapsed_at(&self, now: DateTime<Utc>) -> u64 {
+        if let Some(elapsed) = self.elapsed_seconds {
+            return elapsed;
+        }
+        u64::try_from(now.signed_duration_since(self.started_at).num_seconds()).unwrap_or(0)
+    }
+}
+
 /// Aggregate review consumption for one delivery candidate lineage. Retry,
 /// interruption, candidate invalidation, and delivery lineage share it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -549,19 +561,31 @@ impl ReviewLedger {
         }
     }
 
-    /// What the lineage may still spend.
+    /// What the lineage may still spend after settled consumption. An open
+    /// attempt's running wall time is not included; use [`Self::remaining_at`]
+    /// for a live leftover.
     pub fn remaining(&self) -> ReviewConsumption {
-        let consumed = self.consumed();
+        Self::remaining_from(self.budget, self.consumed())
+    }
+
+    /// Remaining allowance at `now`, counting an open attempt's elapsed wall
+    /// time so a resumed invocation sees leftover seconds rather than the
+    /// full captured budget.
+    pub fn remaining_at(&self, now: DateTime<Utc>) -> ReviewConsumption {
+        let mut consumed = self.consumed();
+        if let Some(open) = self.open_attempt() {
+            consumed.seconds = consumed.seconds.saturating_add(open.elapsed_at(now));
+        }
+        Self::remaining_from(self.budget, consumed)
+    }
+
+    fn remaining_from(budget: ReviewBudget, consumed: ReviewConsumption) -> ReviewConsumption {
         ReviewConsumption {
-            reviewer_starts: self
-                .budget
+            reviewer_starts: budget
                 .reviewer_starts
                 .saturating_sub(consumed.reviewer_starts),
-            repair_cycles: self
-                .budget
-                .repair_cycles
-                .saturating_sub(consumed.repair_cycles),
-            seconds: u64::from(self.budget.minutes)
+            repair_cycles: budget.repair_cycles.saturating_sub(consumed.repair_cycles),
+            seconds: u64::from(budget.minutes)
                 .saturating_mul(60)
                 .saturating_sub(consumed.seconds),
         }

@@ -305,7 +305,8 @@ uncommitted change as one repair commit authored `<family>-reviewer
 `Orbit-Review-Attempt` trailer, and cross-checks the claim: a pass with
 open findings, a claimed repair that changed nothing, a claimed clean pass
 that changed the tree, repairs outside the task selectors, a spent repair
-cycle, validation records that do not establish the candidate (above), or any
+cycle, elapsed wall time beyond the captured lineage `review_minutes`
+allowance, validation records that do not establish the candidate (above), or any
 task-meaning change other than selectors added through the task API
 downgrades the verdict to `incomplete` with the reason recorded. Verdicts are
 `passed_without_repairs` (`independent_review`), `passed_with_repairs`
@@ -329,8 +330,13 @@ the handoff.
 
 The ledger is keyed by workspace, sorted task set, and base branch. It spans
 retries, interruptions, candidate invalidations, and delivery lineage; nothing
-resets it. Reviewer starts are reserved before a reviewer launches, repair
-cycles and wall seconds settle with the attempt, and exhaustion escalates
+resets it. The first budget written on a lineage is captured; a later config
+change cannot expand or replace it. Reviewer starts are reserved before a
+reviewer launches. An interrupted open attempt on a changed candidate settles
+as incomplete with the wall time already spent, once. Repair cycles and wall
+seconds settle with the attempt. The reviewer invocation timeout is the
+captured leftover seconds (capped by the activity's declared ceiling), and a
+pass that exceeds the leftover allowance is refused. Exhaustion escalates
 (`review_budget_exhausted: review_starts_exhausted |
 review_minutes_exhausted`). Provider token/cost caps are not enforced; usage
 stays unknown.

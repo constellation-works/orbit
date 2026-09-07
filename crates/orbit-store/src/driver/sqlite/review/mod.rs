@@ -138,7 +138,8 @@ impl ReviewStoreBackend for Store {
             });
 
             // An interrupted attempt on the same candidate resumes; on a
-            // different candidate it is partial work, settled as incomplete.
+            // different candidate it is partial work, settled as incomplete
+            // with the wall time already spent.
             if let Some(open) = ledger.open_attempt().cloned() {
                 if open.candidate == *request.candidate
                     && open.task_meaning_digest == request.task_meaning_digest
@@ -150,7 +151,7 @@ impl ReviewStoreBackend for Store {
                     &open.attempt_id,
                     ReviewVerdict::Incomplete,
                     0,
-                    0,
+                    open.elapsed_at(request.now),
                 );
                 write_ledger(
                     conn,

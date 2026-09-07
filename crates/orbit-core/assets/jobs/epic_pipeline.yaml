@@ -199,6 +199,7 @@ spec:
         manifest_artifact: "{{ steps.review_gate_admit.output.manifest_artifact }}"
         report_artifact: "{{ steps.review_gate_admit.output.report_artifact }}"
         crew: "{{ steps.review_gate_admit.output.reviewer.crew }}"
+        remaining_seconds: "{{ steps.review_gate_admit.output.remaining.seconds }}"
 
     - id: review_gate_settle
       target: activity:review_gate_settle

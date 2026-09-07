@@ -147,11 +147,11 @@ pub(crate) fn review_gate_settle(
     }
     let context =
         GateContext::load(runtime, &settle_input).map_err(|error| failed(error.to_string()))?;
-    let Some(admission) = context.admission.clone() else {
+    if context.admission.is_none() {
         return Err(failed(
             "review_gate_stale: the run no longer carries a review admission".to_string(),
         ));
-    };
+    }
     let attempt_id = admission_output
         .get("attempt_id")
         .and_then(Value::as_str)
@@ -161,14 +161,7 @@ pub(crate) fn review_gate_settle(
     let reviewer = reviewer_identity(runtime, &context, &admission_output)
         .map_err(|error| failed(error.to_string()))?;
 
-    let outcome = settle(
-        runtime,
-        &context,
-        &admission,
-        &attempt_id,
-        reviewer,
-        &admission_output,
-    );
+    let outcome = settle(runtime, &context, &attempt_id, reviewer, &admission_output);
     let (status, decision, error) = match &outcome {
         Ok(Settled::Passed(value)) => (AuditEventStatus::Success, value.clone(), None),
         Ok(Settled::Blocked { certificate }) => (
@@ -418,11 +411,11 @@ fn admit(
                  {}/{}, repair cycles {}/{}, {}s of {}s); a recorded decision must reset or \
                  re-scope this candidate before another review",
                 consumed.reviewer_starts,
-                admission.budget.reviewer_starts,
+                ledger.budget.reviewer_starts,
                 consumed.repair_cycles,
-                admission.budget.repair_cycles,
+                ledger.budget.repair_cycles,
                 consumed.seconds,
-                u64::from(admission.budget.minutes) * 60
+                u64::from(ledger.budget.minutes) * 60
             )));
         }
     };
@@ -446,8 +439,8 @@ fn admit(
         reviewer_crew: crew.name.clone(),
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: admission.policy_version,
-        budget: admission.budget,
-        remaining: ledger.remaining(),
+        budget: ledger.budget,
+        remaining: ledger.remaining_at(now),
         issued_at: now,
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)
@@ -486,8 +479,8 @@ fn admit(
         "task_selectors": selectors,
         "manifest_artifact": REVIEW_MANIFEST_ARTIFACT,
         "report_artifact": REVIEW_REPORT_ARTIFACT,
-        "budget": admission.budget,
-        "remaining": ledger.remaining(),
+        "budget": ledger.budget,
+        "remaining": ledger.remaining_at(now),
         "started_at": attempt.started_at.to_rfc3339(),
     }))
 }
@@ -586,7 +579,6 @@ enum Settled {
 fn settle(
     runtime: &OrbitRuntime,
     context: &GateContext,
-    admission: &ReviewAdmission,
     attempt_id: &str,
     reviewer: ReviewerIdentity,
     admission_output: &Value,
@@ -639,6 +631,9 @@ fn settle(
     judgement.check_task_meaning(context, &attempt, &admitted_selectors)?;
     let repair = judgement.commit_repairs(context, &reviewer, &attempt)?;
     judgement.reconcile_verdict(&ledger, repair.as_ref());
+    let now = Utc::now();
+    let elapsed_seconds = attempt.elapsed_at(now);
+    judgement.enforce_wall_time(&ledger, elapsed_seconds);
 
     let final_candidate = match &repair {
         Some(commit) => SourceRevision {
@@ -647,8 +642,6 @@ fn settle(
         },
         None => reviewed.head.clone(),
     };
-    let now = Utc::now();
-    let elapsed_seconds = u64::try_from((now - attempt.started_at).num_seconds()).unwrap_or(0);
     let repair_cycles = u32::from(repair.is_some());
     let ledger = store.review_settle(
         &context.workspace_id,
@@ -681,7 +674,7 @@ fn settle(
         validation_complete: judgement.validation_complete,
         reviewer,
         consumed: ledger.consumed(),
-        budget: admission.budget,
+        budget: ledger.budget,
         escalation: judgement.escalation.clone(),
         issued_at: now,
     };
@@ -951,6 +944,22 @@ impl Judgement {
                 Ok(()) => self.validation_complete = true,
                 Err(defect) => self.downgrade(&defect.reason()),
             }
+        }
+    }
+
+    /// A pass may not spend more wall time than the captured lineage budget,
+    /// including this attempt's elapsed seconds. Non-pass verdicts still
+    /// record the honest elapsed time.
+    fn enforce_wall_time(&mut self, ledger: &ReviewLedger, elapsed_seconds: u64) {
+        if !self.verdict.passed() {
+            return;
+        }
+        let budget_seconds = u64::from(ledger.budget.minutes).saturating_mul(60);
+        if ledger.consumed_seconds.saturating_add(elapsed_seconds) > budget_seconds {
+            self.downgrade(
+                "review_minutes_exhausted: this attempt exceeded the captured lineage \
+                 wall-time allowance",
+            );
         }
     }
 

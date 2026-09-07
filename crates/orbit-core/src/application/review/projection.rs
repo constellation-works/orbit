@@ -4,6 +4,7 @@
 //! gate wrote as a task artifact, the lineage ledger, and any landing
 //! records. A task without a certificate simply has no review projection.
 
+use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{ArtifactManifestFileV2, Task};
 use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate};
@@ -69,7 +70,7 @@ pub fn task_review_projection(
         "task_meaning_digest": certificate.task_meaning_digest,
         "budget": certificate.budget,
         "consumed": certificate.consumed,
-        "remaining": ledger.as_ref().map(|ledger| ledger.remaining()),
+        "remaining": ledger.as_ref().map(|ledger| ledger.remaining_at(Utc::now())),
         "attempts": ledger.as_ref().map(|ledger| ledger.attempts.len()).unwrap_or(0),
         "landings": landings,
         "stale_reasons": stale_reasons,

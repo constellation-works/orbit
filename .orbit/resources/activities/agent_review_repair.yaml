@@ -35,6 +35,12 @@ spec:
       crew:
         type: string
         description: The separately configured review crew resolved by review_gate_admit.
+      remaining_seconds:
+        type: integer
+        description: >
+          Captured leftover wall-time allowance for this lineage attempt, in
+          seconds. The host shortens the activity timeout to this value; it
+          cannot extend the declared ceiling.
   output_schema_json:
     type: object
     properties:
@@ -61,6 +67,11 @@ spec:
       task edit allowed, and only when a repair needs it.
     - Read broadly; write narrowly. Reading unrelated code does not authorize
       editing it.
+    - Honor the remaining wall-time budget in the pinned manifest
+      (`remaining.seconds`, also supplied as `remaining_seconds`). Stop and
+      write an `incomplete` report before that allowance is exhausted. The
+      activity timeout is a ceiling on this leftover, not extra time beyond
+      the captured lineage budget.
 
     Procedure
 
@@ -68,7 +79,8 @@ spec:
        `orbit.task.artifact.get` (`id` = `task_id`, `path` =
        `manifest_artifact`). Confirm `attempt_id` matches the supplied
        `attempt_id`, that `git rev-parse HEAD` equals `candidate.commit`, and
-       that `base.commit` is an ancestor of HEAD. On any mismatch write a
+       that `base.commit` is an ancestor of HEAD. Note `remaining.seconds`
+       and treat it as the wall-time you may spend. On any mismatch write a
        report with verdict `incomplete` and stop.
     2. Review spec compliance first: check every acceptance criterion against
        the actual diff (`git diff <base.commit>..HEAD`), the affected callers,
