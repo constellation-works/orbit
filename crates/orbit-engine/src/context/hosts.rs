@@ -109,6 +109,8 @@ pub struct ReviewLandingRequest {
     pub pr_number: String,
     pub base: String,
     pub reviewed_head_sha: String,
+    /// A conditional synchronous merge returned the same commit later observed.
+    pub managed_merge: bool,
     /// The merge commit the provider reported, when it reported one.
     pub landed_commit: Option<String>,
 }

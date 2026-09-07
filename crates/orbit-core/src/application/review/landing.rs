@@ -40,6 +40,16 @@ pub(crate) fn record_review_landing(
     let store = runtime.review_store()?;
     let branch = request.base.trim_start_matches("origin/").to_string();
     let landing = match request.landed_commit.as_deref() {
+        landed_commit if !request.managed_merge => uncovered(
+            &certificate,
+            request,
+            &branch,
+            SourceRevision {
+                commit: landed_commit.unwrap_or_default().to_string(),
+                tree: String::new(),
+            },
+            ReviewInvalidation::ExternalLandingRace,
+        ),
         Some(landed_commit) => classify(request, &certificate, landed_commit, &branch),
         None => uncovered(
             &certificate,
@@ -67,6 +77,7 @@ pub(crate) fn record_review_landing(
             "attempt_id": certificate.attempt_id,
             "pr_number": request.pr_number,
             "landed_commit": landing.landed.commit,
+            "managed_merge": request.managed_merge,
             "transformation": landing.transformation,
             "covered": landing.covered,
             "reason": landing.reason,

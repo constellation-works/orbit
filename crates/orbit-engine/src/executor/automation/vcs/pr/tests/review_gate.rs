@@ -131,6 +131,12 @@ fn managed_completion_pins_the_reviewed_head_and_records_the_landing() {
         merged(reviewed, "3333333333333333333333333333333333333333"),
     ]);
     host.queue_merge_capabilities(true, true, true, false);
+    host.queue_vcs_result(
+        PR_MERGE_OPERATION,
+        json!({
+            "landed_commit": "3333333333333333333333333333333333333333"
+        }),
+    );
     let output = pr_complete(&host, &complete_input(&workspace.repo, reviewed))
         .expect("reviewed head merges");
     assert_eq!(output["merge"]["merged"], true);
@@ -141,10 +147,147 @@ fn managed_completion_pins_the_reviewed_head_and_records_the_landing() {
     let landings = host.review_landings();
     assert_eq!(landings.len(), 1);
     assert_eq!(landings[0].reviewed_head_sha, reviewed);
+    assert!(landings[0].managed_merge);
+    let merge_call = host
+        .vcs_calls()
+        .into_iter()
+        .find(|call| call.operation == PR_MERGE_OPERATION)
+        .expect("merge call");
+    assert_eq!(merge_call.input["reviewed_head_sha"], reviewed);
+    assert_eq!(merge_call.input["auto"], false);
     assert_eq!(
         landings[0].landed_commit.as_deref(),
         Some("3333333333333333333333333333333333333333")
     );
     assert_eq!(landings[0].pr_number, "42");
     assert_eq!(host.task_status("T1"), TaskStatus::Done);
+}
+
+#[test]
+fn gated_pending_checks_wait_locally_without_enabling_auto_merge() {
+    let workspace = pr_workspace();
+    let reviewed = "1111111111111111111111111111111111111111";
+    let host = PrOpenTestHost::new(
+        vec![review_batch_task("T1", None, None)],
+        workspace.repo.clone(),
+    );
+    host.queue_pr_status([
+        status("PENDING", reviewed),
+        status("CLEAN", reviewed),
+        merged(reviewed, "landed"),
+    ]);
+    host.queue_vcs_result(PR_MERGE_OPERATION, json!({"landed_commit": "landed"}));
+    let mut input = complete_input(&workspace.repo, reviewed);
+    input["max_wait_seconds"] = json!(2);
+    let output = pr_complete(&host, &input).expect("wait then merge reviewed candidate");
+    assert_eq!(output["merge"]["auto_merge_requested"], false);
+    let merges: Vec<_> = host
+        .vcs_calls()
+        .into_iter()
+        .filter(|call| call.operation == PR_MERGE_OPERATION)
+        .collect();
+    assert_eq!(merges.len(), 1);
+    assert_eq!(merges[0].input["auto"], false);
+    assert_eq!(merges[0].input["reviewed_head_sha"], reviewed);
+}
+
+#[test]
+fn gated_pending_timeout_leaves_no_deferred_merge_and_external_landing_is_distinct() {
+    let workspace = pr_workspace();
+    let reviewed = "1111111111111111111111111111111111111111";
+    let host = PrOpenTestHost::new(
+        vec![review_batch_task("T1", None, None)],
+        workspace.repo.clone(),
+    );
+    host.queue_pr_status([status("PENDING", reviewed)]);
+    let error = pr_complete(&host, &complete_input(&workspace.repo, reviewed))
+        .expect_err("pending timeout");
+    assert!(error.to_string().contains("timed out"));
+    assert!(
+        host.vcs_calls()
+            .iter()
+            .all(|call| call.operation != PR_MERGE_OPERATION)
+    );
+    assert_eq!(host.task_status("T1"), TaskStatus::Review);
+
+    host.queue_pr_status([merged("external-head", "external-merge")]);
+    let output = pr_complete(&host, &complete_input(&workspace.repo, reviewed))
+        .expect("observe external merge");
+    assert_eq!(output["merge"]["managed_merge"], false);
+    let landings = host.review_landings();
+    assert!(!landings[0].managed_merge);
+    assert_eq!(landings[0].landed_commit.as_deref(), Some("external-merge"));
+    assert!(
+        host.vcs_calls()
+            .iter()
+            .all(|call| call.operation != PR_MERGE_OPERATION)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_completion_rejects_a_push_between_status_and_provider_mutation() {
+    use super::super::super::tests::with_fake_gh;
+
+    // The provider returns A in the first status response, then advances its
+    // own head to B before accepting any merge mutation. An unconditioned
+    // command really merges B, so this test fails against the original code.
+    let script = r#"#!/bin/sh
+set -eu
+printf '%s\n' "$@" >> provider-args
+if [ "$1 $2" = "pr view" ]; then
+    if [ -f provider-merged ]; then
+        printf '%s\n' '{"state":"MERGED","headRefOid":"2222222222222222222222222222222222222222","mergeCommit":{"oid":"unreviewed-merge"}}'
+    else
+        printf '%s\n' '{"state":"OPEN","mergeStateStatus":"CLEAN","headRefOid":"1111111111111111111111111111111111111111"}'
+        printf '%s' '1111111111111111111111111111111111111111' > provider-head
+    fi
+    exit 0
+fi
+# This command only starts after Orbit has inspected the status response.
+printf '%s' '2222222222222222222222222222222222222222' > provider-head
+if [ "$1" = "api" ]; then
+    for arg in "$@"; do
+        case "$arg" in
+            sha=*) if [ "${arg#sha=}" != "$(cat provider-head)" ]; then
+                echo 'HTTP 409: Head branch was modified' >&2
+                exit 1
+            fi ;;
+        esac
+    done
+fi
+printf '%s' 'merged' > provider-merged
+printf '%s\n' '{"merged":true,"sha":"unreviewed-merge"}'
+"#;
+    if !with_fake_gh(
+        module_path!(),
+        "managed_completion_rejects_a_push_between_status_and_provider_mutation",
+        script,
+    ) {
+        return;
+    }
+    let workspace = pr_workspace();
+    let host = PrOpenTestHost::new(
+        vec![review_batch_task("T1", None, None)],
+        workspace.repo.clone(),
+    )
+    .with_provider_completion();
+    let reviewed = "1111111111111111111111111111111111111111";
+    let error = pr_complete(&host, &complete_input(&workspace.repo, reviewed))
+        .expect_err("provider must reject changed head");
+    assert!(error.to_string().contains("HTTP 409"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(workspace.repo.join("provider-head"))
+            .expect("advanced provider head"),
+        "2222222222222222222222222222222222222222"
+    );
+    assert!(!workspace.repo.join("provider-merged").exists());
+    assert_eq!(host.task_status("T1"), TaskStatus::Review);
+    assert!(host.review_landings().is_empty());
+    let args = std::fs::read_to_string(workspace.repo.join("provider-args"))
+        .expect("actual provider args");
+    let expected_mutation = format!(
+        "api\nrepos/{{owner}}/{{repo}}/pulls/42/merge\n--method\nPUT\n-f\nsha={reviewed}\n-f\nmerge_method=squash\n"
+    );
+    assert!(args.contains(&expected_mutation), "{args}");
 }
