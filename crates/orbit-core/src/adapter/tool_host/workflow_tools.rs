@@ -239,5 +239,35 @@ fn run_json_with_lineage(runtime: &OrbitRuntime, run: &JobRun) -> Result<Value, 
         state.as_ref().map(|state| &state.step_outputs),
     ))
     .map_err(serialize_error("serialize agent invocation result"))?;
+    // Recovery evidence remains separate from the run and step errors above:
+    // a successful or failed recovery attempt never rewrites the original
+    // workflow failure that triggered it. Older/unreadable audit trails remain
+    // observable as `unavailable` rather than making existing run-show callers
+    // fail their ordinary durable run read.
+    let recovery_attempts = runtime.collect_run_recovery_attempts(&run.run_id).ok();
+    value["recovery_attempts"] = match recovery_attempts {
+        Some(attempts) => json!({
+            "state": attempts.state,
+            "limit": attempts.limit,
+            "truncated": attempts.truncated,
+            "items": attempts.attempts.into_iter().map(|attempt| json!({
+                "run_id": attempt.run_id,
+                "event_id": attempt.event_id,
+                "attempted_at": attempt.attempted_at.map(|value| value.to_rfc3339()),
+                "failed_step_id": attempt.failed_step_id,
+                "recovery_activity": attempt.recovery_activity,
+                "outcome": attempt.outcome,
+                "failure_phase": attempt.failure_phase,
+                "diagnostic": attempt.diagnostic,
+                "diagnostic_truncated": attempt.diagnostic_truncated,
+            })).collect::<Vec<_>>(),
+        }),
+        None => json!({
+            "state": "unavailable",
+            "limit": 8,
+            "truncated": false,
+            "items": [],
+        }),
+    };
     Ok(value)
 }

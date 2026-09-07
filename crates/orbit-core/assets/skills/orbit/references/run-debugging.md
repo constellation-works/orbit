@@ -38,6 +38,21 @@ orbit run trace <run_id>
 orbit run logs <run_id> --json
 ```
 
+### Inspect recovery evidence before falling back to audit files
+
+The authoritative run-show response includes `recovery_attempts`, a bounded
+projection of persisted `step.recovery_attempted` events. Its `state` is
+`unavailable` for legacy runs with no v2 audit trail, `not_attempted` when a
+trail exists but recovery did not run, or `recorded` when `items` contain
+attempts. Each item names the durable run/event and failed-step identifiers,
+the recovery activity, outcome, failure phase, and a redacted bounded
+diagnostic. `limit` and `truncated` say when older attempts were omitted.
+
+Keep `error_code` and `error_message` from the run itself as the original
+workflow failure. A recovery attempt is secondary evidence: `succeeded` does
+not rewrite that original failure, and a failed `authorization`, preparation,
+`dispatch`, or `activity` attempt explains why recovery did not complete.
+
 ### Verify model routing before reading logs
 
 `orbit run show <run_id> --json` separates three identities: `requested_crew`

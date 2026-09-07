@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
+use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
 use serde_json::Value;
 
@@ -43,6 +44,39 @@ pub struct RunAuditStep {
     pub outcome: Option<String>,
     pub error_message: Option<String>,
 }
+
+/// A bounded, operator-facing recovery attempt reconstructed from the v2 audit
+/// trail. It intentionally excludes activity input and provider transcript
+/// blobs: those can contain unrelated or unbounded material and are not needed
+/// to distinguish a recovery failure from the original failed workflow step.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunRecoveryAttempt {
+    pub run_id: String,
+    pub event_id: String,
+    pub attempted_at: Option<DateTime<Utc>>,
+    pub failed_step_id: String,
+    pub recovery_activity: String,
+    pub outcome: String,
+    pub failure_phase: Option<String>,
+    pub diagnostic: Option<String>,
+    pub diagnostic_truncated: bool,
+}
+
+/// The recovery portion of a run's persisted audit trail.
+///
+/// `unavailable` means the run has no v2 audit evidence (common for legacy
+/// runs), while `not_attempted` means audit evidence exists but records no
+/// recovery attempt. Neither state is a successful recovery.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunRecoveryAttempts {
+    pub state: &'static str,
+    pub attempts: Vec<RunRecoveryAttempt>,
+    pub limit: usize,
+    pub truncated: bool,
+}
+
+const MAX_RECOVERY_ATTEMPTS: usize = 8;
+const MAX_RECOVERY_DIAGNOSTIC_CHARS: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunCliInvocationRecord {
@@ -334,6 +368,46 @@ impl OrbitRuntime {
         Ok(steps)
     }
 
+    /// Recover the most recent bounded recovery-attempt evidence for a run.
+    ///
+    /// The event writer independently redacts and bounds its diagnostic, but
+    /// the projection applies the same safety boundary again because durable
+    /// audit rows can predate that writer behavior.
+    pub fn collect_run_recovery_attempts(
+        &self,
+        run_id: &str,
+    ) -> Result<RunRecoveryAttempts, OrbitError> {
+        let events = self.collect_run_audit_events(run_id)?;
+        let audit_state = if events.is_empty() {
+            "unavailable"
+        } else {
+            "not_attempted"
+        };
+        let total = events
+            .iter()
+            .filter(|event| event.body_kind.as_deref() == Some("step_recovery_attempted"))
+            .count();
+        let mut attempts = events
+            .into_iter()
+            .filter(|event| event.body_kind.as_deref() == Some("step_recovery_attempted"))
+            .filter_map(|event| recovery_attempt_from_event(run_id, event))
+            .rev()
+            .take(MAX_RECOVERY_ATTEMPTS)
+            .collect::<Vec<_>>();
+        attempts.reverse();
+
+        Ok(RunRecoveryAttempts {
+            state: if attempts.is_empty() {
+                audit_state
+            } else {
+                "recorded"
+            },
+            attempts,
+            limit: MAX_RECOVERY_ATTEMPTS,
+            truncated: total > MAX_RECOVERY_ATTEMPTS,
+        })
+    }
+
     pub fn collect_run_cli_invocations(
         &self,
         run_id: &str,
@@ -480,6 +554,58 @@ fn enclosing_step_id(event: &Value, events: &HashMap<String, Value>) -> Option<S
             .map(str::to_string);
     }
     None
+}
+
+fn recovery_attempt_from_event(run_id: &str, event: RunAuditEvent) -> Option<RunRecoveryAttempt> {
+    let failed_step_id = event.raw.get("step_id")?.as_str()?.to_string();
+    let recovery_activity = event.raw.get("recovery_activity")?.as_str()?.to_string();
+    let recovery_succeeded = event.raw.get("recovery_succeeded")?.as_bool()?;
+    let (diagnostic, diagnostic_truncated) = event
+        .raw
+        .get("error_message")
+        .and_then(Value::as_str)
+        .map(bounded_recovery_diagnostic)
+        .map_or((None, false), |(diagnostic, truncated)| {
+            (Some(diagnostic), truncated)
+        });
+
+    Some(RunRecoveryAttempt {
+        run_id: event
+            .raw
+            .get("run_id")
+            .and_then(Value::as_str)
+            .unwrap_or(run_id)
+            .to_string(),
+        event_id: event.event_id,
+        attempted_at: event.timestamp,
+        failed_step_id,
+        recovery_activity,
+        outcome: if recovery_succeeded {
+            "succeeded".to_string()
+        } else {
+            "failed".to_string()
+        },
+        failure_phase: event
+            .raw
+            .get("failure_phase")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        diagnostic,
+        diagnostic_truncated,
+    })
+}
+
+fn bounded_recovery_diagnostic(raw: &str) -> (String, bool) {
+    let redacted = redact_all(raw);
+    let mut bounded = redacted
+        .chars()
+        .take(MAX_RECOVERY_DIAGNOSTIC_CHARS)
+        .collect::<String>();
+    let truncated = bounded.chars().count() < redacted.chars().count();
+    if truncated {
+        bounded.push('…');
+    }
+    (bounded, truncated)
 }
 
 fn read_blob_text(blob_store: &BlobStore, blob_ref: &str) -> Result<String, OrbitError> {

@@ -256,6 +256,158 @@ fn collect_run_audit_steps_reads_step_finished_error_message_and_tolerates_absen
 }
 
 #[test]
+fn recovery_attempt_projection_distinguishes_outcomes_and_redacts_diagnostics() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = "jrun-recovery-outcomes";
+    let secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
+    seed_v2_audit_events(
+        &runtime,
+        run_id,
+        [
+            json!({
+                "event_id": "evt-run",
+                "body_kind": "run_started"
+            }),
+            json!({
+                "event_id": "evt-preparation",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+                "failure_phase": "preparation",
+                "error_message": format!("fixture preparation rejected {secret}")
+            }),
+            json!({
+                "event_id": "evt-dispatch",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+                "failure_phase": "dispatch",
+                "error_message": "launcher refused recovery"
+            }),
+            json!({
+                "event_id": "evt-activity",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+                "failure_phase": "activity",
+                "error_message": "recovery activity returned failure"
+            }),
+            json!({
+                "event_id": "evt-denied",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+                "failure_phase": "authorization",
+                "error_message": "recovery admission denied"
+            }),
+            json!({
+                "event_id": "evt-success",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": true
+            }),
+        ],
+    );
+
+    let attempts = runtime
+        .collect_run_recovery_attempts(run_id)
+        .expect("collect recovery attempts");
+
+    assert_eq!(attempts.state, "recorded");
+    assert_eq!(attempts.limit, 8);
+    assert!(!attempts.truncated);
+    assert_eq!(attempts.attempts.len(), 5);
+    assert_eq!(attempts.attempts[0].run_id, run_id);
+    assert_eq!(attempts.attempts[0].event_id, "evt-preparation");
+    assert_eq!(attempts.attempts[0].failed_step_id, "sync_base");
+    assert_eq!(
+        attempts.attempts[0].failure_phase.as_deref(),
+        Some("preparation")
+    );
+    assert!(
+        !attempts.attempts[0]
+            .diagnostic
+            .as_deref()
+            .unwrap_or_default()
+            .contains(secret)
+    );
+    assert_eq!(
+        attempts.attempts[1].failure_phase.as_deref(),
+        Some("dispatch")
+    );
+    assert_eq!(
+        attempts.attempts[2].failure_phase.as_deref(),
+        Some("activity")
+    );
+    assert_eq!(
+        attempts.attempts[3].failure_phase.as_deref(),
+        Some("authorization")
+    );
+    assert_eq!(attempts.attempts[4].outcome, "succeeded");
+    assert_eq!(attempts.attempts[4].failure_phase, None);
+    assert_eq!(attempts.attempts[4].diagnostic, None);
+}
+
+#[test]
+fn recovery_attempt_projection_bounds_history_and_marks_legacy_absence() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = "jrun-recovery-bounded";
+    let events = (0..9)
+        .map(|index| {
+            json!({
+                "event_id": format!("evt-recovery-{index}"),
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+                "failure_phase": "dispatch",
+                "error_message": "x".repeat(1100)
+            })
+        })
+        .collect::<Vec<_>>();
+    seed_v2_audit_events(&runtime, run_id, events);
+
+    let bounded = runtime
+        .collect_run_recovery_attempts(run_id)
+        .expect("collect bounded attempts");
+    assert_eq!(bounded.attempts.len(), 8);
+    assert!(bounded.truncated);
+    assert_eq!(bounded.attempts[0].event_id, "evt-recovery-1");
+    assert!(bounded.attempts[0].diagnostic_truncated);
+    assert_eq!(
+        bounded.attempts[0]
+            .diagnostic
+            .as_deref()
+            .unwrap_or_default()
+            .chars()
+            .count(),
+        1025
+    );
+
+    let legacy = runtime
+        .collect_run_recovery_attempts("jrun-legacy")
+        .expect("collect legacy absence");
+    assert_eq!(legacy.state, "unavailable");
+    assert!(legacy.attempts.is_empty());
+
+    seed_v2_audit_events(
+        &runtime,
+        "jrun-no-recovery",
+        [json!({"event_id": "evt-run", "body_kind": "run_started"})],
+    );
+    let not_attempted = runtime
+        .collect_run_recovery_attempts("jrun-no-recovery")
+        .expect("collect no recovery attempt");
+    assert_eq!(not_attempted.state, "not_attempted");
+    assert!(not_attempted.attempts.is_empty());
+}
+
+#[test]
 fn malformed_jsonl_and_missing_blobs_are_tolerated() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-tolerant";
