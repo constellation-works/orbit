@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use chrono::Utc;
 use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
 use orbit_common::OrbitError;
+use orbit_common::fs::selector::overlaps;
 use orbit_engine::DispatchError;
 use orbit_engine::review_gate::{
     CandidateIdentity, candidate_identity, commit_reviewer_repairs, uncommitted_paths,
@@ -988,22 +989,17 @@ fn selectors_only_grew(
     Ok(restored_digest == attempt.task_meaning_digest)
 }
 
-/// A repair path is in scope when a task selector names it or a directory
-/// selector contains it. Selector spellings follow the task contract:
-/// `file:<path>`, `dir:<path>`, or a bare path.
+/// A repair path is in scope when a task selector's filesystem anchor names
+/// it or a directory/legacy selector contains it. Matching uses the shared
+/// selector grammar, so `symbol:<path>#<symbol>:<kind>` authorizes the
+/// backing file even when `<symbol>` contains `::`.
 fn path_in_scope(path: &str, tasks: &[Task]) -> bool {
     let path = path.trim_start_matches("./");
+    let changed = format!("file:{path}");
     tasks.iter().any(|task| {
-        task.context_files.iter().any(|selector| {
-            let (kind, target) = selector.split_once(':').unwrap_or(("", selector.as_str()));
-            let target = target.trim().trim_start_matches("./").trim_end_matches('/');
-            match kind {
-                "dir" => path == target || path.starts_with(&format!("{target}/")),
-                "file" => path == target,
-                "symbol" => target.split("::").next().is_some_and(|file| path == file),
-                _ => path == target || path.starts_with(&format!("{target}/")),
-            }
-        })
+        task.context_files
+            .iter()
+            .any(|selector| overlaps(selector, &changed))
     })
 }
 
