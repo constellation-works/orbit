@@ -40,8 +40,12 @@ spec:
     reports `current_failures` with what it filed, skipped as already open,
     left unfiled at the `max_tasks` cap, or deferred for incomplete evidence.
     Schema version 2 requires one job per failure row, matching diagnostic
-    and checkout job identities, one known failed step, and complete untruncated
-    diagnostic evidence. Legacy version-1 run-scoped snapshots remain readable
+    and checkout job identities, one known failed step, and complete
+    diagnostic evidence. A complete bounded diagnostic_unit with matching job
+    and step can replace a truncated display for signature calculation. Raw
+    selected evidence remains in the snapshot; descriptions separately cap
+    display at 4000 bytes and disclose collection display truncation. Legacy
+    version-1 run-scoped snapshots remain readable
     for audit but their failures are deferred for recollection; no job ordering
     inference or event/PR head substitution is allowed. Retryable failures are
     separated by blast radius. One that names a job defers only that job.

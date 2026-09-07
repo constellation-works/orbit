@@ -18,12 +18,17 @@ spec:
     a fallback may only supply that same job. The global max_job_log_reads
     budget defaults to 6 (maximum 25), with stable job ordering and a rotating
     overflow slot. Each read retains the existing timeout, excerpt/scan bounds
-    and one-job fallback. Missing or truncated diagnostic evidence and exhausted
-    job/checkout budgets defer that job with job-scoped retryable errors;
+    and one-job fallback. A separate diagnostic_unit keeps a complete runner
+    command from its Run group through nonzero process completion (256 KiB cap),
+    bound to the unique failed step. A truncated head/tail display alone does
+    not defer a job with this complete unit. Missing/ambiguous command boundaries,
+    source truncation and exhausted job/checkout budgets remain retryable;
     complete sibling jobs still progress. Checkout identity is extracted while
     the full runner-log stream is drained, before the human excerpt is truncated;
     extraction scans at most
-    8 MiB per log and records incomplete evidence rather than guessing.
+    8 MiB per log. Process stdout reads stop beyond 8 MiB with at most one
+    4 KiB lookahead chunk and a retryable error; command line buffers are capped
+    at 16 KiB. No additional query or retry is used for command selection.
     Workflow runs are listed repository-wide in one query. `latest_runs`
     records the newest run of each workflow for audit, ordered by creation
     time then run ID. Current failures are selected by relevant identity

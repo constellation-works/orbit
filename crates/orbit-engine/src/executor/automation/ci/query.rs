@@ -67,6 +67,8 @@ pub(super) struct RunLog {
     /// with no text at all, so the run's evidence gap can name its own cause.
     pub(super) fallback_error: Option<String>,
     pub(super) text: String,
+    pub(super) diagnostic: Option<String>,
+    pub(super) source_complete: bool,
     pub(super) truncated: bool,
     pub(super) total_bytes: usize,
     pub(super) returned_bytes: usize,
@@ -235,6 +237,8 @@ impl CiQueries for HostCiQueries {
             source_jobs: read.source_jobs,
             fallback_error: read.fallback_error,
             text: read.log.text,
+            diagnostic: read.log.diagnostic,
+            source_complete: read.log.source_complete,
             truncated: read.log.truncated,
             total_bytes: read.log.total_bytes,
             returned_bytes: read.log.returned_bytes,
@@ -266,13 +270,18 @@ impl CiQueries for HostCiQueries {
 /// does not retain an unbounded `gh` stdout value.
 #[cfg(test)]
 pub(super) fn bounded_run_log(raw: &str, max_bytes: usize) -> RunLog {
-    let bounded = github_cli::bound_log_text(raw, max_bytes);
-    let evidence = github_cli::scan_checkout_evidence(raw, github_cli::MAX_EVIDENCE_LINES);
+    let mut collector =
+        github_cli::StreamedLogCollector::new(max_bytes, github_cli::MAX_EVIDENCE_LINES);
+    collector.push(raw.as_bytes());
+    let bounded = collector.finish();
+    let evidence = bounded.checkout_evidence;
     RunLog {
         source: github_cli::SOURCE_RUN_LOG.to_string(),
         source_jobs: Vec::new(),
         fallback_error: None,
         text: bounded.text,
+        diagnostic: bounded.diagnostic,
+        source_complete: bounded.source_complete,
         truncated: bounded.truncated,
         total_bytes: bounded.total_bytes,
         returned_bytes: bounded.returned_bytes,

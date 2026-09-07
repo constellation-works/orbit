@@ -140,15 +140,18 @@ fn investigate_job<Q: CiQueries + ?Sized>(
                 return;
             }
             failure["log_job_id"] = json!(job_id);
-            if log.truncated {
+            let diagnostic = bound_diagnostic(&log, failure, job_id);
+            if !log.source_complete || (log.truncated && diagnostic.is_none()) {
                 push_retryable_error(
                     retryable_errors,
                     "investigation",
                     "job_log_truncated",
                     failure.get("run_id"),
-                    "job log excerpt is truncated; diagnostic evidence is incomplete",
+                    "job log source or display is incomplete and no complete bound diagnostic unit is available",
                 );
             }
+            failure["log_source_complete"] = json!(log.source_complete);
+            failure["diagnostic_unit"] = diagnostic.unwrap_or(Value::Null);
             failure["log_excerpt"] = json!(log.text);
             failure["log_truncated"] = json!(log.truncated);
             failure["log_total_bytes"] = json!(log.total_bytes);
@@ -325,4 +328,36 @@ fn set_checkout_identity(failure: &mut Value, scope: &str, log: &super::query::R
             "display_truncated": log.checkout_evidence_display_truncated,
         },
     });
+}
+
+/// A unique runner failure unit can only name a unique failed step. Primary
+/// gh output also carries job/step columns; reject conflicting labels rather
+/// than borrowing a different step's command. Raw fallback logs have no columns.
+fn bound_diagnostic(log: &super::query::RunLog, failure: &Value, job_id: u64) -> Option<Value> {
+    let text = log.diagnostic.as_ref()?;
+    let job = failure["failed_jobs"].as_array()?.first()?;
+    let steps = job["failed_steps"].as_array()?;
+    if steps.len() != 1 {
+        return None;
+    }
+    let step = steps[0]["name"]
+        .as_str()
+        .filter(|name| !name.trim().is_empty())?;
+    if log.source == orbit_tools::github_cli::SOURCE_RUN_LOG {
+        let job_name = job["name"].as_str()?;
+        for line in text.lines() {
+            let mut columns = line.splitn(3, '\t');
+            if columns.next()? != job_name || columns.next()? != step || columns.next().is_none() {
+                return None;
+            }
+        }
+    }
+    Some(json!({
+        "kind": "runner_command",
+        "complete": true,
+        "job_id": job_id,
+        "step": step,
+        "text": text,
+        "returned_bytes": text.len(),
+    }))
 }
