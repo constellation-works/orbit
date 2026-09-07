@@ -1109,18 +1109,17 @@ mod checkoutless_hub_tests {
             )
             .expect("persist verdict fields");
 
-        let source = root.path().join("caller.txt");
-        std::fs::write(&source, "payload").expect("caller artifact");
+        let mut ssh_context = context.clone();
+        ssh_context.transport = Some(orbit_types::tool::McpTransport::SshMcp);
         let with_artifact = executor
             .execute_tool(
                 "orbit.task.artifact.put",
                 json!({
                     "id": id,
-                    "source_path": source,
-                    "path": "reports/result.txt",
+                    "artifacts": [{"path": "reports/result.txt", "content": "payload"}],
                     "model": "codex"
                 }),
-                context.clone(),
+                ssh_context,
             )
             .expect("put artifact bytes");
         assert_eq!(with_artifact["execution_summary"], "Outcome: success");

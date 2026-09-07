@@ -3,8 +3,8 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-08-09
-last_validated: 2026-08-16
+last_updated: 2026-09-07
+last_validated: 2026-09-07
 status: Draft
 feature: task-artifacts
 doc_role: design
@@ -192,9 +192,9 @@ To avoid spending the payload twice, the JSON text mirror is replaced with a one
 
 ### `source_path` is caller-local, and paths do not travel
 
-`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd. It is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
+`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd, then confined to that machine's workspace checkout after symlink resolution. Absolute paths and in-workspace symlinks that escape the checkout are rejected as `invalid_input`. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
 
-The consequence is the lesson from ORB-11364: **an operator-host path is not a portable worker reference.** An image uploaded from an operator's `/tmp` is stored successfully and confirmed by `task_show`, and a worker on another host still gets `ENOENT` for that `/tmp` path — the worker never had it. A worker should discover and retrieve an authorized artifact by **owning workspace, task ID, and artifact path**, through `orbit.task.artifact.get`, rather than by assuming operator filesystem visibility. That is the whole point of the read surface, and it removes the need for ad hoc `scp` between hosts wherever the configured connector supports the workspace.
+The consequence is the lesson from ORB-11364: **an operator-host path is not a portable worker reference.** An image attached from the operator checkout is stored successfully and confirmed by `task_show`, and a worker on another host still cannot open the original local path — the worker never had it. A worker should discover and retrieve an authorized artifact by **owning workspace, task ID, and artifact path**, through `orbit.task.artifact.get`, rather than by assuming operator filesystem visibility. That is the whole point of the read surface, and it removes the need for ad hoc `scp` between hosts wherever the configured connector supports the workspace.
 
 Retrieval routes to the authoritative workspace explicitly. `orbit.task.artifact.get` classifies as `control_plane`, so a federated call is delivered to the workspace's owning host using the host-qualified selector the caller copied from federated `orbit.workspace.list`. An unknown selector is refused, never guessed; workspace scoping stays fail-closed and no implicit cross-workspace access is introduced.
 

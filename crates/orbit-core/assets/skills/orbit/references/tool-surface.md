@@ -32,7 +32,7 @@ records in a second store merely to get past a connection error.
 |---|---|---|
 | Workspace discovery | `orbit_workspace_list` | `orbit workspace list/show` |
 | Task create/read/update/start/approve | `orbit_task_add/list/show/update/start/approve` | Registered `orbit.task.*` tools preserve agent attribution |
-| Task attachments | `orbit_task_artifact_put` | Task artifact commands; source path is on the executing host |
+| Task attachments | `orbit_task_artifact_put` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
 | Retrieval | `orbit_search` | `orbit search`; semantic install/index is separate |
 | Friction | `orbit_friction_add/list/update` | Additional show/stats/tags/resolve commands |
 | Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` |

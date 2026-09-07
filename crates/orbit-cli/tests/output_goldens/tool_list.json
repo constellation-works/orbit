@@ -949,7 +949,7 @@
         "required": true
       },
       {
-        "description": "Source file to store as a task artifact.",
+        "description": "Source file to store as a task artifact. Resolved against the caller cwd, then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected.",
         "name": "source_path",
         "param_type": "string",
         "required": true
