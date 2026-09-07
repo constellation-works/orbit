@@ -331,6 +331,7 @@ fn explanation_names_sources_authority_caps_and_limiting_reasons() {
     .expect("write routine");
 
     let explanation = runtime.explain_operation(None).expect("explain");
+    assert_eq!(explanation["preview"], false);
     assert_eq!(explanation["policy"]["preset"]["value"], "autonomous");
     assert_eq!(explanation["policy"]["preset"]["source"], "workspace");
     assert_eq!(
@@ -384,6 +385,7 @@ fn explanation_names_sources_authority_caps_and_limiting_reasons() {
             ..OperationLayer::default()
         }))
         .expect("preview");
+    assert_eq!(preview["preview"], true);
     assert_eq!(preview["policy"]["preset"]["source"], "run");
     assert_eq!(preview["policy"]["leaf_ceiling"]["value"], 5);
     assert_eq!(preview["policy"]["review_policy"]["value"], "before-pr");
@@ -403,9 +405,16 @@ fn explanation_names_sources_authority_caps_and_limiting_reasons() {
         ))
         .expect("enable");
     let explained = runtime.explain_operation(None).expect("explain with grant");
+    assert_eq!(explained["preview"], false);
     assert_eq!(explained["authority"]["grant_id"], grant.id);
     assert_eq!(explained["authority"]["admission"], "open");
     assert_eq!(explained["delivery"]["grant_complete_right"], false);
+    assert_eq!(
+        explained["authority"]["policy"]["review_policy"]["value"],
+        "none"
+    );
+    assert_eq!(explained["review"]["policy"], "none");
+    assert_eq!(explained["policy"]["review_policy"]["value"], "before-pr");
     assert!(
         !explained["limiting_reasons"]
             .as_array()
@@ -413,6 +422,114 @@ fn explanation_names_sources_authority_caps_and_limiting_reasons() {
             .iter()
             .any(|reason| reason == "scoped_authorization_required")
     );
+}
+
+/// [ORB-11507] Retuning `[operation]` after enablement must not rewrite the
+/// live grant projection; current preferences remain visible as future-grant
+/// defaults, including under a run-layer preview.
+#[test]
+fn explanation_keeps_captured_grant_policy_after_preference_retune() {
+    let fixture = fixture(AUTONOMOUS_DONE);
+    let runtime = &fixture.runtime;
+    let task = seed_task(runtime, "retuned", TaskStatus::Backlog);
+    let grant = runtime
+        .enable_operation_grant(enable(
+            std::slice::from_ref(&task.id),
+            3600,
+            rights(true, true, true),
+            OperationLayer::default(),
+        ))
+        .expect("enable");
+
+    std::fs::write(
+        runtime.shared_root().join("config.toml"),
+        "[operation]\npreset = \"supervised\"\nreview_policy = \"before-pr\"\nreview_crew = \"reviewers\"\n",
+    )
+    .expect("retune workspace operation preferences");
+    let retuned = crate::OrbitRuntime::from_roots(&runtime.global_root(), &runtime.shared_root())
+        .expect("reopen runtime on retuned config")
+        .with_automation_machine_identity(Some(super::MACHINE.to_string()));
+
+    let explained = retuned
+        .explain_operation(None)
+        .expect("explain after retune");
+    assert_eq!(explained["preview"], false);
+    assert_eq!(explained["authority"]["grant_id"], grant.id);
+    assert_eq!(explained["authority"]["admission"], "open");
+
+    assert_eq!(
+        explained["authority"]["policy"]["preset"]["value"],
+        "autonomous"
+    );
+    assert_eq!(
+        explained["authority"]["policy"]["completion"]["value"],
+        "done"
+    );
+    assert_eq!(
+        explained["authority"]["policy"]["delivery_cap"]["value"],
+        "done"
+    );
+    assert_eq!(
+        explained["authority"]["policy"]["preparation"]["value"],
+        "automatic"
+    );
+    assert_eq!(
+        explained["authority"]["policy"]["recovery"]["value"],
+        "scheduled"
+    );
+    assert_eq!(
+        explained["authority"]["policy"]["review_policy"]["value"],
+        "none"
+    );
+    assert_eq!(
+        explained["authority"]["policy"]["leaf_ceiling"]["value"],
+        10
+    );
+
+    assert_eq!(explained["delivery"]["completion_preference"], "done");
+    assert_eq!(explained["delivery"]["delivery_cap"], "done");
+    assert_eq!(explained["delivery"]["effective_completion"], "done");
+    assert_eq!(explained["delivery"]["cap"], serde_json::Value::Null);
+    assert_eq!(explained["delivery"]["grant_complete_right"], true);
+    assert_eq!(explained["preparation"]["preference"], "automatic");
+    assert_eq!(explained["recovery"]["preference"], "scheduled");
+    assert_eq!(explained["review"]["policy"], "none");
+    assert_eq!(explained["review"]["reason"], serde_json::Value::Null);
+    assert_eq!(explained["limits"]["leaf_ceiling"]["preference"], 10);
+    assert_eq!(
+        explained["preparation"]["reason"],
+        "no_enabled_preparation_routine"
+    );
+    assert_eq!(explained["recovery"]["reason"], "no_enabled_triage_routine");
+
+    assert_eq!(explained["policy"]["preset"]["value"], "supervised");
+    assert_eq!(explained["policy"]["completion"]["value"], "review");
+    assert_eq!(explained["policy"]["preparation"]["value"], "manual");
+    assert_eq!(explained["policy"]["recovery"]["value"], "existing");
+    assert_eq!(explained["policy"]["leaf_ceiling"]["value"], 5);
+    assert_eq!(explained["policy"]["review_policy"]["value"], "before-pr");
+    assert_eq!(explained["policy"]["review_crew"]["value"], "reviewers");
+    assert_eq!(explained["policy"]["delivery_cap"]["value"], "review");
+
+    let preview = retuned
+        .explain_operation(Some(&OperationLayer {
+            leaf_ceiling: Some(1),
+            review_policy: Some(ReviewPolicy::AfterLanding),
+            ..OperationLayer::default()
+        }))
+        .expect("preview must not rewrite live grant behavior");
+    assert_eq!(preview["preview"], true);
+    assert_eq!(preview["policy"]["leaf_ceiling"]["value"], 1);
+    assert_eq!(preview["policy"]["review_policy"]["value"], "after-landing");
+    assert_eq!(preview["authority"]["policy"]["leaf_ceiling"]["value"], 10);
+    assert_eq!(
+        preview["authority"]["policy"]["review_policy"]["value"],
+        "none"
+    );
+    assert_eq!(preview["limits"]["leaf_ceiling"]["preference"], 10);
+    assert_eq!(preview["review"]["policy"], "none");
+    assert_eq!(preview["delivery"]["effective_completion"], "done");
+    assert_eq!(preview["delivery"]["completion_preference"], "done");
 }
 
 /// [ORB-11333] `before-pr` is an ordinary captured review timing: enablement

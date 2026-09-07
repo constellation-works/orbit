@@ -53,7 +53,11 @@ keys and out-of-range values fail config load.
 provenance; a preset-managed key reset by a workspace preset shows `null`
 with a `built-in` source because no explicit value survived. The *effective*
 values and their winning source (`workspace`, `global`, `preset:autonomous@workspace`,
-`run`) come from `orbit operation explain`.
+`run`) come from `orbit operation explain`. That explanation keeps current
+(or preview) preferences distinct from an active grant's captured policy:
+delivery, preparation, recovery, review, caps, and limiting reasons that
+describe live authority are projected from the grant snapshot. Preference
+edits and `--preset` previews apply to a future grant only.
 
 `before-pr` holds PR creation for a fresh reviewer (§10, [ORB-11333]); it
 needs an explicit `review_crew`, and the explanation reports
@@ -185,8 +189,9 @@ a preference has no owner to act through.
   reasons (`outside_grant_scope`, `grant_*`) reflect a live grant-bound drain.
 - Dashboard: the Operations → Auto-drain view has an **Operation Mode** panel
   showing every field with its source, the grant, caps, limiting reasons,
-  and governed Stop/Revoke controls with compare-and-set. Enablement is
-  deliberately CLI/MCP only.
+  and governed Stop/Revoke controls with compare-and-set. When a grant is
+  active the panel shows the captured grant policy separately from current
+  preferences (future grants). Enablement is deliberately CLI/MCP only.
 - Audit: `operation.grant` (enabled/stopped/revoked/rejected),
   `operation.promotion`, `operation.recovery`, `operation.completion`,
   plus the existing `pipeline.invoke` and admissions-stop rows. Run inputs
@@ -339,7 +344,9 @@ observed; a certificate that arrives later does not rewrite pending debt.
 
 `orbit operation explain` and the dashboard operation panel show the review
 policy, crew, and budgets with their sources and report
-`review_crew_unconfigured`. `orbit task show --json`, the task API, and the
+`review_crew_unconfigured`. With an active grant those live fields come from
+the captured snapshot; current or preview preferences remain visible as the
+next grant's defaults. `orbit task show --json`, the task API, and the
 task detail view carry a `review` block: verdict, assurance, reviewer
 (including `same_model_as_implementer`), base/reviewed/final candidate,
 implementation and repair commits, findings, validation, consumed and
