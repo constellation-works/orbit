@@ -3918,6 +3918,65 @@ fi
     );
 }
 
+/// [ORB-11607] An operator override in the dispatching process must not reach
+/// the untrusted provider child. The `ORBIT_` envelope is an explicit name
+/// set, not a prefix wildcard, so `ORBIT_OPERATOR` stays with the parent.
+#[test]
+fn run_cli_backend_does_not_forward_ambient_operator_override() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat > /dev/null
+if [ -z "${ORBIT_OPERATOR+x}" ]; then
+  printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"identity":"ok"},"error":null}'
+else
+  printf '{"schemaVersion":1,"status":"failed","error":{"code":"operator_env_leaked","message":"ORBIT_OPERATOR=%s","details":null}}\n' "$ORBIT_OPERATOR"
+  exit 1
+fi
+"#,
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-grok-operator-env-deny",
+        "grok:grok-build",
+        sink_for_writer,
+    ));
+    let host = TestHost {
+        command: script.display().to_string(),
+        executor_args: Vec::new(),
+        provider_config: HashMap::new(),
+        sandbox: None,
+        task_context: None,
+        workspace_root: None,
+        orbit_registry_root: None,
+        orbit_workspace_selector: None,
+    };
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.model = Some("grok-build".to_string());
+
+    let _ambient = orbit_common::test_env::scoped([("ORBIT_OPERATOR", Some("1"))]);
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "test_activity",
+        "job-grok-operator-env-deny",
+        audit,
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("run succeeds");
+
+    assert!(
+        outcome.success,
+        "ORBIT_OPERATOR leaked into the provider child: {:?}",
+        outcome.output
+    );
+}
+
 /// [ORB-10909] CLI-runner dispatch must inject the registry locator from the host so a
 /// spawned agent whose HOME does not contain the Orbit registry can still
 /// resolve `orbit tool run` against the dispatching run's root.
@@ -4115,7 +4174,7 @@ printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{"identity":"ok"
 /// string, when the model or task id is unknown — mirrors ORB-10340's
 /// worker-side semantics. AGENT_RUN_ID is always known for a dispatched run.
 // Asserted at the builder boundary, not through a spawned child: the composed child env
-// forwards the whole `ORBIT_*` envelope, so an Orbit-dispatched test run's own run/task
+// forwards the named `ORBIT_*` envelope, so an Orbit-dispatched test run's own run/task
 // identity can reach the child and mask a correct omission. The positive propagation case
 // above still covers the wiring end-to-end.
 #[test]

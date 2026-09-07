@@ -113,6 +113,32 @@ fn orbit_execution_envelope_variables_reach_the_child() {
 }
 
 #[test]
+fn privilege_bearing_orbit_variables_do_not_ride_the_envelope_allowlist() {
+    let parent = [
+        ("ORBIT_OPERATOR", "1"),
+        ("ORBIT_WORKSPACE_CLAIM_TOKEN", "abc123"),
+        ("ORBIT_MCP_SSH_ACCEPTANCE", "x"),
+        ("ORBIT_RUN_ID", "r1"),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_string(), value.to_string()))
+    .collect::<Vec<_>>();
+
+    let env = allowlisted_child_env_from(&parent, &[], &[]);
+
+    assert_eq!(value_of(&env, "ORBIT_RUN_ID"), Some("r1"));
+    let orbit_names: Vec<&str> = names(&env)
+        .into_iter()
+        .filter(|name| name.starts_with("ORBIT_"))
+        .collect();
+    assert_eq!(
+        orbit_names,
+        ["ORBIT_RUN_ID"],
+        "privilege-bearing ORBIT_* names must not survive allowlisted_child_env_from"
+    );
+}
+
+#[test]
 fn admitted_names_are_deterministic_and_unique() {
     let pass = vec!["HOME".to_string(), "DATABASE_URL".to_string()];
 
