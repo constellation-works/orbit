@@ -237,11 +237,15 @@ pub fn create_dir_symlink(src: &Path, dst: &Path) -> io::Result<()> {
 /// Removes `path` if it exists, tolerating missing paths. Symlinks are
 /// unlinked without following; directories are removed recursively.
 pub fn remove_path_if_exists(path: &Path) -> io::Result<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+
+    if metadata.file_type().is_symlink() {
+        fs::remove_file(path)
+    } else if metadata.is_dir() {
         fs::remove_dir_all(path)
     } else {
         fs::remove_file(path)
