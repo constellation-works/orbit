@@ -89,7 +89,36 @@ pub struct SourcePage {
     pub unresolved: BTreeMap<String, String>,
     #[serde(default)]
     pub associations: BTreeMap<String, Option<DeliveryAssociation>>,
+    /// Accepted before-PR review coverage keyed by delivery key, supplied by
+    /// Core from verified certificates [ORB-11333]. Only a
+    /// `landed_code_review_v1` consumer excludes on it; QA never does.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub exclusions: BTreeMap<String, DeliveryExclusion>,
     pub complete: bool,
+}
+
+/// A delivery whose content is proven covered by an accepted before-PR
+/// review certificate. It stays in the examined range as context but is not
+/// an obligation and does not count toward a review threshold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryExclusion {
+    /// The certificate attempt that covers this delivery.
+    pub attempt_id: String,
+    /// The assurance label the certificate carries.
+    pub assurance: String,
+    /// The certificate's task-meaning digest, retained for audit.
+    pub task_meaning_digest: String,
+    /// The verified reviewed tree the landing reproduced.
+    pub final_candidate_tree: String,
+}
+
+/// A delivery excluded from review obligations, with the reason it was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExcludedDelivery {
+    pub delivery: Delivery,
+    pub exclusion: DeliveryExclusion,
+    pub decided_at: DateTime<Utc>,
 }
 
 /// Frozen input supplied verbatim to the task or job.
@@ -107,6 +136,10 @@ pub struct CoverageBatch {
     pub through_inclusive: SourceRevision,
     pub commits: Vec<String>,
     pub deliveries: Vec<Delivery>,
+    /// Deliveries inside the range that accepted before-PR coverage excludes
+    /// from examination; they are readable context, not obligations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclusions: Vec<ExcludedDelivery>,
     pub created_at: DateTime<Utc>,
     /// Aggregate budget is frozen with the batch, including configuration edits.
     pub max_attempts: u32,
@@ -155,6 +188,10 @@ pub struct AutomationState {
     pub pending: Vec<Delivery>,
     #[serde(default)]
     pub waived: Vec<Delivery>,
+    /// Deliveries proven covered before landing; retired with the range that
+    /// contains them and never counted toward a threshold.
+    #[serde(default)]
+    pub excluded: Vec<ExcludedDelivery>,
     pub unresolved: BTreeMap<String, String>,
     #[serde(default)]
     pub associations: BTreeMap<String, Option<DeliveryAssociation>>,

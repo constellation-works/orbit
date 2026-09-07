@@ -202,10 +202,25 @@ define_config_settings! {
         description: "Crew selected for automatic review. Independent of the preset.",
         resolve: |raw: Option<String>| operation::review_crew(raw),
     },
+    operation_review_minutes: Option<u32> => u32 {
+        key: "operation.review_minutes", value_type: "integer",
+        description: "Aggregate before-PR reviewer, repair, and final-validation wall-time minutes per delivery candidate lineage (1..=1440, default 30). Independent of the preset.",
+        resolve: |raw: Option<u32>| operation::review_minutes(raw),
+    },
     operation_review_policy: Option<String> => String {
         key: "operation.review_policy", value_type: "string",
-        description: "Automatic review timing: none (default), before-pr, or after-landing. Independent of the preset; before-pr is accepted but not yet supported at admission.",
+        description: "Automatic review timing: none (default), before-pr, or after-landing. Independent of the preset. before-pr holds PR creation for a fresh reviewer on the PR route and is refused for local-only delivery.",
         resolve: |raw: Option<String>| admit_choice::<ReviewPolicy>(raw, ReviewPolicy::as_str),
+    },
+    operation_review_repair_cycles: Option<u32> => u32 {
+        key: "operation.review_repair_cycles", value_type: "integer",
+        description: "Reviewer repair/validation cycles allowed per delivery candidate lineage (0..=10, default 2). Independent of the preset.",
+        resolve: |raw: Option<u32>| operation::review_repair_cycles(raw),
+    },
+    operation_review_reviewer_starts: Option<u32> => u32 {
+        key: "operation.review_reviewer_starts", value_type: "integer",
+        description: "Fresh reviewer invocations allowed per delivery candidate lineage, including retries and invalidations (1..=10, default 2). Independent of the preset.",
+        resolve: |raw: Option<u32>| operation::review_reviewer_starts(raw),
     },
     pr_task_url_template: Option<String> => String {
         key: "pr.task_url_template", value_type: "string",

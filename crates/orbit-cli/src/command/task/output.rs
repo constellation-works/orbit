@@ -96,10 +96,18 @@ pub(crate) fn task_to_json_with_sidecars(
         serde_json::to_value(runtime.get_task_history(&task.id)?)
             .map_err(|e| OrbitError::Io(e.to_string()))?,
     );
+    let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
     object.insert(
         "artifacts".to_string(),
-        task_artifact_manifest_to_json(&runtime.get_task_artifact_manifest(&task.id)?),
+        task_artifact_manifest_to_json(&artifacts),
     );
+    // [ORB-11333] The settled before-PR review gate, when one exists, is
+    // durable evidence and travels with the record like the artifacts.
+    if let Some(review) =
+        orbit_core::application::review::task_review_projection(runtime, task, &artifacts)?
+    {
+        object.insert("review".to_string(), review);
+    }
     // `resolved_crew` enriches the record; it does not define it. A task may
     // name a crew this workspace has no `[crews.*]` entry for — a config gap,
     // not a corrupt task — and the fields are simply absent then.

@@ -16,6 +16,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::{ReviewBudget, ReviewTiming};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 
@@ -24,7 +25,8 @@ use crate::registry::read_optional;
 /// Version of the resolved-policy shape captured into run and grant records.
 /// Bump when a field is added, removed, or changes meaning so an older
 /// snapshot fails closed for privileged actions instead of being reinterpreted.
-pub const OPERATION_POLICY_VERSION: u32 = 1;
+/// Version 2 added the independent review budget fields [ORB-11333].
+pub const OPERATION_POLICY_VERSION: u32 = 2;
 
 /// Candidate default due interval for automatic preparation, in seconds.
 pub const DEFAULT_PREPARATION_DUE_SECONDS: u64 = 300;
@@ -39,6 +41,9 @@ const MAX_PREPARATION_DUE_SECONDS: u64 = 86_400;
 const MAX_LEAF_CEILING: u32 = 500;
 const MAX_RECOVERY_EPISODES_PER_TASK: u32 = 10;
 const MAX_RECOVERY_MINUTES_PER_TASK: u32 = 1_440;
+const MAX_REVIEW_REVIEWER_STARTS: u32 = 10;
+const MAX_REVIEW_REPAIR_CYCLES: u32 = 10;
+const MAX_REVIEW_MINUTES: u32 = 1_440;
 
 macro_rules! choice_enum {
     (
@@ -135,7 +140,7 @@ choice_enum! {
     ReviewPolicy, "operation.review_policy", {
         /// No automatic review managed by this policy.
         None => "none",
-        /// Hold PR creation for a fresh reviewer; not yet supported at admission.
+        /// Hold PR creation for a fresh reviewer with scoped repairs [ORB-11333].
         BeforePr => "before-pr",
         /// Accumulate uncovered landed deliveries for a scheduled review.
         AfterLanding => "after-landing",
@@ -153,11 +158,13 @@ choice_enum! {
 }
 
 impl ReviewPolicy {
-    /// V1 ships the configuration contract for every value but only supports
-    /// `none` and `after-landing` at admission; `before-pr` waits for the
-    /// dependent review task that supplies the gate.
-    pub fn supported(self) -> bool {
-        !matches!(self, ReviewPolicy::BeforePr)
+    /// The shared review-timing contract this preference selects.
+    pub fn timing(self) -> ReviewTiming {
+        match self {
+            ReviewPolicy::None => ReviewTiming::None,
+            ReviewPolicy::BeforePr => ReviewTiming::BeforePr,
+            ReviewPolicy::AfterLanding => ReviewTiming::AfterLanding,
+        }
     }
 }
 
@@ -327,6 +334,15 @@ pub struct OperationLayer {
     /// Explicit review crew (independent field).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_crew: Option<String>,
+    /// Explicit reviewer starts per candidate lineage (independent field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_reviewer_starts: Option<u32>,
+    /// Explicit repair cycles per candidate lineage (independent field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_repair_cycles: Option<u32>,
+    /// Explicit review wall-time minutes per candidate lineage (independent field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_minutes: Option<u32>,
     /// Explicit delivery cap (independent field).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_cap: Option<DeliveryCap>,
@@ -346,7 +362,10 @@ pub const OPERATION_KEYS: &[&str] = &[
     "operation.recovery_episodes_per_task",
     "operation.recovery_minutes_per_task",
     "operation.review_crew",
+    "operation.review_minutes",
     "operation.review_policy",
+    "operation.review_repair_cycles",
+    "operation.review_reviewer_starts",
 ];
 
 /// Keys an explicit preset selection resets to that preset's defaults.
@@ -442,6 +461,21 @@ impl OperationLayer {
                 "operation.review_crew",
                 config_path,
             )?)?,
+            review_reviewer_starts: review_reviewer_starts(read_optional(
+                document,
+                "operation.review_reviewer_starts",
+                config_path,
+            )?)?,
+            review_repair_cycles: review_repair_cycles(read_optional(
+                document,
+                "operation.review_repair_cycles",
+                config_path,
+            )?)?,
+            review_minutes: review_minutes(read_optional(
+                document,
+                "operation.review_minutes",
+                config_path,
+            )?)?,
             delivery_cap: parse_choice::<DeliveryCap>(read_optional(
                 document,
                 DeliveryCap::KEY,
@@ -483,6 +517,12 @@ pub struct OperationPolicy {
     pub review_policy: OperationField<ReviewPolicy>,
     /// Crew selected for automatic review.
     pub review_crew: OperationField<Option<String>>,
+    /// Reviewer starts allowed per delivery candidate lineage.
+    pub review_reviewer_starts: OperationField<u32>,
+    /// Repair/validation cycles allowed per delivery candidate lineage.
+    pub review_repair_cycles: OperationField<u32>,
+    /// Aggregate review wall-time minutes per delivery candidate lineage.
+    pub review_minutes: OperationField<u32>,
     /// Repository ceiling on managed delivery.
     pub delivery_cap: OperationField<DeliveryCap>,
 }
@@ -520,6 +560,11 @@ impl OperationPolicy {
                 value: None,
                 source: OperationFieldSource::explicit(layer),
             },
+            review_reviewer_starts: placeholder(
+                orbit_types::workflow::DEFAULT_REVIEW_REVIEWER_STARTS,
+            ),
+            review_repair_cycles: placeholder(orbit_types::workflow::DEFAULT_REVIEW_REPAIR_CYCLES),
+            review_minutes: placeholder(orbit_types::workflow::DEFAULT_REVIEW_MINUTES),
             delivery_cap: OperationField {
                 value: DeliveryCap::Review,
                 source: OperationFieldSource::explicit(layer),
@@ -574,6 +619,11 @@ impl OperationPolicy {
                 source: OperationFieldSource::explicit(source),
             };
         }
+        self.review_reviewer_starts
+            .set(layer.review_reviewer_starts, source);
+        self.review_repair_cycles
+            .set(layer.review_repair_cycles, source);
+        self.review_minutes.set(layer.review_minutes, source);
         self.delivery_cap.set(layer.delivery_cap, source);
     }
 
@@ -626,6 +676,15 @@ impl OperationPolicy {
         }
     }
 
+    /// The lineage budget the review gate captures at admission.
+    pub fn review_budget(&self) -> ReviewBudget {
+        ReviewBudget {
+            reviewer_starts: self.review_reviewer_starts.value,
+            repair_cycles: self.review_repair_cycles.value,
+            minutes: self.review_minutes.value,
+        }
+    }
+
     /// The explanation view: every field with its value and winning source.
     pub fn explain(&self) -> JsonValue {
         fn field<T: Serialize>(field: &OperationField<T>) -> JsonValue {
@@ -643,12 +702,11 @@ impl OperationPolicy {
             "recovery": field(&self.recovery),
             "recovery_episodes_per_task": field(&self.recovery_episodes_per_task),
             "recovery_minutes_per_task": field(&self.recovery_minutes_per_task),
-            "review_policy": {
-                "value": self.review_policy.value,
-                "source": self.review_policy.source.label(),
-                "supported": self.review_policy.value.supported(),
-            },
+            "review_policy": field(&self.review_policy),
             "review_crew": field(&self.review_crew),
+            "review_reviewer_starts": field(&self.review_reviewer_starts),
+            "review_repair_cycles": field(&self.review_repair_cycles),
+            "review_minutes": field(&self.review_minutes),
             "delivery_cap": field(&self.delivery_cap),
             "effective_completion": {
                 "value": effective_completion,
@@ -738,6 +796,28 @@ pub(crate) fn recovery_minutes_per_task(raw: Option<u32>) -> Result<Option<u32>,
         1,
         MAX_RECOVERY_MINUTES_PER_TASK,
     )
+}
+
+pub(crate) fn review_reviewer_starts(raw: Option<u32>) -> Result<Option<u32>, OrbitError> {
+    bounded(
+        raw,
+        "operation.review_reviewer_starts",
+        1,
+        MAX_REVIEW_REVIEWER_STARTS,
+    )
+}
+
+pub(crate) fn review_repair_cycles(raw: Option<u32>) -> Result<Option<u32>, OrbitError> {
+    bounded(
+        raw,
+        "operation.review_repair_cycles",
+        0,
+        MAX_REVIEW_REPAIR_CYCLES,
+    )
+}
+
+pub(crate) fn review_minutes(raw: Option<u32>) -> Result<Option<u32>, OrbitError> {
+    bounded(raw, "operation.review_minutes", 1, MAX_REVIEW_MINUTES)
 }
 
 pub(crate) fn review_crew(raw: Option<String>) -> Result<Option<String>, OrbitError> {

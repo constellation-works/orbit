@@ -765,6 +765,18 @@ impl OrbitRuntime {
                 (input, None)
             }
         };
+        // [ORB-11333] The review admission follows the same discipline: a
+        // child inherits its parent's snapshot, a grant-bound or ordinary
+        // delivery submission captures the effective policy once, and
+        // ordinary input naming the key is refused.
+        let mut input = input;
+        crate::application::review::install_review_admission(
+            self,
+            job_name,
+            &mut input,
+            admission.map(|admission| admission.parent_run_id.as_str()),
+            resume.is_some(),
+        )?;
         let result = (|| {
             let spec = match &definition {
                 SubmittedDefinition::Catalog => self.load_v2_job_asset_by_name(job_name)?.1,

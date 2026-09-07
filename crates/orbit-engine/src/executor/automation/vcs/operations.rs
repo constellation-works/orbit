@@ -374,7 +374,7 @@ fn pr_status(input: &Value) -> Result<Value, OrbitError> {
         "view".to_string(),
         selector.to_string(),
         "--json".to_string(),
-        "number,state,mergedAt,mergeable,mergeStateStatus,headRefName,baseRefName,url".to_string(),
+        "number,state,mergedAt,mergeable,mergeStateStatus,headRefName,headRefOid,baseRefName,mergeCommit,url".to_string(),
     ];
     let result = execute(
         "gh",

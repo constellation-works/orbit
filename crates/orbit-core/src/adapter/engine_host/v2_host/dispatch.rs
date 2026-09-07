@@ -310,6 +310,16 @@ pub(crate) fn run_deterministic(
         // Validate all agent proposals before writing, then replace only the
         // exact prepared tasks' context_files fields.
         CoreDeterministicAction::ApplyTaskPilotResults => task_pilot::apply(runtime, action, input),
+        // [ORB-11333] Reserve a fresh reviewer start for the committed,
+        // base-synchronized candidate and hand it a pinned manifest; then
+        // settle the reviewer's report into an honest verdict, reviewer-
+        // attributed repair commits, and a certificate the PR steps recheck.
+        CoreDeterministicAction::ReviewGateAdmit => {
+            crate::application::review::review_gate_admit(runtime, action, input)
+        }
+        CoreDeterministicAction::ReviewGateSettle => {
+            crate::application::review::review_gate_settle(runtime, action, input)
+        }
         // Guard the auto-dispatch bundle output before fan_out.
         // Rejects duplicated task_ids, unknown ids, and oversize
         // bundles with a structured error so a misgrouped backlog

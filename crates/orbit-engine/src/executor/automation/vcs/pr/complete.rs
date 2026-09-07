@@ -30,7 +30,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{ReviewLandingRequest, RuntimeHost};
 
 use super::super::super::input::input_string_field;
 use super::super::super::task_update::{authorization_note, complete_tasks};
@@ -64,20 +64,36 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
         .get("no_diff_expected")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let task_ids = context
+        .tasks
+        .iter()
+        .map(|task| task.id.clone())
+        .collect::<Vec<_>>();
     let merge_outcome = if no_diff_expected {
         ensure_all_tasks_no_diff_expected(&context.tasks)?;
         json!({ "merged": false, "reason": "no_diff_expected" })
     } else {
         let workspace_path = context.workspace_path.to_string_lossy().into_owned();
         let pr_number = resolve_pr_number(input, &context.tasks)?;
-        drive_pr_to_merged(host, input, &workspace_path, &pr_number)?
+        let outcome = drive_pr_to_merged(host, input, &workspace_path, &pr_number)?;
+        // [ORB-11333] The certificate only carries into coverage when the
+        // landing that actually happened is verified against it.
+        if let Some(reviewed_head_sha) = reviewed_head_sha(input) {
+            host.record_review_landing(&ReviewLandingRequest {
+                run_id: context.batch_id.clone(),
+                task_ids: task_ids.clone(),
+                workspace_path: context.workspace_path.clone(),
+                pr_number: pr_number.clone(),
+                base: input_string_field(input, "base").unwrap_or_default(),
+                reviewed_head_sha,
+                landed_commit: outcome
+                    .get("landed_commit")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            })?;
+        }
+        outcome
     };
-
-    let task_ids = context
-        .tasks
-        .iter()
-        .map(|task| task.id.clone())
-        .collect::<Vec<_>>();
     let authorization = authorization_note(input, &context.batch_id);
     let completion = complete_tasks(host, &context.batch_id, &task_ids, &authorization)?;
 
@@ -108,6 +124,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let mut conflict_refresh_attempted = false;
     let mut merge_capabilities: Option<MergeCapabilities> = None;
 
+    let reviewed_head_sha = reviewed_head_sha(input);
+
     loop {
         let status = read_pr_status(host, workspace_path, pr_number)?;
         match classify(&status) {
@@ -118,6 +136,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     "strategy": merge_capabilities.map(|capabilities| capabilities.strategy.as_str()),
                     "auto_merge_requested": auto_merge_requested,
                     "waited_seconds": waited_seconds,
+                    "landed_commit": status.pointer("/mergeCommit/oid").and_then(Value::as_str),
+                    "reviewed_head_sha": reviewed_head_sha,
                 }));
             }
             PrMergeState::Closed => {
@@ -134,6 +154,15 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 )));
             }
             PrMergeState::Conflict => {
+                // [ORB-11333] Repairing a conflict rewrites the candidate; a
+                // reviewed head cannot be merged as unreviewed content.
+                if reviewed_head_sha.is_some() {
+                    return Err(OrbitError::Execution(format!(
+                        "review_gate_stale: pull request #{pr_number} has merge conflicts and its \
+                         head is bound to a before-PR review; a conflict repair needs a fresh \
+                         review before managed completion, so the task stays in review"
+                    )));
+                }
                 if conflict_refresh_attempted || !has_completion_recovery_checkpoint(input) {
                     return Err(completion_conflict_error(pr_number));
                 }
@@ -145,6 +174,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 continue;
             }
             PrMergeState::Mergeable => {
+                ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
                 if !merge_requested {
                     let capabilities = resolved_capabilities(
                         host,
@@ -172,6 +202,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 }
             }
             PrMergeState::Pending => {
+                ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
                 if !auto_merge_requested {
                     // Required checks are still running. Hand the merge to
                     // GitHub's auto-merge when this repository allows it, then
@@ -263,6 +294,45 @@ fn classify(pull_request: &Value) -> PrMergeState {
         // GitHub reports UNKNOWN while it computes mergeability.
         _ => PrMergeState::Pending,
     }
+}
+
+/// The head a before-PR gate settled, when this run carried one.
+fn reviewed_head_sha(input: &Value) -> Option<String> {
+    input_string_field(input, "reviewed_head_sha")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Managed completion pins the reviewed head against what the provider
+/// reports as the PR head. A moved head is unreviewed content.
+fn ensure_pr_head_is_reviewed(
+    status: &Value,
+    pr_number: &str,
+    reviewed_head_sha: Option<&str>,
+) -> Result<(), OrbitError> {
+    let Some(reviewed) = reviewed_head_sha else {
+        return Ok(());
+    };
+    let reported = status
+        .get("headRefOid")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "review_gate_stale: pull request #{pr_number} did not report its head commit, so \
+                 the reviewed candidate {reviewed} cannot be pinned before merging; the task stays \
+                 in review"
+            ))
+        })?;
+    if reported != reviewed {
+        return Err(OrbitError::Execution(format!(
+            "review_gate_stale: pull request #{pr_number} head {reported} is not the reviewed \
+             candidate {reviewed}; later revisions need a fresh review before managed \
+             completion, so the task stays in review"
+        )));
+    }
+    Ok(())
 }
 
 fn has_completion_recovery_checkpoint(input: &Value) -> bool {

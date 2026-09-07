@@ -508,6 +508,38 @@ function buildRelations(relations, context) {
   return wrap;
 }
 
+// ORB-11333: the settled before-PR review gate. Every value comes from the
+// certificate the gate wrote; nothing here is inferred from status or tags.
+function buildReviewGate(review) {
+  const wrap = el("div", { class: "review-gate" });
+  if (review.unreadable) {
+    wrap.appendChild(el("div", { text: `review evidence unreadable: ${review.unreadable}` }));
+    return wrap;
+  }
+  const reviewer = review.reviewer || {};
+  const consumed = review.consumed || {};
+  const budget = review.budget || {};
+  const lines = [
+    `verdict: ${review.verdict}${review.assurance ? ` (${review.assurance})` : ""}`,
+    `reviewer: ${reviewer.crew ?? "—"} · ${reviewer.provider ?? "—"} / ${reviewer.model ?? "—"}${reviewer.same_model_as_implementer ? " · same model as implementer" : ""}`,
+    `base ${review.base?.commit ?? "—"} → reviewed ${review.reviewed_candidate?.commit ?? "—"} → final ${review.final_candidate?.commit ?? "—"}`,
+    `repairs: ${Array.isArray(review.repair_commits) && review.repair_commits.length ? review.repair_commits.map((c) => `${c.commit.slice(0, 12)} by ${c.author}`).join(", ") : "none"}`,
+    `findings: ${Array.isArray(review.findings) ? review.findings.length : 0} · validation: ${Array.isArray(review.validation) ? review.validation.length : 0} record(s), complete: ${review.validation_complete ? "yes" : "no"}`,
+    `consumed: ${consumed.reviewer_starts ?? 0}/${budget.reviewer_starts ?? "?"} starts · ${consumed.repair_cycles ?? 0}/${budget.repair_cycles ?? "?"} repair cycles · ${consumed.seconds ?? 0}s of ${budget.minutes ?? "?"} min`,
+  ];
+  if (review.escalation) lines.push(`escalation: ${review.escalation}`);
+  if (Array.isArray(review.landings) && review.landings.length) {
+    for (const landing of review.landings) {
+      lines.push(`landing ${landing.landed?.commit ?? "?"}: ${landing.transformation} · ${landing.covered ? "covered" : `uncovered (${landing.reason ?? "unknown"})`}`);
+    }
+  }
+  if (Array.isArray(review.stale_reasons) && review.stale_reasons.length) {
+    lines.push(`stale gate reasons: ${review.stale_reasons.join(", ")}`);
+  }
+  for (const line of lines) wrap.appendChild(el("div", { text: line }));
+  return wrap;
+}
+
 function fmtSize(bytes) {
   const value = Number(bytes);
   if (!Number.isFinite(value) || value < 0) return "0 bytes";
@@ -723,6 +755,10 @@ function buildTaskDetail(task, context) {
 
   if (Array.isArray(task.artifacts) && task.artifacts.length > 0) {
     addField(leftCol, "artifacts", buildArtifacts(task), true, true);
+  }
+
+  if (task.review && typeof task.review === "object") {
+    addField(leftCol, "review gate", buildReviewGate(task.review), true, true);
   }
 
   if (Array.isArray(task.tags) && task.tags.length > 0) {

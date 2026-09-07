@@ -238,13 +238,23 @@ fn interactive_ship_inherits_the_shared_in_flight_guard() {
         .into_iter()
         .next()
         .expect("first CLI dispatch persists a run");
+    // [ORB-11333] Every delivery submission captures the effective review
+    // policy once; the caller-shaped input is otherwise unchanged.
+    let mut persisted = first_run.input.clone().expect("persisted run input");
+    let review = persisted
+        .as_object_mut()
+        .expect("run input object")
+        .remove("review")
+        .expect("captured review admission");
+    assert_eq!(review["timing"], "none");
+    assert_eq!(review["timing_source"], "built-in");
     assert_eq!(
-        first_run.input,
-        Some(json!({
+        persisted,
+        json!({
             "mode": "local",
             "base_branch": "main",
             "task_ids": [task_id],
-        }))
+        })
     );
     let audits = runtime
         .list_audit_events(None, None, None, None, 20)

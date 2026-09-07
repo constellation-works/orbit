@@ -10,6 +10,7 @@ mod operations;
 mod pr;
 mod push;
 mod resume;
+pub mod review_gate;
 mod worktree;
 
 pub(super) use commit::git_commit;

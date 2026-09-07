@@ -23,6 +23,12 @@ pub(super) use super::resume::commit_head_matches_failure_handoff;
 
 const CONFLICT_BLOCKED_EVENT: &str = "pr_conflict_blocked";
 const FAILURE_HANDOFF_EVENT: &str = "pr_failure_handoff";
+/// A before-PR review gate stopped delivery [ORB-11333].
+const REVIEW_GATE_EVENT: &str = "review_gate_escalation";
+
+/// The pipeline steps that belong to the before-PR review gate.
+pub(in crate::executor::automation) const REVIEW_GATE_STEPS: &[&str] =
+    &["review_gate_admit", "review", "review_gate_settle"];
 
 /// Terminal hook for `task_pr_pipeline`.
 ///
@@ -100,6 +106,23 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     }
     if conflicting_paths.is_empty() {
         conflicting_paths = conflicts_from_error(error_message);
+    }
+
+    // [ORB-11333] A review-gate failure keeps the implementation and any
+    // partial reviewer repairs attributed to their authors, pushes the
+    // candidate so the evidence survives, and opens no PR: publication is
+    // exactly what the gate withheld.
+    if REVIEW_GATE_STEPS.contains(&failed_step_id) {
+        return preserve_review_gate_candidate(
+            host,
+            input,
+            &task,
+            run_id,
+            failed_step_id,
+            error_code,
+            error_message,
+            &workspace_path,
+        );
     }
 
     let (head_sha, committed_files) =
@@ -206,6 +229,118 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         "pr_number": pr_number,
         "pr_url": pr_url,
         "pr_created": pr_created,
+        "task_status": "blocked",
+    }))
+}
+
+/// Preserve a candidate the before-PR review gate refused to publish.
+///
+/// Uncommitted reviewer changes are committed under the reviewer identity the
+/// gate admitted, never as implementer work; the branch is pushed so partial
+/// repairs and evidence are recoverable; the task is blocked with the gate's
+/// escalation. No PR is opened.
+#[allow(clippy::too_many_arguments)]
+fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_code: &str,
+    error_message: &str,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let reviewer = input
+        .get("pipeline")
+        .and_then(|pipeline| pipeline.get("review_gate_admit"))
+        .and_then(|admit| admit.get("reviewer"));
+    let reviewer_model = reviewer.and_then(|reviewer| {
+        let provider = reviewer.get("provider")?.as_str()?.trim();
+        let model = reviewer.get("model")?.as_str()?.trim();
+        (!provider.is_empty() && !model.is_empty()).then(|| format!("{provider} / {model}"))
+    });
+    let partial_repair = match &reviewer_model {
+        Some(model) => super::review_gate::commit_reviewer_repairs(
+            workspace_path,
+            model,
+            &format!(
+                "review: partial reviewer repairs preserved [{}]\n\nOrbit-Review-Run: {run_id}\n\
+                 Orbit-Review-Step: {failed_step_id}",
+                task.id
+            ),
+        )?,
+        None => None,
+    };
+    let leftover = super::review_gate::uncommitted_paths(workspace_path)?;
+    let head = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    if head == "HEAD" {
+        return Err(OrbitError::Execution(
+            "pr_failure_handoff: review-gate candidate is detached".to_string(),
+        ));
+    }
+    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let pushed = push_batch_changes_inner(
+        host,
+        &json!({
+            "branch": head,
+            "workspace_path": workspace_path,
+        }),
+        workspace_path,
+    )?;
+
+    let note = format!(
+        "before-PR review gate stopped delivery: run={run_id}, failed_step={failed_step_id}, \
+         candidate={head_sha}, branch={head}; no PR was opened"
+    );
+    let body = format!(
+        "## Review gate escalation\n\nOrbit held PR publication because the before-PR review gate \
+         did not pass. The candidate branch was pushed so the implementation commits, any \
+         reviewer repairs, and the review evidence remain inspectable; nothing was merged or \
+         published as a PR.\n\n- Task: `{}`\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n\
+         - Error code: `{error_code}`\n- Candidate branch: `{head}`\n- Candidate head: `{head_sha}`\n\
+         - Partial reviewer repair commit: {}\n- Uncommitted paths left in the worktree: {}\n\n\
+         Resuming delivery needs a recorded decision: repair or re-scope, then run the gate again \
+         within the lineage's remaining review budget.\n\n## Failure\n\n```text\n{error_message}\n```",
+        task.id,
+        partial_repair
+            .as_ref()
+            .map(|commit| format!("`{}` ({})", commit.commit, commit.author))
+            .unwrap_or_else(|| "none".to_string()),
+        if leftover.is_empty() {
+            "none".to_string()
+        } else {
+            leftover.join(", ")
+        },
+    );
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            status: Some(TaskStatus::Blocked),
+            status_event: Some(REVIEW_GATE_EVENT.to_string()),
+            status_note: Some(note.clone()),
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message: format!("{note}\n\n{body}"),
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+
+    Ok(json!({
+        "phase": "failure_handoff",
+        "decision": "blocked_review_gate",
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "branch": head,
+        "head_sha": head_sha,
+        "partial_repair_commit": partial_repair.map(|commit| commit.commit),
+        "uncommitted_paths": leftover,
+        "push": pushed,
+        "pr_created": false,
         "task_status": "blocked",
     }))
 }

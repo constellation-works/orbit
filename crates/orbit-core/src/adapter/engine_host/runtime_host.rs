@@ -222,6 +222,13 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::authorize_task_completion(self, run_id, task_ids)
     }
 
+    fn record_review_landing(
+        &self,
+        request: &orbit_engine::ReviewLandingRequest,
+    ) -> Result<(), OrbitError> {
+        crate::application::review::record_review_landing(self, request)
+    }
+
     fn apply_task_automation_update(
         &self,
         task_id: &str,

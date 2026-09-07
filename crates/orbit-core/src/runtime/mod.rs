@@ -305,6 +305,13 @@ impl OrbitRuntime {
         orbit_store::compose::automation_store(Store::open(&self.context.persistence().audit_db)?)
     }
 
+    /// Before-PR review ledgers, certificates, and landings [ORB-11333].
+    pub fn review_store(
+        &self,
+    ) -> Result<Arc<dyn orbit_store::contracts::ReviewStoreBackend>, OrbitError> {
+        orbit_store::compose::review_store(Store::open(&self.context.persistence().audit_db)?)
+    }
+
     /// Operation-mode grants and recovery ledgers in the host store [ORB-11332].
     pub fn operation_store(
         &self,

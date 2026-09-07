@@ -42,6 +42,7 @@ export function renderAutomation(diagnostic) {
     field('Examined through', revision(state.covered)),
     field('Pending landings / commits', `${state.pending.length} / ${state.pending_commits.length}`),
     field('Waived landings (uncovered)', state.waived?.length || 0),
+    field('Excluded landings (before-PR coverage)', state.excluded?.length || 0),
     field('Unresolved evidence', Object.keys(state.unresolved).length),
     field('Usage', 'Unknown'),
   ]));
@@ -54,6 +55,7 @@ export function renderAutomation(diagnostic) {
   }
   const gaps = Object.entries(state.unresolved);
   if (gaps.length) panel.appendChild(el('pre', { text: gaps.map(([commit, reason]) => `${commit}: ${reason}`).join('\n') }));
+  for (const excluded of state.excluded || []) panel.appendChild(el('p', { text: `Excluded ${excluded.delivery.key}: certificate ${excluded.exclusion.attempt_id} (${excluded.exclusion.assurance}); examined as context, not an obligation.` }));
   for (const waiver of diagnostic.waivers || []) panel.appendChild(el('p', { text: `Waived ${waiver.batch_id} by ${waiver.by}: ${waiver.reason}. Coverage did not advance.` }));
   for (const receipt of diagnostic.receipts || []) {
     const row = el('p', { text: `Accepted ${receipt.accepted_at} · ${receipt.evidence_digest} · ${receipt.submitted_by} ` });

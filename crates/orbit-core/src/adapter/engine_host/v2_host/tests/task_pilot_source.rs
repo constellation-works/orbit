@@ -651,6 +651,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         pending_commits: vec![],
         pending: vec![],
         waived: vec![],
+        excluded: vec![],
         unresolved: Default::default(),
         associations: Default::default(),
         active: None,

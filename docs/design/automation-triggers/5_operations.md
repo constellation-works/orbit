@@ -201,9 +201,27 @@ no automatic GC policy is added here.
 The source currently understands GitHub PR evidence and authorized local direct
 landings. Other/manual direct changes stay unresolved until an authoritative
 receipt exists. History rewrites pause rather than silently reset. Automatic
-policy migration, before-PR exclusion producers and
-complete usage accounting remain separately scoped work. No review exclusions are
-inferred from tags or summaries, and QA coverage never substitutes for review.
+policy migration and complete usage accounting remain separately scoped work.
+No review exclusions are inferred from tags or summaries, and QA coverage never
+substitutes for review.
+
+## Before-PR coverage exclusions [ORB-11333]
+
+Passed before-PR certificates (see [operation-mode operations
+§10](../operation-mode/5_operations.md)) are the only exclusion producer.
+When observation first sees a landing, Core looks up passed certificates
+whose final tree equals the landed tree, verifies that the certificate's
+objects still exist and every task still has the reviewed meaning, and asks
+`orbit_automation::review::exclusion` for the decision: same base tree, same
+final tree, no contradicting managed landing record. A `landed_code_review_v1`
+consumer moves an accepted landing into its `excluded` list; it does not
+count toward the threshold, travels with the frozen batch as readable context
+(`exclusions`), is absent from `examined_deliveries`, and retires with the
+range that contains it. `integrated_qa_v1` consumers ignore exclusions
+entirely. A different base tree, any later edit, an unreviewed conflict
+repair, task drift, missing objects, or an external landing race keeps the
+landing an ordinary obligation. Inspection surfaces and the dashboard list
+excluded landings with their certificate and assurance label.
 
 ## State preparation and failure triage [ORB-11331]
 

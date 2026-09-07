@@ -126,6 +126,8 @@ pub(super) enum FailedHandoffPhase {
     Promote,
     EmptyBranch,
     ObsoleteBase,
+    /// The head or base no longer matches the reviewed candidate [ORB-11333].
+    StaleReviewGate,
 }
 
 impl FailedHandoffPhase {
@@ -140,6 +142,7 @@ impl FailedHandoffPhase {
             Self::Promote => "promote",
             Self::EmptyBranch => "empty-branch",
             Self::ObsoleteBase => "obsolete-base",
+            Self::StaleReviewGate => "stale-review-gate",
         }
     }
 }

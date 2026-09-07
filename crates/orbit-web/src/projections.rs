@@ -207,6 +207,11 @@ pub(crate) fn task_row_to_json(
         object.insert("resolved_crew".to_string(), Value::String(projection.name));
         object.insert("crew_model".to_string(), Value::String(projection.model));
     }
+    if let Some(review) =
+        orbit_core::application::review::task_review_projection(runtime, task, &row.artifacts)?
+    {
+        object.insert("review".to_string(), review);
+    }
     Ok(value)
 }
 

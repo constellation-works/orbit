@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod completion;
+mod review_gate;
 
 use chrono::Utc;
 use orbit_engine::{
@@ -39,7 +40,7 @@ pub(super) fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathB
     (root, runtime, repo_root, global_root)
 }
 
-fn test_runtime_with_workspace_config(
+pub(super) fn test_runtime_with_workspace_config(
     config: &str,
 ) -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathBuf) {
     let root = tempdir().expect("create tempdir");
@@ -91,7 +92,7 @@ pub(super) fn seed_gate_task(
         .id
 }
 
-fn resolved_job(
+pub(super) fn resolved_job(
     runtime: &OrbitRuntime,
     job_name: &str,
 ) -> orbit_types::workflow::activity_job::JobV2 {
@@ -225,7 +226,7 @@ spec:
     .expect("stub epic finisher activity");
 }
 
-fn git_in(path: &Path, args: &[&str]) {
+pub(super) fn git_in(path: &Path, args: &[&str]) {
     let output = Command::new("git")
         .current_dir(path)
         .args(args)
@@ -1064,13 +1065,17 @@ impl RuntimeHost for ScriptedEpicHost<'_> {
                 "task_id": input.get("task_id"),
                 "status": input.get("status"),
             })),
-            "pipeline_success_guard" => <OrbitRuntime as RuntimeHost>::run_deterministic(
-                self.runtime,
-                action,
-                config,
-                input,
-                tool_context,
-            ),
+            // [ORB-11333] The gate reads the run's captured review admission;
+            // these fixtures persist none, so it reports `applies: false`.
+            "pipeline_success_guard" | "review_gate_admit" | "review_gate_settle" => {
+                <OrbitRuntime as RuntimeHost>::run_deterministic(
+                    self.runtime,
+                    action,
+                    config,
+                    input,
+                    tool_context,
+                )
+            }
             other => Err(DispatchError::DeterministicActionNotRegistered(
                 other.to_string(),
             )),
@@ -1505,7 +1510,9 @@ fn epic_pipeline_reenters_drain_when_finisher_authors_a_child() {
     assert!(host.current_descendants().is_empty());
 }
 
-fn retarget_engine_actions_for_scripted_host(job: &mut orbit_types::workflow::activity_job::JobV2) {
+pub(super) fn retarget_engine_actions_for_scripted_host(
+    job: &mut orbit_types::workflow::activity_job::JobV2,
+) {
     fn walk(step: &mut JobV2Step) {
         match &mut step.body {
             JobV2StepBody::Target(target) => {

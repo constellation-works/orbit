@@ -25,6 +25,23 @@ pub(super) fn git_commit_with_identity(
     git_success_dynamic_with_identity(workspace_path, &args, &author, &committer)
 }
 
+/// Commit with an explicit author; the workflow committer stays Orbit.
+pub(super) fn git_commit_as(
+    workspace_path: &Path,
+    message: &str,
+    author: &GitAuthor,
+) -> Result<(), OrbitError> {
+    let committer = GitAuthor::orbit();
+    let args = vec![
+        "commit".to_string(),
+        "--author".to_string(),
+        author.spec(),
+        "-m".to_string(),
+        message.to_string(),
+    ];
+    git_success_dynamic_with_identity(workspace_path, &args, author, &committer)
+}
+
 pub(super) fn stage_paths(workspace_path: &Path, files: &[String]) -> Result<(), OrbitError> {
     if files.is_empty() {
         return Ok(());

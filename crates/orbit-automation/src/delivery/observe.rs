@@ -1,11 +1,15 @@
 //! Monotonic bounded observation; no observation certifies examination.
 
 use crate::AutomationError;
-use orbit_types::workflow::automation::{AutomationState, SourcePage};
+use orbit_types::workflow::automation::{
+    AutomationState, CoverageClass, ExcludedDelivery, SourcePage,
+};
 
 pub(super) fn apply(
     state: &AutomationState,
     page: SourcePage,
+    coverage: CoverageClass,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<AutomationState, AutomationError> {
     let invalid = || AutomationError::Deferred("source_page_invalid".into());
 
@@ -53,7 +57,12 @@ pub(super) fn apply(
             return Err(invalid());
         }
 
-        if state.waived.iter().any(|old| old.key == delivery.key) {
+        if state.waived.iter().any(|old| old.key == delivery.key)
+            || state
+                .excluded
+                .iter()
+                .any(|old| old.delivery.key == delivery.key)
+        {
             continue;
         }
 
@@ -103,6 +112,20 @@ pub(super) fn apply(
         for sha in &delivery.commits {
             next.unresolved.remove(sha);
         }
+
+        // Proven before-PR coverage is an exclusion only for a review consumer:
+        // QA still owes every landing its own integrated examination.
+        if coverage == CoverageClass::LandedCodeReviewV1
+            && let Some(exclusion) = page.exclusions.get(&delivery.key)
+        {
+            next.excluded.push(ExcludedDelivery {
+                delivery,
+                exclusion: exclusion.clone(),
+                decided_at: now,
+            });
+            continue;
+        }
+
         next.pending.push(delivery);
     }
 
@@ -110,6 +133,10 @@ pub(super) fn apply(
     for (sha, reason) in page.unresolved {
         if next.pending_commits.contains(&sha)
             && !next.pending.iter().any(|d| d.commits.contains(&sha))
+            && !next
+                .excluded
+                .iter()
+                .any(|excluded| excluded.delivery.commits.contains(&sha))
         {
             next.unresolved.insert(sha, reason);
         }
