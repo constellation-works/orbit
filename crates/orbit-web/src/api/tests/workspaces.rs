@@ -69,6 +69,7 @@ pub(super) fn workspace_entry(
         workspace_id: format!("ws_{id}"),
         repo_root: repo_root.clone(),
         ship_mode: ShipMode::Local,
+        base_branch: None,
     });
     WsEntry {
         id: id.to_string(),

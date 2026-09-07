@@ -1178,6 +1178,7 @@ fn orbit_workspace_selector_reports_the_logical_catalog_id() {
             workspace_id: "daniel-e9c542".to_string(),
             repo_root: repo,
             ship_mode: ShipMode::Local,
+            base_branch: None,
         },
     )
     .expect("bound runtime");

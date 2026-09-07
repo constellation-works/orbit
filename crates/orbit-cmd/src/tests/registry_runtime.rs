@@ -54,6 +54,7 @@ fn binding_preserves_logical_and_runtime_ids_and_ship_mode() {
     assert_eq!(resolved.runtime.workspace_id, "ws_runtime_config");
     assert_eq!(resolved.runtime.repo_root, repo);
     assert_eq!(resolved.runtime.ship_mode.as_input_value(), "pr");
+    assert_eq!(resolved.runtime.base_branch.as_deref(), Some("agent-main"));
 
     let direct = workspace_runtime_binding(&workspace, &checkout).expect("core binding");
     assert_eq!(direct, resolved.runtime);

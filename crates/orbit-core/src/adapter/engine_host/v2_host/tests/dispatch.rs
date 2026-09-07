@@ -246,6 +246,7 @@ fn workspace_ship_input_prefers_the_registry_neutral_runtime_binding() {
             workspace_id: "ws_bound".to_string(),
             repo_root: repo,
             ship_mode: ShipMode::Pr,
+            base_branch: None,
         },
     )
     .expect("bound runtime");

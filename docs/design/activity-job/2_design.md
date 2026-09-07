@@ -647,6 +647,37 @@ The body runs before `break_when`, so steps can populate fields the break expres
 
 Every job run is a persisted pipeline run. `orbit run ship`, `orbit.pipeline.invoke` + `orbit.pipeline.wait`, and — after [ORB-10801] — `orbit run job` / `orbit job run` all submit through the same path in `pipeline.rs`: the run is persisted, a detached worker is spawned, and the caller returns. `orbit run history -j <job_id>` and `orbit run show <run_id>` inspect the returned ID. `--wait` blocks on the submitted run and maps a non-success terminal state onto a nonzero exit.
 
+Named `ci_failure_sweep_pipeline` submission resolves and persists one
+`integration_branch` before inserting the run. Precedence is non-empty run
+`integration_branch` (then its supported `base_branch` alias), non-empty trusted
+job `default_input.integration_branch`, registered workspace `base_branch`, then
+explicit `[workflow] base_branch` config for an unbound workspace. An empty or
+null run field requests the default. Whitespace and an `origin/` prefix are
+normalized once before persistence, matching pilot branch resolution. Missing
+authority, a non-string override,
+or an invalid Git branch name refuses admission. The built-in config default
+and GitHub's default branch do not establish integration authority. Both
+`collect.integration_branch` and every pilot child's `base_branch` use this
+persisted input; GitHub's default remains the release branch, scanned separately
+when it differs. Replay/resume with a resolved input retain that branch.
+
+This preserves the shipped-job trust boundary: named execution searches explicit
+job directories and the global catalog, excluding workspace copies of shipped
+jobs even though catalog listing can display them. Editing the workspace CI job
+therefore cannot configure a scheduled named sweep. Set the registered base,
+explicit config for standalone use, or supported run/trusted-catalog input.
+Direct YAML execution retains its explicit-definition/input contract.
+
+Read-only verification after deployment: use `orbit run history -j
+ci_failure_sweep_pipeline` and `orbit run show <run_id>` on an existing scheduled
+run. Confirm persisted `input.integration_branch`, the collect evidence's
+`heads` (`agent-main` integration, `main` release), and each pilot child's
+`input.base_branch`. Compare the registered workspace base via
+`orbit tool run orbit.workspace.list --input '{}'`; for a standalone checkout,
+inspect `orbit config get workflow.base_branch` and its source. Catalog listing
+alone does not prove which YAML named execution used. These reads require no new
+sweep, task filing, release, or package change.
+
 A direct YAML path names an unmanaged file, so its exact validated definition is snapshotted to `state/job-runs/<run_id>.job.yaml` before submission returns; the worker prefers that snapshot over catalog resolution, and an edit or deletion of the source afterwards cannot change the submitted run. Catalog ids keep name resolution as their contract ([Job catalog discovery honors layer precedence](./4_decisions.md)). Workflow-specific `orbit run <workflow> list/show` aliases were removed in [T20260425-2010], and duplicate job-level aliases in [T20260426-0742].
 
 Before [T20260423-0445], early v2 failures could leave `steps: []` and no surfaced `error_message`. The current contract is:

@@ -441,6 +441,7 @@ impl DashboardState {
                 workspace_id: SINGLE_WORKSPACE_ID.to_string(),
                 repo_root: PathBuf::new(),
                 ship_mode: ShipMode::Local,
+                base_branch: None,
             }),
             active: true,
         };
@@ -453,6 +454,7 @@ impl DashboardState {
                     workspace_id: SINGLE_WORKSPACE_ID.to_string(),
                     repo_root: PathBuf::new(),
                     ship_mode: ShipMode::Local,
+                    base_branch: None,
                 },
                 orbit_dir: PathBuf::new(),
                 generation: INITIAL_GENERATION,

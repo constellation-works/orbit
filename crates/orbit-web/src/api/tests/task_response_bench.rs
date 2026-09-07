@@ -56,6 +56,7 @@ async fn task_response_benchmark() {
                     logical_workspace_id: id,
                     repo_root,
                     ship_mode: ShipMode::Local,
+                    base_branch: None,
                 }),
             }
         })
