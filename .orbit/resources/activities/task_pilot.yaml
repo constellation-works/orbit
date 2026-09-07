@@ -98,6 +98,13 @@ spec:
               properties:
                 evidence:
                   type: string
+            release_action_required:
+              type: [object, "null"]
+              properties:
+                action:
+                  type: string
+                evidence:
+                  type: string
             adr_conflicts:
               type: array
               items:
@@ -158,15 +165,29 @@ spec:
        old release whose repair is already present must be `verified_no_diff`
        with `already_landed` set to an object containing concrete `evidence`;
        do not return executable selectors for it.
+       When the failure's only correct repair is an operator-reserved release
+       action rather than a repository change — a version, tag, or artifact the
+       repository already records but the operator has not published or
+       promoted yet, so the job resolves something that does not exist outside
+       this repository — return `verified_no_diff` and set
+       `release_action_required` to `{"action":"...","evidence":"..."}` naming
+       that action. Never propose editing versions, tags, or publication
+       metadata to make such a job pass. This is about the intended repair, not
+       about which files it would touch: a defect the repository itself owns —
+       a wrong dependency requirement, a broken manifest, a packaging script
+       bug — is ordinary work, so return its selectors and leave
+       `release_action_required` null.
     5. Report recommendations only; do not apply them:
        `recommended_crew`, `recommended_complexity`, real `blocked_by` task IDs,
-       `duplicate_of`, `already_landed`, `adr_conflicts` (a legacy output field
-       name kept for consumer compatibility — populate it only with concrete
-       current-code or current-contract conflicts and their evidence; a
-       historical ADR is not by itself a reason to block or reshape work),
-       `utility_warnings`, and `surface_warnings`. Each of these four fields is
-       an array of plain strings, one string per finding combining the finding
-       and its citation — for example a non-empty adr_conflicts entry reads
+       `duplicate_of`, `already_landed`, `release_action_required`,
+       `adr_conflicts` (a legacy output field name kept for consumer
+       compatibility — populate it only with concrete current-code or
+       current-contract conflicts and their evidence; a historical ADR is not
+       by itself a reason to block or reshape work), `utility_warnings`, and
+       `surface_warnings`. Each of `blocked_by`, `adr_conflicts`,
+       `utility_warnings`, and `surface_warnings` is an array of plain strings,
+       one string per finding combining the finding and its citation — for
+       example a non-empty adr_conflicts entry reads
        ["the module this task would change still exports the type it removes
        (verified via rg -n 'pub use Bar' at source_revision)"]; never an array
        of objects. Cite evidence for duplicates, already-landed work, and any
@@ -175,9 +196,10 @@ spec:
        the failure is from the current integration revision and the defect is
        still present, leave `duplicate_of` and `already_landed` null and return
        the selectors for the current repair. Use
-       `{"task_id":"...","evidence":"..."}` for a duplicate and
-       `{"evidence":"..."}` for already-landed work; a bare boolean is not
-       auditable.
+       `{"task_id":"...","evidence":"..."}` for a duplicate,
+       `{"evidence":"..."}` for already-landed work, and
+       `{"action":"...","evidence":"..."}` for a required release action; a
+       bare boolean is not auditable.
 
     Hard bounds:
     - Never update a task, transition lifecycle state, promote, dispatch,
@@ -202,6 +224,7 @@ spec:
         "blocked_by":[],
         "duplicate_of":null,
         "already_landed":null,
+        "release_action_required":null,
         "adr_conflicts":[],
         "utility_warnings":[],
         "surface_warnings":[]

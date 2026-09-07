@@ -14,7 +14,7 @@ use crate::application::task::TaskUpdateParams;
 
 use super::source::SourceSnapshot;
 use super::{
-    action_failed, requested_workspace_root, required_string, required_string_array,
+    action_failed, member_ready, requested_workspace_root, required_string, required_string_array,
     string_array_value, validate_after_selectors, validate_recommendations,
 };
 
@@ -485,23 +485,7 @@ pub(in super::super) fn apply(
             member_key: claim.member.key,
             input_fingerprint: claim.member.fingerprint,
             resulting_fingerprint: resulting.clone(),
-            ready: assessment["disposition"] == "selectors"
-                && [
-                    "blocked_by",
-                    "adr_conflicts",
-                    "utility_warnings",
-                    "surface_warnings",
-                ]
-                .iter()
-                .all(|field| {
-                    assessment
-                        .get(field)
-                        .and_then(Value::as_array)
-                        .is_some_and(Vec::is_empty)
-                })
-                && ["duplicate_of", "already_landed"]
-                    .iter()
-                    .all(|field| assessment.get(field).is_none_or(Value::is_null)),
+            ready: member_ready(assessment),
             result: assessment.clone(),
         })
     });
