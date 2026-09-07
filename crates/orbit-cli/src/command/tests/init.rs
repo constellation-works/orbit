@@ -3,9 +3,13 @@ use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
 
-use crate::InitCommand;
-use crate::tests::env_isolation::EnvGuard;
 use orbit_common::fs::io::create_dir_symlink;
+use orbit_core::OrbitRuntime;
+
+use crate::InitCommand;
+use crate::command::executor::ExecutorShowArgs;
+use crate::command::{CommandOutput, Execute};
+use crate::tests::env_isolation::EnvGuard;
 
 fn seed_discovery_sentinel(home: &Path, agent_dir: &str) -> (PathBuf, PathBuf) {
     let target = home.join("live-sentinels").join(agent_dir).join("orbit");
@@ -317,5 +321,108 @@ fn invalid_task_prefixes_fail_closed() {
 
         init_host(&root, Some("dk-mac"), Some(prefix)).expect_err("invalid prefix must fail");
         assert!(!root.join("host.toml").exists(), "prefix {prefix}");
+    }
+}
+
+/// Ordinary CLI `orbit init` (refresh_defaults, no --force) must keep an
+/// operator `spec.sandbox: off`. `--force` may still restore shipped defaults.
+#[test]
+fn non_interactive_init_preserves_explicit_sandbox_off_without_force() {
+    let home = tempdir().expect("home tempdir");
+    let empty_path = tempdir().expect("empty PATH tempdir");
+    let _env = EnvGuard::acquire()
+        .home(home.path())
+        .path(empty_path.path());
+    let root = home.path().join(".orbit");
+
+    init_host(&root, Some("sandbox-off"), Some("SO")).expect("first init");
+    set_executor_sandbox(&root, "grok", Some("off"));
+    assert_eq!(show_executor_sandbox(&root, "grok"), "off");
+
+    init_host(&root, Some("sandbox-off"), Some("SO")).expect("repeat init without --force");
+    assert_eq!(
+        show_executor_sandbox(&root, "grok"),
+        "off",
+        "ordinary orbit init must not restore shipped sandbox over explicit off"
+    );
+
+    InitCommand {
+        force: true,
+        non_interactive: true,
+        host_name: Some("sandbox-off".to_string()),
+        task_prefix: Some("SO".to_string()),
+    }
+    .execute_without_runtime(Some(&root))
+    .expect("forced init");
+    assert_eq!(
+        show_executor_sandbox(&root, "grok"),
+        shipped_sandbox_json(),
+        "orbit init --force may reset executor sandbox to the shipped default"
+    );
+
+    if cfg!(target_os = "linux") {
+        set_executor_sandbox(&root, "grok", None);
+        init_host(&root, Some("sandbox-off"), Some("SO")).expect("init after omitting sandbox");
+        assert_eq!(
+            show_executor_sandbox(&root, "grok"),
+            "linux-bwrap",
+            "omitted/null sandbox on a Linux shipped default still migrates to linux-bwrap"
+        );
+    }
+}
+
+fn set_executor_sandbox(root: &Path, name: &str, sandbox: Option<&str>) {
+    let path = root
+        .join("resources/executors")
+        .join(format!("{name}.yaml"));
+    let mut resource: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&path).expect("read executor YAML"))
+            .expect("parse executor YAML");
+    let spec = resource
+        .get_mut("spec")
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .expect("executor spec mapping");
+    match sandbox {
+        Some(value) => {
+            spec.insert(
+                serde_yaml::Value::String("sandbox".to_string()),
+                serde_yaml::Value::String(value.to_string()),
+            );
+        }
+        None => {
+            spec.remove(serde_yaml::Value::String("sandbox".to_string()));
+        }
+    }
+    fs::write(
+        &path,
+        serde_yaml::to_string(&resource).expect("encode executor YAML"),
+    )
+    .expect("write executor YAML");
+}
+
+fn show_executor_sandbox(global_root: &Path, name: &str) -> serde_json::Value {
+    let workspace = global_root
+        .parent()
+        .expect("global root parent")
+        .join("repo/.orbit");
+    fs::create_dir_all(&workspace).expect("workspace root");
+    let runtime = OrbitRuntime::from_roots(global_root, &workspace).expect("runtime from roots");
+    let CommandOutput::Payload(payload) = ExecutorShowArgs {
+        name: name.to_string(),
+        json: true,
+    }
+    .execute(&runtime)
+    .expect("executor show") else {
+        panic!("executor show must return a payload");
+    };
+    let (json, _) = payload.into_view();
+    json["sandbox"].clone()
+}
+
+fn shipped_sandbox_json() -> serde_json::Value {
+    match std::env::consts::OS {
+        "linux" => serde_json::Value::String("linux-bwrap".to_string()),
+        "macos" => serde_json::Value::String("macos-sandbox-exec".to_string()),
+        _ => serde_json::Value::Null,
     }
 }

@@ -228,8 +228,12 @@ pub fn init_workspace_at_root(
         None => {
             let executor_store = global_executor_def_store(layout.executors_dir.clone());
             let policy_store = global_policy_def_store(layout.policies_dir.clone());
+            // Skills/activities/jobs refresh on ordinary `orbit init`.
+            // Executors do not: `refresh_defaults` overwrite would restore
+            // shipped sandbox and wipe an operator `spec.sandbox: off`.
+            // `--force` still resets them by deleting the root first.
             let refreshed_default_executors =
-                seed_default_executors(executor_store.as_ref(), overwrite)?;
+                seed_default_executors(executor_store.as_ref(), options.force)?;
             let refreshed_default_policies =
                 seed_default_policies(policy_store.as_ref(), overwrite)?;
             let activity_reconciliation =
