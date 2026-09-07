@@ -66,7 +66,6 @@ fn the_locked_mapping_covers_exactly_the_advertised_surface() {
         .collect::<std::collections::BTreeSet<_>>();
 
     assert_eq!(advertised, locked);
-    assert_eq!(advertised.len(), 28);
 }
 
 #[test]

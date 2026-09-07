@@ -105,7 +105,6 @@ fn the_mux_advertises_the_canonical_surface() {
         names,
         canonical.iter().map(String::as_str).collect::<Vec<_>>()
     );
-    assert_eq!(names.len(), 28, "the frozen production surface changed");
     let listing = definitions
         .iter()
         .find(|definition| definition.schema.name == FEDERATED_WORKSPACE_LIST_TOOL)

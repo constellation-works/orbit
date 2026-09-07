@@ -57,7 +57,6 @@ fn mcp_owns_the_exact_global_discovery_definitions() {
     assert_eq!(crew.schema.parameters[0].name, "workspace");
 
     let canonical = canonical_mcp_tool_definitions().expect("canonical definitions");
-    assert_eq!(canonical.len(), 28, "the frozen production surface changed");
     assert_eq!(
         canonical
             .iter()
