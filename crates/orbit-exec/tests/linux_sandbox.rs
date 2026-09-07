@@ -5,6 +5,7 @@
 
 use std::process::Stdio;
 
+use orbit_common::OrbitError;
 use orbit_exec::{
     LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapPostRunGuard,
     LinuxBwrapSpawnRequest, WriteAnchorKind, bwrap_path, bwrap_program_for_audit,
@@ -655,6 +656,108 @@ fn managed_worktree_guard_rejects_new_forbidden_match() {
     std::fs::write(workspace.join("new.env"), "secret").expect("write forbidden fixture");
     let error = guard.verify().expect_err("new forbidden match rejected");
     assert!(error.to_string().contains("before commit"));
+}
+
+#[test]
+fn absent_subtree_deny_is_enforced_when_child_creates_the_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let created = workspace.join("secrets/x");
+    assert!(!workspace.join("secrets").exists());
+    assert_absent_deny_enforced(
+        &workspace,
+        vec![
+            format!("{}/**", workspace.display()),
+            format!("!{}/secrets/**", workspace.display()),
+        ],
+        "mkdir -p secrets && touch secrets/x",
+        &created,
+    );
+}
+
+#[test]
+fn absent_exact_file_deny_is_enforced_when_child_creates_the_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let created = workspace.join("Cargo.lock");
+    assert!(!created.exists());
+    assert_absent_deny_enforced(
+        &workspace,
+        vec![
+            format!("{}/**", workspace.display()),
+            format!("!{}", created.display()),
+        ],
+        "touch Cargo.lock",
+        &created,
+    );
+}
+
+fn assert_absent_deny_enforced(
+    workspace: &std::path::Path,
+    modify: Vec<String>,
+    script: &str,
+    created: &std::path::Path,
+) {
+    let resolved = profile(modify);
+    let guard = LinuxBwrapPostRunGuard::capture(&resolved).expect("capture");
+
+    let probe = probe_bwrap();
+    if probe.available {
+        let plan = compile_linux_bwrap_argv(
+            &resolved,
+            "/bin/sh",
+            &["-c".to_string(), script.to_string()],
+            Some(workspace),
+            true,
+        )
+        .expect("compile");
+        let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+            plan: &plan,
+            env: &[],
+            cwd: Some(workspace),
+            stdin: Stdio::null(),
+            stdout: Stdio::null(),
+            stderr: Stdio::null(),
+        })
+        .expect("spawn");
+        let _ = child.wait().expect("wait");
+    } else {
+        println!(
+            "bwrap unavailable ({}); applying the child script on the host",
+            probe.detail
+        );
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", script])
+            .current_dir(workspace)
+            .status()
+            .expect("host script");
+        assert!(status.success(), "host script failed: {status}");
+    }
+
+    let write_blocked = !created.exists();
+    match guard {
+        Some(guard) => match guard.verify() {
+            Ok(()) => assert!(
+                write_blocked,
+                "child created {} and the post-run guard accepted it",
+                created.display()
+            ),
+            Err(OrbitError::PolicyDenied(message)) => {
+                assert!(
+                    message.contains("before commit"),
+                    "PolicyDenied must name the post-run check: {message}"
+                );
+            }
+            Err(other) => panic!("expected PolicyDenied, got {other}"),
+        },
+        None => assert!(
+            write_blocked,
+            "no post-run guard and the child created {}",
+            created.display()
+        ),
+    }
 }
 
 #[cfg(target_os = "linux")]

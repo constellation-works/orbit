@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
-use super::{expand_rule, expand_rules, walk_paths};
+use super::{LinuxBwrapPostRunGuard, expand_rule, expand_rules, walk_paths};
+use orbit_common::OrbitError;
+use orbit_types::policy::ResolvedFsProfile;
 
 fn tree() -> tempfile::TempDir {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -77,4 +79,61 @@ fn walk_lists_every_path_once() {
     // 1 root + 4 dirs (a, a/deep, b, target, target/debug = 5) + 6 files.
     assert_eq!(paths.len(), 1 + 5 + 6);
     assert_eq!(paths[0], root);
+}
+
+fn profile(modify: Vec<String>) -> ResolvedFsProfile {
+    ResolvedFsProfile {
+        name: "test".to_string(),
+        read: vec!["/**".to_string()],
+        modify,
+    }
+}
+
+#[test]
+fn capture_watches_absent_exact_and_subtree_denies() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("workspace");
+    let secrets = workspace.join("secrets");
+    let lock = workspace.join("Cargo.lock");
+    let resolved = profile(vec![
+        format!("{}/**", workspace.display()),
+        format!("!{}/**", secrets.display()),
+        format!("!{}", lock.display()),
+    ]);
+
+    let guard = LinuxBwrapPostRunGuard::capture(&resolved)
+        .expect("capture")
+        .expect("absent exact/subtree denies must be guarded");
+    fs::create_dir_all(&secrets).expect("create secrets");
+    fs::write(secrets.join("x"), b"k").expect("write secret");
+    fs::write(&lock, b"k").expect("write lock");
+
+    let error = guard
+        .verify()
+        .expect_err("creating an absent deny root must fail closed");
+    assert!(
+        matches!(error, OrbitError::PolicyDenied(_)),
+        "expected PolicyDenied, got {error}"
+    );
+}
+
+#[test]
+fn capture_skips_absent_deny_whose_nested_reallow_will_create_the_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("workspace");
+    let orbit = workspace.join(".orbit");
+    let resolved = profile(vec![
+        format!("{}/**", workspace.display()),
+        format!("!{}/**", orbit.display()),
+        format!("{}/**", orbit.join("auto_tasks").display()),
+    ]);
+
+    assert!(
+        LinuxBwrapPostRunGuard::capture(&resolved)
+            .expect("capture")
+            .is_none(),
+        "grant preparation will create .orbit, so watching it would false-positive"
+    );
 }
