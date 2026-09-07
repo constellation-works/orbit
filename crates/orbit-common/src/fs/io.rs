@@ -71,47 +71,20 @@ pub(crate) fn append_private_file(path: &Path) -> io::Result<File> {
 /// Atomically write `content` to `path`, then fsync the parent directory so
 /// the rename survives a crash. Creates parent directories as needed.
 pub fn atomic_write_text(path: &Path, content: &str) -> io::Result<()> {
-    let mut staged = StagedTextFile::new_internal(path, content, true)?;
-    staged.commit()
+    atomic_write_bytes(path, content.as_bytes())
 }
 
 /// Atomically write `content` bytes to `path`, then fsync the parent directory
 /// so the rename survives a crash. Creates parent directories as needed.
 pub fn atomic_write_bytes(path: &Path, content: &[u8]) -> io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("no parent dir for {}", path.display()),
-        )
-    })?;
-    create_private_dir_all(parent)?;
-
-    let temp_path = temp_path_for(path);
-    let mut file = create_new_private_file(&temp_path)?;
-
-    let staged = (|| {
-        if let Ok(metadata) = fs::metadata(path) {
-            fs::set_permissions(&temp_path, metadata.permissions())?;
-        }
-        file.write_all(content)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temp_path, path)
-    })();
-    if staged.is_err() {
-        // Every temp name is fresh, so a leftover would never be reclaimed:
-        // a failed write (ENOSPC mid-`write_all`, a rename refused) must not
-        // keep consuming the space it was short of.
-        let _ = fs::remove_file(&temp_path);
-    }
-    staged?;
-    sync_parent_dir(path)
+    let mut staged = StagedTextFile::new_internal(path, content, true)?;
+    staged.commit()
 }
 
 /// Atomically write `content` to `path` without fsyncing the parent.
 /// Cheaper than [`atomic_write_text`] but post-crash the rename may be lost.
 pub fn atomic_write_text_volatile(path: &Path, content: &str) -> io::Result<()> {
-    let mut staged = StagedTextFile::new_internal(path, content, false)?;
+    let mut staged = StagedTextFile::new_internal(path, content.as_bytes(), false)?;
     staged.commit()
 }
 
@@ -129,15 +102,15 @@ pub struct StagedTextFile {
 impl StagedTextFile {
     /// Stage a durable write. `commit()` renames and fsyncs the parent dir.
     pub fn new(target_path: &Path, content: &str) -> io::Result<Self> {
-        Self::new_internal(target_path, content, true)
+        Self::new_internal(target_path, content.as_bytes(), true)
     }
 
     /// Stage a volatile write. `commit()` renames without fsyncing.
     pub fn new_volatile(target_path: &Path, content: &str) -> io::Result<Self> {
-        Self::new_internal(target_path, content, false)
+        Self::new_internal(target_path, content.as_bytes(), false)
     }
 
-    fn new_internal(target_path: &Path, content: &str, durable: bool) -> io::Result<Self> {
+    fn new_internal(target_path: &Path, content: &[u8], durable: bool) -> io::Result<Self> {
         let parent = target_path.parent().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -153,7 +126,7 @@ impl StagedTextFile {
             fs::set_permissions(&temp_path, metadata.permissions())?;
         }
 
-        file.write_all(content.as_bytes())?;
+        file.write_all(content)?;
         if durable {
             file.sync_all()?;
         }
