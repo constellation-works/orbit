@@ -51,11 +51,14 @@ pub enum DueDecision<Tz: TimeZone> {
 /// Pin a scheduled occurrence to its minute (seconds and sub-seconds
 /// zeroed). Slot identity must be stable across sweeps for the idempotency
 /// key to hold.
-pub fn truncate_to_minute<Tz: TimeZone>(value: DateTime<Tz>) -> Result<DateTime<Tz>, OrbitError> {
-    value
-        .with_second(0)
-        .and_then(|value| value.with_nanosecond(0))
-        .ok_or_else(|| OrbitError::InvalidInput("timestamp cannot be minute-aligned".to_string()))
+pub fn truncate_to_minute<Tz: TimeZone>(value: DateTime<Tz>) -> DateTime<Tz> {
+    // DateTime's wall-clock setters re-resolve ambiguous local times and can
+    // fail during a DST fold. Subtracting the sub-minute duration preserves
+    // the instant and its offset, so every scheduled occurrence has a slot.
+    let seconds = i64::from(value.second());
+    let nanoseconds = i64::from(value.nanosecond());
+
+    value - Duration::seconds(seconds) - Duration::nanoseconds(nanoseconds)
 }
 
 /// Parse and validate a routine cron expression (standard 5-field form,
@@ -105,7 +108,7 @@ pub fn due_decision_with_grace<Tz: TimeZone>(
     // returns, which would make the slot different on every sweep within the
     // same minute — breaking the (name, slot) idempotency key. 5-field cron
     // is minute-granular by definition, so pin slots to the minute.
-    let previous = truncate_to_minute(previous)?;
+    let previous = truncate_to_minute(previous);
 
     if previous <= *lower_bound {
         return Ok(DueDecision::NotDue);

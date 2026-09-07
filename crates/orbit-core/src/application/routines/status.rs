@@ -162,7 +162,7 @@ pub fn routine_statuses_with_providers(
         let next_due = parse_cron(&routine.definition.trigger.cron)
             .ok()
             .and_then(|cron| cron.find_next_occurrence(&now, false).ok())
-            .and_then(|slot| truncate_to_minute(slot).ok())
+            .map(truncate_to_minute)
             .map(|slot| slot.to_rfc3339());
         let last_fire = store.routine_latest_fire(&routine.definition.name)?;
         let cursor = store.routine_cursor(&routine.definition.name)?;
