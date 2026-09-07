@@ -66,6 +66,9 @@ spec:
               items: "{{ steps.descendants.output.task_ids }}"
               max_iterations: 256
               steps:
+                # Intermediate assembly onto the epic branch, not local-only
+                # final delivery. A before-pr snapshot is inherited and the
+                # combined candidate is gated later [ORB-11521].
                 - id: land_child
                   target: activity:invoke_and_wait
                   timeout_seconds: 7200
