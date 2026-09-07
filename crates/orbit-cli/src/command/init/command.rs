@@ -15,7 +15,8 @@ use crate::command::{CommandOut, CommandOutput, Execute};
 #[derive(Args)]
 #[command(about = "Initialize the global Orbit root (~/.orbit)")]
 pub struct InitCommand {
-    /// Reset the global Orbit root (~/.orbit/) to defaults before initialization
+    /// Reset the global Orbit root (~/.orbit/) to shipped defaults before
+    /// initialization, including executor sandbox settings
     #[arg(long)]
     pub force: bool,
 

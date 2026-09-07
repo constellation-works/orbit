@@ -134,8 +134,10 @@ Activity-scoped `proc.spawn` supplies a request-time `Sandbox` validator at this
 The `Sandbox` trait remains the seam for generic `run_process` callers, but CLI-backed `agent_loop` invocations use a separate executor wrapper when the executor declares `sandbox: macos-sandbox-exec` ([T20260427-51]). The v2 host resolves the activity `fsProfile`; the engine converts workspace-relative rules to absolute roots and compiles SBPL before spawning the provider CLI.
 
 Executor resources also accept `spec.sandbox: off` as a persistent operator
-opt-out. It survives non-overwriting seeding and normal resource sync, unlike
-omitted/null values on legacy Linux defaults, which migrate to `linux-bwrap`.
+opt-out. It survives ordinary `orbit init` (without `--force`), non-overwriting
+seeding, and normal resource sync, unlike omitted/null values on legacy Linux
+defaults, which migrate to `linux-bwrap`. `orbit init --force` may still reset
+shipped executor defaults, including sandbox.
 The host carries the explicit off descriptor to the runner without resolving
 filesystem grants; preparation chooses no wrapper and performs no capability
 probe. The runner neutralizes supported provider-inner sandbox flags and audits

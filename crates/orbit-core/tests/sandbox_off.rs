@@ -22,10 +22,12 @@ fn seed_global(global: &Path) {
         global,
         InitOptions {
             global_only: true,
+            // Match CLI `orbit init`, which always sets refresh_defaults.
+            refresh_defaults: true,
             ..Default::default()
         },
     )
-    .expect("non-overwrite global seeding");
+    .expect("CLI-equivalent global seeding");
 }
 
 #[test]
