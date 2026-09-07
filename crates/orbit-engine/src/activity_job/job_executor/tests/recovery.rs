@@ -6,6 +6,7 @@ use orbit_common::test_fixtures::TEST_GEMINI_MODEL;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
 
 use crate::CrewConfig;
+use crate::activity_job::load_activity_asset;
 
 use super::crew_overridden_recovery_spec;
 
@@ -96,6 +97,7 @@ fn recovery_success_runs_one_post_recovery_attempt_with_exact_input_and_fs_profi
             ref step_id,
             ref recovery_activity,
             recovery_succeeded: true,
+            ..
         } if step_id == "build" && recovery_activity == "recover"
     ));
 }
@@ -164,6 +166,114 @@ fn recovery_activity_error_returns_original_error_text() {
             ..
         }
     ));
+}
+
+#[test]
+fn recovery_failure_is_redacted_and_persisted_alongside_original_conflict() {
+    let original = recoverable_vcs_conflict();
+    let secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
+    let host = RecoveryHost::new([
+        ("flaky", vec![Err(original.clone())]),
+        (
+            "recover",
+            vec![Err(retryable_error(
+                "recover",
+                &format!(
+                    "sandbox preparation failed: Authorization: Bearer {secret} {}",
+                    "界".repeat(5000),
+                ),
+            ))],
+        ),
+    ]);
+    let job = recovery_job(Some("recover"), None, "flaky", None, 1);
+    let writer = Arc::new(test_writer("run-redacted-recovery"));
+    let error = execute_job(
+        &job,
+        Value::Null,
+        "run-redacted-recovery",
+        writer.clone(),
+        &host,
+    )
+    .expect_err("recovery failure must preserve original conflict");
+    assert_eq!(error.to_string(), original.to_string());
+    let events = writer.events_snapshot().unwrap();
+    let event = serde_json::to_value(recovery_events(&events)[0]).unwrap();
+    assert_eq!(event["failure_phase"], "dispatch");
+    let message = event["error_message"].as_str().unwrap();
+    assert!(message.contains("sandbox preparation failed"));
+    assert!(!message.contains(secret));
+    assert!(message.chars().count() <= 4097);
+    assert_eq!(event["recovery_succeeded"], false);
+
+    // Persisted older rows remain readable with the new optional evidence.
+    let old: V2AuditEventKind = serde_json::from_value(json!({
+        "body_kind": "step_recovery_attempted", "step_id": "sync_base",
+        "recovery_activity": "recover", "recovery_succeeded": false,
+    }))
+    .unwrap();
+    assert!(matches!(
+        old,
+        V2AuditEventKind::StepRecoveryAttempted {
+            failure_phase: None,
+            error_message: None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn pr_recovery_projects_rendered_candidate_context_without_overriding_run_authority() {
+    let host = RecoveryHost::new([
+        (
+            "flaky",
+            vec![Err(recoverable_vcs_conflict()), Ok(json!({}))],
+        ),
+        ("pr_conflict_recovery", vec![Ok(json!({}))]),
+    ]);
+    let mut job = recovery_job(Some("pr_conflict_recovery"), None, "flaky", None, 1);
+    let JobV2StepBody::Target(target) = &mut job.steps[0].body else {
+        panic!("target")
+    };
+    target.default_input = Some(json!({
+        "completed_task_ids": ["T-candidate"],
+        "workspace_path": "{{ input.assigned }}",
+        "head": "candidate-branch", "head_sha": "candidate-sha",
+        "pr_number": "123", "run_id": "stale-input-run",
+    }));
+    let writer = Arc::new(test_writer("run-candidate-context"));
+    execute_job(
+        &job,
+        json!({"assigned": "/assigned/worktree", "task_ids": ["T-other"], "completion": "done"}),
+        "run-candidate-context",
+        writer,
+        &host,
+    )
+    .unwrap();
+    let input = host.input_for_action("pr_conflict_recovery").unwrap();
+    let asset = load_activity_asset(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../orbit-core/assets/activities/pr_conflict_recovery.yaml"
+    )))
+    .unwrap();
+    let schema = jsonschema::JSONSchema::compile(&asset.spec.input_schema_json).unwrap();
+    let mut agent_input = input.clone();
+    agent_input.as_object_mut().unwrap().remove("step_id");
+    assert!(
+        schema.is_valid(&agent_input),
+        "recovery input must satisfy the shipped strict schema: {agent_input}"
+    );
+    assert_eq!(input["workspace_path"], "/assigned/worktree");
+    assert_eq!(input["repo_root"], input["workspace_path"]);
+    assert_eq!(input["task_ids"], json!(["T-candidate"]));
+    assert_eq!(input["run_id"], "run-candidate-context");
+    assert_eq!(input["failed_step_input"]["head"], "candidate-branch");
+    assert_eq!(input["failed_step_input"]["head_sha"], "candidate-sha");
+    assert_eq!(input["failed_step_input"]["pr_number"], "123");
+    assert!(input.get("completion").is_none());
+    assert_eq!(
+        host.actions(),
+        vec!["flaky", "pr_conflict_recovery", "flaky"]
+    );
 }
 
 #[test]
@@ -490,6 +600,7 @@ fn worktree_integrity_failure_bypasses_retry_then_recovers_once() {
             ref step_id,
             ref recovery_activity,
             recovery_succeeded: true,
+            ..
         } if step_id == "build" && recovery_activity == "recover"
     ));
 }

@@ -96,6 +96,14 @@ pub fn run_cli_backend(
 
     let task_ids = task_ids_from_input(input);
     let task_id = task_id_from_input(input);
+    if activity_name == "pr_conflict_recovery"
+        && (task_ids.is_empty() || input.get("run_id").and_then(Value::as_str) != Some(run_id))
+    {
+        return Err(DispatchError::CliInvocationPermanent(
+            "conflict recovery requires task IDs and the current run ID from its failed target"
+                .to_string(),
+        ));
+    }
     let activity_tools = host.resolve_activity_tools(&task_ids, &spec.tools)?;
 
     // §6 allowlist-advisory event — emitted once per invocation before the
@@ -264,6 +272,15 @@ pub fn run_cli_backend(
         tool_ctx.workspace_root.as_deref(),
         declared_worktree_pair.as_ref(),
     )?;
+
+    if activity_name == "pr_conflict_recovery" {
+        let boundary = worktree_boundary.as_mut().ok_or_else(|| {
+            DispatchError::CliInvocationPermanent(
+                "conflict recovery requires a validated assigned worktree; refusing primary-checkout execution".to_string(),
+            )
+        })?;
+        boundary.authorize_rebase_completion(input)?;
+    }
 
     if let Some(admission) = &trusted_host {
         tracing::warn!(
