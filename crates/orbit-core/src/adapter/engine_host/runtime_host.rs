@@ -591,6 +591,32 @@ impl RuntimeHost for OrbitRuntime {
             })
     }
 
+    fn checkpoint_failure_activity(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        failed_step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        self.stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                state.record_failure_activity(
+                    activity_name.to_string(),
+                    failed_step_id.to_string(),
+                    output.clone(),
+                );
+                Ok(())
+            })
+            .map(|_| ())
+            .map_err(|error| {
+                DispatchError::JobExecution(format!(
+                    "persist terminal failure activity checkpoint (run {run_id}, step \
+                     `{failed_step_id}`, activity `{activity_name}`): {error}"
+                ))
+            })
+    }
+
     fn tool_context_for_activity(
         &self,
         run_id: Option<&str>,

@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use orbit_agent::loop_engine::audit::{AuditSink, NullSink};
 use orbit_common::OrbitError;
@@ -18,13 +19,31 @@ use orbit_types::workflow::activity_job::{
 };
 use orbit_types::workflow::{JobRun, JobRunState, JobScheduleState, PipelineState};
 
-const TASK_ID: &str = "ORB-RESUMED-FAILURE";
-const CHECKPOINT_RUN_ID: &str = "jrun-checkpoint-owner";
-const FIRST_RESUME_RUN_ID: &str = "jrun-first-resume";
-const SECOND_RESUME_RUN_ID: &str = "jrun-second-resume";
+pub(super) const TASK_ID: &str = "ORB-RESUMED-FAILURE";
+pub(super) const CHECKPOINT_RUN_ID: &str = "jrun-checkpoint-owner";
+pub(super) const FIRST_RESUME_RUN_ID: &str = "jrun-first-resume";
+pub(super) const SECOND_RESUME_RUN_ID: &str = "jrun-second-resume";
+pub(super) const THIRD_RESUME_RUN_ID: &str = "jrun-third-resume";
 
-struct ResumeFailureHost {
+pub(super) struct ResumeFailureHost {
     inner: PrOpenTestHost,
+    run_states: Mutex<HashMap<String, PipelineState>>,
+}
+
+impl ResumeFailureHost {
+    pub(super) fn new(inner: PrOpenTestHost) -> Self {
+        Self {
+            inner,
+            run_states: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(super) fn write_state(&self, state: PipelineState) {
+        self.run_states
+            .lock()
+            .expect("run states lock")
+            .insert(state.run_id.clone(), state);
+    }
 }
 
 impl RuntimeHost for ResumeFailureHost {
@@ -71,6 +90,65 @@ impl RuntimeHost for ResumeFailureHost {
                     message: error.to_string(),
                 }
             }),
+            "test_finish_repair" => {
+                let workspace_path = input
+                    .get("workspace_path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| DispatchError::DeterministicActionFailed {
+                        action: action.to_string(),
+                        message: "fixture input is missing workspace_path".to_string(),
+                    })?;
+                fs::write(
+                    Path::new(workspace_path).join("src/repaired.rs"),
+                    "pub fn first_repair() {}\npub fn second_repair() {}\npub fn resumed_repair() {}\n",
+                )
+                .map_err(|error| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("write resumed fixture repair: {error}"),
+                })?;
+                self.apply_task_automation_update(
+                    TASK_ID,
+                    TaskAutomationUpdate {
+                        execution_summary: Some(
+                            "Outcome: success\nChanges:\n- Finished the resumed repair."
+                                .to_string(),
+                        ),
+                        ..TaskAutomationUpdate::default()
+                    },
+                )
+                .map_err(|error| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: error.to_string(),
+                })?;
+                Ok(json!({"implemented": true}))
+            }
+            "git_commit" => {
+                crate::executor::automation::vcs::git_commit(self, input).map_err(|error| {
+                    DispatchError::DeterministicActionFailed {
+                        action: action.to_string(),
+                        message: error.to_string(),
+                    }
+                })
+            }
+            "git_push" => crate::executor::automation::vcs::push_batch_changes(self, input)
+                .map_err(|error| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: error.to_string(),
+                }),
+            "pr_open" => crate::executor::automation::vcs::pr_open(self, input).map_err(|error| {
+                DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: error.to_string(),
+                }
+            }),
+            "pr_promote" => {
+                crate::executor::automation::vcs::pr_promote(self, input).map_err(|error| {
+                    DispatchError::DeterministicActionFailed {
+                        action: action.to_string(),
+                        message: error.to_string(),
+                    }
+                })
+            }
             _ => Err(DispatchError::DeterministicActionNotRegistered(
                 action.to_string(),
             )),
@@ -81,8 +159,86 @@ impl RuntimeHost for ResumeFailureHost {
         self.inner.get_job_run(run_id)
     }
 
+    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
+        Ok(self
+            .run_states
+            .lock()
+            .expect("run states lock")
+            .get(run_id)
+            .cloned())
+    }
+
+    fn checkpoint_step(
+        &self,
+        run_id: &str,
+        step_index: u32,
+        _step_id: &str,
+        output: &Value,
+        pipeline_snapshot: &Value,
+    ) -> Result<(), DispatchError> {
+        let mut states = self.run_states.lock().expect("run states lock");
+        let state = states
+            .get_mut(run_id)
+            .ok_or_else(|| DispatchError::JobExecution(format!("missing state for {run_id}")))?;
+        state.record_step(step_index, JobRunState::Success, Some(output.clone()), None);
+        state.sync_pipeline(pipeline_snapshot.clone());
+        Ok(())
+    }
+
+    fn checkpoint_failure_activity(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        failed_step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        let mut states = self.run_states.lock().expect("run states lock");
+        let state = states
+            .get_mut(run_id)
+            .ok_or_else(|| DispatchError::JobExecution(format!("missing state for {run_id}")))?;
+        state.record_failure_activity(
+            activity_name.to_string(),
+            failed_step_id.to_string(),
+            output.clone(),
+        );
+        Ok(())
+    }
+
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         self.inner.get_task(task_id)
+    }
+
+    fn get_task_artifacts(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<orbit_types::task::TaskArtifact>, OrbitError> {
+        self.inner.get_task_artifacts(task_id)
+    }
+
+    fn get_task_comments(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<orbit_types::task::TaskComment>, OrbitError> {
+        self.inner.get_task_comments(task_id)
+    }
+
+    fn list_tasks_filtered(
+        &self,
+        status: Option<TaskStatus>,
+        priority: Option<orbit_types::task::TaskPriority>,
+        parent_id: Option<&str>,
+        batch_id: Option<&str>,
+        external_ref: Option<&orbit_types::task::ExternalRef>,
+        has_external_ref_system: Option<&str>,
+    ) -> Result<Vec<Task>, OrbitError> {
+        self.inner.list_tasks_filtered(
+            status,
+            priority,
+            parent_id,
+            batch_id,
+            external_ref,
+            has_external_ref_system,
+        )
     }
 
     fn apply_task_automation_update(
@@ -102,7 +258,7 @@ impl RuntimeHost for ResumeFailureHost {
     }
 }
 
-fn task_owned_by(run_id: &str) -> orbit_types::task::Task {
+pub(super) fn task_owned_by(run_id: &str) -> orbit_types::task::Task {
     let mut task = batch_task(
         TASK_ID,
         "Preserve partial repair",
@@ -189,7 +345,82 @@ fn resumed_pr_job() -> JobV2 {
     }
 }
 
-fn completed_worktree_checkpoint(workspace_path: &std::path::Path) -> PipelineState {
+pub(super) fn resumed_pr_delivery_job() -> JobV2 {
+    JobV2 {
+        state: JobScheduleState::Enabled,
+        default_input: None,
+        recovery_activity: None,
+        resolved_recovery_activity: None,
+        failure_activity: None,
+        resolved_failure_activity: None,
+        max_active_runs: 1,
+        kind: JobKind::Workflow,
+        steps: vec![
+            deterministic_step("worktree", "unused_worktree_setup", None),
+            deterministic_step(
+                "implement_bundle",
+                "test_finish_repair",
+                Some(json!({
+                    "workspace_path": "{{ steps.worktree.output.workspace_path }}",
+                })),
+            ),
+            deterministic_step(
+                "commit",
+                "git_commit",
+                Some(json!({
+                    "scope": "all",
+                    "job_run_id": "{{ steps.worktree.output.job_run_id }}",
+                    "workspace_path": "{{ steps.worktree.output.workspace_path }}",
+                    "base_sha": "{{ steps.worktree.output.base_sha }}",
+                })),
+            ),
+            deterministic_step(
+                "push",
+                "git_push",
+                Some(json!({
+                    "job_run_id": "{{ steps.worktree.output.job_run_id }}",
+                    "completed_task_ids": [TASK_ID],
+                    "workspace_path": "{{ steps.worktree.output.workspace_path }}",
+                    "branch": "orbit/test-batch",
+                })),
+            ),
+            deterministic_step(
+                "pr_open",
+                "pr_open",
+                Some(json!({
+                    "job_run_id": "{{ steps.worktree.output.job_run_id }}",
+                    "completed_task_ids": [TASK_ID],
+                    "workspace_path": "{{ steps.worktree.output.workspace_path }}",
+                    "head": "orbit/test-batch",
+                    "base": "agent-main",
+                    "base_ref": "agent-main",
+                    "base_sha": "{{ steps.worktree.output.base_sha }}",
+                })),
+            ),
+            deterministic_step(
+                "promote_tasks",
+                "pr_promote",
+                Some(json!({
+                    "job_run_id": "{{ steps.worktree.output.job_run_id }}",
+                    "completed_task_ids": [TASK_ID],
+                    "workspace_path": "{{ steps.worktree.output.workspace_path }}",
+                    "head": "orbit/test-batch",
+                    "base": "agent-main",
+                    "base_ref": "agent-main",
+                    "base_sha": "{{ steps.worktree.output.base_sha }}",
+                    "pr_number": "{{ steps.pr_open.output.pr_number }}",
+                    "pr_url": "{{ steps.pr_open.output.pr_url }}",
+                })),
+            ),
+        ],
+    }
+}
+
+pub(super) fn completed_worktree_checkpoint(
+    run_id: &str,
+    workspace_path: &std::path::Path,
+) -> PipelineState {
+    let base_sha = git(workspace_path, &["rev-parse", "HEAD"]);
     let input = json!({
         "task_ids": [TASK_ID],
         "base_branch": "agent-main",
@@ -199,30 +430,54 @@ fn completed_worktree_checkpoint(workspace_path: &std::path::Path) -> PipelineSt
         "workspace_path": workspace_path,
         "job_run_id": CHECKPOINT_RUN_ID,
         "base_ref": "agent-main",
+        "base_sha": base_sha,
     });
-    let mut state = PipelineState::new(
-        CHECKPOINT_RUN_ID.to_string(),
-        "task_pr_pipeline".to_string(),
-        input,
-    );
+    let mut state = PipelineState::new(run_id.to_string(), "task_pr_pipeline".to_string(), input);
     state.record_step(0, JobRunState::Success, Some(worktree.clone()), None);
     state.sync_pipeline(json!({ "worktree": worktree }));
     state
 }
 
+pub(super) fn record_preservation_evidence(
+    state: &mut PipelineState,
+    handoff_run_id: &str,
+    head_sha: &str,
+) {
+    let base_sha = state.step_outputs[&0]["base_sha"]
+        .as_str()
+        .expect("worktree base sha");
+    state.record_failure_activity(
+        "pr_failure_handoff".to_string(),
+        "implement_bundle".to_string(),
+        json!({
+            "phase": "failure_handoff",
+            "decision": "blocked_failure_pr",
+            "task_id": TASK_ID,
+            "handoff_run_id": handoff_run_id,
+            "checkpoint_owner": CHECKPOINT_RUN_ID,
+            "preservation_commit_created": true,
+            "head_sha": head_sha,
+            "original_base_sha": base_sha,
+        }),
+    );
+}
+
 #[test]
 fn repeated_resume_failure_publishes_partial_repair_to_the_existing_pr() {
     let workspace = no_diff_pr_workspace();
-    let host = ResumeFailureHost {
-        inner: PrOpenTestHost::new(
+    let source_state = completed_worktree_checkpoint(SECOND_RESUME_RUN_ID, &workspace.repo);
+    let host = ResumeFailureHost::new(
+        PrOpenTestHost::new(
             vec![task_owned_by(CHECKPOINT_RUN_ID)],
             workspace.repo.clone(),
         )
         .with_existing_pr()
         .with_job_run(CHECKPOINT_RUN_ID, None)
         .with_job_run(FIRST_RESUME_RUN_ID, Some(CHECKPOINT_RUN_ID))
-        .with_job_run(SECOND_RESUME_RUN_ID, Some(FIRST_RESUME_RUN_ID)),
-    };
+        .with_job_run(SECOND_RESUME_RUN_ID, Some(FIRST_RESUME_RUN_ID))
+        .with_job_run(THIRD_RESUME_RUN_ID, Some(SECOND_RESUME_RUN_ID)),
+    );
+    host.write_state(source_state.clone());
     let sink: Arc<dyn AuditSink> = Arc::new(NullSink);
     let writer = Arc::new(V2AuditWriter::new(SECOND_RESUME_RUN_ID, "test-agent", sink));
 
@@ -236,7 +491,7 @@ fn repeated_resume_failure_publishes_partial_repair_to_the_existing_pr() {
         SECOND_RESUME_RUN_ID,
         writer,
         &host,
-        Some(&completed_worktree_checkpoint(&workspace.repo)),
+        Some(&source_state),
     )
     .expect_err("the resumed implementation failure remains authoritative");
 
@@ -289,6 +544,70 @@ fn repeated_resume_failure_publishes_partial_repair_to_the_existing_pr() {
         blocker
             .message
             .contains("required macOS validation remains unavailable")
+    );
+
+    let preserved_head = recovered_head;
+    let preserved_state = host
+        .read_run_state(SECOND_RESUME_RUN_ID)
+        .expect("read preserved state")
+        .expect("preserved state exists");
+    assert_eq!(
+        preserved_state
+            .failure_activity_checkpoint
+            .as_ref()
+            .expect("failure handoff checkpoint")
+            .output["head_sha"],
+        preserved_head,
+    );
+
+    let mut resumed_state = preserved_state.clone();
+    resumed_state.run_id = THIRD_RESUME_RUN_ID.to_string();
+    host.write_state(resumed_state.clone());
+    host.apply_task_automation_update(
+        TASK_ID,
+        TaskAutomationUpdate {
+            status: Some(TaskStatus::InProgress),
+            ..TaskAutomationUpdate::default()
+        },
+    )
+    .expect("re-admit task for resume");
+
+    let writer = Arc::new(V2AuditWriter::new(
+        THIRD_RESUME_RUN_ID,
+        "test-agent",
+        Arc::new(NullSink),
+    ));
+    let delivered = execute_job_with_resume(
+        &resumed_pr_delivery_job(),
+        json!({
+            "task_ids": [TASK_ID],
+            "base_branch": "agent-main",
+            "base_sync": "local",
+        }),
+        THIRD_RESUME_RUN_ID,
+        writer,
+        &host,
+        Some(&resumed_state),
+    )
+    .expect("resume accepts the exact Orbit preservation commit");
+
+    assert!(delivered.success);
+    assert_eq!(delivered.pipeline["commit"]["decision"], "performed");
+    assert_eq!(delivered.pipeline["pr_open"]["decision"], "reused");
+    assert_eq!(delivered.pipeline["pr_open"]["pr_number"], "42");
+    assert_eq!(host.inner.task_status(TASK_ID), TaskStatus::Review);
+    assert_eq!(
+        git(&workspace.repo, &["rev-parse", "HEAD^1"]),
+        preserved_head,
+        "the resumed commit retains the preservation commit as its parent",
+    );
+    assert!(
+        !host
+            .inner
+            .vcs_calls()
+            .iter()
+            .any(|call| call.operation == PR_CREATE_OPERATION),
+        "delivery reuses the failure handoff PR",
     );
 }
 

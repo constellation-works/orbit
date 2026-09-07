@@ -235,6 +235,23 @@ pub(super) fn attempt_failure_activity(
     match dispatch {
         Ok(dispatch) => {
             persist_dispatch_invocation(ctx, &failure.name, &input, &dispatch);
+            if dispatch.success
+                && let Err(error) = ctx.host.checkpoint_failure_activity(
+                    &ctx.run_id,
+                    &failure.name,
+                    &step.id,
+                    &dispatch.output,
+                )
+            {
+                tracing::warn!(
+                    target: "orbit.engine.job_executor",
+                    run_id = %ctx.run_id,
+                    failed_step_id = %step.id,
+                    failure_activity = %failure.name,
+                    error = %error,
+                    "terminal failure activity evidence could not be checkpointed; preserving original step error"
+                );
+            }
             if !dispatch.success {
                 tracing::warn!(
                     target: "orbit.engine.job_executor",
