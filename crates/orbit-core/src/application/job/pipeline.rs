@@ -293,12 +293,14 @@ impl OrbitRuntime {
     /// registry names are what gets persisted and forwarded. It gates what the
     /// drain may *start* — it does not touch workspace configuration, reassign
     /// a task's crew, or cancel work another invocation already has in flight.
+    #[allow(clippy::too_many_arguments)]
     pub fn submit_workspace_auto_run(
         &self,
         for_seconds: Option<u64>,
         max_active_leaf_runs: Option<u32>,
         completion: crate::application::workflow::CompletionPolicy,
         allowed_crews: &[String],
+        complexity_crews: &orbit_config::ComplexityCrewPools,
         actor: Option<&str>,
         claim_token: Option<&str>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
@@ -307,12 +309,13 @@ impl OrbitRuntime {
             crate::application::workflow::AUTO_WORKFLOW_ALIAS,
         )
         .ok_or_else(|| OrbitError::InvalidInput("unknown workflow 'auto'".to_string()))?;
-        let input = workspace_auto_run_input(
+        let mut input = workspace_auto_run_input(
             for_seconds,
             max_active_leaf_runs,
             completion,
             &self.canonical_allowed_crews(allowed_crews)?,
         )?;
+        Self::set_auto_crew_overrides(&mut input, complexity_crews);
         self.submit_pipeline_run(workflow.job_id, input, None, actor)
     }
 
@@ -776,6 +779,13 @@ impl OrbitRuntime {
             &mut input,
             admission.map(|admission| admission.parent_run_id.as_str()),
             resume.is_some(),
+        )?;
+        self.install_auto_crew_admission(
+            job_name,
+            &mut input,
+            admission.map(|admission| admission.parent_run_id.as_str()),
+            resume.is_some(),
+            &mut super::crew_pools::random_crew_ticket,
         )?;
         let result = (|| {
             let spec = match &definition {

@@ -242,6 +242,7 @@ pub(crate) struct OrbitRuntimeSettings {
     routines_source: bool,
     crews: std::collections::BTreeMap<String, Crew>,
     default_crew: Option<String>,
+    complexity_crews: orbit_config::ComplexityCrewPools,
     system_crew: String,
     /// Resolved operation-mode preferences with provenance (`[operation]`).
     /// Preferences only; authority is a separate durable grant [ORB-11332].
@@ -260,6 +261,7 @@ impl OrbitRuntimeSettings {
         routines_source: bool,
         crews: std::collections::BTreeMap<String, Crew>,
         default_crew: Option<String>,
+        complexity_crews: orbit_config::ComplexityCrewPools,
         system_crew: String,
         operation: orbit_config::OperationPolicy,
     ) -> Self {
@@ -273,6 +275,7 @@ impl OrbitRuntimeSettings {
             routines_source,
             crews,
             default_crew,
+            complexity_crews,
             system_crew,
             operation,
         }
@@ -300,6 +303,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn crews(&self) -> &std::collections::BTreeMap<String, Crew> {
         &self.crews
+    }
+
+    pub(crate) fn complexity_crews(&self) -> &orbit_config::ComplexityCrewPools {
+        &self.complexity_crews
     }
 
     pub(crate) fn default_crew(&self) -> Option<&str> {

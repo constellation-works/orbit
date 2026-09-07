@@ -46,6 +46,7 @@
 //! - `store` — comment-preserving [`ConfigStore`] edits and atomic save.
 //! - `seed` — rendering and writing a fresh default `config.toml`.
 
+mod crew_pools;
 mod layering;
 pub mod operation;
 mod persistence;
@@ -60,6 +61,7 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 
+pub use crew_pools::{ComplexityCrewPools, canonical_crew_pool};
 pub use layering::{
     ConfigValueSource, ConfigValueSourceKind, EffectiveConfig, EffectiveConfigValue,
     load_effective_config,

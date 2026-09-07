@@ -105,3 +105,41 @@ fn get_reads_hand_authored_crew_effort() {
     );
     assert_eq!(document["value"], "high");
 }
+
+#[test]
+fn complexity_pools_set_get_show_agree_and_invalid_edits_do_not_write() {
+    let (_root, runtime, global_root, workspace_root) = test_runtime();
+    let path = workspace_root.join("config.toml");
+    fs::write(&path, "[workflow]\ndefault_crew = \"opus\"\n").expect("config");
+    for complexity in ["low", "medium", "hard"] {
+        let key = format!("workflow.{complexity}_complexity_crews");
+        set_args(&key, r#"["terra", "grok", "terra"]"#)
+            .execute(&runtime)
+            .expect("set pool");
+        let value = json_value(get_args(&key, true).execute(&runtime).expect("get pool"));
+        assert_eq!(value["value"], serde_json::json!(["grok", "terra"]));
+        let effective = orbit_config::load_effective_config(&orbit_config::ConfigRoots::new(
+            &global_root,
+            &workspace_root,
+        ))
+        .expect("effective");
+        let shown = super::super::show::effective_json(&runtime, effective.values());
+        assert_eq!(shown["settings"][&key], value["value"]);
+        assert_eq!(shown["provenance"][&key]["scope"], "workspace");
+        let before = fs::read(&path).expect("before");
+        for invalid in [r#"["unknown-pool-crew"]"#, r#"[""]"#] {
+            let error = set_args(&key, invalid)
+                .execute(&runtime)
+                .expect_err("invalid pool");
+            assert!(error.to_string().contains(&key), "{error}");
+            assert_eq!(fs::read(&path).expect("after"), before);
+        }
+        set_args(&key, "[]")
+            .execute(&runtime)
+            .expect("disable pool");
+        assert_eq!(
+            json_value(get_args(&key, true).execute(&runtime).expect("empty pool"))["value"],
+            serde_json::json!([])
+        );
+    }
+}

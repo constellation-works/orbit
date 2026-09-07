@@ -194,6 +194,7 @@ pub(crate) fn build_context_from_roots(
             routines_source,
             crews,
             default_crew,
+            runtime_config.complexity_crews.clone(),
             system_crew,
             operation,
         ),

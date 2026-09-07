@@ -168,6 +168,9 @@ fn workspace_auto_stop_conflicts_with_start_flags() {
 fn auto_stop_with_no_coordinator_is_idle() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
     super::auto::AutoCommand {
+        low_complexity_crews: None,
+        medium_complexity_crews: None,
+        hard_complexity_crews: None,
         for_duration: None,
         concurrency: None,
         complete: false,
@@ -681,5 +684,63 @@ fn test_audit_event(
         body_kind: Some(body_kind),
         timestamp: None,
         step_id: step_id.map(str::to_string),
+    }
+}
+
+#[test]
+fn workspace_auto_complexity_pools_parse_independently_and_allow_explicit_empty() {
+    let command = parse_run(&[
+        "orbit",
+        "run",
+        "auto",
+        "--medium-complexity-crews",
+        "grok,terra",
+        "--low-complexity-crews",
+        "luna",
+        "--hard-complexity-crews",
+    ]);
+    let RunSubcommand::Auto(args) = command.command else {
+        panic!("auto");
+    };
+    assert_eq!(
+        args.medium_complexity_crews,
+        Some(vec!["grok".into(), "terra".into()])
+    );
+    assert_eq!(args.low_complexity_crews, Some(vec!["luna".into()]));
+    assert_eq!(args.hard_complexity_crews, Some(vec![]));
+    assert!(
+        args.allow_crew.is_empty(),
+        "pools must not become an allowlist"
+    );
+    let RunSubcommand::Auto(defaults) = parse_run(&["orbit", "run", "auto"]).command else {
+        panic!("auto");
+    };
+    assert_eq!(defaults.medium_complexity_crews, None);
+    for flag in [
+        "--low-complexity-crews",
+        "--medium-complexity-crews",
+        "--hard-complexity-crews",
+    ] {
+        assert_cli_rejects(
+            &["orbit", "run", "auto", "--stop", flag, "terra"],
+            ErrorKind::ArgumentConflict,
+            "--stop",
+        );
+    }
+}
+
+#[test]
+fn workspace_auto_help_explains_complexity_pools_and_precedence() {
+    let error = Cli::try_parse_from(["orbit", "run", "auto", "--help"])
+        .err()
+        .expect("help");
+    let help = error.to_string();
+    for text in [
+        "--medium-complexity-crews grok,terra",
+        "without an explicit crew",
+        "replaces its matching workflow pool",
+        "retries/resume",
+    ] {
+        assert!(help.contains(text), "missing {text}: {help}");
     }
 }

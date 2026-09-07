@@ -73,6 +73,8 @@ pub struct ResolvedConfig {
     pub crews: BTreeMap<String, Crew>,
     /// Crew used when a task declares none and no override is given.
     pub default_crew: Option<String>,
+    /// Automatic admission pools; explicit task assignments take precedence.
+    pub complexity_crews: crate::ComplexityCrewPools,
     /// Crew used by system activities such as step-failure recovery and
     /// failed-run triage. Resolution of the named crew is deliberately
     /// deferred to dispatch so a bad system crew does not stop unrelated
@@ -107,6 +109,11 @@ impl ResolvedConfig {
             routines_source: snapshot.routines_role.as_deref() == Some("source"),
             crews: default_crews(),
             default_crew: snapshot.workflow_default_crew.clone(),
+            complexity_crews: crate::ComplexityCrewPools {
+                low: Some(snapshot.workflow_low_complexity_crews.clone()),
+                medium: Some(snapshot.workflow_medium_complexity_crews.clone()),
+                hard: Some(snapshot.workflow_hard_complexity_crews.clone()),
+            },
             system_crew: snapshot.workflow_system_crew.clone(),
             operation: OperationPolicy::built_in(),
             tasks_id_start: snapshot.tasks_id_start,
@@ -206,6 +213,11 @@ impl ResolvedConfig {
             routines_source: snapshot.routines_role.as_deref() == Some("source"),
             crews,
             default_crew: snapshot.workflow_default_crew.clone(),
+            complexity_crews: crate::ComplexityCrewPools {
+                low: Some(snapshot.workflow_low_complexity_crews.clone()),
+                medium: Some(snapshot.workflow_medium_complexity_crews.clone()),
+                hard: Some(snapshot.workflow_hard_complexity_crews.clone()),
+            },
             system_crew: snapshot.workflow_system_crew.clone(),
             operation,
             tasks_id_start: snapshot.tasks_id_start,

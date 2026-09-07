@@ -87,6 +87,7 @@ fn start_drain(runtime: &OrbitRuntime, grant_id: &str) -> (JobRun, OperationAdmi
     let _worker = WorkerOverride::install();
     let result = runtime
         .submit_operation_drain(OperationDrainRequest {
+            complexity_crews: &Default::default(),
             grant_id: Some(grant_id),
             for_seconds: Some(600),
             max_active_leaf_runs: None,
@@ -917,4 +918,68 @@ fn ordinary_expiry_closes_admission_and_promotion_but_keeps_captured_completion(
         .expect("expiry keeps captured completion");
     // And a new window is not implied: the workspace has no active grant.
     assert!(runtime.active_operation_grant().expect("active").is_none());
+}
+
+#[test]
+fn grant_bound_drain_uses_complexity_override_without_widening_authority() {
+    let fixture = fixture("[workflow]\nmedium_complexity_crews = [\"grok\"]\n");
+    let runtime = &fixture.runtime;
+    let task = seed_task(runtime, "Grant crew pool fixture", TaskStatus::Backlog);
+    runtime
+        .update_task(
+            &task.id,
+            crate::application::task::TaskUpdateParams {
+                complexity: Some(orbit_types::task::TaskComplexity::Medium),
+                ..Default::default()
+            },
+        )
+        .expect("assess complexity");
+    let grant = enable(
+        runtime,
+        std::slice::from_ref(&task.id),
+        GrantRights {
+            prepare: true,
+            promote: true,
+            complete: false,
+        },
+        OperationLayer::default(),
+    );
+    let _worker = WorkerOverride::install();
+    let drain = runtime
+        .submit_operation_drain(OperationDrainRequest {
+            grant_id: Some(&grant.id),
+            for_seconds: Some(600),
+            max_active_leaf_runs: Some(1),
+            allowed_crews: &["terra".into()],
+            complexity_crews: &orbit_config::ComplexityCrewPools {
+                medium: Some(vec!["terra".into()]),
+                ..Default::default()
+            },
+            actor: Some("tester"),
+            claim_token: None,
+        })
+        .expect("grant-bound pool override");
+    let ChildSubmission::Submitted(child) = admit_leaf(runtime, &drain.invoke.run_id, &task.id)
+    else {
+        panic!("admitted");
+    };
+    let input = runtime
+        .get_job_run_backend(&child.run_id)
+        .expect("read child")
+        .expect("child")
+        .input
+        .expect("input");
+    assert_eq!(input["crew"], "terra");
+    assert_eq!(
+        input["crew_selection"]["source"],
+        "run_input.medium_complexity_crews"
+    );
+    assert_eq!(input["allowed_crews"], json!(["terra"]));
+    assert_eq!(input[OPERATION_ADMISSION_KEY]["grant_id"], grant.id);
+    assert_eq!(input[OPERATION_ADMISSION_KEY]["limits"]["leaf_ceiling"], 1);
+    stop(runtime, &grant.id);
+    assert_eq!(
+        classify(runtime, &drain.invoke.run_id)["loose_task_ids"],
+        json!([])
+    );
 }
