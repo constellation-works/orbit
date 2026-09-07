@@ -92,6 +92,24 @@ clusters failures by a normalized error signature that prefers a concrete test
 or panic identity over ANSI styling, generic runner/cargo/nextest trailers, and
 assertion payload help text; the raw excerpt stays in the description.
 
+CI evidence schema 2 binds each failure row to one failed job: both log scopes
+select that job, and checkout provenance carries its job ID. Diagnostic excerpts
+that are missing or truncated, unknown/ambiguous failed steps, incomplete
+checkout identity, and exhausted read budgets defer that job; complete siblings
+still file. `max_job_log_reads` caps failed-job reads across the snapshot (default
+6, maximum 25); `max_checkout_log_reads` separately caps additional same-job
+checkout reads (default 3, maximum 25). The rotating investigation slot also
+rotates overflow jobs in stable ID order. Legacy schema-1 failures require
+recollection because their run-wide logs and checkout scans cannot establish
+job attribution. Neither event nor PR head can substitute for runner checkout.
+
+Read-only verification: inspect the run's job metadata with `gh run view <run>
+--json databaseId,jobs --repo <owner/repo>`, then use the production bounded log
+reader with explicit `run`, `job`, and `scope` for each failed job. Compare each
+row's job ID, diagnostic, and checkout provenance with that supplying job; repeat
+with reversed metadata order and a one-job budget. Do not download whole logs
+into memory or use a sweep that files tasks merely to verify collection.
+
 ### The `completion` input
 
 Every pipeline above that ships a task takes a `completion` input, defaulting to

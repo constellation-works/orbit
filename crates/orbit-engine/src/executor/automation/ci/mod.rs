@@ -21,6 +21,7 @@
 //! [`OUTCOME_RETRYABLE_ERROR`] (a bounded discovery or investigation failed).
 
 mod collect;
+mod investigate;
 mod query;
 
 pub(in crate::executor::automation) use query::AuthStatus;

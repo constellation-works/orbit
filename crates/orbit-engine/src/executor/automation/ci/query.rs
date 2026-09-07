@@ -61,6 +61,7 @@ pub(super) struct RunLog {
     /// after the run-scoped read came back empty.
     pub(super) source: String,
     /// Identity of the job whose log was read, when the fallback supplied it.
+    /// Primary reads are bound by the explicit job_id query argument.
     pub(super) source_jobs: Vec<Value>,
     /// Why the fallback recovered nothing. Present only when the read ends
     /// with no text at all, so the run's evidence gap can name its own cause.
@@ -94,6 +95,7 @@ pub(super) trait CiQueries {
     fn run_logs(
         &self,
         run_id: &str,
+        job_id: u64,
         scope: LogScope,
         max_bytes: usize,
     ) -> Result<RunLog, OrbitError>;
@@ -199,20 +201,31 @@ impl CiQueries for HostCiQueries {
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError> {
         let request = github_cli::run_view_request(&json!({"run": run_id}))?;
         let stdout = self.run_gh(request, "gh run view")?;
-        Ok(github_cli::project_run_view(&github_cli::parse_gh_json(
-            &stdout,
-            "gh run view",
-        )?))
+        let view =
+            github_cli::project_run_view(&github_cli::parse_gh_json(&stdout, "gh run view")?);
+        if view
+            .get("run_id")
+            .and_then(Value::as_u64)
+            .map(|id| id.to_string())
+            .as_deref()
+            != Some(run_id)
+        {
+            return Err(OrbitError::Execution(
+                "gh run view returned a different or missing run identity".to_string(),
+            ));
+        }
+        Ok(view)
     }
 
     fn run_logs(
         &self,
         run_id: &str,
+        job_id: u64,
         scope: LogScope,
         max_bytes: usize,
     ) -> Result<RunLog, OrbitError> {
         let requests = github_cli::RunLogRequests::from_input(
-            &json!({"run": run_id, "scope": scope.as_str()}),
+            &json!({"run": run_id, "job": job_id, "scope": scope.as_str()}),
         )?
         .in_directory(&self.repo_root.to_string_lossy());
         let read = github_cli::read_run_log(&requests, github_cli::LogReadBounds::new(max_bytes))?;

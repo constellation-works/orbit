@@ -54,6 +54,9 @@ pub(super) fn failure(
 ) -> Value {
     json!({
         "run_id": run_id,
+        "job_id": 900 + run_id,
+        "log_job_id": 900 + run_id,
+        "checkout_identity": {"state": "observed", "provenance": {"job_id": 900 + run_id, "complete": true}},
         "workflow": workflow,
         "title": format!("{workflow} on {HEAD}"),
         "status": "completed",
@@ -86,7 +89,7 @@ pub(super) fn failure(
 pub(super) fn snapshot(current: Vec<Value>) -> Value {
     let latest = current.clone();
     json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "collected": true,
         "outcome_hint": if current.is_empty() { "no_current_failure" } else { "current_failures" },
         "capability": {
@@ -148,7 +151,7 @@ fn a_snapshot_that_could_not_look_reports_capability_unavailable_and_files_nothi
     let output = file(
         &runtime,
         json!({"ci_evidence": {
-            "schema_version": 1,
+            "schema_version": 2,
             "collected": false,
             "outcome_hint": "capability_unavailable",
             "capability": {
@@ -428,6 +431,10 @@ fn an_excerpt_recovered_from_a_job_log_is_labelled_as_the_whole_job_log() {
     );
     // Collection could not read the run-scoped failed-step log and recovered
     // the excerpt from the failed job's own log instead.
+    recovered["job_id"] = json!(101_560_010_340_u64);
+    recovered["log_job_id"] = recovered["job_id"].clone();
+    recovered["failed_jobs"][0]["job_id"] = recovered["job_id"].clone();
+    recovered["checkout_identity"]["provenance"]["job_id"] = recovered["job_id"].clone();
     recovered["log_source"] = json!("job_api_log");
     recovered["log_source_jobs"] = json!([{
         "job_id": 101_560_010_340_u64,
@@ -477,6 +484,9 @@ fn live_run_fixture_files_once_with_complete_actionable_evidence() {
         ),
         SHA,
     );
+    live["job_id"] = json!(JOB_ID);
+    live["log_job_id"] = json!(JOB_ID);
+    live["checkout_identity"]["provenance"]["job_id"] = json!(JOB_ID);
     live["url"] = json!(RUN_URL);
     live["event_reported_head_sha"] = json!(SHA);
     live["current_ref_head_sha"] = json!(SHA);
@@ -2007,5 +2017,136 @@ fn a_finding_whose_own_run_failed_a_query_is_deferred_not_filed_from_partial_evi
     assert_eq!(
         deferred[0]["reasons"][0]["operation"],
         json!("checkout_evidence")
+    );
+}
+
+fn two_job_findings() -> Vec<Value> {
+    let first = failure(
+        10,
+        "CI",
+        "Clippy",
+        "Run guardrails",
+        "error: unused import",
+        CHECKOUT,
+    );
+    let mut second = failure(
+        10,
+        "CI",
+        "Coverage",
+        "Collect coverage",
+        "test output_goldens FAILED",
+        NEXT_HEAD,
+    );
+    second["job_id"] = json!(920);
+    second["log_job_id"] = json!(920);
+    second["failed_jobs"][0]["job_id"] = json!(920);
+    second["checkout_identity"]["provenance"]["job_id"] = json!(920);
+    vec![first, second]
+}
+
+#[test]
+fn two_failed_jobs_file_distinct_correct_findings_regardless_of_order() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let findings = two_job_findings();
+    let first = file(&runtime, json!({"ci_evidence": snapshot(findings.clone())}));
+    assert_eq!(first["filed_count"], 2);
+    let ids = filed_task_ids(&first);
+    let clippy = runtime.get_task(&ids[0]).expect("clippy task");
+    let coverage = runtime.get_task(&ids[1]).expect("coverage task");
+    assert!(clippy.title.contains("Clippy"));
+    assert!(clippy.description.contains("unused import"));
+    assert!(!clippy.description.contains("output_goldens"));
+    assert!(coverage.title.contains("Coverage"));
+    assert!(coverage.description.contains("output_goldens"));
+    assert!(!coverage.description.contains("unused import"));
+    assert_ne!(
+        first["filed"][0]["failure_key"],
+        first["filed"][1]["failure_key"]
+    );
+    assert_eq!(first["filed"][0]["tested_commit"], CHECKOUT);
+    assert_eq!(first["filed"][1]["tested_commit"], NEXT_HEAD);
+    let mut reversed = findings;
+    reversed.reverse();
+    let second = file(&runtime, json!({"ci_evidence": snapshot(reversed)}));
+    assert_eq!(second["filed_count"], 0);
+    assert_eq!(
+        second["skipped_existing"].as_array().expect("skips").len(),
+        2
+    );
+}
+
+#[test]
+fn one_jobs_retryable_error_defers_only_that_job() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut findings = two_job_findings();
+    findings[0]["investigated"] = json!(false);
+    let mut evidence = snapshot(findings);
+    evidence["retryable_errors"] = json!([{
+        "run_id": 10, "job_id": 910, "operation": "run_logs", "message": "job log unavailable",
+    }]);
+    let output = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(output["filed_count"], 1);
+    assert_eq!(output["filed"][0]["job"], "Coverage");
+    assert_eq!(output["deferred"][0]["job_id"], 910);
+    assert_eq!(output["deferred"][0]["reasons"][0]["job_id"], 910);
+    assert_eq!(output["deferred"].as_array().expect("deferred").len(), 1);
+}
+
+#[test]
+fn unbound_legacy_and_incomplete_job_snapshots_require_recollection() {
+    for defect in [
+        "legacy",
+        "fallback",
+        "checkout",
+        "truncated",
+        "missing",
+        "steps",
+    ] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let mut findings = two_job_findings();
+        findings.truncate(1);
+        let mut evidence = snapshot(findings);
+        let finding = &mut evidence["current_failures"][0];
+        match defect {
+            "fallback" => {
+                finding["log_source"] = json!("job_api_log");
+                finding["log_source_jobs"] = json!([{"job_id": 920}]);
+            }
+            "checkout" => finding["checkout_identity"]["provenance"]["job_id"] = json!(920),
+            "truncated" => finding["log_truncated"] = json!(true),
+            "missing" => finding["log_excerpt"] = json!(""),
+            "steps" => {
+                finding["failed_jobs"][0]["failed_steps"] = json!([{"name": "A"}, {"name": "B"}])
+            }
+            _ => evidence["schema_version"] = json!(1),
+        }
+        let error = file_error(&runtime, json!({"ci_evidence": evidence}));
+        assert!(error.contains("job_evidence_identity"), "{defect}: {error}");
+        assert!(
+            runtime
+                .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+                .expect("tasks")
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn legacy_multi_job_snapshot_cannot_label_coverage_log_as_clippy() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let findings = two_job_findings();
+    let mut combined = findings[0].clone();
+    combined["failed_jobs"] =
+        json!([findings[0]["failed_jobs"][0], findings[1]["failed_jobs"][0],]);
+    combined["log_excerpt"] = json!("Coverage\tCollect coverage\ttest output_goldens FAILED\n");
+    let mut evidence = snapshot(vec![combined]);
+    evidence["schema_version"] = json!(1);
+    let error = file_error(&runtime, json!({"ci_evidence": evidence}));
+    assert!(error.contains("legacy run-scoped evidence"), "{error}");
+    assert!(
+        runtime
+            .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+            .expect("tasks")
+            .is_empty()
     );
 }
