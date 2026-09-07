@@ -1509,6 +1509,120 @@ fn unregister_task_bundle_removes_binding_indexes_and_relation_edges() {
 }
 
 #[test]
+fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace_a_root = temp.path().join("workspace-a");
+    let workspace_b_root = temp.path().join("workspace-b");
+    let bind_workspace = |workspace_id: &str, root: &Path| {
+        let orbit_dir = root.join(".orbit");
+        fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+        store
+            .bind_workspace(BindWorkspaceParams {
+                workspace_id: Some(workspace_id.into()),
+                slug: workspace_id.into(),
+                repo_root: root.to_path_buf(),
+                workspace_path: root.to_path_buf(),
+                orbit_dir,
+                repo_fingerprint: None,
+            })
+            .expect("bind workspace")
+    };
+    let workspace_a = bind_workspace("ws_a", &workspace_a_root);
+    let workspace_b = bind_workspace("ws_b", &workspace_b_root);
+
+    for task_id in ["ORB-1", "ORB-2"] {
+        let bundle_dir = create_canonical_bundle(&store, &workspace_b, task_id);
+        store
+            .register_task_bundle(task_id, &workspace_b.workspace_id, &bundle_dir)
+            .expect("register bundle");
+    }
+    store
+        .replace_task_index(
+            &workspace_b.workspace_id,
+            &envelope(
+                "ORB-1",
+                TaskStatus::Backlog,
+                vec!["sibling".into()],
+                Vec::new(),
+            ),
+        )
+        .expect("index tagged task");
+    store
+        .replace_task_index(
+            &workspace_b.workspace_id,
+            &envelope(
+                "ORB-2",
+                TaskStatus::Backlog,
+                Vec::new(),
+                vec![TaskRelation {
+                    relation_type: TaskRelationType::BlockedBy,
+                    target: "ORB-1".to_string(),
+                }],
+            ),
+        )
+        .expect("index inbound relation");
+
+    let versions_before = store
+        .indexed_task_versions_for_workspace(&workspace_b.workspace_id)
+        .expect("versions before unregister");
+    let tagged_before = store
+        .indexed_task_ids_filtered(
+            &workspace_b.workspace_id,
+            &TaskIndexFilter {
+                status: None,
+                priority: None,
+                job_run_id: None,
+                tags: vec!["sibling".into()],
+            },
+        )
+        .expect("tagged tasks before unregister");
+    let relation_sources_before = store
+        .indexed_relation_sources(
+            &workspace_b.workspace_id,
+            "ORB-1",
+            TaskRelationType::BlockedBy,
+        )
+        .expect("relation sources before unregister");
+
+    assert!(
+        !store
+            .unregister_task_bundle("ORB-1", &workspace_a.workspace_id)
+            .expect("unregister sibling task")
+    );
+    assert_eq!(
+        store
+            .indexed_task_versions_for_workspace(&workspace_b.workspace_id)
+            .expect("versions after unregister"),
+        versions_before
+    );
+    assert_eq!(
+        store
+            .indexed_task_ids_filtered(
+                &workspace_b.workspace_id,
+                &TaskIndexFilter {
+                    status: None,
+                    priority: None,
+                    job_run_id: None,
+                    tags: vec!["sibling".into()],
+                },
+            )
+            .expect("tagged tasks after unregister"),
+        tagged_before
+    );
+    assert_eq!(
+        store
+            .indexed_relation_sources(
+                &workspace_b.workspace_id,
+                "ORB-1",
+                TaskRelationType::BlockedBy,
+            )
+            .expect("relation sources after unregister"),
+        relation_sources_before
+    );
+}
+
+#[test]
 fn projection_rebuild_creates_and_repairs_symlinks() {
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);

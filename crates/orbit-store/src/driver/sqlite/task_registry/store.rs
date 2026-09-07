@@ -564,6 +564,13 @@ impl TaskRegistryStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
 
+        let Some(binding) = task_bundle_by_id(&tx, task_id)? else {
+            return Ok(false);
+        };
+        if binding.workspace_id != workspace_id {
+            return Ok(false);
+        }
+
         tx.execute(
             "DELETE FROM task_bundle_relations
              WHERE source_task_id = ?1 OR target_task_id = ?1",
