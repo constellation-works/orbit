@@ -79,6 +79,43 @@ fn set_parses_toml_literal_types_not_just_strings() {
 }
 
 #[test]
+fn set_descends_through_inline_tables() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    fs::write(&path, "execution = { env = { pass = [\"A\"] } }\n").expect("write config");
+
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    store
+        .set_value("execution.env.pass", "[\"A\",\"B\"]")
+        .expect("set value through inline tables");
+    store.validate().expect("validate");
+    store.save().expect("save");
+
+    let saved = fs::read_to_string(&path).expect("read saved config");
+    assert!(saved.contains("A"), "{saved}");
+    assert!(saved.contains("B"), "{saved}");
+}
+
+#[test]
+fn set_rejects_scalar_ancestor_with_existing_message() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    fs::write(&path, "execution = 1\n").expect("write config");
+
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    let error = store
+        .set_value("execution.env.pass", "[\"A\"]")
+        .expect_err("scalar ancestor must be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("'execution' along its path is already a non-table value"),
+        "{error}"
+    );
+}
+
+#[test]
 fn set_falls_back_to_plain_string_for_non_literal_values() {
     let dir = tempdir().expect("tempdir");
     let path = config_path(dir.path());

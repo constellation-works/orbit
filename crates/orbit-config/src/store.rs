@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value as JsonValue;
-use toml_edit::{DocumentMut, Item, Table};
+use toml_edit::{DocumentMut, Item, Table, TableLike};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
@@ -170,12 +170,12 @@ impl ConfigStore {
             OrbitError::InvalidInput(format!("config key '{key}' must not be empty"))
         })?;
 
-        let mut table: &mut Table = self.doc.as_table_mut();
+        let mut table: &mut dyn TableLike = self.doc.as_table_mut();
         for segment in ancestors {
             let item = table
                 .entry(segment)
                 .or_insert_with(|| Item::Table(Table::new()));
-            table = item.as_table_mut().ok_or_else(|| {
+            table = item.as_table_like_mut().ok_or_else(|| {
                 OrbitError::InvalidInput(format!(
                     "cannot set '{key}': '{segment}' along its path is already a non-table value \
                      in '{}'",
