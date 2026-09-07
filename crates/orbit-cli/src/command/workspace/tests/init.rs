@@ -10,7 +10,10 @@ use orbit_types::workspace::{
 
 use crate::tests::env_isolation::EnvGuard;
 
-use super::super::init::{ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id};
+use super::super::init::{
+    ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id,
+    onboarding_finalize_guidance,
+};
 use super::super::list::{format_workspace_list, workspace_list_json};
 use super::super::role::CliCheckoutRole;
 use super::super::show::format_workspace_show;
@@ -1714,6 +1717,20 @@ fn workspace_init_with_root_override_does_not_modify_repo_gitignore() {
         !gitignore.exists(),
         "`--root` outside the workspace must not create <workspace>/.gitignore",
     );
+
+    let guidance = onboarding_finalize_guidance(workspace.path(), &custom_root);
+    assert!(
+        !guidance.contains("review and commit"),
+        "relocated-root guidance must not tell operators to commit checkout files: {guidance}"
+    );
+    assert!(
+        !guidance.contains(".gitignore"),
+        "relocated-root guidance must not name a checkout .gitignore: {guidance}"
+    );
+    assert!(
+        !guidance.contains(".orbit/auto_tasks") && !guidance.contains(".orbit/routines"),
+        "relocated-root guidance must not name checkout-local definitions: {guidance}"
+    );
 }
 
 /// Regression (ORB-10293): a nameless workspace whose default name is derived
@@ -1814,6 +1831,11 @@ fn workspace_init_guidance_and_generated_onboarding_files_lifecycle() {
     assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".orbit/routines"));
     assert!(ONBOARDING_FINALIZE_GUIDANCE.contains("review and commit"));
     assert!(ONBOARDING_FINALIZE_GUIDANCE.contains("does not auto-commit or discard"));
+    assert_eq!(
+        onboarding_finalize_guidance(workspace.path(), &workspace.path().join(".orbit")),
+        ONBOARDING_FINALIZE_GUIDANCE,
+        "checkout-local initialization must retain the commit guidance"
+    );
 
     let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
     WorkspaceInitArgs {
