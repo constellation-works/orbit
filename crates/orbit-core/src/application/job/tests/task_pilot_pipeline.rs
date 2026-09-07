@@ -130,7 +130,10 @@ fn execute_task_pilot_job(
 
 fn assert_job_resolves_branch(config_branch: &str, input: Value, expected_branch: &str) {
     let fixture = task_pilot_job_fixture(config_branch, expected_branch);
-    let run_id = format!("task-pilot-{config_branch}-{expected_branch}");
+    // Keep branch fixtures out of the execution identity. The identity is
+    // used to seed non-cryptographic retry jitter, so test branch literals
+    // must not flow into it as though they were cryptographic salt.
+    let run_id = std::process::id().to_string();
     let outcome = execute_task_pilot_job(&fixture, input, &run_id)
         .expect("shipped task-pilot job must render and reach preparation");
 
