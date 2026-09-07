@@ -52,6 +52,7 @@ pub struct PrOpenTestHost {
     vcs_errors: Mutex<HashMap<String, String>>,
     queued_vcs_results: Mutex<HashMap<String, VecDeque<Result<Value, String>>>>,
     pr_exists: Mutex<bool>,
+    provider_completion: bool,
     activity_updates: Mutex<Vec<(String, TaskActivityUpdate)>>,
     review_landings: Mutex<Vec<ReviewLandingRequest>>,
 }
@@ -73,9 +74,16 @@ impl PrOpenTestHost {
             vcs_errors: Mutex::new(HashMap::new()),
             queued_vcs_results: Mutex::new(HashMap::new()),
             pr_exists: Mutex::new(false),
+            provider_completion: false,
             activity_updates: Mutex::new(Vec::new()),
             review_landings: Mutex::new(Vec::new()),
         }
+    }
+
+    #[cfg(unix)]
+    pub fn with_provider_completion(mut self) -> Self {
+        self.provider_completion = true;
+        self
     }
 
     pub fn review_landings(&self) -> Vec<ReviewLandingRequest> {
@@ -451,6 +459,12 @@ impl RuntimeHost for PrOpenTestHost {
                 operation: operation.to_string(),
                 input: input.clone(),
             });
+
+        if self.provider_completion
+            && matches!(operation, operations::PR_STATUS | operations::PR_MERGE)
+        {
+            return operations::run(operation, &input);
+        }
 
         if let Some(message) = self
             .vcs_errors

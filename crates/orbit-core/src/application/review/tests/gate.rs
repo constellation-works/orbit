@@ -814,3 +814,64 @@ fn a_landing_on_a_moved_base_or_with_later_edits_stays_uncovered() {
     exclusions(&edited.fixture.runtime, &source, &state, &mut page).expect("exclusions");
     assert!(page.exclusions.is_empty(), "later edits are uncovered");
 }
+
+#[test]
+fn externally_completed_merge_is_audited_and_keeps_review_coverage_open() {
+    let gated = gated_fixture(GATED_CONFIG);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+    write_report(
+        &gated.fixture.runtime,
+        &gated.task_id,
+        &report(attempt_id, ReviewVerdict::PassedWithoutRepairs, false),
+    );
+    gated.settle(&admission).expect("pass");
+    let runtime = &gated.fixture.runtime;
+    let source = Source::new(&gated.fixture.repo);
+    let repository = source.repository().expect("repository");
+    let delivery = land_squash(&gated, &repository);
+
+    crate::application::review::record_review_landing(
+        runtime,
+        &orbit_engine::ReviewLandingRequest {
+            run_id: gated.run_id.clone(),
+            task_ids: vec![gated.task_id.clone()],
+            workspace_path: gated.fixture.repo.clone(),
+            pr_number: "42".into(),
+            base: "main".into(),
+            reviewed_head_sha: gated.implementation_sha.clone(),
+            managed_merge: false,
+            landed_commit: Some(delivery.after.commit.clone()),
+        },
+    )
+    .expect("record observed external landing");
+    let landings = runtime
+        .review_store()
+        .expect("review store")
+        .review_landings(attempt_id)
+        .expect("landings");
+    assert_eq!(landings.len(), 1);
+    assert!(!landings[0].covered);
+    assert_eq!(landings[0].reason.as_deref(), Some("external_landing_race"));
+    assert_eq!(landings[0].landed.commit, delivery.after.commit);
+
+    let (state, mut page) = page_for(&delivery);
+    exclusions(runtime, &source, &state, &mut page).expect("coverage");
+    assert!(
+        page.exclusions.is_empty(),
+        "even the same tree stays uncovered after an external merge"
+    );
+    let audits = runtime
+        .list_audit_events(None, None, None, None, 100)
+        .expect("audits");
+    assert!(
+        audits
+            .iter()
+            .filter_map(|audit| audit.arguments_json.as_deref())
+            .filter_map(|args| serde_json::from_str::<Value>(args).ok())
+            .any(|args| args["phase"] == "landing"
+                && args["managed_merge"] == false
+                && args["reason"] == "external_landing_race"),
+        "external landing audit carries its provenance"
+    );
+}

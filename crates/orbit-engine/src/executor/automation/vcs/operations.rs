@@ -181,6 +181,14 @@ fn pr_merge(input: &Value) -> Result<Value, OrbitError> {
     // required check and branch protection. There is deliberately no
     // administrative bypass (`--admin`) in this surface.
     let auto = input.get("auto").and_then(Value::as_bool).unwrap_or(false);
+    if let Some(reviewed_head) = optional_string(input, "reviewed_head_sha") {
+        if auto {
+            return Err(OrbitError::InvalidInput(
+                "review_gate_stale: deferred auto-merge cannot guarantee the reviewed head; wait for checks and request a synchronous merge".to_string(),
+            ));
+        }
+        return pr_merge_reviewed(selector, workspace_path, strategy, reviewed_head);
+    }
     let mut args = vec![
         "pr".to_string(),
         "merge".to_string(),
@@ -200,6 +208,60 @@ fn pr_merge(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({
         "stdout": result.stdout,
         "stderr": result.stderr,
+    }))
+}
+
+/// Use the synchronous REST mutation: `sha` is checked by GitHub when it
+/// merges, and this endpoint never enables auto-merge or enters a merge queue.
+/// `gh pr merge --match-head-commit` alone is insufficient because the CLI
+/// can choose deferred semantics for a queue-required branch.
+fn pr_merge_reviewed(
+    selector: &str,
+    workspace_path: &str,
+    strategy: &str,
+    reviewed_head: &str,
+) -> Result<Value, OrbitError> {
+    // Managed completion supplies a number in the current repository. Refuse
+    // other selectors here rather than resolving a URL into a different repo.
+    if selector.is_empty() || !selector.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(OrbitError::InvalidInput(
+            "reviewed PR merge requires a pull request number in the workspace repository".into(),
+        ));
+    }
+    if !valid_expected_remote_sha(Some(reviewed_head)) {
+        return Err(OrbitError::InvalidInput(
+            "reviewed PR merge requires an exact 40- or 64-character reviewed_head_sha".into(),
+        ));
+    }
+    let result = execute(
+        "gh",
+        vec![
+            "api".to_string(),
+            format!("repos/{{owner}}/{{repo}}/pulls/{selector}/merge"),
+            "--method".to_string(),
+            "PUT".to_string(),
+            "-f".to_string(),
+            format!("sha={reviewed_head}"),
+            "-f".to_string(),
+            format!("merge_method={strategy}"),
+        ],
+        Some(Path::new(workspace_path)),
+        SLOW_TIMEOUT_MS,
+        "reviewed PR merge",
+    )?;
+    let response: Value = serde_json::from_str(&result.stdout).map_err(|error| {
+        OrbitError::Execution(format!("reviewed PR merge returned invalid JSON: {error}"))
+    })?;
+    if response.get("merged").and_then(Value::as_bool) != Some(true) {
+        return Err(OrbitError::Execution(
+            "reviewed PR merge did not confirm a synchronous merge; deferred merges are unsupported".into(),
+        ));
+    }
+    let landed_commit = required_string(&response, "sha")?;
+    Ok(json!({
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "landed_commit": landed_commit,
     }))
 }
 
