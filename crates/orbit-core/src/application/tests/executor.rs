@@ -300,6 +300,52 @@ fn seed_default_executors_upgrades_old_unsandboxed_linux_default() {
 }
 
 #[test]
+fn explicit_off_survives_repeated_seeding_and_legacy_executor_type_migration() {
+    for platform in [LINUX, MACOS, "windows"] {
+        let store = InMemoryExecutorStore::default();
+        for name in SANDBOXED_SHIPPED {
+            let mut def = base_def(name, ExecutorType::AgentCli);
+            def.sandbox = Some(ExecutorSandboxKind::Off);
+            store
+                .upsert_executor_def(&def)
+                .expect("install explicit off");
+        }
+
+        seed_default_executors_for_platform(&store, false, platform).expect("migrate type");
+        assert_eq!(
+            seed_default_executors_for_platform(&store, false, platform).expect("reseed"),
+            0
+        );
+        for name in SANDBOXED_SHIPPED {
+            let def = store
+                .get_executor_def(name)
+                .expect("load")
+                .expect("present");
+            assert_eq!(
+                def.sandbox,
+                Some(ExecutorSandboxKind::Off),
+                "{name} on {platform}"
+            );
+            assert_eq!(def.executor_type, ExecutorType::DirectAgent);
+        }
+
+        // Explicit overwrite still means replacing operator customizations.
+        seed_default_executors_for_platform(&store, true, platform).expect("overwrite");
+        let expected = parse_default_executor_for_platform("codex", yaml_for("codex"), platform)
+            .expect("shipped choice")
+            .sandbox;
+        assert_eq!(
+            store
+                .get_executor_def("codex")
+                .expect("load")
+                .expect("present")
+                .sandbox,
+            expected
+        );
+    }
+}
+
+#[test]
 fn custom_executor_sandbox_choice_is_not_rewritten_by_seed_migration() {
     let store = InMemoryExecutorStore::default();
     let mut custom = base_def("custom", ExecutorType::DirectAgent);

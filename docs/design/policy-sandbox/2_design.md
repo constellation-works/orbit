@@ -133,6 +133,26 @@ Activity-scoped `proc.spawn` supplies a request-time `Sandbox` validator at this
 
 The `Sandbox` trait remains the seam for generic `run_process` callers, but CLI-backed `agent_loop` invocations use a separate executor wrapper when the executor declares `sandbox: macos-sandbox-exec` ([T20260427-51]). The v2 host resolves the activity `fsProfile`; the engine converts workspace-relative rules to absolute roots and compiles SBPL before spawning the provider CLI.
 
+Executor resources also accept `spec.sandbox: off` as a persistent operator
+opt-out. It survives non-overwriting seeding and normal resource sync, unlike
+omitted/null values on legacy Linux defaults, which migrate to `linux-bwrap`.
+The host carries the explicit off descriptor to the runner without resolving
+filesystem grants; preparation chooses no wrapper and performs no capability
+probe. The runner neutralizes supported provider-inner sandbox flags and audits
+`sandbox_backend: off` with unrestricted read/write enforcement. Bare fallback
+and unspecified settings retain their existing provider delegation behavior.
+Orbit tool authorization and policy checks remain active. See the
+[operator instructions](../../runbooks/linux-sandbox.md#explicitly-disable-worker-sandboxing)
+for the resource path and introspection commands.
+
+Compatibility is directional: new readers accept existing schema-version-2
+resources, but old closed-enum readers reject `off`. Updating a binary on disk
+does not replace persistent MCP servers or active drain/workflow runners.
+Shared executor files must keep their prior values until those readers and
+other runtime-opening processes have restarted on the new build; rollback
+must restore the old concrete values before restarting old readers. The
+runbook specifies the staged rollout and authoritative-MCP verification order.
+
 The macOS wrapper resolves `sandbox-exec` from trusted absolute locations only, currently `/usr/bin/sandbox-exec`; it does not consult `PATH` for either availability checks or process spawn. If the trusted binary is missing, the runner fails closed unless the executor declares `allow_fallback: true`, and the error names the trusted location that was probed ([T20260509-30]).
 
 The wrapper also prepares Codex's TLS trust input before a sandboxed spawn. Its

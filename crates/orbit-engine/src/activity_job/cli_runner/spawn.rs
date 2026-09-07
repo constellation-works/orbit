@@ -81,11 +81,21 @@ impl PreparedSandbox<'_> {
 /// Resolve availability before provider argv construction. This ordering is
 /// security-sensitive: provider-native flags are neutralized only when the
 /// outer wrapper is actually usable, while an explicitly allowed bare
-/// fallback keeps those flags intact.
+/// fallback keeps those flags intact. Explicit off disables both layers.
 pub(crate) fn prepare_sandbox_for_dispatch(
     sandbox: Option<&ResolvedSandbox>,
 ) -> Result<PreparedSandbox<'_>, SpawnError> {
     match sandbox {
+        Some(sandbox) if sandbox.kind == ExecutorSandboxKind::Off => Ok(PreparedSandbox {
+            effective: None,
+            metadata: SandboxDispatchMetadata {
+                backend: Some("off".to_string()),
+                trusted_wrapper: None,
+                probe_outcome: None,
+                write_enforcement: "write_unrestricted".to_string(),
+                read_enforcement: "read_unrestricted".to_string(),
+            },
+        }),
         Some(sandbox) if sandbox.kind == ExecutorSandboxKind::LinuxBwrap => {
             let probe = probe_bwrap();
             prepare_linux_sandbox_for_dispatch_with_probe(sandbox, probe)

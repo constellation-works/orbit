@@ -1,10 +1,59 @@
 mod sandbox_kind_platform {
     use super::super::super::executor_def::ExecutorSandboxKind;
+    use crate::resource::ExecutorResource;
+
+    #[test]
+    fn sandbox_choices_round_trip_and_legacy_absence_remains_unspecified() {
+        let base = "schemaVersion: 2\nkind: Executor\nmetadata:\n  name: codex\nspec:\n  executor_type: direct_agent\n";
+        for (setting, expected) in [
+            ("", None),
+            ("  sandbox: null\n", None),
+            ("  sandbox: off\n", Some(ExecutorSandboxKind::Off)),
+            (
+                "  sandbox: linux-bwrap\n",
+                Some(ExecutorSandboxKind::LinuxBwrap),
+            ),
+            (
+                "  sandbox: macos-sandbox-exec\n",
+                Some(ExecutorSandboxKind::MacosSandboxExec),
+            ),
+        ] {
+            let resource: ExecutorResource = serde_yaml::from_str(&format!("{base}{setting}"))
+                .expect("supported executor resource");
+            assert_eq!(resource.spec.sandbox, expected);
+            let yaml = serde_yaml::to_string(&resource).expect("serialize YAML");
+            let decoded: ExecutorResource = serde_yaml::from_str(&yaml).expect("read YAML");
+            assert_eq!(decoded, resource);
+            let json = serde_json::to_string(&resource).expect("serialize JSON");
+            let decoded: ExecutorResource = serde_json::from_str(&json).expect("read JSON");
+            assert_eq!(decoded, resource);
+            if expected == Some(ExecutorSandboxKind::Off) {
+                assert_eq!(
+                    serde_json::to_value(&resource).expect("JSON")["spec"]["sandbox"],
+                    "off"
+                );
+            }
+        }
+        for malformed in ["false", "disabled", "[]", "{}", "42"] {
+            let error = serde_yaml::from_str::<ExecutorResource>(&format!(
+                "{base}  sandbox: {malformed}\n"
+            ))
+            .expect_err("malformed choice must not turn sandboxing off");
+            assert!(error.to_string().contains("sandbox"), "{error}");
+        }
+    }
 
     #[test]
     fn target_os_matches_std_env_consts_naming() {
-        assert_eq!(ExecutorSandboxKind::MacosSandboxExec.target_os(), "macos");
-        assert_eq!(ExecutorSandboxKind::LinuxBwrap.target_os(), "linux");
+        assert_eq!(
+            ExecutorSandboxKind::MacosSandboxExec.target_os(),
+            Some("macos")
+        );
+        assert_eq!(ExecutorSandboxKind::LinuxBwrap.target_os(), Some("linux"));
+        assert_eq!(ExecutorSandboxKind::Off.target_os(), None);
+        for platform in ["macos", "linux", "windows"] {
+            assert!(ExecutorSandboxKind::Off.is_available_on(platform));
+        }
     }
 
     #[test]
