@@ -477,6 +477,10 @@ impl RuntimeHost for FailureHandoffHost<'_> {
 fn failed_pr_pipeline_dispatches_the_failure_handoff_and_keeps_the_original_error() {
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
+    let run_id = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_default()
+        .to_string();
     let worktree_activity = global_root.join("resources/activities/worktree_setup.yaml");
     let activity_yaml = std::fs::read_to_string(&worktree_activity)
         .expect("read seeded worktree activity")
@@ -495,7 +499,7 @@ fn failed_pr_pipeline_dispatches_the_failure_handoff_and_keeps_the_original_erro
             "base_sync": "local",
             "review": false,
         }),
-        "run-pr-failure-handoff",
+        &run_id,
     )
     .expect_err("the seeded worktree failure must terminalize the run");
 
