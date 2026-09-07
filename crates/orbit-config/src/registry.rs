@@ -4,9 +4,10 @@
 //! drives TOML extraction, defaulting/validation, `orbit config keys`
 //! metadata, the resolved snapshot, and JSON lookup used by `get`/`show`.
 //! Runtime consumers read the admitted snapshot instead of re-parsing raw
-//! section structs. Dynamically named tables (`crews.*`) and removed-key
-//! migration guards remain in `raw`/`runtime` because they are not fixed
-//! settings addressable by `orbit config set`.
+//! section structs. Removed-key migration guards remain in `raw`/`runtime`.
+//! Dynamically named crew tables are not fixed registry rows, but live
+//! `crews.<name>.<field>` keys are addressable by `orbit config set`/`get`
+//! through [`admit_config_key`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -38,6 +39,20 @@ pub(crate) const DEFAULT_WORKFLOW_SYSTEM_CREW: &str = "system";
 pub(crate) const LEGACY_WORKFLOW_SYSTEM_CREW: &str = "qa";
 const LEGACY_DEFAULT_WORKFLOW_CREW: &str = "claude";
 const CONSTELLATION_DEFAULT_PROVIDER_ENV: &str = "CONSTELLATION_DEFAULT_PROVIDER";
+
+/// Live `[crews.<name>]` fields addressable as `crews.<name>.<field>`.
+///
+/// The crew name is not known at compile time, so these are not registry
+/// rows. `orbit config keys` still lists only the fixed settings.
+pub(crate) const CREW_CONFIG_FIELDS: &[&str] =
+    &["description", "effort", "model", "provider", "tags"];
+
+/// One live field on a named crew, as used by `orbit config get`/`set`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CrewFieldKey<'a> {
+    pub name: &'a str,
+    pub field: &'a str,
+}
 
 /// One settable `config.toml` key, as advertised by `orbit config keys`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,6 +343,70 @@ fn default_admission_crews() -> BTreeMap<String, Crew> {
 /// Look up one registry key's metadata.
 pub fn describe(key: &str) -> Option<&'static ConfigKeyDescriptor> {
     CONFIG_KEY_REGISTRY.iter().find(|entry| entry.key == key)
+}
+
+/// Admit a dotted key for `orbit config get`/`set`.
+///
+/// Fixed registry keys and live `crews.<name>.<field>` keys succeed. Unknown
+/// registry keys and misspelled crew fields fail with suggestions before any
+/// document mutation.
+pub fn admit_config_key(key: &str) -> Result<(), OrbitError> {
+    if describe(key).is_some() {
+        return Ok(());
+    }
+    match parse_crew_field_key(key)? {
+        Some(_) => Ok(()),
+        None => Err(OrbitError::invalid_input_with_suggestions(
+            format!("unknown config key '{key}'"),
+            all_key_names(),
+        )),
+    }
+}
+
+/// Parse `crews.<name>.<field>` when `key` is a crew-table path.
+///
+/// `None` means this is not a crew key (including the bare `crews` table).
+/// An ill-formed crew path or unknown field is an error, not a fallthrough
+/// to the fixed-key registry, so `crews.sol.effrot` is not reported as an
+/// unknown registry setting.
+pub(crate) fn parse_crew_field_key(key: &str) -> Result<Option<CrewFieldKey<'_>>, OrbitError> {
+    let mut parts = key.split('.');
+    if parts.next() != Some("crews") {
+        return Ok(None);
+    }
+    let Some(name) = parts.next() else {
+        return Ok(None);
+    };
+    let Some(field) = parts.next() else {
+        return Err(OrbitError::InvalidInput(format!(
+            "crew config keys are crews.<name>.<field>; '{key}' is missing a field"
+        )));
+    };
+    if parts.next().is_some() {
+        return Err(OrbitError::InvalidInput(format!(
+            "crew config keys are crews.<name>.<field>; '{key}' has extra segments"
+        )));
+    }
+    if name.is_empty() {
+        return Err(OrbitError::InvalidInput(
+            "crew config keys require a non-empty crew name".to_string(),
+        ));
+    }
+    if field.is_empty() {
+        return Err(OrbitError::InvalidInput(format!(
+            "crew config keys are crews.<name>.<field>; '{key}' is missing a field"
+        )));
+    }
+    if CREW_CONFIG_FIELDS.contains(&field) {
+        return Ok(Some(CrewFieldKey { name, field }));
+    }
+    Err(OrbitError::invalid_input_with_suggestions(
+        format!("unknown crew field '{field}' in '{key}'"),
+        CREW_CONFIG_FIELDS
+            .iter()
+            .map(|known| format!("crews.{name}.{known}"))
+            .collect(),
+    ))
 }
 
 /// Every settable key name, used for did-you-mean suggestions.

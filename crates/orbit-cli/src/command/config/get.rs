@@ -1,6 +1,6 @@
 use clap::Args;
-use orbit_config::{CONFIG_KEY_REGISTRY, load_effective_config};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_config::{admit_config_key, load_effective_config};
+use orbit_core::OrbitRuntime;
 use serde_json::json;
 
 use crate::command::{CommandOut, CommandOutput, Execute, Payload};
@@ -20,16 +20,11 @@ pub struct ConfigGetArgs {
 impl Execute for ConfigGetArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.scope == ConfigScopeArg::Effective {
+            admit_config_key(&self.key)?;
             let effective = load_effective_config(&runtime_config_roots(runtime))?;
-            let value = effective.value_for(&self.key).ok_or_else(|| {
-                OrbitError::invalid_input_with_suggestions(
-                    format!("unknown config key '{}'", self.key),
-                    CONFIG_KEY_REGISTRY
-                        .iter()
-                        .map(|descriptor| descriptor.key.to_string())
-                        .collect(),
-                )
-            })?;
+            let value = effective
+                .value_for(&self.key)
+                .unwrap_or(serde_json::Value::Null);
             if self.json {
                 return Ok(Payload::document(json!({
                     "key": self.key,

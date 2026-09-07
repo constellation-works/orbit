@@ -133,21 +133,25 @@ impl ConfigStore {
     /// show` and `orbit config get` so they report identical values for the
     /// same scope.
     pub fn snapshot(&self) -> Result<ConfigSnapshot, OrbitError> {
-        // Persistence paths are derived from the two data roots, not from
-        // the config document, and are irrelevant to key validation here;
-        // this is discarded by every caller of `snapshot()`.
-        let persistence =
-            PersistenceConfig::default_for_data_root(self.path.parent().unwrap_or(&self.path));
-        let raw = self.doc.to_string();
-        let resolved = ResolvedConfig::from_raw_str(&raw, &self.path, persistence)?;
-        Ok(resolved.snapshot)
+        Ok(self.resolved()?.snapshot)
     }
 
-    /// Look up the effective value of a single registry key.
+    fn resolved(&self) -> Result<ResolvedConfig, OrbitError> {
+        // Persistence paths are derived from the two data roots, not from
+        // the config document, and are irrelevant to key validation here.
+        let persistence =
+            PersistenceConfig::default_for_data_root(self.path.parent().unwrap_or(&self.path));
+        ResolvedConfig::from_raw_str(&self.doc.to_string(), &self.path, persistence)
+    }
+
+    /// Look up the effective value of a single admitted key.
     pub fn effective_value(&self, key: &str) -> Result<JsonValue, OrbitError> {
-        require_known_key(key)?;
-        let snapshot = self.snapshot()?;
-        Ok(snapshot.value_for(key).unwrap_or(JsonValue::Null))
+        registry::admit_config_key(key)?;
+        let resolved = self.resolved()?;
+        if let Some(value) = resolved.snapshot.value_for(key) {
+            return Ok(value);
+        }
+        Ok(crew_field_value(&resolved, key)?.unwrap_or(JsonValue::Null))
     }
 
     /// Set `key` to the TOML-literal-or-string parse of `raw_value`,
@@ -155,13 +159,13 @@ impl ConfigStore {
     /// [`Self::validate`] and then [`Self::save`] afterward — `set_value`
     /// never touches disk.
     pub fn set_value(&mut self, key: &str, raw_value: &str) -> Result<(), OrbitError> {
-        require_known_key(key)?;
+        registry::admit_config_key(key)?;
         let value = parse_value_literal(raw_value);
         let segments: Vec<&str> = key.split('.').collect();
-        // `require_known_key` above already rejects `key` unless it matches
-        // a non-empty registry entry, so `split_last` is always `Some` here;
-        // handled as an error rather than `expect()` since this is
-        // reachable from user input, not a purely local invariant.
+        // `admit_config_key` above already rejects `key` unless it is a
+        // dotted registry or crew-field path, so `split_last` is always
+        // `Some` here; handled as an error rather than `expect()` since
+        // this is reachable from user input, not a purely local invariant.
         let (last, ancestors) = segments.split_last().ok_or_else(|| {
             OrbitError::InvalidInput(format!("config key '{key}' must not be empty"))
         })?;
@@ -214,15 +218,21 @@ impl ConfigStore {
     }
 }
 
-fn require_known_key(key: &str) -> Result<(), OrbitError> {
-    if registry::describe(key).is_some() {
-        Ok(())
-    } else {
-        Err(OrbitError::invalid_input_with_suggestions(
-            format!("unknown config key '{key}'"),
-            registry::all_key_names(),
-        ))
-    }
+fn crew_field_value(resolved: &ResolvedConfig, key: &str) -> Result<Option<JsonValue>, OrbitError> {
+    let Some(parsed) = registry::parse_crew_field_key(key)? else {
+        return Ok(None);
+    };
+    let Some(crew) = resolved.crews.get(parsed.name) else {
+        return Ok(Some(JsonValue::Null));
+    };
+    Ok(Some(match parsed.field {
+        "model" => serde_json::json!(crew.assignment.model),
+        "provider" => serde_json::json!(crew.assignment.provider),
+        "effort" => serde_json::json!(crew.assignment.effort),
+        "description" => serde_json::json!(crew.description),
+        "tags" => serde_json::json!(crew.tags),
+        _ => JsonValue::Null,
+    }))
 }
 
 fn read_optional(path: &Path) -> Result<String, OrbitError> {

@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-08-17
+last_validated: 2026-09-07
 ---
 
 # Orbit Configuration
@@ -110,6 +110,24 @@ inline baseline in the same way as the rest of that assignment. For the
 standard Codex tiers, use the model-specific crew to choose capability first:
 Terra (`gpt-5.6-terra`) is the medium-low crew; `effort` adjusts the reasoning
 budget inside the chosen Codex model.
+
+Named crew fields are addressable through `orbit config` as
+`crews.<name>.<field>` (`model`, `provider`, `effort`, `description`, `tags`):
+
+```bash
+orbit config set crews.sol.effort high
+orbit config get crews.sol.effort
+orbit config show --json
+```
+
+`get` and `show` report the same configured effort the runtime assignment
+uses. `show` includes `crews.sol.effort` with `workspace` or `global`
+provenance when the field is set; omitting it leaves the provider default and
+does not invent a configured value in effective output. Invalid values,
+unsupported provider/model combinations, and misspelled crew fields are
+refused before the file is written. Creating a crew still requires a
+`[crews.<name>]` table with `model` and `provider` — `config set` will not
+persist an incomplete crew.
 
 Example — the standard Grok crew:
 
