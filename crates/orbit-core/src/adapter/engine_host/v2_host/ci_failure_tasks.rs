@@ -629,8 +629,17 @@ fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<&'static str
     {
         return Some("failed step identity is missing or ambiguous within this job");
     }
-    if value_string(failure, "log_excerpt").trim().is_empty()
-        || failure.get("log_truncated").and_then(Value::as_bool) != Some(false)
+    if let Some(text) = complete_diagnostic(failure)
+        && error_signature(text, &value_string(&job["failed_steps"][0], "name")).step_fallback
+    {
+        return Some("complete command contains no concrete diagnostic");
+    }
+    if failure["log_source_complete"] == false {
+        return Some("job log source is incomplete");
+    }
+    if complete_diagnostic(failure).is_none()
+        && (value_string(failure, "log_excerpt").trim().is_empty()
+            || failure.get("log_truncated").and_then(Value::as_bool) != Some(false))
     {
         return Some("job diagnostic evidence is missing or truncated");
     }
@@ -654,6 +663,23 @@ fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<&'static str
         return Some("checkout identity is not completely observed for this job");
     }
     None
+}
+
+/// Additive schema-2 evidence. Old snapshots remain conservative when their
+/// display was truncated; only a completely captured, correctly bound unit
+/// can replace that display for diagnosis and stable-key calculation.
+fn complete_diagnostic(failure: &Value) -> Option<&str> {
+    let unit = &failure["diagnostic_unit"];
+    let job = failure["failed_jobs"].as_array()?.first()?;
+    let step = job["failed_steps"].as_array()?.first()?["name"].as_str()?;
+    let text = unit["text"].as_str()?;
+    (unit["kind"] == "runner_command"
+        && unit["complete"] == true
+        && unit["job_id"].as_u64()? == failure["job_id"].as_u64()?
+        && unit["step"].as_str()? == step
+        && !text.trim().is_empty()
+        && text.len() <= 262_144)
+        .then_some(text)
 }
 
 /// The deferred entries flattened back into the error list shape, for the
@@ -1018,14 +1044,14 @@ impl FailureCluster {
             }
             if self.log_truncated {
                 out.push_str(
-                    "\n_The excerpt above was truncated at collection. Head and tail are kept; \
-                     the omitted region is marked inline._\n",
+                    "\n_The collection display was truncated. Complete selected command evidence, \
+                     when available, is used for diagnosis; the description has its own display cap._\n",
                 );
             }
             if let Some(job) = &self.log_source_job {
                 out.push_str(&format!(
                     "\n_The run-scoped failed-step log came back empty, so this excerpt is the \
-                     whole log of job {job}, read from the job log API._\n"
+                     evidence from job {job}, read from the job log API._\n"
                 ));
             }
         }
@@ -1217,7 +1243,9 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         }
         let workflow = value_string(failure, "workflow");
         let (job, step) = failing_job_and_step(failure);
-        let log_excerpt = value_string(failure, "log_excerpt");
+        let log_excerpt = complete_diagnostic(failure)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| value_string(failure, "log_excerpt"));
         let signature = error_signature(&log_excerpt, &step);
         let tested_commit = tested_commit(failure);
 

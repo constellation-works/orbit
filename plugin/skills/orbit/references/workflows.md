@@ -93,10 +93,24 @@ or panic identity over ANSI styling, generic runner/cargo/nextest trailers, and
 assertion payload help text; the raw excerpt stays in the description.
 
 CI evidence schema 2 binds each failure row to one failed job: both log scopes
-select that job, and checkout provenance carries its job ID. Diagnostic excerpts
-that are missing or truncated, unknown/ambiguous failed steps, incomplete
-checkout identity, and exhausted read budgets defer that job; complete siblings
-still file. `max_job_log_reads` caps failed-job reads across the snapshot (default
+select that job, and checkout provenance carries its job ID. A separate
+`diagnostic_unit` retains a complete runner command from its `Run` group through
+its nonzero process completion, up to 256 KiB. Exactly one failing command and
+one known failed step are required; primary log columns must also match that
+job and step. Filing uses this unit for the signature while `log_excerpt`,
+`log_truncated`, and byte counts continue to describe the bounded head/tail
+display. Raw selected evidence (with secrets redacted) stays in the snapshot;
+task descriptions apply their own 4,000-byte diagnostic display cap.
+
+Each process stdout read stops with a retryable error beyond 8 MiB (at most one
+4 KiB lookahead chunk); the existing process timeout still applies. Command
+selection uses at most two 256 KiB unit buffers and a 16 KiB line buffer.
+Overlong/invalid source lines, explicit log truncation notices, missing command
+boundaries, multiple failing commands, unknown/ambiguous failed steps, incomplete
+checkout identity, and exhausted read budgets defer that job. Oversized commands
+are not sliced into apparently complete evidence. No extra queries or retries
+are introduced; complete siblings still file. `max_job_log_reads` caps failed-job
+reads across the snapshot (default
 6, maximum 25); `max_checkout_log_reads` separately caps additional same-job
 checkout reads (default 3, maximum 25). The rotating investigation slot also
 rotates overflow jobs in stable ID order. Legacy schema-1 failures require

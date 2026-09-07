@@ -368,3 +368,108 @@ fn checkout_fallback_is_bound_to_its_job_and_missing_logs_leave_siblings_complet
             .all(|error| error["job_id"] == 201)
     );
 }
+
+#[test]
+fn long_job_logs_select_only_the_bound_complete_command_and_keep_display_metadata() {
+    for reverse in [false, true] {
+        let mut queries = two_job_queries(reverse);
+        for (job, name, diagnostic) in [
+            (201, "Clippy", "error: unused import `wrong_import`"),
+            (
+                202,
+                "Coverage",
+                "error[E0063]: missing field `owner_machine_id`",
+            ),
+        ] {
+            let prefix = format!("{name}\t{name}\t2026-09-07T20:52:05Z ");
+            let unit = format!(
+                "{prefix}##[group]Run cargo test\n{prefix}##[endgroup]\n{prefix}{diagnostic}\n{prefix}  --> src/lib.rs:7:1\n{prefix}##[error]Process completed with exit code 101.\n"
+            );
+            queries.job_logs.insert(
+                ("10".to_string(), job, false),
+                format!(
+                    "HEAD is now at {CHECKOUT}\n{}{}{}",
+                    "unrelated setup error: setup_probe\n".repeat(1000),
+                    unit,
+                    "cleanup output\n".repeat(3000)
+                ),
+            );
+        }
+        let evidence = collect(&queries, &input()).expect("collect");
+        let jobs = evidence["current_failures"].as_array().expect("jobs");
+        assert_eq!(jobs.len(), 2);
+        for (index, expected, excluded) in [
+            (0, "wrong_import", "owner_machine_id"),
+            (1, "owner_machine_id", "wrong_import"),
+        ] {
+            let job = &jobs[index];
+            assert_eq!(job["evidence_state"], "complete");
+            assert_eq!(job["log_truncated"], true);
+            assert_eq!(job["actual_checkout_shas"], json!([CHECKOUT]));
+            assert_eq!(job["diagnostic_unit"]["job_id"], job["job_id"]);
+            let text = job["diagnostic_unit"]["text"]
+                .as_str()
+                .expect("selected evidence");
+            assert!(text.contains(expected));
+            assert!(!text.contains(excluded));
+            assert!(!text.contains("setup_probe"));
+            assert!(!text.contains("cleanup"));
+        }
+        assert_eq!(evidence["retryable_errors"], json!([]));
+    }
+}
+
+#[test]
+fn long_fallback_unit_requires_one_failed_step_and_complete_source() {
+    let raw = format!(
+        "{}\n{}{}{}",
+        job_log()
+            .split("2026-09-06T21:28")
+            .next()
+            .expect("checkout setup"),
+        "setup output\n".repeat(2000),
+        "2026-09-07T20:52:05Z ##[group]Run cargo doc\n\
+         2026-09-07T20:52:05Z ##[endgroup]\n\
+         2026-09-07T20:52:23Z error: private item `reject_root_override`\n\
+         2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n",
+        "cleanup output\n".repeat(2000)
+    );
+    for defect in ["none", "steps", "source", "missing_end"] {
+        let mut job = failed_job(101560010340, "docs");
+        if defect == "steps" {
+            job["failed_steps"] = json!([{"name": "A"}, {"name": "B"}]);
+        }
+        let log = match defect {
+            "source" => format!("{raw}##[warning]Log output was truncated\n"),
+            "missing_end" => raw.replace(
+                "##[error]Process completed with exit code 101.",
+                "lost completion",
+            ),
+            _ => raw.clone(),
+        };
+        let queries = FakeQueries::authenticated()
+            .with_head("topic", HEAD)
+            .with_head("main", HEAD)
+            .with_runs(vec![vec![failing_run(10)]])
+            .with_run_view("10", json!({"failed_jobs": [job]}))
+            .with_job_log_fallback("10", false, &log, vec![source_job()]);
+        let evidence = collect(&queries, &input()).expect("collect");
+        let finding = failure_by_id(&evidence, 10).expect("finding");
+        assert_eq!(finding["log_truncated"], true);
+        assert_eq!(
+            finding["investigated"],
+            defect == "none",
+            "{defect}: {finding}"
+        );
+        if defect == "none" {
+            assert_eq!(finding["diagnostic_unit"]["job_id"], 101560010340_u64);
+            assert_eq!(finding["diagnostic_unit"]["step"], "docs");
+            assert!(
+                finding["diagnostic_unit"]["text"]
+                    .as_str()
+                    .expect("unit")
+                    .contains("reject_root_override")
+            );
+        }
+    }
+}

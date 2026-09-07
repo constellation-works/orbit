@@ -433,3 +433,76 @@ fn an_abbreviation_with_rival_expansions_is_not_resolved_to_a_guess() {
 
     assert_eq!(evidence.commits, vec![short.to_string()]);
 }
+
+fn command_unit() -> String {
+    "2026-09-07T20:52:05Z ##[group]Run cargo check\n\
+     2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n\
+     2026-09-07T20:52:05Z ##[endgroup]\n\
+     2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n\
+     2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n\
+     2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n\
+     2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n\
+     2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n"
+        .to_string()
+}
+
+#[test]
+fn long_log_retains_complete_middle_command_independently_of_display() {
+    let unit = command_unit();
+    let raw = format!(
+        "{}{}{}",
+        "setup output\n".repeat(3000),
+        unit,
+        "cleanup output\n".repeat(3000)
+    );
+    for chunk_size in [1, 7, 4096] {
+        let mut collector = StreamedLogCollector::new(16_384, 40);
+        for chunk in raw.as_bytes().chunks(chunk_size) {
+            collector.push(chunk);
+        }
+        let log = collector.finish();
+        assert!(log.truncated);
+        assert!(!log.text.contains("owner_machine_id"));
+        assert_eq!(log.diagnostic.as_deref(), Some(unit.as_str()));
+    }
+}
+
+#[test]
+fn incomplete_ambiguous_and_source_limited_commands_are_not_complete_units() {
+    let unit = command_unit();
+    for raw in [
+        unit.replace("##[group]Run cargo check", "cargo check"),
+        unit.replace("##[error]Process completed with exit code 101.\n", ""),
+        format!("{unit}{unit}"),
+        format!("{unit}##[warning]Log output was truncated\n"),
+        format!("{unit}partial trailing line"),
+        format!("{}\n{unit}", "x".repeat(MAX_CHECKOUT_LOG_SCAN_BYTES)),
+        unit.replace(
+            "shell: /usr/bin/bash -e {0}",
+            &"build output\n".repeat(30_000),
+        ),
+    ] {
+        let mut collector = StreamedLogCollector::new(16_384, 40);
+        collector.push(raw.as_bytes());
+        assert!(collector.finish().diagnostic.is_none());
+    }
+}
+
+#[test]
+fn selected_command_preserves_unicode_and_redacts_secrets_across_chunk_boundaries() {
+    let raw = command_unit().replace(
+        "missing field",
+        &format!("missing café ghp_{} field", "a".repeat(36)),
+    );
+    let mut collector = StreamedLogCollector::new(64, 40);
+    for byte in raw.as_bytes() {
+        collector.push(std::slice::from_ref(byte));
+    }
+    let unit = collector
+        .finish()
+        .diagnostic
+        .expect("complete redacted unit");
+    assert!(unit.contains("café"));
+    assert!(unit.contains("[REDACTED_SECRET]"));
+    assert!(!unit.contains("ghp_"));
+}

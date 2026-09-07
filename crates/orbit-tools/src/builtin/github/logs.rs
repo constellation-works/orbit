@@ -224,9 +224,8 @@ pub fn read_run_log(
     Ok(recover_from_job_logs(requests, bounds, log))
 }
 
-/// Drain one `gh` stdout stream into a bounded excerpt and checkout evidence.
-/// The stream is consumed incrementally, so no complete copy of the log is
-/// ever held.
+/// Read one `gh` stdout stream up to the source cap, retaining only bounded
+/// display, command, and checkout evidence. No unbounded source copy is held.
 fn stream_bounded_log(
     request: &ExecRequest,
     bounds: LogReadBounds,
@@ -248,12 +247,20 @@ fn stream_bounded_log(
             }
         };
         let mut chunk = [0_u8; 4096];
+        let mut source_bytes = 0usize;
         loop {
             let read = stdout.read(&mut chunk).map_err(|error| {
                 OrbitError::Execution(format!("failed reading gh log stream: {error}"))
             })?;
             if read == 0 {
                 return Ok(collector.finish());
+            }
+            source_bytes += read;
+            if source_bytes > super::MAX_CHECKOUT_LOG_SCAN_BYTES {
+                return Err(OrbitError::Execution(
+                    "job log exceeded the 8 MiB source read limit; evidence is incomplete"
+                        .to_string(),
+                ));
             }
             collector.push(&chunk[..read]);
         }

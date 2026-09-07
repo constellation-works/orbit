@@ -270,6 +270,7 @@ fn bound_runtime(
         &repo.join(".orbit"),
         crate::WorkspaceRuntimeBinding {
             logical_workspace_id: workspace_id.clone(),
+            owner_machine_id: None,
             workspace_id,
             owner_machine_id: None,
             repo_root: repo.clone(),

@@ -418,7 +418,7 @@ fn a_filed_task_is_a_proposed_bug_carrying_usable_evidence() {
 }
 
 #[test]
-fn an_excerpt_recovered_from_a_job_log_is_labelled_as_the_whole_job_log() {
+fn an_excerpt_recovered_from_a_job_log_names_the_supplying_job() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let mut recovered = failure(
         10,
@@ -456,7 +456,7 @@ fn an_excerpt_recovered_from_a_job_log_is_labelled_as_the_whole_job_log() {
         "the recovered diagnostic must reach the filed task:\n{description}"
     );
     assert!(
-        description.contains("whole log of job `docs` (id `101560010340`)")
+        description.contains("evidence from job `docs` (id `101560010340`)")
             && description.contains("job log API"),
         "a whole-job log must not be presented as a failed-step excerpt:\n{description}"
     );
@@ -2154,4 +2154,71 @@ fn legacy_multi_job_snapshot_cannot_label_coverage_log_as_clippy() {
             .expect("tasks")
             .is_empty()
     );
+}
+
+#[test]
+fn complete_units_from_long_logs_file_and_dedupe_without_using_display_noise() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut findings = two_job_findings();
+    for finding in &mut findings {
+        let text = finding["log_excerpt"]
+            .as_str()
+            .expect("diagnostic")
+            .to_string();
+        finding["diagnostic_unit"] = json!({"kind": "runner_command", "complete": true,
+            "job_id": finding["job_id"], "step": finding["failed_jobs"][0]["failed_steps"][0]["name"],
+            "text": text});
+        finding["log_excerpt"] = json!("setup error: unrelated_setup\n[... omitted ...]\ncleanup");
+        finding["log_truncated"] = json!(true);
+        finding["log_source_complete"] = json!(true);
+    }
+    let first = file(&runtime, json!({"ci_evidence": snapshot(findings.clone())}));
+    assert_eq!(first["filed_count"], 2);
+    let ids = filed_task_ids(&first);
+    for (id, expected) in ids.iter().zip(["unused import", "output_goldens"]) {
+        let task = runtime.get_task(id).expect("task");
+        assert!(task.description.contains(expected));
+        assert!(
+            task.description
+                .contains("collection display was truncated")
+        );
+        assert!(!task.description.contains("unrelated_setup"));
+    }
+    findings.reverse();
+    let second = file(&runtime, json!({"ci_evidence": snapshot(findings)}));
+    assert_eq!(second["filed_count"], 0);
+    assert_eq!(
+        second["skipped_existing"]
+            .as_array()
+            .expect("deduped")
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn incomplete_or_foreign_units_cannot_override_truncated_display() {
+    for fault in ["job", "step", "incomplete", "source", "generic", "oversize"] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let mut findings = two_job_findings();
+        findings.truncate(1);
+        let finding = &mut findings[0];
+        finding["log_truncated"] = json!(true);
+        finding["diagnostic_unit"] = json!({"kind": "runner_command", "complete": true,
+            "job_id": finding["job_id"], "step": finding["failed_jobs"][0]["failed_steps"][0]["name"],
+            "text": "error: concrete diagnostic"});
+        match fault {
+            "job" => finding["diagnostic_unit"]["job_id"] = json!(999),
+            "step" => finding["diagnostic_unit"]["step"] = json!("Other step"),
+            "incomplete" => finding["diagnostic_unit"]["complete"] = json!(false),
+            "source" => finding["log_source_complete"] = json!(false),
+            "generic" => {
+                finding["diagnostic_unit"]["text"] =
+                    json!("##[error]Process completed with exit code 101.")
+            }
+            _ => finding["diagnostic_unit"]["text"] = json!("x".repeat(262_145)),
+        }
+        let error = file_error(&runtime, json!({"ci_evidence": snapshot(findings)}));
+        assert!(error.contains("job_evidence_identity"), "{fault}: {error}");
+    }
 }
