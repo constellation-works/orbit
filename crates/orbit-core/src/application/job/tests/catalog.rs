@@ -1074,7 +1074,7 @@ fn pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints() {
             (
                 "complete_pr",
                 "activity:pr_complete",
-                Some("step_failure_recovery")
+                Some("pr_conflict_recovery")
             ),
             (
                 "complete_no_diff",
@@ -1100,6 +1100,25 @@ fn pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints() {
             "pr_open must not embed earlier {hidden_phase} phase input"
         );
     }
+
+    let complete_pr = asset
+        .spec
+        .steps
+        .iter()
+        .find(|step| step.id == "complete_pr")
+        .expect("PR completion phase");
+    let JobV2StepBody::TargetRef(target) = &complete_pr.body else {
+        panic!("PR completion must reference a focused activity");
+    };
+    let input = target.default_input.as_ref().expect("PR completion input");
+    assert_eq!(input["completion"], "{{ input.completion }}");
+    assert_eq!(input["head"], "{{ steps.sync_base.output.head }}");
+    assert_eq!(
+        input["published_head_sha"],
+        "{{ steps.push.output.local_sha }}"
+    );
+    assert_eq!(input["base"], "{{ steps.sync_base.output.base }}");
+    assert_eq!(input["base_sync"], "{{ input.base_sync }}");
 }
 
 #[test]
@@ -1681,7 +1700,9 @@ fn task_shipment_jobs_resolve_default_recovery_activity() {
             "default job {job_name} should wire recovery on direct shipment steps"
         );
         for (step_id, recovery_activity, resolved) in recovery_steps {
-            let expected = if job_name == "task_pr_pipeline" && step_id == "sync_base" {
+            let expected = if job_name == "task_pr_pipeline"
+                && matches!(step_id, "sync_base" | "complete_pr")
+            {
                 "pr_conflict_recovery"
             } else {
                 "step_failure_recovery"

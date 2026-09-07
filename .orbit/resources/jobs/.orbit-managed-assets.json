@@ -8,7 +8,7 @@
     "task_gate_pipeline": "4945f11d4169f61aea8f68d9426bda002df89832567f224f0506e0a3bb7088f1",
     "task_local_pipeline": "04eb826fa57d2ff946e87e88283abbaa2e15d7deb6033da41fd9eef204c2a01f",
     "task_pilot_pipeline": "68da78cbc62d744180295f23f81df1d0207d7279e83048d2d61ac8a7ae4abb31",
-    "task_pr_pipeline": "04785d3fbe8bc2f01c801fd7f06e970ed6368c3c35db0cb0b09b25ed7ff63326",
+    "task_pr_pipeline": "ab9071fe1bbd84398d61d50116a554111b06888186226ce5cd7b314708bc3f4a",
     "task_triage_pipeline": "6ab349a2d79c1359a6faf37488b7a3880ad473d313cc54dd1e517a8b39994883",
     "workspace_auto_pipeline": "7094544f29b176c41f062fe20250de73304f3e93d5ba300b9670a148076e63db",
     "workspace_ship_pipeline": "8723039f684ac5f4aabf82ce20eab11b1f1b857815e0fc2fcb367dda6b876891",
