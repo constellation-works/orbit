@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Vision
 owner: codex
-last_updated: 2026-08-23
-last_validated: 2026-08-15
+last_updated: 2026-09-07
+last_validated: 2026-09-07
 status: Draft
 feature: mcp-bridge
 doc_role: vision
@@ -16,24 +16,28 @@ related_artifacts: [ORB-11009, ORB-11008]
 
 # Orbit MCP — Vision
 
-V1 is a skeleton: local stdio, direct SSH stdio, server-side resolution, one Core
-dispatch boundary, and audit context. Future work should preserve that shape and
-add complexity only for a demonstrated requirement.
+Direct v1 provides local stdio, direct SSH stdio, server-side resolution,
+destination-side caller policy, one Core dispatch boundary, and audit context.
+The separately selected federated mode adds an operator-configured mux and
+host-qualified routing. Future work should preserve the direct shape and add
+complexity only for a demonstrated requirement.
 
 ## 1. Authorization in Core
 
-The next security layer belongs in Core, not in the local proxy, client UI, or
-tool advertisement path. A useful authorization design must first answer:
+Authorization is split between destination-side session policy and Core, not the
+local proxy, client UI, or tool advertisement path. The shipped policy answers
+the session-authority questions for direct SSH:
 
 - What authenticated principal does the accepting server receive?
 - How is that principal bound to a machine or operator?
 - Which rules apply globally and which apply per workspace or operation?
 - How are denials audited without creating a second dispatch path?
 
-The v1 `caller_machine_id` and `caller_ip` fields are insufficient for enforcement.
-The label is supplied by the caller and an IP address is neither stable nor a
-machine credential. Possible inputs include SSH certificate principals, forced-
-command metadata, or another server-verified identity, but no mechanism should be
+The ordinary `caller_machine_id` label is self-asserted and `caller_ip` is neither
+stable nor a machine credential, so those fields alone are insufficient for
+enforcement. The optional Tier 2 path uses destination-generated forced-command
+metadata alongside the key sshd authenticated; the resulting key-bound proof is
+recorded separately from the audit-only IP. Further mechanisms should not be
 chosen before the required trust model is concrete.
 
 ## 2. Better provenance
@@ -53,9 +57,11 @@ normal discovery and errors.
 ## 4. Other transports
 
 SSH is appropriate while every supported remote has a shell and the same operator
-controls both ends. A network MCP service would require Orbit-owned authentication,
-session lifecycle, exposure hardening, and operational support. Do not add one
-merely to avoid launching SSH.
+controls both ends. The TCP listener exists for socket deployments and remains
+unauthenticated, with loopback as its default; a network MCP service with remote
+authentication would require Orbit-owned authentication, session lifecycle,
+exposure hardening, and operational support. Do not add one merely to avoid
+launching SSH.
 
 ## 5. Multi-host routing
 
@@ -64,11 +70,11 @@ client-side proxy stays byte-transparent and does not relay a call onward.
 That rule continues to describe **current behavior** in [`2_design.md`](./2_design.md);
 this section does not claim a mux is implemented.
 
-The proposed federated MCP surface is an **explicit exception** to those v1
+The implemented federated MCP surface is an **explicit exception** to those v1
 no-relay / byte-transparent rules, **for the federated namespace only**. A mux
-in front of operator-configured destinations may inspect a host-qualified
-selector and forward the call to the encoded destination. Direct SSH stdio to
-one chosen host is unchanged.
+in front of operator-configured destinations inspects a host-qualified selector
+and forwards the call to the encoded destination. Direct SSH stdio to one chosen
+host is unchanged.
 
 The exception does **not** admit automatic owner discovery, replication,
 relays-as-product, or fleet placement. Those stay out. The contract is
@@ -77,18 +83,20 @@ relays-as-product, or fleet placement. Those stay out. The contract is
 
 ## 6. Evaluation gates
 
-Any extension should preserve these properties unless the change explicitly
-replaces them:
+Any direct-mode extension should preserve these properties unless the change
+explicitly replaces them:
 
 1. one canonical tool schema;
-2. one authoritative accepting server;
+2. one authoritative accepting server for the selected direct destination;
 3. one Core dispatch and audit boundary per tools/call, including unknown names;
-4. no policy in byte-forwarding transport;
+4. no policy in the direct byte-forwarding transport;
 5. no client-side check required for correctness; and
-6. a focused end-to-end test for local and remote context propagation.
+6. a focused end-to-end test for local and remote context propagation. Federated
+   tests additionally cover live discovery, copied selectors, and destination
+   capability classes.
 
-Current behavior is described in [`2_design.md`](./2_design.md). The machine-
-readable contract is [`references/conformance-v1.yaml`](./references/conformance-v1.yaml).
+Current behavior is described in [`2_design.md`](./2_design.md). The direct
+transport and kernel contract is [`references/conformance-v1.yaml`](./references/conformance-v1.yaml).
 
 ## Task References
 

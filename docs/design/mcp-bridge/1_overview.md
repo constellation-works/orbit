@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Overview
 owner: codex
-last_updated: 2026-08-15
-last_validated: 2026-08-15
+last_updated: 2026-09-07
+last_validated: 2026-09-07
 status: Draft
 feature: mcp-bridge
 doc_role: overview
@@ -22,6 +22,12 @@ local:  MCP client <-> stdio <-> orbit mcp serve  <-> Orbit Core
 remote: MCP client <-> stdio <-> SSH <-> orbit mcp serve <-> Orbit Core
 socket: MCP client <-> TCP  <-> orbit mcp listen <-> Orbit Core
 ```
+
+`orbit mcp serve --mode federated` is a separate stdio mode, not a fourth
+transport. It includes the accepting machine plus operator-configured SSH
+destinations, advertises host-qualified workspace selectors, and routes each
+selected call to the encoded destination. Direct `--mode remote` remains the
+byte-transparent one-host proxy described above.
 
 The remote side is intentionally just direct SSH stdio. The local proxy starts a
 non-interactive SSH process whose remote command is:
@@ -53,8 +59,11 @@ for the call. It:
    once; and
 5. records success, failure, or denial at that boundary.
 
-This is the same rule for stdio, SSH-originated, and socket sessions. A transport
-changes only how MCP bytes reach the server.
+This is the same rule for direct stdio, SSH-originated, and socket sessions. A
+transport changes only how MCP bytes reach the server. The federated mode is
+the explicit exception: its mux answers federated discovery and routes
+host-qualified calls, while each destination still applies its own local
+resolution, authorization, and Core dispatch.
 
 ## Audit context
 
@@ -70,17 +79,19 @@ Each tool call carries a fresh `trace_id`. The server also records:
   what distinguishes it.
 
 `host/local` is the fallback machine label when no persisted identity is
-available. None of these caller fields is an authenticated authorization
-principal in v1.
+available. A forwarded caller label is audit-only under the self-asserted
+Tier-1 path. The optional forced-command path binds the caller identity to a
+key sshd authenticated and the destination's callers file then caps the
+session; `caller_ip` remains observational metadata in both cases.
 
 ## Ownership
 
 | Concern | Owner |
 |---|---|
-| MCP framing, tool discovery, server identity context, TCP listener, direct SSH stdio proxy | `orbit-mcp` |
+| MCP framing, tool discovery, server identity context, TCP listener, direct SSH stdio proxy, and the federated mux | `orbit-mcp` |
 | Host identity and workspace-registry state | `orbit-registry` |
 | Server composition and server-local runtime selection | `orbit-cli` |
-| Domain validation, sandboxing, audit persistence, and future authorization | `orbit-core` |
+| Domain validation, capability enforcement, sandboxing, audit persistence, and runtime authorization | `orbit-core` (with destination caller grants resolved by `orbit-mcp`) |
 | Canonical builtin tool definitions | `orbit-tools` |
 | HTTP UI and its own local-forward SSH connection | `orbit-web` |
 
@@ -89,16 +100,26 @@ transport and is not reused by MCP.
 
 ## V1 boundaries
 
-V1 deliberately has no shared broker, local checkout preflight, owner-placement
-routing, capability-based tool filtering, or Orbit authorization layer. The TCP
-listener is a transport only and adds none of them: reaching the socket is
-sufficient to reach the surface, exactly as SSH access is sufficient to start the
-remote server. If authorization is added later, it belongs in Core, after the
-accepting server has established the facts needed to enforce it.
+Direct v1 deliberately has no shared broker, client-side checkout preflight,
+owner-placement routing, or client-side capability filtering. The destination
+does apply authorization: `~/.orbit/mcp-callers.toml` caps a remote session's
+requested `agent`/`operator` authority, and Core enforces those effective
+capabilities at the tool boundary. Tier 1 resolves a self-asserted forwarded
+machine label; the optional Tier 2 forced-command path binds that identity to
+the key sshd authenticated. The TCP listener remains a transport only and
+authenticates no client, so it is hardcoded to agent authority and binds
+loopback unless a wider bind is explicitly requested.
+
+Federated mode adds the configured-destination mux as an explicit namespace
+exception. It performs live discovery and host-qualified routing, and the
+destination additionally enforces whether its checkout holds the tool's
+`control_plane` or `execute` capability class.
 
 Advertised definitions contain only schema plus global-versus-workspace-required
-scope. `orbit.workspace.list` is the sole global tool and reports active logical
-workspaces that have a checkout registered on the accepting machine.
+scope. `orbit.workspace.list` is the sole global tool. In direct mode it reports
+active logical workspaces that have a checkout registered on the accepting
+machine; federated mode replaces that response with live descriptors for the
+accepting machine and configured destinations.
 
 The executable contract and validation map live in
 [`references/conformance-v1.yaml`](./references/conformance-v1.yaml). Detailed

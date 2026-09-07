@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Decisions
 owner: codex
-last_updated: 2026-08-15
-last_validated: 2026-08-15
+last_updated: 2026-09-07
+last_validated: 2026-09-07
 status: Draft
 feature: mcp-bridge
 doc_role: decisions
@@ -39,8 +39,9 @@ already provides SSH.
 parse frames or retry calls.
 
 **Consequences.** The remote path needs no port-forward tunnel, shared broker, or
-third-machine relay. SSH owns transport security and shell access; Orbit owns MCP
-framing only at the accepting process.
+third-machine relay. SSH owns transport security and shell access, while the
+destination's callers policy and Core enforce Orbit's session authority after
+the accepting process receives the bytes.
 
 ## A socket deployment gets its own command, not a mode of `serve`
 
@@ -66,46 +67,62 @@ cannot be reached off-box.
 **Context.** Audit and validation become unreliable when discovery or failure paths
 bypass the normal dispatcher.
 
-**Decision.** Every `tools/call`, including global discovery, unknown or
-unadvertised raw names, and workspace setup failures, enters Core's dispatch and
-audit seam exactly once with the per-call session context. Server-local
-projections and pre-runtime denials use Core's global in-process dispatch hook.
+**Decision.** In the direct server, every `tools/call`, including global
+discovery, unknown or unadvertised raw names, and workspace setup failures,
+enters Core's dispatch and audit seam exactly once with the per-call session
+context. Server-local projections and pre-runtime denials use Core's global
+in-process dispatch hook. Federated mode is the explicit namespace exception:
+its mux answers federated discovery and routes calls, while each destination's
+direct server applies this rule.
 
 **Consequences.** Successes and failures share one audit model without adding a
 Core dependency on MCP or the registry crate.
 
-## Caller metadata is audit-only in v1
+## Caller metadata and destination policy
 
 **Context.** The proxy can supply a machine label and the SSH server exposes a
-source IP, but neither value authenticates an Orbit machine.
+source IP. A forwarded label is self-asserted, while a destination can also
+receive a forced-command identity tied to the key sshd authenticated.
 
-**Decision.** Record the caller label, best-effort SSH caller IP, accepting process
-identity, transport, and a fresh trace ID. Use `host/local` when no machine identity
-is available. Do not authorize from these fields.
+**Decision.** Record the caller label or destination-composed caller identity,
+best-effort SSH caller IP, accepting process identity, transport, and a fresh
+trace ID. Use `host/local` when no machine identity is available. Resolve remote
+session authority from the destination's `~/.orbit/mcp-callers.toml`; the
+forwarded label and IP alone do not grant authority, and a forced-command caller
+identity is recorded as key-bound when sshd authenticated its key.
 
-**Consequences.** Records support correlation now without pretending the v1
-transport establishes a durable machine principal.
+**Consequences.** Records support correlation and make the destination's
+authority decision inspectable. Tier 1 remains a self-asserted identity, while
+the optional Tier 2 path establishes a key-bound remote caller without treating
+the network address as a credential.
 
-## Authorization will be enforced in Core
+## Authorization is enforced by the destination and Core
 
 **Context.** A UI or proxy check can always be bypassed by invoking the server.
 
-**Decision.** V1 treats SSH access as sufficient. If machine- or workspace-specific
-authorization is added, enforce it in Core after server-side resolution and after
-establishing an authenticated principal.
+**Decision.** The destination resolves `~/.orbit/mcp-callers.toml` at SSH session
+establishment. The caller's requested `agent`/`operator` authority is intersected
+with that destination grant, and Core enforces the effective capabilities and
+governed operations after server-side workspace resolution. The optional forced
+command binds a caller identity to the key sshd authenticated; `agent_invoke`
+remains a separate workspace-scoped grant. The TCP listener authenticates no
+client and therefore serves agent authority only.
 
-**Consequences.** V1 remains small, and future policy has one entry point shared by
-local, SSH, CLI, and other callers.
+**Consequences.** Direct local, SSH, and socket calls share Core's operation
+boundary, while remote authority is capped by the destination that executes the
+call. Federated destinations apply their own policy independently, so the mux
+cannot grant authority on a destination's behalf.
 
 ## Crates follow present responsibilities
 
 **Context.** A broad remote feature layer accumulated unrelated registry, protocol,
 routing, and UI concerns.
 
-**Decision.** Keep MCP protocol and direct SSH support in `orbit-mcp`; host and
-workspace state in `orbit-registry`; domain execution and audit in `orbit-core`;
-canonical builtin definitions in `orbit-tools`; and HTTP UI behavior in
-`orbit-web`.
+**Decision.** Keep MCP protocol, direct SSH support, destination caller policy,
+and federated routing in `orbit-mcp`; host and workspace state in
+`orbit-registry`; domain execution, capability enforcement, and audit in
+`orbit-core`; canonical builtin definitions in `orbit-tools`; and HTTP UI
+behavior in `orbit-web`.
 
 **Consequences.** Dependency direction follows the data and execution boundaries.
 There is no general remote layer between MCP and Core.
