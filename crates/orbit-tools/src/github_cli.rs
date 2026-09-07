@@ -28,6 +28,10 @@ pub use crate::builtin::github::dependabot_alerts::{
     project_secret_scanning_alert,
 };
 pub use crate::builtin::github::landing::commit_pull_requests as commit_pull_requests_request;
+pub use crate::builtin::github::logs::{
+    LogReadBounds, LogScope, MAX_EVIDENCE_LINES, RunLogRead, RunLogRequests, SOURCE_JOB_API_LOG,
+    SOURCE_RUN_LOG, read_run_log,
+};
 pub use crate::builtin::github::pr_list::{
     build_exec_request as pr_list_request, project_pull_request,
 };
@@ -35,7 +39,6 @@ pub use crate::builtin::github::repo::{
     build_exec_request as repo_view_request, project_repo_view,
 };
 pub use crate::builtin::github::run_list::{build_exec_request as run_list_request, project_run};
-pub use crate::builtin::github::run_logs::build_exec_request as run_logs_request;
 pub use crate::builtin::github::run_view::{
     build_exec_request as run_view_request, project_run_view,
 };

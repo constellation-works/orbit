@@ -714,6 +714,11 @@ struct FailureCluster {
     signature_is_step_fallback: bool,
     log_excerpt: String,
     log_truncated: bool,
+    /// The job whose own log supplied the excerpt, when the run-scoped read
+    /// returned nothing and collection recovered it per job. Such an excerpt is
+    /// the whole job's log, not just its failed steps, and the description says
+    /// so rather than presenting it as a failed-step quote.
+    log_source_job: Option<String>,
     runs: Vec<Value>,
 }
 
@@ -920,6 +925,12 @@ impl FailureCluster {
                      the omitted region is marked inline._\n",
                 );
             }
+            if let Some(job) = &self.log_source_job {
+                out.push_str(&format!(
+                    "\n_The run-scoped failed-step log came back empty, so this excerpt is the \
+                     whole log of job {job}, read from the job log API._\n"
+                ));
+            }
         }
 
         let stale = self.stale_evidence(evidence);
@@ -995,6 +1006,20 @@ impl FailureCluster {
             })
             .unwrap_or_default()
     }
+}
+
+/// The job whose own log supplied this failure's excerpt, if the run-scoped
+/// read produced nothing and collection fell back per job.
+fn job_log_source(failure: &Value) -> Option<String> {
+    if value_string(failure, "log_source") != "job_api_log" {
+        return None;
+    }
+    let job = failure.get("log_source_jobs")?.as_array()?.first()?;
+    Some(format!(
+        "`{}` (id `{}`)",
+        display(&value_string(job, "name")),
+        display(&value_string(job, "job_id")),
+    ))
 }
 
 fn render_run(run: &Value) -> String {
@@ -1118,6 +1143,7 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
                     .get("log_truncated")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                log_source_job: job_log_source(failure),
                 runs: Vec::new(),
             }
         });

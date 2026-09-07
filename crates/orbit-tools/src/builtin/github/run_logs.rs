@@ -1,10 +1,7 @@
-use std::io::Read;
-
 use orbit_common::OrbitError;
-use orbit_exec::{ExecRequest, NoSandbox, run_process_streaming_stdout};
 use serde_json::{Value, json};
 
-use crate::{TIMEOUT_LONG_MS, check_exec_result};
+use super::logs::{LogReadBounds, RunLogRequests, read_run_log};
 
 /// Default excerpt size. Small enough that a routine failed-step read costs an
 /// executing agent a few thousand tokens rather than its whole context.
@@ -15,48 +12,13 @@ const DEFAULT_MAX_BYTES: u64 = 16_384;
 /// than any agent context can hold, so the tool refuses to return it.
 const MAX_MAX_BYTES: u64 = 262_144;
 
-/// Cap on returned checkout-evidence lines. Evidence is a handful of lines per
-/// job; a much larger match set means the pattern caught noise, not evidence.
-const MAX_EVIDENCE_LINES: usize = 40;
-
-/// Which slice of a run's logs to read.
-///
-/// `failed` is the working default. `all` exists because the checkout step
-/// normally *succeeds*, so the commit a runner actually tested is absent from
-/// the failed-step log and only `all` can evidence it.
-fn log_scope(input: &Value) -> Result<&'static str, OrbitError> {
-    match input.get("scope").and_then(Value::as_str) {
-        None | Some("failed") => Ok("--log-failed"),
-        Some("all") => Ok("--log"),
-        Some(other) => Err(OrbitError::InvalidInput(format!(
-            "invalid `scope`: \"{other}\"; must be \"failed\" or \"all\""
-        ))),
-    }
-}
-
-pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
-    let mut args = vec![
-        "run".to_string(),
-        "view".to_string(),
-        super::require_numeric_id(input, "run")?,
-    ];
-    if input.get("job").is_some() {
-        args.push("--job".to_string());
-        args.push(super::require_numeric_id(input, "job")?);
-    }
-    super::push_repo_flag(&mut args, input)?;
-    args.push(log_scope(input)?.to_string());
-
-    Ok(super::gh_exec_request(args, None, TIMEOUT_LONG_MS))
-}
-
 pub struct GithubRunLogsTool;
 
 impl crate::Tool for GithubRunLogsTool {
     fn schema(&self) -> orbit_types::tool::ToolSchema {
         super::gh_schema(
             "github.run.logs",
-            "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is drained incrementally; checkout extraction stops after 8 MiB and reports incomplete evidence rather than retaining an unbounded log.",
+            "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is drained incrementally; checkout extraction stops after 8 MiB and reports incomplete evidence rather than retaining an unbounded log. When the run-scoped read succeeds with no output at all, the excerpt is recovered from the log API of a job the run itself reported failed, and `source` says so.",
             vec![
                 super::tool_param("run", "Numeric workflow-run ID", "string", true),
                 super::tool_param(
@@ -88,33 +50,28 @@ impl crate::Tool for GithubRunLogsTool {
     }
 
     fn execute(&self, _ctx: &crate::ToolContext, input: Value) -> Result<Value, OrbitError> {
-        let request = build_exec_request(&input)?;
+        let requests = RunLogRequests::from_input(&input)?;
         let max_bytes =
             super::bounded_limit(&input, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES)? as usize;
-        let (result, log) =
-            run_process_streaming_stdout(&request, &NoSandbox, move |mut stdout| {
-                let mut collector = super::StreamedLogCollector::new(max_bytes, MAX_EVIDENCE_LINES);
-                let mut chunk = [0_u8; 4096];
-                loop {
-                    let read = stdout.read(&mut chunk).map_err(|error| {
-                        OrbitError::Execution(format!("failed reading gh run log: {error}"))
-                    })?;
-                    if read == 0 {
-                        return Ok(collector.finish());
-                    }
-                    collector.push(&chunk[..read]);
-                }
-            })?;
-        check_exec_result(&result, "gh run view --log")?;
+        let scope = requests.scope;
+        let read = read_run_log(&requests, LogReadBounds::new(max_bytes))?;
+        let log = read.log;
         let evidence = log.checkout_evidence;
 
         Ok(json!({
             "run_id": input.get("run"),
-            "scope": input.get("scope").and_then(Value::as_str).unwrap_or("failed"),
+            "scope": scope.as_str(),
             "log": log.text,
             "truncated": log.truncated,
             "returned_bytes": log.returned_bytes,
             "total_bytes": log.total_bytes,
+            // Which query the excerpt above came from, and — when the
+            // run-scoped read returned nothing — the job whose own log stood
+            // in for it, so a reader is never left guessing what these bytes
+            // describe.
+            "source": read.source,
+            "source_jobs": read.source_jobs,
+            "fallback_error": read.fallback_error,
             // Distinct from any run's `reported_head_sha`: this is what the
             // runner checked out, read from the runner's own output.
             "checkout_commits": evidence.commits,

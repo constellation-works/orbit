@@ -112,6 +112,7 @@ pub(super) use gh_tool;
 
 pub mod auth;
 pub mod dependabot_alerts;
+pub mod logs;
 pub mod pr_checkout;
 pub mod pr_checks;
 pub mod pr_close;
@@ -205,6 +206,34 @@ pub(super) fn push_optional_flag(
     args.push(flag.to_string());
     args.push(value.to_string());
     Ok(())
+}
+
+/// The `owner/name` path segment for a `gh api repos/...` endpoint.
+///
+/// Without an explicit `repo`, `gh` resolves its own `{owner}/{repo}`
+/// placeholders from the working directory. With one, every character is
+/// checked before it reaches a URL path: an unvalidated value would let a
+/// caller append query parameters or traverse to another endpoint.
+pub(super) fn repository_path(input: &Value) -> Result<String, OrbitError> {
+    let Some(raw) = input.get("repo").and_then(Value::as_str) else {
+        return Ok("{owner}/{repo}".to_string());
+    };
+    let repo = raw.trim();
+    let mut parts = repo.split('/');
+    let owner = parts.next().unwrap_or_default();
+    let name = parts.next().unwrap_or_default();
+    let valid_part = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    };
+    if parts.next().is_some() || !valid_part(owner) || !valid_part(name) {
+        return Err(OrbitError::InvalidInput(format!(
+            "invalid `repo`: \"{repo}\"; expected owner/name using ASCII letters, digits, '.', '-', or '_'"
+        )));
+    }
+    Ok(repo.to_string())
 }
 
 /// Read an optional positive bound, clamped into `[1, max]`.
@@ -363,6 +392,8 @@ pub struct StreamedLog {
 /// instead of retaining an unbounded source stream.
 pub struct StreamedLogCollector {
     max_bytes: usize,
+    /// How much of the budget the head window may keep; the rest is the tail.
+    head_bytes: usize,
     head: Vec<u8>,
     tail: Vec<u8>,
     total_bytes: usize,
@@ -370,11 +401,29 @@ pub struct StreamedLogCollector {
 }
 
 impl StreamedLogCollector {
+    /// An even head/tail split, for a source whose every line is relevant —
+    /// `gh run view --log-failed` emits only failed steps, so its head names
+    /// the failing command and its tail carries the assertion.
     pub fn new(max_bytes: usize, max_evidence_lines: usize) -> Self {
+        Self::with_head_bytes(max_bytes, max_bytes / 2, max_evidence_lines)
+    }
+
+    /// A tail-weighted split, for a whole-job log.
+    ///
+    /// Such a log opens with runner provisioning and setup and only reaches
+    /// the failing step near its end, so an even split spends half the budget
+    /// on boilerplate and can cut the diagnostic headline off. A quarter is
+    /// still enough head to name the job and its first command.
+    pub fn tail_weighted(max_bytes: usize, max_evidence_lines: usize) -> Self {
+        Self::with_head_bytes(max_bytes, max_bytes / 4, max_evidence_lines)
+    }
+
+    fn with_head_bytes(max_bytes: usize, head_bytes: usize, max_evidence_lines: usize) -> Self {
         Self {
             max_bytes,
-            head: Vec::with_capacity(max_bytes / 2),
-            tail: Vec::with_capacity(max_bytes.saturating_sub(max_bytes / 2)),
+            head_bytes,
+            head: Vec::with_capacity(head_bytes),
+            tail: Vec::with_capacity(max_bytes.saturating_sub(head_bytes)),
             total_bytes: 0,
             evidence: CheckoutEvidenceCollector::new(
                 max_evidence_lines,
@@ -387,7 +436,7 @@ impl StreamedLogCollector {
         self.total_bytes = self.total_bytes.saturating_add(chunk.len());
         self.evidence.push(chunk);
 
-        let head_limit = self.max_bytes / 2;
+        let head_limit = self.head_bytes;
         let head_take = head_limit.saturating_sub(self.head.len()).min(chunk.len());
         self.head.extend_from_slice(&chunk[..head_take]);
         let tail_limit = self.max_bytes.saturating_sub(head_limit);
