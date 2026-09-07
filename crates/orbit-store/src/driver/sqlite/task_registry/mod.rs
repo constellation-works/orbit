@@ -16,9 +16,9 @@ mod store;
 mod util;
 mod workspace_id;
 
-// Auxiliary action-key tables do not change the v5 task/allocator format.
-// Keep it readable by rollback binaries, which safely ignore those tables.
-const REGISTRY_SCHEMA_VERSION: u32 = 5;
+// Required action-key storage must advance the version so existing v5
+// registries run schema setup before admission. Older binaries fail closed.
+const REGISTRY_SCHEMA_VERSION: u32 = 6;
 
 pub fn task_registry_path(global_root: &Path) -> PathBuf {
     global_root.join("tasks").join("index.sqlite")
