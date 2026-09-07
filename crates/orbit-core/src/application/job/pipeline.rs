@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use orbit_common::fs::io::atomic_write_text;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
@@ -914,14 +915,8 @@ impl OrbitRuntime {
     /// Durably pin a submitted run's job definition next to the run record.
     fn write_run_definition_snapshot(&self, run_id: &str, yaml: &str) -> Result<(), OrbitError> {
         let dir = self.paths().job_runs_dir.clone();
-        std::fs::create_dir_all(&dir).map_err(|error| {
-            OrbitError::Io(format!(
-                "create job run definition directory '{}': {error}",
-                dir.display()
-            ))
-        })?;
         let path = run_definition_snapshot_path(&dir, run_id);
-        std::fs::write(&path, yaml).map_err(|error| {
+        atomic_write_text(&path, yaml).map_err(|error| {
             OrbitError::Io(format!(
                 "write job run definition snapshot '{}': {error}",
                 path.display()
