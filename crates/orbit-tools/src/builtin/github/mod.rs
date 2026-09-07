@@ -113,6 +113,7 @@ pub(super) use gh_tool;
 pub mod auth;
 pub mod dependabot_alerts;
 mod diagnostic;
+pub use diagnostic::strip_ansi_sequences;
 pub mod logs;
 pub mod pr_checkout;
 pub mod pr_checks;
@@ -388,6 +389,8 @@ pub struct StreamedLog {
     pub checkout_evidence: CheckoutEvidence,
     /// Complete runner command evidence, independent of display truncation.
     pub diagnostic: Option<String>,
+    /// Selected failure regions when the complete command exceeds its bound.
+    pub failure_regions: Option<Value>,
     /// False when a source limit, invalid line, or explicit truncation notice
     /// prevents complete diagnostic collection; independent of display size.
     pub source_complete: bool,
@@ -473,14 +476,17 @@ impl StreamedLogCollector {
             self.head.extend_from_slice(&self.tail);
             redact_all(&String::from_utf8_lossy(&self.head))
         };
+        let source_complete = self.diagnostic.source_complete();
+        let (diagnostic, failure_regions) = self.diagnostic.finish();
         StreamedLog {
             returned_bytes: text.len(),
             text,
             truncated,
             total_bytes: self.total_bytes,
             checkout_evidence: evidence,
-            source_complete: self.diagnostic.source_complete(),
-            diagnostic: self.diagnostic.finish(),
+            source_complete,
+            diagnostic,
+            failure_regions,
         }
     }
 }

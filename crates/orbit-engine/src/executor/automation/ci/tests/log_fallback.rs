@@ -473,3 +473,152 @@ fn long_fallback_unit_requires_one_failed_step_and_complete_source() {
         }
     }
 }
+
+fn oversized_failure_queries(raw: &str) -> FakeQueries {
+    let run_url = "https://github.com/constellation-works/orbit/actions/runs/34165795036";
+    let mut job = failed_job(101876457414, "Check / Clippy / Test");
+    job["url"] = json!(format!("{run_url}/job/101876457414"));
+    job["failed_steps"] = json!([{"name": "Run CI guardrails", "conclusion": "failure"}]);
+    let mut source_run = run(
+        34165795036,
+        "CI",
+        "3ffa0fd3aaa535867c9e060c7ec600a33d7f2be6",
+        "completed",
+        Some("failure"),
+        "2026-09-07T22:18:00Z",
+    );
+    source_run["url"] = json!(run_url);
+    source_run["head_branch"] = json!("agent-main");
+    let mut queries = FakeQueries::authenticated()
+        .with_head("agent-main", "3ffa0fd3aaa535867c9e060c7ec600a33d7f2be6")
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![source_run]])
+        .with_run_view("34165795036", json!({"failed_jobs": [job.clone()]}))
+        .with_job_log_fallback("34165795036", false, raw, vec![job]);
+    queries.repo["full_name"] = json!("constellation-works/orbit");
+    queries
+}
+
+fn check_oversized_finding(evidence: &Value) {
+    let finding = failure_by_id(evidence, 34165795036).expect("exact run");
+    assert_eq!(
+        finding["investigated"], true,
+        "{}",
+        evidence["retryable_errors"]
+    );
+    assert_eq!(finding["log_source_complete"], true);
+    assert_eq!(finding["log_truncated"], true);
+    assert_eq!(
+        finding["actual_checkout_shas"],
+        json!(["3ffa0fd3aaa535867c9e060c7ec600a33d7f2be6"])
+    );
+    let unit = &finding["diagnostic_unit"];
+    assert_eq!(unit["kind"], "runner_failure_regions");
+    assert_eq!(unit["complete"], false);
+    assert_eq!(unit["job_id"], 101876457414_u64);
+    assert_eq!(unit["step"], "Run CI guardrails");
+    let text = unit["text"].as_str().expect("bounded evidence");
+    assert!(text.contains("plain_and_json_forms_match_their_goldens"));
+    assert!(text.contains("output_goldens.rs:321:5"));
+    assert!(text.contains("tool_list.plain.txt"));
+    assert!(text.contains("exit code 100"));
+    assert_eq!(evidence["retryable_errors"], json!([]));
+}
+
+#[test]
+fn oversized_failure_regions_reach_collection_with_exact_job_step_and_checkout() {
+    let raw = format!(
+        "[command]/usr/bin/git log -1 --format=%H\n3ffa0fd3aaa535867c9e060c7ec600a33d7f2be6\n\
+         ##[group]Run make ci\n{}\
+         thread 'plain_and_json_forms_match_their_goldens' panicked at crates/orbit-cli/tests/output_goldens.rs:321:5:\n\
+         assertion `left == right` failed: tool_list.plain.txt golden drift\n\
+         left: {}\nright: expected\n\
+         ##[error]Process completed with exit code 100.\n",
+        "PASS ordinary_test\n".repeat(20_000),
+        "large assertion ".repeat(10_000)
+    );
+    let evidence = collect(
+        &oversized_failure_queries(&raw),
+        &json!({"integration_branch": "agent-main"}),
+    )
+    .expect("collect");
+    check_oversized_finding(&evidence);
+}
+
+/// Explicit, offline replay of the task's attached immutable runner bytes.
+/// Export this production collection snapshot for the disposable filing test.
+#[test]
+#[ignore = "requires ORBIT_CI_REPLAY_LOG and ORBIT_CI_REPLAY_OUTPUT"]
+fn replay_exact_guardrail_job_through_collection() {
+    let path = std::env::var("ORBIT_CI_REPLAY_LOG").expect("attached source log path");
+    let raw = std::fs::read_to_string(path).expect("read attached source log");
+    let evidence = collect(
+        &oversized_failure_queries(&raw),
+        &json!({"integration_branch": "agent-main"}),
+    )
+    .expect("collect replay");
+    check_oversized_finding(&evidence);
+    let output = std::env::var("ORBIT_CI_REPLAY_OUTPUT").expect("snapshot output path");
+    std::fs::write(
+        output,
+        serde_json::to_vec_pretty(&evidence).expect("snapshot JSON"),
+    )
+    .expect("write replay evidence");
+}
+
+#[test]
+fn oversized_primary_regions_preserve_columns_and_reject_wrong_or_ambiguous_steps() {
+    let raw = format!(
+        "[command]/usr/bin/git log -1 --format=%H\n3ffa0fd3aaa535867c9e060c7ec600a33d7f2be6\n\
+         ##[group]Run make ci\n{}\
+         thread 'golden_failure' panicked at tests/golden.rs:1:1:\n\
+         assertion failed: golden drift\n##[error]Process completed with exit code 100.\n",
+        "PASS test\n".repeat(40_000)
+    );
+    for fault in ["none", "job", "step", "ambiguous"] {
+        let mut queries = oversized_failure_queries(&raw);
+        queries.job_log_fallbacks.clear();
+        let job_name = if fault == "job" {
+            "Other job"
+        } else {
+            "Check / Clippy / Test"
+        };
+        let step = if fault == "step" {
+            "Other step"
+        } else {
+            "Run CI guardrails"
+        };
+        let primary = raw
+            .lines()
+            .map(|line| format!("{job_name}\t{step}\t{line}\n"))
+            .collect();
+        queries
+            .job_logs
+            .insert(("34165795036".to_string(), 101876457414, false), primary);
+        if fault == "ambiguous" {
+            queries.run_views.get_mut("34165795036").expect("view")["failed_jobs"][0]["failed_steps"] =
+                json!([{"name": step}, {"name": "Other step"}]);
+        }
+        let evidence =
+            collect(&queries, &json!({"integration_branch": "agent-main"})).expect("collect");
+        let finding = failure_by_id(&evidence, 34165795036).expect("finding");
+        assert_eq!(
+            finding["investigated"],
+            fault == "none",
+            "{fault}: {}",
+            evidence["retryable_errors"]
+        );
+        if fault == "none" {
+            assert_eq!(finding["diagnostic_unit"]["kind"], "runner_failure_regions");
+            assert_eq!(finding["diagnostic_unit"]["job_id"], 101876457414_u64);
+            assert!(
+                finding["diagnostic_unit"]["text"]
+                    .as_str()
+                    .expect("text")
+                    .contains("command bytes omitted")
+            );
+        } else {
+            assert!(finding["diagnostic_unit"].is_null());
+        }
+    }
+}

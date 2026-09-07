@@ -63,6 +63,7 @@ impl crate::Tool for GithubRunLogsTool {
             "scope": scope.as_str(),
             "log": log.text,
             "diagnostic_unit": log.diagnostic,
+            "failure_regions": log.failure_regions,
             "source_complete": log.source_complete,
             "truncated": log.truncated,
             "returned_bytes": log.returned_bytes,
