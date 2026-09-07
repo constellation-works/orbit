@@ -2,7 +2,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::super::redaction::{
     credential_safe_location, is_high_confidence_single_token_credential, is_redactable_value,
-    is_sensitive_env_name, redact_all, redact_sensitive_env_text,
+    is_sensitive_env_name, redact_all, redact_home_dir, redact_sensitive_env_text,
 };
 
 #[test]
@@ -122,6 +122,21 @@ fn redact_all_preserves_knowledge_record_identifiers_and_paths() {
     );
 
     assert_eq!(redact_all(legitimate), legitimate);
+}
+
+#[test]
+fn redact_home_dir_ignores_root_home() {
+    let _home = EnvVarGuard::set("HOME", "/");
+
+    assert_eq!(redact_home_dir("/tmp/x"), "/tmp/x");
+}
+
+#[test]
+fn redact_home_dir_matches_only_path_boundaries() {
+    let _home = EnvVarGuard::set("HOME", "/Users/a");
+
+    assert_eq!(redact_home_dir("/Users/ab/x"), "/Users/ab/x");
+    assert_eq!(redact_home_dir("/Users/a/x"), "~/x");
 }
 
 #[test]
