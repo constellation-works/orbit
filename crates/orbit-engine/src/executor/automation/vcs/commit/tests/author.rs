@@ -158,7 +158,7 @@ fn git_commit_per_task_preserves_orchestration_attribution_in_the_source_message
 
     assert_eq!(
         git_output(workspace, &["log", "-1", "--format=%B"]).expect("read source commit message"),
-        "[T1] Implement one task\n\nOrchestrated-By: gpt-5.6-sol"
+        "[T1] Implement one task\n\nOrchestrated-By: sol"
     );
 }
 
