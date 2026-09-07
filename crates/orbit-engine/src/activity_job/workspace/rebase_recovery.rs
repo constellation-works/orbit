@@ -7,10 +7,11 @@ use serde_json::Value;
 use crate::context::{RuntimeHost, StepRecoveryAdmission};
 use crate::executor::automation::vcs::git::git_command;
 
-use super::{
-    DispatchError, GitWorktreeFingerprint, WorktreeBoundaryGuard, changed_paths, git_command_error,
-    git_fingerprint, git_output_raw, git_stdout, git_stdout_bytes, nul_paths, safe_relative_path,
+use super::fingerprint::{
+    GitWorktreeFingerprint, changed_paths, git_command_error, git_fingerprint, git_output_raw,
+    git_stdout, git_stdout_bytes, nul_paths,
 };
+use super::{DispatchError, WorktreeBoundaryGuard, safe_relative_path};
 
 pub(super) struct RebaseRecoveryCheckpoint {
     branch: String,
