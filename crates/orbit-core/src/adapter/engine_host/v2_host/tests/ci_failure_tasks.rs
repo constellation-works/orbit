@@ -2222,3 +2222,196 @@ fn incomplete_or_foreign_units_cannot_override_truncated_display() {
         assert!(error.contains("job_evidence_identity"), "{fault}: {error}");
     }
 }
+
+fn compiler_findings() -> Vec<Value> {
+    ["macOS", "Clippy", "Coverage"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, job)| {
+            let log = format!(
+                concat!(
+                    "##[group]Run cargo check\n",
+                    "    Compiling thiserror v2.0.17\n",
+                    "    Checking error_stack v1.0.0\n",
+                    "error: process didn't exit successfully: `rustc {}` (exit status: 1)\n",
+                    "\x1b[1;31merror[E0062]\x1b[0m: field `owner_machine_id` specified more than once\n",
+                    "  --> crates/orbit-core/src/ci_sweep.rs:275:13\n",
+                    "   |\n275 | owner_machine_id: None,\n",
+                    "   | ^^^^^^^^^^^^^^^^ used more than once\n",
+                    "error: could not compile `orbit-core` due to 1 previous error\n",
+                    "##[error]Process completed with exit code 101.\n",
+                ),
+                "--extern error_helper=/tmp/build/é ".repeat(1500)
+            );
+            let mut finding = failure(70 + index as u64, "CI", job, job, &log, CHECKOUT);
+            finding["diagnostic_unit"] = json!({"kind": "runner_command", "complete": true,
+                "job_id": finding["job_id"], "step": job, "text": log});
+            finding["log_source_complete"] = json!(true);
+            finding["log_truncated"] = json!(true);
+            finding["log_excerpt"] = json!("setup error: unrelated display noise");
+            finding
+        })
+        .collect()
+}
+
+#[test]
+fn compiler_cause_consolidates_jobs_and_keeps_actionable_excerpt() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut findings = compiler_findings();
+    let output = file(&runtime, json!({"ci_evidence": snapshot(findings.clone())}));
+    assert_eq!(output["filed_count"], 1, "{output}");
+    assert_eq!(output["clusters"], 1);
+    let id = filed_task_ids(&output).remove(0);
+    let task = runtime.get_task(&id).expect("compiler owner");
+    let signature = signature_line(&task.description);
+    assert!(
+        signature.contains("error[e0062]: field `owner_machine_id`"),
+        "{signature}"
+    );
+    assert!(!signature.contains('\x1b'));
+    let excerpt = excerpt_block(&task.description);
+    assert!(excerpt.contains("error[E0062]"));
+    assert!(excerpt.contains("ci_sweep.rs:275:13"));
+    assert!(excerpt.len() < 4_300, "{}", excerpt.len());
+    for finding in &findings {
+        assert!(
+            task.description
+                .contains(finding["failed_jobs"][0]["name"].as_str().expect("name"))
+        );
+        assert!(task.description.contains(&finding["job_id"].to_string()));
+        assert!(task.description.contains(&finding["run_id"].to_string()));
+    }
+    assert!(task.description.contains(CHECKOUT));
+    findings.reverse();
+    let repeated = file(&runtime, json!({"ci_evidence": snapshot(findings)}));
+    assert_eq!(repeated["filed_count"], 0);
+    assert_eq!(repeated["skipped_existing"][0]["task_id"], id);
+}
+
+#[test]
+fn compiler_causes_with_shared_command_and_location_remain_separate() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut findings = compiler_findings();
+    for (index, finding) in findings.iter_mut().enumerate() {
+        let text = finding["diagnostic_unit"]["text"].as_str().expect("log");
+        finding["diagnostic_unit"]["text"] =
+            json!(text.replace("owner_machine_id", &format!("field_{index}")));
+    }
+    let first = file(&runtime, json!({"ci_evidence": snapshot(findings.clone())}));
+    assert_eq!(first["filed_count"], 3);
+    findings.reverse();
+    let repeated = file(&runtime, json!({"ci_evidence": snapshot(findings)}));
+    assert_eq!(repeated["filed_count"], 0);
+    let owners: std::collections::BTreeSet<_> = repeated["skipped_existing"]
+        .as_array()
+        .expect("skips")
+        .iter()
+        .map(|entry| entry["task_id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(owners.len(), 3);
+}
+
+#[test]
+fn compiler_legacy_keys_follow_rejected_owners_only_for_the_original_source() {
+    use crate::application::task::TaskAddParams;
+
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let findings = compiler_findings();
+    let owner = runtime
+        .add_task(TaskAddParams {
+            title: "Repair the compiler initializer".to_string(),
+            description: "Canonical repair explicitly named by the rejected observations."
+                .to_string(),
+            ..TaskAddParams::default()
+        })
+        .expect("owner");
+    // Shipped workflow/job/step/first-marker digests for these exact logs.
+    let keys = ["2c5df683bc1b014d", "c9f31b827d835692", "14ccd1ad54c810ec"];
+    for (finding, key) in findings.iter().zip(keys) {
+        let source = runtime
+            .add_task(TaskAddParams {
+                title: "Legacy compiler observation".to_string(),
+                description: format!(
+                    "run `{}`\nfailed job (id `{}`)\ncommit actually checked out: `{CHECKOUT}`",
+                    finding["run_id"], finding["job_id"]
+                ),
+                tags: vec![format!("ci-failure:{key}")],
+                ..TaskAddParams::default()
+            })
+            .expect("legacy observation");
+        runtime
+            .update_task(
+                &source.id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::Rejected),
+                    comment: Some(format!("Duplicate of {}", owner.id)),
+                    ..TaskUpdateParams::default()
+                },
+            )
+            .expect("rejected duplicate");
+    }
+    for finding in &findings {
+        let output = file(
+            &runtime,
+            json!({"ci_evidence": snapshot(vec![finding.clone()])}),
+        );
+        assert_eq!(output["filed_count"], 0, "{output}");
+        assert_eq!(output["skipped_existing"][0]["task_id"], owner.id);
+        assert_eq!(
+            output["skipped_existing"][0]["match_kind"],
+            "confirmed_duplicate"
+        );
+    }
+    let mut reversed = findings.clone();
+    reversed.reverse();
+    for current in [findings.clone(), reversed] {
+        let output = file(&runtime, json!({"ci_evidence": snapshot(current)}));
+        assert_eq!(output["filed_count"], 0);
+        assert_eq!(output["skipped_existing"][0]["task_id"], owner.id);
+        assert_eq!(
+            output["skipped_existing"][0]["sources"]
+                .as_array()
+                .expect("sources")
+                .len(),
+            3
+        );
+    }
+    // The old chatter key recurs, but a new run is not the original evidence.
+    let mut later = findings[0].clone();
+    later["run_id"] = json!(99);
+    let output = file(&runtime, json!({"ci_evidence": snapshot(vec![later])}));
+    assert_eq!(output["filed_count"], 1);
+}
+
+#[test]
+fn compiler_proof_preserves_case_coordinates_checkout_and_secondary_errors() {
+    for difference in [
+        "case",
+        "location",
+        "checkout",
+        "secondary",
+        "missing_location",
+    ] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let mut findings = compiler_findings();
+        findings.truncate(2);
+        let text = findings[1]["diagnostic_unit"]["text"]
+            .as_str()
+            .expect("log");
+        let changed = match difference {
+            "case" => text.replace("owner_machine_id", "Owner_machine_id"),
+            "location" => text.replace(":275:13", ":276:13"),
+            "checkout" => text.to_string(),
+            "secondary" => format!(
+                "{text}\nerror[E0308]: mismatched types\n --> crates/orbit-core/src/ci_sweep.rs:275:13\n"
+            ),
+            _ => text.replace("  --> crates/orbit-core/src/ci_sweep.rs:275:13\n", ""),
+        };
+        findings[1]["diagnostic_unit"]["text"] = json!(changed);
+        if difference == "checkout" {
+            findings[1]["actual_checkout_shas"] = json!([NEXT_HEAD]);
+        }
+        let output = file(&runtime, json!({"ci_evidence": snapshot(findings)}));
+        assert_eq!(output["filed_count"], 2, "{difference}: {output}");
+    }
+}

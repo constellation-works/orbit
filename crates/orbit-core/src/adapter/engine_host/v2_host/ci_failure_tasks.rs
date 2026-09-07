@@ -21,10 +21,12 @@
 //! regression observed across a push run and a pull-request run of the *same*
 //! commit collapses into one task instead of two.
 //!
-//! `failure_key` — the dedupe tag — deliberately omits the commit. The sweep is
-//! hourly and a fix takes longer than that; keying dedupe on the commit would
-//! file the same root cause again every time the branch advanced, which is the
-//! backlog flood this step exists to prevent.
+//! Ordinary `failure_key` tags omit the commit to keep a still-open repair
+//! across branch advances. Proven compiler causes instead include the exact
+//! diagnostic set, source locations and observed checkout, omitting job and
+//! workflow wrappers. That conservative proof consolidates cross-job failures
+//! without conflating different compiler operands or source revisions. Shipped
+//! per-job tags remain readable for the same immutable supplying evidence.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -343,7 +345,7 @@ where
     let duplicate_matches = clusters
         .iter()
         .map(|cluster| {
-            find_covering_task(lookup, &cluster.duplicate_candidate()).map_err(|error| {
+            cluster.find_covering_task(lookup).map_err(|error| {
                 retryable_pipeline_error(
                     "dedupe_lookup",
                     &audit,
@@ -409,6 +411,7 @@ where
                 "workflow": cluster.workflow,
                 "match_kind": match_kind,
                 "match_evidence": evidence,
+                "sources": cluster.filing_entry(&task_id)["sources"],
             }));
             continue;
         }
@@ -800,8 +803,8 @@ fn normalize_retryable_error(error: Value) -> Value {
 
 /// One root cause, with every current run that exhibited it.
 struct FailureCluster {
-    /// Dedupe identity across sweeps: workflow, failing job, failing step, and
-    /// normalized error signature. Commit-independent by design.
+    /// Dedupe identity across sweeps. Compiler proof replaces the ordinary
+    /// workflow/job/step/signature key only at the same observed checkout.
     failure_key: String,
     /// Grouping identity within one snapshot: `failure_key` plus the commit the
     /// runner actually tested.
@@ -811,6 +814,8 @@ struct FailureCluster {
     step: String,
     tested_commit: String,
     signature: String,
+    compiler_cause: Option<String>,
+    legacy_keys: BTreeSet<String>,
     /// True when `signature` is the failing step name because no error line
     /// survived in the excerpt. The description must label that as a fallback
     /// rather than a captured diagnostic; collapsing every distinct failure of
@@ -827,8 +832,70 @@ struct FailureCluster {
 }
 
 impl FailureCluster {
+    fn find_covering_task<L: DuplicateTaskLookup + ?Sized>(
+        &self,
+        lookup: &L,
+    ) -> Result<Option<DuplicateTaskMatch>, OrbitError> {
+        if let Some(found) = find_covering_task(lookup, &self.duplicate_candidate())? {
+            return Ok(Some(found));
+        }
+        // Shipped per-job keys (including the old first-marker signature) are
+        // durable references. Keep their exact/rejected-owner continuity, but
+        // never use their weak command or source-only fingerprints as proof.
+        for key in &self.legacy_keys {
+            let tag = format!("{CI_FAILURE_KEY_TAG_PREFIX}{key}");
+            let candidate = DuplicateCandidate::new(
+                tag.clone(),
+                vec![CoverageFingerprint::new(
+                    "legacy_compiler_key",
+                    vec![CoverageAnchor::new("exact_failure_key", tag)],
+                )],
+            );
+            if let Some(found) = find_covering_task(lookup, &candidate)? {
+                let source_id = found.evidence["matched_fields"]
+                    .as_array()
+                    .and_then(|fields| {
+                        fields
+                            .iter()
+                            .find(|field| field["field"] == "rejected_task_id")
+                    })
+                    .and_then(|field| field["value"].as_str())
+                    .unwrap_or(&found.task_id);
+                let source = lookup.get_task(source_id)?;
+                let owner = lookup.get_task(&found.task_id)?;
+                let prior_cause = compiler_cause(&source.description)
+                    .or_else(|| compiler_cause(&owner.description));
+                if prior_cause.is_some() && prior_cause != self.compiler_cause {
+                    continue;
+                }
+                // An old chatter-based key can recur for a different compiler
+                // cause. Only immutable supplying evidence justifies migration.
+                if self
+                    .runs
+                    .iter()
+                    .any(|run| legacy_source_matches(&source.description, run))
+                {
+                    return Ok(Some(found));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     fn duplicate_candidate(&self) -> DuplicateCandidate {
         let exact_tag = format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", self.failure_key);
+        if let Some(cause) = &self.compiler_cause {
+            return DuplicateCandidate::new(
+                exact_tag,
+                vec![CoverageFingerprint::new(
+                    "ci_compiler_cause",
+                    vec![
+                        CoverageAnchor::new("compiler_cause", digest(&[cause])),
+                        CoverageAnchor::new("tested_commit", &self.tested_commit),
+                    ],
+                )],
+            );
+        }
         let mut fingerprints = if self.signature_is_step_fallback {
             // A step-name fallback contains no diagnostic. It is sufficient
             // for exact-key idempotency but too weak for broader free-text
@@ -895,6 +962,11 @@ impl FailureCluster {
             "job": self.job,
             "step": self.step,
             "tested_commit": self.tested_commit,
+            "sources": self.runs.iter().map(|run| json!({
+                "run_id": run["run_id"], "job_id": run["job_id"],
+                "workflow": run["workflow"], "failed_jobs": run["failed_jobs"],
+                "actual_checkout_shas": run["actual_checkout_shas"],
+            })).collect::<Vec<_>>(),
             "run_ids": self.run_ids(),
             "run_urls": self.run_urls(),
             "ref_kinds": self.distinct_run_strings("ref_kind"),
@@ -969,10 +1041,21 @@ impl FailureCluster {
             "- Commit the runner actually checked out: `{}`\n",
             display(&self.tested_commit)
         ));
+        if let Some(cause) = &self.compiler_cause {
+            out.push_str(&format!(
+                "- Compiler cause identity: `{}`\n",
+                digest(&[cause])
+            ));
+        }
         if self.signature_is_step_fallback {
             out.push_str(&format!(
                 "- Normalized error signature (step-name fallback — no error line was captured; \
                  the dedupe identity, not a quote): `{}`\n",
+                display(&self.signature)
+            ));
+        } else if self.compiler_cause.is_some() {
+            out.push_str(&format!(
+                "- Normalized error signature (display only; the compiler cause identity controls dedupe): `{}`\n",
                 display(&self.signature)
             ));
         } else {
@@ -1249,8 +1332,24 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         let signature = error_signature(&log_excerpt, &step);
         let tested_commit = tested_commit(failure);
 
-        let failure_key = digest(&[&workflow, &job, &step, &signature.text]);
-        let cluster_key = digest(&[&workflow, &job, &step, &signature.text, &tested_commit]);
+        let compiler_cause = compiler_cause(&log_excerpt);
+        let legacy_key = compiler_cause.as_ref().map(|_| {
+            let lines = classify_log_lines(&log_excerpt);
+            let legacy = legacy_signature(&lines, &step);
+            digest(&[&workflow, &job, &step, &legacy])
+        });
+        // Cross-job consolidation requires the complete compiler diagnostic
+        // set, exact source locations and the same observed checkout. Generic
+        // step wrappers and shared paths are never sufficient.
+        let failure_key = match &compiler_cause {
+            Some(cause) => digest(&["compiler", cause, &tested_commit]),
+            None => digest(&[&workflow, &job, &step, &signature.text]),
+        };
+        let cluster_key = if compiler_cause.is_some() {
+            digest(&[&failure_key, &tested_commit])
+        } else {
+            digest(&[&workflow, &job, &step, &signature.text, &tested_commit])
+        };
 
         let cluster = grouped.entry(cluster_key.clone()).or_insert_with(|| {
             order.push(cluster_key.clone());
@@ -1262,6 +1361,8 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
                 step,
                 tested_commit,
                 signature: signature.text,
+                compiler_cause,
+                legacy_keys: BTreeSet::new(),
                 signature_is_step_fallback: signature.step_fallback,
                 log_excerpt,
                 log_truncated: failure
@@ -1272,6 +1373,9 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
                 runs: Vec::new(),
             }
         });
+        if let Some(key) = legacy_key {
+            cluster.legacy_keys.insert(key);
+        }
         cluster.runs.push(failure.clone());
     }
 
@@ -1311,6 +1415,20 @@ fn tested_commit(failure: &Value) -> String {
         .unwrap_or_default()
 }
 
+/// Generated descriptions shipped these exact provenance labels. This is a
+/// compatibility check for old tags, not a free-text root-cause heuristic.
+fn legacy_source_matches(description: &str, run: &Value) -> bool {
+    let run_id = value_string(run, "run_id");
+    let job_id = value_string(run, "job_id");
+    let checkout = tested_commit(run);
+    !run_id.is_empty()
+        && !job_id.is_empty()
+        && !checkout.is_empty()
+        && description.contains(&format!("run `{run_id}`"))
+        && description.contains(&format!("(id `{job_id}`)"))
+        && description.contains(&format!("commit actually checked out: `{checkout}`"))
+}
+
 fn source_identity_fingerprint(runs: &[Value]) -> Option<CoverageFingerprint> {
     let run = runs.first()?;
     let run_id = value_string(run, "run_id");
@@ -1346,7 +1464,8 @@ fn specific_error_anchors(log: &str, signature: &str) -> Vec<String> {
     for (kind, line) in classify_log_lines(log) {
         if !matches!(
             kind,
-            LineKind::ConcreteDiagnostic
+            LineKind::CompilerDiagnostic
+                | LineKind::ConcreteDiagnostic
                 | LineKind::ErrorAnnotated
                 | LineKind::Marker
                 | LineKind::Content
@@ -1557,12 +1676,13 @@ const ERROR_MARKERS: &[&str] = &[
 ///
 /// Preference order, so a generic wrapper cannot fragment one evidenced
 /// failure or collapse distinct ones:
-/// 1. A concrete test/panic identity (`thread '…' panicked`, `test … FAILED`,
+/// 1. A coded compiler diagnostic (`error[E0062]: …`).
+/// 2. A concrete test/panic identity (`thread '…' panicked`, `test … FAILED`,
 ///    nextest `FAIL […]`, a name listed after libtest `failures:`).
-/// 2. A specific `##[error]` annotation.
-/// 3. Any remaining marker diagnostic (compiler `error:`, `assertion failed`).
-/// 4. The nearest unannotated content line before a generic trailer.
-/// 5. The failing step name, labelled as a fallback — used when the excerpt
+/// 3. A specific `##[error]` annotation.
+/// 4. Any remaining marker diagnostic (compiler `error:`, `assertion failed`).
+/// 5. The nearest unannotated content line before a generic trailer.
+/// 6. The failing step name, labelled as a fallback — used when the excerpt
 ///    only has wrappers, bookkeeping, or assertion payload.
 ///
 /// Generic trailers include GitHub's process-completed / `The process '…'
@@ -1573,37 +1693,127 @@ const ERROR_MARKERS: &[&str] = &[
 /// ANSI is stripped only for classification and the normalized signature.
 fn error_signature(log_excerpt: &str, step: &str) -> ErrorSignature {
     let lines = classify_log_lines(log_excerpt);
-    for wanted in [
-        LineKind::ConcreteDiagnostic,
-        LineKind::ErrorAnnotated,
-        LineKind::Marker,
-    ] {
-        if let Some((_, line)) = lines.iter().find(|(kind, _)| *kind == wanted) {
-            return ErrorSignature {
-                text: normalize_signature(&signature_payload(line)),
-                step_fallback: false,
-            };
-        }
-    }
-    for (index, (kind, _)) in lines.iter().enumerate() {
-        if *kind != LineKind::GenericTrailer {
-            continue;
-        }
-        if let Some((_, line)) = lines[..index]
-            .iter()
-            .rev()
-            .find(|(kind, line)| *kind == LineKind::Content && is_diagnostic_content(line))
-        {
-            return ErrorSignature {
-                text: normalize_signature(&signature_payload(line)),
-                step_fallback: false,
-            };
-        }
+    if let Some(index) = diagnostic_anchor(&lines) {
+        return ErrorSignature {
+            text: normalize_signature(&signature_payload(lines[index].1)),
+            step_fallback: false,
+        };
     }
     ErrorSignature {
         text: normalize_signature(&step.to_ascii_lowercase()),
         step_fallback: true,
     }
+}
+
+/// Signature and display must agree on the strongest diagnostic, independent
+/// of where setup output or a process-exit wrapper appears in the command.
+fn diagnostic_anchor(lines: &[(LineKind, &str)]) -> Option<usize> {
+    for wanted in [
+        LineKind::CompilerDiagnostic,
+        LineKind::ConcreteDiagnostic,
+        LineKind::ErrorAnnotated,
+        LineKind::Marker,
+    ] {
+        if let Some(index) = lines.iter().position(|(kind, _)| *kind == wanted) {
+            return Some(index);
+        }
+    }
+    for (index, (kind, _)) in lines.iter().enumerate() {
+        if *kind == LineKind::GenericTrailer
+            && let Some(previous) = lines[..index]
+                .iter()
+                .rposition(|(kind, line)| *kind == LineKind::Content && is_diagnostic_content(line))
+        {
+            return Some(previous);
+        }
+    }
+    None
+}
+
+/// Preserve the shipped signature algorithm only for looking up existing tags.
+fn legacy_signature(lines: &[(LineKind, &str)], step: &str) -> String {
+    let legacy: Vec<_> = lines
+        .iter()
+        .map(|(kind, line)| {
+            let kind = match kind {
+                LineKind::CompilerDiagnostic | LineKind::CargoStatus => {
+                    if signature_payload(line).contains("##[error]") {
+                        LineKind::ErrorAnnotated
+                    } else if is_error_marker_line(signature_payload(line).trim()) {
+                        LineKind::Marker
+                    } else {
+                        LineKind::Content
+                    }
+                }
+                other => *other,
+            };
+            (kind, *line)
+        })
+        .collect();
+    diagnostic_anchor(&legacy)
+        .map(|index| normalize_signature(&signature_payload(legacy[index].1)))
+        .unwrap_or_else(|| normalize_signature(&step.to_ascii_lowercase()))
+}
+
+fn is_compiler_diagnostic(payload: &str) -> bool {
+    let payload = payload.strip_prefix("##[error]").unwrap_or(payload).trim();
+    let Some(rest) = payload.strip_prefix("error[e") else {
+        return false;
+    };
+    let Some((code, message)) = rest.split_once("]:") else {
+        return false;
+    };
+    code.len() == 4 && code.bytes().all(|byte| byte.is_ascii_digit()) && !message.trim().is_empty()
+}
+
+fn is_cargo_status(payload: &str) -> bool {
+    [
+        "compiling ",
+        "checking ",
+        "downloading ",
+        "downloaded ",
+        "fresh ",
+        "error: could not compile ",
+        "warning: build failed",
+        "for more information about this error",
+    ]
+    .iter()
+    .any(|prefix| payload.starts_with(prefix))
+}
+
+/// A conservative proof for cross-job merging. Preserve diagnostic operands
+/// and line/column numbers: display normalization deliberately erases numbers
+/// and truncates text, so it is not strong enough for a compiler cause key.
+fn compiler_cause(log: &str) -> Option<String> {
+    let lines = classify_log_lines(log);
+    let mut causes = BTreeSet::new();
+    for (index, (kind, line)) in lines.iter().enumerate() {
+        if *kind != LineKind::CompilerDiagnostic {
+            continue;
+        }
+        let diagnostic = strip_ansi_sequences(log_payload(line));
+        let diagnostic = diagnostic
+            .trim()
+            .strip_prefix("##[error]")
+            .unwrap_or(diagnostic.trim())
+            .trim();
+        let location = lines
+            .get(index + 1)
+            .map(|(_, line)| strip_ansi_sequences(log_payload(line)))?;
+        let location = location.trim().strip_prefix("-->")?.trim();
+        let (path_line, column) = location.rsplit_once(':')?;
+        let (path, line_number) = path_line.rsplit_once(':')?;
+        if path.starts_with('/')
+            || path.contains("..")
+            || !path.ends_with(".rs")
+            || line_number.parse::<u64>().is_err()
+            || column.parse::<u64>().is_err()
+        {
+            return None;
+        }
+        causes.insert(format!("{diagnostic} @ {location}"));
+    }
+    (!causes.is_empty()).then(|| causes.into_iter().collect::<Vec<_>>().join("; "))
 }
 
 struct ErrorSignature {
@@ -1616,6 +1826,8 @@ enum LineKind {
     RunCommand,
     ParamDump,
     EndGroup,
+    CompilerDiagnostic,
+    CargoStatus,
     ConcreteDiagnostic,
     ErrorAnnotated,
     GenericTrailer,
@@ -1626,7 +1838,10 @@ enum LineKind {
 
 impl LineKind {
     fn skip_from_excerpt(self) -> bool {
-        matches!(self, Self::ParamDump | Self::EndGroup | Self::Bookkeeping)
+        matches!(
+            self,
+            Self::ParamDump | Self::EndGroup | Self::Bookkeeping | Self::CargoStatus
+        )
     }
 }
 
@@ -1637,11 +1852,11 @@ struct FailedStepExcerpt {
 
 /// Command line plus the failure region, never a head-biased env dump.
 ///
-/// The `##[group]Run …` line is the command the runner executed and is the
-/// most actionable fact in the log. The `env:` / `with:` dump that follows it
-/// is never the evidence. The rest of the block is a bounded window around
-/// an error anchor, capped at `max_bytes` on that region rather than the
-/// log head.
+/// The `##[group]Run …` line is useful reproduction context. The selected diagnostic and its following
+/// source location take precedence over oversized wrapper arguments. The
+/// `env:` / `with:` dump that follows the command is never the evidence.
+/// The remaining block is a bounded window around the diagnostic, capped at
+/// `max_bytes` on that region rather than the log head.
 fn render_failed_step_excerpt(log: &str, max_bytes: usize) -> FailedStepExcerpt {
     let lines = classify_log_lines(log);
     let command = lines
@@ -1649,15 +1864,11 @@ fn render_failed_step_excerpt(log: &str, max_bytes: usize) -> FailedStepExcerpt 
         .find(|(kind, _)| *kind == LineKind::RunCommand)
         .map(|(_, line)| *line);
 
-    let anchor = lines
-        .iter()
-        .position(|(kind, _)| {
-            matches!(
-                kind,
-                LineKind::ConcreteDiagnostic | LineKind::ErrorAnnotated | LineKind::GenericTrailer
-            )
-        })
-        .or_else(|| lines.iter().position(|(kind, _)| *kind == LineKind::Marker));
+    let anchor = diagnostic_anchor(&lines).or_else(|| {
+        lines
+            .iter()
+            .position(|(kind, _)| *kind == LineKind::GenericTrailer)
+    });
 
     let Some(anchor_idx) = anchor else {
         return FailedStepExcerpt {
@@ -1713,6 +1924,10 @@ fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
             in_param_block = false;
             if is_generic_trailer(lowered) {
                 LineKind::GenericTrailer
+            } else if is_compiler_diagnostic(lowered) {
+                LineKind::CompilerDiagnostic
+            } else if is_cargo_status(lowered) {
+                LineKind::CargoStatus
             } else if lowered.contains("##[error]") {
                 LineKind::ErrorAnnotated
             } else if is_runner_bookkeeping(lowered) || lowered.contains("##[group]") {
@@ -1926,10 +2141,10 @@ fn cap_bytes_around_line(text: &str, anchor_line: &str, max_bytes: usize) -> Str
         return truncate_bytes(anchor_line, max_bytes);
     }
     let extra = max_bytes - anchor_len;
-    let want_before = extra * 2 / 3;
+    let want_before = extra / 3;
     let mut start = anchor_start.saturating_sub(want_before);
-    while start > 0 && !text.is_char_boundary(start) {
-        start -= 1;
+    while start < anchor_start && !text.is_char_boundary(start) {
+        start += 1;
     }
     if start > 0
         && let Some(newline) = text[start..anchor_start].find('\n')
@@ -1944,8 +2159,8 @@ fn cap_bytes_around_line(text: &str, anchor_line: &str, max_bytes: usize) -> Str
             start -= 1;
         }
     }
-    while end < text.len() && !text.is_char_boundary(end) {
-        end += 1;
+    while end > anchor_start + anchor_len && !text.is_char_boundary(end) {
+        end -= 1;
     }
     if end < text.len()
         && let Some(newline) = text[anchor_start + anchor_len..end].rfind('\n')
