@@ -4732,3 +4732,94 @@ fn run_cli_backend_accepts_a_structured_output_envelope_from_a_tool_using_run() 
     assert_eq!(outcome.output["completion_envelope_satisfied"], true);
     assert_eq!(outcome.output["response_envelope_status"], "success");
 }
+
+#[test]
+fn conflict_recovery_can_complete_only_its_checkpointed_rebase() {
+    let git_head = |repo: &Path| {
+        String::from_utf8(git_bytes(repo, &["rev-parse", "HEAD"]))
+            .unwrap()
+            .trim()
+            .to_string()
+    };
+    for wrong_checkpoint in [false, true] {
+        let fixture = linked_worktree_fixture();
+        fs::write(fixture.assigned.join("README.md"), "candidate\n").unwrap();
+        git_ok(&fixture.assigned, &["add", "README.md"]);
+        git_ok(&fixture.assigned, &["commit", "-m", "candidate intent"]);
+        let original = git_head(&fixture.assigned);
+        fs::write(fixture.primary.join("README.md"), "target\n").unwrap();
+        git_ok(&fixture.primary, &["add", "README.md"]);
+        git_ok(&fixture.primary, &["commit", "-m", "target change"]);
+        let target = git_head(&fixture.primary);
+        let stopped = Command::new("git")
+            .arg("-C")
+            .arg(&fixture.assigned)
+            .args(["rebase", &target])
+            .output()
+            .unwrap();
+        assert!(!stopped.status.success());
+        let script = fixture.root().join("codex");
+        write_executable(
+            &script,
+            r##"#!/bin/sh
+set -eu
+cat > /dev/null
+printf 'candidate and target\n' > README.md
+git add README.md
+git -c core.editor=true rebase --continue >&2
+printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
+"##,
+        );
+        let mut host = TestHost::with_command(script.display().to_string());
+        host.workspace_root = Some(fixture.primary.clone());
+        let mut input = worktree_input(&fixture, "T-recovery");
+        input["run_id"] = serde_json::json!("run-rebase-recovery");
+        input["recovery_kind"] = serde_json::json!("vcs_conflict");
+        input["operation"] = serde_json::json!("git_rebase");
+        input["target_base_sha"] =
+            serde_json::json!(if wrong_checkpoint { &original } else { &target });
+        input["failed_step_input"] = serde_json::json!({
+            "head": "orbit-integrity-test", "head_sha": original,
+        });
+        let audit = test_audit("run-rebase-recovery", "codex");
+        let outcome = run_cli_backend(
+            &host,
+            &test_agent_loop_spec(Duration::from_secs(30)),
+            "pr_conflict_recovery",
+            "run-rebase-recovery",
+            audit.clone(),
+            &input,
+            None,
+        );
+        if wrong_checkpoint {
+            let error = outcome.unwrap_err().to_string();
+            assert!(error.contains("existing rebase matching"), "{error}");
+            assert!(
+                !audit
+                    .events_snapshot()
+                    .unwrap()
+                    .iter()
+                    .any(|event| matches!(
+                        event.kind,
+                        V2AuditEventKind::CliInvocationStarted { .. }
+                    ))
+            );
+            assert!(
+                String::from_utf8_lossy(&git_bytes(&fixture.assigned, &["ls-files", "-u"]))
+                    .contains("README.md")
+            );
+        } else {
+            assert!(outcome.unwrap().success);
+            assert_eq!(
+                fs::read_to_string(fixture.assigned.join("README.md")).unwrap(),
+                "candidate and target\n"
+            );
+            assert_ne!(git_head(&fixture.assigned), original);
+            git_ok(
+                &fixture.assigned,
+                &["merge-base", "--is-ancestor", &target, "HEAD"],
+            );
+            assert_eq!(git_head(&fixture.primary), target);
+        }
+    }
+}

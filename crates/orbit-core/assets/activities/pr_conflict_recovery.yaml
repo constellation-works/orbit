@@ -25,6 +25,24 @@ spec:
       - conflicting_paths
       - diagnostic
     properties:
+      run_id:
+        type: string
+      task_id:
+        type: string
+      task_ids:
+        type: array
+        items:
+          type: string
+      workspace_path:
+        type: string
+      repo_root:
+        type: string
+      failed_step_input:
+        type: object
+      crew:
+        type: string
+      crew_config_key:
+        const: workflow.system_crew
       failed_step_id:
         type: string
       activity_name:
@@ -76,7 +94,9 @@ spec:
     implementation, dispatch or resume a job, create another task or branch,
     open another PR, push, merge, or change lifecycle status.
 
-    1. Read the supplied conflict evidence. Inspect the current run through
+    1. Read the supplied conflict evidence and `failed_step_input`, which
+       retains the candidate branch and pre-rewrite checkpoint. Work only in
+       the supplied matching `workspace_path` and `repo_root`. Inspect the run through
        `orbit run show "$ORBIT_RUN_ID" --json`, its task, and its checkpointed
        worktree. Confirm the run, task, checked-out branch, recorded pre-rewrite
        HEAD, and target base SHA agree before editing. If the run is cancelled,

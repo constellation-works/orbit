@@ -387,6 +387,12 @@ pub(crate) struct WorktreeBoundaryGuard {
     primary_root: PathBuf,
     assigned_before: GitWorktreeFingerprint,
     primary_before: GitWorktreeFingerprint,
+    rebase_recovery: Option<RebaseRecoveryCheckpoint>,
+}
+
+struct RebaseRecoveryCheckpoint {
+    branch: String,
+    target_base_sha: String,
 }
 
 impl WorktreeBoundaryGuard {
@@ -581,7 +587,110 @@ impl WorktreeBoundaryGuard {
             primary_before: git_fingerprint(&primary_root)?,
             assigned_root,
             primary_root,
+            rebase_recovery: None,
         }))
+    }
+
+    /// Only the dedicated conflict-recovery dispatcher calls this method.
+    /// Admit completion of the already stopped, checkpoint-matching rebase;
+    /// ordinary implementing agents retain the no-history-change invariant.
+    pub(crate) fn authorize_rebase_completion(
+        &mut self,
+        input: &Value,
+    ) -> Result<(), DispatchError> {
+        let invalid = || {
+            DispatchError::CliInvocationPermanent(
+                "conflict recovery requires an existing rebase matching the prepared branch, \
+                 original HEAD and pinned target base"
+                    .to_string(),
+            )
+        };
+        if input.get("recovery_kind").and_then(Value::as_str) != Some("vcs_conflict")
+            || input.get("operation").and_then(Value::as_str) != Some("git_rebase")
+        {
+            return Err(invalid());
+        }
+        let prepared = input.get("failed_step_input").ok_or_else(invalid)?;
+        let branch = prepared
+            .get("head")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let original = prepared
+            .get("head_sha")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let target = input
+            .get("target_base_sha")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let expected_ref = format!("refs/heads/{branch}");
+        if git_stdout(
+            &self.assigned_root,
+            &["rev-parse", "--verify", &expected_ref],
+        )? != original
+        {
+            return Err(invalid());
+        }
+        for backend in ["rebase-merge", "rebase-apply"] {
+            let path = git_stdout(
+                &self.assigned_root,
+                &["rev-parse", "--path-format=absolute", "--git-path", backend],
+            )?;
+            let path = Path::new(&path);
+            if !path.is_dir() {
+                continue;
+            }
+            let read = |name: &str| {
+                fs::read_to_string(path.join(name)).map(|text| text.trim().to_string())
+            };
+            if read("head-name").ok().as_deref() != Some(expected_ref.as_str())
+                || read("orig-head").ok().as_deref() != Some(original)
+                || read("onto").ok().as_deref() != Some(target)
+            {
+                return Err(invalid());
+            }
+            self.rebase_recovery = Some(RebaseRecoveryCheckpoint {
+                branch: branch.to_string(),
+                target_base_sha: target.to_string(),
+            });
+            return Ok(());
+        }
+        Err(invalid())
+    }
+
+    fn completed_authorized_rebase(
+        &self,
+        after: &GitWorktreeFingerprint,
+    ) -> Result<bool, DispatchError> {
+        let Some(checkpoint) = &self.rebase_recovery else {
+            return Ok(false);
+        };
+        if after.branch.as_deref() != Some(checkpoint.branch.as_str())
+            || !after.dirty_paths.is_empty()
+        {
+            return Ok(false);
+        }
+        for backend in ["rebase-merge", "rebase-apply"] {
+            let path = git_stdout(
+                &self.assigned_root,
+                &["rev-parse", "--path-format=absolute", "--git-path", backend],
+            )?;
+            if Path::new(&path).exists() {
+                return Ok(false);
+            }
+        }
+        Ok(after.head != checkpoint.target_base_sha
+            && git_output_raw(
+                &self.assigned_root,
+                &[
+                    "merge-base",
+                    "--is-ancestor",
+                    &checkpoint.target_base_sha,
+                    "HEAD",
+                ],
+            )?
+            .status
+            .success())
     }
 
     /// Compare both monitored checkouts after the provider reaches any
@@ -591,8 +700,9 @@ impl WorktreeBoundaryGuard {
     /// every path this run touched alone: linked worktrees keep their own
     /// HEAD, and the shipment rebase checkpoint owns reconciliation with a new
     /// base. Primary rewrites, primary branch switches, primary source edits,
-    /// primary dirt overlapping the run, and history changes in the assigned
-    /// worktree remain typed, fail-closed violations.
+    /// primary dirt overlapping the run, and unapproved history changes in the
+    /// assigned worktree remain typed, fail-closed violations. Only completion
+    /// of an explicitly admitted stopped rebase permits assigned history changes.
     pub(crate) fn verify(self) -> Result<(), DispatchError> {
         let assigned_after = git_fingerprint(&self.assigned_root)?;
         let primary_after = git_fingerprint(&self.primary_root)?;
@@ -614,8 +724,8 @@ impl WorktreeBoundaryGuard {
             .cloned()
             .collect::<Vec<_>>();
 
-        if assigned_history_changed {
-            // ADR-0299: provider execution may change files, never Git history.
+        if assigned_history_changed && !self.completed_authorized_rebase(&assigned_after)? {
+            // Only the checkpointed conflict-recovery leaf may finish a rebase.
             return Err(self.integrity_error(
                 "worktree_content_conflict",
                 &assigned_after,

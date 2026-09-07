@@ -84,6 +84,12 @@ pub enum V2AuditEventKind {
         step_id: String,
         recovery_activity: String,
         recovery_succeeded: bool,
+        /// Absent on historical events and successful attempts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_phase: Option<String>,
+        /// Bounded and redacted independently of the original step error.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_message: Option<String>,
     },
     StepDenied {
         step_id: String,
