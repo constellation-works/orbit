@@ -2783,3 +2783,31 @@ if (!input.value) throw new Error("stale lookup must not clear the jump input as
 "##,
     );
 }
+
+#[test]
+fn operations_actions_preserve_capabilities_feedback_and_workspace_identity() {
+    let dom = r#"
+class Node {
+  constructor() { this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this._text = ""; }
+  appendChild(child) { this.children.push(child); return child; }
+  append(...children) { children.forEach(child => this.appendChild(child)); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get textContent() { return this._text + this.children.map(child => child.textContent).join(""); }
+  setAttribute(name, value) { this[name] = String(value); }
+  getAttribute(name) { return this[name]; }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  click() { if (!this.disabled) return this.listeners.click?.(); }
+  dispatchEvent(event) { return this.listeners[event.type]?.(event); }
+}
+const nodes = new Map();
+globalThis.document = {
+  getElementById: id => { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); },
+  createElement: () => new Node(),
+};
+globalThis.window = { location: new URL("http://dashboard.test"), localStorage: { getItem: () => null } };
+"#;
+    run_dashboard_javascript_test(&format!(
+        "{dom}\n{}",
+        include_str!("dashboard_operations.mjs")
+    ));
+}

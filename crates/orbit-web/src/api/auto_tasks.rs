@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Local, Utc};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_TOGGLE, OPERATOR_OVERRIDE_ENV,
+    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_TOGGLE,
 };
 use orbit_core::OrbitRuntime;
 use orbit_core::application::auto_tasks::{
@@ -24,8 +24,8 @@ use serde_json::{Value, json};
 
 use super::map_runtime_error;
 use super::routines::{
-    OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
-    named_entity_not_found, record_operation_audit, selection_conflict,
+    OperationsQuery, action_capability, authorization_denied, authorized_caller,
+    explicit_workspace, named_entity_not_found, record_operation_audit, selection_conflict,
 };
 use crate::state::DashboardState;
 
@@ -299,6 +299,10 @@ fn read_only_envelope(generated_at: DateTime<Utc>, workspace: Option<&str>, reas
         "generated_at": generated_at.to_rfc3339(),
         "workspace": workspace,
         "controls_authorized": false,
+        "capabilities": {
+            "auto_task_toggle": {"authorized": false, "reason": reason},
+            "auto_task_mint": {"authorized": false, "reason": reason},
+        },
         "read_only_reason": reason,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "definitions": [],
@@ -334,13 +338,11 @@ fn list_json(
         "workspace": workspace,
         "workspace_name": workspace_name,
         "controls_authorized": controls_authorized,
-        "read_only_reason": if controls_authorized {
-            Value::Null
-        } else {
-            Value::String(format!(
-                "Controls require an authorized operator session (set {OPERATOR_OVERRIDE_ENV} or use an interactive operator terminal)."
-            ))
+        "capabilities": {
+            "auto_task_toggle": action_capability(&DASHBOARD_AUTO_TASK_TOGGLE),
+            "auto_task_mint": action_capability(&DASHBOARD_AUTO_TASK_MINT),
         },
+        "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "definitions": definitions,
         "load_errors": collection.errors.iter().map(|error| json!({

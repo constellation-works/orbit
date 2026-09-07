@@ -4266,7 +4266,8 @@
       .operation-button:disabled, .operation-cadence:disabled { opacity: .5; cursor: not-allowed; }
       .operation-button.disable { color: var(--state-failed); }
       .operation-button.enable { color: var(--state-success); }
-      .operation-clock-summary { justify-content: flex-start; margin-bottom: 14px; }
+      .operation-clock-summary { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 14px; overflow-wrap: anywhere; }
+      .operation-cadence { min-width: 0; max-width: 100%; }
       .operation-clock-actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 14px; }
 
       @media (max-width: 900px) {
