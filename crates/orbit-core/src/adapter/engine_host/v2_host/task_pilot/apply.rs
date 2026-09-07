@@ -463,13 +463,42 @@ pub(in super::super) fn apply(
         .filter(|decision| decision["outcome"] == "skipped_stale")
         .cloned()
         .collect::<Vec<_>>();
+    let applied_partitions = partition_decisions
+        .iter()
+        .filter(|decision| decision["outcome"] == "applied")
+        .count();
     let succeeded = failed_partitions.is_empty() && skipped_stale_partitions.is_empty();
     let status = if succeeded { "succeeded" } else { "failed" };
     let error = (!succeeded).then(|| {
+        let stale_tasks = skipped_stale_partitions
+            .iter()
+            .flat_map(|partition| partition["stale_tasks"].as_array())
+            .flatten()
+            .filter_map(|task| {
+                Some(format!(
+                    "{}: {}",
+                    task["task_id"].as_str()?,
+                    task["reason"].as_str()?
+                ))
+            })
+            .collect::<Vec<_>>();
+        let stale_details = if stale_tasks.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", stale_tasks.join(", "))
+        };
+        let applied_details = if applied_partitions == 0 {
+            String::new()
+        } else {
+            "; valid partitions were applied".to_string()
+        };
         format!(
-            "{} partition(s) failed and {} partition(s) were skipped as stale; valid partitions were applied",
+            "{} partition(s) failed, {} partition(s) were skipped as stale{}, and {} partition(s) applied{}",
             failed_partitions.len(),
-            skipped_stale_partitions.len()
+            skipped_stale_partitions.len(),
+            stale_details,
+            applied_partitions,
+            applied_details
         )
     });
 
