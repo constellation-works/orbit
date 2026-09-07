@@ -1,22 +1,27 @@
 //! `Embedder` implementation that talks to the installed companion binary
 //! over JSON-Lines stdio. The subprocess is kept alive across requests via
-//! a `Mutex<ChildIo>`; `Drop` sends `Exit` and reaps the child.
+//! a `Mutex<ChildIo>`; a dedicated reader thread feeds stdout into a
+//! channel so each RPC waits with a payload-scaled deadline. `Drop` sends
+//! `Exit`, closes stdin, and reaps the child within a bounded wait
+//! (killing the process group if it ignores `exit`).
 //!
 //! ## Retry hygiene (ORB-10006)
 //!
 //! Transport-level failures — spawn resource exhaustion, a crashed/exited
-//! companion (EOF), broken pipes — are transient: the request is retried a
-//! bounded number of times with exponential backoff + full jitter,
-//! respawning the companion between attempts. Companion-reported RPC errors
-//! and protocol violations are permanent and surface immediately.
+//! companion (EOF), broken pipes, a wedged companion that misses its read
+//! deadline — are transient: the request is retried a bounded number of
+//! times with exponential backoff + full jitter, respawning the companion
+//! between attempts. Companion-reported RPC errors and protocol violations
+//! are permanent and surface immediately.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::Duration;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_common::process::jitter::JitterRng;
@@ -26,11 +31,21 @@ use crate::embedder::{DEFAULT_MODEL, Embedder};
 use crate::rpc::{RpcRequest, RpcResponse, RpcResult, rpc_error_to_orbit};
 
 /// Total request attempts (first try + respawn retries).
-const RPC_MAX_ATTEMPTS: u32 = 3;
+pub(crate) const RPC_MAX_ATTEMPTS: u32 = 3;
 /// Base of the exponential backoff bound between attempts.
 const RPC_RETRY_INITIAL_BACKOFF_MS: u64 = 50;
 /// Cap on the backoff bound.
 const RPC_RETRY_BACKOFF_CAP_MS: u64 = 1_000;
+
+/// Default per-request wait for a companion response. Large payloads add
+/// [`RPC_TIMEOUT_PER_KIB`] so a batch embed is not killed while ONNX runs.
+pub(crate) const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
+const RPC_TIMEOUT_PER_KIB: Duration = Duration::from_millis(25);
+
+/// How long Drop waits for a cooperative `exit` before killing the child.
+pub(crate) const DEFAULT_DROP_TIMEOUT: Duration = Duration::from_secs(2);
+
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompanionStderr {
@@ -65,6 +80,13 @@ pub(crate) fn retry_backoff_bound_ms(attempt: u32) -> u64 {
         .min(RPC_RETRY_BACKOFF_CAP_MS)
 }
 
+/// Per-request stdout wait: `base` plus 25ms for every KiB of the serialized
+/// request so large embed batches keep a proportional ONNX budget.
+pub(crate) fn rpc_read_deadline(base: Duration, request_line: &str) -> Duration {
+    let kib = u32::try_from(request_line.len() / 1024).unwrap_or(u32::MAX);
+    base.saturating_add(RPC_TIMEOUT_PER_KIB.saturating_mul(kib))
+}
+
 pub struct SubprocessEmbedder {
     model_id: String,
     dim: usize,
@@ -76,12 +98,15 @@ pub struct SubprocessEmbedder {
     companion_path: PathBuf,
     model_arg: String,
     stderr_mode: CompanionStderr,
+    rpc_timeout: Duration,
+    drop_timeout: Duration,
 }
 
 struct ChildIo {
     child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    stdin: Option<ChildStdin>,
+    lines: Receiver<std::io::Result<String>>,
+    reader: Option<JoinHandle<()>>,
 }
 
 impl SubprocessEmbedder {
@@ -106,6 +131,22 @@ impl SubprocessEmbedder {
         model: &str,
         stderr: CompanionStderr,
     ) -> Result<Self, OrbitError> {
+        Self::with_path_model_stderr_and_timeouts(
+            path,
+            model,
+            stderr,
+            DEFAULT_RPC_TIMEOUT,
+            DEFAULT_DROP_TIMEOUT,
+        )
+    }
+
+    pub(crate) fn with_path_model_stderr_and_timeouts(
+        path: PathBuf,
+        model: &str,
+        stderr: CompanionStderr,
+        rpc_timeout: Duration,
+        drop_timeout: Duration,
+    ) -> Result<Self, OrbitError> {
         let io = spawn_companion_with_retry(&path, model, stderr)?;
         let mut embedder = Self {
             model_id: String::new(),
@@ -116,6 +157,8 @@ impl SubprocessEmbedder {
             companion_path: path,
             model_arg: model.to_string(),
             stderr_mode: stderr,
+            rpc_timeout,
+            drop_timeout,
         };
         let info = embedder.request(RpcRequest::Info { id: 0 })?;
         let RpcResult::Info {
@@ -133,6 +176,11 @@ impl SubprocessEmbedder {
         embedder.dim = dim;
         embedder.max_input_tokens = max_input_tokens;
         Ok(embedder)
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn child_id(&self) -> Option<u32> {
+        self.io.lock().ok().map(|io| io.child.id())
     }
 
     fn request(&self, request: RpcRequest) -> Result<RpcResult, OrbitError> {
@@ -156,6 +204,7 @@ impl SubprocessEmbedder {
         let line = serde_json::to_string(&request)
             .map_err(|error| OrbitError::Execution(error.to_string()))?;
         let id = request.id();
+        let deadline = rpc_read_deadline(self.rpc_timeout, &line);
 
         let mut io = self
             .io
@@ -170,10 +219,7 @@ impl SubprocessEmbedder {
                 match spawn_companion_child(&self.companion_path, &self.model_arg, self.stderr_mode)
                 {
                     Ok(fresh) => {
-                        // Reap the dead/wedged child before dropping its
-                        // handles so it doesn't linger as a zombie.
-                        let _ = io.child.kill();
-                        let _ = io.child.wait();
+                        io.kill_and_reap();
                         *io = fresh;
                     }
                     Err(error) => {
@@ -190,7 +236,7 @@ impl SubprocessEmbedder {
                     }
                 }
             }
-            match request_once(&mut io, &line, id) {
+            match request_once(&mut io, &line, id, deadline) {
                 Ok(result) => return Ok(result),
                 Err(RequestFailure::Permanent(error)) => return Err(error),
                 Err(RequestFailure::Transient(message)) => {
@@ -214,26 +260,53 @@ impl SubprocessEmbedder {
 }
 
 /// One request/response round-trip against the current companion child.
-/// Transport failures (write/read errors, EOF) are transient; malformed or
-/// mismatched responses and companion-reported errors are permanent.
-fn request_once(io: &mut ChildIo, line: &str, id: u64) -> Result<RpcResult, RequestFailure> {
-    io.stdin
+/// Transport failures (write/read errors, EOF, deadline) are transient;
+/// malformed or mismatched responses and companion-reported errors are
+/// permanent.
+fn request_once(
+    io: &mut ChildIo,
+    line: &str,
+    id: u64,
+    deadline: Duration,
+) -> Result<RpcResult, RequestFailure> {
+    let stdin = io
+        .stdin
+        .as_mut()
+        .ok_or_else(|| RequestFailure::Transient("search companion stdin is closed".to_string()))?;
+    stdin
         .write_all(line.as_bytes())
-        .and_then(|_| io.stdin.write_all(b"\n"))
-        .and_then(|_| io.stdin.flush())
+        .and_then(|_| stdin.write_all(b"\n"))
+        .and_then(|_| stdin.flush())
         .map_err(|error| {
             RequestFailure::Transient(format!("failed to write companion RPC: {error}"))
         })?;
 
-    let mut response_line = String::new();
-    let read = io.stdout.read_line(&mut response_line).map_err(|error| {
-        RequestFailure::Transient(format!("failed to read companion RPC: {error}"))
-    })?;
-    if read == 0 {
-        return Err(RequestFailure::Transient(
-            "search companion exited before sending a response".to_string(),
-        ));
-    }
+    let response_line = match io.lines.recv_timeout(deadline) {
+        Ok(Ok(response)) => response,
+        Ok(Err(error)) => {
+            io.kill_and_reap();
+            return Err(RequestFailure::Transient(format!(
+                "failed to read companion RPC: {error}"
+            )));
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            tracing::warn!(
+                ?deadline,
+                "search companion RPC timed out; killing companion"
+            );
+            io.kill_and_reap();
+            return Err(RequestFailure::Transient(format!(
+                "search companion RPC timed out after {}ms",
+                deadline.as_millis()
+            )));
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            io.kill_and_reap();
+            return Err(RequestFailure::Transient(
+                "search companion exited before sending a response".to_string(),
+            ));
+        }
+    };
     let response: RpcResponse = serde_json::from_str(&response_line).map_err(|error| {
         RequestFailure::Permanent(OrbitError::AgentProtocolViolation(error.to_string()))
     })?;
@@ -251,6 +324,68 @@ fn request_once(io: &mut ChildIo, line: &str, id: u64) -> Result<RpcResult, Requ
                 "companion response id mismatch for request {id}: {other:?}"
             )),
         )),
+    }
+}
+
+impl ChildIo {
+    fn kill_and_reap(&mut self) {
+        self.stdin.take();
+        kill_child_tree(&mut self.child);
+        self.join_reader();
+    }
+
+    fn join_reader(&mut self) {
+        if let Some(handle) = self.reader.take() {
+            let _ = handle.join();
+        }
+    }
+
+    fn shutdown_cooperatively(&mut self, drop_timeout: Duration) {
+        if let Some(mut stdin) = self.stdin.take() {
+            if let Ok(line) = serde_json::to_string(&RpcRequest::Exit { id: 9_999_999 }) {
+                let _ = stdin.write_all(line.as_bytes());
+                let _ = stdin.write_all(b"\n");
+                let _ = stdin.flush();
+            }
+            drop(stdin);
+        }
+        if wait_child_until(&mut self.child, drop_timeout) {
+            self.join_reader();
+            return;
+        }
+        self.kill_and_reap();
+    }
+}
+
+fn kill_child_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id();
+        // Safety: `killpg` is async-signal-safe. The child was spawned with
+        // `process_group(0)`, so its PGID equals its PID and the signal stays
+        // inside that group.
+        unsafe {
+            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn wait_child_until(child: &mut Child, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                thread::sleep(WAIT_POLL_INTERVAL.min(remaining));
+            }
+            Err(_) => return false,
+        }
     }
 }
 
@@ -305,13 +440,19 @@ fn spawn_companion_child(
     model: &str,
     stderr: CompanionStderr,
 ) -> Result<ChildIo, std::io::Error> {
-    let mut child = Command::new(path)
+    let mut command = Command::new(path);
+    command
         .arg("--model")
         .arg(model)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(stderr.stdio())
-        .spawn()?;
+        .stderr(stderr.stdio());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn()?;
     let stdin = child
         .stdin
         .take()
@@ -320,11 +461,45 @@ fn spawn_companion_child(
         .stdout
         .take()
         .ok_or_else(|| std::io::Error::other("companion stdout unavailable"))?;
-    Ok(ChildIo {
-        child,
-        stdin,
-        stdout: BufReader::new(stdout),
-    })
+    match spawn_stdout_reader(stdout) {
+        Ok((lines, reader)) => Ok(ChildIo {
+            child,
+            stdin: Some(stdin),
+            lines,
+            reader: Some(reader),
+        }),
+        Err(error) => {
+            kill_child_tree(&mut child);
+            Err(error)
+        }
+    }
+}
+
+fn spawn_stdout_reader(
+    stdout: ChildStdout,
+) -> Result<(Receiver<std::io::Result<String>>, JoinHandle<()>), std::io::Error> {
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::Builder::new()
+        .name("orbit-search-companion-stdout".to_string())
+        .spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if tx.send(Ok(line)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = tx.send(Err(error));
+                        break;
+                    }
+                }
+            }
+        })?;
+    Ok((rx, handle))
 }
 
 impl CompanionStderr {
@@ -378,16 +553,10 @@ impl Embedder for SubprocessEmbedder {
 
 impl Drop for SubprocessEmbedder {
     fn drop(&mut self) {
-        let Ok(mut io) = self.io.lock() else {
-            return;
+        let mut io = match self.io.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
-        if let Ok(line) = serde_json::to_string(&RpcRequest::Exit { id: 9_999_999 }) {
-            let _ = io.stdin.write_all(line.as_bytes());
-            let _ = io.stdin.write_all(b"\n");
-            let _ = io.stdin.flush();
-            let mut response = String::new();
-            let _ = io.stdout.read_line(&mut response);
-        }
-        let _ = io.child.wait();
+        io.shutdown_cooperatively(self.drop_timeout);
     }
 }
