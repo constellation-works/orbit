@@ -1,4 +1,9 @@
 // ORB-10003: versioned schema-migration ledger.
+use std::path::Path;
+use std::sync::{Arc, Barrier, Mutex, mpsc};
+use std::thread;
+use std::time::Duration;
+
 use orbit_common::OrbitError;
 use rusqlite::{Connection, Error as SqliteError, ffi};
 
@@ -538,6 +543,192 @@ fn failed_migration_rolls_back_schema_and_ledger() {
     ];
     ledger::run_migrations(&conn, &fixed).expect("resume after fix");
     assert_eq!(current_schema_version(&conn).expect("current version"), 2);
+}
+
+fn seed_pre_ledger_fixture(path: &Path) {
+    let conn = Connection::open(path).expect("seed pre-ledger db");
+    conn.execute_batch(
+        "CREATE TABLE tools (
+            name TEXT PRIMARY KEY,
+            path TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            is_enabled INTEGER NOT NULL DEFAULT 1,
+            is_builtin INTEGER NOT NULL DEFAULT 0
+        );",
+    )
+    .expect("pre-ledger tools table");
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .expect("enable WAL on fixture");
+}
+
+fn assert_full_unique_ledger(applied: &[AppliedMigration]) {
+    assert_eq!(applied.len(), SUPPORTED_SCHEMA_VERSION as usize);
+    for (index, row) in applied.iter().enumerate() {
+        assert_eq!(row.version, u32::try_from(index).expect("index") + 1);
+    }
+}
+
+#[test]
+fn concurrent_store_open_on_pre_ledger_fixture_applies_each_version_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.db");
+    seed_pre_ledger_fixture(&path);
+
+    let barrier = Arc::new(Barrier::new(2));
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let path = path.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                crate::Store::open(&path)
+            })
+        })
+        .collect();
+
+    let stores: Vec<_> = handles
+        .into_iter()
+        .map(|handle| {
+            handle
+                .join()
+                .expect("join")
+                .expect("concurrent Store::open")
+        })
+        .collect();
+
+    for store in &stores {
+        let applied = store.applied_migrations().expect("applied migrations");
+        assert_full_unique_ledger(&applied);
+    }
+}
+
+struct PanicMigrationProbe {
+    started: Option<mpsc::Sender<()>>,
+    release: Option<mpsc::Receiver<()>>,
+    waiting: Option<mpsc::Sender<()>>,
+}
+
+static PANIC_PROBE: Mutex<PanicMigrationProbe> = Mutex::new(PanicMigrationProbe {
+    started: None,
+    release: None,
+    waiting: None,
+});
+
+fn take_probe_started() -> Option<mpsc::Sender<()>> {
+    PANIC_PROBE.lock().expect("panic probe").started.take()
+}
+
+fn take_probe_release() -> Option<mpsc::Receiver<()>> {
+    PANIC_PROBE.lock().expect("panic probe").release.take()
+}
+
+fn take_probe_waiting() -> Option<mpsc::Sender<()>> {
+    PANIC_PROBE.lock().expect("panic probe").waiting.take()
+}
+
+fn migration_holds_lock_then_panics(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch("CREATE TABLE ledger_test_panic (x INTEGER)")
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    if let Some(started) = take_probe_started() {
+        let _ = started.send(());
+    }
+    if let Some(release) = take_probe_release() {
+        let _ = release.recv();
+    }
+    panic!("intentional migration panic");
+}
+
+fn migration_creates_panic_table(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch("CREATE TABLE ledger_test_panic (x INTEGER)")
+        .map_err(|e| OrbitError::Store(e.to_string()))
+}
+
+fn waiter_busy_handler(_n: i32) -> bool {
+    if let Some(waiting) = take_probe_waiting() {
+        let _ = waiting.send(());
+    }
+    true
+}
+
+#[test]
+fn waiter_applies_after_holder_panics_and_rolls_back() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.db");
+    let seed = Connection::open(&path).expect("seed db");
+    seed.pragma_update(None, "journal_mode", "WAL")
+        .expect("enable WAL");
+    drop(seed);
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (waiting_tx, waiting_rx) = mpsc::channel();
+    {
+        let mut probe = PANIC_PROBE.lock().expect("panic probe");
+        probe.started = Some(started_tx);
+        probe.release = Some(release_rx);
+        probe.waiting = Some(waiting_tx);
+    }
+
+    let panic_registry = [Migration {
+        version: 1,
+        name: "holds-then-panics",
+        apply: migration_holds_lock_then_panics,
+    }];
+    let success_registry = [Migration {
+        version: 1,
+        name: "applies-after-rollback",
+        apply: migration_creates_panic_table,
+    }];
+
+    let holder_path = path.clone();
+    let holder = thread::spawn(move || {
+        let conn = Connection::open(&holder_path).expect("holder open");
+        orbit_common::storage::sqlite::apply_default_pragmas(&conn).expect("holder pragmas");
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ledger::run_migrations(&conn, &panic_registry)
+        }))
+    });
+
+    started_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("holder entered migration body");
+
+    let waiter_path = path.clone();
+    let waiter = thread::spawn(move || {
+        let conn = Connection::open(&waiter_path).expect("waiter open");
+        conn.busy_handler(Some(waiter_busy_handler))
+            .expect("waiter busy handler");
+        ledger::run_migrations(&conn, &success_registry)
+    });
+
+    let waited = waiting_rx.recv_timeout(Duration::from_secs(5));
+    let _ = release_tx.send(());
+    let holder_result = holder.join().expect("holder join");
+    assert!(
+        holder_result.is_err(),
+        "holder thread must unwind from the migration panic"
+    );
+
+    waited.expect("waiter blocked on BEGIN IMMEDIATE while holder held the lock");
+    waiter
+        .join()
+        .expect("waiter join")
+        .expect("waiter applies after holder rollback");
+
+    let conn = Connection::open(&path).expect("inspect");
+    assert!(
+        table_exists(&conn, "ledger_test_panic").expect("panic table"),
+        "rolled-back holder must not leave the table; waiter must create it"
+    );
+    assert_eq!(current_schema_version(&conn).expect("current version"), 1);
+    assert_eq!(ledger_rows(&conn).len(), 1);
+    assert_eq!(
+        ledger_rows(&conn)[0],
+        (
+            "migration.v0001".to_string(),
+            "applies-after-rollback".to_string()
+        )
+    );
 }
 
 #[test]
