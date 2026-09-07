@@ -21,8 +21,11 @@
 //! `--remote-caller-machine-id` is a label the caller chooses, so a caller that
 //! can reach this destination can also name a different row. That is an
 //! accident guard, in keeping with the governance kernel's doctrine — strictly
-//! stronger than a caller-authored grant, and not a boundary anything may be
-//! relaxed against.
+//! stronger than a caller-authored grant, and not an authenticated boundary.
+//! The only trusted-host exception is a destination owner's explicit
+//! operation-specific `cooperative` mode, which accepts that limitation for
+//! operators already sharing the destination OS account and records it
+//! candidly.
 //!
 //! Under Tier 2 [ORB-11053] the destination pins the identity to a key in its
 //! own `authorized_keys`, sshd authenticates that key, and the forced command
@@ -38,7 +41,9 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::protocol::toml::escape_basic_string;
 use orbit_types::identity::validate_machine_id;
-use orbit_types::tool::{CallerIdentityProof, McpCapability, RemoteCallerGrant};
+use orbit_types::tool::{
+    CallerIdentityProof, McpCapability, RemoteAgentInvokeMode, RemoteCallerGrant,
+};
 use serde::Deserialize;
 
 use super::identity::McpSessionAuthority;
@@ -99,9 +104,15 @@ pub struct CallerRow {
     pub ssh_key_fingerprint: Option<String>,
     /// Explicitly admits `orbit.agent.invoke` for this caller on the row's
     /// narrowed workspaces. Requires operator capability, a workspace
-    /// narrowing, and a key-bound identity.
+    /// narrowing, and a key-bound identity unless the destination explicitly
+    /// selects the cooperative same-account mode below.
     #[serde(default)]
     pub agent_invoke: bool,
+    /// Trust model for `agent_invoke`. Omission preserves strict key-bound
+    /// admission; `cooperative` deliberately accepts the self-asserted caller
+    /// label on the existing SSH operator channel.
+    #[serde(default)]
+    pub agent_invoke_mode: Option<RemoteAgentInvokeMode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
@@ -218,7 +229,9 @@ fn validate_callers(file: &CallersFile, path: &Path) -> Result<(), OrbitError> {
                     ),
                 ));
             }
-            if row.ssh_key_fingerprint.is_none() {
+            if row.agent_invoke_mode.unwrap_or_default() == RemoteAgentInvokeMode::KeyBound
+                && row.ssh_key_fingerprint.is_none()
+            {
                 return Err(invalid(
                     path,
                     format!(
@@ -228,6 +241,15 @@ fn validate_callers(file: &CallersFile, path: &Path) -> Result<(), OrbitError> {
                     ),
                 ));
             }
+        } else if row.agent_invoke_mode.is_some() {
+            return Err(invalid(
+                path,
+                format!(
+                    "caller '{}' sets `agent_invoke_mode` without enabling `agent_invoke`; the \
+                     mode only qualifies that operation-specific grant",
+                    row.machine_id
+                ),
+            ));
         }
     }
     Ok(())
@@ -343,6 +365,8 @@ pub struct ResolvedCallerGrant {
     /// Whether the matched row explicitly admits trusted-host agent
     /// invocation on its covered workspaces.
     pub agent_invoke: bool,
+    /// Trust mode selected for agent invocation, when it is enabled.
+    pub agent_invoke_mode: Option<RemoteAgentInvokeMode>,
     /// Whether a row matched, or the file default answered.
     pub matched: bool,
 }
@@ -373,6 +397,15 @@ impl ResolvedCallerGrant {
                 (Some(_), None) | (None, _) => false,
             }
     }
+
+    /// The selected trust mode when the operation grant covers `workspace_id`.
+    pub fn agent_invoke_mode_for_workspace(
+        &self,
+        workspace_id: Option<&str>,
+    ) -> Option<RemoteAgentInvokeMode> {
+        self.agent_invoke_for_workspace(workspace_id)
+            .then_some(self.agent_invoke_mode.unwrap_or_default())
+    }
 }
 
 impl CallersFile {
@@ -398,6 +431,7 @@ impl CallersFile {
                 elsewhere: default,
                 workspaces: None,
                 agent_invoke: false,
+                agent_invoke_mode: None,
                 matched: false,
             };
         };
@@ -421,6 +455,9 @@ impl CallersFile {
                 .as_ref()
                 .map(|workspaces| workspaces.iter().cloned().collect()),
             agent_invoke: row.agent_invoke,
+            agent_invoke_mode: row
+                .agent_invoke
+                .then_some(row.agent_invoke_mode.unwrap_or_default()),
             matched: true,
         }
     }
@@ -570,6 +607,7 @@ impl SessionCapabilityPolicy {
             source: CALLERS_FILE_DISPLAY.to_string(),
             identity: grant.identity,
             agent_invoke: grant.agent_invoke_for_workspace(workspace_id),
+            agent_invoke_mode: grant.agent_invoke_mode_for_workspace(workspace_id),
         })
     }
 

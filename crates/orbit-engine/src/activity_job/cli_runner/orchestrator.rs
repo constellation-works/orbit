@@ -292,6 +292,7 @@ pub fn run_cli_backend(
             authorizer_provenance = %admission.authorizer_provenance,
             caller_machine_id = admission.caller_machine_id.as_deref(),
             caller_identity = admission.caller_identity.map(|identity| identity.to_string()),
+            agent_invoke_mode = admission.agent_invoke_mode.map(|mode| mode.to_string()),
             workspace_path = %admission.workspace_path,
             cwd = %admission.cwd,
             "starting an operator-admitted provider subprocess outside the executor sandbox"
@@ -303,6 +304,7 @@ pub fn run_cli_backend(
             authorizer_provenance: admission.authorizer_provenance.clone(),
             caller_machine_id: admission.caller_machine_id.clone(),
             caller_identity: admission.caller_identity,
+            agent_invoke_mode: admission.agent_invoke_mode,
             authorized_at: admission.authorized_at.clone(),
             workspace_path: admission.workspace_path.clone(),
             cwd: admission.cwd.clone(),

@@ -1486,6 +1486,96 @@ agent_invoke = false
     assert_eq!(denied["code"], "capability_denied", "{denied}");
 }
 
+/// The destination may deliberately trust the existing SSH operator channel
+/// when both ends cooperate through the same OS account. The invocation is
+/// still workspace- and operation-scoped, while its output and durable
+/// admission must say `cooperative` and `self-asserted`, never `key-bound`.
+#[test]
+fn a_cooperative_ssh_operator_invocation_records_its_actual_trust_boundary() {
+    let workspace = McpWorkspace::init();
+    plant_agent_response_stub(&McpWorkspace::stub_bin_dir(&workspace.home), "codex");
+    let registry: Value = serde_json::from_str(
+        &std::fs::read_to_string(workspace.home.join(".orbit/workspaces.json"))
+            .expect("read workspace registry"),
+    )
+    .expect("parse workspace registry");
+    let workspace_id = registry["workspaces"][0]["id"]
+        .as_str()
+        .expect("workspace id");
+
+    write_callers(
+        &workspace,
+        &format!(
+            r#"
+default = "deny"
+
+[[callers]]
+machine_id = "hm_caller"
+capabilities = ["agent", "operator"]
+workspaces = ["{workspace_id}"]
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+"#,
+        ),
+    );
+    let mut cooperative = workspace.serve_with_args_and_env(
+        &["--operator", "--remote-caller-machine-id", "hm_caller"],
+        &[("SSH_CONNECTION", "192.0.2.8 43100 198.51.100.2 22")],
+    );
+    let submitted = cooperative.call_tool_ok(
+        "orbit_agent_invoke",
+        json!({
+            "prompt": "read-only cooperative probe",
+            "cwd": workspace.work,
+            "crew": "system",
+            "timeout_seconds": 30,
+            "model": "codex",
+        }),
+    );
+
+    assert_eq!(submitted["authorized_by"], "hm_caller");
+    assert_eq!(submitted["authorizer_provenance"], "remote-grant");
+    assert_eq!(submitted["caller_machine_id"], "hm_caller");
+    assert_eq!(submitted["caller_identity"], "self-asserted");
+    assert_eq!(submitted["agent_invoke_mode"], "cooperative");
+    let run_id = submitted["run_id"].as_str().expect("run id").to_string();
+
+    let deadline = Instant::now() + RESPONSE_TIMEOUT;
+    loop {
+        let shown = cooperative.call_tool_ok("orbit_workflow_run_show", json!({ "id": run_id }));
+        if matches!(
+            shown["state"].as_str(),
+            Some("success" | "failed" | "timeout" | "cancelled" | "interrupted")
+        ) {
+            assert_eq!(shown["state"], "success", "{shown}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "cooperative agent invocation did not finish: {shown}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    let connection =
+        Connection::open(workspace.home.join(".orbit/orbit.db")).expect("destination store");
+    let input_json: String = connection
+        .query_row(
+            "SELECT input_json FROM job_runs WHERE run_id = ?1",
+            [&run_id],
+            |row| row.get(0),
+        )
+        .expect("persisted invocation input");
+    let input: Value = serde_json::from_str(&input_json).expect("parse invocation input");
+    let admission = &input["trusted_host_admission"];
+    assert_eq!(admission["caller_identity"], "self-asserted");
+    assert_eq!(admission["agent_invoke_mode"], "cooperative");
+    assert_eq!(
+        admission["workspace_path"],
+        workspace.work.display().to_string()
+    );
+}
+
 /// [ORB-11184] A separate ordinary same-UID process scans every process's argv
 /// and environment continuously while the generated protected launcher starts
 /// repeated legitimate destinations. The kernel boundary exists at exec, so

@@ -135,8 +135,9 @@ explicit per-invocation operator admission, so a sandbox-denial diagnostic is
 never the explanation for one failing. The run trail records the admission as a
 `trusted_host.execution_admitted` audit event naming the authorizing operator
 and the working directory. For remote admission it also records the
-destination-resolved caller machine ID and key-bound identity proof. They are
-deliberately **not resumable**: the
+destination-resolved caller machine ID, remote invocation mode, and actual
+identity proof. A cooperative grant is recorded as `cooperative` plus
+`self-asserted`, never as key-bound. They are deliberately **not resumable**: the
 admission covered one invocation, so submit a new one rather than resuming.
 
 For recurring signatures and known remedies, read [common-failures.md](common-failures.md) after the initial classification — keep this file focused on investigation flow; add new patterns there.

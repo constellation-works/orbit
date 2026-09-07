@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::{McpCapability, RemoteAgentInvokeMode, ToolSessionContext};
 
 use orbit_types::tool::CallerIdentityProof;
 
@@ -263,11 +263,49 @@ agent_invoke = true
         .expect("remote grant on workspace");
     assert!(on_workspace.agent_invoke);
     assert_eq!(on_workspace.identity, CallerIdentityProof::KeyBound);
+    assert_eq!(
+        on_workspace.agent_invoke_mode,
+        Some(RemoteAgentInvokeMode::KeyBound),
+        "omitting the new mode must preserve the original strict behavior"
+    );
 
     let elsewhere = policy
         .grant_for(Some("ws_other"))
         .expect("remote grant outside narrowing");
     assert!(!elsewhere.agent_invoke);
+    assert!(policy.effective_for(Some("ws_other")).is_empty());
+}
+
+#[test]
+fn cooperative_agent_invoke_is_explicit_and_workspace_scoped() {
+    let (_dir, path) = write(
+        r#"
+default = "deny"
+
+[[callers]]
+machine_id = "hm_beta"
+capabilities = ["agent", "operator"]
+workspaces = ["ws_orbit"]
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+"#,
+    );
+    let file = load_callers(&path).expect("cooperative invocation grant");
+    let policy = SessionCapabilityPolicy::from_grant(
+        McpSessionAuthority::Operator,
+        file.resolve(&caller("hm_beta")),
+    );
+
+    let on_workspace = policy.grant_for(Some("ws_orbit")).expect("remote grant");
+    assert_eq!(on_workspace.identity, CallerIdentityProof::SelfAsserted);
+    assert_eq!(
+        on_workspace.agent_invoke_mode,
+        Some(RemoteAgentInvokeMode::Cooperative)
+    );
+
+    let elsewhere = policy.grant_for(Some("ws_other")).expect("remote grant");
+    assert!(!elsewhere.agent_invoke);
+    assert_eq!(elsewhere.agent_invoke_mode, None);
     assert!(policy.effective_for(Some("ws_other")).is_empty());
 }
 
@@ -309,6 +347,29 @@ agent_invoke = true
 "#
             .to_string(),
             "ssh_key_fingerprint",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+workspaces = ["ws_orbit"]
+agent_invoke_mode = "cooperative"
+"#
+            .to_string(),
+            "without enabling `agent_invoke`",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+workspaces = ["ws_orbit"]
+agent_invoke = true
+agent_invoke_mode = "invented"
+"#
+            .to_string(),
+            "unknown variant",
         ),
     ] {
         let (_dir, path) = write(&contents);

@@ -200,6 +200,9 @@ pub enum V2AuditEventKind {
         /// How the destination established the remote caller identity.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         caller_identity: Option<crate::tool::CallerIdentityProof>,
+        /// Destination-selected trust mode for the remote invocation grant.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_invoke_mode: Option<crate::tool::RemoteAgentInvokeMode>,
         /// RFC 3339 timestamp the admission was stamped.
         authorized_at: String,
         /// Canonical checkout the invocation was admitted against.
