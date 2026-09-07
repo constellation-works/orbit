@@ -227,7 +227,7 @@ fn schema_exposes_only_trimmed_create_task_fields() {
 }
 
 #[test]
-fn add_call_with_retired_fields_warns_once_and_ignores_them() {
+fn add_call_with_retired_fields_reports_and_ignores_them() {
     let host = RecordingHost::default();
     let ctx = mk_ctx(host.clone());
     let tool = OrbitTaskAddTool;
@@ -257,6 +257,7 @@ fn add_call_with_retired_fields_warns_once_and_ignores_them() {
 
     let (res, logs) = capture_warnings(|| tool.execute(&ctx, input).expect("execute succeeds"));
     assert_eq!(res["id"], "ORB-TEST");
+    assert_eq!(res["ignored_fields"], json!(RETIRED_TASK_ADD_INPUT_FIELDS));
     assert_eq!(
         logs.matches("ignored retired orbit.task.add fields")
             .count(),

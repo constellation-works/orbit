@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string, optional_string_alias,
-    optional_string_list_alias, required_string, strip_retired_task_add_input_fields,
+    optional_string_list_alias, required_string,
 };
 use orbit_types::task::{TaskPriority, validate_relative_artifact_path};
 use serde_json::{Value, json};
@@ -21,19 +21,10 @@ use super::json::{
 
 pub(super) fn add(
     runtime: &OrbitRuntime,
-    mut input: Value,
+    input: Value,
     agent: Option<String>,
     model: Option<String>,
 ) -> Result<Value, OrbitError> {
-    let ignored_fields = strip_retired_task_add_input_fields(&mut input);
-    if !ignored_fields.is_empty() {
-        tracing::warn!(
-            target: "orbit.core.task.add",
-            ignored_fields = ?ignored_fields,
-            "ignored retired orbit.task.add fields"
-        );
-    }
-
     let title = required_string(&input, &["title"], "title")?;
     let description = required_string(&input, &["description"], "description")?;
     let workspace = required_string(&input, &["workspace"], "workspace")?;
