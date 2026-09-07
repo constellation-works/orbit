@@ -12,15 +12,18 @@ use orbit_types::task::Task;
 use orbit_types::workflow::automation::{Delivery, DeliveryExclusion};
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, ReviewCertificate, ReviewInvalidation, ReviewLanding,
-    ValidationOutcome,
 };
 use serde_json::json;
 
 use crate::AutomationError;
 use crate::delivery::definition_epoch;
 
+mod validation;
+
 #[cfg(test)]
 mod tests;
+
+pub use validation::{ValidationDefect, validation_evidence, validation_role_counts};
 
 /// Contract label folded into every task-meaning digest.
 pub const TASK_MEANING_CONTRACT: &str = "review_task_meaning_v1";
@@ -65,8 +68,13 @@ pub fn combined_task_meaning_digest(
 }
 
 /// Whether a certificate is acceptable coverage on its own terms: current
-/// contract, a pass verdict, a validation set that all passed on the final
-/// candidate, and a candidate distinct from its base.
+/// contract, a pass verdict, validation records that establish the final
+/// candidate under [`validation_evidence`], and a candidate distinct from
+/// its base.
+///
+/// The validation rules are re-derived here rather than trusting the
+/// `validation_complete` flag alone, so a certificate whose records do not
+/// support the flag is never spent as coverage.
 pub fn certificate_acceptable(certificate: &ReviewCertificate) -> Result<(), ReviewInvalidation> {
     if certificate.schema_version != REVIEW_CONTRACT_VERSION {
         return Err(ReviewInvalidation::MappingUnknown);
@@ -74,13 +82,7 @@ pub fn certificate_acceptable(certificate: &ReviewCertificate) -> Result<(), Rev
     if !certificate.verdict.passed() || certificate.assurance.is_none() {
         return Err(ReviewInvalidation::VerdictNotPassed);
     }
-    if !certificate.validation_complete
-        || certificate.validation.is_empty()
-        || certificate
-            .validation
-            .iter()
-            .any(|record| record.outcome != ValidationOutcome::Passed)
-    {
+    if !certificate.validation_complete || validation_evidence(&certificate.validation).is_err() {
         return Err(ReviewInvalidation::ValidationIncomplete);
     }
     if certificate.final_candidate.tree == certificate.base.tree {
