@@ -91,6 +91,32 @@ impl Gated {
             &["log", "-1", "--format=%an <%ae>", spec],
         )
     }
+
+    fn rescope(&self, selectors: &[&str]) {
+        self.fixture
+            .runtime
+            .update_task(
+                &self.task_id,
+                TaskUpdateParams {
+                    context_files: Some(
+                        selectors
+                            .iter()
+                            .map(|selector| (*selector).into())
+                            .collect(),
+                    ),
+                    ..TaskUpdateParams::default()
+                },
+            )
+            .expect("rescope");
+    }
+
+    fn context_files(&self) -> Vec<String> {
+        self.fixture
+            .runtime
+            .get_task(&self.task_id)
+            .expect("task")
+            .context_files
+    }
 }
 
 #[test]
@@ -246,6 +272,75 @@ fn reviewer_repairs_land_as_separate_attributed_commits_and_bind_the_final_tree(
             .len(),
         1
     );
+}
+
+#[test]
+fn a_repair_in_a_canonical_symbol_selector_file_passes_without_a_redundant_file_selector() {
+    let gated = gated_fixture(GATED_CONFIG);
+    gated.rescope(&["symbol:src.txt#run:function"]);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+
+    fs::write(
+        gated.fixture.repo.join("src.txt"),
+        "implementation target\nimplemented\nrepaired\n",
+    )
+    .expect("repair");
+    write_report(
+        &gated.fixture.runtime,
+        &gated.task_id,
+        &report(attempt_id, ReviewVerdict::PassedWithRepairs, true),
+    );
+    let settled = gated.settle(&admission).expect("settle");
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["verdict"], "passed_with_repairs");
+    assert_eq!(
+        gated.context_files(),
+        vec!["symbol:src.txt#run:function".to_string()],
+        "a symbol selector already authorizes its backing file"
+    );
+}
+
+#[test]
+fn qualified_rust_symbol_selectors_share_the_file_anchor_and_unrelated_paths_still_downgrade() {
+    let gated = gated_fixture(GATED_CONFIG);
+    gated.rescope(&["symbol:src.txt#orbit_core::run:function"]);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+
+    fs::write(
+        gated.fixture.repo.join("src.txt"),
+        "implementation target\nimplemented\nrepaired\n",
+    )
+    .expect("repair");
+    write_report(
+        &gated.fixture.runtime,
+        &gated.task_id,
+        &report(attempt_id, ReviewVerdict::PassedWithRepairs, true),
+    );
+    let settled = gated.settle(&admission).expect("settle");
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["verdict"], "passed_with_repairs");
+
+    let unrelated = gated_fixture(GATED_CONFIG);
+    unrelated.rescope(&["symbol:src.txt#orbit_core::run:function"]);
+    let admission = unrelated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+    fs::write(
+        unrelated.fixture.repo.join("README.md"),
+        "out of scope repair\n",
+    )
+    .expect("edit");
+    write_report(
+        &unrelated.fixture.runtime,
+        &unrelated.task_id,
+        &report(attempt_id, ReviewVerdict::PassedWithRepairs, true),
+    );
+    let error = unrelated.settle(&admission).expect_err("out of scope");
+    let message = error.to_string();
+    assert!(message.contains("repair_out_of_scope"), "{message}");
+    assert!(message.contains("README.md"), "{message}");
+    assert_eq!(unrelated.certificate().verdict, ReviewVerdict::Incomplete);
 }
 
 #[test]
