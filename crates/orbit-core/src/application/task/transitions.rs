@@ -352,7 +352,7 @@ impl OrbitRuntime {
                         OrbitEvent::TaskStarted {
                             id: id.to_string(),
                             started_by: effective_label.clone(),
-                            approved_from_proposed: task.status == TaskStatus::Proposed,
+                            approved_from_proposed: true,
                         },
                     ))
                 })?;
