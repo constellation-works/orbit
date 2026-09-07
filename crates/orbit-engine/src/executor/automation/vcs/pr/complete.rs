@@ -13,8 +13,8 @@
 //! with the tasks still in `review`.
 //!
 //! Branch protection is respected by construction. The merge request is an
-//! ordinary `gh pr merge` (optionally `--auto`); no administrative bypass is
-//! reachable from this path, so a PR that GitHub reports as `BLOCKED` fails the
+//! ordinary provider merge (ungated runs may use `--auto`); no administrative
+//! bypass is reachable, so a PR that GitHub reports as `BLOCKED` fails the
 //! run rather than being forced through.
 //!
 //! A `DIRTY` PR is narrower than those policy refusals. With the pipeline's
@@ -86,6 +86,7 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
                 pr_number: pr_number.clone(),
                 base: input_string_field(input, "base").unwrap_or_default(),
                 reviewed_head_sha,
+                managed_merge: outcome["managed_merge"].as_bool().unwrap_or(false),
                 landed_commit: outcome
                     .get("landed_commit")
                     .and_then(Value::as_str)
@@ -121,6 +122,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let mut waited_seconds = 0_u64;
     let mut auto_merge_requested = false;
     let mut merge_requested = false;
+    let mut requested_landed_commit: Option<String> = None;
     let mut conflict_refresh_attempted = false;
     let mut merge_capabilities: Option<MergeCapabilities> = None;
 
@@ -130,13 +132,18 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         let status = read_pr_status(host, workspace_path, pr_number)?;
         match classify(&status) {
             PrMergeState::Merged => {
+                let landed_commit = status.pointer("/mergeCommit/oid").and_then(Value::as_str);
+                let managed_merge = requested_landed_commit
+                    .as_deref()
+                    .is_some_and(|requested| Some(requested) == landed_commit);
                 return Ok(json!({
                     "merged": true,
                     "pr_number": pr_number,
                     "strategy": merge_capabilities.map(|capabilities| capabilities.strategy.as_str()),
                     "auto_merge_requested": auto_merge_requested,
                     "waited_seconds": waited_seconds,
-                    "landed_commit": status.pointer("/mergeCommit/oid").and_then(Value::as_str),
+                    "landed_commit": landed_commit,
+                    "managed_merge": managed_merge,
                     "reviewed_head_sha": reviewed_head_sha,
                 }));
             }
@@ -182,12 +189,13 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         pr_number,
                         &mut merge_capabilities,
                     )?;
-                    request_merge(
+                    requested_landed_commit = request_merge(
                         host,
                         workspace_path,
                         pr_number,
                         capabilities.strategy,
                         false,
+                        reviewed_head_sha.as_deref(),
                     )
                     .map_err(|error| {
                         OrbitError::Execution(format!(
@@ -203,7 +211,11 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             }
             PrMergeState::Pending => {
                 ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
-                if !auto_merge_requested {
+                // The CLI auto-merge path cannot retain the review condition.
+                // Gated runs wait locally and use the conditional synchronous
+                // mutation once checks settle, including on queue-only branches
+                // where that mutation will refuse the unsupported merge.
+                if reviewed_head_sha.is_none() && !auto_merge_requested {
                     // Required checks are still running. Hand the merge to
                     // GitHub's auto-merge when this repository allows it, then
                     // keep polling: enabling it is not success. Repositories
@@ -217,14 +229,21 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         &mut merge_capabilities,
                     )?;
                     if capabilities.auto_merge_allowed {
-                        request_merge(host, workspace_path, pr_number, capabilities.strategy, true)
-                            .map_err(|error| {
-                                OrbitError::Execution(format!(
-                                    "pr_complete: could not enable auto-merge using {} on pull request \
+                        request_merge(
+                            host,
+                            workspace_path,
+                            pr_number,
+                            capabilities.strategy,
+                            true,
+                            None,
+                        )
+                        .map_err(|error| {
+                            OrbitError::Execution(format!(
+                                "pr_complete: could not enable auto-merge using {} on pull request \
                                      #{pr_number}: {error}; the task stays in review",
-                                    capabilities.strategy.as_str()
-                                ))
-                            })?;
+                                capabilities.strategy.as_str()
+                            ))
+                        })?;
                         auto_merge_requested = true;
                     }
                 }
@@ -303,8 +322,8 @@ fn reviewed_head_sha(input: &Value) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// Managed completion pins the reviewed head against what the provider
-/// reports as the PR head. A moved head is unreviewed content.
+/// Early diagnostic for an already moved head. The provider mutation must
+/// also enforce the reviewed SHA atomically; this read cannot prevent a race.
 fn ensure_pr_head_is_reviewed(
     status: &Value,
     pr_number: &str,
@@ -456,17 +475,24 @@ fn request_merge<H: RuntimeHost + ?Sized>(
     pr_number: &str,
     strategy: MergeStrategy,
     auto: bool,
-) -> Result<(), OrbitError> {
+    reviewed_head_sha: Option<&str>,
+) -> Result<Option<String>, OrbitError> {
     host.run_private_vcs_operation(
         operations::PR_MERGE,
         json!({
             "pr": pr_number,
             "strategy": strategy.as_str(),
             "auto": auto,
+            "reviewed_head_sha": reviewed_head_sha,
             "workspace_path": workspace_path,
         }),
     )
-    .map(|_| ())
+    .map(|result| {
+        result
+            .get("landed_commit")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    })
 }
 
 fn resolved_capabilities<H: RuntimeHost + ?Sized>(
