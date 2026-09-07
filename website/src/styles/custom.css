@@ -182,7 +182,7 @@ body {
    src/components/SiteTitle.astro. */
 .orbit-topnav {
   align-items: center;
-  display: flex;
+  display: none;
   gap: 1.5rem;
   white-space: nowrap;
 }
@@ -206,9 +206,31 @@ body {
   overflow: visible;
 }
 
-@media (max-width: 72rem) {
+/* Reserve space for the splash Menu button (same inset as Starlight's
+   sidebar toggle). Docs already get this from `[data-has-sidebar]`. */
+html:not([data-has-sidebar]) header.header {
+  overflow: visible;
+  padding-inline-end: calc(
+    var(--sl-nav-gap) + var(--sl-nav-pad-x) + var(--sl-menu-button-size)
+  );
+}
+
+/* Match Starlight's `md` breakpoint: below 50rem the splash page uses
+   HomeMenu instead of the inline section links. Documentation pages keep
+   Starlight's sidebar Menu. */
+@media (min-width: 50rem) {
   .orbit-topnav {
-    display: none;
+    display: flex;
+  }
+
+  html:not([data-has-sidebar]) header.header {
+    padding-inline-end: var(--sl-nav-pad-x);
+  }
+}
+
+@media (min-width: 50rem) and (max-width: 72rem) {
+  .orbit-topnav {
+    gap: 1rem;
   }
 }
 

@@ -28,9 +28,10 @@ The Orbit website is a **documentation site**, not a marketing site. It exists t
 1. **Reference-heavy, search-first.** Users land via `⌘K` or Google. Every page must be findable and self-contained.
 2. **Minimalism as a feature.** Restraint is the aesthetic. One accent color, one type family per role, no decorative motion in docs content.
 3. **Legibility over personality.** The orbit metaphor shows up structurally (logo, section glyphs) — never at the cost of reading comfort.
-4. **Static and fast.** Zero JS by default; the homepage's copy controls are the one
-   scripted exception, and every other interaction is CSS. Hundreds of pages should
-   feel identical in performance to ten.
+4. **Static and fast.** Zero JS by default. The homepage's copy controls and its
+   narrow-viewport Menu (Escape and breakpoint close) are the scripted exceptions;
+   every other interaction is CSS. Hundreds of pages should feel identical in
+   performance to ten.
 5. **Dark-default, light-available.** Theme toggle persists per user; neither mode is an afterthought.
 
 ---
@@ -86,7 +87,9 @@ Three-column, fixed:
 - Left nav: collapsible sections. Active page marked with a 2px accent bar on the left edge.
 - Content column: max-width ~720px, measure 65–75ch for prose.
 - Right rail: sticky "On this page" TOC. Muted until the corresponding section is in view.
-- Top bar: logo, search, theme toggle. Nothing else.
+- Top bar: logo, section links (from 50rem), search, theme toggle. Below 50rem the
+  splash header keeps search and exposes section links plus theme through a Menu
+  disclosure; documentation pages keep Starlight's sidebar Menu.
 
 ### 3.5 Landing page
 
@@ -129,9 +132,10 @@ Commands shown on this page must match current CLI behaviour, and illustrative
 output must say that it is illustrative. The page advertises no unlanded feature
 and publishes no live metric.
 
-The only script on the site is a small inline handler for the copy controls.
-Those buttons are served `hidden` and unhidden by that script, so a page without
-JavaScript shows the command text and no dead control; a clipboard that is
+Scripts are limited to the copy controls and the homepage Menu's Escape /
+breakpoint close. Copy buttons are served `hidden` and unhidden by that script,
+so a page without JavaScript shows the command text and no dead control; a
+clipboard that is
 unavailable or refuses the write reports failure rather than a false success.
 
 Other pages keep Starlight's default chrome (auto title, sidebar, TOC) unchanged.
