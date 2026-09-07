@@ -82,6 +82,56 @@ fn doc_branch_searches_inlined_adr_body_content() {
 }
 
 #[test]
+fn lexical_task_search_notes_empty_multi_word_substring_miss() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let id = add_task(
+        &runtime,
+        "EnvGuard dropped its restore",
+        "workspace_init lost the parallel env snapshot",
+        TaskStatus::InProgress,
+    );
+
+    let miss = runtime
+        .global_search(GlobalSearchParams {
+            query: Some("EnvGuard workspace_init".to_string()),
+            kind: GlobalSearchKind::Task,
+            ..Default::default()
+        })
+        .expect("multi-word task search");
+
+    assert!(
+        miss.results.is_empty(),
+        "non-contiguous terms are one needle"
+    );
+    assert!(
+        miss.notes.iter().any(|note| {
+            note.contains("single case-insensitive substring")
+                && note.contains("not proof the corpus is empty")
+                && note.contains("EnvGuard")
+                && note.contains("workspace_init")
+        }),
+        "empty multi-word miss must carry a substring diagnostic, got {:?}",
+        miss.notes
+    );
+
+    let hit = runtime
+        .global_search(GlobalSearchParams {
+            query: Some("EnvGuard".to_string()),
+            kind: GlobalSearchKind::Task,
+            ..Default::default()
+        })
+        .expect("single-term task search");
+
+    assert_eq!(hit.results.len(), 1);
+    assert_eq!(hit.results[0].id.as_deref(), Some(id.as_str()));
+    assert!(
+        hit.notes.is_empty(),
+        "single-term hits must not attach the empty-query diagnostic: {:?}",
+        hit.notes
+    );
+}
+
+#[test]
 fn friction_branch_searches_open_records_and_rejects_learning_kind() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
     runtime
