@@ -1201,35 +1201,42 @@ const ERROR_MARKERS: &[&str] = &[
 /// Reduce a failed-step log to one normalized line that survives a rerun.
 ///
 /// Reruns of the same regression differ in timestamps, durations, run numbers,
-/// and paths under a run-specific temp directory. Normalizing those away is
-/// what lets an hourly sweep recognize the same root cause instead of filing it
-/// again every hour. Prefer an `##[error]`-annotated line over an unanchored
-/// marker substring, except that GitHub's generic runner-completion annotation
-/// yields to a specific unannotated diagnostic immediately before it. Never
-/// sign off runner-bookkeeping (checkout, group headers, `env:`/`with:` dumps)
-/// or libtest success/section lines whose names happen to contain a marker
-/// word. With no usable line the step name alone is the signature — weaker,
-/// but stable, and still scoped by workflow and job.
+/// ANSI styling, and paths under a run-specific temp directory. Normalizing
+/// those away is what lets an hourly sweep recognize the same root cause
+/// instead of filing it again every hour.
+///
+/// Preference order, so a generic wrapper cannot fragment one evidenced
+/// failure or collapse distinct ones:
+/// 1. A concrete test/panic identity (`thread '…' panicked`, `test … FAILED`,
+///    nextest `FAIL […]`, a name listed after libtest `failures:`).
+/// 2. A specific `##[error]` annotation.
+/// 3. Any remaining marker diagnostic (compiler `error:`, `assertion failed`).
+/// 4. The nearest unannotated content line before a generic trailer.
+/// 5. The failing step name, labelled as a fallback — used when the excerpt
+///    only has wrappers, bookkeeping, or assertion payload.
+///
+/// Generic trailers include GitHub's process-completed / `The process '…'
+/// failed with exit code` / action-failed annotations, cargo's
+/// `test failed, to rerun pass` wrappers, and nextest cancellation/summary
+/// lines. Assertion `left:`/`right:` dumps are not signatures even when they
+/// contain marker words. Raw excerpt bytes stay in the filed description;
+/// ANSI is stripped only for classification and the normalized signature.
 fn error_signature(log_excerpt: &str, step: &str) -> ErrorSignature {
     let lines = classify_log_lines(log_excerpt);
-    for (kind, line) in &lines {
-        if *kind == LineKind::ErrorAnnotated {
+    for wanted in [
+        LineKind::ConcreteDiagnostic,
+        LineKind::ErrorAnnotated,
+        LineKind::Marker,
+    ] {
+        if let Some((_, line)) = lines.iter().find(|(kind, _)| *kind == wanted) {
             return ErrorSignature {
-                text: normalize_signature(&log_payload(line).to_ascii_lowercase()),
-                step_fallback: false,
-            };
-        }
-    }
-    for (kind, line) in &lines {
-        if *kind == LineKind::Marker {
-            return ErrorSignature {
-                text: normalize_signature(&log_payload(line).to_ascii_lowercase()),
+                text: normalize_signature(&signature_payload(line)),
                 step_fallback: false,
             };
         }
     }
     for (index, (kind, _)) in lines.iter().enumerate() {
-        if *kind != LineKind::RunnerCompletion {
+        if *kind != LineKind::GenericTrailer {
             continue;
         }
         if let Some((_, line)) = lines[..index]
@@ -1238,15 +1245,7 @@ fn error_signature(log_excerpt: &str, step: &str) -> ErrorSignature {
             .find(|(kind, line)| *kind == LineKind::Content && is_diagnostic_content(line))
         {
             return ErrorSignature {
-                text: normalize_signature(&log_payload(line).to_ascii_lowercase()),
-                step_fallback: false,
-            };
-        }
-    }
-    for (kind, line) in &lines {
-        if *kind == LineKind::RunnerCompletion {
-            return ErrorSignature {
-                text: normalize_signature(&log_payload(line).to_ascii_lowercase()),
+                text: normalize_signature(&signature_payload(line)),
                 step_fallback: false,
             };
         }
@@ -1267,8 +1266,9 @@ enum LineKind {
     RunCommand,
     ParamDump,
     EndGroup,
+    ConcreteDiagnostic,
     ErrorAnnotated,
-    RunnerCompletion,
+    GenericTrailer,
     Marker,
     Bookkeeping,
     Content,
@@ -1301,7 +1301,12 @@ fn render_failed_step_excerpt(log: &str, max_bytes: usize) -> FailedStepExcerpt 
 
     let anchor = lines
         .iter()
-        .position(|(kind, _)| matches!(kind, LineKind::ErrorAnnotated | LineKind::RunnerCompletion))
+        .position(|(kind, _)| {
+            matches!(
+                kind,
+                LineKind::ConcreteDiagnostic | LineKind::ErrorAnnotated | LineKind::GenericTrailer
+            )
+        })
         .or_else(|| lines.iter().position(|(kind, _)| *kind == LineKind::Marker));
 
     let Some(anchor_idx) = anchor else {
@@ -1337,9 +1342,10 @@ fn render_failed_step_excerpt(log: &str, max_bytes: usize) -> FailedStepExcerpt 
 
 fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
     let mut in_param_block = false;
+    let mut after_failures_header = false;
     let mut out = Vec::new();
     for line in log.lines() {
-        let payload = log_payload(line);
+        let payload = signature_payload(line);
         let trimmed = payload.trim();
         let lowered = trimmed.to_ascii_lowercase();
         let indented = payload.starts_with(' ') || payload.starts_with('\t');
@@ -1356,21 +1362,38 @@ fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
             LineKind::ParamDump
         } else {
             in_param_block = false;
-            if is_generic_runner_completion(&lowered) {
-                LineKind::RunnerCompletion
+            if is_generic_trailer(&lowered) {
+                LineKind::GenericTrailer
             } else if lowered.contains("##[error]") {
                 LineKind::ErrorAnnotated
             } else if is_runner_bookkeeping(&lowered) || lowered.contains("##[group]") {
                 LineKind::Bookkeeping
-            } else if is_error_marker_line(&lowered) {
+            } else if is_concrete_diagnostic(&payload, &lowered, after_failures_header) {
+                LineKind::ConcreteDiagnostic
+            } else if is_error_marker_line(&lowered) && !is_assertion_payload(&lowered) {
                 LineKind::Marker
             } else {
                 LineKind::Content
             }
         };
+        if lowered == "failures:" || lowered == "errors:" {
+            after_failures_header = true;
+        } else if is_libtest_stdout_header(&lowered) || lowered.starts_with("test result:") {
+            after_failures_header = false;
+        }
         out.push((kind, line));
     }
     out
+}
+
+fn is_generic_trailer(lowered: &str) -> bool {
+    is_generic_runner_completion(lowered)
+        || is_generic_process_failed(lowered)
+        || is_generic_action_failed(lowered)
+        || is_cargo_test_wrapper(lowered)
+        || is_nextest_cancellation(lowered)
+        || is_nextest_summary(lowered)
+        || lowered.contains("tests were not run due to test failure")
 }
 
 fn is_generic_runner_completion(lowered: &str) -> bool {
@@ -1387,9 +1410,117 @@ fn is_generic_runner_completion(lowered: &str) -> bool {
     !exit_code.is_empty() && exit_code.chars().all(|ch| ch.is_ascii_digit())
 }
 
+fn is_generic_process_failed(lowered: &str) -> bool {
+    let Some(message) = lowered.trim().strip_prefix("##[error]") else {
+        return false;
+    };
+    let message = message.trim().trim_end_matches('.');
+    let Some(rest) = message.strip_prefix("the process ") else {
+        return false;
+    };
+    rest.contains(" failed with exit code ")
+}
+
+fn is_generic_action_failed(lowered: &str) -> bool {
+    let Some(message) = lowered.trim().strip_prefix("##[error]") else {
+        return false;
+    };
+    let message = message
+        .trim()
+        .trim_start_matches(|ch: char| !ch.is_ascii_alphabetic());
+    message == "action failed"
+}
+
+fn is_cargo_test_wrapper(lowered: &str) -> bool {
+    let message = lowered
+        .trim()
+        .strip_prefix("error:")
+        .map(str::trim)
+        .unwrap_or_else(|| lowered.trim());
+    message.starts_with("test failed, to rerun pass")
+        || message == "test run failed"
+        || message.starts_with("process didn't exit successfully:")
+}
+
+fn is_nextest_cancellation(lowered: &str) -> bool {
+    lowered
+        .trim()
+        .trim_end_matches(':')
+        .trim()
+        .starts_with("cancelling due to test failure")
+}
+
+fn is_nextest_summary(lowered: &str) -> bool {
+    let trimmed = lowered.trim();
+    trimmed.starts_with("summary [") && trimmed.contains("tests run:")
+}
+
+fn is_concrete_diagnostic(payload: &str, lowered: &str, after_failures_header: bool) -> bool {
+    is_panic_line(lowered)
+        || is_failed_test_result(lowered)
+        || is_nextest_fail_line(lowered)
+        || is_libtest_listed_failure_name(payload, after_failures_header)
+}
+
+fn is_panic_line(lowered: &str) -> bool {
+    lowered.contains("panicked at")
+        && (lowered.contains("thread '") || lowered.contains("thread \""))
+}
+
+fn is_failed_test_result(lowered: &str) -> bool {
+    let Some(rest) = lowered.strip_prefix("test ") else {
+        return false;
+    };
+    let Some((_, status)) = rest.rsplit_once(" ... ") else {
+        return false;
+    };
+    let status = status.trim();
+    status == "failed" || status.starts_with("failed ")
+}
+
+fn is_nextest_fail_line(lowered: &str) -> bool {
+    let Some(rest) = lowered.trim().strip_prefix("fail") else {
+        return false;
+    };
+    rest.trim_start().starts_with('[')
+}
+
+fn is_libtest_stdout_header(lowered: &str) -> bool {
+    let trimmed = lowered.trim();
+    trimmed.starts_with("---- ")
+        && (trimmed.ends_with(" stdout ----") || trimmed.ends_with(" stderr ----"))
+}
+
+fn is_libtest_listed_failure_name(payload: &str, after_failures_header: bool) -> bool {
+    if !after_failures_header {
+        return false;
+    }
+    let indented = payload.starts_with(' ') || payload.starts_with('\t');
+    if !indented {
+        return false;
+    }
+    let trimmed = payload.trim();
+    !trimmed.is_empty()
+        && !trimmed.contains(' ')
+        && !trimmed.starts_with("----")
+        && !trimmed.starts_with("thread")
+        && !trimmed.starts_with("error")
+        && !trimmed.starts_with("note:")
+        && !trimmed.starts_with("assertion")
+}
+
+fn is_assertion_payload(lowered: &str) -> bool {
+    let trimmed = lowered.trim_start();
+    trimmed.starts_with("left:")
+        || trimmed.starts_with("right:")
+        || trimmed.starts_with("left =")
+        || trimmed.starts_with("right =")
+}
+
 fn is_diagnostic_content(line: &str) -> bool {
-    let payload = log_payload(line).trim();
-    !payload.is_empty() && !payload.starts_with("##[")
+    let payload = signature_payload(line);
+    let trimmed = payload.trim();
+    !trimmed.is_empty() && !trimmed.starts_with("##[")
 }
 
 fn is_run_command_payload(payload: &str) -> bool {
@@ -1521,6 +1652,60 @@ fn log_payload(line: &str) -> &str {
         Some((first, tail)) if first.contains('T') && first.ends_with('Z') => tail,
         _ => rest,
     }
+}
+
+/// Payload used for classification and the normalized signature: runner
+/// columns removed, ANSI styling stripped. The filed excerpt keeps the raw
+/// line so evidence is not discarded.
+fn signature_payload(line: &str) -> String {
+    strip_ansi_sequences(log_payload(line)).to_ascii_lowercase()
+}
+
+/// CSI/OSC sequences only. The raw log line remains in the task description.
+fn strip_ansi_sequences(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != 0x1b {
+            let len = input[i..].chars().next().map_or(1, char::len_utf8);
+            out.push_str(&input[i..i + len]);
+            i += len;
+            continue;
+        }
+        i += 1;
+        if i >= bytes.len() {
+            break;
+        }
+        match bytes[i] {
+            b'[' => {
+                i += 1;
+                while i < bytes.len() {
+                    let byte = bytes[i];
+                    i += 1;
+                    if (0x40..=0x7e).contains(&byte) {
+                        break;
+                    }
+                }
+            }
+            b']' => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == 0x07 {
+                        i += 1;
+                        break;
+                    }
+                    if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    out
 }
 
 /// Collapse the parts of a log line that vary between identical failures.

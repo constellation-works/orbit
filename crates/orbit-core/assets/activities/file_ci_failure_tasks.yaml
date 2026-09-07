@@ -10,7 +10,11 @@ spec:
     (workflow, failing job, failing step, normalized error signature, and the
     commit the runner actually tested) so one regression repeated across a push
     run and a pull-request run of the same commit becomes one task rather than
-    several. Current failures may include already-failed jobs from an
+    several. The normalized signature prefers a concrete test/panic diagnostic
+    over ANSI styling, generic cancellation/process/cargo trailers, and
+    assertion payload help text; the filed description still carries the raw
+    excerpt. With no concrete line the step name is used and labelled as a
+    fallback. Current failures may include already-failed jobs from an
     in-flight workflow when that evidence is complete; a pending check is
     never present in the snapshot as a current failure and must not be filed. Each surviving cluster is filed at `status: proposed` with the
     collected evidence rendered inline in the description, so the implementing

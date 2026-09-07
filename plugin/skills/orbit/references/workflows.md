@@ -87,7 +87,10 @@ empty selectors, pilot failure, duplicates, already-landed
 work, conflicts, and warnings leave that task proposed without blocking other
 pilot children. A standalone task-pilot run has no promotion authority. The
 source run/job/SHA/step remains in the task description, while parent and child
-run state retain the pilot run ID, result, and admission decision.
+run state retain the pilot run ID, result, and admission decision. Filing
+clusters by a normalized error signature that prefers a concrete test or panic
+identity over ANSI styling, generic runner/cargo/nextest trailers, and
+assertion payload help text; the raw excerpt stays in the description.
 
 ### The `completion` input
 
