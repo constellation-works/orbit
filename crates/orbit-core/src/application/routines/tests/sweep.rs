@@ -1,5 +1,8 @@
+use crate::application::routines::clock::{ClockSettings, save_clock_settings};
 use crate::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
-use crate::application::routines::sweep::{SweepOptions, run_sweep_at_with_providers};
+use crate::application::routines::sweep::{
+    SweepOptions, configured_sweep_options, run_sweep_at_with_providers,
+};
 use crate::application::routines::validation::{
     RoutineHostIdentity, RoutinePlacementProjection, RoutinePlacementProvider,
 };
@@ -43,4 +46,24 @@ fn busy_lock_returns_before_remote_providers_are_loaded() {
     assert!(outcome.lock_busy);
     assert_eq!(outcome.machine_id, "hm_local");
     assert_eq!(outcome.host_id, "local");
+}
+
+#[test]
+fn production_sweep_options_follow_the_host_clock_cadence() {
+    let root = tempfile::tempdir().expect("root");
+
+    let default_options = configured_sweep_options(root.path(), SweepOptions::default())
+        .expect("default clock settings");
+    assert_eq!(default_options.sweep_cadence_seconds, 60);
+
+    save_clock_settings(
+        root.path(),
+        ClockSettings {
+            cadence_seconds: 300,
+        },
+    )
+    .expect("configured clock settings");
+    let configured_options = configured_sweep_options(root.path(), SweepOptions::default())
+        .expect("configured clock settings");
+    assert_eq!(configured_options.sweep_cadence_seconds, 300);
 }

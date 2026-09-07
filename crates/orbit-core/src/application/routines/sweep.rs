@@ -12,6 +12,7 @@ use super::loader::{RoutineLoadError, RoutineWorkspaceProvider, collect_routines
 use super::validation::{RoutinePlacementProjection, RoutinePlacementProvider};
 use crate::OrbitRuntime;
 use crate::application::job::run_owner_liveness;
+use crate::application::routines::clock::load_clock_settings;
 use chrono::Utc;
 use orbit_automation::routines::sweep::run_sweep_core_with_registry;
 pub use orbit_automation::routines::sweep::{
@@ -132,6 +133,10 @@ pub fn run_sweep_at_with_providers(
     };
 
     let store = super::open_routine_store(global_root)?;
+    // The OS unit and due calculation share this host-local setting. A
+    // configured five-minute clock therefore keeps a slot natural for two
+    // five-minute intervals instead of retaining the old 120-second default.
+    let options = configured_sweep_options(global_root, options)?;
     let now_utc = Utc::now();
     let RoutinePlacementProjection {
         local_host,
@@ -171,5 +176,18 @@ pub fn run_sweep_at_with_providers(
         lock_busy: false,
         reports,
         load_errors,
+    })
+}
+
+/// Bind a routine sweep to the same cadence the host clock installer renders.
+/// Kept separate so the production path and its configuration test share one
+/// explicit boundary.
+pub(crate) fn configured_sweep_options(
+    global_root: &Path,
+    options: SweepOptions,
+) -> Result<SweepOptions, OrbitError> {
+    Ok(SweepOptions {
+        sweep_cadence_seconds: load_clock_settings(global_root)?.cadence_seconds,
+        ..options
     })
 }

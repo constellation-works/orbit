@@ -1,6 +1,9 @@
 use chrono::{DateTime, TimeZone, Utc};
 
-use super::super::due::{DueDecision, due_decision, parse_cron};
+use super::super::due::{
+    DueDecision, NATURAL_SLOT_GRACE_SECONDS, due_decision, due_decision_with_grace,
+    natural_slot_grace_for_cadence, parse_cron,
+};
 use orbit_types::workflow::MissedRunPolicy;
 
 fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
@@ -39,6 +42,117 @@ fn natural_slot_fires_within_grace() {
         DueDecision::Fire {
             slot: at(2026, 7, 2, 22, 0, 0),
             is_catch_up: false,
+        }
+    );
+}
+
+#[test]
+fn default_cadence_keeps_its_existing_two_minute_natural_window() {
+    let cron = parse_cron("0 * * * *").expect("cron");
+    let lower = at(2026, 7, 2, 21, 0, 0);
+
+    let final_natural = due_decision(
+        &cron,
+        MissedRunPolicy::Skip,
+        &lower,
+        &at(2026, 7, 2, 22, 2, 0),
+    )
+    .expect("decision");
+    assert!(matches!(
+        final_natural,
+        DueDecision::Fire {
+            is_catch_up: false,
+            ..
+        }
+    ));
+
+    let first_missed = due_decision(
+        &cron,
+        MissedRunPolicy::Skip,
+        &lower,
+        &at(2026, 7, 2, 22, 2, 1),
+    )
+    .expect("decision");
+    assert_eq!(first_missed, DueDecision::NotDue);
+    assert_eq!(NATURAL_SLOT_GRACE_SECONDS, 120);
+}
+
+#[test]
+fn configured_cadence_keeps_the_incident_slot_natural_once() {
+    let cron = parse_cron("5 * * * *").expect("cron");
+    let lower = at(2026, 9, 7, 0, 5, 0);
+    let grace = natural_slot_grace_for_cadence(300).expect("five-minute grace");
+
+    // The production incident polled before the 01:05 slot, then again at
+    // 01:08:43. The 223-second-old slot is still an ordinary fire, not a
+    // catch-up, under the configured five-minute clock.
+    let legacy_decision = due_decision(
+        &cron,
+        MissedRunPolicy::Skip,
+        &lower,
+        &at(2026, 9, 7, 1, 8, 43),
+    )
+    .expect("legacy decision");
+    assert_eq!(legacy_decision, DueDecision::NotDue);
+
+    let decision = due_decision_with_grace(
+        &cron,
+        MissedRunPolicy::Skip,
+        &lower,
+        &at(2026, 9, 7, 1, 8, 43),
+        grace,
+    )
+    .expect("decision");
+    assert_eq!(
+        decision,
+        DueDecision::Fire {
+            slot: at(2026, 9, 7, 1, 5, 0),
+            is_catch_up: false,
+        }
+    );
+}
+
+#[test]
+fn cadence_grace_handles_poll_phase_without_masking_real_downtime() {
+    let cron = parse_cron("5 * * * *").expect("cron");
+    let lower = at(2026, 9, 7, 0, 5, 0);
+    let grace = natural_slot_grace_for_cadence(300).expect("five-minute grace");
+
+    for now in [at(2026, 9, 7, 1, 5, 5), at(2026, 9, 7, 1, 8, 43)] {
+        let decision = due_decision_with_grace(&cron, MissedRunPolicy::Skip, &lower, &now, grace)
+            .expect("decision");
+        assert!(matches!(
+            decision,
+            DueDecision::Fire {
+                is_catch_up: false,
+                ..
+            }
+        ));
+    }
+
+    let after_one_delayed_poll = due_decision_with_grace(
+        &cron,
+        MissedRunPolicy::Skip,
+        &lower,
+        &at(2026, 9, 7, 1, 15, 1),
+        grace,
+    )
+    .expect("decision");
+    assert_eq!(after_one_delayed_poll, DueDecision::NotDue);
+
+    let catch_up = due_decision_with_grace(
+        &cron,
+        MissedRunPolicy::CatchUpOnce,
+        &lower,
+        &at(2026, 9, 7, 1, 15, 1),
+        grace,
+    )
+    .expect("decision");
+    assert_eq!(
+        catch_up,
+        DueDecision::Fire {
+            slot: at(2026, 9, 7, 1, 5, 0),
+            is_catch_up: true,
         }
     );
 }
