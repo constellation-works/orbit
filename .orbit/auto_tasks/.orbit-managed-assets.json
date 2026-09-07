@@ -1,5 +1,8 @@
 {
   "schemaVersion": 1,
   "assetKind": "auto_task",
-  "assets": {}
+  "assets": {
+    "delivery-code-review": "9f67e270711b6b346abc289eec8cd4effef01f7792f6cdae97269ad40ad8999c",
+    "delivery-qa": "9a5ec9690a3bf2db43233416fb91c460c37bed97580e37144fc40b63fdf21abf"
+  }
 }
