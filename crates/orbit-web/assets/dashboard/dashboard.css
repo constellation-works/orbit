@@ -1527,6 +1527,18 @@
         font-family: var(--font-mono);
         font-size: 11px;
       }
+      .runs-scope-note,
+      .runs-limit-note {
+        padding: 8px 16px;
+        border-bottom: 1px solid var(--border);
+        color: var(--fg-dim);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .runs-limit-note {
+        color: var(--accent);
+      }
       
       .runs-row:last-child {
         border-bottom: none;
@@ -1622,7 +1634,9 @@
         .runs-row { min-width: 790px; }
         .runs-row.workspace-attributed { min-width: 900px; }
         .runs-filter,
-        .runs-source-warning {
+        .runs-source-warning,
+        .runs-scope-note,
+        .runs-limit-note {
           min-width: max-content;
           position: sticky;
           left: 0;

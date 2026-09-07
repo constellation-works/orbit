@@ -234,16 +234,19 @@ async fn job_run_filters_apply_before_limit_and_validate_state() {
 
     let response = request_job_runs(runtime.clone(), "state=running&limit=1").await;
     assert_eq!(response.status(), StatusCode::OK);
-    let rows = body_json(response).await;
-    assert_eq!(rows.as_array().expect("runs array").len(), 1);
+    let body = body_json(response).await;
+    assert_eq!(body["state"], json!("running"));
+    assert_eq!(body["limit"], json!(1));
+    let rows = body["items"].as_array().expect("runs items");
+    assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["run_id"], json!(running.run_id));
 
     let response = request_job_runs(runtime.clone(), "state=terminal&limit=10").await;
     assert_eq!(response.status(), StatusCode::OK);
-    let rows = body_json(response).await;
-    let states = rows
+    let body = body_json(response).await;
+    let states = body["items"]
         .as_array()
-        .expect("runs array")
+        .expect("runs items")
         .iter()
         .map(|run| run["state"].as_str().expect("state"))
         .collect::<Vec<_>>();
@@ -258,10 +261,10 @@ async fn job_run_filters_apply_before_limit_and_validate_state() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    let rows = body_json(response).await;
-    let run_ids = rows
+    let body = body_json(response).await;
+    let run_ids = body["items"]
         .as_array()
-        .expect("runs array")
+        .expect("runs items")
         .iter()
         .map(|run| run["run_id"].as_str().expect("run id"))
         .collect::<Vec<_>>();
@@ -273,8 +276,75 @@ async fn job_run_filters_apply_before_limit_and_validate_state() {
     let error = body_json(response).await;
     assert_eq!(
         error["error"],
-        json!("invalid state; expected one of: pending, running, terminal")
+        json!("invalid state; expected one of: all, active, failed, pending, running, terminal")
     );
+}
+
+/// Dashboard Recent Runs used to fetch the newest N runs and then filter to
+/// `failed` in the browser. A Failed run older than that recent success/active
+/// slice disappeared even though the header still counted it. Filter, then
+/// limit, so that older failure remains discoverable.
+#[tokio::test]
+async fn job_runs_failed_filter_keeps_older_failures_outside_the_recent_success_slice() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let now = Utc::now();
+
+    for index in 0..3 {
+        let mut recent = seed_run(
+            &runtime,
+            &format!("jrun-recent-success-{index}"),
+            "recent_job",
+            JobRunState::Success,
+        );
+        recent.created_at = now - Duration::minutes(index);
+        recent.scheduled_at = recent.created_at;
+        recent.started_at = Some(recent.created_at);
+        recent.finished_at = Some(now - Duration::minutes(index));
+        write_seeded_run(&runtime, &recent);
+    }
+
+    let mut older_failed = seed_run(
+        &runtime,
+        "jrun-older-failed",
+        "recent_job",
+        JobRunState::Failed,
+    );
+    older_failed.created_at = now - Duration::hours(2);
+    older_failed.scheduled_at = older_failed.created_at;
+    older_failed.started_at = Some(older_failed.created_at);
+    older_failed.finished_at = Some(now - Duration::hours(2));
+    write_seeded_run(&runtime, &older_failed);
+
+    let unfiltered = request_job_runs(runtime.clone(), "limit=3").await;
+    assert_eq!(unfiltered.status(), StatusCode::OK);
+    let unfiltered = body_json(unfiltered).await;
+    assert_eq!(unfiltered["state"], json!("all"));
+    assert_eq!(unfiltered["limit"], json!(3));
+    assert_eq!(unfiltered["total"], json!(4));
+    assert_eq!(unfiltered["truncated"], json!(true));
+    let unfiltered_ids = unfiltered["items"]
+        .as_array()
+        .expect("unfiltered items")
+        .iter()
+        .map(|run| run["run_id"].as_str().expect("run id"))
+        .collect::<Vec<_>>();
+    assert_eq!(unfiltered_ids.len(), 3);
+    assert!(
+        !unfiltered_ids.contains(&"jrun-older-failed"),
+        "the unfiltered recent slice must omit the older failure so this fixture still proves filter-after-limit would hide it"
+    );
+
+    let failed = request_job_runs(runtime, "state=failed&limit=3").await;
+    assert_eq!(failed.status(), StatusCode::OK);
+    let failed = body_json(failed).await;
+    assert_eq!(failed["state"], json!("failed"));
+    assert_eq!(failed["limit"], json!(3));
+    assert_eq!(failed["total"], json!(1));
+    assert_eq!(failed["truncated"], json!(false));
+    let failed_items = failed["items"].as_array().expect("failed items");
+    assert_eq!(failed_items.len(), 1);
+    assert_eq!(failed_items[0]["run_id"], json!("jrun-older-failed"));
+    assert_eq!(failed_items[0]["state"], json!("failed"));
 }
 
 #[tokio::test]
