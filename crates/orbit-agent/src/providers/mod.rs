@@ -82,10 +82,11 @@ pub fn normalize_cli_stdout<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
 /// response-envelope projection.
 ///
 /// Invocation traces and diagnostics continue to use [`normalize_cli_stdout`]
-/// so usage, tool traffic, and provider failures remain observable. Codex and
-/// Copilot need a narrower view because their JSONL streams also contain
-/// reasoning and tool payloads that may quote an unrelated Orbit envelope.
-/// Other providers retain their existing normalized response boundary.
+/// so usage, tool traffic, and provider failures remain observable. Codex,
+/// Copilot, and Grok need a narrower view because their provider wrappers can
+/// carry reasoning and tool payloads that may quote an unrelated Orbit
+/// envelope. Other providers retain their existing normalized response
+/// boundary.
 /// [ORB-11348]
 pub fn project_cli_response<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8]> {
     match provider {
@@ -93,6 +94,9 @@ pub fn project_cli_response<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
             codex::project_codex_response(stdout).map_or_else(|| Cow::Borrowed(stdout), Cow::Owned)
         }
         "copilot" => Cow::Owned(copilot::project_copilot_response(stdout)),
+        "grok" => {
+            grok::project_grok_response(stdout).map_or_else(|| Cow::Borrowed(stdout), Cow::Owned)
+        }
         _ => normalize_cli_stdout(provider, stdout),
     }
 }

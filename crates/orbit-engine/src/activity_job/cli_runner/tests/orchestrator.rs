@@ -3661,6 +3661,92 @@ fn run_cli_backend_passes_model_to_grok_and_captures_well_formed_stdout() {
 }
 
 #[test]
+fn run_cli_backend_uses_grok_final_text_not_wrapper_metadata() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    let grok_stdout = serde_json::json!({
+        "text": "{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"source\":\"final-text\"},\"error\":null}",
+        "stopReason": "EndTurn",
+        "thought": "{\"schemaVersion\":1,\"status\":\"failed\",\"result\":{},\"error\":{\"code\":\"metadata\",\"message\":\"ignore\",\"details\":null}}",
+        "toolCalls": [{"result": "{\"schemaVersion\":1,\"status\":\"failed\",\"result\":{},\"error\":{\"code\":\"tool\",\"message\":\"ignore\",\"details\":null}}"}],
+    })
+    .to_string();
+    write_executable(
+        &script,
+        &format!("#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{grok_stdout}'\n"),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-grok-final-text",
+        "grok:grok-build",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.require_completion_envelope = true;
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "test_activity",
+        "job-grok-final-text",
+        audit,
+        &serde_json::json!({"prompt": "respond"}),
+        None,
+    )
+    .expect("run cli backend");
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(outcome.output["source"], "final-text");
+    assert_eq!(outcome.output["response_envelope_status"], "success");
+}
+
+#[test]
+fn run_cli_backend_preserves_grok_failed_final_text() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    let grok_stdout = serde_json::json!({
+        "text": "{\"schemaVersion\":1,\"status\":\"failed\",\"result\":{},\"error\":{\"code\":\"final_failure\",\"message\":\"final answer failed\",\"details\":null}}",
+        "stopReason": "EndTurn",
+        "thought": "{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"source\":\"metadata\"},\"error\":null}",
+    })
+    .to_string();
+    write_executable(
+        &script,
+        &format!("#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{grok_stdout}'\n"),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-grok-final-failure",
+        "grok:grok-build",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.require_completion_envelope = true;
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "test_activity",
+        "job-grok-final-failure",
+        audit,
+        &serde_json::json!({"prompt": "respond"}),
+        None,
+    )
+    .expect("run cli backend");
+
+    assert!(!outcome.success);
+    assert_eq!(outcome.output["response_envelope_status"], "failed");
+    let message = outcome.message.expect("failed final answer diagnostic");
+    assert!(message.contains("final_failure"), "{message}");
+}
+
+#[test]
 fn run_cli_backend_exports_runtime_identity_for_subprocess_tools() {
     let temp = tempdir().expect("tempdir");
     let script = temp.path().join("grok");
