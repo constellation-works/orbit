@@ -72,7 +72,7 @@ Lifecycle:
 
 - `SubprocessEmbedder::new()` resolves the companion path under `~/.orbit/embed/bin/orbit-search-companion-<platform>` and starts the subprocess. ~100–300ms cold-start latency for ORT init.
 - The subprocess stays alive for the duration of the parent process or until explicitly dropped. Callers that retain the embedder, including the background indexing worker, reuse the same subprocess.
-- On process exit, the parent sends an `exit` RPC, reads the response, and waits for the child to exit.
+- On process exit, the parent sends an `exit` RPC, closes stdin, and waits a short bounded interval for the companion to leave; a still-running child is killed (its Unix process group) and reaped. Each RPC read waits only up to a payload-scaled deadline; a timeout is a transient transport failure and respawns the companion.
 
 ### 2.3 RPC protocol
 
