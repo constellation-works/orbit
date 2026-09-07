@@ -3,8 +3,8 @@
   "version": "0.19.0",
   "description": "Task and activity orchestration for AI coding agents. Adds Orbit's MCP task and knowledge surface plus workflow skills to Codex.",
   "author": {
-    "name": "danieljhkim",
-    "url": "https://github.com/danieljhkim"
+    "name": "constellation-works",
+    "url": "https://github.com/constellation-works"
   },
   "homepage": "https://github.com/constellation-works/orbit",
   "repository": "https://github.com/constellation-works/orbit",
@@ -20,14 +20,14 @@
   "mcpServers": {
     "orbit": {
       "command": "npx",
-      "args": ["-y", "@orbit-tools/cli@latest", "mcp", "serve"]
+      "args": ["-y", "@orbit-tools/cli@0.19.0", "mcp", "serve"]
     }
   },
   "interface": {
     "displayName": "Orbit",
     "shortDescription": "Task, docs search, and workflow tools.",
     "longDescription": "Orbit adds a local task lifecycle, searchable project documentation, and auditable workflows for Codex workspaces.",
-    "developerName": "danieljhkim",
+    "developerName": "constellation-works",
     "category": "Developer Tools",
     "capabilities": ["MCP", "Skills", "Agent Workflows"],
     "websiteURL": "https://github.com/constellation-works/orbit",

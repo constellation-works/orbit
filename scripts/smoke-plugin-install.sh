@@ -29,6 +29,7 @@ from pathlib import Path
 
 claude, codex, cursor = map(Path, sys.argv[1:4])
 version = sys.argv[4]
+expected_args = ["-y", f"@orbit-tools/cli@{version}", "mcp", "serve"]
 installs = {
     "Claude Code": claude / f"plugins/cache/orbit/orbit/{version}",
     "Codex": codex / f"plugins/cache/orbit/orbit/{version}",
@@ -42,15 +43,23 @@ for client, root in installs.items():
 claude_mcp = json.loads((installs["Claude Code"] / ".mcp.json").read_text())
 codex_manifest = json.loads((installs["Codex"] / ".codex-plugin/plugin.json").read_text())
 cursor_mcp = json.loads((installs["Cursor"] / "mcp.json").read_text())
+cursor_manifest = json.loads((installs["Cursor"] / "plugin.json").read_text())
 for client, servers in (
     ("Claude Code", claude_mcp.get("mcpServers")),
     ("Codex", codex_manifest.get("mcpServers")),
     ("Cursor", cursor_mcp.get("mcpServers")),
 ):
     orbit = (servers or {}).get("orbit")
-    if not orbit or orbit.get("command") != "npx" or "serve" not in orbit.get("args", []):
-        raise SystemExit(f"{client}: Orbit MCP tools are not configured")
+    if not orbit or orbit.get("command") != "npx" or orbit.get("args") != expected_args:
+        raise SystemExit(
+            f"{client}: Orbit MCP launch must pin npx {' '.join(expected_args)}"
+        )
 
+author = cursor_manifest.get("author") if isinstance(cursor_manifest, dict) else None
+if not isinstance(author, dict) or author.get("name") != "constellation-works":
+    raise SystemExit("Cursor: plugin author must be constellation-works")
+if cursor_manifest.get("version") != version:
+    raise SystemExit("Cursor: plugin.json version does not match the installed package")
 if (installs["Cursor"] / ".cursor-plugin").exists():
     raise SystemExit("Cursor: forbidden .cursor-plugin directory is present")
 PY

@@ -16,6 +16,11 @@ MCP_SERVER_JSON="server.json"
 CLAUDE_PLUGIN_MANIFEST="plugin/.claude-plugin/plugin.json"
 CODEX_PLUGIN_MANIFEST="plugin/.codex-plugin/plugin.json"
 AGENT_PLUGIN_MANIFEST="plugin/plugin.json"
+AGENT_PLUGIN_MCP="plugin/mcp.json"
+CLAUDE_PLUGIN_MCP="plugin/.mcp.json"
+CLAUDE_MARKETPLACE=".claude-plugin/marketplace.json"
+EXPECTED_OWNER="constellation-works"
+EXPECTED_OWNER_URL="https://github.com/constellation-works"
 
 require_bin() {
   local bin="$1"
@@ -28,7 +33,8 @@ require_bin() {
 require_bin jq
 
 for file in "$CARGO_TOML" "$NPM_PACKAGE_JSON" "$MCP_SERVER_JSON" \
-  "$CLAUDE_PLUGIN_MANIFEST" "$CODEX_PLUGIN_MANIFEST" "$AGENT_PLUGIN_MANIFEST"; do
+  "$CLAUDE_PLUGIN_MANIFEST" "$CODEX_PLUGIN_MANIFEST" "$AGENT_PLUGIN_MANIFEST" \
+  "$AGENT_PLUGIN_MCP" "$CLAUDE_PLUGIN_MCP" "$CLAUDE_MARKETPLACE"; do
   if [[ ! -f "$file" ]]; then
     echo "release-check: $file not found (run from repo root)" >&2
     exit 2
@@ -61,6 +67,7 @@ server_package_version="$(jq -r '.packages[0].version // empty' "$MCP_SERVER_JSO
 claude_plugin_version="$(jq -r .version "$CLAUDE_PLUGIN_MANIFEST")"
 codex_plugin_version="$(jq -r .version "$CODEX_PLUGIN_MANIFEST")"
 agent_plugin_version="$(jq -r .version "$AGENT_PLUGIN_MANIFEST")"
+expected_mcp_package="@orbit-tools/cli@${cargo_package_version}"
 
 if [[ -z "$cargo_package_version" ]]; then
   echo "release-check: $CARGO_TOML has no [workspace.package] version" >&2
@@ -88,6 +95,44 @@ if ! jq -e '
   echo "DRIFT: server.json must retain exactly the non-operator npm stdio launch: mcp serve" >&2
   exit 1
 fi
+require_owner() {
+  local file="$1"
+  local jq_name="$2"
+  local jq_url="$3"
+  local name url
+  name="$(jq -r "$jq_name" "$file")"
+  url="$(jq -r "$jq_url" "$file")"
+  if [[ "$name" != "$EXPECTED_OWNER" || "$url" != "$EXPECTED_OWNER_URL" ]]; then
+    echo "DRIFT: $file owner must be $EXPECTED_OWNER ($EXPECTED_OWNER_URL), found $name ($url)" >&2
+    exit 1
+  fi
+}
+
+require_mcp_launch() {
+  local file="$1"
+  local jq_command="$2"
+  local jq_args="$3"
+  if ! jq -e --arg pkg "$expected_mcp_package" \
+    "$jq_command == \"npx\" and $jq_args == [\"-y\", \$pkg, \"mcp\", \"serve\"]" \
+    "$file" >/dev/null; then
+    echo "DRIFT: $file MCP launch must pin npx -y $expected_mcp_package mcp serve" >&2
+    exit 1
+  fi
+}
+
+require_owner "$AGENT_PLUGIN_MANIFEST" ".author.name" ".author.url"
+require_owner "$CLAUDE_PLUGIN_MANIFEST" ".author.name" ".author.url"
+require_owner "$CODEX_PLUGIN_MANIFEST" ".author.name" ".author.url"
+require_owner "$CLAUDE_MARKETPLACE" ".owner.name" ".owner.url"
+codex_developer="$(jq -r .interface.developerName "$CODEX_PLUGIN_MANIFEST")"
+if [[ "$codex_developer" != "$EXPECTED_OWNER" ]]; then
+  echo "DRIFT: $CODEX_PLUGIN_MANIFEST interface.developerName must be $EXPECTED_OWNER" >&2
+  exit 1
+fi
+require_mcp_launch "$AGENT_PLUGIN_MCP" ".mcpServers.orbit.command" ".mcpServers.orbit.args"
+require_mcp_launch "$CLAUDE_PLUGIN_MCP" ".mcpServers.orbit.command" ".mcpServers.orbit.args"
+require_mcp_launch "$CODEX_PLUGIN_MANIFEST" ".mcpServers.orbit.command" ".mcpServers.orbit.args"
+
 if command -v mcp-publisher >/dev/null 2>&1; then
   mcp-publisher validate "$MCP_SERVER_JSON"
 else

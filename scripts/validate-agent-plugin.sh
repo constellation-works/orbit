@@ -32,6 +32,7 @@ claude_manifest_path = plugin_root / ".claude-plugin" / "plugin.json"
 codex_manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
 claude_mcp_path = plugin_root / ".mcp.json"
 npm_package_path = repo / "npm" / "package.json"
+claude_marketplace_path = repo / ".claude-plugin" / "marketplace.json"
 
 PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
@@ -47,7 +48,8 @@ SEMVER_RE = re.compile(
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
 EXPECTED_MCP_COMMAND = "npx"
-EXPECTED_MCP_ARGS = ["-y", "@orbit-tools/cli@latest", "mcp", "serve"]
+EXPECTED_OWNER_NAME = "constellation-works"
+EXPECTED_OWNER_URL = "https://github.com/constellation-works"
 PLUGIN_MANIFEST_KEYS = {
     "$schema",
     "name",
@@ -87,6 +89,16 @@ def require_string(payload: dict[str, Any], key: str, label: str) -> str | None:
         errors.append(f"{label}.{key} must be a non-empty string")
         return None
     return value
+
+
+def require_owner(payload: dict[str, Any] | None, label: str) -> None:
+    if not isinstance(payload, dict):
+        errors.append(f"{label} must be an object")
+        return
+    if payload.get("name") != EXPECTED_OWNER_NAME:
+        errors.append(f"{label}.name must be {EXPECTED_OWNER_NAME!r}")
+    if payload.get("url") != EXPECTED_OWNER_URL:
+        errors.append(f"{label}.url must be {EXPECTED_OWNER_URL!r}")
 
 
 def reject_todos(value: Any, path: str) -> None:
@@ -186,6 +198,19 @@ claude_manifest = load_json(claude_manifest_path, "plugin/.claude-plugin/plugin.
 codex_manifest = load_json(codex_manifest_path, "plugin/.codex-plugin/plugin.json")
 claude_mcp = load_json(claude_mcp_path, "plugin/.mcp.json")
 npm_package = load_json(npm_package_path, "npm/package.json")
+claude_marketplace = load_json(claude_marketplace_path, ".claude-plugin/marketplace.json")
+
+npm_version = None
+if npm_package is not None:
+    raw_npm_version = npm_package.get("version")
+    if isinstance(raw_npm_version, str) and raw_npm_version.strip() and SEMVER_RE.fullmatch(raw_npm_version):
+        npm_version = raw_npm_version
+    else:
+        errors.append("npm/package.json.version must use strict semver")
+
+expected_mcp_args = (
+    ["-y", f"@orbit-tools/cli@{npm_version}", "mcp", "serve"] if npm_version is not None else None
+)
 
 if (plugin_root / ".cursor-plugin").exists():
     errors.append(
@@ -216,6 +241,7 @@ if manifest is not None:
         errors.append("plugin/plugin.json.author must be an object")
     else:
         require_string(author, "name", "plugin/plugin.json.author")
+        require_owner(author, "plugin/plugin.json.author")
         for extra in sorted(set(author) - {"name", "email", "url"}):
             errors.append(f"plugin/plugin.json.author field {extra} is not supported")
     keywords = manifest.get("keywords")
@@ -296,18 +322,37 @@ codex_launch = mcp_launch(
     codex_manifest if isinstance(codex_manifest, dict) else None,
     "plugin/.codex-plugin/plugin.json",
 )
-expected = (EXPECTED_MCP_COMMAND, EXPECTED_MCP_ARGS)
+expected = (
+    (EXPECTED_MCP_COMMAND, expected_mcp_args) if expected_mcp_args is not None else None
+)
 for label, launch in (
     ("plugin/mcp.json", agent_launch),
     ("plugin/.mcp.json", claude_launch),
     ("plugin/.codex-plugin/plugin.json", codex_launch),
 ):
-    if launch is None:
+    if launch is None or expected is None:
         continue
-    if launch != expected:
+    args = launch[1]
+    if launch == expected:
+        continue
+    stale = any("@latest" in arg or "@0.5.1" in arg for arg in args)
+    prefix = f"{label} has a stale launch pin; " if stale else f"{label} "
+    errors.append(
+        f"{prefix}MCP launch must be {EXPECTED_MCP_COMMAND} {' '.join(expected_mcp_args)}"
+    )
+
+if claude_manifest is not None:
+    require_owner(claude_manifest.get("author"), "plugin/.claude-plugin/plugin.json.author")
+if isinstance(codex_manifest, dict):
+    require_owner(codex_manifest.get("author"), "plugin/.codex-plugin/plugin.json.author")
+    interface = codex_manifest.get("interface")
+    if isinstance(interface, dict) and interface.get("developerName") != EXPECTED_OWNER_NAME:
         errors.append(
-            f"{label} MCP launch must be {EXPECTED_MCP_COMMAND} {' '.join(EXPECTED_MCP_ARGS)}"
+            "plugin/.codex-plugin/plugin.json.interface.developerName must be "
+            f"{EXPECTED_OWNER_NAME!r}"
         )
+if claude_marketplace is not None:
+    require_owner(claude_marketplace.get("owner"), ".claude-plugin/marketplace.json.owner")
 
 skills_root = plugin_root / "skills"
 orbit_skill = skills_root / "orbit"
