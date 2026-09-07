@@ -287,6 +287,21 @@ define_config_settings! {
         description: "Named crew used when a task does not declare `crew` and no CLI override is given.",
         resolve: |raw: Option<String>| resolve_optional_non_empty(raw, "workflow.default_crew"),
     },
+    workflow_hard_complexity_crews: Vec<String> => Vec<String> {
+        key: "workflow.hard_complexity_crews", value_type: "array<string>",
+        description: "Random crew pool for unassigned hard-complexity tasks in auto drains; empty disables the pool.",
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_low_complexity_crews: Vec<String> => Vec<String> {
+        key: "workflow.low_complexity_crews", value_type: "array<string>",
+        description: "Random crew pool for unassigned low-complexity tasks in auto drains; empty disables the pool.",
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_medium_complexity_crews: Vec<String> => Vec<String> {
+        key: "workflow.medium_complexity_crews", value_type: "array<string>",
+        description: "Random crew pool for unassigned medium-complexity tasks in auto drains; empty disables the pool.",
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
     workflow_system_crew: String => String {
         key: "workflow.system_crew", value_type: "string",
         description: "Named crew used by system activities such as step-failure recovery and failed-run triage.",
@@ -304,6 +319,21 @@ impl ConfigSnapshot {
             Some(self.runtime_log_retention_days),
             Some(self.runtime_log_max_total_mb),
             Some(self.runtime_log_max_file_mb),
+        )?;
+        self.workflow_low_complexity_crews = crate::canonical_crew_pool(
+            &self.workflow_low_complexity_crews,
+            crews,
+            "workflow.low_complexity_crews",
+        )?;
+        self.workflow_medium_complexity_crews = crate::canonical_crew_pool(
+            &self.workflow_medium_complexity_crews,
+            crews,
+            "workflow.medium_complexity_crews",
+        )?;
+        self.workflow_hard_complexity_crews = crate::canonical_crew_pool(
+            &self.workflow_hard_complexity_crews,
+            crews,
+            "workflow.hard_complexity_crews",
         )?;
         self.workflow_default_crew =
             resolve_default_crew(self.workflow_default_crew.take(), crews, env_default)?;

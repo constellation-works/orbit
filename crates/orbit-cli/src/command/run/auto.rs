@@ -17,7 +17,7 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
 #[command(
     about = "Drain the workspace backlog for a window (loose leaves, plus one epic)",
     override_usage = "orbit run auto [OPTIONS]",
-    after_help = "Examples:\n  orbit run auto\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --stop\n\n\
+    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,terra\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --stop\n\n\
                   The drain re-lists the whole backlog every pass and keeps `--concurrency`\n\
                   tasks in flight, starting a replacement as each one finishes rather than\n\
                   waiting for the batch. An epic root runs alongside the leaves, one at a time.\n\n\
@@ -25,6 +25,11 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   admits for the whole window, including work that reaches the backlog after\n\
                   the run starts. The drain is asynchronous, so this prints the durable run ID\n\
                   and returns without knowing the eventual outcome.\n\n\
+                  Complexity pools select only for tasks without an explicit crew.\n\
+                  Each CLI pool replaces its matching workflow pool for this drain.\n\
+                  Empty pools and unset complexity use the existing default crew chain.\n\
+                  Selections are recorded at admission and retained on retries/resume.\n\
+                  Pools do not restrict manual crew choices.\n\n\
                   `--allow-crew` restricts this one run to the named crews, for its window\n\
                   only. It edits no configuration and reassigns nothing: a backlog task whose\n\
                   crew is excluded is simply not started, and `orbit run readiness --allow-crew`\n\
@@ -70,6 +75,18 @@ pub struct AutoCommand {
     /// invocation is already running is cancelled.
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
+    /// Random crew pool for unassigned low-complexity tasks. Overrides the
+    /// matching workflow pool; pass the flag with no names to disable it.
+    #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
+    pub low_complexity_crews: Option<Vec<String>>,
+    /// Random crew pool for unassigned medium-complexity tasks. Overrides the
+    /// matching workflow pool; pass the flag with no names to disable it.
+    #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
+    pub medium_complexity_crews: Option<Vec<String>>,
+    /// Random crew pool for unassigned hard-complexity tasks. Overrides the
+    /// matching workflow pool; pass the flag with no names to disable it.
+    #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
+    pub hard_complexity_crews: Option<Vec<String>>,
     /// Bind this drain to an operation-mode grant (see `orbit operation`).
     /// Completion, scope, and limits come from the grant; `--complete` is
     /// not accepted alongside it.
@@ -87,7 +104,7 @@ pub struct AutoCommand {
     /// start a drain.
     #[arg(
         long,
-        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "grant"]
+        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "grant", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews"]
     )]
     pub stop: bool,
 }
@@ -97,6 +114,11 @@ impl Execute for AutoCommand {
         if self.stop {
             return execute_stop(runtime, self.json, self.claim_token.as_deref());
         }
+        let complexity_crews = orbit_config::ComplexityCrewPools {
+            low: self.low_complexity_crews,
+            medium: self.medium_complexity_crews,
+            hard: self.hard_complexity_crews,
+        };
         let for_seconds = self
             .for_duration
             .as_deref()
@@ -109,6 +131,7 @@ impl Execute for AutoCommand {
                 for_seconds,
                 self.concurrency,
                 &self.allow_crew,
+                &complexity_crews,
                 self.claim_token.as_deref(),
                 self.json,
             );
@@ -123,6 +146,7 @@ impl Execute for AutoCommand {
             self.concurrency,
             completion,
             &self.allow_crew,
+            &complexity_crews,
             None,
             self.claim_token.as_deref(),
         )?;
@@ -145,12 +169,14 @@ impl Execute for AutoCommand {
 }
 
 /// [ORB-11332] A drain whose every admission is bound to a grant.
+#[allow(clippy::too_many_arguments)]
 fn execute_grant_bound(
     runtime: &OrbitRuntime,
     grant_id: &str,
     for_seconds: Option<u64>,
     concurrency: Option<u32>,
     allow_crew: &[String],
+    complexity_crews: &orbit_config::ComplexityCrewPools,
     claim_token: Option<&str>,
     json: bool,
 ) -> CommandOut {
@@ -159,6 +185,7 @@ fn execute_grant_bound(
         for_seconds,
         max_active_leaf_runs: concurrency,
         allowed_crews: allow_crew,
+        complexity_crews,
         actor: None,
         claim_token,
     })?;

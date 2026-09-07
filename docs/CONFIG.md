@@ -857,6 +857,66 @@ authoritative.
 
 This means you can mix-and-match in a single ship run: route a tricky refactor to `claude` while routing routine cleanups to `codex` — both go through the same `orbit run ship` invocation, each picking its own crew at dispatch time. `orbit run ship` fans singleton child runs, so each task's `crew` is recorded on that child (`orbit run show` → `resolved_crew`) and used by `implement_one`. A single child pipeline whose `task_ids` name more than one distinct crew (or mix set and unset crews) fails closed rather than inheriting `[workflow].default_crew`.
 
+### Automatic crew pools by complexity
+
+Auto drains can randomly select a crew for each task that has no explicit
+`task.crew`:
+
+```sh
+orbit run auto --medium-complexity-crews grok,terra
+```
+
+The equivalent configuration is:
+
+```toml
+[workflow]
+low_complexity_crews = ["luna"]
+medium_complexity_crews = ["grok", "terra"]
+hard_complexity_crews = ["astra"]
+```
+
+Use `--low-complexity-crews`, `--medium-complexity-crews`, and
+`--hard-complexity-crews` for run overrides, including with `--grant`. Each
+provided CLI pool replaces only its matching configuration pool for that
+drain. Configuration arrays replace their corresponding global arrays when
+specified in the workspace file. Set/get/show use the same fields:
+
+```sh
+orbit config set workflow.medium_complexity_crews '["grok", "terra"]'
+orbit config get workflow.medium_complexity_crews
+orbit config show
+```
+
+For automatic task admission the order is an explicit run-input crew, an
+explicit task crew, the matching nonempty complexity pool, then the existing
+default crew resolution chain. Low, medium and hard are the task complexity
+values; unset or `unassessed` complexity uses the default chain. An omitted
+pool inherits configuration; an absent or empty effective pool uses the
+default chain. `medium_complexity_crews = []` disables that configured pool;
+`orbit run auto --medium-complexity-crews` (with no names) disables it for one
+drain. Blank entries such as `""` and unknown crew names fail before dispatch.
+Names are trimmed, resolved against the configured registry and deduplicated,
+so repeated entries never add random weight.
+
+Pools are selection preferences. They do not install a crew allowlist or
+restrict manual assignments, ordinary `run ship`, or explicit activity crews.
+When a separately supplied `--allow-crew` restricts the drain, random selection
+is uniform among the pool's permitted members. A disjoint pool is ineligible
+and `orbit run readiness --allow-crew <crew>` diagnoses `crew_not_allowed`; an explicit task assignment
+outside the allowlist is also excluded. The allowlist still applies to system
+and review activities at dispatch, and operation grants keep their scope and
+admission limits.
+
+The coordinator captures effective pools in run input `auto_crew_pools`.
+Each admitted leaf or epic root records `crew` and `crew_selection`, including
+the task ID, complexity, source (`task.crew`, `run_input.<complexity>_complexity_crews`,
+`workflow.<complexity>_complexity_crews`, `explicit`, or `default`), and eligible
+pool. Inspect these with `orbit run show <RUN_ID>`. Same-task pipeline children
+and retries/resumes retain the admitted selection even if configuration or
+the task assignment changes later. Different tasks, including epic descendants,
+receive independent draws at their own admission. No choice rewrites
+`task.crew`; a newly admitted run outside the retry lineage can select again.
+
 ### Setting `task.crew`
 
 Three equivalent surfaces:

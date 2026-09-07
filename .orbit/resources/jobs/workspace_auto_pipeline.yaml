@@ -75,6 +75,11 @@ spec:
     # which is the behavior of every caller that does not pass it. Forwarded
     # unchanged so the leaf/epic jobs this run admits inherit the same window.
     allowed_crews: []
+    # Complexity pools are captured by Core at coordinator admission from
+    # workflow configuration and low/medium/hard_complexity_crews run overrides.
+    # Omit defaults here: an omitted override inherits configuration, while []
+    # explicitly disables a pool. Child admission inherits auto_crew_pools and
+    # freezes crew_selection per task; templates must not reroll selections.
 
   steps:
     - id: resolve_ship_input

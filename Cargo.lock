@@ -2224,6 +2224,7 @@ dependencies = [
  "chrono",
  "croner",
  "fs2",
+ "getrandom 0.3.4",
  "libc",
  "orbit-automation",
  "orbit-common",

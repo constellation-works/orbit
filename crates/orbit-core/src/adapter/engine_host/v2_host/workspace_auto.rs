@@ -8,6 +8,7 @@ use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, OperationAdmi
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::job::crew_pools::CapturedCrewPools;
 use crate::application::operation::{admission_state, live_admission, promote_within_grant};
 
 use crate::runtime::engine::crew::CrewAllowlist;
@@ -137,6 +138,9 @@ pub(super) fn classify_workspace_auto_tasks(
             .saturating_sub(live_leaves.len())
     };
 
+    let pools = runtime
+        .auto_crew_pools_for_input(input)
+        .map_err(|error| action_failed(action, error.to_string()))?;
     let backlog = list_backlog_tasks(runtime, action, input)?;
     // Priority/age order is `list_backlog_tasks`'s, and the truncation to the
     // free slots has to preserve it: the slots are scarce, so they go to the
@@ -177,6 +181,7 @@ pub(super) fn classify_workspace_auto_tasks(
             runtime,
             action,
             allowlist_from_input(runtime, action, input)?.as_ref(),
+            &pools,
         )?
         .filter(|root| {
             operation
@@ -310,11 +315,16 @@ pub fn explain_workspace_auto_readiness(
 
     // Validated here, before any snapshot work, so a typo reads the same way
     // it would on `orbit run auto --allow-crew`.
+    let pool_input = active_drain
+        .as_ref()
+        .map_or_else(|| json!({}), |drain| json!({"run_id": drain.run_id}));
+    let pools = runtime.auto_crew_pools_for_input(&pool_input)?;
     let allowlist = runtime.crew_allowlist(allowed_crews)?;
     let snapshot = backlog_snapshot(
         runtime,
         "explain_workspace_auto_readiness",
         allowlist.as_ref(),
+        &pools,
     )
     .map_err(|error| OrbitError::Execution(format!("read readiness snapshot: {error}")))?;
     let live_leaves = read_live_leaf_runs(runtime)?;
@@ -388,6 +398,7 @@ pub fn explain_workspace_auto_readiness(
             runtime,
             "explain_workspace_auto_readiness",
             allowlist.as_ref(),
+            &pools,
         )
         .map_err(|error| OrbitError::Execution(format!("read epic readiness: {error}")))?
     } else {
@@ -827,6 +838,7 @@ fn next_admissible_epic_root(
     runtime: &OrbitRuntime,
     action: &str,
     allowlist: Option<&CrewAllowlist>,
+    pools: &CapturedCrewPools,
 ) -> Result<Option<String>, DispatchError> {
     let all_tasks = runtime.stores().tasks().list_tasks().map_err(|err| {
         DispatchError::DeterministicActionFailed {
@@ -855,8 +867,8 @@ fn next_admissible_epic_root(
                 && task_dependencies_ready(task, &status_by_id)
                 && allowlist.is_none_or(|allowlist| {
                     runtime
-                        .effective_task_crew(task)
-                        .is_ok_and(|crew| allowlist.permits(&crew))
+                        .auto_task_crew_eligibility(task, pools, allowlist)
+                        .is_ok()
                 })
         })
         .collect::<Vec<_>>();

@@ -1543,3 +1543,97 @@ fn readiness_parses_numeric_and_string_run_input_ceilings() {
         assert_eq!(classified["worker_limit_source"], "run_input");
     }
 }
+
+#[test]
+fn complexity_pools_drive_allowlist_eligibility_without_reassigning_manual_tasks() {
+    let (_root, runtime, _repo) = runtime_with_workspace_config(Some(
+        "[workflow]\ndefault_crew = \"opus\"\nmedium_complexity_crews = [\"grok\", \"terra\"]\n",
+    ));
+    let unassigned = runtime
+        .add_task(TaskAddParams {
+            title: "Pool-eligible task".into(),
+            description: "Configured pool permits this task despite its excluded default".into(),
+            plan: "Inspect classification".into(),
+            complexity: orbit_types::task::TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("unassigned task");
+    let manual = runtime
+        .add_task(TaskAddParams {
+            title: "Manual crew outside automatic pool".into(),
+            description: "Manual assignments remain selectable".into(),
+            plan: "Inspect classification".into(),
+            complexity: orbit_types::task::TaskComplexity::Medium,
+            crew: Some("astra".into()),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("manual task");
+    let unrestricted = classify(&runtime);
+    let ids = unrestricted["loose_task_ids"].as_array().expect("ids");
+    assert!(ids.contains(&json!(unassigned.id)));
+    assert!(
+        ids.contains(&json!(manual.id)),
+        "a pool must not install an allowlist"
+    );
+    let restricted = classify_with(&runtime, json!({"allowed_crews": ["terra"]}));
+    assert_eq!(restricted["loose_task_ids"], json!([unassigned.id]));
+    let disjoint = classify_with(&runtime, json!({"allowed_crews": ["luna"]}));
+    assert_eq!(disjoint["loose_task_ids"], json!([]));
+    let readiness = runtime
+        .workspace_auto_readiness(
+            std::slice::from_ref(&unassigned.id),
+            None,
+            10,
+            &["luna".into()],
+        )
+        .expect("readiness");
+    let excluded = readiness_task(&readiness, &unassigned.id);
+    assert_eq!(excluded["reason"], "crew_not_allowed");
+    assert_eq!(excluded["crew"], "grok, terra");
+    assert_eq!(
+        runtime
+            .get_task(&manual.id)
+            .expect("manual task")
+            .crew
+            .as_deref(),
+        Some("astra")
+    );
+}
+
+#[test]
+fn classifier_uses_captured_cli_pool_instead_of_current_configuration() {
+    let (_root, runtime, _repo) =
+        runtime_with_workspace_config(Some("[workflow]\nmedium_complexity_crews = [\"grok\"]\n"));
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Captured pool task".into(),
+            description: "CLI override controls eligibility".into(),
+            plan: "Inspect classifier against coordinator input".into(),
+            complexity: orbit_types::task::TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("task");
+    let mut input = json!({"medium_complexity_crews": ["terra"], "allowed_crews": ["terra"]});
+    runtime
+        .install_auto_crew_admission(
+            "workspace_auto_pipeline",
+            &mut input,
+            None,
+            false,
+            &mut || panic!("capture does not draw"),
+        )
+        .expect("capture");
+    let coordinator = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), Some(input), None)
+        .expect("coordinator");
+    let result = classify_with(
+        &runtime,
+        json!({"run_id": coordinator.run_id, "allowed_crews": ["terra"]}),
+    );
+    assert_eq!(result["loose_task_ids"], json!([task.id]));
+}
