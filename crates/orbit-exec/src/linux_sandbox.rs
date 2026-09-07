@@ -50,10 +50,11 @@ pub struct LinuxBwrapSpawnRequest<'a> {
     pub stderr: Stdio,
 }
 
-/// Snapshot guard for Bubblewrap's one known write-policy gap: a
-/// non-subtree deny glob cannot be represented for a path that does not exist
-/// yet. Managed worktrees are disposable and single-writer, so Orbit records
-/// existing matches before spawn and rejects any new matches after the child.
+/// Snapshot guard for write-policy gaps Bubblewrap cannot represent as a
+/// mount at spawn time: a non-subtree deny glob, and an exact or subtree
+/// deny whose root does not exist yet. Managed worktrees are disposable and
+/// single-writer, so Orbit records existing matches before spawn and rejects
+/// any new matches after the child.
 #[derive(Debug, Clone)]
 pub struct LinuxBwrapPostRunGuard {
     rules: Vec<String>,
@@ -62,7 +63,7 @@ pub struct LinuxBwrapPostRunGuard {
 
 impl LinuxBwrapPostRunGuard {
     pub fn capture(profile: &ResolvedFsProfile) -> Result<Option<Self>, OrbitError> {
-        let rules = non_subtree_denies(profile);
+        let rules = post_run_deny_rules(profile);
         if rules.is_empty() {
             return Ok(None);
         }
@@ -781,14 +782,46 @@ fn overlaps_writable_root(rule: &str, roots: &[PathBuf]) -> bool {
         .any(|root| root.starts_with(&prefix) || prefix.starts_with(root))
 }
 
-fn non_subtree_denies(profile: &ResolvedFsProfile) -> Vec<String> {
+/// Deny rules that have nothing to `--ro-bind` at spawn: non-subtree globs,
+/// and exact/subtree denies whose root is still absent.
+///
+/// An absent exact/subtree deny with a later nested re-allow is omitted.
+/// Grant preparation materializes that re-allow (creating the deny root) so
+/// `--ro-bind` can apply; watching the root would false-positive on that
+/// pre-spawn create. The orchestrator snapshots this guard before spawn
+/// preparation, so the skip is what keeps default `.orbit/**` plus
+/// `.orbit/auto_tasks/**` from failing on a fresh worktree.
+fn post_run_deny_rules(profile: &ResolvedFsProfile) -> Vec<String> {
     profile
         .modify
         .iter()
-        .filter_map(|rule| rule.strip_prefix('!'))
-        .filter(|rule| !is_exact_or_subtree(rule))
-        .map(str::to_string)
+        .enumerate()
+        .filter_map(|(index, rule)| {
+            let denied = rule.strip_prefix('!')?;
+            if is_exact_or_subtree(denied) {
+                let root = denied.strip_suffix("/**").unwrap_or(denied);
+                if Path::new(root).exists() || deny_has_nested_reallow(&profile.modify, index) {
+                    return None;
+                }
+            }
+            Some(denied.to_string())
+        })
         .collect()
+}
+
+fn deny_has_nested_reallow(modify: &[String], deny_index: usize) -> bool {
+    let Some(denied_root) = modify
+        .get(deny_index)
+        .and_then(|rule| rule.strip_prefix('!'))
+        .and_then(exact_or_subtree_root)
+    else {
+        return false;
+    };
+    modify.iter().skip(deny_index + 1).any(|rule| {
+        !rule.starts_with('!')
+            && exact_or_subtree_root(rule)
+                .is_some_and(|root| root != denied_root && root.starts_with(&denied_root))
+    })
 }
 
 /// Every existing path matched by any of `rules`.
