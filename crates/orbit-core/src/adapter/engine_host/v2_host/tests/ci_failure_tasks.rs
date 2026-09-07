@@ -1432,7 +1432,7 @@ fn orb_11498_style_golden_log(failing: &str) -> String {
 
 /// ORB-11513: Wrangler colored `[ERROR]` plus the missing-field diagnostic,
 /// then GitHub's generic `The process 'npx' failed with exit code`.
-fn orb_11513_style_wrangler_log(title: &str, detail: &str) -> String {
+pub(super) fn orb_11513_style_wrangler_log(title: &str, detail: &str) -> String {
     let job = "Publish to Cloudflare Pages";
     let step = "Deploy static site";
     let prefix = |payload: &str| github_line(job, step, payload);
@@ -1443,10 +1443,15 @@ fn orb_11513_style_wrangler_log(title: &str, detail: &str) -> String {
     out.push_str(&prefix(
         "##[group]Run cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0",
     ));
+    out.push_str(&prefix("[command]/usr/local/bin/npm i wrangler@4.129.0"));
+    out.push_str(&prefix(
+        "[command]/usr/local/bin/npx --no-install wrangler --version",
+    ));
+    out.push_str(&prefix(
+        "[command]/usr/local/bin/npx wrangler pages deploy dist --project-name=orbit-website --branch=main --commit-hash=a93caa13890764380e184d996fa709b1bcbe278c",
+    ));
     out.push_str(&prefix(&wrangler_error));
-    out.push_str(&prefix(&format!(
-        "    - Missing top-level field \"name\" in configuration file. {detail}"
-    )));
+    out.push_str(&prefix(&format!("    - {detail}")));
     out.push_str(&prefix(
         "##[error]The process '/usr/local/bin/npx' failed with exit code 1",
     ));
@@ -1695,7 +1700,7 @@ fn wrangler_error_outranks_generic_npx_process_failed() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let missing_name = orb_11513_style_wrangler_log(
         "Running configuration file validation for Pages",
-        "Pages requires the name of your project.",
+        "Missing top-level field \"name\" in configuration file.",
     );
     let missing_pages = orb_11513_style_wrangler_log(
         "Failed to publish your Function",

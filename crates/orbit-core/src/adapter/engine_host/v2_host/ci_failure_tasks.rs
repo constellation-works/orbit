@@ -803,7 +803,7 @@ struct FailureCluster {
 impl FailureCluster {
     fn duplicate_candidate(&self) -> DuplicateCandidate {
         let exact_tag = format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", self.failure_key);
-        let fingerprints = if self.signature_is_step_fallback {
+        let mut fingerprints = if self.signature_is_step_fallback {
             // A step-name fallback contains no diagnostic. It is sufficient
             // for exact-key idempotency but too weak for broader free-text
             // coverage, where it could suppress an unrelated failure of the
@@ -823,6 +823,25 @@ impl FailureCluster {
                 ],
             )]
         };
+        if !self.signature_is_step_fallback {
+            if let Some(command) = specific_command_from_log(&self.log_excerpt) {
+                for diagnostic in specific_error_anchors(&self.log_excerpt, &self.signature)
+                    .into_iter()
+                    .take(3)
+                {
+                    fingerprints.push(CoverageFingerprint::new(
+                        "ci_failure_error_and_command",
+                        vec![
+                            CoverageAnchor::new("specific_error", diagnostic),
+                            CoverageAnchor::new("command", command.clone()),
+                        ],
+                    ));
+                }
+            }
+            if let Some(fingerprint) = source_identity_fingerprint(&self.runs) {
+                fingerprints.push(fingerprint);
+            }
+        }
         DuplicateCandidate::new(exact_tag, fingerprints)
     }
 
@@ -1262,6 +1281,231 @@ fn tested_commit(failure: &Value) -> String {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .unwrap_or_default()
+}
+
+fn source_identity_fingerprint(runs: &[Value]) -> Option<CoverageFingerprint> {
+    let run = runs.first()?;
+    let run_id = value_string(run, "run_id");
+    let job_id = value_string(run, "job_id");
+    if run_id.is_empty() || job_id.is_empty() {
+        return None;
+    }
+    Some(CoverageFingerprint::new(
+        "ci_failure_source_identity",
+        vec![
+            CoverageAnchor::new("run_id", run_id),
+            CoverageAnchor::new("job_id", job_id),
+        ],
+    ))
+}
+
+/// Distinctive diagnostic lines a manual repair brief can quote without
+/// generated `workflow` / `failing job` / `failing step` labels.
+fn specific_error_anchors(log: &str, signature: &str) -> Vec<String> {
+    let mut anchors: Vec<String> = Vec::new();
+    let mut push = |value: &str| {
+        let Some(normalized) = specific_error_text(value) else {
+            return;
+        };
+        if !anchors
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&normalized))
+        {
+            anchors.push(normalized);
+        }
+    };
+    push(signature);
+    for (kind, line) in classify_log_lines(log) {
+        if !matches!(
+            kind,
+            LineKind::ConcreteDiagnostic
+                | LineKind::ErrorAnnotated
+                | LineKind::Marker
+                | LineKind::Content
+        ) {
+            continue;
+        }
+        push(&strip_ansi_sequences(log_payload(line)));
+    }
+    anchors
+}
+
+fn specific_error_text(value: &str) -> Option<String> {
+    let trimmed = value
+        .trim()
+        .trim_start_matches(|character: char| {
+            character == '-' || character == '*' || character.is_whitespace()
+        })
+        .trim();
+    if trimmed.chars().count() < 16 || trimmed.chars().count() > 180 {
+        return None;
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    if is_generic_trailer(&lowered)
+        || is_run_command_payload(&lowered)
+        || lowered.starts_with("[command]")
+        || (lowered.contains("added ") && lowered.contains("packages"))
+        || lowered.contains("looking for funding")
+        || lowered.contains("found 0 vulnerabilities")
+        || lowered.contains("wrangler installed")
+        || lowered.contains("logs were written")
+    {
+        return None;
+    }
+    let diagnostic = ERROR_MARKERS.iter().any(|marker| lowered.contains(marker))
+        || lowered.contains("missing")
+        || lowered.contains("not found")
+        || lowered.contains("cannot")
+        || lowered.contains("invalid")
+        || lowered.contains("expected")
+        || lowered.contains("required");
+    diagnostic.then(|| trimmed.to_string())
+}
+
+fn specific_command_from_log(log: &str) -> Option<String> {
+    let mut best = None;
+    for (kind, line) in classify_log_lines(log) {
+        let payload = log_payload(line);
+        let raw = if kind == LineKind::RunCommand {
+            run_command_body(payload)
+        } else {
+            bracket_command_body(payload)
+        };
+        let Some(raw) = raw else {
+            continue;
+        };
+        if let Some(stable) = stabilize_command(raw) {
+            best = Some(stable);
+        }
+    }
+    best
+}
+
+fn run_command_body(payload: &str) -> Option<&str> {
+    let trimmed = payload.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    const PREFIX: &str = "##[group]run ";
+    lower
+        .starts_with(PREFIX)
+        .then(|| trimmed.get(PREFIX.len()..).unwrap_or_default().trim())
+        .filter(|body| !body.is_empty())
+}
+
+fn bracket_command_body(payload: &str) -> Option<&str> {
+    let trimmed = payload.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    const PREFIX: &str = "[command]";
+    lower
+        .starts_with(PREFIX)
+        .then(|| trimmed.get(PREFIX.len()..).unwrap_or_default().trim())
+        .filter(|body| !body.is_empty())
+}
+
+fn stabilize_command(raw: &str) -> Option<String> {
+    let mut tokens = raw.split_whitespace().collect::<Vec<_>>();
+    if tokens
+        .first()
+        .is_some_and(|token| token.eq_ignore_ascii_case("[command]"))
+    {
+        tokens.remove(0);
+    }
+    while tokens
+        .first()
+        .is_some_and(|token| is_javascript_runtime_token(token))
+    {
+        tokens.remove(0);
+        if tokens.first().is_some_and(|token| {
+            matches!(*token, "--no-install" | "--yes" | "-y" | "--prefer-offline")
+        }) {
+            tokens.remove(0);
+        }
+    }
+    if tokens.is_empty() || is_install_invocation(&tokens) {
+        return None;
+    }
+    let mut kept = Vec::new();
+    let mut skip_value = false;
+    for token in tokens {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if is_volatile_command_flag(token) {
+            if !token.contains('=') {
+                skip_value = true;
+            }
+            continue;
+        }
+        kept.push(token);
+    }
+    if is_generic_command(&kept) {
+        return None;
+    }
+    Some(kept.join(" "))
+}
+
+fn is_javascript_runtime_token(token: &str) -> bool {
+    let base = token
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(token)
+        .to_ascii_lowercase();
+    matches!(base.as_str(), "npx" | "npm" | "node" | "yarn" | "pnpm")
+}
+
+fn is_install_invocation(tokens: &[&str]) -> bool {
+    matches!(
+        tokens
+            .first()
+            .map(|token| token.to_ascii_lowercase())
+            .as_deref(),
+        Some("i" | "install" | "add" | "ci")
+    )
+}
+
+fn is_volatile_command_flag(token: &str) -> bool {
+    let name = token
+        .trim_start_matches('-')
+        .split_once('=')
+        .map(|(name, _)| name)
+        .unwrap_or_else(|| token.trim_start_matches('-'));
+    matches!(
+        name,
+        "commit-hash" | "commit-message" | "commit" | "sha" | "hash"
+    )
+}
+
+fn is_generic_command(tokens: &[&str]) -> bool {
+    if tokens.is_empty() {
+        return true;
+    }
+    let joined = tokens.join(" ").to_ascii_lowercase();
+    if matches!(
+        joined.as_str(),
+        "cargo test"
+            | "cargo build"
+            | "cargo check"
+            | "cargo clippy"
+            | "cargo nextest run"
+            | "cargo llvm-cov"
+            | "npm test"
+            | "npm run build"
+            | "yarn test"
+            | "pnpm test"
+            | "npx"
+            | "node"
+            | "wrangler --version"
+            | "wrangler version"
+    ) {
+        return true;
+    }
+    let distinctive = tokens.iter().any(|token| {
+        token.contains('/')
+            || token.contains('\\')
+            || (token.starts_with("--") && token.contains('='))
+            || token.contains('@')
+    });
+    tokens.len() < 3 && !distinctive
 }
 
 /// Lines a runner emits when something breaks.

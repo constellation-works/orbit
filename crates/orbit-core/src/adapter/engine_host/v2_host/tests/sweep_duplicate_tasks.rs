@@ -5,7 +5,7 @@ use std::cell::Cell;
 use orbit_common::OrbitError;
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{Task, TaskComment, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -13,9 +13,11 @@ use crate::adapter::engine_host::v2_host::ci_failure_tasks::file_ci_failure_task
 use crate::adapter::engine_host::v2_host::dependabot_alert_tasks::file_dependabot_alert_tasks_with_lookup;
 use crate::adapter::engine_host::v2_host::duplicate_tasks::DuplicateTaskLookup;
 use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
-use crate::application::task::TaskAddParams;
+use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
-use super::ci_failure_tasks::{failure, filed_task_ids, snapshot as ci_snapshot};
+use super::ci_failure_tasks::{
+    failure, filed_task_ids, orb_11513_style_wrangler_log, snapshot as ci_snapshot,
+};
 use super::dependabot_alert_tasks::{
     alert, code_alert, expanded_snapshot, file as file_security, snapshot as security_snapshot,
 };
@@ -89,6 +91,14 @@ impl DuplicateTaskLookup for FailingBroadLookup<'_> {
     fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
         Err(injected_lookup_error())
     }
+
+    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+        self.runtime.get_task(task_id)
+    }
+
+    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+        self.runtime.get_task_comments(task_id)
+    }
 }
 
 struct FailingSecondBroadLookup<'a> {
@@ -109,6 +119,36 @@ impl DuplicateTaskLookup for FailingSecondBroadLookup<'_> {
         } else {
             Err(injected_lookup_error())
         }
+    }
+
+    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+        self.runtime.get_task(task_id)
+    }
+
+    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+        self.runtime.get_task_comments(task_id)
+    }
+}
+
+struct FailingCommentsLookup<'a> {
+    runtime: &'a OrbitRuntime,
+}
+
+impl DuplicateTaskLookup for FailingCommentsLookup<'_> {
+    fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
+        self.runtime.list_tasks_by_tags(tags)
+    }
+
+    fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
+        self.runtime.list_tasks()
+    }
+
+    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+        self.runtime.get_task(task_id)
+    }
+
+    fn get_task_comments(&self, _task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+        Err(injected_lookup_error())
     }
 }
 
@@ -461,4 +501,240 @@ fn manual_repairs_dedupe_complete_findings_while_gaps_stay_visible() {
         json!(33_900_000_001_u64),
         "the starved candidate is still owed: {output}"
     );
+}
+
+/// Natural prose from the live ORB-11511 brief: specific Wrangler diagnostic,
+/// deploy command, commit, and config path, without generated CI labels.
+fn orb_11511_manual_brief() -> &'static str {
+    "The user reports website publication failing on 2026-09-07 for commit \
+     a93caa13890764380e184d996fa709b1bcbe278c. \
+     cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 installs \
+     Wrangler 4.129.0 and runs `wrangler pages deploy dist \
+     --project-name=orbit-website --branch=main \
+     --commit-hash=a93caa13890764380e184d996fa709b1bcbe278c`. It exits 1 during \
+     Pages configuration validation: `Missing top-level field \"name\" in \
+     configuration file.` No CI run URL was supplied. Local source inspection \
+     confirms website/wrangler.toml contains only compatibility_date and \
+     pages_build_output_dir."
+}
+
+fn website_wrangler_log() -> String {
+    orb_11513_style_wrangler_log(
+        "Running configuration file validation for Pages",
+        "Missing top-level field \"name\" in configuration file.",
+    )
+}
+
+fn website_wrangler_evidence() -> Value {
+    ci_snapshot(vec![failure(
+        10,
+        "Website",
+        "Publish to Cloudflare Pages",
+        "Deploy static site",
+        &website_wrangler_log(),
+        "a93caa13890764380e184d996fa709b1bcbe278c",
+    )])
+}
+
+#[test]
+fn manual_wrangler_brief_covers_the_same_incident_without_generated_labels_or_tag_mutation() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let task_id = seed_manual_task(
+        &runtime,
+        "Fix website Pages deployment failing on missing Wrangler project name",
+        orb_11511_manual_brief(),
+        TaskStatus::InProgress,
+    );
+    let before = runtime.get_task(&task_id).expect("covering task");
+    assert!(
+        !before
+            .description
+            .to_ascii_lowercase()
+            .contains("failing job")
+            && !before
+                .description
+                .to_ascii_lowercase()
+                .contains("failing step"),
+        "fixture must stay natural prose"
+    );
+    assert!(before.tags.is_empty(), "covering task must stay untagged");
+
+    let output = file_ci(&runtime, website_wrangler_evidence());
+
+    assert_eq!(output["filed_count"], json!(0), "{output}");
+    assert_eq!(output["skipped_existing"][0]["task_id"], task_id);
+    assert_eq!(
+        output["skipped_existing"][0]["match_kind"],
+        "material_coverage"
+    );
+    assert_eq!(
+        output["skipped_existing"][0]["match_evidence"]["fingerprint"],
+        "ci_failure_error_and_command"
+    );
+    let after = runtime
+        .get_task(&task_id)
+        .expect("covering task after sweep");
+    assert_eq!(after.tags, before.tags);
+    assert_eq!(after.description, before.description);
+    assert_eq!(after.title, before.title);
+}
+
+#[test]
+fn shared_workflow_generic_npx_or_same_file_do_not_suppress_unrelated_failures() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    seed_manual_task(
+        &runtime,
+        "Website workflow failed because npx exited 1",
+        "The Website workflow's Publish job failed when npx exited 1. \
+         website/wrangler.toml is the Pages config and should be inspected, \
+         but this brief does not quote a missing name field or the deploy command.",
+        TaskStatus::Backlog,
+    );
+
+    let output = file_ci(&runtime, website_wrangler_evidence());
+
+    assert_eq!(output["filed_count"], json!(1), "{output}");
+    assert_eq!(output["skipped_existing"], json!([]));
+}
+
+#[test]
+fn a_done_manual_repair_does_not_hide_a_later_recurrence() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    seed_manual_task(
+        &runtime,
+        "Fix website Pages deployment failing on missing Wrangler project name",
+        orb_11511_manual_brief(),
+        TaskStatus::Done,
+    );
+
+    let output = file_ci(&runtime, website_wrangler_evidence());
+
+    assert_eq!(output["filed_count"], json!(1), "{output}");
+    assert_eq!(output["skipped_existing"], json!([]));
+}
+
+#[test]
+fn rejected_exact_key_comment_reuses_one_open_covering_owner() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let owner_id = seed_manual_task(
+        &runtime,
+        "Fix website Pages deployment failing on missing Wrangler project name",
+        "Repair the Pages project name. This brief deliberately omits the \
+         Wrangler diagnostic and deploy command so coverage must come from \
+         the rejected duplicate comment.",
+        TaskStatus::InProgress,
+    );
+    let first = file_ci(&runtime, website_wrangler_evidence());
+    assert_eq!(first["filed_count"], json!(1), "{first}");
+    let filed_id = filed_task_ids(&first).remove(0);
+    runtime
+        .update_task(
+            &filed_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Rejected),
+                comment: Some(format!(
+                    "Duplicate of active {owner_id}: both cite the same Website Pages failure."
+                )),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("reject as duplicate");
+
+    let output = file_ci(&runtime, website_wrangler_evidence());
+
+    assert_eq!(output["filed_count"], json!(0), "{output}");
+    assert_eq!(output["skipped_existing"][0]["task_id"], owner_id);
+    assert_eq!(
+        output["skipped_existing"][0]["match_kind"],
+        "confirmed_duplicate"
+    );
+    assert_eq!(
+        output["skipped_existing"][0]["match_evidence"]["fingerprint"],
+        "rejected_duplicate_comment"
+    );
+    let owner = runtime.get_task(&owner_id).expect("covering owner");
+    assert!(
+        owner.tags.is_empty(),
+        "confirmed duplicate must not tag the owner"
+    );
+}
+
+#[test]
+fn rejected_exact_key_without_covering_owner_or_with_done_owner_stays_visible() {
+    for (comment, owner_status) in [
+        (
+            Some("Won't fix; this is an infrastructure flake.".to_string()),
+            None,
+        ),
+        (
+            Some("Duplicate of active {owner}: preserve the rejected evidence.".to_string()),
+            Some(TaskStatus::Done),
+        ),
+    ] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let comment = match owner_status {
+            Some(status) => {
+                let owner_id = seed_manual_task(
+                    &runtime,
+                    "Fix website Pages deployment failing on missing Wrangler project name",
+                    "Repair the Pages project name without quoting the diagnostic.",
+                    status,
+                );
+                comment.map(|template| template.replace("{owner}", &owner_id))
+            }
+            None => comment,
+        };
+        let first = file_ci(&runtime, website_wrangler_evidence());
+        assert_eq!(first["filed_count"], json!(1), "{first}");
+        let filed_id = filed_task_ids(&first).remove(0);
+        runtime
+            .update_task(
+                &filed_id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::Rejected),
+                    comment,
+                    ..TaskUpdateParams::default()
+                },
+            )
+            .expect("reject filed task");
+
+        let output = file_ci(&runtime, website_wrangler_evidence());
+        assert_eq!(
+            output["filed_count"],
+            json!(1),
+            "closed or unlinked rejected history must not suppress: {output}"
+        );
+    }
+}
+
+#[test]
+fn confirmed_duplicate_comment_lookup_failure_is_redacted_retryable_and_writes_nothing() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let first = file_ci(&runtime, website_wrangler_evidence());
+    let filed_id = filed_task_ids(&first).remove(0);
+    runtime
+        .update_task(
+            &filed_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Rejected),
+                comment: Some(
+                    "Duplicate of active ORB-11511: retain provenance until lookup works."
+                        .to_string(),
+                ),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("reject filed task");
+    let before = runtime.list_tasks().expect("list tasks").len();
+
+    let error = file_ci_failure_tasks_with_lookup(
+        &runtime,
+        &json!({"ci_evidence": website_wrangler_evidence()}),
+        &FailingCommentsLookup { runtime: &runtime },
+    )
+    .expect_err("comment lookup failure must fail closed")
+    .to_string();
+
+    assert_retryable_redacted_lookup_error(&error);
+    assert_eq!(runtime.list_tasks().expect("list tasks").len(), before);
 }
