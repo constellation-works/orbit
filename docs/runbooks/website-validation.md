@@ -239,6 +239,17 @@ who currently owns the external account, which project owns the custom domain,
 or that repository secrets exist. Do not create a project, rotate or invent
 credentials, or edit DNS as part of website publication.
 
+Wrangler's Pages configuration validation still requires a top-level `name`, so
+`website/wrangler.toml` keeps `name = "orbit-website"`. Treat that value as a
+validation placeholder rather than the deployment target: the publish job always
+passes `--project-name` from the protected `CLOUDFLARE_PAGES_PROJECT` variable,
+which overrides the configured name, so the project still comes from the
+environment instead of the repository. Deleting the field to avoid restating an
+untrusted name breaks publication rather than hardening it. ORB-11379 removed it
+in commit `86d48ebd212a9a7d6f2f36ae25312f6e81e11105` (PR #1425), and `main`
+publication then failed Pages configuration validation with `Missing top-level
+field "name" in configuration file` until ORB-11511 restored it.
+
 ORB-11379 recorded the publication gap on 2026-09-06:
 
 - `.github/workflows/website.yml` had only a pull-request build trigger and no

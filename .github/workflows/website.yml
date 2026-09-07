@@ -53,7 +53,8 @@ jobs:
         run: |
           set -euo pipefail
           test -f dist/_headers
-          grep -Fx 'Strict-Transport-Security: max-age=31536000' dist/_headers
+          # ORB-11461 / e2454bcb0: Cloudflare emits the policy with indentation.
+          grep -E '^[[:space:]]*Strict-Transport-Security: max-age=31536000$' dist/_headers
 
       - name: Attach publication provenance
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
