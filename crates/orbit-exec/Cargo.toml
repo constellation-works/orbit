@@ -25,3 +25,6 @@ libc.workspace = true
 # state the environment they reason about instead of inheriting the shell.
 orbit-common = { path = "../orbit-common", features = ["test-util"] }
 regex.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true
