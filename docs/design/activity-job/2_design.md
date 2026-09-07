@@ -3,8 +3,8 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-09-06
-last_validated: 2026-09-06
+last_updated: 2026-09-07
+last_validated: 2026-09-07
 status: Draft
 feature: activity-job
 doc_role: design
@@ -242,7 +242,25 @@ After [ORB-10232], `task_pr_pipeline` exposes the PR handoff as ordered durable 
 
 After [ORB-10380] / [Pipeline steps consume a base commit pinned at worktree setup, never a moving ref name](./4_decisions.md#pipeline-steps-consume-a-base-commit-pinned-at-worktree-setup-never-a-moving-ref-name), the base a run was created at is a pinned commit, not a name. `worktree_setup` resolves its start point once, creates the worktree at that commit, and emits `base_sha` alongside `base_ref`; both task pipelines pass `base_sha` into `commit`. After [ORB-10519] / [Workflow alone creates shipment commits while dirty failures remain recoverable](./4_decisions.md#workflow-alone-creates-shipment-commits-while-dirty-failures-remain-recoverable), `commit` rejects a ref name in `input.base_sha` and compares the resolved immutable commit directly with HEAD without traversing provider-created history. A mismatch is a typed `worktree_head_changed` failure; the provider boundary should already have rejected it. [No-diff-expected tasks bypass repository change gates](../auto-tasks/4_decisions.md#no-diff-expected-tasks-bypass-repository-change-gates)'s `no-diff-expected` carve-out remains reachable before changed-HEAD and empty-stage failures, and no failure path stages or resets another checkout. `base_ref` still flows as the moving name to `sync_base` and `pr_open`, which remain the reconciliation with a base that moved.
 
-After [ORB-11456] / [Resumed shipment accepts only its durable Orbit preservation commit](./4_decisions.md#resumed-shipment-accepts-only-its-durable-orbit-preservation-commit), a successful terminal `pr_failure_handoff` is checkpointed separately from successful steps. Its output records the task, handoff run, reused worktree owner, original base, exact preserved HEAD, and whether the hook itself created that commit. Before a resumed implementation runs, the executor compares the checkout with the unchanged worktree `base_sha`. A moved HEAD is accepted only when the task still belongs to the checkpoint owner, the active run descends from the handoff run, the source run's immutable state contains the exact same evidence, and HEAD equals the recorded Orbit-created preservation commit. `git_commit` repeats those checks against the active and source run states before staging. Missing evidence, an unrelated retry, changed task ownership, or any later commit fails without changing HEAD, the index, or worktree files. The original base remains the delivery base and the preservation commit remains in history, so resumed edits become one new workflow-authored commit on top of it and `pr_open` reuses the failure-handoff PR.
+After [ORB-11456] / [Resumed shipment accepts only its durable Orbit preservation commit](./4_decisions.md#resumed-shipment-accepts-only-its-durable-orbit-preservation-commit), a successful terminal `pr_failure_handoff` is checkpointed separately from successful steps. Its output records the task, handoff run, reused worktree owner, original base, exact preserved HEAD, and whether the hook itself created that commit. Before a resumed implementation runs, the executor compares the checkout with the unchanged worktree `base_sha`. A moved HEAD is accepted only when the task still belongs to the checkpoint owner, the active run descends from the handoff run, the source run's immutable state contains the exact same evidence, and HEAD equals either the hook-created preservation commit or the source run's successful workflow commit recorded at that same handoff HEAD. `git_commit` repeats those checks against the active and source run states before staging. Missing evidence, an unrelated retry, changed task ownership, or any later commit fails without changing HEAD, the index, or worktree files. The original base remains the delivery base and the preservation commit remains in history, so resumed edits become one new workflow-authored commit on top of it and `pr_open` reuses the failure-handoff PR.
+
+After [ORB-11493], a resumed `task_pr_pipeline` may replace one stale
+`prepare_branch` checkpoint when its authenticated terminal handoff says
+`sync_base` failed. The executor first proves the exact candidate HEAD, branch,
+task owner, PR number, immutable source checkpoint, and retry lineage. It then
+reruns only `prepare_branch`; implementation and commit remain successful
+checkpoints and are not replayed. The descendant run's new preparation output
+records `resume_refresh` with the handoff run, previous base SHA, attempt, and
+limit, while the source run retains its original checkpoint unchanged. The
+ordinary `git_rebase` boundary consumes the fresh pin, so a real conflict still
+reaches the existing one-shot `pr_conflict_recovery` path and later steps reuse
+the same branch and PR. One preparation refresh is allowed. A later
+`sync_base` failure carrying an already-refreshed checkpoint stops with
+`resume_checkpoint_refresh_exhausted`; changed candidate or PR identity,
+changed/live ownership, unrelated lineage, inconsistent downstream success,
+and absent evidence stop earlier. Cancellation admission and the explicit
+completion authorization remain owned by their existing Core and `pr_complete`
+gates; checkpoint refresh cannot grant either.
 
 The provider boundary now admits only worktree-file changes from an implementation provider. Any assigned HEAD or branch movement is a typed `worktree_content_conflict` regardless of commit count, message trailers, or changed paths; Orbit does not try to prove that provider history belongs to the task. `git_commit` stages the task worktree diff, creates exactly one workflow-owned commit, and returns that SHA. It never enumerates or adopts commits above the pinned base, parses `Agent-*` trailers, or validates a commit against `context_files`.
 
@@ -251,6 +269,18 @@ The provider boundary now admits only worktree-file changes from an implementati
 After [ORB-10363], `JobV2.failure_activity` is a terminal, best-effort hook distinct from retry recovery. It receives the merged job input, all completed pipeline checkpoints, the failing step/action, and the structured error; it runs once and never replaces the original failure. `task_pr_pipeline` binds this hook to `pr_failure_handoff` ([Terminal PR shipment uses a job-level failure handoff](./4_decisions.md#terminal-pr-shipment-uses-a-job-level-failure-handoff)). When [ORB-11281]'s bounded conflict repair fails or its deterministic retry still conflicts, this action aborts the stopped rebase back to the prepared branch, commits any remaining candidate, performs non-overwriting push classification, and opens or reuses the same blocked PR. Its body retains original/target SHAs and conflicting paths, and the task stays `blocked` with `pr_conflict_blocked`; it never restarts implementation or loops recovery. A successful recovery continues the original run through push, PR open/reuse, and review promotion. If that run carried `completion: done`, the unchanged verified-merge checkpoint retains the authorization and moves the task to `done` only after GitHub reports the same PR merged.
 
 The preserved live ORB-11472 / PR1478 incident is an installed-runtime follow-up, not validation performed by [ORB-11488]. After this change is merged to `agent-main` and that build is installed on the owning host, first verify `orbit run show jrun-20260907-0339-14 --json` still names ORB-11472 and its preserved worktree/branch, and verify `gh pr view 1478 --json number,state,mergeStateStatus,headRefName,baseRefName` still reports the same open candidate. Then run `orbit job resume jrun-20260907-0339-14 --json` and retain the returned descendant run ID. Resume reuses successful publication and promotion checkpoints but resolves the current `complete_pr` definition, so the installed typed recovery path—not a blind retry of the old failed process—must perform any repair. Finally, verify the descendant run succeeded, PR1478 is `MERGED`, ORB-11472 is `done`, and its task branch was updated once rather than replaced by a new branch or PR. Until those host-side checks are recorded, source tests establish the recovery mechanism only; they do not establish that PR1478 recovered live.
+
+The ORB-11479 / PR1481 stale-`sync_base` incident likewise remains an
+installed-runtime verification target for [ORB-11493]. The observed deployed
+revision was `21b64aac2987379660b802aa741514e230e16f62` (executable SHA-256
+`87ad10a1b0a123a0635758c45efc9e5740efc203060c7d970330c8bb2fcc097d`), and
+the preserved source is `jrun-20260907-0341-12` through failed resume
+`jrun-20260907-0504`. After an ORB-11493 build is installed, verify those runs,
+the preserved branch, and PR1481 still agree before resuming the failed run.
+The descendant must show a new `prepare_branch.resume_refresh`, enter typed
+conflict recovery if Git proves unmerged entries, reuse PR1481, and complete
+only under its retained `completion: done` authority. Source tests do not prove
+that host-side recovery, so it remains required after delivery.
 
 After [ORB-10385] / [The runtime reports its deterministic-action registry, and job validation gates on it](./4_decisions.md#the-runtime-reports-its-deterministic-action-registry-and-job-validation-gates-on-it), a job's reachable deterministic actions are checked against the executing runtime before its first step runs. `RuntimeHost::has_deterministic_action` reports the shared typed registry; `validate_job_deterministic_actions` walks the job's `recovery_activity`, `failure_activity`, every step's `recovery_activity`, and every resolved deterministic target (recursing through `parallel:`, `fan_out:`, and `loop:`) and fails the run with `DeterministicActionUnavailable` naming both the activity and the action. Because the check runs inside `execute_job_with_resume` ahead of step one, the run never reaches `worktree_setup`, so no task is admitted and no worktree is created. Unknown actions are never skipped, and the default trait implementation reports `true`, so a host that cannot enumerate its registry keeps surfacing the miss at dispatch. The gate does not weaken the failure hook: an action that becomes unavailable after admission still leaves the original failed-step error authoritative.
 
@@ -850,6 +880,7 @@ Read-only history does not need the same dependencies as live execution. [T20260
 
 - **[ORB-11281]** — Route only typed task-PR rebase conflicts to one system-crew leaf, retry the same checkpoint once, preserve stale-base races, and retain normal review or authorized verified-completion gates.
 - **[ORB-11488]** — Reuse that bounded pinned-rebase recovery when an already-published PR becomes `DIRTY` during authorized completion, with exact branch/PR leases and no protection or auth bypass.
+- **[ORB-11493]** — Refresh one authenticated stale `prepare_branch` checkpoint on preserved-candidate resume, retain source/descendant provenance, and reuse the bounded conflict-recovery and same-PR delivery tail.
 - **[ORB-10770]** — Type the protocol schema's `error` as an object omitted on success, and accept the JSON string `"null"` as absent `error` so a completed Claude structured-output wrapper still counts as an envelope (see [§7.6b](#76b-structured-output-is-the-claude-prevention-layer)).
 - **[ORB-10746]** — Enforce the Orbit response envelope through Claude CLI structured output (`--json-schema`), read `structured_output` as the authoritative extraction source, and map abnormal exit-0 endings to a specific failed-envelope diagnostic (see [§7.6b](#76b-structured-output-is-the-claude-prevention-layer)).
 - **[ORB-10606]** — Supply the complete reviewer worktree pair and distinguish review startup failure from a reviewer rejection at the parent and task-history boundaries ([Classify independent-review startup separately from reviewer rejection](./4_decisions.md#classify-independent-review-startup-separately-from-reviewer-rejection)).
