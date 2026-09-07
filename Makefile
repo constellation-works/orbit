@@ -135,6 +135,7 @@ ci-fast:
 	./scripts/sync-plugin-skills.sh --check
 	./scripts/test-validate-codex-plugin.sh
 	./scripts/test-validate-agent-plugin.sh
+	./scripts/test-cursor-marketplace-followup.sh
 	./scripts/smoke-plugin-install.sh
 	./scripts/test-compiler-cache.sh
 

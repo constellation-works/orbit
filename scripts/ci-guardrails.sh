@@ -48,4 +48,5 @@ fi
 "$repo_root/scripts/sync-plugin-skills.sh" --check
 "$repo_root/scripts/test-validate-codex-plugin.sh"
 "$repo_root/scripts/test-validate-agent-plugin.sh"
+"$repo_root/scripts/test-cursor-marketplace-followup.sh"
 "$repo_root/scripts/smoke-plugin-install.sh"
