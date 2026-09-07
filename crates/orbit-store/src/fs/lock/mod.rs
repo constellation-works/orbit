@@ -71,7 +71,7 @@ impl Default for LockOptions {
 pub(crate) struct FileLockGuard {
     // Held purely for its Drop side effect: closing the file releases the
     // `flock`. Named with a leading underscore so dead-code analysis does not
-    // flag the never-read field (mirrors `SignalHandlerGuard::_lock`).
+    // flag the never-read field.
     _file: File,
 }
 

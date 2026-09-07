@@ -4,7 +4,7 @@ type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
 last_updated: 2026-09-06
-last_validated: 2026-09-06
+last_validated: 2026-09-07
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -276,7 +276,7 @@ requires no new ADR.
 
 `process_group_is_alive` uses `killpg(pid, 0)`, treats `ESRCH` as "all gone," and treats other errno values as "still alive" so cleanup errs toward SIGKILL.
 
-`SignalHandlerGuard` is RAII: install acquires a global `Mutex`, creates a pipe, swaps in handlers, and stores prior `sigaction` structs; Drop restores handlers, closes the pipe, and releases the mutex. The handler performs only an atomic load plus one-byte `write`, both async-signal-safe.
+`SignalHandlerGuard` is RAII and refcounted: the first live waiter installs SIGINT/SIGTERM handlers and snapshots the previous `sigaction` structs; the last drop restores them. A process-wide mutex covers only that install/drop critical section, so concurrent `run_process` waits overlap. Each waiter registers its child's pgid in a lock-free table and snapshots a signal generation counter. The handler is async-signal-safe: it stores the signal, increments the generation, and `killpg`s every registered group. Waiters that miss a slot still observe the generation counter on the next poll and run the ordinary termination path.
 
 Non-Unix builds use a fallback `terminate_process_group` that just calls `child.kill().ok(); child.wait().ok();` — process-group semantics do not apply on Windows, so orphan reaping is best-effort.
 
@@ -348,7 +348,7 @@ asserts 100 collision-free dense IDs per artifact kind ([ORB-10596]).
 10. **Glob syntax is narrow.** Character classes, brace expansion, and POSIX bracket expressions are unsupported.
 11. **Policy result shapes are parallel.** `PolicyDecision` and `FsPolicyEvaluation` have no bridge for future non-fs evaluators.
 12. **Empty rule sets are safe but opaque.** A profile with only deny rules reports `matched_rule = "[]"`, not the matching deny rule.
-13. **Signal handling is process-global.** `SignalHandlerGuard` serializes installs with a global `Mutex`, which constrains future worker-pool exec.
+13. **Signal handling is process-global.** SIGINT/SIGTERM dispositions are shared across concurrent waits (refcounted install, lock-free pgid fan-out). A waiter that cannot claim a pgid slot still terminates from the generation counter within one poll interval.
 14. **Workspace canonicalization errors collapse to denial.** A missing workspace root can surface as `PolicyDenied("path is outside workspace")` rather than a clearer root-missing error.
 
 ---

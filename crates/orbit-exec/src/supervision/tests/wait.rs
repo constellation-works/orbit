@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use orbit_common::process::output_capture::OUTPUT_TRUNCATED_MARKER;
 
-use super::super::wait::wait_with_timeout_and_output_limit;
+use super::super::wait::{WaitResult, wait_with_timeout_and_output_limit};
 use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
 
 #[cfg(unix)]
@@ -84,4 +84,47 @@ fn capture_limit_kill_names_its_reason_on_stderr() {
         "stderr was {stderr:?}"
     );
     assert!(result.stdout.ends_with(OUTPUT_TRUNCATED_MARKER));
+}
+
+/// Concurrent supervisors must overlap: the process-wide signal-handler
+/// mutex used to be held for each child's entire lifetime, so two `sleep 1`
+/// waits from two threads took ~2 s instead of ~1 s.
+#[cfg(unix)]
+#[test]
+fn concurrent_supervised_sleeps_overlap() {
+    let started = Instant::now();
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| supervise_sleep("1"));
+        let second = scope.spawn(|| supervise_sleep("1"));
+        let first = first
+            .join()
+            .expect("first supervisor thread")
+            .expect("first wait");
+        let second = second
+            .join()
+            .expect("second supervisor thread")
+            .expect("second wait");
+        assert!(first.exit_success, "first sleep should exit 0");
+        assert!(second.exit_success, "second sleep should exit 0");
+    });
+    assert!(
+        started.elapsed() < Duration::from_millis(1_500),
+        "concurrent sleep 1 children serialized: {:?}",
+        started.elapsed()
+    );
+}
+
+#[cfg(unix)]
+fn supervise_sleep(seconds: &str) -> Result<WaitResult, orbit_common::OrbitError> {
+    let req = ExecRequest {
+        program: "/bin/sleep".to_string(),
+        args: vec![seconds.to_string()],
+        current_dir: None,
+        timeout_ms: Some(5_000),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::Inherit,
+        debug: false,
+    };
+    let child = crate::process::spawn(&req).expect("spawn child");
+    wait_with_timeout_and_output_limit(child, Some(5_000), false, None, 64)
 }
