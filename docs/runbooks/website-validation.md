@@ -154,6 +154,19 @@ export PREVIEW_URL="http://127.0.0.1:$PREVIEW_PORT"
 curl --fail --silent --show-error "$PREVIEW_URL/" >/dev/null
 ```
 
+For security.txt changes, validate both the source and generated static asset:
+
+```bash
+npm --prefix "$REPO/website" run validate:security-txt -- public/.well-known/security.txt
+npm --prefix "$REPO/website" run validate:security-txt -- dist/.well-known/security.txt
+```
+
+The validator rejects missing or malformed RFC 9116 fields, invalid or expired
+`Expires`, non-HTTPS `Contact`/`Policy` URIs, an incorrect `Canonical`, invalid
+UTF-8, and HTML fallback content. The Orbit maintainers own renewal: review the
+file before its `Expires` timestamp and renew it annually. A local build proves
+only that the asset is packaged; it does not prove public publication.
+
 Launch Chromium through the staged Playwright package at both representative desktop and
 mobile sizes. The following smoke check records HTTP status, heading, rendered text length,
 console/page errors, and horizontal overflow; extend `PAGES` with the routes changed by the
@@ -283,6 +296,22 @@ second redirect mechanism to the site.
    `https://orbit-cli.com/getting-started/install/`. Fetch
    `https://orbit-cli.com/deployment.json` and compare `sourceRevision` with the
    workflow's `github.sha` before declaring publication successful.
+
+For the security document, independently check the canonical endpoint after the
+production workflow succeeds:
+
+```bash
+curl --fail --show-error --silent --dump-header /tmp/security-txt.headers \
+  https://orbit-cli.com/.well-known/security.txt
+grep -Eiq '^content-type:[[:space:]]*text/plain(?:;|$)' /tmp/security-txt.headers
+```
+
+Then rerun the security scan. A 404, HTML response, stale `Expires`, or failed
+scan remains an external publication issue until the exact `main` artifact is
+published and verified. The production workflow performs the same status,
+`text/plain`, and body validation against both the deployment URL and the
+custom domain. Do not treat the local `dist/.well-known/security.txt` check as
+public deployment evidence.
 
 If the workflow has not yet reached `main`, the exact existing project mapping
 has not been confirmed, or the environment credentials are missing or invalid,

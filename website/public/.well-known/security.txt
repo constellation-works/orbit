@@ -1,0 +1,4 @@
+Contact: https://github.com/constellation-works/orbit/security/advisories/new
+Expires: 2027-09-07T00:00:00Z
+Canonical: https://orbit-cli.com/.well-known/security.txt
+Policy: https://github.com/constellation-works/orbit/blob/main/SECURITY.md
