@@ -198,6 +198,22 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::settle_step_recovery(self, run_id, step_id, elapsed_seconds)
     }
 
+    fn validate_step_recovery_mutation(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        task_ids: &[String],
+        workspace_path: &std::path::Path,
+    ) -> Result<(), OrbitError> {
+        OrbitRuntime::validate_step_recovery_mutation(
+            self,
+            run_id,
+            step_id,
+            task_ids,
+            workspace_path,
+        )
+    }
+
     fn authorize_task_completion(
         &self,
         run_id: &str,

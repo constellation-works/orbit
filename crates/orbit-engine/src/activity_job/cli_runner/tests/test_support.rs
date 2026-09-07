@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use orbit_common::test_fixtures::TEST_CODEX_MODEL;
+use orbit_common::{OrbitError, test_fixtures::TEST_CODEX_MODEL};
 
-use crate::context::{CrewConfig, ResolvedActivityTools};
+use crate::context::{CrewConfig, ResolvedActivityTools, StepRecoveryAdmission};
 use orbit_agent::loop_engine::audit::{AuditSink, LoopAuditEvent};
 use orbit_common::observability::logging::RedactingFields;
 #[cfg(target_os = "macos")]
@@ -293,6 +293,42 @@ impl RuntimeHost for TestHost {
 
     fn task_context_for_agent_input(&self, _input: &Value) -> Result<Option<Value>, DispatchError> {
         Ok(self.task_context.clone())
+    }
+
+    fn validate_step_recovery_mutation(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _task_ids: &[String],
+        _workspace_path: &Path,
+    ) -> Result<(), OrbitError> {
+        match self
+            .task_context
+            .as_ref()
+            .and_then(|context| context.get("recovery_mutation_denied"))
+            .and_then(Value::as_str)
+        {
+            Some(reason) => Err(OrbitError::Execution(reason.to_string())),
+            None => Ok(()),
+        }
+    }
+
+    fn authorize_step_recovery(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+    ) -> Result<StepRecoveryAdmission, OrbitError> {
+        match self
+            .task_context
+            .as_ref()
+            .and_then(|context| context.get("recovery_authorization_denied"))
+            .and_then(Value::as_str)
+        {
+            Some(reason) => Ok(StepRecoveryAdmission::Denied {
+                reason: reason.to_string(),
+            }),
+            None => Ok(StepRecoveryAdmission::Allowed),
+        }
     }
 
     fn resolve_activity_tools(

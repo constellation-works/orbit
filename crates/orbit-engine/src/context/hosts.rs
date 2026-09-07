@@ -244,6 +244,20 @@ pub trait RuntimeHost: Send + Sync {
     ) -> Result<(), OrbitError> {
         Ok(())
     }
+    /// Revalidate the live owner immediately before a recovery hook asks the
+    /// host process to mutate Git metadata. Agent subprocesses cannot confer
+    /// this authority through their response payload.
+    fn validate_step_recovery_mutation(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _task_ids: &[String],
+        _workspace_path: &Path,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability(
+            "validate_step_recovery_mutation",
+        ))
+    }
     /// Recheck the run's authority immediately before the guarded
     /// `review -> done` transition. An error refuses completion.
     fn authorize_task_completion(

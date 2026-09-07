@@ -111,7 +111,7 @@ pub fn run_cli_backend(
     audit.emit_lossy(V2AuditEventKind::ToolAllowlistHarnessDelegated {
         provider: provider.clone(),
         task_id: task_id.map(ToOwned::to_owned),
-        task_ids,
+        task_ids: task_ids.clone(),
         requested_tools: activity_tools.requested_tools.clone(),
         effective_tools: activity_tools.effective_tools.clone(),
         tools: activity_tools.effective_tools.clone(),
@@ -451,7 +451,12 @@ pub fn run_cli_backend(
         Ok(result) => result,
         Err(err) => {
             if let Some(boundary) = worktree_boundary.take() {
-                boundary.verify()?;
+                boundary.verify_after_provider(
+                    host,
+                    false,
+                    input.get("failed_step_id").and_then(Value::as_str),
+                    &task_ids,
+                )?;
             }
             // Spawn-layer classification (ORB-10006): executable missing /
             // permission denied fail fast; resource exhaustion (EAGAIN,
@@ -487,14 +492,6 @@ pub fn run_cli_backend(
         harness_version: None,
         timed_out,
     });
-
-    // Verify the write boundary after recording the terminal provider event
-    // but before its success/failure classification can reach the DAG. The
-    // integrity error deliberately takes precedence over exit zero, nonzero,
-    // and timeout outcomes.
-    if let Some(boundary) = worktree_boundary {
-        boundary.verify()?;
-    }
 
     // Provider output is not the system of record for artifact-backed
     // activities: task state, review threads, git state, and deterministic
@@ -589,6 +586,20 @@ pub fn run_cli_backend(
         && !completion_protocol_violation
         && !completion_status_failure
         && (!spec.require_response_envelope || response_envelope_valid);
+
+    // A conflict-recovery provider repairs files only. Once its process has
+    // satisfied the activity completion contract, the host-side boundary
+    // independently revalidates live ownership, stages exactly the conflict
+    // set, and continues the checkpointed rebase. No response result field is
+    // consulted. Ordinary providers retain the same post-run integrity check.
+    if let Some(boundary) = worktree_boundary {
+        boundary.verify_after_provider(
+            host,
+            success,
+            input.get("failed_step_id").and_then(Value::as_str),
+            &task_ids,
+        )?;
+    }
     let trace = parse_cli_invocation_trace(
         trace_stdout.as_ref(),
         stderr.protocol_bytes(),
