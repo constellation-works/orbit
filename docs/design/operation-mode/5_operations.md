@@ -220,8 +220,12 @@ from the workspace preferences at that moment. Ordinary input naming the
 reserved `review` key is refused, and a resume keeps its persisted input, so
 rolling a preference back to `none` never weakens a gate that is already
 active and switching to `before-pr` never gates a run already admitted.
-`before-pr` is refused at submission for `task_local_pipeline`; the epic
-pipeline refuses it when its route resolves to local.
+`before-pr` is refused at submission for ordinary `task_local_pipeline`
+delivery. A parent-authorized `epic_pipeline` child may still assemble
+locally onto the epic branch: it inherits the captured snapshot unchanged,
+and the epic's own before-PR gate remains mandatory on the combined
+candidate. Caller-shaped input cannot claim that assembly exemption. The
+epic pipeline itself refuses `before-pr` when its route resolves to local.
 
 ### The gate
 

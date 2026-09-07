@@ -3,8 +3,28 @@
 use orbit_types::workflow::{REVIEW_ADMISSION_KEY, ReviewAdmission, ReviewTiming};
 use serde_json::json;
 
-use super::{GATED_CONFIG, fixture, seed_task};
-use crate::application::review::install_review_admission;
+use super::{GATED_CONFIG, admit_input, fixture, implement_candidate, seed_task};
+use crate::application::job::pipeline::{
+    ChildPipelineAdmission, ChildSubmission, worker_command_override,
+};
+use crate::application::review::{install_review_admission, review_gate_admit};
+
+/// Replaces the detached pipeline worker so child submission can persist a
+/// run without re-executing the test binary.
+struct WorkerOverride;
+
+impl WorkerOverride {
+    fn install() -> Self {
+        worker_command_override::set(["sh", "-c", "sleep 1"]);
+        Self
+    }
+}
+
+impl Drop for WorkerOverride {
+    fn drop(&mut self) {
+        worker_command_override::clear();
+    }
+}
 
 #[test]
 fn delivery_submissions_capture_the_effective_policy_with_its_sources() {
@@ -125,4 +145,137 @@ fn before_pr_is_refused_on_the_local_only_route() {
     install_review_admission(&runtime, "task_local_pipeline", &mut local, None, false)
         .expect("after-landing is fine locally");
     assert_eq!(local["review"]["timing"], "after-landing");
+}
+
+#[test]
+fn epic_parent_assembles_a_local_child_under_before_pr() {
+    let fixture = fixture(GATED_CONFIG);
+    let runtime = &fixture.runtime;
+    let epic = seed_task(runtime, "epic");
+    let parent = super::admitted_run(runtime, "epic_pipeline", std::slice::from_ref(&epic.id));
+
+    let mut child = json!({ "task_ids": ["ORB-CHILD"] });
+    install_review_admission(
+        runtime,
+        "task_local_pipeline",
+        &mut child,
+        Some(&parent.run_id),
+        false,
+    )
+    .expect("epic assembly is not local-only final delivery");
+    let inherited = ReviewAdmission::from_run_input(&child)
+        .expect("readable")
+        .expect("present");
+    let captured = ReviewAdmission::from_run_input(parent.input.as_ref().expect("parent input"))
+        .expect("readable")
+        .expect("present");
+    assert_eq!(inherited, captured);
+    assert_eq!(inherited.timing, ReviewTiming::BeforePr);
+}
+
+#[test]
+fn non_epic_parent_cannot_assemble_local_child_under_before_pr() {
+    let fixture = fixture(GATED_CONFIG);
+    let runtime = &fixture.runtime;
+    let leaf = seed_task(runtime, "leaf");
+    let parent = super::admitted_run(
+        runtime,
+        "task_auto_pipeline",
+        std::slice::from_ref(&leaf.id),
+    );
+
+    let mut child = json!({ "task_ids": [leaf.id] });
+    let error = install_review_admission(
+        runtime,
+        "task_local_pipeline",
+        &mut child,
+        Some(&parent.run_id),
+        false,
+    )
+    .expect_err("ordinary local-only child still refused");
+    assert!(
+        error
+            .to_string()
+            .contains("no meaning on the local-only delivery route"),
+        "{error}"
+    );
+}
+
+#[test]
+fn caller_shaped_input_cannot_claim_an_epic_assembly_exemption() {
+    let fixture = fixture(GATED_CONFIG);
+    let runtime = &fixture.runtime;
+    let mut forged = json!({
+        "task_ids": ["ORB-1"],
+        "parent_run_id": "jrun-forged-epic",
+        "job_name": "epic_pipeline",
+        "epic_assembly": true,
+    });
+    let error = install_review_admission(runtime, "task_local_pipeline", &mut forged, None, false)
+        .expect_err("ordinary input cannot claim the exemption");
+    assert!(
+        error
+            .to_string()
+            .contains("no meaning on the local-only delivery route"),
+        "{error}"
+    );
+}
+
+#[test]
+fn pr_bound_epic_submits_a_local_child_then_gates_the_combined_candidate() {
+    let fixture = fixture(GATED_CONFIG);
+    let runtime = &fixture.runtime;
+    let epic = seed_task(runtime, "epic");
+    let child = seed_task(runtime, "child");
+    let parent = super::admitted_run(runtime, "epic_pipeline", std::slice::from_ref(&epic.id));
+    runtime
+        .seed_v2_pipeline_run(&parent, parent.input.as_ref().expect("parent input"), None)
+        .expect("parent pipeline state");
+    implement_candidate(&fixture.repo, &epic.id);
+
+    let _worker = WorkerOverride::install();
+    let submission = runtime
+        .submit_child_pipeline_run(
+            "task_local_pipeline",
+            json!({
+                "task_ids": [child.id],
+                "base_branch": "epic/branch",
+                "base_sync": "local",
+                "auto_push": false,
+                "landing_branch": "main",
+                "terminal_status": "done",
+            }),
+            None,
+            Some("tester"),
+            &ChildPipelineAdmission {
+                parent_run_id: parent.run_id.clone(),
+                parent_step_id: Some("land_child".to_string()),
+                action: "invoke_and_wait".to_string(),
+                blocking: true,
+            },
+        )
+        .expect("epic child local pipeline is admitted");
+    let ChildSubmission::Submitted(result) = submission else {
+        panic!("expected a submitted child, got {submission:?}");
+    };
+    let child_run = runtime.show_job_run(&result.run_id).expect("child run");
+    let inherited = ReviewAdmission::from_run_input(child_run.input.as_ref().expect("child input"))
+        .expect("readable")
+        .expect("present");
+    assert_eq!(inherited.timing, ReviewTiming::BeforePr);
+    assert_eq!(child_run.job_id, "task_local_pipeline");
+
+    let admission = review_gate_admit(
+        runtime,
+        "review_gate_admit",
+        &admit_input(
+            &parent.run_id,
+            std::slice::from_ref(&epic.id),
+            &fixture.repo,
+        ),
+    )
+    .expect("epic gate admits the combined candidate");
+    assert_eq!(admission["applies"], true);
+    assert_eq!(admission["decision"], "admitted");
+    assert_eq!(admission["reviewer"]["crew"], "reviewers");
 }

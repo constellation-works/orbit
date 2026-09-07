@@ -51,8 +51,16 @@ pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
     "epic_pipeline",
 ];
 
-/// The job that delivers locally and therefore cannot honour `before-pr`.
+/// The job that delivers locally and therefore cannot honour `before-pr`
+/// as a final route. A parent-authorized [`EPIC_JOB`] child may still use
+/// it to assemble onto the epic branch; the epic's own gate remains the
+/// before-pr checkpoint.
 pub(crate) const LOCAL_ROUTE_JOB: &str = "task_local_pipeline";
+
+/// The job that assembles descendants locally and then reviews the combined
+/// PR-bound candidate. Its child `task_local_pipeline` submissions are
+/// intermediate landing, not local-only final delivery.
+pub(crate) const EPIC_JOB: &str = "epic_pipeline";
 
 /// One candidate lineage: the task set delivered together against a base.
 pub(crate) fn lineage_key(workspace_id: &str, task_ids: &[String], base: &str) -> String {
