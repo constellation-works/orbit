@@ -5,6 +5,24 @@ use crate::command::{Cli, Commands};
 use super::super::TaskSubcommand;
 
 #[test]
+fn task_update_accepts_every_existing_status() {
+    for status in [
+        "proposed",
+        "backlog",
+        "in-progress",
+        "review",
+        "done",
+        "blocked",
+        "archived",
+        "rejected",
+        "someday",
+    ] {
+        Cli::try_parse_from(["orbit", "task", "update", "ORB-00001", "--status", status])
+            .unwrap_or_else(|error| panic!("status {status} must parse: {error}"));
+    }
+}
+
+#[test]
 fn task_update_accepts_context_files_alias() {
     let cli = Cli::try_parse_from([
         "orbit",

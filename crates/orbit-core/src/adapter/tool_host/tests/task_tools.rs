@@ -625,7 +625,7 @@ fn task_tools_roundtrip_required_tools_and_reject_updates() {
 }
 
 #[test]
-fn stale_checkoutless_metadata_update_cannot_mutate_a_task_approved_to_done() {
+fn checkoutless_metadata_update_serializes_without_restoring_an_older_status() {
     let (_root, executor, context) = checkoutless_executor();
     let id = checkoutless_review_task(&executor, &context, "Terminal race fixture");
     let snapshot_read = Arc::new(Barrier::new(2));
@@ -673,11 +673,12 @@ fn stale_checkoutless_metadata_update_cannot_mutate_a_task_approved_to_done() {
         );
         release_update.wait();
 
-        let error = stale_update
+        let updated = stale_update
             .join()
             .expect("stale update thread")
-            .expect_err("the terminal task must reject the stale metadata update");
-        assert!(error.to_string().contains("done is terminal"), "{error}");
+            .expect("explicit metadata update remains valid after completion");
+        assert_eq!(updated["status"], "done");
+        assert_eq!(updated["title"], "Stale title");
     });
 
     let shown = executor
@@ -687,9 +688,55 @@ fn stale_checkoutless_metadata_update_cannot_mutate_a_task_approved_to_done() {
             context,
         )
         .expect("show terminal task");
-    assert_eq!(
-        shown,
-        json!({"status": "done", "title": "Terminal race fixture"})
+    assert_eq!(shown, json!({"status": "done", "title": "Stale title"}));
+}
+
+#[test]
+fn checkoutless_task_update_supports_direct_archive_and_restore_with_fields() {
+    let (_root, executor, context) = checkoutless_executor();
+    let id = checkoutless_review_task(&executor, &context, "Flexible status fixture");
+    let done = executor
+        .execute_tool(
+            "orbit.task.update",
+            json!({"id": id, "status": "done", "model": "codex"}),
+            context.clone(),
+        )
+        .expect("review moves directly to done");
+    assert_eq!(done["status"], "done");
+
+    let archived = executor
+        .execute_tool(
+            "orbit.task.update",
+            json!({
+                "id": id,
+                "status": "archived",
+                "title": "Archived classification",
+                "model": "codex"
+            }),
+            context.clone(),
+        )
+        .expect("done moves directly to archived with a field edit");
+    assert_eq!(archived["status"], "archived");
+    assert_eq!(archived["title"], "Archived classification");
+
+    let restored = executor
+        .execute_tool(
+            "orbit.task.update",
+            json!({"id": id, "status": "rejected", "model": "codex"}),
+            context,
+        )
+        .expect("archived restores directly to rejected");
+    assert_eq!(restored["status"], "rejected");
+    let history = restored["history"].as_array().expect("history array");
+    assert!(
+        history
+            .iter()
+            .any(|entry| { entry["from_status"] == "done" && entry["to_status"] == "archived" })
+    );
+    assert!(
+        history.iter().any(|entry| {
+            entry["from_status"] == "archived" && entry["to_status"] == "rejected"
+        })
     );
 }
 
@@ -1584,6 +1631,7 @@ fn task_update_tool_leaves_all_fields_unchanged_when_composite_update_is_invalid
         "orbit.task.update",
         json!({
             "id": task.id,
+            "title": "   ",
             "pr_status": "approved",
             "execution_summary": "This must not persist.",
             "status": "archived",
@@ -1591,11 +1639,12 @@ fn task_update_tool_leaves_all_fields_unchanged_when_composite_update_is_invalid
         Some("codex".to_string()),
         Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
     ));
-    assert!(message.contains("archive"), "{message}");
+    assert!(message.contains("title"), "{message}");
 
     let persisted = runtime.get_task(&task.id).expect("read unchanged task");
     assert_eq!(persisted.pr_status, None);
     assert!(persisted.execution_summary.is_empty());
+    assert_eq!(persisted.title, "Backlog task");
     assert_eq!(persisted.status, TaskStatus::Backlog);
 }
 

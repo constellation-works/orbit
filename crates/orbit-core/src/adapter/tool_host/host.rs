@@ -442,74 +442,6 @@ impl HubCoordinationExecutor {
         let status = optional_string(&input, "status")?
             .map(|value| super::input::parse_task_status("status", &value))
             .transpose()?;
-        let has_non_status_mutation = [
-            "title",
-            "description",
-            "acceptance_criteria",
-            "dependencies",
-            "relations",
-            "tags",
-            "plan",
-            "execution_summary",
-            "type",
-            "source_task_id",
-            "planned_by",
-            "implemented_by",
-            "pr_status",
-            "job_run_id",
-            "crew",
-            "orchestrator",
-            "context_files",
-            "context",
-            "artifacts",
-            "artifact",
-        ]
-        .iter()
-        .any(|field| input.get(*field).is_some());
-        let unarchiving = current.status == TaskStatus::Archived
-            && status == Some(TaskStatus::Backlog)
-            && !has_non_status_mutation;
-        if current.status == TaskStatus::Archived && !unarchiving {
-            return Err(OrbitError::InvalidInput(format!(
-                "task {id} is archived and cannot be modified; restore it to backlog first"
-            )));
-        }
-        if current.status == TaskStatus::Done && (status.is_some() || has_non_status_mutation) {
-            return Err(OrbitError::InvalidInput(format!(
-                "task {id} is done and cannot be modified; done is terminal"
-            )));
-        }
-        if let Some(target) = status {
-            current
-                .status
-                .validate_transition(target)
-                .map_err(OrbitError::TaskStatusTransition)?;
-            if target == TaskStatus::InProgress
-                && current.status != TaskStatus::InProgress
-                && input
-                    .get("plan")
-                    .and_then(Value::as_str)
-                    .unwrap_or(&current.plan)
-                    .trim()
-                    .is_empty()
-            {
-                return Err(OrbitError::InvalidInput(format!(
-                    "task '{id}' requires a non-empty plan before entering in-progress"
-                )));
-            }
-            if current.status == TaskStatus::InProgress
-                && target == TaskStatus::Review
-                && optional_raw_string(&input, "execution_summary")?
-                    .as_deref()
-                    .unwrap_or(&current.execution_summary)
-                    .trim()
-                    .is_empty()
-            {
-                return Err(OrbitError::InvalidInput(format!(
-                    "task '{id}' requires non-empty execution_summary before transitioning in-progress -> review"
-                )));
-            }
-        }
         let dependencies = optional_csv_or_string_list_alias(&input, &["dependencies"])?
             .map(normalize_task_dependencies)
             .transpose()?;
@@ -606,9 +538,12 @@ impl HubCoordinationExecutor {
                 planned_by: explicit_planned_by
                     .or_else(|| input.get("plan").is_some().then(|| Some(actor.to_string()))),
                 implemented_by: explicit_implemented_by.or_else(|| {
-                    status
-                        .is_some_and(|value| matches!(value, TaskStatus::Review | TaskStatus::Done))
-                        .then(|| Some(actor.to_string()))
+                    (current.implemented_by.is_none()
+                        && input.get("execution_summary").is_some()
+                        && status.is_some_and(|value| {
+                            matches!(value, TaskStatus::Review | TaskStatus::Done)
+                        }))
+                    .then(|| Some(actor.to_string()))
                 }),
                 priority: None,
                 complexity: None,
@@ -646,7 +581,10 @@ impl HubCoordinationExecutor {
                 TaskHistoryUpdateParams {
                     actor: actor.to_string(),
                     status,
-                    status_event: status.map(|_| "updated".to_string()),
+                    // The store emits `status_changed` only for an actual
+                    // transition and includes both status values. Supplying a
+                    // same-status edit therefore creates no lifecycle event.
+                    status_event: None,
                     status_note: None,
                     append_history: Vec::new(),
                     append_comments,

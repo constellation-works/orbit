@@ -465,7 +465,7 @@ fn withdrawn_task_fixtures(runtime: &OrbitRuntime) -> Vec<(&'static str, String)
 }
 
 #[test]
-fn direct_update_to_in_progress_still_requires_plan_for_unapproved_statuses() {
+fn direct_update_to_in_progress_is_classification_without_a_plan() {
     let (_root, runtime) = test_runtime();
     let task = runtime
         .add_task(TaskAddParams {
@@ -476,7 +476,7 @@ fn direct_update_to_in_progress_still_requires_plan_for_unapproved_statuses() {
         })
         .expect("create proposed task");
 
-    let err = runtime
+    let updated = runtime
         .update_task(
             &task.id,
             TaskUpdateParams {
@@ -484,12 +484,9 @@ fn direct_update_to_in_progress_still_requires_plan_for_unapproved_statuses() {
                 ..Default::default()
             },
         )
-        .expect_err("direct update should still require a plan");
-    assert!(
-        err.to_string()
-            .contains("requires a non-empty execution plan"),
-        "{err}"
-    );
+        .expect("direct status classification needs no plan");
+    assert_eq!(updated.status, TaskStatus::InProgress);
+    assert!(updated.plan.is_empty());
 }
 
 #[test]
@@ -714,7 +711,7 @@ fn v2_update_task_activity_preserves_existing_implemented_by() {
 }
 
 #[test]
-fn review_transition_still_requires_execution_summary() {
+fn direct_review_status_is_classification_without_execution_evidence() {
     let (_root, runtime) = test_runtime();
     let task = runtime
         .add_task(TaskAddParams {
@@ -729,7 +726,7 @@ fn review_transition_still_requires_execution_summary() {
         .start_task(&task.id, Some("start task".to_string()), None)
         .expect("start task");
 
-    let err = runtime
+    let updated = runtime
         .update_task(
             &task.id,
             TaskUpdateParams {
@@ -737,12 +734,10 @@ fn review_transition_still_requires_execution_summary() {
                 ..Default::default()
             },
         )
-        .expect_err("review without execution summary should fail");
-    assert!(
-        err.to_string()
-            .contains("requires non-empty execution_summary"),
-        "{err}"
-    );
+        .expect("direct review classification needs no execution summary");
+    assert_eq!(updated.status, TaskStatus::Review);
+    assert!(updated.execution_summary.is_empty());
+    assert_eq!(updated.implemented_by, None);
 }
 
 #[test]
@@ -763,6 +758,7 @@ fn activity_update_comment_records_comment_as_system() {
             &task.id,
             TaskActivityUpdate {
                 status: TaskStatus::InProgress,
+                expected_status: TaskStatus::Backlog,
                 execution_summary: None,
                 comment: Some("Automation left a note.".to_string()),
                 note: Some("automation start".to_string()),

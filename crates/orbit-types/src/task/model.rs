@@ -2,15 +2,9 @@
 //!
 //! ## Task Status Lifecycle
 //!
-//! Transitions are **permissive by default** — any move is allowed unless it
-//! violates one of the three invariants below.
-//!
-//! ### Invariants (blocklist)
-//! 1. **Done is terminal** — no transitions out of done.
-//! 2. **Archived requires dedicated command** — use `orbit task archive`; the
-//!    bare `--status archived` path is rejected.
-//! 3. **InProgress → Review requires execution_summary** — enforced at the
-//!    command layer, not in [`TaskStatus::validate_transition`].
+//! An explicit, authorized edit may move a task directly between any two
+//! statuses. Status is an audited classification; workflow admission,
+//! completion, and delivery keep their own stricter operational gates.
 //!
 //! ### Statuses
 //! | Status       | Purpose |
@@ -20,12 +14,10 @@
 //! | Someday      | Future-scoped — wanted but not yet actionable. Agents skip someday tasks. |
 //! | InProgress   | Actively being worked on. |
 //! | Review       | Implementation complete; awaiting review/merge. |
-//! | Done         | Accepted and closed. Terminal. |
+//! | Done         | Accepted and closed. May be reopened by an explicit edit. |
 //! | Blocked      | Temporarily paused. |
-//! | Archived     | Soft-deleted. Restorable to Backlog. |
+//! | Archived     | Soft-deleted. Restorable to any other status. |
 //! | Rejected     | Declined. Can be re-opened. |
-//!
-//! See [`TaskStatus::validate_transition`] for the blocklist implementation.
 
 // Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
 #![allow(clippy::expect_used)]
@@ -115,7 +107,7 @@ pub fn complexity_bucket_ord(label: &str) -> (u8, &str) {
 
 /// Current lifecycle state of a task.
 ///
-/// See the module-level doc for the full state transition diagram.
+/// See the module-level documentation for status-edit semantics.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "snake_case")]
@@ -130,13 +122,13 @@ pub enum TaskStatus {
     InProgress,
     /// Implementation complete; awaiting review/merge.
     Review,
-    /// Accepted and closed. Terminal — no further transitions.
+    /// Accepted and closed. May be reopened by an explicit status edit.
     Done,
     /// Temporarily paused (waiting on a dependency or decision).
     Blocked,
-    /// Soft-deleted. Can be restored to Backlog.
+    /// Soft-deleted. Can be restored to any other status.
     Archived,
-    /// Declined. Can be re-opened to Backlog or InProgress.
+    /// Declined. Can be reclassified to any other status.
     Rejected,
     /// Future-scoped — wanted but not yet actionable. Agents skip someday tasks.
     Someday,
@@ -240,40 +232,6 @@ impl TaskStatus {
             | TaskStatus::Blocked
             | TaskStatus::Someday => None,
         }
-    }
-
-    /// Validates a status transition using a short blocklist of invariants:
-    ///
-    /// 1. **Done is terminal** — no transitions out of done.
-    /// 2. **Archived requires dedicated command** — use `orbit task archive`, not a
-    ///    bare status update (enforced upstream; blocked here as defense-in-depth).
-    /// 3. **InProgress → Review requires execution_summary** — enforced upstream in
-    ///    `update_task_with_status_note`, not here (we lack the task data).
-    ///
-    /// Everything else is allowed.
-    pub fn validate_transition(&self, target: TaskStatus) -> Result<(), String> {
-        // No-op transitions are always fine.
-        if *self == target {
-            return Ok(());
-        }
-
-        // Done is terminal.
-        if *self == TaskStatus::Done {
-            return Err(format!(
-                "invalid status transition: {} -> {} (done is terminal)",
-                self, target
-            ));
-        }
-
-        // Archived requires the dedicated archive command.
-        if target == TaskStatus::Archived {
-            return Err(format!(
-                "invalid status transition: {} -> {} (use the archive command)",
-                self, target
-            ));
-        }
-
-        Ok(())
     }
 }
 

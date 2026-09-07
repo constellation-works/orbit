@@ -47,6 +47,10 @@ pub struct TaskAutomationUpdate {
 #[derive(Debug, Clone)]
 pub struct TaskActivityUpdate {
     pub status: TaskStatus,
+    /// Status observed before the activity requested this write. The runtime
+    /// compares it under the task lock so a delayed worker cannot overwrite a
+    /// newer operator decision.
+    pub expected_status: TaskStatus,
     pub execution_summary: Option<String>,
     pub comment: Option<String>,
     pub note: Option<String>,

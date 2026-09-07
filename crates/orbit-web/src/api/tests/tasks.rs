@@ -1587,6 +1587,47 @@ async fn post_task(runtime: Arc<OrbitRuntime>, body: Value) -> Response {
         .expect("response")
 }
 
+#[tokio::test]
+async fn update_task_reopens_done_and_restores_archived_without_intermediate_statuses() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    let task = seed_backlog_task(&runtime, "Flexible API status");
+
+    let done = patch_task(runtime.clone(), &task.id, json!({ "status": "done" })).await;
+    assert_eq!(done.status(), StatusCode::OK);
+    assert_eq!(body_json(done).await["status"], json!("done"));
+
+    let archived = patch_task(
+        runtime.clone(),
+        &task.id,
+        json!({ "status": "archived", "title": "Archived through PATCH" }),
+    )
+    .await;
+    assert_eq!(archived.status(), StatusCode::OK);
+    let archived = body_json(archived).await;
+    assert_eq!(archived["status"], json!("archived"));
+    assert_eq!(archived["title"], json!("Archived through PATCH"));
+
+    let restored = patch_task(
+        runtime.clone(),
+        &task.id,
+        json!({ "status": "in-progress" }),
+    )
+    .await;
+    assert_eq!(restored.status(), StatusCode::OK);
+    assert_eq!(body_json(restored).await["status"], json!("in-progress"));
+
+    let fetched = body_json(request_shared(runtime, &format!("/tasks/{}", task.id)).await).await;
+    let history = fetched["history"].as_array().expect("history array");
+    assert!(
+        history
+            .iter()
+            .any(|entry| { entry["from_status"] == "done" && entry["to_status"] == "archived" })
+    );
+    assert!(history.iter().any(|entry| {
+        entry["from_status"] == "archived" && entry["to_status"] == "in_progress"
+    }));
+}
+
 /// ORB-10648: `priority` is now a declared update field. It was undeclared
 /// while the record layer could persist it, so a re-prioritization was dropped
 /// by serde and the endpoint still answered `200` with the old priority — the

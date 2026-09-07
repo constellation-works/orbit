@@ -1038,6 +1038,77 @@ fn dashboard_task_filter_hash_round_trips_default_all_someday_and_none() {
     );
 }
 
+#[test]
+fn dashboard_renders_every_other_status_for_a_done_task() {
+    let app = include_str!("../../assets/dashboard/app.js");
+    for status in [
+        "in-progress",
+        "review",
+        "blocked",
+        "proposed",
+        "backlog",
+        "someday",
+        "done",
+        "rejected",
+        "archived",
+    ] {
+        assert!(
+            app.contains(&format!("\"{status}\"")),
+            "dashboard status catalog must include {status}"
+        );
+    }
+
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor() { this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const old = child.parentNode; if (old) old.children = old.children.filter((candidate) => candidate !== child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() { return { add: (...names) => { this.className = `${this.className} ${names.join(" ")}`.trim(); } }; }
+}
+const nodes = new Map();
+const get = (id) => nodes.get(id) || (nodes.set(id, new Node()), nodes.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: () => new Node(),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+const location = new URL("http://dashboard.test/#tasks");
+globalThis.window = { location, addEventListener: () => {}, confirm: () => false };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+globalThis.setTimeout = () => 0;
+
+const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
+const task = { id: "ORB-1", title: "Done task", status: "done", history: [], artifacts: [] };
+const { renderTasks } = await import("./tasks.js");
+renderTasks([task], {
+  getTasks: () => [task], getTasksMeta: () => null, getSearchQuery: () => "",
+  getActiveStatuses: () => new Set(["done"]), statusOrder: statuses,
+  statusUpdateTargets: statuses, fmtAbsTime: (value) => value,
+  refreshDashboard: () => Promise.resolve(),
+});
+
+function find(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
+  return null;
+}
+const select = find(get("tasks-body"), (node) => node.className === "task-status-select mono");
+if (!select) throw new Error("status select did not render");
+const values = select.children.map((option) => option.value).filter(Boolean);
+const expected = statuses.filter((status) => status !== "done");
+if (JSON.stringify(values) !== JSON.stringify(expected)) throw new Error(`status options ${JSON.stringify(values)} != ${JSON.stringify(expected)}`);
+"#,
+    );
+}
+
 /// ORB-10874: switching the workspace selector only updated in-memory state,
 /// so a reload silently fell back to the server's default workspace instead
 /// of the one the operator had selected.

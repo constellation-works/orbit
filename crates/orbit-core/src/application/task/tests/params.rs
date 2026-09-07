@@ -47,9 +47,6 @@ fn task_update_params_route_document_history_and_artifact_fields() {
         ..Default::default()
     };
 
-    assert!(params.has_any_mutation());
-    assert!(params.has_non_comment_mutation());
-
     let record = TaskRecordUpdateParams::from(params);
     assert_eq!(record.title.as_deref(), Some("Updated title"));
     assert_eq!(record.dependencies, Some(vec!["ORB-00042".to_string()]));
@@ -70,9 +67,8 @@ fn task_update_params_route_document_history_and_artifact_fields() {
 }
 
 #[test]
-fn empty_task_update_is_rejected_by_mutation_routing() {
+fn empty_task_update_routes_to_no_record_changes() {
     let params = TaskUpdateParams::default();
-    assert!(!params.has_any_mutation());
 
     let record = TaskRecordUpdateParams::from(params);
     assert!(!record.has_document_changes());
