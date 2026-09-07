@@ -60,4 +60,4 @@ system_crew = "system"
 # at that layer; review_policy, review_crew and delivery_cap are independent.
 # preset = "supervised"        # or "autonomous"
 # delivery_cap = "review"      # raise to "done" only where managed completion is allowed
-# review_policy = "none"       # or "after-landing"; "before-pr" is not yet supported
+# review_policy = "none"       # or "before-pr", "after-landing"
