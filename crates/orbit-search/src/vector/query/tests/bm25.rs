@@ -109,13 +109,13 @@ fn snippet_lookup_preserves_chunk_order() {
     let conn = store.connection();
     let conn = conn.lock().unwrap();
     conn.execute(
-        "INSERT INTO corpus_fts(source_kind, source_id, field, content) VALUES (?1, ?2, ?3, ?4)",
-        ("task", "T1", "purpose", "first chunk"),
+        "INSERT INTO chunks(source_kind, source_id, field, chunk_idx, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+        ("task", "T1", "purpose", 0, "first chunk"),
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO corpus_fts(source_kind, source_id, field, content) VALUES (?1, ?2, ?3, ?4)",
-        ("task", "T1", "purpose", "second chunk"),
+        "INSERT INTO chunks(source_kind, source_id, field, chunk_idx, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+        ("task", "T1", "purpose", 1, "second chunk"),
     )
     .unwrap();
     drop(conn);

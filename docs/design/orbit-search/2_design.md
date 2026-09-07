@@ -207,19 +207,32 @@ Token counting uses fastembed-rs's tokenizer for the active model — exact, not
 
 ### 5.1 FTS5 virtual table
 
-A virtual table mirrors corpus content for lexical search:
+Chunk text lives in an ordinary table, addressed the same way embeddings are, and a virtual table indexes it for lexical search:
 
 ```sql
+CREATE TABLE chunks (
+    id INTEGER PRIMARY KEY,
+    source_kind TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    field TEXT NOT NULL,
+    chunk_idx INTEGER NOT NULL,
+    content TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX chunks_by_address
+ON chunks(source_kind, source_id, field, chunk_idx);
+
 CREATE VIRTUAL TABLE corpus_fts USING fts5(
-    source_kind UNINDEXED,
-    source_id UNINDEXED,
-    field UNINDEXED,
     content,
+    content = 'chunks',
+    content_rowid = 'id',
     tokenize = 'porter unicode61 remove_diacritics 2'
 );
 ```
 
-Populated from the same per-field text as the embedding indexer. FTS5 ships with BM25 ranking built in — no implementation needed beyond the virtual table.
+`chunks` is populated from the same per-field text as the embedding indexer; insert/delete/update triggers keep `corpus_fts` in step with it. FTS5 ships with BM25 ranking built in — no implementation needed beyond the virtual table.
+
+The external-content split is what keeps reindexing linear. Everything the writer does outside a `MATCH` — pruning a source, replacing one field, resolving a snippet, asking which fields a source already has indexed — addresses rows by `(source_kind, source_id, field, chunk_idx)` or by rowid. Holding that metadata inside the FTS5 table made each of those a full corpus scan, so a no-op reindex of a few thousand sources cost tens of seconds of pure scanning.
 
 ### 5.2 Reciprocal Rank Fusion
 
