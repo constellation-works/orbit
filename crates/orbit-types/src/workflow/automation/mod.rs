@@ -14,6 +14,17 @@ pub enum CoverageClass {
     LandedCodeReviewV1,
 }
 
+impl std::fmt::Display for CoverageClass {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let wire_name = match self {
+            Self::IntegratedQaV1 => "integrated_qa_v1",
+            Self::LandedCodeReviewV1 => "landed_code_review_v1",
+        };
+
+        formatter.write_str(wire_name)
+    }
+}
+
 /// Opt-in delivery scheduling configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -8,6 +8,7 @@ use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
 use orbit_core::application::auto_tasks::cursor_state_path;
 use orbit_core::{AutoTaskAddParams, OrbitRuntime};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+use orbit_types::workflow::automation::{CoverageClass, DeliveryTrigger};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use tower::ServiceExt;
 
@@ -28,6 +29,36 @@ fn chore_params(name: &str) -> AutoTaskAddParams {
             title: format!("Chore {name}"),
             description: "Recurring chore body.".to_string(),
             acceptance_criteria: vec!["The chore is observable.".to_string()],
+            task_type: TaskType::Chore,
+            tags: vec![],
+            required_tools: Vec::new(),
+            priority: TaskPriority::Medium,
+            crew: None,
+            status: TaskStatus::Backlog,
+        },
+        dedupe: DedupePolicy::SkipIfOpen,
+    }
+}
+
+fn delivery_params(name: &str, coverage: CoverageClass) -> AutoTaskAddParams {
+    AutoTaskAddParams {
+        name: name.to_string(),
+        description: format!("Delivery definition {name}"),
+        schedule: AutoTaskSchedule::Deliveries {
+            deliveries_landed: DeliveryTrigger {
+                owner_machine: None,
+                branch: "agent-main".to_string(),
+                threshold: 3,
+                max_wait_minutes: 60,
+                coverage,
+                max_items: 20,
+                retries: 0,
+            },
+        },
+        template: AutoTaskTemplate {
+            title: format!("Delivery {name}"),
+            description: "Recurring delivery coverage.".to_string(),
+            acceptance_criteria: vec!["Delivery coverage is observable.".to_string()],
             task_type: TaskType::Chore,
             tags: vec![],
             required_tools: Vec::new(),
@@ -192,6 +223,36 @@ async fn list_reports_enabled_and_disabled_definitions() {
     assert!(hourly["next_evaluation"].as_str().is_some(), "{hourly}");
     assert_eq!(hourly["schedule_summary"], "every 60 minutes");
     assert_eq!(nightly["last_evaluation"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn list_uses_delivery_coverage_wire_name_in_schedule_summary() {
+    let runtime = runtime();
+    runtime
+        .auto_task_add(delivery_params(
+            "delivery-qa",
+            CoverageClass::IntegratedQaV1,
+        ))
+        .expect("add");
+    let (state, _) = state(runtime);
+
+    let response = send(state, Method::GET, "/auto-tasks?workspace=default", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let definition = json["definitions"]
+        .as_array()
+        .expect("definitions")
+        .first()
+        .expect("delivery definition");
+
+    assert_eq!(
+        definition["schedule_summary"],
+        "3 deliveries on agent-main (integrated_qa_v1)"
+    );
+    assert_eq!(
+        definition["schedule"]["deliveries_landed"]["coverage"],
+        "integrated_qa_v1"
+    );
 }
 
 #[tokio::test]
