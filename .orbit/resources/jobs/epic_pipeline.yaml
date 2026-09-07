@@ -43,6 +43,10 @@ spec:
       default_input:
         task_ids:
           - "{{ input.epic_task_id }}"
+        # Stable checkout token only. Dispatcher still injects the admitted
+        # job as `job_run_id`; setup stamps tasks and returns that run so
+        # the review gate and later delivery steps look up the captured
+        # policy, not this worktree identity [ORB-11520].
         run_id: "epic-{{ input.epic_task_id }}"
         branch_prefix: epic
         base: "{{ steps.resolve_ship_input.output.base_branch }}"
@@ -164,10 +168,12 @@ spec:
         commits_behind: "{{ steps.prepare_branch.output.commits_behind }}"
         sync_required: "{{ steps.prepare_branch.output.sync_required }}"
 
-    # ORB-11333: the before-PR review gate examines the epic's final combined
-    # diff after base synchronization and before publication. Both gate steps
-    # always run; the local route and no-diff outcomes report `applies: false`
-    # or refuse, and a non-pass verdict stops delivery without a PR.
+    # ORB-11333 / ORB-11520: the before-PR review gate examines the epic's
+    # final combined diff after base synchronization and before publication.
+    # `job_run_id` is the admitted job (setup output), not the epic worktree
+    # token. Both gate steps always run; the local route and no-diff outcomes
+    # report `applies: false` or refuse, and a non-pass verdict stops delivery
+    # without a PR.
     - id: review_gate_admit
       target: activity:review_gate_admit
       default_input:

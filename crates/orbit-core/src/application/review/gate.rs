@@ -50,7 +50,10 @@ pub(crate) fn review_gate_admit(
     // A run without a captured review admission predates the policy or was
     // never a delivery submission: it keeps the pre-existing behavior and
     // never loads tasks or Git state for a gate that cannot apply.
-    let run_id = required_string(input, "job_run_id").map_err(|error| failed(error.to_string()))?;
+    // Prefer the dispatcher-injected `run_id` (the admitted job) over
+    // `job_run_id`, which an epic pipeline may still spell as the stable
+    // worktree token that has no run record [ORB-11520].
+    let run_id = admitted_run_id(input).map_err(|error| failed(error.to_string()))?;
     let Some(admission) =
         run_review_admission(runtime, &run_id).map_err(|error| failed(error.to_string()))?
     else {
@@ -231,7 +234,7 @@ struct GateContext {
 
 impl GateContext {
     fn load(runtime: &OrbitRuntime, input: &Value) -> Result<Self, OrbitError> {
-        let run_id = required_string(input, "job_run_id")?;
+        let run_id = admitted_run_id(input)?;
         let task_ids = input
             .get("completed_task_ids")
             .and_then(Value::as_array)
@@ -348,6 +351,21 @@ fn required_string(input: &Value, key: &str) -> Result<String, OrbitError> {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .ok_or_else(|| OrbitError::InvalidInput(format!("review gate requires input.{key}")))
+}
+
+/// The admitted job that captured review policy and owns the candidate.
+///
+/// Dispatcher injects the executing run as `run_id`. Epic pipelines may pass
+/// the stable worktree token as `job_run_id`; that token is not a run record.
+fn admitted_run_id(input: &Value) -> Result<String, OrbitError> {
+    let job_run_id = required_string(input, "job_run_id")?;
+    let injected = input
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    Ok(injected.unwrap_or(job_run_id))
 }
 
 fn not_applicable(reason: &str, admission: Option<&ReviewAdmission>) -> Value {

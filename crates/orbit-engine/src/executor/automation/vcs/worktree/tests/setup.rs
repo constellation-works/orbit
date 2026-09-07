@@ -329,12 +329,48 @@ fn setup_worktree_succeeds_when_landing_mode_is_local_and_base_is_clean() {
     assert_eq!(host.admitted(), vec!["ORB-11373".to_string()]);
 }
 
+#[test]
+fn setup_worktree_keeps_an_explicit_identity_token_and_stamps_the_admitted_job() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, "base.txt", "v1");
+
+    let host = FakeHost::new(&repo, &["ORB-EPIC"]);
+    let worktree_token = "epic-ORB-EPIC";
+    let admitted_run = "jrun-admitted-epic";
+    let input = json!({
+        "task_ids": ["ORB-EPIC"],
+        "run_id": worktree_token,
+        "job_run_id": admitted_run,
+        "branch_prefix": "epic",
+        "base": "agent-main",
+        "base_sync": "local",
+        "dependency_delivery": "ignore",
+    });
+
+    let output = setup_worktree(&host, &input).expect("epic identity split");
+    let worktree_path = resolve_worktree_path_from_prefix(&repo, "epic", worktree_token).unwrap();
+
+    assert!(
+        worktree_path.exists(),
+        "the stable epic token still names the checkout"
+    );
+    assert_eq!(output["job_run_id"], json!(admitted_run));
+    assert_eq!(output["batch_id"], json!(admitted_run));
+    assert_eq!(
+        host.stamped_job_run_id("ORB-EPIC").as_deref(),
+        Some(admitted_run)
+    );
+}
+
 struct FakeHost {
     tasks: BTreeMap<String, Task>,
     repo_root: PathBuf,
     data_root: PathBuf,
     scoreboard_dir: PathBuf,
     admitted: Mutex<Vec<String>>,
+    stamped_job_run_id: Mutex<BTreeMap<String, String>>,
 }
 
 impl FakeHost {
@@ -380,11 +416,20 @@ impl FakeHost {
             data_root: repo_root.join(".orbit-test-data"),
             scoreboard_dir: repo_root.join(".orbit-test-data").join("scoreboard"),
             admitted: Mutex::new(Vec::new()),
+            stamped_job_run_id: Mutex::new(BTreeMap::new()),
         }
     }
 
     fn admitted(&self) -> Vec<String> {
         self.admitted.lock().expect("admitted lock").clone()
+    }
+
+    fn stamped_job_run_id(&self, task_id: &str) -> Option<String> {
+        self.stamped_job_run_id
+            .lock()
+            .expect("stamp lock")
+            .get(task_id)
+            .cloned()
     }
 }
 
@@ -443,9 +488,15 @@ impl RuntimeHost for FakeHost {
 
     fn apply_task_automation_update(
         &self,
-        _task_id: &str,
-        _update: TaskAutomationUpdate,
+        task_id: &str,
+        update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
+        if let Some(job_run_id) = update.job_run_id {
+            self.stamped_job_run_id
+                .lock()
+                .expect("stamp lock")
+                .insert(task_id.to_string(), job_run_id);
+        }
         Ok(())
     }
 

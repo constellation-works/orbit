@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod completion;
+mod epic_review_gate;
 mod review_gate;
 
 use chrono::Utc;
@@ -919,14 +920,21 @@ impl RuntimeHost for ScriptedEpicHost<'_> {
                 "mode": self.ship_mode,
                 "base_branch": "agent-main",
             })),
-            "worktree_setup" => Ok(json!({
-                "job_run_id": "epic-ORB-EPIC",
-                "batch_id": "epic-ORB-EPIC",
-                "workspace_path": self.runtime.paths().repo_root,
-                "head_ref": "epic/ORB-EPIC",
-                "base_ref": "origin/agent-main",
-                "base_sha": "1111111111111111111111111111111111111111",
-            })),
+            "worktree_setup" => {
+                let job_run_id = input
+                    .get("job_run_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("epic-ORB-EPIC");
+                Ok(json!({
+                    "job_run_id": job_run_id,
+                    "batch_id": job_run_id,
+                    "workspace_path": self.runtime.paths().repo_root,
+                    "head_ref": "epic/ORB-EPIC",
+                    "base_ref": "origin/agent-main",
+                    "base_sha": "1111111111111111111111111111111111111111",
+                }))
+            }
             "list_epic_descendants" => {
                 let descendant_ids = self.current_descendants();
                 let empty = descendant_ids.is_empty();

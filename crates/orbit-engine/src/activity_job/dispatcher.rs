@@ -344,12 +344,20 @@ fn dispatch_v2_activity_inner(
     result
 }
 
-fn inject_run_id(input: &Value, run_id: &str) -> Value {
+pub(crate) fn inject_run_id(input: &Value, run_id: &str) -> Value {
     let Value::Object(map) = input else {
         return input.clone();
     };
     if map.contains_key("run_id") {
-        return input.clone();
+        // An explicit `run_id` is a worktree identity token (epic pipelines
+        // pin `epic-<task-id>`). The admitted job still owns execution
+        // authority; expose it as `job_run_id` when the caller did not.
+        if map.contains_key("job_run_id") {
+            return input.clone();
+        }
+        let mut augmented = map.clone();
+        augmented.insert("job_run_id".to_string(), Value::String(run_id.to_string()));
+        return Value::Object(augmented);
     }
 
     let mut augmented = map.clone();
