@@ -169,6 +169,10 @@ impl OrbitRuntime {
                 .remote_caller
                 .as_ref()
                 .map(|grant| grant.identity),
+            agent_invoke_mode: authorizer
+                .remote_caller
+                .as_ref()
+                .and_then(|grant| grant.agent_invoke_mode),
             authorized_at: Utc::now().to_rfc3339(),
             workspace_path: self.paths().repo_root.display().to_string(),
             cwd: cwd.display().to_string(),

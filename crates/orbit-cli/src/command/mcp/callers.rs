@@ -18,7 +18,7 @@ use orbit_mcp::{
     federated,
 };
 use orbit_types::identity::validate_machine_id;
-use orbit_types::tool::McpCapability;
+use orbit_types::tool::{McpCapability, RemoteAgentInvokeMode};
 
 use crate::command::{CommandOut, CommandOutput};
 
@@ -148,7 +148,10 @@ fn list(path: &Path) -> CommandOut {
         println!(
             "    agent_invoke: {}",
             if row.agent_invoke {
-                "enabled"
+                match row.agent_invoke_mode.unwrap_or_default() {
+                    RemoteAgentInvokeMode::KeyBound => "enabled (key-bound)",
+                    RemoteAgentInvokeMode::Cooperative => "enabled (cooperative)",
+                }
             } else {
                 "disabled"
             }
@@ -177,8 +180,10 @@ fn check(path: &Path, machine_id: &str) -> CommandOut {
     println!("granted: [{}]", capability_list(&grant.granted));
     match &grant.pinned_fingerprint {
         Some(fingerprint) => println!(
-            "identity: key-bound to {fingerprint} where this machine can observe the \
-             authenticating key"
+            "identity pin: {fingerprint}, enforced where this machine can observe the \
+             authenticating key. The identity itself is key-bound only on the \
+             destination-issued forced-command path; the ordinary SSH proxy remains \
+             self-asserted."
         ),
         None => println!(
             "identity: self-asserted — this row is selected by a name, so any caller that \
@@ -199,11 +204,16 @@ fn check(path: &Path, machine_id: &str) -> CommandOut {
     }
     println!(
         "agent_invoke: {}",
-        if grant.agent_invoke {
-            "configured for the listed workspaces; admission additionally requires a key-bound \
-             session"
-        } else {
-            "not granted"
+        match grant.agent_invoke_mode {
+            Some(RemoteAgentInvokeMode::KeyBound) => {
+                "configured for the listed workspaces in key-bound mode; admission requires a \
+                 destination-issued forced-command session"
+            }
+            Some(RemoteAgentInvokeMode::Cooperative) => {
+                "configured for the listed workspaces in cooperative mode; identity remains \
+                 self-asserted and the SSH OS-account/operator channel is the trust boundary"
+            }
+            None => "not granted",
         }
     );
     // Both requests, because the grant is a ceiling and the caller's argv is
@@ -328,8 +338,11 @@ fn authorize(global_root: &Path, callers_path: &Path, args: &CallersAuthorizeArg
     );
     eprintln!(
         "Remote `orbit.agent.invoke` remains denied unless the matched row also sets \
-         `agent_invoke = true`, grants `operator`, pins this key, and narrows `workspaces` to the \
-         destination workspace IDs. That extra grant never comes from the file default."
+         `agent_invoke = true`, grants `operator`, and narrows `workspaces` to the destination \
+         workspace IDs. The omitted `agent_invoke_mode` remains strict and requires this pinned \
+         key. A destination owner may instead set `agent_invoke_mode = \"cooperative\"` for an \
+         existing same-OS-account SSH operator channel; that records a self-asserted identity and \
+         is not Tier 2. The operation grant never comes from the file default."
     );
     // The row guidance is written against what is actually in the file: a
     // template that restated `capabilities` would invite an operator to paste

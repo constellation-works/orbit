@@ -14,7 +14,8 @@ use std::path::PathBuf;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::tool::{
-    CallerIdentityProof, McpCapability, RemoteCallerGrant, ToolSessionContext,
+    CallerIdentityProof, McpCapability, RemoteAgentInvokeMode, RemoteCallerGrant,
+    ToolSessionContext,
 };
 use orbit_types::workflow::activity_job::TRUSTED_HOST_ADMISSION_KEY;
 use orbit_types::workflow::{JobRun, JobRunState};
@@ -68,6 +69,7 @@ fn runner_session() -> ToolSessionContext {
 fn remote_operator_session(
     identity: CallerIdentityProof,
     agent_invoke: bool,
+    agent_invoke_mode: Option<RemoteAgentInvokeMode>,
 ) -> ToolSessionContext {
     ToolSessionContext {
         effective_capabilities: [McpCapability::Operator].into_iter().collect(),
@@ -77,6 +79,7 @@ fn remote_operator_session(
             source: "mcp-callers.toml".to_string(),
             identity,
             agent_invoke,
+            agent_invoke_mode,
         }),
         ..ToolSessionContext::default()
     }
@@ -146,7 +149,7 @@ fn a_runs_own_runner_grant_cannot_admit_an_invocation() {
 #[test]
 fn a_self_asserted_remote_operator_cannot_admit_an_invocation() {
     let (_root, runtime, repo_root) = test_runtime();
-    let session = remote_operator_session(CallerIdentityProof::SelfAsserted, true);
+    let session = remote_operator_session(CallerIdentityProof::SelfAsserted, true, None);
     let error = runtime
         .submit_agent_invoke_run(request(&repo_root.display().to_string(), &session))
         .expect_err("a spoofable remote identity must not admit an unsandboxed process");
@@ -165,7 +168,7 @@ fn a_self_asserted_remote_operator_cannot_admit_an_invocation() {
 #[test]
 fn a_key_bound_remote_operator_still_needs_the_explicit_operation_grant() {
     let (_root, runtime, _repo_root) = test_runtime();
-    let session = remote_operator_session(CallerIdentityProof::KeyBound, false);
+    let session = remote_operator_session(CallerIdentityProof::KeyBound, false, None);
     let error = runtime
         .admit_agent_invoke(&session)
         .expect_err("operator capability alone must not grant unsandboxed remote execution");
@@ -182,7 +185,7 @@ fn a_key_bound_remote_operator_still_needs_the_explicit_operation_grant() {
 #[test]
 fn an_explicit_key_bound_remote_grant_preserves_the_real_caller() {
     let (_root, runtime, _repo_root) = test_runtime();
-    let session = remote_operator_session(CallerIdentityProof::KeyBound, true);
+    let session = remote_operator_session(CallerIdentityProof::KeyBound, true, None);
 
     let authorizer = runtime
         .admit_agent_invoke(&session)
@@ -198,9 +201,30 @@ fn an_explicit_key_bound_remote_grant_preserves_the_real_caller() {
 }
 
 #[test]
+fn an_explicit_cooperative_remote_operator_retains_self_asserted_provenance() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let session = remote_operator_session(
+        CallerIdentityProof::SelfAsserted,
+        true,
+        Some(RemoteAgentInvokeMode::Cooperative),
+    );
+
+    let authorizer = runtime
+        .admit_agent_invoke(&session)
+        .expect("the destination explicitly trusted its cooperative SSH operator channel");
+    let remote = authorizer.remote_caller.expect("remote caller facts");
+
+    assert_eq!(remote.identity, CallerIdentityProof::SelfAsserted);
+    assert_eq!(
+        remote.agent_invoke_mode,
+        Some(RemoteAgentInvokeMode::Cooperative)
+    );
+}
+
+#[test]
 fn revoking_the_remote_operation_grant_denies_the_next_invocation() {
     let (_root, runtime, _repo_root) = test_runtime();
-    let mut session = remote_operator_session(CallerIdentityProof::KeyBound, true);
+    let mut session = remote_operator_session(CallerIdentityProof::KeyBound, true, None);
     runtime
         .admit_agent_invoke(&session)
         .expect("the initial explicit grant is admitted");

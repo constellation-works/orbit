@@ -26,7 +26,8 @@ use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::contracts::AuditEventInsertParams;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{
-    CallerIdentityProof, McpCapability, RemoteCallerGrant, ToolSessionContext,
+    CallerIdentityProof, McpCapability, RemoteAgentInvokeMode, RemoteCallerGrant,
+    ToolSessionContext,
 };
 
 use crate::OrbitRuntime;
@@ -144,8 +145,11 @@ impl OrbitRuntime {
     ///   resolves as `agent`, and an agent is refused.
     /// * **Remote callers need an operation-specific, workspace-scoped grant.**
     ///   `operator` alone remains insufficient. The caller must have a
-    ///   destination-issued key-bound identity and the matched callers-file row
-    ///   must explicitly enable `agent_invoke` for the resolved workspace.
+    ///   matched callers-file row must explicitly enable `agent_invoke` for the
+    ///   resolved workspace. The default mode still requires a
+    ///   destination-issued key-bound identity; only an explicit cooperative
+    ///   mode accepts the self-asserted identity of the existing same-account
+    ///   SSH operator channel.
     pub(crate) fn admit_agent_invoke(
         &self,
         session_context: &ToolSessionContext,
@@ -160,20 +164,25 @@ impl OrbitRuntime {
         self.decide_with_envelope(operation, envelope)?;
 
         if let Some(grant) = caller.remote_caller_grant() {
-            if grant.identity != CallerIdentityProof::KeyBound {
-                return self.deny_remote_agent_invoke(
-                    &caller,
-                    grant,
-                    "the caller identity is self-asserted; use the destination-issued key-bound \
-                     SSH acceptance path",
-                );
-            }
             if !grant.agent_invoke {
                 return self.deny_remote_agent_invoke(
                     &caller,
                     grant,
                     "the matched destination policy does not enable `agent_invoke` for this \
                      workspace",
+                );
+            }
+            let mode = grant.agent_invoke_mode.unwrap_or_default();
+            if mode == RemoteAgentInvokeMode::KeyBound
+                && grant.identity != CallerIdentityProof::KeyBound
+            {
+                return self.deny_remote_agent_invoke(
+                    &caller,
+                    grant,
+                    "the caller identity is self-asserted and the grant's default key-bound mode \
+                     requires the destination-issued SSH acceptance path; the destination owner \
+                     may instead select `agent_invoke_mode = \"cooperative\"` for a trusted \
+                     same-OS-account operator channel",
                 );
             }
         }
@@ -202,6 +211,7 @@ impl OrbitRuntime {
             caller_machine_id = grant.caller_machine_id,
             caller_identity = %grant.identity,
             agent_invoke = grant.agent_invoke,
+            agent_invoke_mode = grant.agent_invoke_mode.map(|mode| mode.to_string()),
             "trusted host admission denied to a remote caller"
         );
         self.record_authorization_event(
@@ -336,6 +346,7 @@ impl OrbitRuntime {
                     // the caller had to hold a key to select it [ORB-11053].
                     "caller_identity": grant.identity,
                     "agent_invoke": grant.agent_invoke,
+                    "agent_invoke_mode": grant.agent_invoke_mode,
                 })
                 .to_string()
             }),
