@@ -220,9 +220,152 @@ async fn list_reports_enabled_and_disabled_definitions() {
     assert_eq!(hourly["last_evaluation"]["kind"], "fired");
     assert_eq!(hourly["last_evaluation"]["last_task_id"], "ORB-00001");
     assert_eq!(hourly["last_minted_task_id"], "ORB-00001");
-    assert!(hourly["next_evaluation"].as_str().is_some(), "{hourly}");
+    assert_eq!(hourly["next_evaluation"]["state"], "scheduled");
+    assert_eq!(hourly["next_evaluation"]["hypothetical"], false);
+    assert!(
+        hourly["next_evaluation"]["at"]
+            .as_str()
+            .is_some_and(|at| chrono::DateTime::parse_from_rfc3339(at).is_ok()),
+        "{hourly}"
+    );
     assert_eq!(hourly["schedule_summary"], "every 60 minutes");
     assert_eq!(nightly["last_evaluation"], serde_json::Value::Null);
+    assert_eq!(nightly["next_evaluation"]["state"], "disabled");
+    assert_eq!(nightly["next_evaluation"]["hypothetical"], true);
+    assert!(nightly["next_evaluation"]["at"].is_null(), "{nightly}");
+}
+
+fn write_cursor(runtime: &OrbitRuntime, name: &str, last_task_id: &str) {
+    let path = cursor_state_path(&runtime.paths().state_dir);
+    std::fs::create_dir_all(path.parent().expect("state dir")).expect("mkdir");
+    let existing =
+        std::fs::read_to_string(&path).unwrap_or_else(|_| r#"{"definitions":{}}"#.to_string());
+    let mut doc: serde_json::Value = serde_json::from_str(&existing).expect("parse cursor");
+    doc["definitions"][name] = serde_json::json!({
+        "baseline_at": "2026-01-01T00:00:00+00:00",
+        "last_slot": "2026-01-01T01:00:00+00:00",
+        "last_fired_at": "2026-01-01T01:00:05+00:00",
+        "last_task_id": last_task_id
+    });
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(&doc).expect("serialize cursor"),
+    )
+    .expect("write cursor");
+}
+
+#[tokio::test]
+async fn list_labels_disabled_next_evaluation_as_hypothetical() {
+    let runtime = runtime();
+    runtime
+        .auto_task_add(chore_params("paused-chore"))
+        .expect("add");
+    runtime
+        .auto_task_toggle("paused-chore", false)
+        .expect("disable");
+    write_cursor(&runtime, "paused-chore", "ORB-00001");
+
+    let (state, _) = state(runtime);
+    let response = send(state, Method::GET, "/auto-tasks?workspace=default", None).await;
+    let json = body_json(response).await;
+    let item = json["definitions"]
+        .as_array()
+        .expect("definitions")
+        .iter()
+        .find(|item| item["name"] == "paused-chore")
+        .expect("paused-chore");
+    assert_eq!(item["enabled"], false);
+    assert_eq!(item["next_evaluation"]["state"], "disabled");
+    assert_eq!(item["next_evaluation"]["hypothetical"], true);
+    assert!(item["next_evaluation"]["at"].as_str().is_some(), "{item}");
+}
+
+#[tokio::test]
+async fn list_reports_never_observed_when_the_cursor_is_missing() {
+    let runtime = runtime();
+    runtime.auto_task_add(chore_params("fresh")).expect("add");
+    let (state, _) = state(runtime);
+    let response = send(state, Method::GET, "/auto-tasks?workspace=default", None).await;
+    let json = body_json(response).await;
+    let item = &json["definitions"].as_array().expect("definitions")[0];
+    assert_eq!(item["enabled"], true);
+    assert_eq!(item["next_evaluation"]["state"], "never_observed");
+    assert_eq!(item["next_evaluation"]["hypothetical"], false);
+    assert!(item["next_evaluation"]["at"].is_null(), "{item}");
+}
+
+#[tokio::test]
+async fn list_reports_disabled_and_unavailable_delivery_definitions() {
+    let runtime = runtime();
+    runtime
+        .auto_task_add(delivery_params(
+            "delivery-qa",
+            CoverageClass::IntegratedQaV1,
+        ))
+        .expect("add");
+    let (state, runtime) = state(runtime);
+    let disabled = body_json(
+        send(
+            state.clone(),
+            Method::GET,
+            "/auto-tasks?workspace=default",
+            None,
+        )
+        .await,
+    )
+    .await;
+    let disabled_item = &disabled["definitions"].as_array().expect("definitions")[0];
+    assert_eq!(disabled_item["next_evaluation"]["state"], "disabled");
+    assert!(
+        disabled_item["next_evaluation"]["at"].is_null(),
+        "{disabled_item}"
+    );
+
+    runtime
+        .auto_task_toggle("delivery-qa", true)
+        .expect("enable delivery definition");
+    let enabled =
+        body_json(send(state, Method::GET, "/auto-tasks?workspace=default", None).await).await;
+    let enabled_item = &enabled["definitions"].as_array().expect("definitions")[0];
+    assert_eq!(
+        enabled_item["next_evaluation"]["state"], "unavailable",
+        "in-memory runtimes have no delivery coverage; inspect failure is unavailable, not waiting: {enabled_item}"
+    );
+    assert!(
+        enabled_item["next_evaluation"]["at"].is_null(),
+        "{enabled_item}"
+    );
+}
+
+#[tokio::test]
+async fn list_separates_manual_mint_from_scheduler_evaluation() {
+    let runtime = runtime();
+    runtime.auto_task_add(chore_params("nightly")).expect("add");
+    write_cursor(&runtime, "nightly", "ORB-00001");
+    let (state, runtime) = state(runtime);
+    let minted = as_operator(send(
+        state.clone(),
+        Method::POST,
+        "/auto-tasks/mint?workspace=default",
+        Some(r#"{"name":"nightly","acknowledge_unconditional":true}"#),
+    ))
+    .await;
+    assert_eq!(minted.status(), StatusCode::OK);
+    let minted_id = body_json(minted).await["task_id"]
+        .as_str()
+        .expect("minted id")
+        .to_string();
+
+    let response = send(state, Method::GET, "/auto-tasks?workspace=default", None).await;
+    let json = body_json(response).await;
+    let item = &json["definitions"].as_array().expect("definitions")[0];
+    assert_eq!(item["last_evaluation"]["last_task_id"], "ORB-00001");
+    assert_eq!(item["last_minted_task_id"], minted_id);
+    assert_ne!(minted_id, "ORB-00001");
+    let cursor = runtime
+        .list_tasks_by_tags(&["auto-task:nightly".into()])
+        .expect("list");
+    assert_eq!(cursor[0].id.to_string(), minted_id);
 }
 
 #[tokio::test]

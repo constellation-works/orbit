@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-09-07
+last_validated: 2026-09-07
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -175,8 +175,13 @@ cursor-neutral on every surface.
 The dashboard Operations tab exposes the same CRUD/mint runtime rather than a
 second scheduler. `#operations/auto-tasks` lists the selected workspace's
 definitions (name, enabled, schedule, template summary, dedupe, last
-evaluation/mint, last minted task id, next evaluation when the cursor makes
-that derivable). Enable/disable writes `enabled` through `auto_task_toggle`
+scheduler evaluation, last minted task id, and a structured next-evaluation
+state). Next evaluation is never an unqualified future timestamp: disabled
+rows show `Disabled` (a theoretical slot is labeled hypothetical), delivery
+rows show waiting-for-deliveries, a missing cursor is never observed, and
+inspect failures are unavailable. Last scheduler evaluation is the host-local
+cursor; last minted task is the newest tagged instance and is labeled a
+manual mint when the two ids differ. Enable/disable writes `enabled` through `auto_task_toggle`
 with `expected_enabled` compare-and-swap, operator authorization
 (`auto_task.toggle`), and a dashboard-operations audit row. `Mint now` calls
 `auto_task_mint` after the operator acknowledges the unconditional warning

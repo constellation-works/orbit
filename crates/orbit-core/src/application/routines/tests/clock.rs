@@ -550,6 +550,33 @@ fn enabled_systemd_timer_without_a_future_trigger_is_unhealthy() {
 }
 
 #[test]
+fn systemd_monotonic_duration_is_not_a_wall_clock_next_tick() {
+    let root = tempdir().expect("create global root");
+    let runner = MockRunner::with_outputs(
+        vec![Ok(true)],
+        vec![Ok(Some(
+            "LoadState=loaded\nActiveState=active\nNextElapseUSecRealtime=n/a\nNextElapseUSecMonotonic=4h 14min\nLastTriggerUSec=Sun 2026-09-07 21:00:00 UTC"
+                .to_string(),
+        ))],
+    );
+
+    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner)
+        .expect("read monotonic-only timer status");
+
+    assert!(status.enabled);
+    assert!(status.schedulable);
+    assert_eq!(status.effective_cadence_seconds, Some(60));
+    assert_eq!(
+        status.last_tick_at.as_deref(),
+        Some("Sun 2026-09-07 21:00:00 UTC")
+    );
+    assert_eq!(
+        status.next_tick_at, None,
+        "NextElapseUSecMonotonic is a duration from boot, not the next wall-clock tick"
+    );
+}
+
+#[test]
 fn disabled_systemd_timer_reports_loaded_state_without_becoming_schedulable() {
     let root = tempdir().expect("create global root");
     let runner = MockRunner::with_outputs(

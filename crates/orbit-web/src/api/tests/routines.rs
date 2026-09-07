@@ -5,13 +5,13 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
-use orbit_core::application::routines::ClockStatus;
+use orbit_core::application::routines::{ClockStatus, ScheduleDisplayState};
 use orbit_core::{OrbitRuntime, RoutineFireRecord, RoutineFireState};
 use orbit_registry::{NewHostIdentity, ensure_host_identity};
 use tower::ServiceExt;
 
 use super::super::router;
-use super::super::routines::{clock_json, duration_ms, fire_json, fire_ok};
+use super::super::routines::{clock_json, duration_ms, fire_json, fire_ok, next_evaluation_json};
 use super::test_support::body_json;
 use crate::state::DashboardState;
 
@@ -121,6 +121,22 @@ fn clock_json_keeps_service_state_and_health_distinct() {
     assert_eq!(missed["health"], "missed");
     assert_eq!(missed["enabled"], true, "enabled is not health");
     assert_eq!(missed["running"], false);
+}
+
+#[test]
+fn next_evaluation_json_marks_disabled_times_hypothetical() {
+    let json = next_evaluation_json(
+        ScheduleDisplayState::Disabled,
+        Some("2026-09-07T14:15:00-07:00".to_string()),
+    );
+    assert_eq!(json["state"], "disabled");
+    assert_eq!(json["hypothetical"], true);
+    assert_eq!(json["at"], "2026-09-07T14:15:00-07:00");
+
+    let waiting = next_evaluation_json(ScheduleDisplayState::Waiting, None);
+    assert_eq!(waiting["state"], "waiting");
+    assert!(waiting["at"].is_null());
+    assert_eq!(waiting["hypothetical"], false);
 }
 
 /// End-to-end: the endpoint resolves host-level routine state from the global

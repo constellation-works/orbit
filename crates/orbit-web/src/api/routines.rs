@@ -13,8 +13,8 @@ use orbit_common::governance::authorization::{
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::application::routines::{
-    ClockStatus, RoutineStatus, RoutineStatusReport, RoutineToggleOutcome, clock_status,
-    set_clock_cadence, set_clock_enabled, set_routine_enabled,
+    ClockStatus, RoutineStatus, RoutineStatusReport, RoutineToggleOutcome, ScheduleDisplayState,
+    clock_status, set_clock_cadence, set_clock_enabled, set_routine_enabled,
 };
 use orbit_core::{AuditEventInsertParams, OrbitRuntime, RoutineFireRecord, RoutineFireState};
 use orbit_types::telemetry::AuditEventStatus;
@@ -374,7 +374,23 @@ fn status_json(status: &RoutineStatus) -> Value {
         "first_observed_at": status.first_observed_at,
         "last_evaluated_slot": status.last_evaluated_slot,
         "next_due": status.next_due,
+        "next_evaluation": next_evaluation_json(
+            status.schedule_display_state(),
+            status.next_due.clone(),
+        ),
         "last_fire": status.last_fire.as_ref().map(fire_json),
+    })
+}
+
+pub(super) fn next_evaluation_json(state: ScheduleDisplayState, at: Option<String>) -> Value {
+    json!({
+        "state": state.as_str(),
+        "at": if state == ScheduleDisplayState::Waiting {
+            None
+        } else {
+            at
+        },
+        "hypothetical": state.is_hypothetical(),
     })
 }
 

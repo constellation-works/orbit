@@ -1,8 +1,8 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-09-07
+last_validated: 2026-09-07
 status: Accepted
 feature: routines
 doc_role: design
@@ -46,7 +46,13 @@ the supported platforms; there is no resident Orbit daemon ([Host-local sweep cl
 
 The dashboard Operations view projects the same typed status and control functions
 [ORB-10875]. Routine definitions remain workspace-scoped and show their versioned
-`enabled` value; the host clock remains one independent host-scoped card. A routine
+`enabled` value; the host clock remains one independent host-scoped card.
+Next evaluation uses schedule display state (`scheduled`, `disabled`, `paused`,
+`waiting`, `never_observed`, `unavailable`) so a disabled or paused routine
+does not look armed; a theoretical next slot is labeled hypothetical.
+Clock last/next tick are wall-clock times; systemd `NextElapseUSecMonotonic`
+is used only for schedulability, never as a displayed next tick. Cadence is a
+duration. A routine
 toggle resolves its file from a freshly loaded `LoadedRoutine`, validates the displayed
 workspace, host, target, and expected prior state, changes only the top-level `enabled`
 field, reparses the document, and uses an atomic rename. Clock requests are a closed
