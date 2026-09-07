@@ -53,14 +53,20 @@ fn push(input: &Value) -> Result<Value, OrbitError> {
         ));
     }
 
-    let mut args = vec!["-C".to_string(), repo_root.to_string(), "push".to_string()];
+    let mut args = vec!["push".to_string()];
     if let Some(expected_remote_sha) = force_with_lease.then_some(expected_remote_sha).flatten() {
         args.push(format!(
             "--force-with-lease=refs/heads/{branch}:{expected_remote_sha}"
         ));
     }
     args.extend(["--".to_string(), "origin".to_string(), branch.to_string()]);
-    let result = execute("git", args, None, LONG_TIMEOUT_MS, "push")?;
+    let result = execute(
+        "git",
+        args,
+        Some(Path::new(repo_root)),
+        LONG_TIMEOUT_MS,
+        "push",
+    )?;
     Ok(json!({
         "stdout": result.stdout,
         "stderr": result.stderr,
@@ -460,18 +466,32 @@ fn execute(
     timeout_ms: u64,
     operation: &str,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
-    let result = run_process(
-        &ExecRequest {
+    let request = if program == "git" {
+        let root = current_dir.ok_or_else(|| {
+            OrbitError::InvalidInput("Git operation requires a working directory".to_string())
+        })?;
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        super::git::git_request(root, &args, timeout_ms)
+    } else {
+        ExecRequest {
             program: program.to_string(),
             args,
             current_dir: current_dir.map(|path| path.to_string_lossy().into_owned()),
             timeout_ms: Some(timeout_ms),
             stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::Inherit,
+            environment_mode: EnvironmentMode::ClearAndSet(super::git::vcs_environment(&[
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "GH_ENTERPRISE_TOKEN",
+                "GITHUB_ENTERPRISE_TOKEN",
+                "GH_HOST",
+                "GH_CONFIG_DIR",
+                "XDG_CONFIG_HOME",
+            ])),
             debug: false,
-        },
-        &NoSandbox,
-    )?;
+        }
+    };
+    let result = run_process(&request, &NoSandbox)?;
     if !result.success {
         return Err(OrbitError::Execution(format!(
             "private automation VCS {operation} failed: {}",
