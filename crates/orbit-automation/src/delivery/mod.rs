@@ -171,6 +171,10 @@ pub fn evaluate(
         state = admit_active(store, host, &state)?;
     }
 
+    // Proven-covered prefixes are not debt. Retire them before backpressure so
+    // an already-stalled excluded-only consumer can observe again.
+    state = retire_covered_prefix(store, state, dry_run)?;
+
     // Backpressure pauses observation, never admission of already retained debt.
     if state.pending.len() < 950 && state.pending_commits.len() <= 4800 {
         let page = host.observe(&trigger.branch, &state)?;
@@ -180,6 +184,7 @@ pub fn evaluate(
         } else {
             commit(store, &state, next, None)?
         };
+        state = retire_covered_prefix(store, state, dry_run)?;
     }
 
     if let Some(active) = &state.active {
@@ -356,6 +361,21 @@ fn admit_active(
     }
 
     commit(store, state, next, None)
+}
+
+fn retire_covered_prefix(
+    store: &dyn AutomationStoreBackend,
+    state: AutomationState,
+    dry_run: bool,
+) -> Result<AutomationState, AutomationError> {
+    let Some(next) = observe::retire_excluded_prefix(&state) else {
+        return Ok(state);
+    };
+    if dry_run {
+        Ok(next)
+    } else {
+        commit(store, &state, next, None)
+    }
 }
 
 fn reconcile(

@@ -314,11 +314,13 @@ every task still has the reviewed meaning, and lets
 tree, no contradicting managed landing. Only a `landed_code_review_v1`
 consumer excludes; QA counts every landing. Excluded landings leave
 `pending`, live in the consumer's `excluded` list, do not count toward the
-threshold, travel with the frozen batch as readable context (`exclusions`),
-are absent from `examined_deliveries`, and retire with the range that
-contains them. Later edits, task drift, a different base, an unreviewed
-conflict repair, missing objects, or an external landing race keep the
-landing an ordinary obligation. Exclusions apply when a landing is first
+threshold, and are absent from `examined_deliveries`. An exclusively excluded
+prefix advances the covered cursor without an examination receipt so
+observation cannot stall; interleaved exclusions travel with the next frozen
+batch as readable context (`exclusions`) and retire with that examined
+range. Later edits, task drift, a different base, an unreviewed conflict
+repair, missing objects, or an external landing race keep the landing an
+ordinary obligation. Exclusions apply when a landing is first
 observed; a certificate that arrives later does not rewrite pending debt.
 
 ### Surfaces

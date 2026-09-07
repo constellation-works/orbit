@@ -173,8 +173,11 @@ Three separate checkpoints are essential:
   retained as pending/unresolved. Advancing `O` never means successful work.
 - **Dispatched (`D`)**: immutable batch has an acknowledged job run or minted task
   identity. This measures action creation, not the executor's success.
-- **Covered (`C`)**: accepted member receipts and, for code ranges, the highest
-  contiguous successfully examined boundary. Never jump over a coverage hole.
+- **Covered (`C`)**: the highest contiguous boundary that is no longer a
+  scheduling obligation — accepted examination receipts, or a proven
+  before-PR-excluded prefix that advanced without a consumer receipt. Never
+  jump over a coverage hole. Excluded-only progress is not an examination
+  receipt and does not count toward a review threshold.
 
 Use member sets, not one timestamp, for pilot tasks and incidents. For deliveries,
 range boundaries are Git revisions while observation continuations are source

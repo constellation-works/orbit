@@ -215,12 +215,15 @@ objects still exist and every task still has the reviewed meaning, and asks
 `orbit_automation::review::exclusion` for the decision: same base tree, same
 final tree, no contradicting managed landing record. A `landed_code_review_v1`
 consumer moves an accepted landing into its `excluded` list; it does not
-count toward the threshold, travels with the frozen batch as readable context
-(`exclusions`), is absent from `examined_deliveries`, and retires with the
-range that contains it. `integrated_qa_v1` consumers ignore exclusions
-entirely. A different base tree, any later edit, an unreviewed conflict
-repair, task drift, missing objects, or an external landing race keeps the
-landing an ordinary obligation. Inspection surfaces and the dashboard list
+count toward the threshold, is absent from `examined_deliveries`, and does
+not mint an examination receipt. An exclusively excluded prefix advances the
+covered cursor and leaves the pending window so later uncovered landings can
+still be observed. Interleaved exclusions travel with the next frozen batch
+as readable context (`exclusions`) and retire with that examined range.
+`integrated_qa_v1` consumers ignore exclusions entirely. A different base
+tree, any later edit, an unreviewed conflict repair, task drift, missing
+objects, or an external landing race keeps the landing an ordinary
+obligation. Inspection surfaces and the dashboard list
 excluded landings with their certificate and assurance label.
 
 ## State preparation and failure triage [ORB-11331]
