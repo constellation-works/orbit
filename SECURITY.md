@@ -58,7 +58,10 @@ program allowlists, not a shipped `fs.*` family), evaluation applies on every
 platform. Activity-scoped `proc.spawn` additionally confines the child at
 spawn time: on Linux, Landlock enforces the resolved `fsProfile` read set
 (plus existing `denyRead` matches) so an allowed program cannot read a
-denied path by interpreting argv as code. The program allowlist and
+denied path by interpreting argv as code. A Linux host whose kernel lacks
+Landlock denies the spawn outright; no non-Linux host has an equivalent
+child confinement today, so on those platforms the request-time argument
+check remains the only filesystem gate. The program allowlist and
 cleared child environment remain fail-closed.
 
 For `backend: cli` agents (an agent CLI such as Codex/Claude/Gemini/Grok

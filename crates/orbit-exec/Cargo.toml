@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
+regex.workspace = true
 tempfile = "3"
 wait-timeout.workspace = true
 
@@ -24,4 +25,3 @@ libc.workspace = true
 # `test_env::scoped` — one shared ambient-environment guard, so launcher tests
 # state the environment they reason about instead of inheriting the shell.
 orbit-common = { path = "../orbit-common", features = ["test-util"] }
-regex.workspace = true

@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 
 use orbit_common::OrbitError;
-use orbit_types::policy::{ResolvedFsProfile, match_glob, normalize_glob_path};
+use orbit_types::policy::{ResolvedFsProfile, compile_glob_regex, normalize_glob_path};
+use regex::Regex;
 
 use crate::runner::ExecRequest;
 
@@ -159,17 +160,21 @@ fn workspace_read_grants(
     workspace_root: &Path,
     profile: &ResolvedFsProfile,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
-    if !profile_allows_read(profile, ".")? {
-        return collect_allowed_subtrees(workspace_root, workspace_root, profile);
+    let rules = ReadRules::compile(profile)?;
+    if rules.grants_nothing() {
+        return Ok(Vec::new());
     }
-    let denied = collect_denied_paths(workspace_root, workspace_root, profile)?;
+    if !rules.allows(".")? {
+        return collect_allowed_subtrees(workspace_root, workspace_root, &rules);
+    }
+    let denied = collect_denied_paths(workspace_root, workspace_root, &rules)?;
     punch_holes(workspace_root, &denied)
 }
 
 fn collect_allowed_subtrees(
     workspace_root: &Path,
     dir: &Path,
-    profile: &ResolvedFsProfile,
+    rules: &ReadRules,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
     let mut grants = Vec::new();
     let entries = match std::fs::read_dir(dir) {
@@ -187,13 +192,13 @@ fn collect_allowed_subtrees(
             continue;
         };
         let relative = workspace_relative(workspace_root, &path)?;
-        if profile_allows_read(profile, &relative)? {
-            let denied = collect_denied_paths(workspace_root, &path, profile)?;
+        if rules.allows(&relative)? {
+            let denied = collect_denied_paths(workspace_root, &path, rules)?;
             grants.extend(punch_holes(&path, &denied)?);
             continue;
         }
         if path.is_dir() {
-            grants.extend(collect_allowed_subtrees(workspace_root, &path, profile)?);
+            grants.extend(collect_allowed_subtrees(workspace_root, &path, rules)?);
         }
     }
     Ok(grants)
@@ -202,17 +207,19 @@ fn collect_allowed_subtrees(
 fn collect_denied_paths(
     workspace_root: &Path,
     root: &Path,
-    profile: &ResolvedFsProfile,
+    rules: &ReadRules,
 ) -> Result<BTreeSet<PathBuf>, OrbitError> {
     let mut denied = BTreeSet::new();
-    collect_denied_from(workspace_root, root, profile, &mut denied)?;
+    if rules.can_deny_below_an_allowed_path() {
+        collect_denied_from(workspace_root, root, rules, &mut denied)?;
+    }
     Ok(denied)
 }
 
 fn collect_denied_from(
     workspace_root: &Path,
     dir: &Path,
-    profile: &ResolvedFsProfile,
+    rules: &ReadRules,
     denied: &mut BTreeSet<PathBuf>,
 ) -> Result<(), OrbitError> {
     let entries = match std::fs::read_dir(dir) {
@@ -227,12 +234,12 @@ fn collect_denied_from(
             continue;
         };
         let relative = workspace_relative(workspace_root, &path)?;
-        if !profile_allows_read(profile, &relative)? {
+        if !rules.allows(&relative)? {
             denied.insert(path);
             continue;
         }
         if path.is_dir() {
-            collect_denied_from(workspace_root, &path, profile, denied)?;
+            collect_denied_from(workspace_root, &path, rules, denied)?;
         }
     }
     Ok(())
@@ -285,21 +292,59 @@ fn full_grant(path: &Path) -> LandlockPathGrant {
     }
 }
 
-fn profile_allows_read(profile: &ResolvedFsProfile, relative: &str) -> Result<bool, OrbitError> {
-    if profile.read.is_empty() {
-        return Ok(false);
-    }
-    let normalized = normalize_glob_path(relative).map_err(OrbitError::from)?;
-    let mut allowed = false;
-    let mut matched = false;
-    for rule in &profile.read {
-        let (negated, pattern) = normalize_rule_pattern(rule);
-        if match_glob(&pattern, &normalized).map_err(OrbitError::from)? {
-            allowed = !negated;
-            matched = true;
+/// The profile's read rules, compiled once for a whole workspace walk.
+///
+/// `match_glob` builds a regex on every call, so re-evaluating the rule set
+/// per visited path made grant compilation cost seconds on a large workspace
+/// — paid before every activity-scoped spawn. Compiling up front keeps the
+/// walk proportional to the tree instead of to the rule set.
+struct ReadRules {
+    rules: Vec<CompiledReadRule>,
+}
+
+struct CompiledReadRule {
+    negated: bool,
+    matcher: Regex,
+}
+
+impl ReadRules {
+    fn compile(profile: &ResolvedFsProfile) -> Result<Self, OrbitError> {
+        let mut rules = Vec::with_capacity(profile.read.len());
+        for rule in &profile.read {
+            let (negated, pattern) = normalize_rule_pattern(rule);
+            let matcher = compile_glob_regex(&pattern).map_err(|error| {
+                OrbitError::InvalidInput(format!(
+                    "landlock read rule `{rule}` is not a valid filesystem glob: {error}"
+                ))
+            })?;
+            rules.push(CompiledReadRule { negated, matcher });
         }
+        Ok(Self { rules })
     }
-    Ok(matched && allowed)
+
+    /// True when no path can ever be allowed, so the workspace walk is waste.
+    fn grants_nothing(&self) -> bool {
+        self.rules.iter().all(|rule| rule.negated)
+    }
+
+    /// True when a negated rule could carve a denied path out of an allowed
+    /// subtree. Without one, an allowed root needs no hole-punching walk.
+    fn can_deny_below_an_allowed_path(&self) -> bool {
+        self.rules.iter().any(|rule| rule.negated)
+    }
+
+    /// Decide one workspace-relative path. The last matching rule wins, which
+    /// is the rule ordering `PolicyDef::check_path` applies at request time.
+    fn allows(&self, relative: &str) -> Result<bool, OrbitError> {
+        let normalized = normalize_glob_path(relative).map_err(OrbitError::from)?;
+        let mut allowed = false;
+        for rule in &self.rules {
+            if rule.matcher.is_match(&normalized) {
+                allowed = !rule.negated;
+            }
+        }
+        Ok(allowed)
+    }
 }
 
 fn normalize_rule_pattern(rule: &str) -> (bool, String) {

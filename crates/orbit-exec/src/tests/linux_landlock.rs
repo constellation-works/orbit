@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use orbit_types::policy::ResolvedFsProfile;
 
@@ -96,5 +97,58 @@ fn restricted_profile_does_not_grant_a_sibling_outside_the_read_root() {
     assert!(
         !grant_reads_file(&grants, &denied),
         "path outside the read root must not be granted: {grants:?}"
+    );
+}
+
+/// Grant compilation runs before every activity-scoped spawn, so it must stay
+/// proportional to the tree rather than to the rule set. Compiling the read
+/// globs per visited path cost roughly a millisecond each in a debug build,
+/// which turned an ordinary workspace into a minute of setup per spawn.
+#[test]
+fn grant_compilation_stays_fast_on_a_large_workspace() {
+    const FILES: usize = 3_000;
+    const BUDGET: Duration = Duration::from_secs(10);
+
+    let workspace = tempfile::tempdir().expect("workspace");
+    for bucket in 0..30 {
+        let dir = workspace.path().join(format!("bucket{bucket}"));
+        fs::create_dir(&dir).expect("mkdir bucket");
+        for file in 0..(FILES / 30) {
+            fs::write(dir.join(format!("file{file}.txt")), "x").expect("write file");
+        }
+    }
+    let profile = unrestricted_with_denies(&["**/.env", "**/.env.*", "**/*.env", "**/*.env.*"]);
+
+    let started = Instant::now();
+    let grants = linux_landlock_read_grants(workspace.path(), &profile).expect("compile grants");
+    let elapsed = started.elapsed();
+
+    assert!(
+        !grants.is_empty(),
+        "an unrestricted profile should still grant the workspace"
+    );
+    assert!(
+        elapsed < BUDGET,
+        "compiling grants for {FILES} files took {elapsed:?}, over the {BUDGET:?} budget"
+    );
+}
+
+/// A profile that allows nothing needs no workspace grants at all.
+#[test]
+fn empty_read_profile_grants_no_workspace_path() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let file = workspace.path().join("visible.txt");
+    fs::write(&file, "ok").expect("write file");
+    let profile = ResolvedFsProfile {
+        name: "pure_compute".to_string(),
+        read: Vec::new(),
+        modify: Vec::new(),
+    };
+
+    let grants = linux_landlock_read_grants(workspace.path(), &profile).expect("compile grants");
+
+    assert!(
+        !grant_reads_file(&grants, &file),
+        "an empty read profile must not grant a workspace file: {grants:?}"
     );
 }
