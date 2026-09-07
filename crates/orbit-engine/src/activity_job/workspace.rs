@@ -1,19 +1,21 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::Output;
 
 use serde::Serialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::context::RuntimeHost;
-use crate::executor::automation::vcs::git::git_command;
 
 use super::dispatcher::DispatchError;
 
+pub(crate) mod fingerprint;
 mod rebase_recovery;
 
+use fingerprint::{
+    GitPathState, GitWorktreeFingerprint, changed_paths, git_fingerprint, git_output_raw,
+    git_stdout_bytes,
+};
 use rebase_recovery::RebaseRecoveryCheckpoint;
 
 pub fn resolve_subprocess_cwd(
@@ -325,33 +327,6 @@ fn worktree_mismatch_error(
         code: "worktree_mismatch",
         diagnostic: diagnostic.to_string(),
     }
-}
-
-/// Exact, read-only identity of the Git state that an agent invocation can
-/// observe or mutate. Large byte streams are represented by domain-separated
-/// SHA-256 identities; untracked files retain one content identity per path so
-/// diagnostics can name the primary-checkout delta without staging it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct GitWorktreeFingerprint {
-    head: String,
-    branch: Option<String>,
-    index_sha256: String,
-    tracked_patch_sha256: String,
-    untracked_content: BTreeMap<String, String>,
-    dirty_paths: Vec<String>,
-    path_states: BTreeMap<String, GitPathState>,
-}
-
-/// Per-path Git identity. Optional identities distinguish an absent index
-/// entry, an empty staged/unstaged delta, a deletion from the worktree, and an
-/// untracked file without reading file contents into the diagnostic.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct GitPathState {
-    index_entry_sha256: Option<String>,
-    staged_patch_sha256: Option<String>,
-    worktree_patch_sha256: Option<String>,
-    worktree_present: bool,
-    untracked_content_sha256: Option<String>,
 }
 
 /// Durable, content-bearing evidence written before a dirty integrity failure
@@ -1042,240 +1017,4 @@ fn git_common_dir(path: &Path) -> Result<Option<PathBuf>, DispatchError> {
         return Ok(None);
     }
     Ok(Some(canonicalize_dir(Path::new(&common))))
-}
-
-fn git_fingerprint(root: &Path) -> Result<GitWorktreeFingerprint, DispatchError> {
-    let head = git_stdout(root, &["rev-parse", "--verify", "HEAD"])?;
-    let branch_output = git_output_raw(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
-    let branch = branch_output
-        .status
-        .success()
-        .then(|| {
-            String::from_utf8_lossy(&branch_output.stdout)
-                .trim()
-                .to_string()
-        })
-        .filter(|branch| !branch.is_empty());
-
-    let index = git_stdout_bytes(root, &["ls-files", "--stage", "-z", "--"])?;
-    let tracked_patch = git_stdout_bytes(
-        root,
-        &[
-            "diff",
-            "--binary",
-            "--full-index",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-renames",
-            "HEAD",
-            "--",
-        ],
-    )?;
-    let discovered_untracked_paths = nul_paths(&git_stdout_bytes(
-        root,
-        &["ls-files", "--others", "--exclude-standard", "-z", "--"],
-    )?);
-    let mut untracked_paths = Vec::with_capacity(discovered_untracked_paths.len());
-    let mut untracked_content = BTreeMap::new();
-    for path in discovered_untracked_paths {
-        let Some(identity) = untracked_file_identity(root, &path)? else {
-            // ADR-0286: an atomic tracked-file replacement briefly exposes an
-            // untracked sibling temp file. It may disappear between
-            // `ls-files` and `hash-object`; that file was never part of a
-            // stable checkout state, so omit it instead of turning an
-            // unrelated boundary snapshot into a permanent failure.
-            continue;
-        };
-        untracked_content.insert(path.clone(), identity);
-        untracked_paths.push(path);
-    }
-
-    let mut dirty_paths = nul_paths(&git_stdout_bytes(
-        root,
-        &["diff", "--name-only", "-z", "--no-renames", "HEAD", "--"],
-    )?);
-    dirty_paths.extend(untracked_paths);
-    dirty_paths.sort();
-    dirty_paths.dedup();
-
-    let mut path_states = BTreeMap::new();
-    for path in &dirty_paths {
-        let index_entry = git_stdout_bytes(root, &["ls-files", "--stage", "-z", "--", path])?;
-        let staged_patch = git_stdout_bytes(
-            root,
-            &[
-                "diff",
-                "--cached",
-                "--binary",
-                "--full-index",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--no-renames",
-                "HEAD",
-                "--",
-                path,
-            ],
-        )?;
-        let worktree_patch = git_stdout_bytes(
-            root,
-            &[
-                "diff",
-                "--binary",
-                "--full-index",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--no-renames",
-                "--",
-                path,
-            ],
-        )?;
-        path_states.insert(
-            path.clone(),
-            GitPathState {
-                index_entry_sha256: optional_sha256_identity("git-index-entry-v1", &index_entry),
-                staged_patch_sha256: optional_sha256_identity(
-                    "git-staged-path-patch-v1",
-                    &staged_patch,
-                ),
-                worktree_patch_sha256: optional_sha256_identity(
-                    "git-worktree-path-patch-v1",
-                    &worktree_patch,
-                ),
-                worktree_present: fs::symlink_metadata(root.join(path)).is_ok(),
-                untracked_content_sha256: untracked_content.get(path).cloned(),
-            },
-        );
-    }
-
-    Ok(GitWorktreeFingerprint {
-        head,
-        branch,
-        index_sha256: sha256_identity("git-index-v1", &index),
-        tracked_patch_sha256: sha256_identity("git-tracked-patch-v1", &tracked_patch),
-        untracked_content,
-        dirty_paths,
-        path_states,
-    })
-}
-
-pub(crate) fn untracked_file_identity(
-    root: &Path,
-    path: &str,
-) -> Result<Option<String>, DispatchError> {
-    let args = ["hash-object", "--no-filters", "--", path];
-    let output = git_output_raw(root, &args)?;
-    if output.status.success() {
-        let identity = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(Some(format!("git-blob:{identity}")));
-    }
-
-    match fs::symlink_metadata(root.join(path)) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        _ => Err(git_command_error(root, &args, &output)),
-    }
-}
-
-fn changed_paths(
-    root: &Path,
-    before: &GitWorktreeFingerprint,
-    after: &GitWorktreeFingerprint,
-) -> Vec<String> {
-    let all_state_paths = before
-        .path_states
-        .keys()
-        .chain(after.path_states.keys())
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let mut paths = BTreeSet::new();
-    for path in all_state_paths {
-        if before.path_states.get(&path) != after.path_states.get(&path) {
-            paths.insert(path);
-        }
-    }
-
-    if before.head != after.head
-        && let Ok(bytes) = git_stdout_bytes(
-            root,
-            &[
-                "diff",
-                "--name-only",
-                "-z",
-                "--no-renames",
-                &before.head,
-                &after.head,
-                "--",
-            ],
-        )
-    {
-        paths.extend(nul_paths(&bytes));
-    }
-    if paths.is_empty() {
-        if before.head != after.head {
-            paths.insert("<head>".to_string());
-        }
-        if before.branch != after.branch {
-            paths.insert("<branch-ref>".to_string());
-        }
-        if before.index_sha256 != after.index_sha256 {
-            paths.insert("<index>".to_string());
-        }
-        if before.tracked_patch_sha256 != after.tracked_patch_sha256 {
-            paths.insert("<tracked-patch>".to_string());
-        }
-    }
-    paths.into_iter().collect()
-}
-
-fn nul_paths(bytes: &[u8]) -> Vec<String> {
-    bytes
-        .split(|byte| *byte == 0)
-        .filter(|path| !path.is_empty())
-        .map(|path| String::from_utf8_lossy(path).into_owned())
-        .collect()
-}
-
-fn sha256_identity(domain: &str, bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(domain.as_bytes());
-    hasher.update([0]);
-    hasher.update((bytes.len() as u64).to_be_bytes());
-    hasher.update(bytes);
-    format!("sha256:{:x}", hasher.finalize())
-}
-
-fn optional_sha256_identity(domain: &str, bytes: &[u8]) -> Option<String> {
-    (!bytes.is_empty()).then(|| sha256_identity(domain, bytes))
-}
-
-fn git_stdout(root: &Path, args: &[&str]) -> Result<String, DispatchError> {
-    let bytes = git_stdout_bytes(root, args)?;
-    Ok(String::from_utf8_lossy(&bytes).trim().to_string())
-}
-
-fn git_stdout_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, DispatchError> {
-    let output = git_output_raw(root, args)?;
-    if output.status.success() {
-        return Ok(output.stdout);
-    }
-    Err(git_command_error(root, args, &output))
-}
-
-fn git_output_raw(root: &Path, args: &[&str]) -> Result<Output, DispatchError> {
-    git_command(root, args).output().map_err(|error| {
-        DispatchError::CliInvocationPermanent(format!(
-            "snapshot Git state in '{}': {error}",
-            root.display()
-        ))
-    })
-}
-
-fn git_command_error(root: &Path, args: &[&str], output: &Output) -> DispatchError {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    DispatchError::CliInvocationPermanent(format!(
-        "snapshot Git state in '{}' with `git {}` failed (status {}): {}",
-        root.display(),
-        args.join(" "),
-        output.status,
-        stderr.trim()
-    ))
 }
