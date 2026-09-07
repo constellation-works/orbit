@@ -55,7 +55,9 @@ pub use context::{
     blocked_workflow_failure_update,
 };
 pub use executor::automation::vcs::review_gate;
-pub use executor::automation::vcs::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees};
+pub use executor::automation::vcs::{
+    WorktreeGcOptions, WorktreeGcResult, collect_worktrees, fetch_remote_base,
+};
 pub use executor::automation::{
     StateExecutionContext, execute_action as execute_deterministic_action,
 };
