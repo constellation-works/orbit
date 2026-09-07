@@ -188,8 +188,10 @@ pub struct AutomationState {
     pub pending: Vec<Delivery>,
     #[serde(default)]
     pub waived: Vec<Delivery>,
-    /// Deliveries proven covered before landing; retired with the range that
-    /// contains them and never counted toward a threshold.
+    /// Deliveries proven covered before landing. They never count toward a
+    /// threshold. An exclusively excluded prefix may retire without a consumer
+    /// examination receipt; interleaved exclusions retire with the examined
+    /// range that contains them.
     #[serde(default)]
     pub excluded: Vec<ExcludedDelivery>,
     pub unresolved: BTreeMap<String, String>,

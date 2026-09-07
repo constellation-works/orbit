@@ -40,8 +40,10 @@ fn excluded_landings_do_not_count_toward_a_review_threshold() {
     let state = diagnostic.state.unwrap();
     assert_eq!(diagnostic.reason, "not_due");
     assert_eq!(state.pending.len(), 2);
-    assert_eq!(state.excluded.len(), 4);
+    assert_eq!(state.covered, revision(2));
+    assert_eq!(state.excluded.len(), 2);
     assert!(state.active.is_none());
+    assert!(diagnostic.receipts.is_empty());
     assert!(host.actions.lock().unwrap().is_empty());
 
     host.page(6, 7);
@@ -57,11 +59,12 @@ fn excluded_landings_do_not_count_toward_a_review_threshold() {
             .collect::<Vec<_>>(),
         vec![landing(3).key, landing(6).key, landing(7).key]
     );
-    assert_eq!(batch.exclusions.len(), 4);
+    assert_eq!(batch.from_exclusive, revision(2));
+    assert_eq!(batch.exclusions.len(), 2);
     assert_eq!(
         batch.commits.len(),
-        7,
-        "the range keeps excluded commits as context"
+        5,
+        "the range keeps interleaved excluded commits as context"
     );
     let template = evidence_template(state.active.as_ref().unwrap());
     assert_eq!(template.examined_deliveries.len(), 3);
@@ -165,4 +168,86 @@ fn a_pending_landing_is_not_excluded_retroactively() {
         .unwrap();
     assert_eq!(state.pending.len(), 1);
     assert!(state.excluded.is_empty());
+}
+
+fn exclude_range(host: &Host, from: usize, to: usize) {
+    host.page(from, to);
+    let mut page = host.page.lock().unwrap();
+    for n in from + 1..=to {
+        page.exclusions.insert(landing(n).key, exclusion(n));
+    }
+}
+
+/// An excluded-only prefix advances the covered cursor without minting a
+/// receipt or counting toward the review threshold.
+#[test]
+fn excluded_only_prefix_advances_coverage_without_a_receipt() {
+    let (store, host, mut trigger) = review_setup();
+    trigger.threshold = 1;
+    exclude_range(&host, 0, 2);
+
+    let diagnostic = evaluate(store.as_ref(), &host, &trigger, true);
+    let state = diagnostic.state.unwrap();
+    assert_eq!(diagnostic.reason, "not_due");
+    assert_eq!(state.covered, revision(2));
+    assert_eq!(state.observed, revision(2));
+    assert!(state.pending.is_empty());
+    assert!(state.excluded.is_empty());
+    assert!(state.pending_commits.is_empty());
+    assert!(state.active.is_none());
+    assert!(diagnostic.receipts.is_empty());
+    assert!(host.actions.lock().unwrap().is_empty());
+
+    host.page(2, 3);
+    let diagnostic = evaluate(store.as_ref(), &host, &trigger, true);
+    assert_eq!(diagnostic.reason, "threshold_reached");
+    let state = diagnostic.state.unwrap();
+    let batch = &state.active.as_ref().unwrap().batch;
+    assert_eq!(batch.deliveries.len(), 1);
+    assert_eq!(batch.deliveries[0].key, landing(3).key);
+    assert_eq!(batch.from_exclusive, revision(2));
+    assert!(batch.exclusions.is_empty());
+    assert!(diagnostic.receipts.is_empty());
+}
+
+/// A covered-only window larger than the observation cap must keep moving,
+/// then schedule the first later uncovered delivery on the same consumer.
+#[test]
+fn covered_only_prefix_past_five_thousand_still_observes_later_uncovered() {
+    let (store, host, mut trigger) = review_setup();
+    trigger.threshold = 1;
+    const PAGES: usize = 101;
+    const PAGE: usize = 50;
+    let covered = PAGES * PAGE;
+
+    for page in 0..PAGES {
+        let from = page * PAGE;
+        exclude_range(&host, from, from + PAGE);
+        let diagnostic = evaluate(store.as_ref(), &host, &trigger, true);
+        let state = diagnostic.state.unwrap();
+        assert_eq!(diagnostic.reason, "not_due");
+        assert_eq!(state.baseline, revision(0));
+        assert_eq!(state.covered, revision(from + PAGE));
+        assert_eq!(state.observed, revision(from + PAGE));
+        assert!(state.pending.is_empty());
+        assert!(state.excluded.is_empty());
+        assert!(state.pending_commits.len() <= 200);
+        assert!(state.active.is_none());
+        assert!(diagnostic.receipts.is_empty());
+        assert!(host.actions.lock().unwrap().is_empty());
+    }
+
+    host.page(covered, covered + 1);
+    let diagnostic = evaluate(store.as_ref(), &host, &trigger, true);
+    assert_eq!(diagnostic.reason, "threshold_reached");
+    let state = diagnostic.state.unwrap();
+    assert_eq!(state.baseline, revision(0));
+    assert_eq!(state.consumer, "ws/qa");
+    let batch = &state.active.as_ref().unwrap().batch;
+    assert_eq!(batch.deliveries.len(), 1);
+    assert_eq!(batch.deliveries[0].key, landing(covered + 1).key);
+    assert_eq!(batch.from_exclusive, revision(covered));
+    assert!(batch.exclusions.is_empty());
+    assert!(diagnostic.receipts.is_empty());
+    assert_eq!(store.automation_receipts("ws/qa", 20).unwrap().len(), 0);
 }
