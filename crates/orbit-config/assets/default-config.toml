@@ -50,3 +50,14 @@ system_crew = "system"
 # log_retention_days = 7    # delete archives older than N days (>= 1)
 # log_max_total_mb   = 500  # total MiB budget across archives; oldest pruned first (>= 1)
 # log_max_file_mb    = 100  # roll the active log once it exceeds N MiB (>= 1, <= log_max_total_mb)
+
+# [operation]
+# Operation-mode preferences. They describe desired defaults and authorize
+# nothing: scoped automation needs an explicit `orbit operation enable` grant,
+# and no grant authorizes merge. Selecting a preset resets the preset-managed
+# keys (preparation, preparation_due_seconds, leaf_ceiling, promotion,
+# completion, recovery, recovery_episodes_per_task, recovery_minutes_per_task)
+# at that layer; review_policy, review_crew and delivery_cap are independent.
+# preset = "supervised"        # or "autonomous"
+# delivery_cap = "review"      # raise to "done" only where managed completion is allowed
+# review_policy = "none"       # or "after-landing"; "before-pr" is not yet supported

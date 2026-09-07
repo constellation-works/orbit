@@ -289,7 +289,10 @@ state projection: pending fingerprints, fresh/unready assessments, withheld
 reasons, consumed attempts, absolute deadlines, continuation and immutable
 receipt links. Usage stays unknown when no measurement exists. Readiness is
 positive evidence only; this trigger grants no promotion, commit, merge or
-implementation authority. Operation-mode grants remain separate work.
+implementation authority. Operation-mode grants [ORB-11332] are separate
+records: a valid grant supplies this evaluator a scope and due interval and
+lets the drain promote in-scope tasks whose accepted assessment is still fresh;
+see [operation-mode operations](../operation-mode/5_operations.md).
 
 Keep definitions disabled for rollout review. Inspect `orbit routine list`,
 `orbit routine show <name> --json`, and the existing `orbit sweep --dry-run`

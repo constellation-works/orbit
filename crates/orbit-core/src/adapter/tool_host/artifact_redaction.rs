@@ -302,6 +302,9 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::Friction(FrictionVerb::Stats)
         | OrbitBuiltinAction::Friction(FrictionVerb::Tags)
         | OrbitBuiltinAction::Friction(FrictionVerb::Resolve)
+        // Operation-mode verbs persist grant structure (task ids, rights,
+        // windows, a short operator reason); no free-text artifact is written.
+        | OrbitBuiltinAction::OperationMode(_)
         | OrbitBuiltinAction::PipelineInvoke
         | OrbitBuiltinAction::PipelineWait
         | OrbitBuiltinAction::Search

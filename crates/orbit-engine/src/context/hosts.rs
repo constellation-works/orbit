@@ -82,6 +82,20 @@ fn unsupported_dispatch_capability(capability: &str) -> DispatchError {
 /// strongly typed activity-job enums at the orbit-core boundary; an
 /// unrecognized provider yields `None` for that field rather than
 /// silently coercing dispatch to a wrong runtime.
+/// Whether a step-recovery hook may dispatch [ORB-11332].
+///
+/// `Allowed` is the pre-existing behavior for runs without an operation-mode
+/// admission. `Reserved` names the aggregate-budget episode the host charged
+/// before dispatch, and `Denied` carries the reason recovery must not run
+/// (`recovery_episodes_exhausted`, `recovery_minutes_exhausted`,
+/// `grant_revoked`). The original step error stays authoritative either way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepRecoveryAdmission {
+    Allowed,
+    Reserved { episode: u32 },
+    Denied { reason: String },
+}
+
 /// The single capability boundary between the job executor and its runtime.
 ///
 /// Deterministic actions, task/run persistence, environment resolution, agent
@@ -204,6 +218,36 @@ pub trait RuntimeHost: Send + Sync {
         Err(unsupported_runtime_capability(
             "apply_task_automation_update",
         ))
+    }
+
+    // ── Operation-mode rechecks [ORB-11332] ────────────────────────────
+
+    /// Ask before dispatching a step-recovery hook. Hosts without operation
+    /// mode allow every recovery, which is the pre-existing behavior.
+    fn authorize_step_recovery(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+    ) -> Result<StepRecoveryAdmission, OrbitError> {
+        Ok(StepRecoveryAdmission::Allowed)
+    }
+    /// Record the wall time a reserved recovery episode consumed.
+    fn settle_step_recovery(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _elapsed_seconds: u64,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+    /// Recheck the run's authority immediately before the guarded
+    /// `review -> done` transition. An error refuses completion.
+    fn authorize_task_completion(
+        &self,
+        _run_id: &str,
+        _task_ids: &[String],
+    ) -> Result<(), OrbitError> {
+        Ok(())
     }
 
     // ── Config accessors (implementors provide these) ──────────────────

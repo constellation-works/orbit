@@ -1,0 +1,22 @@
+Explain, enable, stop, and revoke scoped operation-mode automation
+
+Usage: orbit operation [OPTIONS] <COMMAND>
+
+Commands:
+  explain  Explain the effective operation policy and authority
+  enable   Enable a scoped, bounded operation-mode grant
+  list     List recent operation-mode grants
+  show     Show one operation-mode grant
+  stop     Stop new admissions under a grant (admitted work keeps its bounds)
+  revoke   Hard-revoke a grant (admitted work loses privileged actions)
+
+Options:
+      --root <ROOT>  Override the Orbit root directory (highest precedence)
+  -h, --help         Print help
+
+Preferences live under `[operation]` in config.toml and authorize nothing by
+themselves. `orbit operation enable` records the one durable grant: a finite
+task set, separate prepare/promote/complete rights, and a bounded window.
+Start a drain under it with `orbit run auto --grant <ID>`. `stop` ends new
+admissions while admitted work keeps its captured bounds; `revoke` also
+withdraws completion from admitted work. Neither cancels running children.

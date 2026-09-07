@@ -172,6 +172,7 @@ fn auto_stop_with_no_coordinator_is_idle() {
         concurrency: None,
         complete: false,
         allow_crew: Vec::new(),
+        grant: None,
         json: true,
         claim_token: None,
         stop: true,

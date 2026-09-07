@@ -16,6 +16,7 @@ let autoDrainDuration = "1h";
 let autoDrainConcurrency = "";
 let autoDrainComplete = false;
 let lastAutoDrainRun = null;
+let lastOperationMode = null;
 let context = null;
 
 export function initOperations(nextContext) {
@@ -577,6 +578,130 @@ function fetchAndRenderAutoDrain() {
   return fetchJson(`/api/workflows/auto/readiness${query}`).then(renderAutoDrain);
 }
 
+// ORB-11332: operation mode. The panel projects `orbit operation explain`
+// (every resolved field with its winning source, the active grant, caps, and
+// limiting reasons) and offers the two governed grant controls. Enablement is
+// deliberately not a dashboard action: a grant names a finite task set and
+// explicit rights, which is an operator decision made from the CLI or MCP.
+const OPERATION_MODE_CONTROLS = {
+  stop: {
+    label: "Stop grant",
+    confirm: "Stop new admissions and promotion under this grant? Admitted work keeps its captured bounds, including completion. This is not cancellation.",
+    enabled: (authority) => authority.admission === "open",
+  },
+  revoke: {
+    label: "Revoke grant",
+    confirm: "WARNING: revocation withdraws privileged actions, including completion, from work already admitted under this grant. Bound drains stop admitting. Continue?",
+    enabled: (authority) => authority.status !== "revoked",
+  },
+};
+
+function policyField(policy, name, label) {
+  const entry = policy?.[name] || {};
+  const value = entry.value ?? "—";
+  const source = entry.source ? ` [${entry.source}]` : "";
+  return field(label, `${value}${source}`);
+}
+
+function operationControlButton(payload, kind) {
+  const control = OPERATION_MODE_CONTROLS[kind];
+  const authority = payload.authority || {};
+  const key = `operation:${kind}`;
+  const pending = pendingOperations.has(key);
+  const unauthorized = payload.controls_authorized === false;
+  const button = el("button", {
+    class: `operation-button ${kind === "revoke" ? "disable" : "secondary"}`,
+    text: pending ? `${control.label}…` : control.label,
+    title: unauthorized
+      ? "Grant controls require an authorized operator session."
+      : control.confirm,
+  });
+  button.type = "button";
+  button.disabled = unauthorized || pending || !control.enabled(authority);
+  button.addEventListener("click", async () => {
+    if (pendingOperations.has(key)) return;
+    if (!window.confirm(`${control.confirm}\n\nGrant: ${authority.grant_id} (revision ${authority.revision})`)) return;
+    pendingOperations.add(key);
+    feedback("operation-mode-operation-feedback", "pending", `${control.label} in progress…`);
+    renderOperationMode(payload);
+    try {
+      const result = await postJson(`/api/operation/${kind}`, {
+        grant_id: authority.grant_id,
+        expected_revision: authority.revision,
+      });
+      feedback("operation-mode-operation-feedback", "success", `Grant ${result?.grant_id ?? authority.grant_id}: ${result?.outcome ?? kind} (revision ${result?.revision ?? "?"}).`);
+      await fetchAndRenderOperationMode();
+    } catch (error) {
+      feedback("operation-mode-operation-feedback", "error", `${control.label} failed: ${error.message}`);
+    } finally {
+      pendingOperations.delete(key);
+      if (lastOperationMode) renderOperationMode(lastOperationMode);
+    }
+  });
+  return button;
+}
+
+function renderOperationMode(payload) {
+  lastOperationMode = payload;
+  const body = $("operation-mode-body");
+  if (!body) return;
+  body.textContent = "";
+  const workspaceReason = workspaceReadOnlyReason();
+  const workspace = selectedWorkspace();
+  if (workspaceReason) {
+    body.appendChild(el("div", { class: "operations-readonly-note", text: workspaceReason }));
+    $("operation-mode-count").textContent = "read-only";
+    return;
+  }
+  const policy = payload.policy || {};
+  const authority = payload.authority || {};
+  const delivery = payload.delivery || {};
+  body.append(
+    el("div", { class: "operation-grid" }, [
+      policyField(policy, "preset", "Preset"),
+      policyField(policy, "preparation", "Preparation"),
+      policyField(policy, "promotion", "Promotion"),
+      policyField(policy, "completion", "Completion"),
+      policyField(policy, "recovery", "Recovery"),
+      policyField(policy, "leaf_ceiling", "Leaf ceiling"),
+      policyField(policy, "review_policy", "Review policy"),
+      policyField(policy, "delivery_cap", "Delivery cap"),
+    ]),
+    el("div", { class: "operation-grid" }, [
+      field("Effective completion", `${delivery.effective_completion ?? "—"}${delivery.cap ? ` (cap: ${delivery.cap})` : ""}`),
+      field("Grant", authority.grant_id ?? "none"),
+      field("Admission", authority.admission ?? "none"),
+      field("Rights", Array.isArray(authority.rights) && authority.rights.length ? authority.rights.join(", ") : "—"),
+      field("Scope", Array.isArray(authority.task_ids) ? `${authority.task_ids.length} task(s)` : "—"),
+      field("Expires", authority.expires_at ? time(authority.expires_at) : "—"),
+    ]),
+  );
+  const reasons = Array.isArray(payload.limiting_reasons) ? payload.limiting_reasons : [];
+  body.appendChild(el("p", {
+    class: "operation-control-note",
+    text: reasons.length ? `Limiting reasons: ${reasons.join(", ")}` : "No limiting reasons.",
+  }));
+  body.appendChild(el("p", {
+    class: "operation-control-note",
+    text: "Changing a preference activates nothing. Only an explicit grant (orbit operation enable) authorizes scoped automation, and no grant authorizes merge.",
+  }));
+  if (authority.grant_id) {
+    body.appendChild(el("div", { class: "operation-clock-actions" }, [
+      operationControlButton(payload, "stop"),
+      operationControlButton(payload, "revoke"),
+    ]));
+  }
+  $("operation-mode-count").textContent = `${authority.grant_id ? authority.admission : "no grant"} · ${workspace?.name || workspace?.id}`;
+}
+
+export function fetchAndRenderOperationMode() {
+  if (!selectedWorkspace()) {
+    renderOperationMode({});
+    return Promise.resolve();
+  }
+  return fetchJson("/api/operation/explain").then(renderOperationMode);
+}
+
 export function fetchAndRenderOperations() {
   return Promise.all([
     fetchJson("/api/routines").then(renderOperations),
@@ -585,6 +710,9 @@ export function fetchAndRenderOperations() {
     }),
     fetchAndRenderAutoDrain().catch((error) => {
       feedback("auto-drain-operation-feedback", "error", `Failed to load auto-delivery readiness: ${error.message}`);
+    }),
+    fetchAndRenderOperationMode().catch((error) => {
+      feedback("operation-mode-operation-feedback", "error", `Failed to load operation mode: ${error.message}`);
     }),
   ]);
 }

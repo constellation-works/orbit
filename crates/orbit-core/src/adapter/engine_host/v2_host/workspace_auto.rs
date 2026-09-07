@@ -4,10 +4,11 @@ use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{Task, TaskStatus, task_dependencies_ready, unmet_task_dependencies};
-use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit};
+use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, OperationAdmission};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::operation::{admission_state, live_admission, promote_within_grant};
 
 use crate::runtime::engine::crew::CrewAllowlist;
 
@@ -114,7 +115,21 @@ pub(super) fn classify_workspace_auto_tasks(
         .collect();
     let admissions_stop = live_admissions_stop(runtime, input);
     let admissions_stopped = admissions_stop.is_some();
-    let free_slots = if admissions_stopped {
+
+    // [ORB-11332] A grant-bound drain rechecks its grant every iteration:
+    // stop, expiry, and revocation close the window here, the finite scope
+    // bounds what may be offered, the captured ceiling bounds how much, and
+    // fresh positively assessed proposed work inside the scope is promoted
+    // before the backlog is listed. The Store transaction rechecks all of it
+    // again at each child insert; this is the classifier's snapshot.
+    let operation = grant_bound_admission(runtime, action, input)?;
+    let operation_open = operation.as_ref().is_none_or(|operation| operation.open);
+    let max_active_leaf_runs = operation
+        .as_ref()
+        .map_or(max_active_leaf_runs, |operation| {
+            max_active_leaf_runs.min(u64::from(operation.leaf_ceiling))
+        });
+    let free_slots = if admissions_stopped || !operation_open {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
@@ -134,6 +149,11 @@ pub(super) fn classify_workspace_auto_tasks(
         .iter()
         .filter_map(Value::as_str)
         .filter(|task_id| !claimed.contains(*task_id))
+        .filter(|task_id| {
+            operation
+                .as_ref()
+                .is_none_or(|operation| operation.scope.contains(*task_id))
+        })
         .map(ToOwned::to_owned)
         .collect();
     let admitted = &pending[..pending.len().min(free_slots)];
@@ -150,7 +170,7 @@ pub(super) fn classify_workspace_auto_tasks(
     // root's status also closes the window between a detached submit and
     // the child's `worktree_setup` moving that root to `in-progress`.
     // [ORB-11283] A stopped drain offers no new epic either.
-    let epic_task_id = if admissions_stopped || active_epic.is_some() {
+    let epic_task_id = if admissions_stopped || !operation_open || active_epic.is_some() {
         None
     } else {
         next_admissible_epic_root(
@@ -158,6 +178,11 @@ pub(super) fn classify_workspace_auto_tasks(
             action,
             allowlist_from_input(runtime, action, input)?.as_ref(),
         )?
+        .filter(|root| {
+            operation
+                .as_ref()
+                .is_none_or(|operation| operation.scope.contains(root))
+        })
     };
 
     let has_leaves = !loose_task_dispatches.is_empty();
@@ -192,6 +217,55 @@ pub(super) fn classify_workspace_auto_tasks(
         "admissions_stop": admissions_stop,
         "active_epic_run_id": active_epic.as_ref().map(|epic| epic.run_id.clone()),
         "active_epic_task_id": active_epic.and_then(|epic| epic.task_id),
+        "operation": operation.map(|operation| operation.report),
+    }))
+}
+
+/// The grant-bound facts one classifier iteration works under.
+struct GrantBoundAdmission {
+    /// Whether the grant still admits new work.
+    open: bool,
+    /// The finite task set the drain may offer.
+    scope: BTreeSet<String>,
+    /// The captured leaf ceiling.
+    leaf_ceiling: u32,
+    /// The durable explanation carried in the step output.
+    report: Value,
+}
+
+/// Recheck the coordinator's grant and promote eligible in-scope work.
+/// `None` for a drain that was not admitted under a grant.
+fn grant_bound_admission(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+) -> Result<Option<GrantBoundAdmission>, DispatchError> {
+    let Some(admission) = live_admission(runtime, input) else {
+        return Ok(None);
+    };
+    let (grant, state) = admission_state(runtime, &admission)
+        .map_err(|error| action_failed(action, format!("recheck operation grant: {error}")))?;
+    let open = state.admits();
+    let promotions = if open {
+        promote_within_grant(runtime, &grant)
+            .map_err(|error| action_failed(action, format!("operation promotion: {error}")))?
+    } else {
+        Vec::new()
+    };
+    Ok(Some(GrantBoundAdmission {
+        open,
+        scope: grant.task_ids.iter().cloned().collect(),
+        leaf_ceiling: admission.limits.leaf_ceiling,
+        report: json!({
+            "grant_id": grant.id,
+            "grant_revision": grant.revision,
+            "admission": state.reason(),
+            "expires_at": grant.expires_at.to_rfc3339(),
+            "completion": admission.completion,
+            "scope": grant.task_ids,
+            "leaf_ceiling": admission.limits.leaf_ceiling,
+            "promotions": promotions,
+        }),
     }))
 }
 
@@ -260,7 +334,28 @@ pub fn explain_workspace_auto_readiness(
     let admissions_stopped = active_drain
         .as_ref()
         .is_some_and(|drain| drain.admissions_stopped());
-    let free_slots = if admissions_stopped {
+    // [ORB-11332] A grant-bound drain admits only its finite scope, and only
+    // while the grant admits at all; report that the same way the drain sees it.
+    let operation = active_drain
+        .as_ref()
+        .and_then(|drain| drain.operation.as_ref())
+        .map(|admission| {
+            admission_state(runtime, admission).map(|(grant, state)| ReadinessGrant {
+                grant,
+                state,
+                leaf_ceiling: admission.limits.leaf_ceiling,
+            })
+        })
+        .transpose()?;
+    let grant_closed = operation
+        .as_ref()
+        .is_some_and(|operation| !operation.state.admits());
+    let max_active_leaf_runs = operation
+        .as_ref()
+        .map_or(max_active_leaf_runs, |operation| {
+            max_active_leaf_runs.min(u64::from(operation.leaf_ceiling))
+        });
+    let free_slots = if admissions_stopped || grant_closed {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
@@ -271,6 +366,11 @@ pub fn explain_workspace_auto_readiness(
         .admissible_leaves
         .iter()
         .filter(|task| !claimed_by_task.contains_key(&task.id))
+        .filter(|task| {
+            operation
+                .as_ref()
+                .is_none_or(|operation| operation.grant.covers(&task.id))
+        })
         .map(|task| task.id.clone())
         .collect::<Vec<_>>();
     let admitted = pending
@@ -408,6 +508,12 @@ pub fn explain_workspace_auto_readiness(
                     "reason".to_string(),
                     Value::String("admissions_stopped".to_string()),
                 );
+            } else if let Some(closed) = operation.as_ref().filter(|operation| !operation.state.admits()) {
+                object.insert("reason".to_string(), Value::String(closed.state.reason().to_string()));
+                object.insert("grant_id".to_string(), json!(closed.grant.id));
+            } else if let Some(outside) = operation.as_ref().filter(|operation| !operation.grant.covers(&task.id)) {
+                object.insert("reason".to_string(), Value::String("outside_grant_scope".to_string()));
+                object.insert("grant_id".to_string(), json!(outside.grant.id));
             } else if admitted.contains(&task.id) {
                 object.insert("eligible".to_string(), Value::Bool(true));
                 object.insert("reason".to_string(), Value::String("ready".to_string()));
@@ -435,6 +541,13 @@ pub fn explain_workspace_auto_readiness(
             "admissions_stop": active_drain
                 .as_ref()
                 .and_then(|drain| drain.stop.clone()),
+            "operation": operation.as_ref().map(|operation| json!({
+                "grant_id": operation.grant.id,
+                "admission": operation.state.reason(),
+                "scope": operation.grant.task_ids,
+                "expires_at": operation.grant.expires_at.to_rfc3339(),
+                "leaf_ceiling": operation.leaf_ceiling,
+            })),
         },
         "tasks": tasks,
     }))
@@ -451,6 +564,14 @@ impl OrbitRuntime {
     ) -> Result<Value, OrbitError> {
         explain_workspace_auto_readiness(self, task_ids, max_active_leaf_runs, limit, allowed_crews)
     }
+}
+
+/// The grant a live grant-bound drain is admitting under, as readiness sees it.
+struct ReadinessGrant {
+    grant: orbit_types::workflow::OperationGrant,
+    state: orbit_types::workflow::GrantAdmission,
+    /// The ceiling captured at the drain's admission.
+    leaf_ceiling: u32,
 }
 
 /// The live worker ceiling an operator has set on *this* drain [ORB-11253].
@@ -489,6 +610,8 @@ struct ActiveDrain {
     submitted: u32,
     limit: Option<DrainWorkerLimit>,
     stop: Option<DrainAdmissionsStop>,
+    /// The operation-mode snapshot the drain was admitted under [ORB-11332].
+    operation: Option<OperationAdmission>,
 }
 
 impl ActiveDrain {
@@ -531,11 +654,19 @@ fn active_drain(runtime: &OrbitRuntime) -> Result<Option<ActiveDrain>, OrbitErro
         .as_ref()
         .and_then(|state| state.drain_worker_limit.clone());
     let stop = state.and_then(|state| state.drain_admissions_stop);
+    let operation = run
+        .input
+        .as_ref()
+        .map(OperationAdmission::from_run_input)
+        .transpose()
+        .map_err(OrbitError::InvalidInput)?
+        .flatten();
     Ok(Some(ActiveDrain {
         run_id: run.run_id,
         submitted,
         limit,
         stop,
+        operation,
     }))
 }
 
@@ -773,13 +904,28 @@ pub(super) fn drain_window(
     let remaining_seconds = (deadline - now).num_milliseconds() as f64 / 1000.0;
     let window_expired = remaining_seconds <= 0.0;
     let admissions_stopped = live_admissions_stop(runtime, input).is_some();
-    let expired = window_expired || admissions_stopped;
+    // [ORB-11332] A grant-bound drain also closes when its grant stops
+    // admitting: ordinary expiry and stop end new admissions, revocation does
+    // too; admitted children are untouched either way.
+    let grant_closed = match live_admission(runtime, input) {
+        Some(admission) => {
+            let (_, state) = admission_state(runtime, &admission).map_err(|error| {
+                action_failed(action, format!("recheck operation grant: {error}"))
+            })?;
+            (!state.admits()).then_some(state.reason())
+        }
+        None => None,
+    };
+    let closed = admissions_stopped || grant_closed.is_some();
+    let expired = window_expired || closed;
     Ok(json!({
         "deadline": deadline.to_rfc3339_opts(SecondsFormat::Secs, true),
         "expired": expired,
-        "remaining_seconds": if admissions_stopped { 0.0 } else { remaining_seconds.max(0.0) },
+        "remaining_seconds": if closed { 0.0 } else { remaining_seconds.max(0.0) },
         "expired_reason": if admissions_stopped {
             "admissions_stopped"
+        } else if let Some(reason) = grant_closed {
+            reason
         } else if window_expired {
             "window"
         } else {

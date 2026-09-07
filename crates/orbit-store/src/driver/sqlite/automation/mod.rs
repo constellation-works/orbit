@@ -190,6 +190,29 @@ impl AutomationStoreBackend for Store {
         })
     }
 
+    fn automation_states(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<AutomationState>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT state_json FROM automation_consumers WHERE consumer LIKE ?1 ESCAPE '\\' ORDER BY consumer LIMIT ?2",
+                )
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            let pattern = format!("{}%", prefix.replace('%', "\\%").replace('_', "\\_"));
+            let rows = stmt
+                .query_map(params![pattern, limit.min(100)], |row| row.get::<_, String>(0))
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            rows.map(|row| {
+                row.map_err(|e| OrbitError::Store(e.to_string()))
+                    .and_then(|raw| decode(&raw))
+            })
+            .collect()
+        })
+    }
+
     fn automation_receipts(
         &self,
         consumer: &str,

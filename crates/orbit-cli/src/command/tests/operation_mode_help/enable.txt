@@ -1,0 +1,31 @@
+Enable a scoped, bounded operation-mode grant
+
+Usage: orbit operation enable [OPTIONS] --task <TASK_IDS> --for <WINDOW> --right <RIGHTS>
+
+Options:
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+      --task <TASK_IDS>
+          Task in the finite scope; repeat or comma-separate (at most 50)
+      --for <WINDOW>
+          Admission window from now, e.g. `30m`, `2h` (at most 24h)
+      --right <RIGHTS>
+          Right to grant: prepare, promote, or complete; repeat or comma-separate
+      --preset <PRESET>
+          Run-layer preset override: supervised or autonomous (resets the preset-managed fields)
+      --completion <COMPLETION>
+          Run-layer completion preference: review or done (an explicit done past the delivery cap is refused)
+      --leaf-ceiling <LEAF_CEILING>
+          Run-layer ceiling on concurrently live leaf runs
+      --recovery-episodes <RECOVERY_EPISODES>
+          Run-layer recovery episodes allowed per task
+      --recovery-minutes <RECOVERY_MINUTES>
+          Run-layer recovery wall-time minutes allowed per task
+      --review-policy <REVIEW_POLICY>
+          Run-layer review policy: none or after-landing (before-pr is not yet supported at admission)
+      --claim-token <CLAIM_TOKEN>
+          Token for this workspace's exclusive claim, when another operator holds one
+      --json
+          Output as JSON
+  -h, --help
+          Print help

@@ -8,6 +8,7 @@ pub(crate) mod friction_tools;
 mod host;
 mod input;
 mod json;
+mod operation_mode_tools;
 mod pipeline_tools;
 mod search_tools;
 mod semantic_tools;

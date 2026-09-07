@@ -212,6 +212,9 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         params: &ChildJobRunAdmissionParams,
     ) -> Result<ChildJobRunAdmissionOutcome, OrbitError> {
         validate_path_stem(&params.job_id, "job")?;
+        if params.authority.is_some() {
+            super::operation::initialize(&self.store)?;
+        }
         self.store
             .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
                 let parent_row = tx
@@ -250,6 +253,19 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                     })?;
                 if parent_state.admissions_stopped() {
                     return Ok(ChildJobRunAdmissionOutcome::AdmissionsStopped);
+                }
+                // [ORB-11332] A grant-bound parent rechecks its grant here, in
+                // the same transaction, so a stop, expiry, or revocation that
+                // committed first is seen before the child exists.
+                if let Some(authority) = &params.authority
+                    && let Some(reason) = super::operation::admission_refusal(
+                        &tx.tx,
+                        &self.workspace_id,
+                        &params.job_id,
+                        authority,
+                    )?
+                {
+                    return Ok(ChildJobRunAdmissionOutcome::Refused { reason });
                 }
 
                 let run_id = next_run_id_conn(
