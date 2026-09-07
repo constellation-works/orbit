@@ -42,6 +42,12 @@ pub const AUTO_WORKFLOW_ALIAS: &str = "auto";
 /// default, so an ordinary submission's persisted input is unchanged and the
 /// presence of the key is itself the durable record that an operator granted
 /// this run completion authority.
+///
+/// [ORB-11746] `base_sync` is only written for `--mode local`. Seeded shipping
+/// jobs default `base_sync: remote` (fetch `origin/<base>`), which is correct
+/// for PR delivery but fails `worktree_setup` on a disposable repo with no
+/// remotes. Local mode opts into the local base so First Task can complete
+/// without origin; PR submissions omit the key and keep the remote default.
 pub fn build_ship_input(
     mode: ShipMode,
     base_branch: &str,
@@ -77,6 +83,9 @@ pub fn build_ship_input(
         "base_branch".to_string(),
         Value::String(base_branch.to_string()),
     );
+    if mode == ShipMode::Local {
+        map.insert("base_sync".to_string(), Value::String("local".to_string()));
+    }
     if !task_ids.is_empty() {
         map.insert(
             "task_ids".to_string(),
@@ -138,6 +147,10 @@ mod ship_input_tests {
         assert_eq!(input["mode"], "pr");
         assert_eq!(input["base_branch"], "main");
         assert!(input.get("task_ids").is_none());
+        assert!(
+            input.get("base_sync").is_none(),
+            "PR mode must omit base_sync so seeded jobs keep fetching origin/<base>"
+        );
     }
 
     #[test]
@@ -153,7 +166,21 @@ mod ship_input_tests {
         .expect("builds");
         assert_eq!(input["mode"], "local");
         assert_eq!(input["base_branch"], "agent-main");
+        assert_eq!(input["base_sync"], "local");
         assert_eq!(input["task_ids"], serde_json::json!(["T1", "T2"]));
+    }
+
+    #[test]
+    fn local_mode_opts_into_local_base_sync_without_origin() {
+        // Disposable First Task repos have no remotes. Local ship must tell
+        // worktree_setup to use the local base instead of fetching origin/<base>.
+        let local = build_ship_input(ShipMode::Local, "main", &[], CompletionPolicy::Review, &[])
+            .expect("local input builds");
+        assert_eq!(local["base_sync"], "local");
+
+        let pr = build_ship_input(ShipMode::Pr, "main", &[], CompletionPolicy::Review, &[])
+            .expect("pr input builds");
+        assert!(pr.get("base_sync").is_none());
     }
 
     #[test]
