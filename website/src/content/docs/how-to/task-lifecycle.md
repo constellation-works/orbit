@@ -74,5 +74,6 @@ To authorize the run itself to finish delivery instead, ship it with
 
 ## Next
 
+- [Use the Dashboard](../dashboard/) — inspect the same tasks and runs in the operator UI.
 - [Run a Continuous Delivery Window](../continuous-delivery/) — the same path across a whole backlog.
 - [Schedule Recurring Work](../recurring-work/) — let Orbit file and run the work itself.
