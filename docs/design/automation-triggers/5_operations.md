@@ -132,7 +132,7 @@ range, including unattributed neighbors. Fill in the actual checks and findings,
 replace the action ID placeholder with the current task ID, and attach:
 
 ```sh
-orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":"/tmp/automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
+orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":"./automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
 ```
 
 The version-1 schema has these required fields:

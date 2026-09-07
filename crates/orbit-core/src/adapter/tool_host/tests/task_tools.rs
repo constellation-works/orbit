@@ -2798,7 +2798,7 @@ mod artifact_get {
     }
 
     fn attach(runtime: &OrbitRuntime, task_id: &str, path: &str, content: Vec<u8>) {
-        let source = std::env::temp_dir().join(format!(
+        let source = runtime.paths().repo_root.join(format!(
             "orbit-artifact-fixture-{}-{}",
             std::process::id(),
             path.replace('/', "_"),
