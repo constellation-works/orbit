@@ -31,6 +31,16 @@ the source commit, and verifies the deployment URL plus
 `https://orbit-cli.com` before succeeding. The published `/deployment.json`
 records the source revision and Actions run URL.
 
+The published `/.well-known/security.txt` is the canonical security-reporting
+document. Its `Contact` points to GitHub's private vulnerability-reporting form,
+matching [SECURITY.md](../SECURITY.md); its `Policy` points to that policy. The
+Orbit maintainers own renewal: review the file before the `Expires` timestamp
+and renew it annually when the reporting channel or policy changes.
+`npm run validate:security-txt` checks the source file, and the workflow checks
+both the source and built asset. After publication, the workflow also requires
+the deployment URL and `orbit-cli.com` to return this asset as UTF-8 `text/plain`
+and validates the response body.
+
 ## Transport security
 
 `public/_headers` is the sole repository-owned response-header policy. Cloudflare
