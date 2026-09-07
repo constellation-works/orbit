@@ -2,6 +2,7 @@ use orbit_types::task::Task;
 
 use crate::context::PrConfig;
 
+use super::super::attribution::orchestration_trailer;
 use super::super::freshness::BranchFreshness;
 
 pub(super) const GITHUB_PR_BODY_BYTE_LIMIT: usize = 65_536;
@@ -25,6 +26,10 @@ pub(super) fn build_batch_pr_body(
     if let Some(signature) = batch_pr_signature(tasks, pr_opener_model) {
         body.push_str("\n\n");
         body.push_str(&signature);
+    }
+    if let Some(trailer) = orchestration_trailer(tasks) {
+        body.push_str("\n\n");
+        body.push_str(&trailer);
     }
 
     bound_pr_body(body, tasks)
