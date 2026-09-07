@@ -19,6 +19,14 @@ spec:
           type: string
       run_id:
         type: string
+        description: >
+          Worktree identity token. Epic pipelines pin `epic-<task-id>` so the
+          checkout is stable across runs. Distinct from the admitted job.
+      job_run_id:
+        type: string
+        description: >
+          Admitted job that owns task stamps and downstream execution. The
+          dispatcher injects this when `run_id` is already an identity token.
       base:
         type: string
       base_branch:

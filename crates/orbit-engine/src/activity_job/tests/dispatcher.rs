@@ -87,3 +87,45 @@ fn dispatch_error_to_orbit_keeps_validation_variant_and_buckets_the_rest() {
                 && details.conflicting_paths == ["src/lib.rs"]
     ));
 }
+
+#[test]
+fn inject_run_id_fills_absent_run_id() {
+    use super::super::dispatcher::inject_run_id;
+    use serde_json::json;
+
+    let injected = inject_run_id(&json!({ "task_ids": ["ORB-1"] }), "jrun-admitted");
+    assert_eq!(injected["run_id"], "jrun-admitted");
+    assert!(injected.get("job_run_id").is_none());
+}
+
+#[test]
+fn inject_run_id_exposes_the_admitted_job_beside_an_explicit_worktree_token() {
+    use super::super::dispatcher::inject_run_id;
+    use serde_json::json;
+
+    let injected = inject_run_id(
+        &json!({
+            "task_ids": ["ORB-EPIC"],
+            "run_id": "epic-ORB-EPIC",
+        }),
+        "jrun-admitted",
+    );
+    assert_eq!(injected["run_id"], "epic-ORB-EPIC");
+    assert_eq!(injected["job_run_id"], "jrun-admitted");
+}
+
+#[test]
+fn inject_run_id_does_not_overwrite_an_explicit_job_run_id() {
+    use super::super::dispatcher::inject_run_id;
+    use serde_json::json;
+
+    let injected = inject_run_id(
+        &json!({
+            "run_id": "epic-ORB-EPIC",
+            "job_run_id": "jrun-already",
+        }),
+        "jrun-admitted",
+    );
+    assert_eq!(injected["run_id"], "epic-ORB-EPIC");
+    assert_eq!(injected["job_run_id"], "jrun-already");
+}

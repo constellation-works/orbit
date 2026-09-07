@@ -651,6 +651,29 @@ fn the_gate_reads_the_captured_snapshot_not_the_live_preference() {
     );
 }
 
+#[test]
+fn epic_worktree_token_does_not_mask_the_admitted_run() {
+    let gated = gated_fixture(GATED_CONFIG);
+    let worktree_token = format!("epic-{}", gated.task_id);
+    let mut input = admit_input(
+        &worktree_token,
+        std::slice::from_ref(&gated.task_id),
+        &gated.fixture.repo,
+    );
+
+    let missing = review_gate_admit(&gated.fixture.runtime, "review_gate_admit", &input)
+        .expect("a worktree token is not a run record");
+    assert_eq!(missing["applies"], false);
+    assert_eq!(missing["reason"], "review_admission_missing");
+
+    input["run_id"] = json!(&gated.run_id);
+    let admission = review_gate_admit(&gated.fixture.runtime, "review_gate_admit", &input)
+        .expect("the injected admitted run still applies");
+    assert_eq!(admission["applies"], true);
+    assert_eq!(admission["decision"], "admitted");
+    assert_eq!(admission["reviewer"]["crew"], "reviewers");
+}
+
 /// Land the checked-out candidate onto `main` the way a squash merge does
 /// and return the delivery the source adapter would observe.
 fn land_squash(gated: &Gated, repository: &str) -> Delivery {

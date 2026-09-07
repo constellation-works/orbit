@@ -1,12 +1,11 @@
-//! The real `task_pr_pipeline` with the before-PR review gate [ORB-11333].
+//! The real `epic_pipeline` before-PR review gate [ORB-11520].
 //!
-//! Git mechanics that reach a remote are scripted; the review gate actions,
-//! the failure handoff, and the task/run records are real. The reviewer
-//! agent is replaced by a deterministic stub that persists the same report
-//! artifact the reviewer tool would. Epic-pipeline coverage lives in the
-//! sibling `epic_review_gate` module.
+//! Git mechanics that reach a remote are scripted; the review gate actions
+//! and the task/run records are real. The reviewer agent is replaced by a
+//! deterministic stub that persists the same report artifact the reviewer
+//! tool would.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
@@ -19,6 +18,9 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
+use super::review_gate::{
+    GATED_CONFIG, ReviewerScript, git_stdout, positions, stub_agent_activity,
+};
 use super::{
     git_in, resolved_job, retarget_engine_actions_for_scripted_host, seed_default_catalogs,
     test_runtime_with_workspace_config, try_execute_job,
@@ -27,36 +29,7 @@ use crate::OrbitRuntime;
 use crate::application::review::install_review_admission;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
-pub(super) const GATED_CONFIG: &str = r#"
-[crews.implementer]
-model = "impl-model"
-provider = "codex"
-backend = "cli"
-
-[crews.reviewers]
-model = "review-model"
-provider = "codex"
-backend = "cli"
-
-[workflow]
-default_crew = "implementer"
-
-[operation]
-review_policy = "before-pr"
-review_crew = "reviewers"
-"#;
-
-pub(super) fn stub_agent_activity(global_root: &Path, name: &str, action: &str) {
-    std::fs::write(
-        global_root.join(format!("resources/activities/{name}.yaml")),
-        format!(
-            "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: {name}\nspec:\n  type: deterministic\n  description: Test stub.\n  input_schema_json:\n    type: object\n  output_schema_json:\n    type: object\n  action: {action}\n  config: {{}}\n"
-        ),
-    )
-    .expect("stub agent activity");
-}
-
-struct Pipeline {
+struct EpicPipeline {
     _root: tempfile::TempDir,
     runtime: OrbitRuntime,
     repo: PathBuf,
@@ -65,11 +38,12 @@ struct Pipeline {
     base_sha: String,
 }
 
-fn pipeline(config: &str) -> Pipeline {
+fn epic_pipeline(config: &str) -> EpicPipeline {
     let (root, runtime, repo, global_root) = test_runtime_with_workspace_config(config);
     seed_default_catalogs(&global_root);
     stub_agent_activity(&global_root, "agent_implement", "scripted_agent_implement");
     stub_agent_activity(&global_root, "agent_review_repair", "scripted_review");
+    stub_agent_activity(&global_root, "epic_orchestrator", "scripted_epic_finish");
 
     let remote = root.path().join("remote.git");
     git_in(
@@ -101,10 +75,11 @@ fn pipeline(config: &str) -> Pipeline {
 
     let task = runtime
         .add_task(TaskAddParams {
-            title: "Gated pipeline task".to_string(),
-            description: "Fixture task delivered through the gated PR pipeline.".to_string(),
+            title: "Gated epic".to_string(),
+            description: "Fixture epic delivered through epic_pipeline.".to_string(),
             acceptance_criteria: vec!["src.txt says implemented.".to_string()],
             plan: "Edit src.txt.".to_string(),
+            tags: vec!["epic".to_string()],
             context_files: vec!["file:src.txt".to_string()],
             workspace_path: Some(".".to_string()),
             priority: TaskPriority::Medium,
@@ -112,8 +87,8 @@ fn pipeline(config: &str) -> Pipeline {
             status: Some(TaskStatus::InProgress),
             ..TaskAddParams::default()
         })
-        .expect("seed task");
-    git_in(&repo, &["checkout", "-b", &format!("orbit/{}", task.id)]);
+        .expect("seed epic");
+    git_in(&repo, &["checkout", "-b", &format!("epic/{}", task.id)]);
     std::fs::write(repo.join("src.txt"), "base\nimplemented\n").expect("implement");
     git_in(&repo, &["add", "src.txt"]);
     git_in(
@@ -122,22 +97,14 @@ fn pipeline(config: &str) -> Pipeline {
     );
 
     let mut input = json!({
-        "task_ids": [task.id],
-        "base_branch": "main",
-        "base_sync": "local",
+        "epic_task_id": task.id,
         "allowed_crews": [],
     });
-    install_review_admission(&runtime, "task_pr_pipeline", &mut input, None, false)
+    install_review_admission(&runtime, "epic_pipeline", &mut input, None, false)
         .expect("capture admission");
-    let run = RuntimeHost::insert_job_run(
-        &runtime,
-        "task_pr_pipeline",
-        1,
-        Utc::now(),
-        Some(input),
-        None,
-    )
-    .expect("insert run");
+    let run =
+        RuntimeHost::insert_job_run(&runtime, "epic_pipeline", 1, Utc::now(), Some(input), None)
+            .expect("insert run");
     runtime
         .update_task(
             &task.id,
@@ -149,9 +116,9 @@ fn pipeline(config: &str) -> Pipeline {
                 ..TaskUpdateParams::default()
             },
         )
-        .expect("bind task");
+        .expect("bind epic");
 
-    Pipeline {
+    EpicPipeline {
         _root: root,
         runtime,
         repo,
@@ -161,17 +128,7 @@ fn pipeline(config: &str) -> Pipeline {
     }
 }
 
-pub(super) fn git_stdout(path: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .current_dir(path)
-        .args(args)
-        .output()
-        .expect("git");
-    assert!(output.status.success(), "git {args:?} failed");
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-impl Pipeline {
+impl EpicPipeline {
     fn run_input(&self) -> Value {
         self.runtime
             .get_job_run_backend(&self.run_id)
@@ -181,8 +138,8 @@ impl Pipeline {
             .expect("input")
     }
 
-    fn execute(&self, host: &ScriptedReviewHost<'_>) -> Result<(), DispatchError> {
-        let mut job = resolved_job(&self.runtime, "task_pr_pipeline");
+    fn execute(&self, host: &ScriptedEpicReviewHost<'_>) -> Result<(), DispatchError> {
+        let mut job = resolved_job(&self.runtime, "epic_pipeline");
         retarget_engine_actions_for_scripted_host(&mut job);
         try_execute_job(
             &self.runtime,
@@ -200,29 +157,24 @@ impl Pipeline {
     }
 }
 
-/// What the stubbed reviewer does when the pipeline reaches it.
-#[derive(Clone, Copy)]
-pub(super) struct ReviewerScript {
-    pub(super) verdict: ReviewVerdict,
-    pub(super) repair: bool,
-}
-
-struct ScriptedReviewHost<'a> {
-    pipeline: &'a Pipeline,
+struct ScriptedEpicReviewHost<'a> {
+    pipeline: &'a EpicPipeline,
     reviewer: ReviewerScript,
     calls: Mutex<Vec<String>>,
     pr_open_inputs: Mutex<Vec<Value>>,
-    private_ops: Mutex<Vec<String>>,
+    worktree_inputs: Mutex<Vec<Value>>,
+    admit_inputs: Mutex<Vec<Value>>,
 }
 
-impl<'a> ScriptedReviewHost<'a> {
-    fn new(pipeline: &'a Pipeline, reviewer: ReviewerScript) -> Self {
+impl<'a> ScriptedEpicReviewHost<'a> {
+    fn new(pipeline: &'a EpicPipeline, reviewer: ReviewerScript) -> Self {
         Self {
             pipeline,
             reviewer,
             calls: Mutex::new(Vec::new()),
             pr_open_inputs: Mutex::new(Vec::new()),
-            private_ops: Mutex::new(Vec::new()),
+            worktree_inputs: Mutex::new(Vec::new()),
+            admit_inputs: Mutex::new(Vec::new()),
         }
     }
 
@@ -234,8 +186,15 @@ impl<'a> ScriptedReviewHost<'a> {
         self.pr_open_inputs.lock().expect("pr open inputs").clone()
     }
 
-    fn private_ops(&self) -> Vec<String> {
-        self.private_ops.lock().expect("private ops").clone()
+    fn worktree_inputs(&self) -> Vec<Value> {
+        self.worktree_inputs
+            .lock()
+            .expect("worktree inputs")
+            .clone()
+    }
+
+    fn admit_inputs(&self) -> Vec<Value> {
+        self.admit_inputs.lock().expect("admit inputs").clone()
     }
 
     fn write_report(&self, attempt_id: &str) {
@@ -244,7 +203,7 @@ impl<'a> ScriptedReviewHost<'a> {
             schema_version: REVIEW_CONTRACT_VERSION,
             attempt_id: attempt_id.to_string(),
             verdict: self.reviewer.verdict,
-            summary: "Scripted review.".to_string(),
+            summary: "Scripted epic review.".to_string(),
             findings: if repaired || self.reviewer.verdict == ReviewVerdict::ChangesRequired {
                 vec![ReviewFinding {
                     id: "F1".to_string(),
@@ -293,7 +252,7 @@ impl<'a> ScriptedReviewHost<'a> {
     }
 }
 
-impl RuntimeHost for ScriptedReviewHost<'_> {
+impl RuntimeHost for ScriptedEpicReviewHost<'_> {
     fn run_deterministic(
         &self,
         action: &str,
@@ -303,16 +262,33 @@ impl RuntimeHost for ScriptedReviewHost<'_> {
     ) -> Result<Value, DispatchError> {
         self.calls.lock().expect("calls").push(action.to_string());
         let repo = &self.pipeline.repo;
-        let branch = format!("orbit/{}", self.pipeline.task_id);
+        let branch = format!("epic/{}", self.pipeline.task_id);
         let head = self.pipeline.head();
         match action {
-            "scripted_worktree_setup" => Ok(json!({
-                "workspace_path": repo,
-                "job_run_id": self.pipeline.run_id,
-                "base_ref": "main",
-                "base_sha": self.pipeline.base_sha,
+            "resolve_workspace_ship_input" => Ok(json!({
+                "mode": "pr",
+                "base_branch": "main",
             })),
-            "scripted_agent_implement" => Ok(json!({ "summary": "implemented" })),
+            "scripted_worktree_setup" => {
+                self.worktree_inputs
+                    .lock()
+                    .expect("worktree inputs")
+                    .push(input.clone());
+                let job_run_id = input
+                    .get("job_run_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(self.pipeline.run_id.as_str());
+                Ok(json!({
+                    "workspace_path": repo,
+                    "job_run_id": job_run_id,
+                    "batch_id": job_run_id,
+                    "head_ref": branch,
+                    "base_ref": "main",
+                    "base_sha": self.pipeline.base_sha,
+                }))
+            }
+            "scripted_epic_finish" => Ok(json!({ "summary": "finished" })),
             "scripted_git_commit" => Ok(json!({
                 "phase": "commit",
                 "decision": "already_committed",
@@ -387,6 +363,19 @@ impl RuntimeHost for ScriptedReviewHost<'_> {
                 "reused_task_ids": [],
                 "pr_number": "42",
             })),
+            "review_gate_admit" => {
+                self.admit_inputs
+                    .lock()
+                    .expect("admit inputs")
+                    .push(input.clone());
+                <OrbitRuntime as RuntimeHost>::run_deterministic(
+                    &self.pipeline.runtime,
+                    action,
+                    config,
+                    input,
+                    tool_context,
+                )
+            }
             _ => <OrbitRuntime as RuntimeHost>::run_deterministic(
                 &self.pipeline.runtime,
                 action,
@@ -399,27 +388,11 @@ impl RuntimeHost for ScriptedReviewHost<'_> {
 
     fn has_deterministic_action(&self, action: &str) -> bool {
         action.starts_with("scripted_")
+            || action == "resolve_workspace_ship_input"
             || <OrbitRuntime as RuntimeHost>::has_deterministic_action(
                 &self.pipeline.runtime,
                 action,
             )
-    }
-
-    fn run_private_vcs_operation(
-        &self,
-        operation: &str,
-        _input: Value,
-    ) -> Result<Value, orbit_common::OrbitError> {
-        self.private_ops
-            .lock()
-            .expect("private ops")
-            .push(operation.to_string());
-        match operation {
-            "push" => Ok(json!({ "stdout": "", "stderr": "" })),
-            other => Err(orbit_common::OrbitError::Execution(format!(
-                "unexpected private VCS operation {other}"
-            ))),
-        }
     }
 
     fn get_task(&self, task_id: &str) -> Result<Task, orbit_common::OrbitError> {
@@ -499,37 +472,24 @@ impl RuntimeHost for ScriptedReviewHost<'_> {
     }
 }
 
-pub(super) fn positions(calls: &[String], names: &[&str]) -> Vec<usize> {
-    names
-        .iter()
-        .map(|name| {
-            calls
-                .iter()
-                .position(|call| call == name)
-                .unwrap_or_else(|| panic!("{name} was not called: {calls:?}"))
-        })
-        .collect()
-}
-
 #[test]
-fn before_pr_pass_with_repairs_publishes_only_the_settled_candidate() {
-    let pipeline = pipeline(GATED_CONFIG);
-    let implementation = pipeline.head();
-    let host = ScriptedReviewHost::new(
+fn epic_before_pr_with_a_combined_diff_invokes_the_reviewer_and_publishes_only_a_pass() {
+    let pipeline = epic_pipeline(GATED_CONFIG);
+    let host = ScriptedEpicReviewHost::new(
         &pipeline,
         ReviewerScript {
-            verdict: ReviewVerdict::PassedWithRepairs,
-            repair: true,
+            verdict: ReviewVerdict::PassedWithoutRepairs,
+            repair: false,
         },
     );
 
-    pipeline.execute(&host).expect("gated pipeline succeeds");
+    pipeline.execute(&host).expect("gated epic succeeds");
 
     let calls = host.calls();
     let order = positions(
         &calls,
         &[
-            "scripted_git_rebase",
+            "scripted_worktree_setup",
             "review_gate_admit",
             "scripted_review",
             "review_gate_settle",
@@ -540,21 +500,35 @@ fn before_pr_pass_with_repairs_publishes_only_the_settled_candidate() {
     );
     assert!(
         order.windows(2).all(|pair| pair[0] < pair[1]),
-        "the gate runs after base sync and before push/PR: {calls:?}"
+        "the epic gate runs after assembly and before push/PR: {calls:?}"
     );
 
-    let final_head = pipeline.head();
-    assert_ne!(
-        final_head, implementation,
-        "the repair is a separate commit"
-    );
+    let worktree = &host.worktree_inputs()[0];
     assert_eq!(
-        git_stdout(&pipeline.repo, &["log", "-1", "--format=%an", "HEAD"]),
-        "codex-reviewer"
+        worktree["run_id"],
+        format!("epic-{}", pipeline.task_id),
+        "the stable epic checkout token is preserved"
     );
+    let admitted = &host.admit_inputs()[0];
+    assert_eq!(
+        admitted["job_run_id"], pipeline.run_id,
+        "the gate looks up the admitted job, not the worktree token"
+    );
+    assert_eq!(admitted["completed_task_ids"], json!([pipeline.task_id]));
+    assert_eq!(
+        pipeline
+            .runtime
+            .get_task(&pipeline.task_id)
+            .expect("epic")
+            .job_run_id
+            .as_deref(),
+        Some(pipeline.run_id.as_str()),
+        "task ownership stays on the admitted job"
+    );
+
     let opened = host.pr_open_inputs();
     assert_eq!(opened.len(), 1);
-    assert_eq!(opened[0]["reviewed_head_sha"], final_head);
+    assert_eq!(opened[0]["reviewed_head_sha"], pipeline.head());
     assert_eq!(opened[0]["reviewed_base_sha"], pipeline.base_sha);
     assert!(
         pipeline
@@ -563,28 +537,12 @@ fn before_pr_pass_with_repairs_publishes_only_the_settled_candidate() {
             .expect("read")
             .is_some()
     );
-    let review = crate::application::review::task_review_projection(
-        &pipeline.runtime,
-        &pipeline.runtime.get_task(&pipeline.task_id).expect("task"),
-        &pipeline
-            .runtime
-            .get_task_artifact_manifest(&pipeline.task_id)
-            .expect("manifest"),
-    )
-    .expect("projection")
-    .expect("present");
-    assert_eq!(review["verdict"], "passed_with_repairs");
-    assert_eq!(
-        review["assurance"],
-        "independent_review_with_self_authored_repairs"
-    );
-    assert_eq!(review["consumed"]["repair_cycles"], 1);
 }
 
 #[test]
-fn before_pr_changes_required_blocks_the_task_without_opening_a_pr() {
-    let pipeline = pipeline(GATED_CONFIG);
-    let host = ScriptedReviewHost::new(
+fn epic_before_pr_changes_required_blocks_without_opening_a_pr() {
+    let pipeline = epic_pipeline(GATED_CONFIG);
+    let host = ScriptedEpicReviewHost::new(
         &pipeline,
         ReviewerScript {
             verdict: ReviewVerdict::ChangesRequired,
@@ -594,60 +552,25 @@ fn before_pr_changes_required_blocks_the_task_without_opening_a_pr() {
 
     let error = pipeline
         .execute(&host)
-        .expect_err("the gate stops delivery");
+        .expect_err("the gate stops epic delivery");
     assert!(error.to_string().contains("review_gate_blocked"), "{error}");
 
     let calls = host.calls();
-    assert!(calls.iter().any(|call| call == "review_gate_settle"));
+    assert!(calls.iter().any(|call| call == "scripted_review"));
     assert!(
         !calls.iter().any(|call| call == "scripted_pr_open"),
-        "no PR is opened for a blocked candidate: {calls:?}"
+        "no PR is opened for a blocked epic candidate: {calls:?}"
     );
-    assert_eq!(
-        host.private_ops(),
-        vec!["push"],
-        "the failure handoff pushes the candidate but creates no PR"
-    );
-    let task = pipeline.runtime.get_task(&pipeline.task_id).expect("task");
-    assert_eq!(task.status, TaskStatus::Blocked);
-    assert!(
-        task.external_refs
-            .iter()
-            .all(|reference| reference.system != "github-pr"),
-        "no PR reference is attached"
-    );
-    let comments = pipeline
-        .runtime
-        .get_task_comments(&pipeline.task_id)
-        .expect("comments");
-    assert!(
-        comments
-            .iter()
-            .any(|comment| comment.message.contains("Review gate escalation")),
-        "the escalation is recorded on the task"
-    );
-    let review = crate::application::review::task_review_projection(
-        &pipeline.runtime,
-        &task,
-        &pipeline
-            .runtime
-            .get_task_artifact_manifest(&pipeline.task_id)
-            .expect("manifest"),
-    )
-    .expect("projection")
-    .expect("present");
-    assert_eq!(review["verdict"], "changes_required");
-    assert_eq!(review["passed"], false);
 }
 
 #[test]
-fn none_and_after_landing_policies_never_start_a_reviewer() {
+fn epic_none_and_after_landing_policies_never_start_a_reviewer() {
     for policy in ["none", "after-landing"] {
         let config = format!(
             "[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"implementer\"\n[operation]\nreview_policy = \"{policy}\"\n"
         );
-        let pipeline = pipeline(&config);
-        let host = ScriptedReviewHost::new(
+        let pipeline = epic_pipeline(&config);
+        let host = ScriptedEpicReviewHost::new(
             &pipeline,
             ReviewerScript {
                 verdict: ReviewVerdict::PassedWithoutRepairs,
@@ -655,26 +578,18 @@ fn none_and_after_landing_policies_never_start_a_reviewer() {
             },
         );
 
-        pipeline.execute(&host).expect("ungated pipeline succeeds");
+        pipeline.execute(&host).expect("ungated epic succeeds");
         let calls = host.calls();
         assert!(calls.iter().any(|call| call == "review_gate_admit"));
         assert!(
             !calls.iter().any(|call| call == "scripted_review"),
             "{policy}: no reviewer starts: {calls:?}"
         );
-        let opened = host.pr_open_inputs();
-        assert_eq!(opened.len(), 1);
+        assert_eq!(host.pr_open_inputs().len(), 1);
         assert_eq!(
-            opened[0]["reviewed_head_sha"], "",
+            host.pr_open_inputs()[0]["reviewed_head_sha"],
+            "",
             "{policy}: no pinned gate"
-        );
-        assert!(
-            pipeline
-                .runtime
-                .get_task_artifact(&pipeline.task_id, REVIEW_GATE_ARTIFACT)
-                .expect("read")
-                .is_none(),
-            "{policy}: no certificate is issued"
         );
     }
 }
