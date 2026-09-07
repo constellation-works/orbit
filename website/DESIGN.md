@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Owner:** Orbit contributors
-**Last updated:** 2026-07-26
+**Last updated:** 2026-09-07
 
 ---
 
@@ -97,21 +97,30 @@ The homepage uses an in-content hero in place of Starlight's auto-rendered title
 - **Lede + install bar + primary/secondary CTAs.** Install bar carries a `$` prompt and a Copy action.
 - **Provider strip** — mono uppercase list of the shipped CLI executors, with the
   legacy Gemini executor named in a footnote rather than implied current.
-- **Transcript** — a `figure` of the task → ship → inspect → commit loop, with a
-  `figcaption` naming it illustrative. Real commands, placeholder identifiers.
+- **Dashboard preview** — a `figure` of the operator Tasks view after that
+  default ship: the walkthrough task in `review`, pull request open and
+  unmerged, `approve` available, `ship` absent. `role="img"` plus a
+  `figcaption` mark it as an illustration of current chrome, not a screenshot
+  or a live host. Identifiers are placeholders; no measured counts or
+  durations.
 
 Below the hero, in order:
 
-1. **Start here** — a 3-card grid, each card carrying a mono numbered tag
-   `01`–`03` and the command it runs.
-2. **Choose a delivery mode** — a four-mode explorer over `orbit run ship`,
+1. **One task, one pull request** — a 4-card grid for create → ship → inspect
+   → review. Each card carries a mono numbered tag `01`–`04` and the command
+   it runs. New tasks start in `proposed` until approved into the backlog.
+   The default path stops in `review` with the PR unmerged; approving the
+   task does not merge the pull request. A sentence under the grid points at
+   Install and First Task.
+2. **Other delivery modes** — a four-mode explorer over `orbit run ship`,
    `--mode local`, `orbit run auto` and `orbit run ship-sweep`. Each panel
    states the command, where the run stops, and that `--complete` is a separate
    explicit authorization. Built as a native radio group switched by CSS
    `:has()`, so pointer, keyboard and screen-reader support are the platform's
-   and the selected panel still renders without JavaScript.
+   and the selected panel still renders without JavaScript. This section stays
+   after the walkthrough so the default path is read first.
 3. **Why Orbit** — a 4-card value-prop strip. Each card carries a thin SVG glyph;
-   these and the Start here tags are the only glyphs in content.
+   these and the walkthrough tags are the only glyphs in content.
 4. **Go further** — a 4-card grid routing to continuous delivery, recurring work,
    publication and recovery, and the CLI reference.
 5. **Explore the docs** — a flat index of the sidebar groups.
