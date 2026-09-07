@@ -204,7 +204,12 @@ pub fn run_cli_backend(
     //     transparently inside our outer sandbox.
     //   - gemini: drop `-s` / `--sandbox` from the executor's static args.
     //   - claude: nothing to do; claude has no OS-level sandbox flag.
-    if sandbox.is_some() {
+    // An explicit executor opt-out must not silently restore the provider's
+    // inner sandbox when preparation selects a bare process.
+    let explicitly_off = resolved_sandbox
+        .as_ref()
+        .is_some_and(|sandbox| sandbox.kind == ExecutorSandboxKind::Off);
+    if sandbox.is_some() || explicitly_off {
         neutralize_inner_sandbox(&provider, &mut provider_config, &mut cli_executor.args);
     }
 

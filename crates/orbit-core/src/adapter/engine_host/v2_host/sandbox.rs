@@ -26,6 +26,19 @@ pub(crate) fn resolve_executor_sandbox(
         return Ok(None);
     };
     match kind {
+        // Carry explicit off through preparation so the runner can suppress
+        // provider-inner sandboxing and audit the choice without probing an OS
+        // wrapper or resolving filesystem grants that will not be enforced.
+        ExecutorSandboxKind::Off => Ok(Some(ResolvedSandbox {
+            kind,
+            fs_profile: ResolvedFsProfile {
+                name: UNRESTRICTED_FS_PROFILE.to_string(),
+                read: Vec::new(),
+                modify: Vec::new(),
+            },
+            allow_fallback: false,
+            managed_worktree: false,
+        })),
         ExecutorSandboxKind::MacosSandboxExec => {
             #[cfg(not(target_os = "macos"))]
             {

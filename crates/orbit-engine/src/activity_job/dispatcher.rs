@@ -51,11 +51,11 @@ pub struct ResolvedShellExecutor {
 /// just before spawn (keeping the orbit-exec dependency local to orbit-engine).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSandbox {
-    /// OS sandbox primitive selected by the executor declaration.
+    /// Executor choice, including explicit off (no wrapper or profile use).
     pub kind: ExecutorSandboxKind,
     /// Workspace-absolute resolved `read` / `modify` rules from the activity's
     /// `FsProfile`. The engine passes this to `orbit_exec::compile_*_profile`
-    /// to produce a kernel-shaped payload.
+    /// to produce a kernel-shaped payload. Unused and empty for explicit off.
     pub fs_profile: ResolvedFsProfile,
     /// Whether to fall back to bare exec if the OS primitive is unavailable.
     pub allow_fallback: bool,

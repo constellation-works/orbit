@@ -23,6 +23,11 @@ impl Execute for ExecutorShowArgs {
         let mut out = String::new();
         let _ = writeln!(out, "Name:      {}", def.name);
         let _ = writeln!(out, "Type:      {}", def.executor_type);
+        let _ = writeln!(
+            out,
+            "Sandbox:   {}",
+            def.sandbox.map_or("unspecified", |kind| kind.as_str())
+        );
         if let Some(ref cmd) = def.command {
             let _ = writeln!(out, "Command:   {cmd}");
         }
