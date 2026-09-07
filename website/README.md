@@ -31,6 +31,21 @@ the source commit, and verifies the deployment URL plus
 `https://orbit-cli.com` before succeeding. The published `/deployment.json`
 records the source revision and Actions run URL.
 
+## Transport security
+
+`public/_headers` is the sole repository-owned response-header policy. Cloudflare
+Pages copies it to the static-output root and applies its `Strict-Transport-Security:
+max-age=31536000` rule to every HTTPS route, including static error responses.
+The bounded one-year policy deliberately omits `includeSubDomains` and `preload`:
+the repository does not establish HTTPS readiness or operational ownership for
+every subdomain.
+
+HTTP-to-HTTPS redirection is owned by the externally managed Cloudflare zone,
+not by the Pages artifact. The production publish job verifies both that redirect
+and HSTS on representative success and 404 responses after each deployment.
+Changing either responsibility requires updating the workflow and the [website
+validation runbook](../docs/runbooks/website-validation.md) in the same change.
+
 Build success is not publication success. The `Check and build` job proves only
 that Astro produced static output; the separate `Publish to Cloudflare Pages`
 job and its GitHub Deployment record prove upload and post-deploy verification.

@@ -154,7 +154,9 @@ Each section has an index page that lists its children with one-line description
   path directly uploads to the existing Pages project identified by the protected
   production environment, and publishes only from the release/production `main`
   branch. The `orbit-cli.com` DNS remains externally managed; publication neither
-  provisions hosting nor edits DNS. See ORB-11379.
+  provisions hosting nor edits DNS. Cloudflare Pages applies the repository-owned
+  `public/_headers` policy to HTTPS responses; the externally managed Cloudflare
+  zone owns HTTP-to-HTTPS redirection. See ORB-11379.
 - **Repo layout:** new top-level `website/` directory, independent of the Rust workspace
 
 ### 5.1 Why Starlight over Nextra

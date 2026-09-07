@@ -248,7 +248,19 @@ deployments are serialized, use only `contents: read` and `deployments: write`,
 and are recorded in both the Actions run and GitHub Deployments. The final step
 checks the unique homepage headline, the delivery-mode setup explorer, the
 install route, and the expected source revision at both the deployment URL and
-`orbit-cli.com`.
+`orbit-cli.com`. It also checks the Pages `_headers` artifact during build, then
+checks the deployed custom domain for `Strict-Transport-Security:
+max-age=31536000` on homepage and install-route 200 responses and on a 404
+response. Finally, it checks that `http://orbit-cli.com/` redirects to the
+canonical HTTPS domain.
+
+The static `website/public/_headers` file is the sole repository-owned HSTS
+policy. Its one-year max-age intentionally does not use `includeSubDomains` or
+`preload`; the repository has not established that every subdomain is HTTPS-ready
+and under compatible operational ownership. HTTP redirect behavior belongs to the
+externally managed Cloudflare zone rather than the Pages artifact. Treat a failed
+redirect check as an external-zone configuration issue, not a reason to add a
+second redirect mechanism to the site.
 
 ### Operate and recover
 
