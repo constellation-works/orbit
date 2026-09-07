@@ -15,7 +15,7 @@ use super::super::test_support::{
     create_task, managed_tool_env_guard, run_tool_as_operator, test_runtime,
     unmanaged_tool_env_guard,
 };
-use crate::OrbitRuntime;
+use crate::{OrbitRuntime, V2AuditEventInsertParams};
 
 /// The default-named ship job. Loaded from the *global* orbit root, so a
 /// fixture has to seed it there rather than in the workspace's `.orbit`.
@@ -107,6 +107,47 @@ fn capability_denial(result: Result<Value, OrbitError>) -> String {
         Err(error) => panic!("expected a capability denial, got {error:?}"),
         Ok(value) => panic!("expected a capability denial, got {value}"),
     }
+}
+
+fn seed_recovery_attempt(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    event_id: &str,
+    recovery_succeeded: bool,
+    failure_phase: Option<&str>,
+    error_message: Option<&str>,
+) {
+    let event = json!({
+        "schemaVersion": 1,
+        "event_type": "step.recovery_attempted",
+        "event_id": event_id,
+        "ts": "2026-09-07T05:25:00Z",
+        "run_id": run_id,
+        "agent_identity": "codex",
+        "body_kind": "step_recovery_attempted",
+        "step_id": "implement_one",
+        "recovery_activity": "step_failure_recovery",
+        "recovery_succeeded": recovery_succeeded,
+        "failure_phase": failure_phase,
+        "error_message": error_message,
+    });
+    runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: runtime.workspace_id().expect("workspace id"),
+            event_id: event_id.to_string(),
+            source: "v2_envelope".to_string(),
+            schema_version: 1,
+            event_type: "step.recovery_attempted".to_string(),
+            ts: chrono::DateTime::parse_from_rfc3339("2026-09-07T05:25:00Z")
+                .expect("fixture timestamp")
+                .with_timezone(&Utc),
+            run_id: run_id.to_string(),
+            agent_identity: "codex".to_string(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: event.to_string(),
+        })
+        .expect("seed recovery attempt audit event");
 }
 
 /// ORB-10540: the in-run denial, driven by the environment rather than by a
@@ -308,6 +349,68 @@ fn operator_can_observe_runs_and_agent_denial_is_audited() {
         event.command == "authorization"
             && event.target_id.as_deref() == Some("orbit.workflow.run.show")
     }));
+}
+
+#[test]
+fn mcp_run_show_projects_bounded_recovery_evidence_without_replacing_run_error() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
+        .expect("insert run");
+    let secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
+    seed_recovery_attempt(
+        &runtime,
+        &run.run_id,
+        "evt-recovery-failed",
+        false,
+        Some("dispatch"),
+        Some(&format!("recovery launcher refused {secret}")),
+    );
+    seed_recovery_attempt(
+        &runtime,
+        &run.run_id,
+        "evt-recovery-success",
+        true,
+        None,
+        None,
+    );
+
+    let shown = run_tool_as_operator(
+        &runtime,
+        "orbit.workflow.run.show",
+        json!({"id": run.run_id}),
+    )
+    .expect("operator run show");
+
+    assert_eq!(shown["run_id"], json!(run.run_id));
+    assert_eq!(shown["error_message"], Value::Null);
+    assert_eq!(shown["recovery_attempts"]["state"], json!("recorded"));
+    assert_eq!(shown["recovery_attempts"]["limit"], json!(8));
+    assert_eq!(shown["recovery_attempts"]["truncated"], json!(false));
+    assert_eq!(
+        shown["recovery_attempts"]["items"][0]["run_id"],
+        json!(run.run_id)
+    );
+    assert_eq!(
+        shown["recovery_attempts"]["items"][0]["failed_step_id"],
+        json!("implement_one")
+    );
+    assert_eq!(
+        shown["recovery_attempts"]["items"][0]["failure_phase"],
+        json!("dispatch")
+    );
+    assert!(
+        !shown["recovery_attempts"]["items"][0]["diagnostic"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(secret)
+    );
+    assert_eq!(
+        shown["recovery_attempts"]["items"][1]["outcome"],
+        json!("succeeded")
+    );
 }
 
 /// [ORB-10971] CLI, MCP, dashboard API, and audit must agree on lineage. This
