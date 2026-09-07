@@ -101,6 +101,26 @@ impl GlobalSearchParams {
     }
 }
 
+/// Note attached when a whitespace-containing query matches nothing.
+///
+/// Lexical friction and task search keep a single case-insensitive substring
+/// needle. A zero-hit multi-word query is therefore not evidence the corpus is
+/// empty — the same records may still match each token on its own.
+pub(crate) fn empty_whitespace_query_note(query: &str) -> Option<String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return None;
+    }
+    Some(format!(
+        "query {trimmed:?} is a single case-insensitive substring (all tokens required together), not independent terms. Zero hits is not proof the corpus is empty; retry each distinctive token on its own: {}.",
+        tokens.join(", ")
+    ))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct GlobalSearchResponse {
     pub mode: GlobalSearchMode,

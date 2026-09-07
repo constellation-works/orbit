@@ -137,6 +137,63 @@ fn an_empty_update_title_restores_derivation() {
 }
 
 #[test]
+fn list_notes_empty_multi_word_substring_miss() {
+    let (_temp, runtime, _repo) = test_runtime();
+    let seeded = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.add",
+        json!({
+            "title": "EnvGuard dropped its restore",
+            "body": "workspace_init lost the parallel env snapshot while EnvGuard was armed.",
+            "tags": ["tooling"],
+            "model": TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("seed open friction");
+    let id = seeded["id"].as_str().expect("record id");
+
+    let miss = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.list",
+        json!({ "status": "open", "q": "EnvGuard workspace_init" }),
+    )
+    .expect("multi-word list");
+
+    assert_eq!(miss["records"], json!([]));
+    let notes = miss["notes"].as_array().expect("notes array");
+    assert_eq!(notes.len(), 1);
+    let note = notes[0].as_str().expect("note text");
+    assert!(note.contains("single case-insensitive substring"), "{note}");
+    assert!(note.contains("not proof the corpus is empty"), "{note}");
+    assert!(note.contains("EnvGuard"), "{note}");
+    assert!(note.contains("workspace_init"), "{note}");
+
+    let hit = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.list",
+        json!({ "status": "open", "q": "EnvGuard" }),
+    )
+    .expect("single-term list");
+
+    let records = hit.as_array().expect("historical array shape");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["id"], json!(id));
+
+    let unmatched = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.list",
+        json!({ "status": "open", "q": "EnvGuardUniqueMiss" }),
+    )
+    .expect("single-term miss");
+    assert!(
+        unmatched
+            .as_array()
+            .is_some_and(|records| records.is_empty()),
+        "single-term empty pages keep the array shape: {unmatched}"
+    );
+}
+
+#[test]
 fn update_still_requires_at_least_one_mutable_field() {
     let (_temp, runtime, _repo) = test_runtime();
     let seeded = run_tool_as_operator(

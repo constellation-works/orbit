@@ -1009,6 +1009,9 @@ fn strip_private_friction_paths(value: &mut Value) {
         Value::Array(items) => items.iter_mut().for_each(strip_private_friction_paths),
         Value::Object(object) => {
             object.remove("path");
+            if let Some(records) = object.get_mut("records") {
+                strip_private_friction_paths(records);
+            }
         }
         _ => {}
     }

@@ -23,6 +23,7 @@ use orbit_types::record::{FrictionRecord, FrictionStatus};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::search::empty_whitespace_query_note;
 
 /// Route one friction verb to its handler.
 ///
@@ -104,13 +105,28 @@ pub(super) fn list_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<
         limit: optional_usize(&input, "limit")?,
         offset: optional_usize(&input, "offset")?.unwrap_or(0),
     };
-    Ok(Value::Array(
-        store
-            .list(&filter)?
-            .into_iter()
-            .map(record_to_json)
-            .collect::<Result<Vec<_>, _>>()?,
-    ))
+    let records = store
+        .list(&filter)?
+        .into_iter()
+        .map(record_to_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(list_payload(records, filter.q.as_deref()))
+}
+
+/// Keep the historical JSON array when the page has hits or the needle is a
+/// single token. Wrap only the empty multi-word miss so a curator can see that
+/// the substring matcher — not an empty group — produced zero rows.
+fn list_payload(records: Vec<Value>, query: Option<&str>) -> Value {
+    if records.is_empty()
+        && let Some(query) = query
+        && let Some(note) = empty_whitespace_query_note(query)
+    {
+        return json!({
+            "records": [],
+            "notes": [note],
+        });
+    }
+    Value::Array(records)
 }
 
 fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {

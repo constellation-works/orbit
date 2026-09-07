@@ -18,6 +18,7 @@ use serde_json::Value;
 
 use super::operation_args::{Invocation, augment_subcommands, invocation_from_matches};
 use crate::command::{CommandOut, Execute, Payload};
+use crate::output::payload::Block;
 
 /// One parsed friction verb invocation.
 pub type FrictionInvocation = Invocation<FrictionVerb>;
@@ -78,7 +79,7 @@ fn render(value: &Value, kind: CliRender) -> CommandOut {
 }
 
 fn records_table_payload(value: &Value) -> CommandOut {
-    let Some(records) = value.as_array() else {
+    let Some((records, notes)) = split_list_payload(value) else {
         return Ok(Payload::document(value.clone()).into());
     };
 
@@ -93,7 +94,7 @@ fn records_table_payload(value: &Value) -> CommandOut {
         Column::new("TITLE"),
     ])
     .empty_message("no friction records matching the given filters");
-    for record in records {
+    for record in &records {
         table.add_row(vec![
             value_string(record, "id"),
             value_string(record, "status"),
@@ -103,7 +104,39 @@ fn records_table_payload(value: &Value) -> CommandOut {
             value_string(record, "title"),
         ]);
     }
-    Ok(Payload::list(records.clone(), table).into())
+    if notes.is_empty() {
+        return Ok(Payload::list(records, table).into());
+    }
+    let mut blocks: Vec<Block> = notes
+        .iter()
+        .map(|note| Block::text(format!("note: {note}")))
+        .collect();
+    blocks.push(Block::table(table));
+    Ok(Payload::blocks(value.clone(), blocks).into())
+}
+
+/// Historical list JSON is a record array. An empty multi-word `--q` wraps as
+/// `{records, notes}` so the substring-needle diagnostic is visible.
+fn split_list_payload(value: &Value) -> Option<(Vec<Value>, Vec<String>)> {
+    match value {
+        Value::Array(records) => Some((records.clone(), Vec::new())),
+        Value::Object(object) => {
+            let records = object.get("records").and_then(Value::as_array)?.clone();
+            let notes = object
+                .get("notes")
+                .and_then(Value::as_array)
+                .map(|notes| {
+                    notes
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some((records, notes))
+        }
+        _ => None,
+    }
 }
 
 fn record_payload(value: &Value) -> CommandOut {

@@ -147,8 +147,21 @@ pub(super) async fn list_frictions(
         return map_runtime_error(e);
     }
 
-    let items = match call.run(&runtime) {
-        Ok(Value::Array(items)) => items,
+    let (items, notes) = match call.run(&runtime) {
+        Ok(Value::Array(items)) => (items, Vec::new()),
+        Ok(Value::Object(object)) => {
+            let items = object
+                .get("records")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let notes = object
+                .get("notes")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            (items, notes)
+        }
         Ok(other) => {
             return map_runtime_error(OrbitError::Execution(format!(
                 "{} returned non-array JSON: {other}",
@@ -166,12 +179,17 @@ pub(super) async fn list_frictions(
         Err(e) => return map_runtime_error(e),
     };
 
-    Json(json!({
+    let mut body = json!({
         "stats": stats,
         "tags": tags,
         "items": items,
-    }))
-    .into_response()
+    });
+    if !notes.is_empty()
+        && let Some(object) = body.as_object_mut()
+    {
+        object.insert("notes".to_string(), Value::Array(notes));
+    }
+    Json(body).into_response()
 }
 
 /// `POST /frictions` — file a new friction, mirroring `orbit.friction.add`.
