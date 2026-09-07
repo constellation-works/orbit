@@ -1279,7 +1279,10 @@ fn github_line(job: &str, step: &str, payload: &str) -> String {
 
 /// ORB-11509: nextest cancellation and summary wrap a FAIL line. ANSI styling
 /// must not become the signature, and colored/uncolored logs must match.
-fn orb_11509_style_nextest_log(colored: bool, failing: &str) -> String {
+///
+/// `elapsed` is the per-test duration nextest prints in the FAIL line; it
+/// differs on every rerun of the same regression.
+fn orb_11509_style_nextest_log(colored: bool, failing: &str, elapsed: &str) -> String {
     let job = "Check / Clippy / Test";
     let step = "Run CI guardrails";
     let paint = |text: &str, color: bool| {
@@ -1318,7 +1321,7 @@ fn orb_11509_style_nextest_log(colored: bool, failing: &str) -> String {
         job,
         step,
         &format!(
-            "{} [   1.399s] (2786/4410) {} {}",
+            "{} [   {elapsed}] (2786/4410) {} {}",
             paint("        FAIL", colored),
             paint("orbit-cli::output_goldens", colored),
             paint(failing, colored)
@@ -1445,8 +1448,8 @@ fn orb_11513_style_wrangler_log(title: &str, detail: &str) -> String {
 fn colored_and_uncolored_nextest_cancellation_share_the_fail_identity() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     const FAILING: &str = "plain_and_json_forms_match_their_goldens";
-    let colored = orb_11509_style_nextest_log(true, FAILING);
-    let plain = orb_11509_style_nextest_log(false, FAILING);
+    let colored = orb_11509_style_nextest_log(true, FAILING, "1.399s");
+    let plain = orb_11509_style_nextest_log(false, FAILING, "1.399s");
 
     let first = file(
         &runtime,
@@ -1496,11 +1499,68 @@ fn colored_and_uncolored_nextest_cancellation_share_the_fail_identity() {
     );
 }
 
+/// A colored log can reach the sweep with an escape sequence cut short — the
+/// stripper must not split the multi-byte character that follows it.
+#[test]
+fn a_truncated_escape_before_a_multibyte_character_still_files() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let log = format!(
+        "{}{}{}",
+        github_line("build", "cargo test", "##[group]Run cargo nextest run"),
+        github_line("build", "cargo test", "\u{1b}────────────"),
+        github_line(
+            "build",
+            "cargo test",
+            "    FAIL [   1.399s] orbit-core truncated_escape_case",
+        ),
+    );
+
+    let (_output, description) = filed_description(&runtime, &log);
+    let signature = signature_line(&description).to_ascii_lowercase();
+    assert!(
+        signature.contains("truncated_escape_case"),
+        "the FAIL identity must survive a truncated escape: {signature}"
+    );
+}
+
+#[test]
+fn nextest_fail_durations_do_not_fragment_one_regression() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    const FAILING: &str = "plain_and_json_forms_match_their_goldens";
+    let first_run = orb_11509_style_nextest_log(true, FAILING, "1.399s");
+    let rerun = orb_11509_style_nextest_log(true, FAILING, "2.004s");
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10, "CI", "Check / Clippy / Test", "Run CI guardrails", &first_run, CHECKOUT,
+        )])}),
+    );
+    assert_eq!(first["filed_count"], json!(1));
+
+    let repeated = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            11, "CI", "Check / Clippy / Test", "Run CI guardrails", &rerun, NEXT_HEAD,
+        )])}),
+    );
+    assert_eq!(
+        repeated["filed_count"],
+        json!(0),
+        "a rerun of the same test must not file a second task"
+    );
+    assert_eq!(
+        repeated["skipped_existing"][0]["failure_key"], first["filed"][0]["failure_key"],
+        "the per-test duration must not change the failure key"
+    );
+}
+
 #[test]
 fn distinct_nextest_fail_lines_in_the_same_job_keep_distinct_keys() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
-    let foo = orb_11509_style_nextest_log(true, "plain_and_json_forms_match_their_goldens");
-    let bar = orb_11509_style_nextest_log(false, "another_golden_does_not_match");
+    let foo =
+        orb_11509_style_nextest_log(true, "plain_and_json_forms_match_their_goldens", "1.399s");
+    let bar = orb_11509_style_nextest_log(false, "another_golden_does_not_match", "2.004s");
 
     let output = file(
         &runtime,

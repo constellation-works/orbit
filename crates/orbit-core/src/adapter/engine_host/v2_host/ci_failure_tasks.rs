@@ -1346,10 +1346,9 @@ fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
     let mut out = Vec::new();
     for line in log.lines() {
         let payload = signature_payload(line);
-        let trimmed = payload.trim();
-        let lowered = trimmed.to_ascii_lowercase();
+        let lowered = payload.trim();
         let indented = payload.starts_with(' ') || payload.starts_with('\t');
-        let kind = if is_run_command_payload(trimmed) {
+        let kind = if is_run_command_payload(lowered) {
             in_param_block = false;
             LineKind::RunCommand
         } else if lowered.contains("##[endgroup]") {
@@ -1358,19 +1357,19 @@ fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
         } else if lowered == "env:" || lowered == "with:" {
             in_param_block = true;
             LineKind::ParamDump
-        } else if in_param_block && (indented || trimmed.is_empty()) {
+        } else if in_param_block && (indented || lowered.is_empty()) {
             LineKind::ParamDump
         } else {
             in_param_block = false;
-            if is_generic_trailer(&lowered) {
+            if is_generic_trailer(lowered) {
                 LineKind::GenericTrailer
             } else if lowered.contains("##[error]") {
                 LineKind::ErrorAnnotated
-            } else if is_runner_bookkeeping(&lowered) || lowered.contains("##[group]") {
+            } else if is_runner_bookkeeping(lowered) || lowered.contains("##[group]") {
                 LineKind::Bookkeeping
-            } else if is_concrete_diagnostic(&payload, &lowered, after_failures_header) {
+            } else if is_concrete_diagnostic(&payload, lowered, after_failures_header) {
                 LineKind::ConcreteDiagnostic
-            } else if is_error_marker_line(&lowered) && !is_assertion_payload(&lowered) {
+            } else if is_error_marker_line(lowered) && !is_assertion_payload(lowered) {
                 LineKind::Marker
             } else {
                 LineKind::Content
@@ -1378,7 +1377,7 @@ fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
         };
         if lowered == "failures:" || lowered == "errors:" {
             after_failures_header = true;
-        } else if is_libtest_stdout_header(&lowered) || lowered.starts_with("test result:") {
+        } else if is_libtest_stdout_header(lowered) || lowered.starts_with("test result:") {
             after_failures_header = false;
         }
         out.push((kind, line));
@@ -1655,60 +1654,56 @@ fn log_payload(line: &str) -> &str {
 }
 
 /// Payload used for classification and the normalized signature: runner
-/// columns removed, ANSI styling stripped. The filed excerpt keeps the raw
-/// line so evidence is not discarded.
+/// columns removed, ANSI styling stripped, lowercased. The filed excerpt keeps
+/// the raw line so evidence is not discarded.
 fn signature_payload(line: &str) -> String {
     strip_ansi_sequences(log_payload(line)).to_ascii_lowercase()
 }
 
 /// CSI/OSC sequences only. The raw log line remains in the task description.
+///
+/// Walks characters rather than bytes: a truncated or malformed escape in a
+/// runner log must not split a multi-byte character.
 fn strip_ansi_sequences(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != 0x1b {
-            let len = input[i..].chars().next().map_or(1, char::len_utf8);
-            out.push_str(&input[i..i + len]);
-            i += len;
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            out.push(ch);
             continue;
         }
-        i += 1;
-        if i >= bytes.len() {
-            break;
-        }
-        match bytes[i] {
-            b'[' => {
-                i += 1;
-                while i < bytes.len() {
-                    let byte = bytes[i];
-                    i += 1;
-                    if (0x40..=0x7e).contains(&byte) {
+        match chars.next() {
+            // CSI: parameters and intermediates, then one final character.
+            Some('[') => {
+                for ch in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&ch) {
                         break;
                     }
                 }
             }
-            b']' => {
-                i += 1;
-                while i < bytes.len() {
-                    if bytes[i] == 0x07 {
-                        i += 1;
+            // OSC: runs to BEL or the ST terminator.
+            Some(']') => {
+                while let Some(ch) = chars.next() {
+                    if ch == '\u{07}' {
                         break;
                     }
-                    if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                        i += 2;
+                    if ch == '\u{1b}' && chars.peek() == Some(&'\\') {
+                        chars.next();
                         break;
                     }
-                    i += 1;
                 }
             }
-            _ => i += 1,
+            // A lone escape, or a two-character sequence: drop both.
+            _ => {}
         }
     }
     out
 }
 
-/// Collapse the parts of a log line that vary between identical failures.
+/// Collapse the parts of a log line that vary between identical failures:
+/// bare numbers, long hex blobs, and measurements whose unit is the only
+/// stable part (nextest's `FAIL [ 1.399s]` is a different duration on every
+/// rerun of the same failing test).
 fn normalize_signature(lowered: &str) -> String {
     let mut out = String::with_capacity(lowered.len());
     let mut chars = lowered.chars().peekable();
@@ -1719,14 +1714,19 @@ fn normalize_signature(lowered: &str) -> String {
             while chars.peek().is_some_and(char::is_ascii_alphanumeric) {
                 token.push(chars.next().unwrap_or_default());
             }
-            let replacement = if token.chars().all(|c| c.is_ascii_digit()) {
-                "<n>"
+            // The token is ASCII alphanumeric, so a digit count indexes it directly.
+            let digits = token.chars().take_while(char::is_ascii_digit).count();
+            if digits == token.len() {
+                out.push_str("<n>");
             } else if token.len() >= 7 && token.chars().all(|c| c.is_ascii_hexdigit()) {
-                "<hex>"
+                out.push_str("<hex>");
+            } else if digits > 0 && token[digits..].chars().all(|c| c.is_ascii_alphabetic()) {
+                // A measurement such as `399s` or `250ms`: keep the unit, drop the count.
+                out.push_str("<n>");
+                out.push_str(&token[digits..]);
             } else {
-                token.as_str()
-            };
-            out.push_str(replacement);
+                out.push_str(&token);
+            }
             last_was_space = false;
             continue;
         }
