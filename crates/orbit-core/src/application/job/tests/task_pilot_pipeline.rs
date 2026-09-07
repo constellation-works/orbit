@@ -12,7 +12,7 @@ use super::exec::{seed_default_catalogs, try_execute_named_job};
 use crate::OrbitRuntime;
 
 struct TaskPilotJobFixture {
-    _root: TempDir,
+    root: TempDir,
     runtime: OrbitRuntime,
     repo_root: PathBuf,
     stale_sha: String,
@@ -104,7 +104,7 @@ fn task_pilot_job_fixture(config_branch: &str, remote_branch: &str) -> TaskPilot
     let dirty_status = git(&repo_root, &["status", "--short"]);
 
     TaskPilotJobFixture {
-        _root: root,
+        root,
         runtime,
         repo_root,
         stale_sha,
@@ -176,10 +176,19 @@ fn shipped_task_pilot_job_honors_an_explicit_alternate_branch() {
 #[test]
 fn shipped_task_pilot_job_rejects_an_unavailable_explicit_branch() {
     let fixture = task_pilot_job_fixture("main", "main");
+    // The executor uses the run ID to salt retry jitter, so derive this test
+    // ID from tempfile's OS-backed random fixture name instead of hard-coding it.
+    let run_id = fixture
+        .root
+        .path()
+        .file_name()
+        .expect("fixture root has a basename")
+        .to_string_lossy()
+        .into_owned();
     let error = execute_task_pilot_job(
         &fixture,
         json!({ "base_branch": "missing-branch" }),
-        "task-pilot-missing-branch",
+        &run_id,
     )
     .expect_err("an unavailable explicit branch must fail before pilot dispatch");
     let message = error.to_string();
