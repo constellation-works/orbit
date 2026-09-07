@@ -271,6 +271,7 @@ fn bound_runtime(
         crate::WorkspaceRuntimeBinding {
             logical_workspace_id: workspace_id.clone(),
             workspace_id,
+            owner_machine_id: None,
             repo_root: repo.clone(),
             ship_mode: orbit_types::workflow::ShipMode::Pr,
             base_branch: branch.map(ToOwned::to_owned),
