@@ -1269,6 +1269,509 @@ fn distinct_rust_panics_with_the_same_passing_preamble_keep_distinct_keys() {
     );
 }
 
+fn ansi_bold_red(text: &str) -> String {
+    format!("\u{1b}[31;1m{text}\u{1b}[0m")
+}
+
+fn github_line(job: &str, step: &str, payload: &str) -> String {
+    format!("{job}\t{step}\t2026-09-07T07:24:42.8592482Z {payload}\n")
+}
+
+/// ORB-11509: nextest cancellation and summary wrap a FAIL line. ANSI styling
+/// must not become the signature, and colored/uncolored logs must match.
+///
+/// `elapsed` is the per-test duration nextest prints in the FAIL line; it
+/// differs on every rerun of the same regression.
+fn orb_11509_style_nextest_log(colored: bool, failing: &str, elapsed: &str) -> String {
+    let job = "Check / Clippy / Test";
+    let step = "Run CI guardrails";
+    let paint = |text: &str, color: bool| {
+        if color {
+            ansi_bold_red(text)
+        } else {
+            text.to_string()
+        }
+    };
+    let mut out = String::new();
+    out.push_str(&github_line(job, step, "##[group]Run cargo nextest run"));
+    out.push_str(&github_line(
+        job,
+        step,
+        "test mcp_serve_error_paths_return_tool_errors_and_keep_serving ... ok",
+    ));
+    out.push_str(&github_line(
+        job,
+        step,
+        &format!(
+            "{} due to {}: ",
+            paint("  Cancelling", colored),
+            paint("test failure", colored)
+        ),
+    ));
+    out.push_str(&github_line(job, step, "────────────"));
+    out.push_str(&github_line(
+        job,
+        step,
+        &format!(
+            "{} [ 177.529s] 2786/4410 tests run: 2785 passed (2 slow), 1 failed, 10 skipped",
+            paint("     Summary", colored)
+        ),
+    ));
+    out.push_str(&github_line(
+        job,
+        step,
+        &format!(
+            "{} [   {elapsed}] (2786/4410) {} {}",
+            paint("        FAIL", colored),
+            paint("orbit-cli::output_goldens", colored),
+            paint(failing, colored)
+        ),
+    ));
+    out.push_str(&github_line(
+        job,
+        step,
+        "warning: 1624/4410 tests were not run due to test failure (run with --no-fail-fast to run all tests)",
+    ));
+    out.push_str(&github_line(
+        job,
+        step,
+        &format!("{}: test run failed", paint("error", colored)),
+    ));
+    out.push_str(&github_line(
+        job,
+        step,
+        "##[error]Process completed with exit code 100.",
+    ));
+    out
+}
+
+/// ORB-11470 / ORB-11467: cargo's colored `error: test failed, to rerun pass`
+/// trailer can appear before the panic when the excerpt is a recovered job log.
+fn orb_11470_style_macos_log(failing: &str, cargo_before_panic: bool) -> String {
+    let job = "macOS Sandbox";
+    let step = "Run orbit-exec sandbox tests (real sandbox-exec)";
+    let prefix = |payload: &str| github_line(job, step, payload);
+    let cargo = format!(
+        "{}: test failed, to rerun pass `-p orbit-exec --lib`",
+        ansi_bold_red("error")
+    );
+    let header = format!("---- {failing} stdout ----");
+    let panic = format!(
+        "thread '{failing}' (14083) panicked at crates/orbit-exec/src/macos_sandbox/tests/compile.rs:454:5:"
+    );
+    let mut out = String::new();
+    out.push_str(&prefix("##[group]Run cargo test -p orbit-exec --locked"));
+    out.push_str(&prefix(
+        "test macos_sandbox::tests::spawn::spawn_under_macos_sandbox_runs_program_in_provided_cwd ... ok",
+    ));
+    out.push_str(&prefix("failures:"));
+    out.push_str(&prefix(&header));
+    if cargo_before_panic {
+        out.push_str(&prefix(&cargo));
+        out.push_str(&prefix(&panic));
+    } else {
+        out.push_str(&prefix(&panic));
+        out.push_str(&prefix(&cargo));
+    }
+    out.push_str(&prefix(
+        "an explicit denyRead must still outrank the public CA default",
+    ));
+    out.push_str(&prefix("failures:"));
+    out.push_str(&prefix(&format!("    {failing}")));
+    out.push_str(&prefix(
+        "test result: FAILED. 67 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s",
+    ));
+    out.push_str(&prefix("##[error]Process completed with exit code 101."));
+    out
+}
+
+/// ORB-11498 / ORB-11502: golden assertion payload quotes github.run.logs help
+/// text containing `failed steps`. The failing test name is in the libtest
+/// summary list; the panic line is omitted as in a head/tail truncated excerpt.
+fn orb_11498_style_golden_log(failing: &str) -> String {
+    let job = "Coverage (informational)";
+    let step = "Collect workspace coverage";
+    let prefix = |payload: &str| github_line(job, step, payload);
+    let mut out = String::new();
+    out.push_str(&prefix(
+        "##[group]Run cargo llvm-cov --workspace --locked --no-report",
+    ));
+    out.push_str(&prefix(
+        "test no_ansi_escapes_under_any_color_configuration ... ok",
+    ));
+    out.push_str(&prefix(
+        r#"        "description": "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is drained incrementally; checkout extraction stops after 8 MiB.""#,
+    ));
+    out.push_str(&prefix(
+        r#"  right: "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence.""#,
+    ));
+    out.push_str(&prefix("failures:"));
+    out.push_str(&prefix(&format!("    {failing}")));
+    out.push_str(&prefix(
+        "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.64s",
+    ));
+    out.push_str(&prefix(
+        "error: test failed, to rerun pass `-p orbit-cli --test output_goldens`",
+    ));
+    out.push_str(&prefix(
+        "error: process didn't exit successfully: `/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo test --tests` (exit status: 101)",
+    ));
+    out.push_str(&prefix("##[error]Process completed with exit code 101."));
+    out
+}
+
+/// ORB-11513: Wrangler colored `[ERROR]` plus the missing-field diagnostic,
+/// then GitHub's generic `The process 'npx' failed with exit code`.
+fn orb_11513_style_wrangler_log(title: &str, detail: &str) -> String {
+    let job = "Publish to Cloudflare Pages";
+    let step = "Deploy static site";
+    let prefix = |payload: &str| github_line(job, step, payload);
+    let wrangler_error = format!(
+        "\u{1b}[31m✘ \u{1b}[41;31m[\u{1b}[41;97mERROR\u{1b}[41;31m]\u{1b}[0m \u{1b}[1m{title}:\u{1b}[0m"
+    );
+    let mut out = String::new();
+    out.push_str(&prefix(
+        "##[group]Run cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0",
+    ));
+    out.push_str(&prefix(&wrangler_error));
+    out.push_str(&prefix(&format!(
+        "    - Missing top-level field \"name\" in configuration file. {detail}"
+    )));
+    out.push_str(&prefix(
+        "##[error]The process '/usr/local/bin/npx' failed with exit code 1",
+    ));
+    out.push_str(&prefix("##[error]🚨 Action failed"));
+    out
+}
+
+#[test]
+fn colored_and_uncolored_nextest_cancellation_share_the_fail_identity() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    const FAILING: &str = "plain_and_json_forms_match_their_goldens";
+    let colored = orb_11509_style_nextest_log(true, FAILING, "1.399s");
+    let plain = orb_11509_style_nextest_log(false, FAILING, "1.399s");
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10, "CI", "Check / Clippy / Test", "Run CI guardrails", &colored, CHECKOUT,
+        )])}),
+    );
+    assert_eq!(first["filed_count"], json!(1));
+    let task_id = filed_task_ids(&first).remove(0);
+    let signature = signature_line(
+        &runtime
+            .get_task(&task_id)
+            .expect("read filed task")
+            .description,
+    )
+    .to_ascii_lowercase();
+    assert!(
+        signature.contains(FAILING) && signature.contains("fail"),
+        "nextest FAIL line must be the signature: {signature}"
+    );
+    assert!(
+        !signature.contains("cancelling")
+            && !signature.contains("process completed")
+            && !signature.contains("test run failed")
+            && !signature.contains('\u{1b}'),
+        "cancellation, cargo trailer, and ANSI must not be the signature: {signature}"
+    );
+    assert!(
+        runtime
+            .get_task(&task_id)
+            .expect("read filed task")
+            .description
+            .contains("Cancelling"),
+        "raw colored excerpt must remain in the description"
+    );
+
+    let repeated = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            11, "CI", "Check / Clippy / Test", "Run CI guardrails", &plain, NEXT_HEAD,
+        )])}),
+    );
+    assert_eq!(repeated["filed_count"], json!(0));
+    assert_eq!(
+        repeated["skipped_existing"][0]["failure_key"], first["filed"][0]["failure_key"],
+        "colored and uncolored nextest FAIL logs must share a failure key"
+    );
+}
+
+/// A colored log can reach the sweep with an escape sequence cut short — the
+/// stripper must not split the multi-byte character that follows it.
+#[test]
+fn a_truncated_escape_before_a_multibyte_character_still_files() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let log = format!(
+        "{}{}{}",
+        github_line("build", "cargo test", "##[group]Run cargo nextest run"),
+        github_line("build", "cargo test", "\u{1b}────────────"),
+        github_line(
+            "build",
+            "cargo test",
+            "    FAIL [   1.399s] orbit-core truncated_escape_case",
+        ),
+    );
+
+    let (_output, description) = filed_description(&runtime, &log);
+    let signature = signature_line(&description).to_ascii_lowercase();
+    assert!(
+        signature.contains("truncated_escape_case"),
+        "the FAIL identity must survive a truncated escape: {signature}"
+    );
+}
+
+#[test]
+fn nextest_fail_durations_do_not_fragment_one_regression() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    const FAILING: &str = "plain_and_json_forms_match_their_goldens";
+    let first_run = orb_11509_style_nextest_log(true, FAILING, "1.399s");
+    let rerun = orb_11509_style_nextest_log(true, FAILING, "2.004s");
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10, "CI", "Check / Clippy / Test", "Run CI guardrails", &first_run, CHECKOUT,
+        )])}),
+    );
+    assert_eq!(first["filed_count"], json!(1));
+
+    let repeated = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            11, "CI", "Check / Clippy / Test", "Run CI guardrails", &rerun, NEXT_HEAD,
+        )])}),
+    );
+    assert_eq!(
+        repeated["filed_count"],
+        json!(0),
+        "a rerun of the same test must not file a second task"
+    );
+    assert_eq!(
+        repeated["skipped_existing"][0]["failure_key"], first["filed"][0]["failure_key"],
+        "the per-test duration must not change the failure key"
+    );
+}
+
+#[test]
+fn distinct_nextest_fail_lines_in_the_same_job_keep_distinct_keys() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let foo =
+        orb_11509_style_nextest_log(true, "plain_and_json_forms_match_their_goldens", "1.399s");
+    let bar = orb_11509_style_nextest_log(false, "another_golden_does_not_match", "2.004s");
+
+    let output = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![
+            failure(10, "CI", "Check / Clippy / Test", "Run CI guardrails", &foo, CHECKOUT),
+            failure(11, "CI", "Check / Clippy / Test", "Run CI guardrails", &bar, CHECKOUT),
+        ])}),
+    );
+    assert_eq!(output["filed_count"], json!(2));
+    let filed = output["filed"].as_array().expect("filed");
+    assert_ne!(filed[0]["failure_key"], filed[1]["failure_key"]);
+}
+
+#[test]
+fn cargo_test_failed_trailer_does_not_outrank_the_panic() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    const FAILING: &str = "macos_sandbox::tests::compile::compiled_codex_profile_reads_public_ca_material_but_not_private_credentials";
+    let trailer_first = orb_11470_style_macos_log(FAILING, true);
+    let panic_first = orb_11470_style_macos_log(FAILING, false);
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10,
+            "macOS Platform",
+            "macOS Sandbox",
+            "Run orbit-exec sandbox tests (real sandbox-exec)",
+            &trailer_first,
+            CHECKOUT,
+        )])}),
+    );
+    assert_eq!(first["filed_count"], json!(1));
+    let signature = signature_line(
+        &runtime
+            .get_task(&filed_task_ids(&first)[0])
+            .expect("read filed task")
+            .description,
+    )
+    .to_ascii_lowercase();
+    assert!(
+        signature.contains(FAILING) && signature.contains("panicked"),
+        "panic must outrank the cargo trailer: {signature}"
+    );
+    assert!(
+        !signature.contains("to rerun pass") && !signature.contains("process completed"),
+        "cargo/github wrappers must not be the signature: {signature}"
+    );
+
+    let repeated = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            11,
+            "macOS Platform",
+            "macOS Sandbox",
+            "Run orbit-exec sandbox tests (real sandbox-exec)",
+            &panic_first,
+            NEXT_HEAD,
+        )])}),
+    );
+    assert_eq!(repeated["filed_count"], json!(0));
+    assert_eq!(
+        repeated["skipped_existing"][0]["failure_key"],
+        first["filed"][0]["failure_key"]
+    );
+}
+
+#[test]
+fn golden_assertion_help_text_does_not_outrank_the_failing_test_name() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    const FAILING: &str = "plain_and_json_forms_match_their_goldens";
+    let log = orb_11498_style_golden_log(FAILING);
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10,
+            "CI",
+            "Coverage (informational)",
+            "Collect workspace coverage",
+            &log,
+            CHECKOUT,
+        )])}),
+    );
+    assert_eq!(first["filed_count"], json!(1));
+    let task_id = filed_task_ids(&first).remove(0);
+    let description = runtime
+        .get_task(&task_id)
+        .expect("read filed task")
+        .description;
+    let signature = signature_line(&description).to_ascii_lowercase();
+    assert!(
+        signature.contains(FAILING),
+        "listed golden test name must be the signature: {signature}"
+    );
+    assert!(
+        !signature.contains("failed steps")
+            && !signature.contains("bounded excerpt")
+            && !signature.contains("to rerun pass"),
+        "assertion payload and cargo trailer must not be the signature: {signature}"
+    );
+    assert!(
+        description.contains("failed steps by default"),
+        "raw assertion payload must remain in the excerpt"
+    );
+
+    let repeated = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            11,
+            "CI",
+            "Coverage (informational)",
+            "Collect workspace coverage",
+            &log,
+            NEXT_HEAD,
+        )])}),
+    );
+    assert_eq!(repeated["filed_count"], json!(0));
+}
+
+#[test]
+fn wrangler_error_outranks_generic_npx_process_failed() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let missing_name = orb_11513_style_wrangler_log(
+        "Running configuration file validation for Pages",
+        "Pages requires the name of your project.",
+    );
+    let missing_pages = orb_11513_style_wrangler_log(
+        "Failed to publish your Function",
+        "Pages build output directory is missing.",
+    );
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10,
+            "Website",
+            "Publish to Cloudflare Pages",
+            "Deploy static site",
+            &missing_name,
+            CHECKOUT,
+        )])}),
+    );
+    assert_eq!(first["filed_count"], json!(1));
+    let signature = signature_line(
+        &runtime
+            .get_task(&filed_task_ids(&first)[0])
+            .expect("read filed task")
+            .description,
+    )
+    .to_ascii_lowercase();
+    assert!(
+        signature.contains("configuration file validation")
+            || signature.contains("missing top-level field"),
+        "wrangler diagnostic must outrank npx process-failed: {signature}"
+    );
+    assert!(
+        !signature.contains("usr/local/bin/npx") && !signature.contains("action failed"),
+        "generic process/action trailers must not be the signature: {signature}"
+    );
+
+    let second = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![
+            failure(
+                11,
+                "Website",
+                "Publish to Cloudflare Pages",
+                "Deploy static site",
+                &missing_pages,
+                CHECKOUT,
+            ),
+        ])}),
+    );
+    assert_eq!(second["filed_count"], json!(1));
+    assert_ne!(
+        first["filed"][0]["failure_key"], second["filed"][0]["failure_key"],
+        "distinct wrangler diagnostics in the same job must not collapse"
+    );
+}
+
+#[test]
+fn generic_only_truncated_excerpt_labels_step_name_fallback() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let log = format!(
+        "{}{}{}",
+        github_line("build", "cargo test", "##[group]Run cargo test"),
+        github_line(
+            "build",
+            "cargo test",
+            "error: test failed, to rerun pass `-p orbit-exec --lib`",
+        ),
+        github_line(
+            "build",
+            "cargo test",
+            "##[error]Process completed with exit code 101.",
+        ),
+    );
+
+    let (_output, description) = filed_description(&runtime, &log);
+    let signature = signature_line(&description);
+    assert!(
+        signature.contains("step-name fallback"),
+        "generic-only excerpt must label fallback uncertainty: {signature}"
+    );
+    assert!(
+        description.contains("test failed, to rerun pass")
+            && description.contains("Process completed with exit code 101."),
+        "raw generic trailers must remain in the excerpt:\n{description}"
+    );
+}
+
 #[test]
 fn query_error_prevents_filing_and_remains_retryable() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
