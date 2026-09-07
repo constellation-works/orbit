@@ -246,3 +246,167 @@ async fn operations_mutations_require_an_explicit_workspace() {
     let json = body_json(response).await;
     assert_eq!(json["code"], "workspace_required");
 }
+
+#[tokio::test]
+async fn routine_and_clock_capabilities_use_each_canonical_operation() {
+    use super::super::routines::action_capability;
+    use orbit_common::governance::authorization::{
+        DASHBOARD_CLOCK_CADENCE, DASHBOARD_CLOCK_SERVICE, DASHBOARD_ROUTINE_TOGGLE,
+    };
+
+    for operator in [false, true] {
+        with_caller_env(
+            [
+                (OPERATOR_OVERRIDE_ENV, operator.then_some("1")),
+                ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+            ],
+            async {
+                for operation in [
+                    &DASHBOARD_ROUTINE_TOGGLE,
+                    &DASHBOARD_CLOCK_SERVICE,
+                    &DASHBOARD_CLOCK_CADENCE,
+                ] {
+                    let capability = action_capability(operation);
+                    assert_eq!(capability["authorized"], operator);
+                    if operator {
+                        assert!(capability["reason"].is_null());
+                    } else {
+                        assert!(
+                            capability["reason"]
+                                .as_str()
+                                .expect("denial")
+                                .contains(operation.id)
+                        );
+                    }
+                }
+            },
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn authorized_routine_toggle_reads_back_and_rejects_stale_or_wrong_selection() {
+    use super::workspaces::workspace_entry;
+    use chrono::Utc;
+    use orbit_registry::workspace_registry;
+    use orbit_types::workspace::{
+        Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus,
+    };
+
+    let temp = tempfile::tempdir().expect("fixture");
+    let global = temp.path().join("global");
+    std::fs::create_dir_all(&global).expect("global");
+    ensure_host_identity(&global, || {
+        Ok(NewHostIdentity {
+            host_id: "dashboard-test".to_string(),
+            task_prefix: "DA".to_string(),
+        })
+    })
+    .expect("identity");
+    let repo = temp.path().join("alpha");
+    let orbit_dir = repo.join(".orbit");
+    std::fs::create_dir_all(&orbit_dir).expect("workspace");
+    std::fs::write(
+        orbit_dir.join("config.yaml"),
+        "schema_version: 1\nworkspace_id: ws_alpha\n",
+    )
+    .expect("workspace identity");
+    std::fs::write(
+        orbit_dir.join("config.toml"),
+        "[routines]\nrole = \"source\"\n",
+    )
+    .expect("source role");
+    super::test_support::write_replay_job_under(&orbit_dir, "noop");
+    let routines = orbit_dir.join("routines");
+    std::fs::create_dir_all(&routines).expect("routines");
+    let path = routines.join("fixture.yaml");
+    std::fs::write(&path, "schemaVersion: 1\nname: fixture\nhosts: [dashboard-test]\nenabled: true\ntrigger: {cron: '* * * * *'}\ntarget: job:noop\n").expect("definition");
+    let now = Utc::now();
+    let registry = WorkspaceRegistry {
+        workspaces: vec![Workspace {
+            id: "ws_alpha".to_string(),
+            name: "alpha".to_string(),
+            owner_machine_id: Some(
+                orbit_registry::host_identity::load_host_identity(&global)
+                    .expect("identity")
+                    .machine_id,
+            ),
+            git_remote: None,
+            ship_mode: None,
+            base_branch: "agent-main".to_string(),
+            status: WorkspaceStatus::Active,
+            created_at: now,
+            updated_at: now,
+        }],
+        checkouts: vec![WorkspaceCheckout::owner(
+            "ws_alpha".to_string(),
+            repo.clone(),
+            orbit_dir.clone(),
+        )],
+        ..WorkspaceRegistry::default()
+    };
+    workspace_registry::save_registry_to(
+        &registry,
+        &workspace_registry::registry_path_for(&global),
+    )
+    .expect("registry");
+    let state = DashboardState::global(
+        global,
+        vec![workspace_entry("alpha", repo, orbit_dir, true)],
+        Some("alpha".to_string()),
+    );
+
+    with_caller_env([(OPERATOR_OVERRIDE_ENV, Some("1"))], async {
+        for enabled in [false, true] {
+            let body = serde_json::json!({"name":"fixture", "source":"alpha", "target":"job:noop", "host_id":"dashboard-test", "expected_enabled": !enabled, "enabled":enabled});
+            let response = routine_request(state.clone(), "/routines/toggle?workspace=alpha", Some(body.clone())).await;
+            assert_eq!(response.status(), StatusCode::OK, "{}", body_json(response).await);
+            let persisted: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).expect("read file")).expect("yaml");
+            assert_eq!(persisted["enabled"].as_bool(), Some(enabled));
+            let listed = body_json(routine_request(state.clone(), "/routines", None).await).await;
+            assert_eq!(listed["routines"][0]["enabled"], enabled, "{listed}");
+            assert_eq!(listed["capabilities"]["routine_toggle"]["authorized"], true);
+            let stale = routine_request(state.clone(), "/routines/toggle?workspace=alpha", Some(body)).await;
+            assert_eq!(stale.status(), StatusCode::CONFLICT);
+        }
+        let wrong = routine_request(state.clone(), "/routines/toggle?workspace=alpha", Some(serde_json::json!({
+            "name":"fixture", "source":"other", "target":"job:noop", "host_id":"dashboard-test", "expected_enabled":true, "enabled":false
+        }))).await;
+        assert_eq!(wrong.status(), StatusCode::CONFLICT);
+        assert_eq!(body_json(wrong).await["code"], "workspace_mismatch");
+
+        // Enter the canonical clock handler, but reject an invalid cadence before
+        // native service writes. Actual service mutation belongs to Core's fake-runner tests.
+        let listed = body_json(routine_request(state.clone(), "/routines", None).await).await;
+        let invalid_clock = routine_request(state.clone(), "/routines/clock?workspace=alpha", Some(serde_json::json!({
+            "action":"set_cadence", "host_id":"dashboard-test",
+            "expected_enabled": listed["clock"]["enabled"],
+            "expected_cadence_seconds": listed["clock"]["configured_cadence_seconds"], "cadence_seconds":61
+        }))).await;
+        assert_eq!(invalid_clock.status(), StatusCode::BAD_REQUEST);
+        assert!(body_json(invalid_clock).await["error"].as_str().expect("error").contains("whole minute"));
+    }).await;
+}
+
+async fn routine_request(
+    state: DashboardState,
+    uri: &str,
+    body: Option<serde_json::Value>,
+) -> axum::response::Response {
+    let mut request = Request::builder().uri(uri);
+    let body = if let Some(body) = body {
+        request = request
+            .method(Method::POST)
+            .header("origin", "http://localhost:7878")
+            .header("content-type", "application/json");
+        Body::from(body.to_string())
+    } else {
+        Body::empty()
+    };
+    router()
+        .with_state(state)
+        .oneshot(request.body(body).expect("request"))
+        .await
+        .expect("response")
+}

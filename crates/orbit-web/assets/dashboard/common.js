@@ -10,8 +10,24 @@ export function getWorkspace() {
   return currentWorkspace;
 }
 
+let workspaceRevision = 0;
+const workspaceListeners = new Set();
+
+export function getWorkspaceRevision() {
+  return workspaceRevision;
+}
+
+export function onWorkspaceChange(listener) {
+  workspaceListeners.add(listener);
+  return () => workspaceListeners.delete(listener);
+}
+
 export function setWorkspace(id) {
-  currentWorkspace = id || null;
+  const next = id || null;
+  if (next === currentWorkspace) return;
+  currentWorkspace = next;
+  workspaceRevision += 1;
+  for (const listener of workspaceListeners) listener();
 }
 
 // ORB-10872: workspace + time window are one dashboard scope. Scoreboard,

@@ -493,3 +493,66 @@ async fn mint_returns_the_exact_server_error() {
         "{json}"
     );
 }
+
+#[tokio::test]
+async fn list_capabilities_match_toggle_and_mint_authorization() {
+    let (state, _) = state(runtime());
+    for operator in [false, true] {
+        let request = send(
+            state.clone(),
+            Method::GET,
+            "/auto-tasks?workspace=default",
+            None,
+        );
+        let response = if operator {
+            as_operator(request).await
+        } else {
+            as_agent(request).await
+        };
+        let json = body_json(response).await;
+        for action in ["auto_task_toggle", "auto_task_mint"] {
+            assert_eq!(json["capabilities"][action]["authorized"], operator);
+            if operator {
+                assert!(json["capabilities"][action]["reason"].is_null());
+            } else {
+                assert!(
+                    json["capabilities"][action]["reason"]
+                        .as_str()
+                        .expect("denial")
+                        .contains("operator")
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn toggle_both_directions_reads_back_persisted_state() {
+    let runtime = runtime();
+    runtime.auto_task_add(chore_params("nightly")).expect("add");
+    let (state, _) = state(runtime);
+    for enabled in [false, true] {
+        let body =
+            serde_json::json!({"name":"nightly", "expected_enabled": !enabled, "enabled": enabled})
+                .to_string();
+        let response = as_operator(send(
+            state.clone(),
+            Method::POST,
+            "/auto-tasks/toggle?workspace=default",
+            Some(&body),
+        ))
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let listed = body_json(
+            send(
+                state.clone(),
+                Method::GET,
+                "/auto-tasks?workspace=default",
+                None,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(listed["definitions"][0]["enabled"], enabled);
+    }
+}

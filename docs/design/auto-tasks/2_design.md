@@ -185,6 +185,40 @@ disclosure. All-workspace and inactive/unknown workspace selections stay
 read-only. Refresh and hash navigation only GET — they never replay a toggle
 or mint.
 
+List responses expose separate `capabilities` decisions for auto-task toggle,
+manual mint, routine toggle, clock service, and clock cadence. Each decision
+uses the same governed operation as its POST endpoint; no client-side grant
+is inferred from another action. These five operations currently all require
+operator authority, while bounded-window submission has a separate policy.
+The legacy `controls_authorized` field remains for existing API consumers.
+
+One session-access explanation appears above Operations. Dashboard authority
+comes from the **server process**, not from opening a browser or terminal.
+For deliberate operator access, restart the server with
+`ORBIT_OPERATOR=1 orbit web serve`, preserving its existing root, port, and
+workspace options, then reload the page. No dashboard button grants authority.
+Unavailable actions retain a keyboard-focusable explanation, including host
+and workspace restrictions.
+
+Toggle and mint controls remain pending through server readback. Failures stay
+inline; mint success links to the created task in its originating workspace
+and never dispatches delivery. The confirmation warns when an open duplicate
+exists and preserves unconditional manual-mint semantics. Workspace changes
+invalidate old controls, list responses, and feedback, including switching
+away and back while a request is pending. The in-flight guard survives that
+switch until the request settles; it is a UI duplicate-click guard, not a
+server-side idempotency promise for manual mint. A failed readback preserves
+the successful action result and task link, so a refresh failure does not
+invite another mint.
+
+Validation uses the shipped modules in the existing Node harness
+(`cargo test -p orbit-web --lib operations_actions_preserve`). The same fixture
+runs in Chromium with `node crates/orbit-web/src/tests/dashboard_operations_browser.mjs
+/absolute/path/to/playwright/index.mjs /evidence/directory` (on one shell line).
+The optional runner serves isolated markup, styles and mocked API responses,
+checks behavior, and captures routine/auto-task panels at 1440px and 390px;
+Rust API tests separately exercise the canonical handlers and persisted state.
+
 ## 6. Concerns & Honest Limitations
 
 The seeded `qa-sweep` definition is disabled by default. When enabled, its
