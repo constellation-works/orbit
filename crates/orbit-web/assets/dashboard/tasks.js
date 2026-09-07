@@ -305,10 +305,11 @@ export function openVisibleTask(taskId, context) {
   });
 }
 
-/* Global ID resolver support (ORB-00211): allow rendering detail for a task whose status
-   is outside the active chip filter (done/rejected/archived) without adding it to the
-   bulk-loaded list or mutating DASHBOARD_TASK_STATUSES. The pinned detail appears in a
-   highlighted block at top of #tasks-body; auto-clears if user later enables matching chip. */
+/* Global ID resolver support (ORB-00211): allow rendering detail for a task that
+   is outside the filtered list (hidden status, search, or truncated fetch)
+   without mutating DASHBOARD_TASK_STATUSES. The pinned detail appears in a
+   highlighted block at top of #tasks-body; auto-clears once the filtered list
+   actually contains the task. */
 export function setPinnedExternalTask(task, context) {
   if (!task || !task.id) return;
   pinnedExternalTask = { task, id: task.id };
@@ -1245,14 +1246,12 @@ export function renderTasks(tasks, context) {
   // data so no extra plumbing is needed (single-workspace lists lack the field).
   const aggregate = Array.isArray(tasks) && tasks.some((t) => t && t.workspace_name);
 
-  // Auto-clear pinned external (global resolver) if its status+search now makes it
-  // visible in the normal filtered list (user enabled the chip or cleared search).
+  // Auto-clear a pinned jump only when the task is actually in the filtered
+  // list. Matching status/search chips is not enough: a truncated fetch can
+  // omit the jumped task even when its chip is on.
   if (pinnedExternalTask && pinnedExternalTask.task) {
     const p = pinnedExternalTask.task;
-    const q = (searchQueryValue(context) || "").toLowerCase();
-    const act = activeStatusSet(context);
-    const matchesQ = !q || (p.id && p.id.toLowerCase().includes(q)) || (p.title && p.title.toLowerCase().includes(q));
-    if (act.has(p.status) && matchesQ) {
+    if (filterTasks(tasks, context).some((task) => task.id === p.id)) {
       pinnedExternalTask = null;
     }
   }

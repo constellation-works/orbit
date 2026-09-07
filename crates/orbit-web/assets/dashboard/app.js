@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow } from './common.js';
+import { el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './audit.js';
 import { renderScoreboard } from './scoreboard.js';
@@ -750,81 +750,222 @@ function wireFrictionResponsiveDetail() {
   });
 }
 
-/* Global task ID resolver (ORB-00211).
+/* Global task ID resolver (ORB-00211 / ORB-11560).
+   GET /api/tasks/:id is workspace-scoped. A raw fetch without ?workspace=
+   hits the server default (often not the selected workspace) and reports an
+   existing task as not found — the Diagnostics jump failure on ws_orbit.
    - Only fires on exact ^ORB-\d{5}$ (case-insens) after trim/upper.
-   - 250ms debounce to avoid hammering dashboard_status_index full scan.
-   - On success: switch tab, clear per-tab search, freshen lastTasks, openVisible (active status)
-     or setPinnedExternalTask + render (for done/rejected/archived bypassing filter).
-   - Error: inline .error + span msg with ID, cleared on any next input.
-   - Works from any tab because header input + sAT('tasks').
+   - 250ms debounce; Enter looks up immediately.
+   - Lookup uses the selected workspace first; a confirmed miss then probes
+     other active workspaces and adopts the owner.
+   - Stale replies after a workspace change or a newer lookup are ignored.
+   - Not-found is reserved for a confirmed miss; loading / 403 / 5xx / network
+     have distinct copy.
 */
 function wireGlobalTaskResolver() {
   const input = $("global-task-id");
   if (!input) return;
   let debounce = null;
+  let lookupSeq = 0;
   const ID_RE = /^ORB-\d{5}$/i;
 
-  function clearError() {
+  function lookupWrap() {
+    return input.parentNode;
+  }
+
+  function clearLookupStatus() {
     input.classList.remove("error");
-    const wrap = input.parentNode;
-    if (wrap && wrap.classList) wrap.classList.remove("error");
+    const wrap = lookupWrap();
+    if (wrap && wrap.classList) {
+      wrap.classList.remove("error");
+      wrap.classList.remove("pending");
+    }
     const err = $("global-task-id-error");
     if (err) err.textContent = "";
   }
 
-  input.addEventListener("input", () => {
-    clearError();
-    if (debounce) clearTimeout(debounce);
-    const raw = (input.value || "").trim();
-    if (!raw) return;
-    const candidate = raw.toUpperCase();
-    if (!ID_RE.test(candidate)) {
-      // partial input: explicitly do not fetch (per AC and CPU guard)
-      return;
+  function showLookupStatus(kind, msg) {
+    const wrap = lookupWrap();
+    input.classList.toggle("error", kind === "error");
+    if (wrap && wrap.classList) {
+      wrap.classList.toggle("error", kind === "error");
+      wrap.classList.toggle("pending", kind === "pending");
     }
-    // full match: debounce then fetch exactly once
-    debounce = setTimeout(() => {
-      const id = candidate;
-      fetch(`/api/tasks/${encodeURIComponent(id)}`, { headers: { accept: "application/json" } })
-        .then(async (res) => {
-          if (res.ok) {
-            const task = await res.json();
-            sAT("tasks");
-            searchQuery = "";
-            const ts = $("task-search");
-            if (ts) ts.value = "";
-            // freshen cache so open sees latest (incl sidecars)
-            const idx = lastTasks.findIndex((t) => t && t.id === task.id);
-            if (idx >= 0) lastTasks[idx] = task;
-            else lastTasks.push(task);
-            const ctx = taskContext();
-            if (activeStatuses.has(task.status)) {
-              openVisibleTask(task.id, ctx);
-            } else {
-              setPinnedExternalTask(task, ctx);
-              renderTasks(lastTasks, ctx);
-            }
-            // success: clear the jump input for next use
-            input.value = "";
-          } else if (res.status === 404) {
-            showGlobalIdError(id, `${id} not found`);
-          } else {
-            showGlobalIdError(id, `Error ${res.status} resolving ${id}`);
-          }
-        })
-        .catch(() => {
-          showGlobalIdError(id, `Network error resolving ${id}`);
-        });
-    }, 250);
-  });
-
-  function showGlobalIdError(id, msg) {
-    input.classList.add("error");
-    const wrap = input.parentNode;
-    if (wrap && wrap.classList) wrap.classList.add("error");
     const err = $("global-task-id-error");
     if (err) err.textContent = msg;
   }
+
+  function taskDetailPath(id, workspaceId) {
+    const base = `/api/tasks/${encodeURIComponent(id)}`;
+    if (workspaceId) {
+      return `${base}?workspace=${encodeURIComponent(workspaceId)}`;
+    }
+    return withWorkspace(base);
+  }
+
+  async function readJson(res) {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  function classifyLookupFailure(res, body, id) {
+    const status = res && res.status;
+    const errorText = body && body.error ? String(body.error) : "";
+    if (status === 401 || status === 403) {
+      return { kind: "denied", message: `Lookup denied for ${id}` };
+    }
+    if (status >= 500) {
+      return { kind: "server", message: `Server error resolving ${id}` };
+    }
+    if (status === 404 && /unknown workspace/i.test(errorText)) {
+      return { kind: "server", message: `Workspace error resolving ${id}` };
+    }
+    if (status === 404) {
+      return { kind: "missing", message: `${id} not found` };
+    }
+    if (status === 400) {
+      return { kind: "server", message: errorText || `Error ${status} resolving ${id}` };
+    }
+    return { kind: "server", message: `Error ${status} resolving ${id}` };
+  }
+
+  async function fetchTaskInWorkspace(id, workspaceId) {
+    const res = await fetch(taskDetailPath(id, workspaceId), {
+      headers: { accept: "application/json" },
+    });
+    const body = await readJson(res);
+    return { res, body, workspaceId };
+  }
+
+  function adoptWorkspace(workspaceId) {
+    if (!workspaceId || workspaceId === getWorkspace()) return;
+    setWorkspace(workspaceId);
+    persistScopeToUrl();
+    const selector = $("workspace-select");
+    if (selector) selector.value = workspaceId;
+  }
+
+  function openLookedUpTask(task, workspaceId) {
+    adoptWorkspace(workspaceId);
+    sAT("tasks", { refresh: false });
+    searchQuery = "";
+    const ts = $("task-search");
+    if (ts) ts.value = "";
+    const ctx = taskContext();
+    setPinnedExternalTask(task, ctx);
+    const listedAt = lastTasks.findIndex((t) => t && t.id === task.id);
+    if (listedAt >= 0) {
+      lastTasks[listedAt] = task;
+      openVisibleTask(task.id, ctx);
+    } else {
+      renderTasks(lastTasks, ctx);
+    }
+    input.value = "";
+    clearLookupStatus();
+  }
+
+  function otherActiveWorkspaces(exceptId) {
+    return dashboardWorkspaces.filter((ws) => (
+      ws
+      && ws.status === "active"
+      && ws.id
+      && ws.id !== exceptId
+    ));
+  }
+
+  async function lookupTask(id) {
+    const seq = ++lookupSeq;
+    const workspaceAtStart = getWorkspace();
+    const stillCurrent = () => seq === lookupSeq && getWorkspace() === workspaceAtStart;
+    const discardIfStale = () => {
+      if (stillCurrent()) return false;
+      if (seq === lookupSeq) clearLookupStatus();
+      return true;
+    };
+
+    showLookupStatus("pending", `Looking up ${id}\u2026`);
+    let primary;
+    try {
+      primary = await fetchTaskInWorkspace(id, workspaceAtStart);
+    } catch {
+      if (discardIfStale()) return;
+      showLookupStatus("error", `Network error resolving ${id}`);
+      return;
+    }
+    if (discardIfStale()) return;
+    if (primary.res.ok && primary.body && primary.body.id) {
+      openLookedUpTask(primary.body, primary.workspaceId || workspaceAtStart);
+      return;
+    }
+
+    const classified = classifyLookupFailure(primary.res, primary.body, id);
+    if (classified.kind !== "missing") {
+      showLookupStatus("error", classified.message);
+      return;
+    }
+
+    const others = otherActiveWorkspaces(workspaceAtStart);
+    if (others.length === 0) {
+      showLookupStatus("error", `${id} not found`);
+      return;
+    }
+
+    const probed = await Promise.all(others.map(async (ws) => {
+      try {
+        return await fetchTaskInWorkspace(id, ws.id);
+      } catch (error) {
+        return { network: true, workspaceId: ws.id, error };
+      }
+    }));
+    if (discardIfStale()) return;
+
+    const hit = probed.find((result) => result && result.res && result.res.ok && result.body && result.body.id);
+    if (hit) {
+      openLookedUpTask(hit.body, hit.workspaceId);
+      return;
+    }
+    if (probed.some((result) => result && result.network)) {
+      showLookupStatus("error", `Network error resolving ${id}`);
+      return;
+    }
+    const probeFailure = probed
+      .map((result) => result && result.res ? classifyLookupFailure(result.res, result.body, id) : null)
+      .find((result) => result && result.kind !== "missing");
+    if (probeFailure) {
+      showLookupStatus("error", probeFailure.message);
+      return;
+    }
+    showLookupStatus("error", `${id} not found`);
+  }
+
+  function scheduleLookup() {
+    if (debounce) clearTimeout(debounce);
+    const raw = (input.value || "").trim();
+    if (!raw) {
+      lookupSeq += 1;
+      clearLookupStatus();
+      return;
+    }
+    const candidate = raw.toUpperCase();
+    if (!ID_RE.test(candidate)) return;
+    debounce = setTimeout(() => lookupTask(candidate), 250);
+  }
+
+  input.addEventListener("input", () => {
+    clearLookupStatus();
+    scheduleLookup();
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    const candidate = (input.value || "").trim().toUpperCase();
+    if (!ID_RE.test(candidate)) return;
+    if (event.preventDefault) event.preventDefault();
+    if (debounce) clearTimeout(debounce);
+    lookupTask(candidate);
+  });
 }
 
 function fmtRelative(iso) {
