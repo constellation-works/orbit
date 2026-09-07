@@ -1,6 +1,8 @@
 //! Deterministic routine evaluation, retry and overlap coordination.
 
-use super::due::{DueDecision, due_decision, parse_cron};
+use super::due::{
+    DueDecision, due_decision_with_grace, natural_slot_grace_for_cadence, parse_cron,
+};
 use super::loader::{LoadedRoutine, RoutineCollection, RoutineLoadError};
 #[cfg(test)]
 use super::validation::RoutineHostIdentity;
@@ -62,10 +64,23 @@ pub trait RoutineDispatch {
 }
 
 /// Options for one sweep pass.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct SweepOptions {
     /// Report what would fire without recording or dispatching anything.
     pub dry_run: bool,
+    /// Cadence of the host clock that invokes this pass. The production
+    /// assembly supplies the configured clock cadence; deterministic callers
+    /// use the compatible 60-second default.
+    pub sweep_cadence_seconds: u64,
+}
+
+impl Default for SweepOptions {
+    fn default() -> Self {
+        Self {
+            dry_run: false,
+            sweep_cadence_seconds: 60,
+        }
+    }
 }
 
 /// Per-routine outcome of one sweep pass.
@@ -303,11 +318,13 @@ fn sweep_routine(
     let lower_bound_raw = cursor.last_slot.as_deref().unwrap_or(&cursor.baseline_at);
     let lower_bound = parse_rfc3339(lower_bound_raw)?.with_timezone(&Local);
 
-    match due_decision(
+    let natural_slot_grace = natural_slot_grace_for_cadence(options.sweep_cadence_seconds)?;
+    match due_decision_with_grace(
         &cron,
         definition.trigger.missed_run,
         &lower_bound,
         &now_local,
+        natural_slot_grace,
     )? {
         DueDecision::Fire { slot, .. } => {
             let slot_utc = slot.with_timezone(&Utc).to_rfc3339();

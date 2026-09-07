@@ -258,8 +258,11 @@ Per pass:
    (last slot, else the first-observation baseline — a routine never fires for slots that
    predate its registration on this host; the first sweep records the baseline and fires
    nothing). Due-ness is O(1) via previous-occurrence lookup, never a walk over every
-   missed slot; `missed_run` policy decides gaps. A slot is "natural" within a 120s grace
-   of its scheduled time.
+   missed slot; `missed_run` policy decides gaps. A slot is "natural" for two configured
+   clock-cadence intervals after its scheduled time: the default 60s clock therefore keeps
+   the existing 120s grace, while a configured 300s clock keeps a slot natural for 600s.
+   This admits one delayed or missed poll without turning genuine downtime into a `skip`
+   fire.
 7. For each due routine: check `overlap` against in-flight fires, record the fire intent
    (idempotency key: routine name + scheduled slot + attempt, transactionally with the
    cursor advance), then dispatch the target via `submit_pipeline_run` in the routine's
@@ -308,7 +311,7 @@ shows all three columns plus computed next-due, so "why didn't this fire?" is on
 The OS owns the wake-up; Orbit owns everything else. `orbit routine init --install-clock`
 renders and installs the platform unit:
 
-- **macOS** — a launchd agent (`com.orbit.sweep`) with `StartInterval` 60s. launchd also
+- **macOS** — a launchd agent (`com.orbit.sweep`) with `StartInterval=<cadence>`. launchd also
   fires on wake, which pairs with `missed_run: catch_up_once` for laptop sleep gaps.
 - **Linux** — `orbit-sweep.timer` combines `OnActiveSec=<cadence>` with
   `OnUnitActiveSec=<cadence>` plus a oneshot service. Every timer activation (fresh install,
@@ -321,6 +324,10 @@ renders and installs the platform unit:
   triggers deliberately do not replay timer events missed while the manager or host was
   down. The first sweep after restart evaluates each routine's cursor, so `catch_up_once`
   collapses missed cron slots to one fire and `skip` waits for the next natural slot.
+  Every sweep loads the same `clock.toml` cadence used to render the native timer, so
+  changing the clock from 60s to 300s changes its natural-slot grace from 120s to 600s.
+  The configured wake-up cost, routine enable/pause state, and host pinning are otherwise
+  unchanged.
 
 There is no resident Orbit daemon. Sub-minute triggers and event triggers are explicitly
 out of v1 scope for this reason.

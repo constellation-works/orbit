@@ -82,6 +82,7 @@ impl SweepCommand {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
         let options = SweepOptions {
             dry_run: self.dry_run,
+            ..SweepOptions::default()
         };
         let outcome = run_sweep_for_selected_root(root_override, options)?;
 

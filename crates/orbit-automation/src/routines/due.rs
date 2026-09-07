@@ -13,9 +13,25 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::MissedRunPolicy;
 
 /// How far past its scheduled slot a fire still counts as "natural" for
-/// `missed_run: skip`. Two sweep intervals: tolerates one slow or skipped
-/// sweep without reclassifying the slot as missed.
+/// `missed_run: skip` at the default 60-second sweep cadence. Two sweep
+/// intervals tolerate one slow or skipped sweep without reclassifying the
+/// slot as missed.
 pub const NATURAL_SLOT_GRACE_SECONDS: i64 = 120;
+
+/// Derive the natural-slot grace from the cadence of the host clock that
+/// invokes the sweep. The scheduler permits one missed or delayed poll, so a
+/// slot remains natural for two configured cadence intervals. The default
+/// cadence deliberately preserves [`NATURAL_SLOT_GRACE_SECONDS`].
+pub fn natural_slot_grace_for_cadence(cadence_seconds: u64) -> Result<Duration, OrbitError> {
+    let seconds = cadence_seconds.checked_mul(2).ok_or_else(|| {
+        OrbitError::InvalidInput("sweep cadence is too large for natural-slot grace".to_string())
+    })?;
+    let seconds = i64::try_from(seconds).map_err(|_| {
+        OrbitError::InvalidInput("sweep cadence is too large for natural-slot grace".to_string())
+    })?;
+
+    Ok(Duration::seconds(seconds))
+}
 
 /// Outcome of the due check for one routine on one sweep pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +78,25 @@ pub fn due_decision<Tz: TimeZone>(
     lower_bound: &DateTime<Tz>,
     now: &DateTime<Tz>,
 ) -> Result<DueDecision<Tz>, OrbitError> {
+    due_decision_with_grace(
+        cron,
+        missed_run,
+        lower_bound,
+        now,
+        Duration::seconds(NATURAL_SLOT_GRACE_SECONDS),
+    )
+}
+
+/// Decide whether a routine is due with the natural-slot grace supplied by
+/// the host sweep clock. Non-routine callers retain [`due_decision`]'s
+/// default cadence behavior.
+pub fn due_decision_with_grace<Tz: TimeZone>(
+    cron: &Cron,
+    missed_run: MissedRunPolicy,
+    lower_bound: &DateTime<Tz>,
+    now: &DateTime<Tz>,
+    natural_slot_grace: Duration,
+) -> Result<DueDecision<Tz>, OrbitError> {
     // Latest scheduled slot at or before now.
     let previous = cron
         .find_previous_occurrence(now, true)
@@ -77,7 +112,7 @@ pub fn due_decision<Tz: TimeZone>(
     }
 
     let age = now.clone().signed_duration_since(previous.clone());
-    let natural = age <= Duration::seconds(NATURAL_SLOT_GRACE_SECONDS);
+    let natural = age <= natural_slot_grace;
     if natural {
         return Ok(DueDecision::Fire {
             slot: previous,
