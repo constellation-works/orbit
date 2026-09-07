@@ -290,7 +290,7 @@ html:not([data-has-sidebar]) header.header {
 }
 
 .orbit-hero-install-prompt {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   flex: 0 0 auto;
 }
 
@@ -398,7 +398,7 @@ html:not([data-has-sidebar]) header.header {
 /* The mono strip under the hero CTAs naming the provider CLIs Orbit drives. */
 .orbit-hero-providers {
   align-items: center;
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   display: flex;
   flex-wrap: wrap;
   font-family: var(--sl-font-mono);
@@ -492,7 +492,7 @@ html:not([data-has-sidebar]) header.header {
 }
 
 .orbit-dash-rail-label {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   font-family: var(--sl-font-mono);
   font-size: 0.58rem;
   letter-spacing: 0.1em;
@@ -512,7 +512,7 @@ html:not([data-has-sidebar]) header.header {
 }
 
 .orbit-dash-rail-foot {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   font-family: var(--sl-font-mono);
   font-size: 0.62rem;
   margin-top: auto;
@@ -548,7 +548,7 @@ html:not([data-has-sidebar]) header.header {
   background: var(--sl-color-bg);
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 4px;
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   flex: 1 1 auto;
   font-family: var(--sl-font-mono);
   font-size: 0.62rem;
@@ -611,7 +611,7 @@ html:not([data-has-sidebar]) header.header {
 }
 
 .orbit-dash-count {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   font-family: var(--sl-font-mono);
   font-size: 0.62rem;
   font-weight: 500;
@@ -658,7 +658,7 @@ html:not([data-has-sidebar]) header.header {
 }
 
 .orbit-dash-id {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   font-family: var(--sl-font-mono);
   font-size: 0.62rem;
 }
@@ -733,7 +733,7 @@ html:not([data-has-sidebar]) header.header {
 
 .orbit-section-title {
   align-items: center;
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   display: flex;
   font-size: 0.78rem;
   font-weight: 600;
@@ -916,7 +916,7 @@ html:not([data-has-sidebar]) header.header {
 }
 
 .orbit-flow-cmd-prompt {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   flex: 0 0 auto;
 }
 
@@ -1102,7 +1102,7 @@ html:not([data-has-sidebar]) header.header {
 
 .orbit-docs-group-title {
   border-bottom: 1px solid var(--sl-color-hairline-light);
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   font-family: var(--sl-font-mono);
   font-size: 0.72rem;
   letter-spacing: 0.08em;
