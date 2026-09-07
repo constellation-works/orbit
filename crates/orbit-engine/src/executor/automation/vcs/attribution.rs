@@ -1,12 +1,10 @@
 use std::collections::BTreeSet;
 
-use orbit_types::identity::agent_from_model;
 use orbit_types::task::Task;
 
-/// Render task-scoped orchestration attribution. `created_by` carries the
-/// actor's exact model at task creation; it is relevant here only when the
-/// task also records an explicit orchestrator. That prevents creation or
-/// implementation attribution from being mistaken for orchestration.
+/// Render task-scoped orchestration attribution from the explicit ownership
+/// record. Creation and implementation provenance are separate identities, so
+/// neither can establish a model for the task's orchestrator.
 pub(super) fn orchestration_trailer(tasks: &[Task]) -> Option<String> {
     let values = tasks
         .iter()
@@ -22,14 +20,7 @@ pub(super) fn orchestration_trailer(tasks: &[Task]) -> Option<String> {
 }
 
 fn orchestration_attribution(task: &Task) -> Option<String> {
-    let orchestrator = trailer_value(task.orchestrator.as_deref())?;
-    let model = task
-        .created_by
-        .as_deref()
-        .and_then(|value| trailer_value(Some(value)))
-        .filter(|value| agent_from_model(value).is_some());
-
-    model.or(Some(orchestrator))
+    trailer_value(task.orchestrator.as_deref())
 }
 
 fn trailer_value(value: Option<&str>) -> Option<String> {

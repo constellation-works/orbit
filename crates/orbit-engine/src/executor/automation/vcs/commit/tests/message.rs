@@ -151,10 +151,10 @@ fn batch_commit_trailers_omit_missing_fields() {
 }
 
 #[test]
-fn orchestration_trailer_prefers_the_recorded_creation_model_over_its_alias() {
+fn orchestration_trailer_preserves_an_explicit_model_shaped_orchestrator() {
     let mut task = task_with_type(TaskType::Feature, "Attribute orchestration");
-    task.orchestrator = Some("terra".to_string());
-    task.created_by = Some("gpt-5.6-sol".to_string());
+    task.orchestrator = Some("gpt-5.6-sol".to_string());
+    task.created_by = Some("gpt-5.6-terra".to_string());
     task.implemented_by = Some("gpt-5.6-terra".to_string());
 
     assert_eq!(
@@ -164,7 +164,19 @@ fn orchestration_trailer_prefers_the_recorded_creation_model_over_its_alias() {
 }
 
 #[test]
-fn orchestration_trailer_uses_alias_without_a_reliable_model_and_omits_unattributed_tasks() {
+fn orchestration_trailer_uses_the_explicit_alias_after_pre_execution_reassignment() {
+    let mut task = task_with_type(TaskType::Feature, "Respect reassigned orchestration");
+    task.created_by = Some("gpt-5.6-sol".to_string());
+    task.orchestrator = Some("terra".to_string());
+
+    assert_eq!(
+        batch_commit_message(&task),
+        "feat: Respect reassigned orchestration [ORB-00107]\n\nOrchestrated-By: terra"
+    );
+}
+
+#[test]
+fn orchestration_trailer_uses_alias_without_a_model_and_omits_unattributed_tasks() {
     let mut alias_only = task_with_type(TaskType::Feature, "Keep legacy attribution truthful");
     alias_only.orchestrator = Some("terra".to_string());
     alias_only.created_by = Some("codex".to_string());
@@ -201,11 +213,11 @@ fn orchestration_trailers_are_deterministic_and_preserved_on_task_and_finalize_m
 
     assert_eq!(
         task_commit_message(&first),
-        "[ORB-00108] First task\n\nOrchestrated-By: gpt-5.6-sol"
+        "[ORB-00108] First task\n\nOrchestrated-By: sol"
     );
     assert_eq!(
         finalize_commit_message(&[second.clone(), duplicate, first]),
-        "fix: finalize ship batch [ORB-00109, ORB-00110, ORB-00108]\n\n- ORB-00109: Second task\n- ORB-00110: Duplicate orchestrator\n- ORB-00108: First task\n\nOrchestrated-By: gpt-5.6-sol, gpt-5.6-terra"
+        "fix: finalize ship batch [ORB-00109, ORB-00110, ORB-00108]\n\n- ORB-00109: Second task\n- ORB-00110: Duplicate orchestrator\n- ORB-00108: First task\n\nOrchestrated-By: another-sol-alias, sol, terra"
     );
 }
 
