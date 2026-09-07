@@ -323,6 +323,50 @@ fn rebase_retry_distinguishes_wrong_branch_from_stopped_rebase() {
     assert!(!message.contains("rebase remains stopped"), "{message}");
 }
 
+#[cfg(unix)]
+#[test]
+fn rebase_disables_tracked_post_rewrite_hook() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let workspace = pr_workspace();
+    git(&workspace.repo, &["checkout", "agent-main"]);
+    fs::create_dir(workspace.repo.join(".hooks")).expect("hooks directory");
+    let hook = workspace.repo.join(".hooks/post-rewrite");
+    fs::write(
+        &hook,
+        "#!/bin/sh\nprintf triggered > .git/post-rewrite-marker\n",
+    )
+    .expect("write rewrite hook");
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("executable hook");
+    git(&workspace.repo, &["add", ".hooks"]);
+    git(
+        &workspace.repo,
+        &["commit", "-m", "advance base with tracked hook"],
+    );
+    git(&workspace.repo, &["checkout", "orbit/test-batch"]);
+    git(&workspace.repo, &["config", "core.hooksPath", ".hooks"]);
+    let host = PrOpenTestHost::new(
+        vec![batch_task("T1", "Rebase candidate", "Outcome: success")],
+        workspace.repo.clone(),
+    );
+    let input = json!({
+        "workspace_path": workspace.repo,
+        "job_run_id": "batch-1",
+        "completed_task_ids": ["T1"],
+        "base": "agent-main",
+        "base_sync": "local",
+    });
+    let prepared = prepare_pr_handoff(&host, &input).expect("prepare rebase");
+    let synced = rebase_pr_branch(&host, &rebase_input(&input, &prepared)).expect("rebase");
+    assert_eq!(synced["rewritten"], true);
+    assert!(hook.exists(), "rebased tree includes the executable hook");
+    assert!(!workspace.repo.join(".git/post-rewrite-marker").exists());
+
+    // An ordinary amend invokes the exact hook whose rebase execution was suppressed.
+    git(&workspace.repo, &["commit", "--amend", "--no-edit"]);
+    assert!(workspace.repo.join(".git/post-rewrite-marker").exists());
+}
+
 #[test]
 fn base_advance_with_mergeable_changes_rebases_cleanly_and_continues() {
     let workspace = pr_workspace();

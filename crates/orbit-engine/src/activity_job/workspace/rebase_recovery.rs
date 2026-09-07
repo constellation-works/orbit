@@ -1,10 +1,11 @@
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 use serde_json::Value;
 
 use crate::context::{RuntimeHost, StepRecoveryAdmission};
+use crate::executor::automation::vcs::git::git_command;
 
 use super::{
     DispatchError, GitWorktreeFingerprint, WorktreeBoundaryGuard, changed_paths, git_command_error,
@@ -411,17 +412,11 @@ fn git_mutation(root: &Path, args: &[&str]) -> Result<(), DispatchError> {
 }
 
 fn git_mutation_output(root: &Path, args: &[&str]) -> Result<Output, DispatchError> {
-    Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .map_err(|error| {
-            DispatchError::CliInvocationPermanent(format!(
-                "mutate Git state in '{}' with `git {}`: {error}",
-                root.display(),
-                args.join(" ")
-            ))
-        })
+    git_command(root, args).output().map_err(|error| {
+        DispatchError::CliInvocationPermanent(format!(
+            "mutate Git state in '{}' with `git {}`: {error}",
+            root.display(),
+            args.join(" ")
+        ))
+    })
 }

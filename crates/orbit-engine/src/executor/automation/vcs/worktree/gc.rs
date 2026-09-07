@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
+use crate::executor::automation::vcs::git::git_command;
 
 use super::super::git::git_success;
 use super::cleanup::remove_worktree;
@@ -354,16 +355,17 @@ fn branch_name(worktree: &Path) -> Result<String, OrbitError> {
 /// whose directory has already been removed simply fails to canonicalize and
 /// does not match, which is the same answer the literal comparison gave.
 fn branch_exists(repo_root: &Path, branch: &str) -> bool {
-    Command::new("git")
-        .current_dir(repo_root)
-        .args([
+    git_command(
+        repo_root,
+        &[
             "show-ref",
             "--verify",
             "--quiet",
             &format!("refs/heads/{branch}"),
-        ])
-        .status()
-        .is_ok_and(|status| status.success())
+        ],
+    )
+    .status()
+    .is_ok_and(|status| status.success())
 }
 
 fn directory_bytes(path: &Path) -> Result<u64, OrbitError> {
@@ -409,9 +411,7 @@ fn git(cwd: &Path, args: &[&str]) -> Result<(), OrbitError> {
 }
 
 fn git_raw(cwd: &Path, args: &[&str]) -> Result<Output, OrbitError> {
-    let output = Command::new("git")
-        .current_dir(cwd)
-        .args(args)
+    let output = git_command(cwd, args)
         .output()
         .map_err(|error| OrbitError::Execution(format!("failed to run git: {error}")))?;
     if output.status.success() {

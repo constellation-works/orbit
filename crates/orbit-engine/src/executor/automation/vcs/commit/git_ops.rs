@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
+use orbit_exec::{EnvironmentMode, NoSandbox, run_process};
 
-use super::super::git::{git_output, git_output_paths, git_success};
+use super::super::git::{git_output, git_output_paths, git_request, git_success};
 use super::author::GitAuthor;
 
 pub(super) fn git_commit_with_identity(
@@ -76,31 +76,16 @@ fn git_success_dynamic_with_identity(
         ("GIT_COMMITTER_NAME", committer.name()),
         ("GIT_COMMITTER_EMAIL", committer.email()),
     ];
-    let mut environment = std::env::vars()
-        .filter(|(key, _)| {
-            key != "AGENT_MODEL"
-                && !env_overrides
-                    .iter()
-                    .any(|(override_key, _)| key == override_key)
-        })
-        .collect::<Vec<_>>();
-    environment.extend(
-        env_overrides
-            .iter()
-            .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
-    );
-    let result = run_process(
-        &ExecRequest {
-            program: "git".to_string(),
-            args: args.to_vec(),
-            current_dir: Some(current_dir.to_string_lossy().to_string()),
-            timeout_ms: Some(30_000),
-            stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::ClearAndSet(environment),
-            debug: false,
-        },
-        &NoSandbox,
-    )?;
+    let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut request = git_request(current_dir, &args_ref, 30_000);
+    if let EnvironmentMode::ClearAndSet(environment) = &mut request.environment_mode {
+        environment.extend(
+            env_overrides
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+        );
+    }
+    let result = run_process(&request, &NoSandbox)?;
 
     if !result.success {
         return Err(OrbitError::Execution(format!(

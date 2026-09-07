@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::context::RuntimeHost;
+use crate::executor::automation::vcs::git::git_command;
 
 use super::dispatcher::DispatchError;
 
@@ -1260,18 +1261,12 @@ fn git_stdout_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, DispatchError
 }
 
 fn git_output_raw(root: &Path, args: &[&str]) -> Result<Output, DispatchError> {
-    Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .map_err(|error| {
-            DispatchError::CliInvocationPermanent(format!(
-                "snapshot Git state in '{}': {error}",
-                root.display()
-            ))
-        })
+    git_command(root, args).output().map_err(|error| {
+        DispatchError::CliInvocationPermanent(format!(
+            "snapshot Git state in '{}': {error}",
+            root.display()
+        ))
+    })
 }
 
 fn git_command_error(root: &Path, args: &[&str], output: &Output) -> DispatchError {

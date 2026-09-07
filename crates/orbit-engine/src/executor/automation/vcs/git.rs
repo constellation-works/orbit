@@ -1,8 +1,77 @@
 use std::path::Path;
+use std::process::Command;
 
 use orbit_common::OrbitError;
+use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use serde_json::Value;
+
+/// Compose host VCS environments by name. Git needs the SSH agent socket for
+/// authenticated remotes, but never the provider's credentials or ORBIT_* envelope.
+/// GitHub CLI callers explicitly supply their own authentication names.
+pub(super) fn vcs_environment(extras: &[&str]) -> Vec<(String, String)> {
+    AGENT_SUBPROCESS_BASELINE_VARS
+        .iter()
+        .copied()
+        .chain(extras.iter().copied())
+        .filter_map(|name| {
+            std::env::var(name)
+                .ok()
+                .map(|value| (name.to_string(), value))
+        })
+        .collect()
+}
+
+fn git_environment() -> Vec<(String, String)> {
+    let mut environment = vcs_environment(&["SSH_AUTH_SOCK"]);
+    environment.push(("GIT_OPTIONAL_LOCKS".to_string(), "0".to_string()));
+    environment
+}
+
+fn git_args(args: &[&str]) -> Vec<String> {
+    // Command-line configuration wins over tracked hooksPath configuration.
+    // Disable automatic maintenance too: it may launch additional Git children.
+    let mut secured = vec![
+        "-c".to_string(),
+        "core.hooksPath=/dev/null".to_string(),
+        "-c".to_string(),
+        "gc.auto=0".to_string(),
+    ];
+    if let Some((command, rest)) = args.split_first()
+        && matches!(*command, "commit" | "push")
+    {
+        secured.extend([(*command).to_string(), "--no-verify".to_string()]);
+        secured.extend(rest.iter().map(|arg| (*arg).to_string()));
+    } else {
+        secured.extend(args.iter().map(|arg| (*arg).to_string()));
+    }
+    secured
+}
+
+/// The host Git policy shared by deterministic delivery and workspace recovery.
+pub(crate) fn git_request(current_dir: &Path, args: &[&str], timeout_ms: u64) -> ExecRequest {
+    ExecRequest {
+        program: "git".to_string(),
+        args: git_args(args),
+        current_dir: Some(current_dir.to_string_lossy().into_owned()),
+        timeout_ms: Some(timeout_ms),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::ClearAndSet(git_environment()),
+        debug: false,
+    }
+}
+
+/// Byte-preserving adapter for filesystem snapshots and recovery operations.
+pub(crate) fn git_command(current_dir: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    command
+        .current_dir(current_dir)
+        .args(git_args(args))
+        .env_clear()
+        .envs(git_environment())
+        .stdin(std::process::Stdio::null());
+    command
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::executor::automation) enum BaseSyncMode {
@@ -45,18 +114,7 @@ pub(crate) fn git_output(current_dir: &Path, args: &[&str]) -> Result<String, Or
 }
 
 pub(crate) fn git_output_raw(current_dir: &Path, args: &[&str]) -> Result<String, OrbitError> {
-    let result = run_process(
-        &ExecRequest {
-            program: "git".to_string(),
-            args: args.iter().map(|value| (*value).to_string()).collect(),
-            current_dir: Some(current_dir.to_string_lossy().to_string()),
-            timeout_ms: Some(30_000),
-            stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::Inherit,
-            debug: false,
-        },
-        &NoSandbox,
-    )?;
+    let result = run_process(&git_request(current_dir, args, 30_000), &NoSandbox)?;
 
     if !result.success {
         return Err(OrbitError::Execution(format!(
@@ -71,44 +129,11 @@ pub(crate) fn git_output_raw(current_dir: &Path, args: &[&str]) -> Result<String
 }
 
 pub(crate) fn git_success(current_dir: &Path, args: &[&str]) -> Result<(), OrbitError> {
-    let result = run_process(
-        &ExecRequest {
-            program: "git".to_string(),
-            args: args.iter().map(|value| (*value).to_string()).collect(),
-            current_dir: Some(current_dir.to_string_lossy().to_string()),
-            timeout_ms: Some(30_000),
-            stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::Inherit,
-            debug: false,
-        },
-        &NoSandbox,
-    )?;
-
-    if !result.success {
-        return Err(OrbitError::Execution(format!(
-            "git {} failed in '{}': {}",
-            args.join(" "),
-            current_dir.display(),
-            result.stderr.trim()
-        )));
-    }
-
-    Ok(())
+    git_output_raw(current_dir, args).map(|_| ())
 }
 
 pub(crate) fn git_command_success(current_dir: &Path, args: &[&str]) -> Result<bool, OrbitError> {
-    let result = run_process(
-        &ExecRequest {
-            program: "git".to_string(),
-            args: args.iter().map(|value| (*value).to_string()).collect(),
-            current_dir: Some(current_dir.to_string_lossy().to_string()),
-            timeout_ms: Some(30_000),
-            stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::Inherit,
-            debug: false,
-        },
-        &NoSandbox,
-    )?;
+    let result = run_process(&git_request(current_dir, args, 30_000), &NoSandbox)?;
     Ok(result.success)
 }
 
@@ -118,19 +143,15 @@ pub(in crate::executor::automation) fn fetch_remote_base(
 ) -> Result<(), OrbitError> {
     let branch = normalize_base_branch(base)?;
     let result = run_process(
-        &ExecRequest {
-            program: "git".to_string(),
-            args: vec![
-                "fetch".to_string(),
-                "origin".to_string(),
-                format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"),
+        &git_request(
+            repo_root,
+            &[
+                "fetch",
+                "origin",
+                &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"),
             ],
-            current_dir: Some(repo_root.to_string_lossy().to_string()),
-            timeout_ms: Some(60_000),
-            stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::Inherit,
-            debug: false,
-        },
+            60_000,
+        ),
         &NoSandbox,
     )?;
 
