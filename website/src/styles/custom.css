@@ -826,6 +826,7 @@ body {
 
 .orbit-landing .orbit-section-title {
   margin: 4.75rem 0 1.25rem;
+  padding-top: 0;
 }
 
 /* A flat index of the sidebar, so the landing page is a way into the corpus
@@ -849,6 +850,7 @@ body {
   font-family: var(--sl-font-mono);
   font-size: 0.72rem;
   letter-spacing: 0.08em;
+  margin: 0;
   padding-bottom: 0.375rem;
   text-transform: uppercase;
 }

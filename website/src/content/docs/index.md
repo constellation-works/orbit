@@ -67,7 +67,7 @@ next: false
   </figure>
 </section>
 
-<div class="orbit-section-title">Start here</div>
+<h2 class="orbit-section-title">Start here</h2>
 
 <div class="orbit-card-grid orbit-card-grid-3">
   <a class="orbit-card" data-tag="01" href="/getting-started/install/">
@@ -87,7 +87,7 @@ next: false
   </a>
 </div>
 
-<div class="orbit-section-title">Choose a delivery mode</div>
+<h2 class="orbit-section-title">Choose a delivery mode</h2>
 
 <p class="orbit-section-lede">Every <code>orbit run</code> command is asynchronous: it prints a durable run ID and returns without knowing the outcome. Follow up with <code>orbit run show</code>. Pick the shape of delivery you want — the differences are where the run stops and who authorizes the last step.</p>
 
@@ -231,7 +231,7 @@ next: false
   </div>
 </div>
 
-<div class="orbit-section-title">Why Orbit</div>
+<h2 class="orbit-section-title">Why Orbit</h2>
 
 <div class="orbit-card-grid orbit-card-grid-4">
   <div class="orbit-card">
@@ -256,7 +256,7 @@ next: false
   </div>
 </div>
 
-<div class="orbit-section-title">Go further</div>
+<h2 class="orbit-section-title">Go further</h2>
 
 <div class="orbit-card-grid orbit-card-grid-4">
   <a class="orbit-card" href="/how-to/continuous-delivery/">
@@ -281,24 +281,24 @@ next: false
   </a>
 </div>
 
-<div class="orbit-section-title">Explore the docs</div>
+<h2 class="orbit-section-title">Explore the docs</h2>
 
 <div class="orbit-docs-index">
   <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">Getting Started</div>
+    <h3 class="orbit-docs-group-title">Getting Started</h3>
     <a href="/getting-started/install/">Install Orbit</a>
     <a href="/getting-started/first-task/">First Task</a>
     <a href="/getting-started/workflows/">Delivery Workflows</a>
   </div>
   <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">Concepts</div>
+    <h3 class="orbit-docs-group-title">Concepts</h3>
     <a href="/concepts/tasks/">Tasks</a>
     <a href="/concepts/activities-jobs/">Activities and Jobs</a>
     <a href="/concepts/policies/">Policies</a>
     <a href="/concepts/agents/">Agents</a>
   </div>
   <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">How-to Guides</div>
+    <h3 class="orbit-docs-group-title">How-to Guides</h3>
     <a href="/how-to/task-lifecycle/">Run a Task Lifecycle</a>
     <a href="/how-to/continuous-delivery/">Run Continuous Delivery</a>
     <a href="/how-to/recurring-work/">Schedule Recurring Work</a>
@@ -308,7 +308,7 @@ next: false
     <a href="/how-to/mcp-integration/">Set Up MCP</a>
   </div>
   <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">Reference</div>
+    <h3 class="orbit-docs-group-title">Reference</h3>
     <a href="/reference/cli/">CLI Commands</a>
     <a href="/reference/activity-job-yaml/">Activity and Job YAML</a>
     <a href="/reference/policy-format/">Policy Format</a>
@@ -316,7 +316,7 @@ next: false
     <a href="/reference/scoping/">Scoping Rules</a>
   </div>
   <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">Contributing</div>
+    <h3 class="orbit-docs-group-title">Contributing</h3>
     <a href="/contributing/local-dev/">Local Development</a>
     <a href="/contributing/crate-layout/">Crate Layout</a>
     <a href="/contributing/pr-workflow/">PR Workflow</a>
