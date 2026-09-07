@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
 use orbit_core::application::routines::ClockStatus;
 use orbit_core::{OrbitRuntime, RoutineFireRecord, RoutineFireState};
 use orbit_registry::{NewHostIdentity, ensure_host_identity};
@@ -160,25 +161,60 @@ async fn routines_endpoint_returns_envelope_for_empty_host() {
     assert_eq!(json["load_errors"], serde_json::json!([]));
 }
 
+/// Pin the process signals `CallerCapabilities::resolve` reads, for the whole
+/// request rather than just its construction.
+///
+/// The guard in `orbit_common::test_env` is process-wide, so it serializes two
+/// tests only when *both* take it. Parallel `as_operator` tests in
+/// `api::tests::auto_tasks`, `api::tests::runs`, and `api::tests::operation`
+/// set `ORBIT_OPERATOR=1` under that lock. This case used to read the variable
+/// without holding it, so a sibling could promote the caller to Operator;
+/// authorization then succeeded and `routine_statuses` on
+/// `DashboardState::single`'s empty global root mapped `InvalidInput` to HTTP
+/// 400 instead of the 403 unidentified-caller denial [ORB-10894].
+#[allow(clippy::await_holding_lock)]
+async fn with_caller_env<'a, T>(
+    vars: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    let _env = orbit_common::test_env::scoped(vars);
+    fut.await
+}
+
 #[tokio::test]
 async fn routine_mutation_denies_an_unidentified_dashboard_caller() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let state = DashboardState::single(Arc::new(runtime));
-    let response = router()
-        .with_state(state)
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/routines/toggle?workspace=default")
-                .header("origin", "http://localhost:7878")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"name":"nightly","source":"default","target":"job:nightly","host_id":"host-a","expected_enabled":true,"enabled":false}"#,
-                ))
-                .expect("request"),
-        )
-        .await
-        .expect("response");
+    // Agent envelope is *set* rather than cleared: with nothing declared,
+    // resolution falls through to the interactive-terminal probe, and a TTY
+    // `cargo test` would resolve to Operator for a reason unrelated to the
+    // handler. The empty-grants unidentified branch is covered without process
+    // state in `orbit_common::governance::tests::authorization`.
+    let response = with_caller_env(
+        [
+            (OPERATOR_OVERRIDE_ENV, None),
+            ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+            ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
+        ],
+        async {
+            router()
+                .with_state(state)
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/routines/toggle?workspace=default")
+                        .header("origin", "http://localhost:7878")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"name":"nightly","source":"default","target":"job:nightly","host_id":"host-a","expected_enabled":true,"enabled":false}"#,
+                        ))
+                        .expect("request"),
+                )
+                .await
+                .expect("response")
+        },
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let json = body_json(response).await;
