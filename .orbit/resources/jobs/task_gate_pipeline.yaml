@@ -57,7 +57,7 @@ metadata:
 spec:
   state: enabled
   kind: workflow
-  max_active_runs: 10
+  max_active_runs: 15
   default_input:
     task_ids: []
     mode: pr

@@ -22,7 +22,7 @@ enabled: true
 hosts:
   - dk-server-1
 trigger:
-  cron: "*/40 * * * *"
+  cron: "*/15 * * * *"
   missed_run: skip
 target: job:task_pilot_pipeline
 policy:

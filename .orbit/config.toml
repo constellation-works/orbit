@@ -8,11 +8,14 @@ pass = [
     "__CF_USER_TEXT_ENCODING",
 ]
 
+[execution.codex]
+sandbox = "danger-full-access"
+
 [workflow]
 auto_ship = true
 base_branch = "agent-main"
 default_crew = "sol"
-system_crew = "luna"
+system_crew = "terra"
 
 [crews.opus]
 backend = "cli"
@@ -33,6 +36,7 @@ provider = "claude"
 backend = "cli"
 model = "gpt-6-astra"
 provider = "codex"
+effort = "medium"
 
 [crews.sol]
 backend = "cli"
@@ -48,6 +52,7 @@ provider = "codex"
 backend = "cli"
 model = "gpt-5.6-luna"
 provider = "codex"
+effort = "high"
 
 [crews.grok]
 backend = "cli"
@@ -65,3 +70,7 @@ task_url_template = "https://orbit-cli.com/tasks/{task_id}"
 
 [docs]
 roots = ["docs/"]
+
+[operation]
+review_crew = "grok"
+review_policy = "none"
