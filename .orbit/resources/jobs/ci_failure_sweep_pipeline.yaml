@@ -76,12 +76,13 @@ spec:
   kind: workflow
   max_active_runs: 1
   default_input:
-    # The branch this workspace ships onto. Empty means "use whatever GitHub
-    # reports as this repository's default branch", which is right for a
-    # workspace that ships onto its default branch and wrong for one that
-    # ships onto a separate integration branch — set it in the workspace copy
-    # of this job when they differ, the same way `task_pr_pipeline` carries
-    # `base_branch`.
+    # Named submission resolves an empty integration branch from the registered
+    # workspace base branch, or explicit workflow.base_branch config when no
+    # registration is available. The resolved input is persisted for collect
+    # and every pilot. Missing authority fails admission; GitHub's default is
+    # the release identity. Override with run input or a trusted job catalog,
+    # never the ignored workspace copy of this shipped named job.
+    # This checkout-specific value applies to explicit YAML-path execution only.
     integration_branch: "agent-main"
     max_tasks: 5
     max_investigated_runs: 6

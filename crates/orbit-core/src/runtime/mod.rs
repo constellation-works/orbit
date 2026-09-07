@@ -112,6 +112,8 @@ pub struct WorkspaceRuntimeBinding {
     pub owner_machine_id: Option<String>,
     pub repo_root: PathBuf,
     pub ship_mode: ShipMode,
+    /// Registered integration branch; absent for standalone runtimes.
+    pub base_branch: Option<String>,
 }
 
 /// Build the neutral Core binding for one registered local checkout.
@@ -125,6 +127,7 @@ pub fn workspace_runtime_binding(
         owner_machine_id: workspace.owner_machine_id.clone(),
         repo_root: checkout.repo_root.clone(),
         ship_mode: resolved_ship_mode(workspace),
+        base_branch: Some(workspace.base_branch.clone()),
     })
 }
 
@@ -170,6 +173,7 @@ impl OrbitRuntime {
             owner_machine_id: None,
             repo_root: data_root.to_path_buf(),
             ship_mode: ShipMode::Local,
+            base_branch: None,
         };
         let context = builder::build_context_from_roots(
             data_root,

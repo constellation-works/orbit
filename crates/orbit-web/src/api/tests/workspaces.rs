@@ -70,6 +70,7 @@ pub(super) fn workspace_entry(
         owner_machine_id: None,
         repo_root: repo_root.clone(),
         ship_mode: ShipMode::Local,
+        base_branch: None,
     });
     WsEntry {
         id: id.to_string(),

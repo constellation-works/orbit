@@ -788,6 +788,12 @@ impl OrbitRuntime {
                 )));
             }
 
+            if job_name == "ci_failure_sweep_pipeline"
+                && matches!(definition, SubmittedDefinition::Catalog)
+            {
+                self.resolve_ci_sweep_input(&spec, &mut input)?;
+            }
+
             let submitted_at = Utc::now();
             let run = if let Some(admission) = admission {
                 match self
