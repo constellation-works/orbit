@@ -125,10 +125,12 @@ spec:
     10. Review the complete deliverable and diff before handoff for accuracy,
         clarity, consistency, unintended changes, and stale supporting material.
         Run the checks required by the task and workspace instructions.
-        Keep incidental caches and temporary artifacts out of the patch; remove
-        only verified run-owned temporary artifacts when cleanup is necessary.
-        Preserve pre-existing contents and legitimate task outputs. Run
-        `git diff --check` and `git status --short`; account for every change.
+        Keep incidental caches and temporary artifacts out of the patch. For
+        Cargo outputs, use `cargo clean` or generate them outside the worktree;
+        never use raw `rm -f` or `rm -rf`. If cleanup is denied, do not retry:
+        record the bounded leftover. Independently run `git diff --check` and
+        `git status --short`, even after a cleanup denial; account for every
+        change. Preserve pre-existing contents and legitimate task outputs.
     11. Workflow admission already set `in-progress`: do not call
         `orbit.task.start`, and do not move the task to `review` (the pipeline
         owns that transition). Before returning, REQUIRED: persist a meaningful
