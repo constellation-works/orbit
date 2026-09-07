@@ -182,7 +182,12 @@ fn one_runs_failed_fallback_does_not_withhold_anothers_complete_finding() {
             true,
             "job 101560010340 (`docs`): Not Found (HTTP 404)",
         )
-        .with_job_log_fallback("11", false, &job_log(), vec![source_job()]);
+        .with_job_log_fallback(
+            "11",
+            false,
+            &job_log(),
+            vec![json!({"job_id": 202, "name": "build", "conclusion": "failure"})],
+        );
 
     let evidence = collect(&queries, &input()).expect("collect");
 
@@ -207,5 +212,159 @@ fn one_runs_failed_fallback_does_not_withhold_anothers_complete_finding() {
             .all(|error| error["run_id"] == json!(10)),
         "run 11's evidence is complete, so it owns no error: {}",
         evidence["retryable_errors"]
+    );
+}
+
+fn two_job_queries(reverse: bool) -> FakeQueries {
+    let mut jobs = vec![failed_job(201, "Clippy"), failed_job(202, "Coverage")];
+    if reverse {
+        jobs.reverse();
+    }
+    let mut queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![failing_run(10)]])
+        .with_run_view("10", json!({"failed_jobs": jobs}));
+    for (job, sha, diagnostic) in [
+        (201, CHECKOUT, "error: unused import"),
+        (202, HEAD, "test output_goldens FAILED"),
+    ] {
+        queries.job_logs.insert(
+            ("10".to_string(), job, false),
+            format!("HEAD is now at {sha}\n{diagnostic}\n"),
+        );
+    }
+    queries
+}
+
+#[test]
+fn different_jobs_keep_their_own_diagnostic_and_checkout_in_either_order() {
+    for reverse in [false, true] {
+        let evidence = collect(&two_job_queries(reverse), &input()).expect("collect");
+        let jobs = evidence["current_failures"].as_array().expect("jobs");
+        assert_eq!(jobs.len(), 2);
+        for (job, sha, diagnostic, excluded) in [
+            (&jobs[0], CHECKOUT, "unused import", "output_goldens"),
+            (&jobs[1], HEAD, "output_goldens", "unused import"),
+        ] {
+            assert_eq!(job["evidence_state"], "complete");
+            assert_eq!(job["actual_checkout_shas"], json!([sha]));
+            assert_eq!(
+                job["checkout_identity"]["provenance"]["job_id"],
+                job["job_id"]
+            );
+            assert_eq!(job["log_job_id"], job["job_id"]);
+            let log = job["log_excerpt"].as_str().expect("log");
+            assert!(log.contains(diagnostic));
+            assert!(!log.contains(excluded));
+        }
+        assert_eq!(evidence["truncation"]["job_log_reads"], 2);
+    }
+}
+
+#[test]
+fn a_fallback_for_only_one_job_never_supplies_its_siblings_evidence() {
+    let queries = two_job_queries(false).with_job_log_fallback(
+        "10",
+        false,
+        &job_log(),
+        vec![json!({"job_id": 202, "name": "Coverage"})],
+    );
+    let evidence = collect(&queries, &input()).expect("collect");
+    let jobs = &evidence["current_failures"];
+    assert_eq!(jobs[0]["job_id"], 201);
+    assert_eq!(jobs[0]["evidence_state"], "deferred");
+    assert!(jobs[0].get("log_excerpt").is_none());
+    assert_eq!(jobs[0]["actual_checkout_shas"], json!([]));
+    assert_eq!(jobs[1]["evidence_state"], "complete");
+    assert_eq!(jobs[1]["actual_checkout_shas"], json!([CHECKOUT]));
+    assert!(
+        evidence["retryable_errors"]
+            .as_array()
+            .expect("errors")
+            .iter()
+            .all(|error| error["job_id"] == 201)
+    );
+}
+
+#[test]
+fn job_budget_rotates_without_swapping_evidence_and_truncation_is_deferred() {
+    for cursor in 0..2 {
+        let evidence = collect(&two_job_queries(false), &json!({
+            "integration_branch": "topic", "max_job_log_reads": 1, "investigation_cursor": cursor,
+        })).expect("collect");
+        assert_eq!(evidence["truncation"]["job_log_reads"], 1);
+        let jobs = evidence["current_failures"].as_array().expect("jobs");
+        assert_eq!(jobs[cursor]["evidence_state"], "complete");
+        assert_eq!(jobs[1 - cursor]["evidence_state"], "deferred");
+        assert_eq!(
+            evidence["retryable_errors"][0]["operation"],
+            "job_log_budget"
+        );
+    }
+    let mut queries = two_job_queries(false);
+    queries.job_logs.insert(
+        ("10".to_string(), 201, false),
+        format!("{}\n{}", job_log(), "noise\n".repeat(100)),
+    );
+    let evidence = collect(
+        &queries,
+        &json!({"integration_branch": "topic", "log_max_bytes": 128}),
+    )
+    .expect("collect");
+    assert_eq!(evidence["current_failures"][0]["log_truncated"], true);
+    assert_eq!(
+        evidence["current_failures"][0]["evidence_state"],
+        "deferred"
+    );
+    assert_eq!(
+        evidence["current_failures"][1]["evidence_state"],
+        "complete"
+    );
+}
+
+#[test]
+fn checkout_fallback_is_bound_to_its_job_and_missing_logs_leave_siblings_complete() {
+    let mut queries = two_job_queries(false);
+    queries.job_logs.insert(
+        ("10".to_string(), 201, false),
+        "error: unused import\n".to_string(),
+    );
+    queries.job_logs.insert(
+        ("10".to_string(), 202, false),
+        "test output_goldens FAILED\n".to_string(),
+    );
+    let queries =
+        queries.with_job_log_fallback("10", true, &job_log(), vec![json!({"job_id": 202})]);
+    let evidence = collect(&queries, &input()).expect("collect");
+    let jobs = &evidence["current_failures"];
+    assert_eq!(jobs[0]["evidence_state"], "deferred");
+    assert_eq!(jobs[0]["actual_checkout_shas"], json!([]));
+    assert_eq!(jobs[1]["evidence_state"], "complete");
+    assert_eq!(jobs[1]["checkout_identity"]["provenance"]["job_id"], 202);
+    assert_eq!(jobs[1]["actual_checkout_shas"], json!([CHECKOUT]));
+    assert_ne!(jobs[1]["actual_checkout_shas"], json!([HEAD]));
+    assert_eq!(
+        evidence["retryable_errors"][0]["operation"],
+        "checkout_job_identity"
+    );
+
+    let mut queries = two_job_queries(false);
+    queries.job_logs.remove(&("10".to_string(), 201, false));
+    let evidence = collect(&queries, &input()).expect("collect");
+    assert_eq!(
+        evidence["current_failures"][0]["evidence_state"],
+        "deferred"
+    );
+    assert_eq!(
+        evidence["current_failures"][1]["evidence_state"],
+        "complete"
+    );
+    assert!(
+        evidence["retryable_errors"]
+            .as_array()
+            .expect("errors")
+            .iter()
+            .all(|error| error["job_id"] == 201)
     );
 }

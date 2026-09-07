@@ -50,7 +50,7 @@ const OUTCOME_NO_CURRENT_FAILURE: &str = "no_current_failure";
 const OUTCOME_CURRENT_FAILURES: &str = "current_failures";
 
 /// Snapshot schema this step knows how to read.
-const SUPPORTED_SCHEMA_VERSION: u64 = 1;
+const SUPPORTED_SCHEMA_VERSION: u64 = 2;
 
 /// Provenance tag: every task this step files carries it.
 pub(crate) const CI_FAILURE_TAG: &str = "ci-failure-sweep";
@@ -139,7 +139,7 @@ where
     let schema_version = evidence
         .get("schema_version")
         .and_then(Value::as_u64)
-        .unwrap_or(SUPPORTED_SCHEMA_VERSION);
+        .unwrap_or(1);
     if schema_version > SUPPORTED_SCHEMA_VERSION {
         return Err(OrbitError::InvalidInput(format!(
             "ci_evidence schema version {schema_version} is newer than the supported version \
@@ -217,6 +217,7 @@ where
             "stage": "registration",
             "operation": "current_failure_not_investigated",
             "run_id": failure.get("run_id"),
+            "job_id": failure.get("job_id"),
             "retryable": true,
             "message": "a current CI failure has no complete investigation and cannot be filed safely",
         });
@@ -240,7 +241,7 @@ where
             retryable_errors,
         ));
     }
-    let (complete, mut deferred) = split_deferred_failures(&failures, &run_errors);
+    let (complete, mut deferred) = split_deferred_failures(&failures, &run_errors, schema_version);
     // A run-scoped retryable error whose run never made it into
     // `current_failures` at all — an in-flight run with an observed failed
     // job but logs collection could not read yet — has no failure row for
@@ -516,7 +517,7 @@ fn run_id_key(entry: &Value) -> Option<String> {
 
 /// Split retryable errors by blast radius.
 ///
-/// An error that names a run spoils that run's finding and nothing else. An
+/// A job error affects only that job; a run error affects all its jobs. An
 /// error that names none — a repository read, a run listing, a pull-request
 /// listing — leaves the whole snapshot in doubt: any finding it did produce
 /// could be missing the newer run that would have superseded it, so filing
@@ -537,25 +538,45 @@ fn partition_retryable_errors(errors: &[Value]) -> (usize, BTreeMap<String, Vec<
 /// incomplete.
 ///
 /// Per-finding evidence requirements are unchanged: a failure is filed only
-/// when collection investigated it fully and no error is recorded against its
-/// run. What changes is that a deferred failure now says so in its own entry
+/// when collection investigated it fully and no applicable job or run error
+/// is recorded. What changes is that a deferred failure now says so in its own entry
 /// instead of silently withholding its neighbours.
 fn split_deferred_failures(
     failures: &[Value],
     run_errors: &BTreeMap<String, Vec<Value>>,
+    schema_version: u64,
 ) -> (Vec<Value>, Vec<Value>) {
     let mut complete = Vec::new();
     let mut deferred = Vec::new();
     for failure in failures {
-        let reasons = run_id_key(failure)
-            .and_then(|run_id| run_errors.get(&run_id).cloned())
-            .unwrap_or_default();
+        let mut reasons = run_id_key(failure)
+            .and_then(|run_id| run_errors.get(&run_id))
+            .into_iter()
+            .flatten()
+            .filter(|error| {
+                error.get("job_id").is_none_or(Value::is_null)
+                    || error.get("job_id") == failure.get("job_id")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if reasons.is_empty()
+            && failure.get("investigated").and_then(Value::as_bool) == Some(true)
+            && let Some(message) = job_evidence_gap(failure, schema_version)
+        {
+            reasons.push(json!({
+                "stage": "registration", "operation": "job_evidence_identity",
+                "run_id": failure.get("run_id"), "job_id": failure.get("job_id"),
+                "retryable": true, "message": message,
+            }));
+        }
         let investigated = failure.get("investigated").and_then(Value::as_bool) == Some(true);
         if reasons.is_empty() && investigated {
             complete.push(failure.clone());
             continue;
         }
         deferred.push(json!({
+            "job_id": failure.get("job_id"),
+            "failed_jobs": failure.get("failed_jobs"),
             "run_id": failure.get("run_id"),
             "url": failure.get("url"),
             "workflow": failure.get("workflow"),
@@ -577,6 +598,62 @@ fn split_deferred_failures(
         }));
     }
     (complete, deferred)
+}
+
+/// Old snapshots did not bind the run log or its checkout scan to the named
+/// job. They remain readable audit evidence, but must be recollected before
+/// filing; inferring attribution from job order would repeat the original bug.
+fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<&'static str> {
+    if schema_version < 2 {
+        return Some("legacy run-scoped evidence has no verified job binding; recollect this run");
+    }
+    let Some(job_id) = failure.get("job_id").and_then(Value::as_u64) else {
+        return Some("failure has no numeric job identity");
+    };
+    let jobs = failure.get("failed_jobs").and_then(Value::as_array);
+    let Some(job) = jobs
+        .filter(|jobs| jobs.len() == 1)
+        .and_then(|jobs| jobs.first())
+    else {
+        return Some("failure must identify exactly one supplying job");
+    };
+    if job.get("job_id").and_then(Value::as_u64) != Some(job_id)
+        || failure.get("log_job_id").and_then(Value::as_u64) != Some(job_id)
+    {
+        return Some("diagnostic evidence is not bound to the named job");
+    }
+    if job
+        .get("failed_steps")
+        .and_then(Value::as_array)
+        .is_none_or(|steps| steps.len() != 1)
+    {
+        return Some("failed step identity is missing or ambiguous within this job");
+    }
+    if value_string(failure, "log_excerpt").trim().is_empty()
+        || failure.get("log_truncated").and_then(Value::as_bool) != Some(false)
+    {
+        return Some("job diagnostic evidence is missing or truncated");
+    }
+    if value_string(failure, "log_source") == "job_api_log"
+        && failure
+            .get("log_source_jobs")
+            .and_then(Value::as_array)
+            .is_none_or(|jobs| jobs.len() != 1 || jobs[0]["job_id"].as_u64() != Some(job_id))
+    {
+        return Some("fallback log evidence belongs to a different or unknown job");
+    }
+    let identity = &failure["checkout_identity"];
+    if identity["provenance"]["job_id"].as_u64() != Some(job_id)
+        || identity["provenance"]["complete"].as_bool() != Some(true)
+        || identity["state"] != "observed"
+        || failure
+            .get("actual_checkout_shas")
+            .and_then(Value::as_array)
+            .is_none_or(|shas| shas.len() != 1)
+    {
+        return Some("checkout identity is not completely observed for this job");
+    }
+    None
 }
 
 /// The deferred entries flattened back into the error list shape, for the
@@ -683,6 +760,7 @@ fn normalize_retryable_error(error: Value) -> Value {
             .and_then(Value::as_str)
             .unwrap_or("unknown"),
         "run_id": error.get("run_id").cloned().unwrap_or(Value::Null),
+        "job_id": error.get("job_id").cloned().unwrap_or(Value::Null),
         "retryable": true,
         "message": bounded_error(
             error
@@ -1156,7 +1234,7 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         .collect()
 }
 
-/// The first failing job and step named by the snapshot.
+/// The single job and step whose evidence passed registration.
 fn failing_job_and_step(failure: &Value) -> (String, String) {
     let Some(job) = failure
         .get("failed_jobs")
@@ -1174,8 +1252,8 @@ fn failing_job_and_step(failure: &Value) -> (String, String) {
     (value_string(job, "name"), step)
 }
 
-/// The commit under test: what the runner checked out when that is evidenced,
-/// falling back to the SHA the event reported.
+/// The observed checkout, validated before clustering. Event and PR heads
+/// are never substitutes for the commit the supplying job tested.
 fn tested_commit(failure: &Value) -> String {
     failure
         .get("actual_checkout_shas")
@@ -1183,7 +1261,7 @@ fn tested_commit(failure: &Value) -> String {
         .and_then(|shas| shas.first())
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| value_string(failure, "event_reported_head_sha"))
+        .unwrap_or_default()
 }
 
 /// Lines a runner emits when something breaks.

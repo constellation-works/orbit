@@ -23,7 +23,8 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use serde_json::{Value, json};
 
-use super::query::{CiQueries, LogScope};
+use super::investigate::investigate;
+use super::query::CiQueries;
 use super::{
     OUTCOME_CAPABILITY_UNAVAILABLE, OUTCOME_CURRENT_FAILURES, OUTCOME_NO_CURRENT_FAILURE,
     OUTCOME_RETRYABLE_ERROR, bounded_u64, optional_input_string, unsuccessful_conclusion,
@@ -31,7 +32,7 @@ use super::{
 
 /// Snapshot schema version. Bump when a consumer would misread an older
 /// snapshot; `file_ci_failure_tasks` reads this field before anything else.
-pub(super) const CI_EVIDENCE_SCHEMA_VERSION: u64 = 1;
+pub(super) const CI_EVIDENCE_SCHEMA_VERSION: u64 = 2;
 
 /// Cap on the single repository-wide run listing. This is a whole-repository
 /// budget, not a per-ref one: it has to be deep enough that the integration
@@ -49,6 +50,9 @@ const MAX_LOG_MAX_BYTES: u64 = 262_144;
 /// Cap on full-log reads taken purely to evidence a checkout commit. The
 /// failed-step log usually lacks it, and a full log can be tens of megabytes.
 const DEFAULT_MAX_CHECKOUT_LOG_READS: u64 = 3;
+/// Global cap on diagnostic reads, each bound to one failed job.
+const DEFAULT_MAX_JOB_LOG_READS: u64 = 6;
+const MAX_MAX_JOB_LOG_READS: u64 = 25;
 /// Cap on origin probes for branches no scanned head covers. One probe per
 /// distinct branch, and only for branches that actually carry a red run.
 const DEFAULT_MAX_RETIRED_REF_PROBES: u64 = 20;
@@ -82,16 +86,17 @@ struct ScannedRef {
     pr_url: Option<Value>,
 }
 
-struct Bounds {
+pub(super) struct Bounds {
     max_runs: u64,
     max_pull_requests: u64,
     max_investigated_runs: usize,
-    log_max_bytes: usize,
-    max_checkout_log_reads: usize,
+    pub(super) log_max_bytes: usize,
+    pub(super) max_checkout_log_reads: usize,
+    pub(super) max_job_log_reads: usize,
     max_retired_ref_probes: usize,
     /// Which overflow candidate this sweep spends its rotating investigation
     /// slot on. Taken from the collection hour unless the caller pins it.
-    investigation_cursor: u64,
+    pub(super) investigation_cursor: u64,
 }
 
 fn bounds_from_input(input: &Value) -> Result<Bounds, OrbitError> {
@@ -114,6 +119,12 @@ fn bounds_from_input(input: &Value) -> Result<Bounds, OrbitError> {
             "log_max_bytes",
             DEFAULT_LOG_MAX_BYTES,
             MAX_LOG_MAX_BYTES,
+        )? as usize,
+        max_job_log_reads: bounded_u64(
+            input,
+            "max_job_log_reads",
+            DEFAULT_MAX_JOB_LOG_READS,
+            MAX_MAX_JOB_LOG_READS,
         )? as usize,
         max_checkout_log_reads: bounded_u64(
             input,
@@ -289,20 +300,24 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         }
     }
     let mut checkout_log_reads = 0usize;
+    let mut job_log_reads = 0usize;
+    let mut findings = Vec::new();
     for (index, failure) in inspect.iter_mut().enumerate() {
         if !selected.contains(&index) {
             failure["investigated"] = json!(false);
+            findings.push(failure.clone());
             continue;
         }
-        investigate(
+        findings.extend(investigate(
             queries,
             failure,
             &bounds,
             &mut checkout_log_reads,
+            &mut job_log_reads,
             &mut retryable_errors,
-        );
+        ));
     }
-    current = inspect
+    current = findings
         .into_iter()
         .filter(is_actionable_current_failure)
         .collect();
@@ -372,6 +387,8 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             "current_failures_investigation_attempted": attempted,
             "current_failures_investigated": investigated_count,
             "log_max_bytes": bounds.log_max_bytes,
+            "job_log_reads": job_log_reads,
+            "max_job_log_reads": bounds.max_job_log_reads,
             "checkout_log_reads": checkout_log_reads,
             "max_checkout_log_reads": bounds.max_checkout_log_reads,
             "retired_refs": probes.retired.iter().collect::<Vec<_>>(),
@@ -632,7 +649,7 @@ fn probe_slots(candidates: usize, budget: usize, cursor: u64) -> std::collection
 /// that gate delivery still go first, and every other candidate is reached
 /// within one rotation instead of never. With a budget of one there is nothing
 /// to rotate and the highest-ranked candidate keeps the slot.
-fn investigation_slots(
+pub(super) fn investigation_slots(
     candidates: usize,
     budget: usize,
     cursor: u64,
@@ -806,7 +823,7 @@ fn run_branch(run: &Value) -> &str {
     run.get("head_branch").and_then(Value::as_str).unwrap_or("")
 }
 
-fn run_is_completed(run: &Value) -> bool {
+pub(super) fn run_is_completed(run: &Value) -> bool {
     run.get("status").and_then(Value::as_str) == Some("completed")
 }
 
@@ -825,7 +842,7 @@ fn is_actionable_current_failure(failure: &Value) -> bool {
     if run_is_completed(failure) {
         return run_is_unsuccessful(failure);
     }
-    has_failed_jobs(failure) && failure.get("investigated").and_then(Value::as_bool) == Some(true)
+    has_failed_jobs(failure)
 }
 
 /// A red run on a branch origin no longer has. Not superseded by a newer run —
@@ -932,229 +949,7 @@ fn sort_current_failures(failures: &mut [Value]) {
     });
 }
 
-/// Fill one current failure in with its failed jobs, steps, bounded log, and
-/// the commit its runner actually checked out.
-fn investigate<Q: CiQueries + ?Sized>(
-    queries: &Q,
-    failure: &mut Value,
-    bounds: &Bounds,
-    checkout_log_reads: &mut usize,
-    retryable_errors: &mut Vec<Value>,
-) {
-    let Some(run_id) = failure
-        .get("run_id")
-        .and_then(Value::as_u64)
-        .map(|id| id.to_string())
-    else {
-        push_retryable_error(
-            retryable_errors,
-            "registration",
-            "run_identity",
-            None,
-            "current failure has no numeric run_id",
-        );
-        return;
-    };
-    let errors_before = retryable_errors.len();
-
-    match queries.run_view(&run_id) {
-        Ok(view) => {
-            let failed_jobs = view.get("failed_jobs").cloned().unwrap_or(json!([]));
-            let empty = failed_jobs.as_array().is_none_or(Vec::is_empty);
-            if empty && run_is_completed(failure) {
-                push_retryable_error(
-                    retryable_errors,
-                    "registration",
-                    "run_view",
-                    failure.get("run_id"),
-                    "failed run returned no failed jobs",
-                );
-            }
-            failure["failed_jobs"] = failed_jobs;
-            // A pending in-flight check is not a repair task. Do not fetch
-            // logs or consume checkout budget until a job has actually failed.
-            if empty && !run_is_completed(failure) {
-                failure["investigated"] = json!(true);
-                return;
-            }
-        }
-        Err(error) => {
-            push_retryable_error(
-                retryable_errors,
-                "investigation",
-                "run_view",
-                failure.get("run_id"),
-                &error.to_string(),
-            );
-            if !run_is_completed(failure) {
-                failure["investigated"] = json!(false);
-                return;
-            }
-        }
-    }
-
-    match queries.run_logs(&run_id, LogScope::Failed, bounds.log_max_bytes) {
-        Ok(log) => {
-            failure["log_excerpt"] = json!(log.text);
-            failure["log_truncated"] = json!(log.truncated);
-            failure["log_total_bytes"] = json!(log.total_bytes);
-            failure["log_returned_bytes"] = json!(log.returned_bytes);
-            failure["log_scope"] = json!("failed");
-            failure["log_source"] = json!(log.source);
-            failure["log_source_jobs"] = json!(log.source_jobs);
-            failure["actual_checkout_shas"] = json!(log.checkout_commits);
-            failure["checkout_evidence"] = json!(log.checkout_evidence);
-            failure["checkout_evidence_scope"] = json!("failed");
-            set_checkout_identity(failure, "failed", &log);
-            // A read that ends with no text at all is not a captured excerpt,
-            // and the per-job fallback has already had its turn. Record why,
-            // so the filed task can say what is missing and the sweep never
-            // reads silence as a clean run.
-            if log.text.trim().is_empty() {
-                push_retryable_error(
-                    retryable_errors,
-                    "investigation",
-                    "run_logs",
-                    failure.get("run_id"),
-                    &with_fallback_cause("query returned no failed-step log text", &log),
-                );
-            }
-        }
-        Err(error) => {
-            push_retryable_error(
-                retryable_errors,
-                "investigation",
-                "run_logs",
-                failure.get("run_id"),
-                &error.to_string(),
-            );
-        }
-    }
-
-    // The checkout step normally succeeds, so it is absent from the
-    // failed-step log. One full-log read per run, within a hard budget,
-    // recovers the commit under test; past the budget we say so rather than
-    // leaving the field silently empty.
-    let needs_checkout = failure
-        .get("actual_checkout_shas")
-        .and_then(Value::as_array)
-        .is_none_or(Vec::is_empty)
-        || failure
-            .get("checkout_evidence_complete")
-            .and_then(Value::as_bool)
-            != Some(true);
-    if !needs_checkout {
-        failure["investigated"] = json!(retryable_errors.len() == errors_before);
-        return;
-    }
-    if *checkout_log_reads >= bounds.max_checkout_log_reads {
-        failure["checkout_evidence_scope"] = json!("skipped_budget_exhausted");
-        push_retryable_error(
-            retryable_errors,
-            "investigation",
-            "checkout_evidence_budget",
-            failure.get("run_id"),
-            "actual checkout SHA was not collected because max_checkout_log_reads was exhausted",
-        );
-        failure["investigated"] = json!(false);
-        return;
-    }
-    *checkout_log_reads += 1;
-    match queries.run_logs(&run_id, LogScope::All, bounds.log_max_bytes) {
-        Ok(log) => {
-            failure["actual_checkout_shas"] = json!(log.checkout_commits);
-            failure["checkout_evidence"] = json!(log.checkout_evidence);
-            failure["checkout_evidence_scope"] = json!("all");
-            set_checkout_identity(failure, "all", &log);
-            // A genuinely incomplete scan (the source-byte cap, or a dropped
-            // overlong line that could have carried checkout identity) stays
-            // fail-closed even when one SHA was already found: it cannot rule
-            // out a later, conflicting identity past whatever it didn't
-            // manage to read. Only a *display* cap (evidence line/commit
-            // count, or an overlong line unrelated to checkout) is exempt —
-            // that never touches `checkout_evidence_complete`.
-            if !log.checkout_evidence_complete {
-                push_retryable_error(
-                    retryable_errors,
-                    "registration",
-                    "checkout_evidence",
-                    failure.get("run_id"),
-                    "checkout evidence scan reached its hard limit; actual checkout identity is incomplete",
-                );
-            } else if log.checkout_commits.is_empty() {
-                push_retryable_error(
-                    retryable_errors,
-                    "registration",
-                    "checkout_evidence",
-                    failure.get("run_id"),
-                    &with_fallback_cause("run logs contained no actual checkout SHA", &log),
-                );
-            }
-        }
-        Err(error) => {
-            failure["checkout_evidence_scope"] = json!("unavailable");
-            push_retryable_error(
-                retryable_errors,
-                "investigation",
-                "run_logs_all",
-                failure.get("run_id"),
-                &error.to_string(),
-            );
-        }
-    }
-    failure["investigated"] = json!(retryable_errors.len() == errors_before);
-}
-
-/// An evidence gap, extended with the fallback's own outcome when there was
-/// one.
-///
-/// An empty log read is not proof that a run's logs expired: it is also how
-/// the `gh run view --log*` blind spot presents, and the per-job fallback runs
-/// precisely then. Whichever way the gap arose, the reader is told which query
-/// fell short rather than being left to assume retention.
-fn with_fallback_cause(gap: &str, log: &super::query::RunLog) -> String {
-    match &log.fallback_error {
-        Some(reason) => format!("{gap}; the per-job log fallback recovered none either: {reason}"),
-        None => gap.to_string(),
-    }
-}
-
-fn set_checkout_identity(failure: &mut Value, scope: &str, log: &super::query::RunLog) {
-    let state = if !log.checkout_evidence_complete {
-        "incomplete"
-    } else {
-        match log.checkout_commits.len() {
-            0 => "missing",
-            1 => "observed",
-            _ => "ambiguous",
-        }
-    };
-    failure["checkout_evidence_complete"] = json!(log.checkout_evidence_complete);
-    failure["checkout_evidence_scanned_bytes"] = json!(log.checkout_evidence_scanned_bytes);
-    failure["checkout_evidence_source_truncated"] = json!(log.checkout_evidence_source_truncated);
-    failure["checkout_evidence_display_truncated"] = json!(log.checkout_evidence_display_truncated);
-    failure["checkout_identity"] = json!({
-        "state": state,
-        "observed_shas": log.checkout_commits,
-        "provenance": {
-            "source": "runner_log",
-            // Which query the runner log was read through, and the job whose
-            // own log supplied it when the run-scoped read returned nothing.
-            "read_via": log.source,
-            "jobs": log.source_jobs,
-            "scope": scope,
-            "complete": log.checkout_evidence_complete,
-            "scanned_bytes": log.checkout_evidence_scanned_bytes,
-            "source_truncated": log.checkout_evidence_source_truncated,
-            // Display caps (evidence line/commit count, or an unrelated
-            // overlong line) reduce what is reported without bearing on
-            // whether identity itself was captured; see `complete` for that.
-            "display_truncated": log.checkout_evidence_display_truncated,
-        },
-    });
-}
-
-fn push_retryable_error(
+pub(super) fn push_retryable_error(
     errors: &mut Vec<Value>,
     stage: &str,
     operation: &str,

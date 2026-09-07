@@ -23,6 +23,7 @@ pub(super) struct FakeQueries {
     /// page, so a test can make CI progress between calls.
     pub(super) runs: Mutex<Vec<Vec<Value>>>,
     pub(super) run_views: HashMap<String, Value>,
+    pub(super) job_logs: HashMap<(String, u64, bool), String>,
     pub(super) logs: HashMap<(String, bool), String>,
     pub(super) repository_runs_error: Option<String>,
     pub(super) run_view_errors: HashMap<String, String>,
@@ -188,6 +189,7 @@ impl CiQueries for FakeQueries {
     fn run_logs(
         &self,
         run_id: &str,
+        job_id: u64,
         scope: LogScope,
         max_bytes: usize,
     ) -> Result<RunLog, OrbitError> {
@@ -204,7 +206,12 @@ impl CiQueries for FakeQueries {
             log.source_jobs = jobs.clone();
             return Ok(log);
         }
-        let raw = self.logs.get(&key).cloned().unwrap_or_default();
+        let raw = self
+            .job_logs
+            .get(&(run_id.to_string(), job_id, scope == LogScope::All))
+            .or_else(|| self.logs.get(&key))
+            .cloned()
+            .unwrap_or_default();
         let mut log = super::super::query::bounded_run_log(&raw, max_bytes);
         log.fallback_error = self.log_fallback_errors.get(&key).cloned();
         Ok(log)

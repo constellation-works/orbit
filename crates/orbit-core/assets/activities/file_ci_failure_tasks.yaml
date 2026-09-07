@@ -34,10 +34,15 @@ spec:
     failure reports `no_current_failure` and files nothing, and anything else
     reports `current_failures` with what it filed, skipped as already open,
     left unfiled at the `max_tasks` cap, or deferred for incomplete evidence.
-    Retryable failures are separated by blast radius. One that names a run —
-    an exhausted investigation budget, an unreadable log, incomplete checkout
-    identity — defers only that finding: it appears in `deferred` with its
-    reasons, is excluded from clustering, and is left for a later sweep, while
+    Schema version 2 requires one job per failure row, matching diagnostic
+    and checkout job identities, one known failed step, and complete untruncated
+    diagnostic evidence. Legacy version-1 run-scoped snapshots remain readable
+    for audit but their failures are deferred for recollection; no job ordering
+    inference or event/PR head substitution is allowed. Retryable failures are
+    separated by blast radius. One that names a job defers only that job.
+    One that names only a run, such as an exhausted run investigation budget
+    or unreadable job metadata, defers that run's findings. Each appears in
+    `deferred` with its reasons and is excluded from clustering, while
     every complete finding in the same snapshot still files and dedupes. One
     that names no run — a repository, run-listing, or pull-request-listing
     read, a registration, dedupe-lookup, or task-creation failure — leaves the
@@ -170,13 +175,15 @@ spec:
         type: array
         description: >
           Current failures left unfiled because their own evidence is
-          incomplete. Each entry carries the run it is about and the bounded
+          incomplete. Each entry carries the run and job it is about and bounded
           retryable reasons, so the gap stays visible and a later sweep can
           finish it.
         items:
           type: object
           required: [run_id, reasons]
           properties:
+            job_id:
+              type: [number, "null"]
             run_id:
               oneOf:
                 - type: number
