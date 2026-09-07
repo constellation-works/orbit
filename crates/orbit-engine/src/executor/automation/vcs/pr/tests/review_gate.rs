@@ -1,14 +1,19 @@
 //! PR steps recheck the reviewed candidate [ORB-11333].
 
+use std::fs;
+use std::path::Path;
+
 use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 
 use super::super::complete::pr_complete;
 use super::super::open::pr_open;
 use super::test_support::{
-    PR_CREATE_OPERATION, PR_MERGE_OPERATION, PrOpenTestHost, batch_task, git, pr_open_input,
-    pr_workspace, review_batch_task,
+    PR_CREATE_OPERATION, PR_MERGE_OPERATION, PUSH_OPERATION, PrOpenTestHost, batch_task, git,
+    pr_open_input, pr_workspace, review_batch_task,
 };
+use crate::executor::automation::vcs::failure::pr_failure_handoff;
+use crate::executor::automation::vcs::push::push_batch_changes;
 
 const SUMMARY: &str = "Outcome: success\n\nChanges:\n- Reviewed change.";
 
@@ -290,4 +295,193 @@ printf '%s\n' '{"merged":true,"sha":"unreviewed-merge"}'
         "api\nrepos/{{owner}}/{{repo}}/pulls/42/merge\n--method\nPUT\n-f\nsha={reviewed}\n-f\nmerge_method=squash\n"
     );
     assert!(args.contains(&expected_mutation), "{args}");
+}
+
+/// [ORB-11538] A rewritten candidate whose origin SHA is not an ancestor must
+/// still be preserved: checkpoint-less push stays fail-closed, and the
+/// review-gate handoff supplies the durable rewrite lease so the blocked
+/// escalation can run.
+#[test]
+fn review_gate_handoff_pushes_a_diverged_candidate_with_a_rewrite_lease() {
+    let workspace = pr_workspace();
+    let (head_before, published) = diverge_published_candidate(&workspace.repo);
+    let task_id = "ORB-11538-DIVERGED";
+    let host = PrOpenTestHost::new(
+        vec![batch_task(
+            task_id,
+            "Preserve rewritten review-gate candidate",
+            SUMMARY,
+        )],
+        workspace.repo.clone(),
+    );
+
+    let error = push_batch_changes(
+        &host,
+        &json!({
+            "workspace_path": workspace.repo,
+            "branch": "orbit/test-batch",
+        }),
+    )
+    .expect_err("checkpoint-less push must not replace a diverged origin");
+    assert!(
+        error.to_string().contains("no durable rewrite checkpoint"),
+        "{error}"
+    );
+    assert!(host.vcs_calls().is_empty(), "no push without a lease");
+    assert_eq!(host.task_status(task_id), TaskStatus::InProgress);
+
+    let recovered = pr_failure_handoff(
+        &host,
+        &review_gate_handoff_input(
+            &workspace.repo,
+            task_id,
+            json!({
+                "head": "orbit/test-batch",
+                "rewritten": true,
+                "head_sha_before": head_before,
+                "remote_sha_before": published,
+            }),
+        ),
+    )
+    .expect("lease-checked preservation must reach the blocked update");
+
+    assert_eq!(recovered["decision"], "blocked_review_gate");
+    assert_eq!(recovered["pr_created"], false);
+    assert_eq!(recovered["task_status"], "blocked");
+    assert_eq!(recovered["push"]["decision"], "performed_force_with_lease");
+    assert_eq!(recovered["push"]["force_with_lease"], true);
+    assert_eq!(host.task_status(task_id), TaskStatus::Blocked);
+    let push = host
+        .vcs_calls()
+        .into_iter()
+        .find(|call| call.operation == PUSH_OPERATION)
+        .expect("preservation push");
+    assert_eq!(push.input["force_with_lease"], true);
+    assert_eq!(push.input["expected_remote_sha"], json!(published));
+    assert!(
+        host.vcs_calls()
+            .iter()
+            .all(|call| call.operation != PR_CREATE_OPERATION),
+        "review-gate preservation must not open a PR"
+    );
+    let update = host
+        .automation_updates()
+        .into_iter()
+        .find(|(_, update)| update.status == Some(TaskStatus::Blocked))
+        .expect("blocked review-gate update");
+    assert_eq!(
+        update.1.status_event.as_deref(),
+        Some("review_gate_escalation")
+    );
+}
+
+#[test]
+fn review_gate_handoff_creates_a_missing_origin_branch_and_fast_forwards_without_force() {
+    let missing = pr_workspace();
+    git(
+        &missing.repo,
+        &["push", "origin", "--delete", "orbit/test-batch"],
+    );
+    let missing_id = "ORB-11538-CREATE";
+    let missing_host = PrOpenTestHost::new(
+        vec![batch_task(
+            missing_id,
+            "Create review-gate candidate",
+            SUMMARY,
+        )],
+        missing.repo.clone(),
+    );
+    let created = pr_failure_handoff(
+        &missing_host,
+        &review_gate_handoff_input(
+            &missing.repo,
+            missing_id,
+            json!({
+                "head": "orbit/test-batch",
+                "rewritten": false,
+                "head_sha_before": git(&missing.repo, &["rev-parse", "HEAD"]),
+                "remote_sha_before": Value::Null,
+            }),
+        ),
+    )
+    .expect("first-time preservation creates the branch");
+    assert_eq!(created["decision"], "blocked_review_gate");
+    assert_eq!(created["push"]["decision"], "performed_create");
+    assert_eq!(created["push"]["force_with_lease"], false);
+    assert_eq!(missing_host.vcs_calls()[0].input["force_with_lease"], false);
+    assert_eq!(missing_host.task_status(missing_id), TaskStatus::Blocked);
+
+    let fast_forward = pr_workspace();
+    fs::write(fast_forward.repo.join("fast-forward.txt"), "local\n").expect("write follow-up");
+    git(&fast_forward.repo, &["add", "fast-forward.txt"]);
+    git(&fast_forward.repo, &["commit", "-m", "local follow-up"]);
+    let ff_id = "ORB-11538-FF";
+    let ff_host = PrOpenTestHost::new(
+        vec![batch_task(
+            ff_id,
+            "Fast-forward review-gate candidate",
+            SUMMARY,
+        )],
+        fast_forward.repo.clone(),
+    );
+    let origin_sha = git(
+        &fast_forward.repo,
+        &["rev-parse", "origin/orbit/test-batch"],
+    );
+    let forwarded = pr_failure_handoff(
+        &ff_host,
+        &review_gate_handoff_input(
+            &fast_forward.repo,
+            ff_id,
+            json!({
+                "head": "orbit/test-batch",
+                "rewritten": false,
+                "head_sha_before": git(&fast_forward.repo, &["rev-parse", "HEAD"]),
+                "remote_sha_before": origin_sha,
+            }),
+        ),
+    )
+    .expect("fast-forward preservation must not force-push");
+    assert_eq!(forwarded["decision"], "blocked_review_gate");
+    assert_eq!(forwarded["push"]["decision"], "performed_fast_forward");
+    assert_eq!(forwarded["push"]["force_with_lease"], false);
+    assert_eq!(ff_host.vcs_calls()[0].input["force_with_lease"], false);
+    assert_eq!(ff_host.task_status(ff_id), TaskStatus::Blocked);
+}
+
+fn review_gate_handoff_input(repo: &Path, task_id: &str, sync_base: Value) -> Value {
+    json!({
+        "failed_step_id": "review_gate_settle",
+        "activity_name": "review_gate_settle",
+        "error_code": "review_gate_failed",
+        "error_message": "before-PR review gate did not pass",
+        "run_id": "batch-1",
+        "job_input": {
+            "task_ids": [task_id],
+            "base_branch": "agent-main",
+            "base_sync": "local",
+        },
+        "pipeline": {
+            "worktree": {
+                "workspace_path": repo,
+                "job_run_id": "batch-1",
+                "base_ref": "agent-main",
+            },
+            "sync_base": sync_base,
+        },
+    })
+}
+
+fn diverge_published_candidate(repo: &Path) -> (String, String) {
+    let head_before = git(repo, &["rev-parse", "HEAD"]);
+    fs::write(repo.join("published-side.txt"), "published\n").expect("write published side");
+    git(repo, &["add", "published-side.txt"]);
+    git(repo, &["commit", "-m", "previous preservation candidate"]);
+    git(repo, &["push", "origin", "orbit/test-batch"]);
+    let published = git(repo, &["rev-parse", "HEAD"]);
+    git(repo, &["reset", "--hard", &head_before]);
+    fs::write(repo.join("retry-side.txt"), "retry\n").expect("write retry side");
+    git(repo, &["add", "retry-side.txt"]);
+    git(repo, &["commit", "-m", "rewritten review-gate candidate"]);
+    (head_before, published)
 }
