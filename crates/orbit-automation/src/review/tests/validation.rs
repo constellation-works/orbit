@@ -264,6 +264,49 @@ fn an_unrelated_later_required_pass_does_not_replace_a_superseded_test() {
 }
 
 #[test]
+fn one_sided_check_ids_do_not_collide_with_fallback_commands() {
+    let superseded_check = vec![
+        with_check(
+            record(
+                "cargo test",
+                ValidationOutcome::Failed,
+                ValidationRole::Superseded,
+                Some("rerun after repair"),
+            ),
+            "cargo fmt --check",
+        ),
+        required("cargo fmt --check", ValidationOutcome::Passed),
+    ];
+    assert_eq!(
+        validation_evidence(&superseded_check),
+        Err(ValidationDefect::SupersededWithoutReplacement {
+            command: "cargo test".into(),
+        }),
+        "an explicit superseded check ID cannot match a required command"
+    );
+
+    let required_check = vec![
+        record(
+            "cargo fmt --check",
+            ValidationOutcome::Failed,
+            ValidationRole::Superseded,
+            Some("rerun after repair"),
+        ),
+        with_check(
+            required("cargo test", ValidationOutcome::Passed),
+            "cargo fmt --check",
+        ),
+    ];
+    assert_eq!(
+        validation_evidence(&required_check),
+        Err(ValidationDefect::SupersededWithoutReplacement {
+            command: "cargo fmt --check".into(),
+        }),
+        "a required check ID cannot match a superseded fallback command"
+    );
+}
+
+#[test]
 fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_closed() {
     let superseded = |check: Option<&str>| {
         let record = record(
