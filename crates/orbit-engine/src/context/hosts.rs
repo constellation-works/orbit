@@ -617,6 +617,19 @@ pub trait RuntimeHost: Send + Sync {
         Ok(())
     }
 
+    /// Persist an exact host-validated recovered rebase before reporting recovery
+    /// success. Unlike ordinary step checkpoints, durability failure is fatal.
+    fn checkpoint_rebase_recovery(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _output: &Value,
+    ) -> Result<(), DispatchError> {
+        Err(DispatchError::JobExecution(
+            "host does not support durable rebase recovery checkpoints".to_string(),
+        ))
+    }
+
     fn tool_context_for_activity(
         &self,
         _run_id: Option<&str>,

@@ -94,7 +94,7 @@ pub(in crate::executor::automation) fn rebase_pr_branch<H: RuntimeHost + ?Sized>
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let context = load_handoff_context(host, input, "git_rebase")?;
-    match rebase_pr_branch_inner(input, &context) {
+    match rebase_pr_branch_inner(host, input, &context) {
         Ok(output) => Ok(output),
         Err(error) => {
             record_failed_handoff(host, &context, input, FailedHandoffPhase::Rebase, &error)?;
@@ -103,7 +103,11 @@ pub(in crate::executor::automation) fn rebase_pr_branch<H: RuntimeHost + ?Sized>
     }
 }
 
-fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Value, OrbitError> {
+fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    context: &HandoffContext,
+) -> Result<Value, OrbitError> {
     let head = required_input_string(input, "head")?;
     let head_sha_before = required_input_string(input, "head_sha")?;
     let base = required_input_string(input, "base")?;
@@ -190,6 +194,7 @@ fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Val
             }
             ("skipped_current", false, current_sha)
         } else if sync_required {
+            validate_recovered_rewrite(host, input, context, &current_sha)?;
             ("reused_recovery", true, current_sha)
         } else {
             return Err(OrbitError::Execution(format!(
@@ -244,6 +249,43 @@ fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Val
         "remote_sha_before": input_string_field(input, "remote_sha"),
         "rewritten": rewritten,
     }))
+}
+
+fn validate_recovered_rewrite<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    context: &HandoffContext,
+    current_sha: &str,
+) -> Result<(), OrbitError> {
+    let run_id = input
+        .get("run_id")
+        .and_then(Value::as_str)
+        .unwrap_or(&context.batch_id);
+    let Some(checkpoint) =
+        recovered_head_checkpoint(host, run_id, &context.workspace_path, current_sha)?
+    else {
+        return Err(OrbitError::Execution(
+            "git_rebase: changed HEAD has no exact host-validated recovery checkpoint".to_string(),
+        ));
+    };
+    let task_ids = context
+        .tasks
+        .iter()
+        .map(|task| task.id.as_str())
+        .collect::<Vec<_>>();
+    if checkpoint["head"] != input["head"]
+        || checkpoint["head_sha_before"] != input["head_sha"]
+        || checkpoint["base_sha"] != input["base_sha"]
+        || checkpoint["remote_sha_before"]
+            != input.get("remote_sha").cloned().unwrap_or(Value::Null)
+        || checkpoint["task_ids"] != json!(task_ids)
+    {
+        return Err(OrbitError::Execution(
+            "git_rebase: recovered HEAD provenance does not match the prepared rewrite checkpoint"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn unmerged_paths(repo_root: &Path) -> Result<Vec<String>, OrbitError> {
@@ -382,4 +424,67 @@ fn parse_divergence_count(
             "invalid {label} divergence count '{raw}' while comparing '{head}' to '{base}': {error}"
         ))
     })
+}
+
+/// Read only host-written provenance, authenticating the original durable run
+/// when a resume carries a copy. Advisory activity outputs never authorize HEAD.
+pub(super) fn recovered_head_checkpoint<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    workspace: &Path,
+    head_sha: &str,
+) -> Result<Option<Value>, OrbitError> {
+    let Some(state) = host.read_run_state(run_id)? else {
+        return Ok(None);
+    };
+    for (step_id, checkpoint) in &state.rebase_recovery_checkpoints {
+        if !matches!(step_id.as_str(), "sync_base" | "complete_pr")
+            || checkpoint.get("head_sha").and_then(Value::as_str) != Some(head_sha)
+            || checkpoint.get("workspace_path").and_then(Value::as_str) != workspace.to_str()
+            || checkpoint.get("step_id").and_then(Value::as_str) != Some(step_id)
+            || checkpoint.get("rewritten").and_then(Value::as_bool) != Some(true)
+        {
+            continue;
+        }
+        let source_run_id = required_input_string(checkpoint, "run_id")?;
+        if source_run_id != run_id {
+            let source = host.read_run_state(source_run_id)?.ok_or_else(|| {
+                OrbitError::Execution(
+                    "recovered rebase source run has no durable state".to_string(),
+                )
+            })?;
+            if source.rebase_recovery_checkpoints.get(step_id) != Some(checkpoint) {
+                return Err(OrbitError::Execution(
+                    "recovered rebase differs from its source checkpoint".to_string(),
+                ));
+            }
+            let task_id = checkpoint
+                .get("task_ids")
+                .and_then(Value::as_array)
+                .and_then(|ids| ids.first())
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    OrbitError::Execution("recovered rebase has no task identity".to_string())
+                })?;
+            super::resume::ensure_retry_descends_from(
+                host,
+                "rebase recovery",
+                "recovery run",
+                task_id,
+                run_id,
+                source_run_id,
+            )?;
+        }
+        let target = required_input_string(checkpoint, "base_sha")?;
+        if !git_command_success(
+            workspace,
+            &["merge-base", "--is-ancestor", target, head_sha],
+        )? {
+            return Err(OrbitError::Execution(
+                "recovered candidate does not descend from its pinned base".to_string(),
+            ));
+        }
+        return Ok(Some(checkpoint.clone()));
+    }
+    Ok(None)
 }

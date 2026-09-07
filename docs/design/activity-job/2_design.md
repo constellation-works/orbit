@@ -233,12 +233,38 @@ candidate/PR evidence. The boundary finally requires the target as an ancestor
 and a remaining candidate commit. Ordinary providers still cannot move HEAD;
 primary-checkout drift checks apply to recovery too.
 
+The stopped index also contains the candidate's nonconflicting changes. Host
+continuation commits those staged paths normally; their disappearance from the
+dirty-path map is not unrelated editing. After continuation, tracked state must
+be clean and pre-existing untracked contents must be unchanged. Only after all
+boundary checks succeed does the host transactionally persist the exact recovered
+HEAD, original HEAD/base, pinned target, branch, task IDs, workspace, run/step and
+pre-rewrite remote lease in `PipelineState.rebase_recovery_checkpoints`. This is
+recovery provenance, not a successful workflow step. Missing run storage or a
+checkpoint write failure prevents recovery success.
+
+The same failed step still executes once after recovery. Reusing a rewritten
+HEAD requires an exact host checkpoint; a fresh-looking manual replacement is
+insufficient. Once recovery succeeds, a subsequent step error describes the new
+failure rather than reviving resolved conflicts. Failure handoff derives conflict
+paths from the live stopped rebase, retains the immutable worktree base in its
+preservation evidence, and does not infer unresolved paths from an old error after
+Git has completed. A resumed run authenticates copied recovery evidence against
+the source run and retry lineage before refreshing preparation for that exact
+preserved candidate. Recovery checkpoints survive ordinary step checkpoints and
+process restart, including interruption before the recovered step completes.
+If execution stops after Git changes HEAD but before the host persists verified
+completion, there is no authenticated completed-head record: resume fails closed
+and requires inspection. It never reconstructs success from the agent's result.
+
 `step.recovery_attempted` retains a bounded, redacted `error_message` and
 `failure_phase` when authorization, input preparation, crew resolution, dispatch,
 or the recovery activity fails. These optional fields are absent from older
-events and successful attempts. They supplement the original step conflict,
-which remains the returned error and terminal handoff evidence. An admitted
-attempt settles its recovery budget even when preparation fails before launch.
+events and successful attempts. Failed attempts supplement the original step
+conflict. Successful recovery supersedes that conflict; any failure of the
+post-recovery step becomes the returned error and terminal handoff evidence. An
+admitted attempt settles its recovery budget even when preparation fails before
+launch.
 
 After [ORB-10382], a recovery activity's structured result is **advisory only**, and its `output_schema_json` declares no `required` fields to keep it that way. A `recovery_activity` is a step attribute rather than a step, so it has no step id and no `{{ steps.<id>.output.* }}` template can consume it; `attempt_recovery_activity` gates the executor's single post-recovery attempt on dispatch success, never on a returned `recovered` field. `pr_conflict_recovery` no longer advertises such a field at all. Its host-side continuation is authorized by the executor-selected activity and authenticated checkpoints, not response JSON. Final success is established when the deterministic `git_rebase` retry verifies a clean index, no stopped rebase, pinned target-base ancestry, and the expected branch rewrite; later push/open/promote/complete checkpoints remain the normal authorities.
 

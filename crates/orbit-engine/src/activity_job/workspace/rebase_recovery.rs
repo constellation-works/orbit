@@ -8,8 +8,7 @@ use crate::context::{RuntimeHost, StepRecoveryAdmission};
 
 use super::{
     DispatchError, GitWorktreeFingerprint, WorktreeBoundaryGuard, changed_paths, git_command_error,
-    git_fingerprint, git_output_raw, git_stdout, git_stdout_bytes, nul_paths,
-    primary_dirt_mutations, safe_relative_path,
+    git_fingerprint, git_output_raw, git_stdout, git_stdout_bytes, nul_paths, safe_relative_path,
 };
 
 pub(super) struct RebaseRecoveryCheckpoint {
@@ -19,6 +18,7 @@ pub(super) struct RebaseRecoveryCheckpoint {
     base_ref: String,
     target_base_sha: String,
     conflicting_paths: Vec<String>,
+    remote_sha_before: Option<String>,
 }
 
 impl WorktreeBoundaryGuard {
@@ -114,6 +114,11 @@ impl WorktreeBoundaryGuard {
                 base_ref,
                 target_base_sha: target.to_string(),
                 conflicting_paths,
+                remote_sha_before: prepared
+                    .get("remote_sha")
+                    .or_else(|| prepared.get("published_head_sha"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             });
             return Ok(());
         }
@@ -158,7 +163,7 @@ impl WorktreeBoundaryGuard {
         host: &dyn RuntimeHost,
         step_id: &str,
         task_ids: &[String],
-    ) -> Result<(), DispatchError> {
+    ) -> Result<Value, DispatchError> {
         let checkpoint = self.rebase_recovery.as_ref().ok_or_else(|| {
             DispatchError::CliInvocationPermanent(
                 "conflict recovery has no authenticated rebase checkpoint".to_string(),
@@ -256,16 +261,34 @@ impl WorktreeBoundaryGuard {
                 "continued rebase did not leave the checkpointed branch on the pinned base with a candidate commit",
             ));
         }
-        let unrelated_mutations = primary_dirt_mutations(&self.assigned_before, &completed)
-            .into_iter()
-            .filter(|path| !checkpoint.conflicting_paths.contains(path))
-            .collect::<Vec<_>>();
-        if !unrelated_mutations.is_empty() {
-            return Err(invalid(&format!(
-                "host continuation changed unrelated paths: {unrelated_mutations:?}"
-            )));
+        // The stopped index includes every nonconflicting candidate change.
+        // Those staged paths become clean when Git commits them; comparing dirty
+        // path maps across that transition incorrectly rejects the candidate.
+        // Provider edits were checked before continuation. Now require Git to
+        // leave no tracked dirt and preserve the pre-existing untracked payload.
+        if !git_output_raw(&self.assigned_root, &["diff", "--quiet", "HEAD", "--"])?
+            .status
+            .success()
+            || completed.untracked_content != self.assigned_before.untracked_content
+        {
+            return Err(invalid(
+                "host continuation left tracked dirt or changed untracked files",
+            ));
         }
-        Ok(())
+        Ok(serde_json::json!({
+            "run_id": self.run_id,
+            "step_id": step_id,
+            "task_ids": task_ids,
+            "workspace_path": self.assigned_root,
+            "head": checkpoint.branch,
+            "head_sha_before": checkpoint.original_head,
+            "original_base_sha": checkpoint.original_base_sha,
+            "base_ref": checkpoint.base_ref,
+            "base_sha": checkpoint.target_base_sha,
+            "remote_sha_before": checkpoint.remote_sha_before,
+            "head_sha": completed.head,
+            "rewritten": true,
+        }))
     }
 
     fn validate_rebase_checkpoint(

@@ -135,6 +135,28 @@ fn recovery_success_with_post_recovery_failure_returns_original_error_text() {
 }
 
 #[test]
+fn successful_vcs_recovery_reports_the_new_failure_instead_of_resolved_conflicts() {
+    let original = recoverable_vcs_conflict();
+    let remaining = retryable_error("flaky", "prepared base moved after recovery");
+    let host = RecoveryHost::new([
+        ("flaky", vec![Err(original), Err(remaining.clone())]),
+        ("recover", vec![Ok(json!({"recovered": true}))]),
+    ]);
+    let job = recovery_job(Some("recover"), None, "flaky", None, 1);
+    let error = execute_job(
+        &job,
+        Value::Null,
+        "run-new-recovery-failure",
+        Arc::new(test_writer("run-new-recovery-failure")),
+        &host,
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), remaining.to_string());
+    assert!(!error.to_string().contains("conflicting paths"));
+    assert_eq!(host.actions(), vec!["flaky", "recover", "flaky"]);
+}
+
+#[test]
 fn recovery_activity_error_returns_original_error_text() {
     let original_error = retryable_error("flaky", "precondition failed");
     let host = RecoveryHost::new([

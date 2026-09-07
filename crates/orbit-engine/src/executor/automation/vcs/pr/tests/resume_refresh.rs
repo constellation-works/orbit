@@ -131,7 +131,37 @@ fn stale_checkpoint_delivery_job() -> JobV2 {
 
 #[test]
 fn stale_preserved_checkpoint_refreshes_then_recovers_and_completes_the_same_pr() {
+    preserved_checkpoint_resume(ResumeCheckpoint::StalePreparation);
+}
+
+#[test]
+fn recovered_candidate_survives_restart_and_failure_handoff_before_step_checkpoint() {
+    preserved_checkpoint_resume(ResumeCheckpoint::RecoveredAfterHandoff);
+}
+
+#[test]
+fn recovered_candidate_resumes_after_restart_without_a_failure_handoff_or_step_success() {
+    preserved_checkpoint_resume(ResumeCheckpoint::RecoveredBeforeHandoff);
+}
+
+enum ResumeCheckpoint {
+    StalePreparation,
+    RecoveredAfterHandoff,
+    RecoveredBeforeHandoff,
+}
+
+fn preserved_checkpoint_resume(checkpoint: ResumeCheckpoint) {
+    let recovered_before_handoff = !matches!(checkpoint, ResumeCheckpoint::StalePreparation);
+    let publish_handoff = !matches!(checkpoint, ResumeCheckpoint::RecoveredBeforeHandoff);
     let workspace = pr_workspace();
+    if recovered_before_handoff {
+        // The observed run had no published remote branch before its recovery.
+        // Diverged failure-handoff publication is the separate rewrite-lease task.
+        git(
+            &workspace.repo,
+            &["push", "origin", "--delete", "orbit/test-batch"],
+        );
+    }
     let original_base = git(&workspace.repo, &["rev-parse", "agent-main"]);
     let candidate_before = git(&workspace.repo, &["rev-parse", "orbit/test-batch"]);
     let mut task = batch_task(
@@ -237,27 +267,69 @@ fn stale_preserved_checkpoint_refreshes_then_recovers_and_completes_the_same_pr(
     .expect_err("the original preparation is stale");
     assert!(stale_error.to_string().contains(&advanced_base));
 
-    let handoff = pr_failure_handoff(
-        &host,
-        &json!({
-            "failed_step_id": "sync_base",
-            "activity_name": "git_rebase",
-            "error_code": "pipeline_step_failed",
-            "error_message": stale_error.to_string(),
-            "run_id": FIRST_RESUME_RUN_ID,
-            "job_input": input,
-            "pipeline": source.pipeline,
-        }),
-    )
-    .expect("publish the preserved candidate to a blocked PR");
-    assert_eq!(handoff["decision"], "blocked_failure_pr");
-    assert_eq!(handoff["pr_number"], "42");
-    assert_eq!(handoff["preservation_commit_created"], false);
-    source.record_failure_activity(
-        "pr_failure_handoff".to_string(),
-        "sync_base".to_string(),
-        handoff,
-    );
+    let mut error_message = stale_error.to_string();
+    if recovered_before_handoff {
+        let prepared =
+            crate::executor::automation::vcs::prepare_pr_handoff(&host, &prepare_input).unwrap();
+        source.step_outputs.insert(3, prepared.clone());
+        source.pipeline["prepare_branch"] = prepared.clone();
+        host.write_state(source.clone());
+        let mut rebase_input = prepared;
+        rebase_input["job_run_id"] = json!(CHECKPOINT_RUN_ID);
+        rebase_input["run_id"] = json!(FIRST_RESUME_RUN_ID);
+        rebase_input["completed_task_ids"] = json!([TASK_ID]);
+        rebase_input["workspace_path"] = json!(workspace.repo);
+        let conflict =
+            crate::executor::automation::vcs::rebase_pr_branch(&host, &rebase_input).unwrap_err();
+        error_message = conflict.to_string();
+        host.run_deterministic(
+            "test_resolve_rebase_conflict",
+            &Value::Null,
+            &json!({
+                "run_id": FIRST_RESUME_RUN_ID,
+                "workspace_path": workspace.repo,
+                "original_base_sha": original_base,
+                "failed_step_input": rebase_input,
+            }),
+            Default::default(),
+        )
+        .unwrap();
+        // The host completion is durable, but sync_base never checkpointed:
+        // simulate process restart by reloading only serialized run state.
+        source = serde_json::from_slice(
+            &serde_json::to_vec(&host.read_run_state(FIRST_RESUME_RUN_ID).unwrap().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!source.step_states.contains_key(&4));
+        assert!(!source.step_outputs.contains_key(&4));
+    }
+
+    if publish_handoff {
+        let handoff = pr_failure_handoff(
+            &host,
+            &json!({
+                "failed_step_id": "sync_base",
+                "activity_name": "git_rebase",
+                "error_code": "pipeline_step_failed",
+                "error_message": error_message,
+                "run_id": FIRST_RESUME_RUN_ID,
+                "job_input": input,
+                "pipeline": source.pipeline,
+            }),
+        )
+        .expect("publish the preserved candidate to a blocked PR");
+        assert_eq!(handoff["decision"], "blocked_failure_pr");
+        assert_eq!(handoff["conflicting_paths"], json!([]));
+        assert_eq!(handoff["original_base_sha"], original_base);
+        assert_eq!(handoff["pr_number"], "42");
+        assert_eq!(handoff["preservation_commit_created"], false);
+        source.record_failure_activity(
+            "pr_failure_handoff".to_string(),
+            "sync_base".to_string(),
+            handoff,
+        );
+    }
     host.write_state(source.clone());
     let historical_source = source.clone();
 
@@ -310,21 +382,34 @@ fn stale_preserved_checkpoint_refreshes_then_recovers_and_completes_the_same_pr(
         delivered.pipeline["prepare_branch"]["base_sha"],
         advanced_base
     );
-    assert_eq!(
-        delivered.pipeline["prepare_branch"]["resume_refresh"],
-        json!({
-            "kind": "stale_delivery_checkpoint",
-            "source_run_id": FIRST_RESUME_RUN_ID,
-            "previous_base_sha": original_base,
-            "attempt": 1,
-            "max_attempts": 1,
-        })
-    );
+    if publish_handoff {
+        assert_eq!(
+            delivered.pipeline["prepare_branch"]["resume_refresh"],
+            json!({
+                "kind": "stale_delivery_checkpoint",
+                "source_run_id": FIRST_RESUME_RUN_ID,
+                "previous_base_sha": if recovered_before_handoff { &advanced_base } else { &original_base },
+                "attempt": 1,
+                "max_attempts": 1,
+            })
+        );
+    }
     assert_eq!(
         delivered.pipeline["sync_base"]["decision"],
-        "reused_recovery"
+        if recovered_before_handoff && publish_handoff {
+            "skipped_current"
+        } else {
+            "reused_recovery"
+        }
     );
-    assert_eq!(delivered.pipeline["pr_open"]["decision"], "reused");
+    assert_eq!(
+        delivered.pipeline["pr_open"]["decision"],
+        if publish_handoff {
+            "reused"
+        } else {
+            "performed"
+        }
+    );
     assert_eq!(delivered.pipeline["pr_open"]["pr_number"], "42");
     assert_eq!(host.inner.task_status(TASK_ID), TaskStatus::Done);
     assert_eq!(
@@ -353,7 +438,9 @@ fn stale_preserved_checkpoint_refreshes_then_recovers_and_completes_the_same_pr(
         .expect("read active state")
         .expect("active state exists");
     assert_eq!(active.step_outputs[&3]["base_sha"], advanced_base);
-    assert_eq!(active.step_outputs[&3]["resume_refresh"]["attempt"], 1);
+    if publish_handoff {
+        assert_eq!(active.step_outputs[&3]["resume_refresh"]["attempt"], 1);
+    }
 }
 
 #[test]

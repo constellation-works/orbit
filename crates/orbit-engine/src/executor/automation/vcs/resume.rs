@@ -14,7 +14,7 @@ use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string,
 };
 
-use super::freshness::commit_sha;
+use super::freshness::{commit_sha, recovered_head_checkpoint};
 
 const FAILURE_HANDOFF_LINEAGE_MAX_HOPS: usize = 64;
 const RESUME_PREPARATION_REFRESH_MAX_ATTEMPTS: u64 = 1;
@@ -82,7 +82,7 @@ pub(crate) fn reconcile_resumed_failure_handoff(
     resume: &PipelineState,
     pipeline: &HashMap<String, Value>,
 ) -> Result<Option<ResumePreparationRefresh>, DispatchError> {
-    let preparation_refresh = resumed_preparation_refresh(job, resume)?;
+    let mut preparation_refresh = resumed_preparation_refresh(job, resume)?;
     let Some(commit_index) = job
         .steps
         .iter()
@@ -190,9 +190,10 @@ pub(crate) fn reconcile_resumed_failure_handoff(
             "failure handoff evidence belongs to task '{evidence_task_id}', which is not targeted by the resumed run"
         ))));
     }
-    if preparation_refresh.is_some() {
+    if let Some(refresh) = preparation_refresh.as_mut() {
         validate_preparation_refresh_identity(host, pipeline, evidence, &head_sha)
             .map_err(resume_preservation_error)?;
+        refresh.expected_head_sha = head_sha.clone();
     }
     if let Some(refresh) = preparation_refresh.as_ref()
         && refresh.attempt > refresh.max_attempts
@@ -340,10 +341,26 @@ fn validate_preparation_refresh_identity<H: RuntimeHost + ?Sized>(
     let prepared_head_sha = required_input_string(prepared, "head_sha")?;
     let evidence_head = required_input_string(evidence, "branch")?;
     let evidence_head_sha = required_input_string(evidence, "head_sha")?;
-    if prepared_head != evidence_head
-        || prepared_head_sha != evidence_head_sha
-        || evidence_head_sha != head_sha
-    {
+    let worktree = pipeline
+        .get("worktree")
+        .ok_or_else(|| OrbitError::Execution("resume lost worktree checkpoint".to_string()))?;
+    let workspace = canonicalize_existing_dir(
+        required_input_string(worktree, "workspace_path")?,
+        "workspace_path",
+    )?;
+    let recovered = recovered_head_checkpoint(
+        host,
+        required_input_string(evidence, "handoff_run_id")?,
+        &workspace,
+        head_sha,
+    )?;
+    let prepared_origin_matches = prepared_head_sha == evidence_head_sha
+        || recovered.as_ref().is_some_and(|checkpoint| {
+            checkpoint["head_sha_before"] == prepared_head_sha
+                && checkpoint["base_sha"] == prepared["base_sha"]
+                && checkpoint["head"] == prepared_head
+        });
+    if prepared_head != evidence_head || !prepared_origin_matches || evidence_head_sha != head_sha {
         return Err(OrbitError::Execution(format!(
             "resume refresh candidate changed across preparation, failure handoff, and current checkout: prepared {prepared_head}@{prepared_head_sha}, handoff {evidence_head}@{evidence_head_sha}, current HEAD {head_sha}"
         )));
@@ -462,11 +479,19 @@ fn validate_failure_handoff_evidence<'a, H: RuntimeHost + ?Sized>(
         .get("preservation_commit_created")
         .and_then(Value::as_bool)
         == Some(true);
+    let recovered = recovered_head_checkpoint(host, handoff_run_id, workspace_path, head_sha)?;
+    let recovered_head_owned = recovered.as_ref().is_some_and(|recovery| {
+        recovery["task_ids"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|id| id == task_id))
+            && recovery["head"] == evidence["branch"]
+            && recovery["original_base_sha"] == base_sha
+    });
     let workflow_commit_owned = !preservation_commit_created
         && source_state_step_owns_head(host, handoff_run_id, task_id, evidence_head)?;
-    if !preservation_commit_created && !workflow_commit_owned {
+    if !preservation_commit_created && !workflow_commit_owned && !recovered_head_owned {
         return Err(OrbitError::Execution(
-            "failure handoff HEAD is neither its preservation commit nor a successful workflow commit"
+            "failure handoff HEAD has no preservation commit, successful workflow commit, or exact host-validated rebase recovery"
                 .to_string(),
         ));
     }
@@ -491,14 +516,16 @@ fn validate_failure_handoff_evidence<'a, H: RuntimeHost + ?Sized>(
             "failure handoff evidence does not match the immutable state of run '{handoff_run_id}'"
         )));
     }
-    ensure_preservation_parent_owned(
-        host,
-        workspace_path,
-        handoff_run_id,
-        base_sha,
-        head_sha,
-        &source_state,
-    )?;
+    if !recovered_head_owned {
+        ensure_preservation_parent_owned(
+            host,
+            workspace_path,
+            handoff_run_id,
+            base_sha,
+            head_sha,
+            &source_state,
+        )?;
+    }
 
     let task = host.get_task(task_id)?;
     if task.job_run_id.as_deref() != Some(checkpoint_owner) {
