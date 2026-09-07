@@ -2638,12 +2638,18 @@ if (!disabled.disabled) throw new Error("controls must be disabled for an unauth
     );
 }
 
-/// ORB-11560: Jump to ORB-NNNNN must look up in the selected workspace, not the
-/// server default. The live failure was Diagnostics/Errors on ws_orbit with
+/// ORB-11691: Jump to task ids must accept non-ORB prefixes, look up in the
+/// selected workspace, and probe concrete workspaces from the aggregate view,
+/// not the server default. The live failure was Diagnostics/Errors on ws_orbit with
 /// `window=24h&run_state=failed`: GET /api/tasks/ORB-11514 (no workspace) 404'd
 /// against polaris while the same id existed as blocked in ws_orbit.
 #[test]
 fn dashboard_global_task_jump_scopes_to_selected_workspace_and_distinguishes_errors() {
+    let app = include_str!("../../assets/dashboard/app.js");
+    let index = include_str!("../../assets/dashboard/index.html");
+    assert!(app.contains(r#"const ID_RE = /^[A-Z]{2,5}-\d+$/i;"#));
+    assert!(index.contains(r#"placeholder="Jump to task id"#));
+
     run_dashboard_javascript_test(
         r##"
 class Node {
@@ -2777,7 +2783,7 @@ globalThis.requestAnimationFrame = (fn) => fn();
 globalThis.setInterval = () => 0;
 globalThis.EventSource = class { constructor() {} close() {} };
 
-const existing = { id: "ORB-11514", title: "Enforce proc.spawn filesystem policy against indirect child access", status: "blocked", history: [], artifacts: [], comments: [] };
+const existing = { id: "DANI-00012", title: "Enforce proc.spawn filesystem policy against indirect child access", status: "blocked", history: [], artifacts: [], comments: [] };
 let lookupMode = "existing";
 let delayed = null;
 const requests = [];
@@ -2793,17 +2799,17 @@ globalThis.fetch = async (path) => {
       { id: "ws_orbit", name: "orbit", status: "active", is_default: false },
     ]);
   }
-  if (/^\/api\/tasks\/ORB-/.test(url.pathname)) {
+  if (/^\/api\/tasks\/(?:ORB-|DANI-)/.test(url.pathname)) {
     const id = decodeURIComponent(url.pathname.slice("/api/tasks/".length));
     const workspace = url.searchParams.get("workspace");
     if (lookupMode === "network" && id === "ORB-00001") throw new Error("offline");
     if (lookupMode === "denied" && id === "ORB-00002") return json({ error: "cross-origin requests not allowed" }, 403);
     if (lookupMode === "server" && id === "ORB-00003") return json({ error: "boom" }, 500);
-    if (lookupMode === "stale" && id === "ORB-11514") {
+    if (lookupMode === "stale" && id === "DANI-00012") {
       await new Promise((resolve) => { delayed = resolve; });
       return workspace === "ws_orbit" ? json(existing) : json({ error: `task not found: ${id}` }, 404);
     }
-    if (id === "ORB-11514" && workspace === "ws_orbit") return json(existing);
+    if (id === "DANI-00012" && workspace === "ws_orbit") return json(existing);
     return json({ error: `task not found: ${id}` }, 404);
   }
   if (url.pathname === "/api/tasks" || url.pathname === "/api/tasks/all") {
@@ -2831,9 +2837,9 @@ function jump(id) {
 }
 
 requests.length = 0;
-jump("ORB-11514");
+jump("dani-00012");
 await tick(); await tick(); await tick(); await tick(); await tick();
-const taskGets = requests.filter((url) => url.startsWith("/api/tasks/ORB-11514"));
+const taskGets = requests.filter((url) => url.startsWith("/api/tasks/DANI-00012"));
 if (!taskGets[0] || !taskGets[0].includes("workspace=ws_orbit")) {
   throw new Error(`existing-task jump must query the selected workspace first; got ${JSON.stringify(taskGets)}`);
 }
@@ -2841,8 +2847,19 @@ if (err.textContent.includes("not found")) throw new Error(`existing task report
 if (wrap.classList.contains("error")) throw new Error("successful jump must not leave the error state");
 if (input.value) throw new Error("successful jump should clear the input");
 if (!String(location.hash).includes("tasks")) throw new Error(`successful jump should open Tasks, hash=${location.hash}`);
-const opened = get("tasks-body").children.some((node) => String(node.textContent).includes("ORB-11514"));
+const opened = get("tasks-body").children.some((node) => String(node.textContent).includes("DANI-00012"));
 if (!opened) throw new Error("existing blocked task must render after jump");
+
+setWorkspace("");
+requests.length = 0;
+jump("DANI-00012");
+await tick(); await tick(); await tick(); await tick(); await tick();
+const aggregateGets = requests.filter((url) => url.startsWith("/api/tasks/DANI-00012"));
+if (aggregateGets.length < 2 || !aggregateGets[0].includes("workspace=ws_polaris") || !aggregateGets.some((url) => url.includes("workspace=ws_orbit"))) {
+  throw new Error(`aggregate lookup must probe concrete workspaces; got ${JSON.stringify(aggregateGets)}`);
+}
+if (getWorkspace() !== "ws_orbit") throw new Error(`aggregate lookup should adopt the owner, got ${getWorkspace()}`);
+if (err.textContent.includes("Error 400")) throw new Error(`aggregate lookup must not expose a missing workspace: ${err.textContent}`);
 
 lookupMode = "missing";
 requests.length = 0;
@@ -2869,8 +2886,8 @@ if (err.textContent !== "Server error resolving ORB-00003") throw new Error(`ser
 
 lookupMode = "stale";
 const hashBeforeStale = String(location.hash);
-input.value = "ORB-11514";
-jump("ORB-11514");
+input.value = "DANI-00012";
+jump("DANI-00012");
 await tick();
 setWorkspace("ws_polaris");
 if (typeof delayed === "function") delayed();
