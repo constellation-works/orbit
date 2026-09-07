@@ -52,6 +52,10 @@ fn binding_preserves_logical_and_runtime_ids_and_ship_mode() {
     assert_eq!(resolved.logical_workspace_id, "logical-abc123");
     assert_eq!(resolved.runtime.logical_workspace_id, "logical-abc123");
     assert_eq!(resolved.runtime.workspace_id, "ws_runtime_config");
+    assert_eq!(
+        resolved.runtime.owner_machine_id.as_deref(),
+        Some("hm_owner")
+    );
     assert_eq!(resolved.runtime.repo_root, repo);
     assert_eq!(resolved.runtime.ship_mode.as_input_value(), "pr");
 
@@ -91,6 +95,11 @@ fn registered_checkout_opens_a_bound_runtime() {
     assert_eq!(binding.workspace_id, "ws_runtime");
     assert_eq!(binding.repo_root, repo);
     assert_eq!(binding.ship_mode.as_input_value(), "local");
+    assert_eq!(
+        binding.owner_machine_id.as_deref(),
+        Some("hm_owner"),
+        "delivery automation resolves its default owner from this registry fact"
+    );
 
     assert!(matches!(
         runtime.run_tool("orbit.workspace.list", json!({})),

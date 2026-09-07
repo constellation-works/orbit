@@ -7,11 +7,28 @@ const field = (label, value) => el('div', { class: 'operation-field' }, [
 ]);
 const revision = value => value ? `${value.commit} (tree ${value.tree})` : 'Not observed';
 
+// Why this host cannot admit work for a consumer whose owner it is not, and
+// what the operator can do about it.
+const ownershipBlocker = ownership => {
+  if (!ownership || ownership.owned_here) return null;
+  switch (ownership.authority) {
+    case 'definition':
+    case 'workspace':
+      return `Owned by machine ${ownership.owner_machine}. This host reconciles admitted work only; run it where that machine is registered, or set owner_machine to this host.`;
+    case 'conflicting':
+      return 'Ownership is contradictory: the workspace record and this replica checkout name different owner machines. Repair the workspace registration, or set owner_machine explicitly.';
+    default:
+      return 'No owner machine is registered for this workspace. Register the workspace owner, or set owner_machine on the definition.';
+  }
+};
+
 export function renderAutomation(diagnostic) {
   if (!diagnostic) return null;
   const panel = el('details', { class: 'automation-diagnostic' });
   panel.appendChild(el('summary', { text: `${diagnostic.state?.members ? 'State automation' : 'Delivery coverage'} · ${diagnostic.reason || 'unknown'}` }));
   if (diagnostic.error) panel.appendChild(el('p', { text: diagnostic.error }));
+  const blocker = ownershipBlocker(diagnostic.ownership);
+  if (blocker) panel.appendChild(el('p', { text: blocker }));
   const state = diagnostic.state;
   if (!state) {
     panel.appendChild(el('p', { text: 'No baseline recorded. Preview before enabling this consumer.' }));

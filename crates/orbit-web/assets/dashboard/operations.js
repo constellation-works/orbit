@@ -613,7 +613,7 @@ function policyGrid(policy) {
     policyField(policy, "recovery", "Recovery"),
     policyField(policy, "leaf_ceiling", "Leaf ceiling"),
     policyField(policy, "review_policy", "Review policy"),
-    policyField(policy, "review_crew", "Review crew"),
+    policyField(policy, "review_crew", "Review crew (before-PR)"),
     policyField(policy, "review_reviewer_starts", "Reviewer starts / lineage"),
     policyField(policy, "review_repair_cycles", "Repair cycles / lineage"),
     policyField(policy, "review_minutes", "Review minutes / lineage"),
@@ -707,6 +707,10 @@ function renderOperationMode(payload) {
   body.appendChild(el("p", {
     class: "operation-control-note",
     text: "Changing a preference activates nothing. Only an explicit grant (orbit operation enable) authorizes scoped automation, and no grant authorizes merge.",
+  }));
+  body.appendChild(el("p", {
+    class: "operation-control-note",
+    text: "Review crew selects the reviewer for before-PR review only. After-landing review runs from its own delivery auto-task, which mints tasks with that definition's template crew.",
   }));
   if (authority.grant_id) {
     body.appendChild(el("div", { class: "operation-clock-actions" }, [

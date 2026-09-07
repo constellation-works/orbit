@@ -439,6 +439,7 @@ impl DashboardState {
             binding: Some(WorkspaceRuntimeBinding {
                 logical_workspace_id: SINGLE_WORKSPACE_ID.to_string(),
                 workspace_id: SINGLE_WORKSPACE_ID.to_string(),
+                owner_machine_id: None,
                 repo_root: PathBuf::new(),
                 ship_mode: ShipMode::Local,
             }),
@@ -451,6 +452,7 @@ impl DashboardState {
                 binding: WorkspaceRuntimeBinding {
                     logical_workspace_id: SINGLE_WORKSPACE_ID.to_string(),
                     workspace_id: SINGLE_WORKSPACE_ID.to_string(),
+                    owner_machine_id: None,
                     repo_root: PathBuf::new(),
                     ship_mode: ShipMode::Local,
                 },

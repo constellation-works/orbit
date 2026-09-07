@@ -2079,6 +2079,47 @@ assert.doesNotMatch(rendered,/Examined through/);
     );
 }
 
+/// An enabled delivery consumer this host cannot admit for must say so where
+/// the operator reads it, instead of an empty "no baseline recorded" panel.
+#[test]
+fn delivery_automation_renders_the_ownership_admission_blocker() {
+    run_dashboard_javascript_test(
+        r#"
+import assert from 'node:assert/strict';
+class Element {
+  constructor(tag) { this.tag = tag; this.children = []; this.textContent = ''; this.dataset = {}; this.style = {}; }
+  appendChild(child) { this.children.push(child); return child; }
+  setAttribute(key, value) { this[key] = value; }
+  addEventListener() {}
+}
+globalThis.document = {createElement: tag => new Element(tag), createTextNode: text => ({textContent:text})};
+globalThis.window = {location: {search:''}};
+const {renderAutomation} = await import('./automation.js');
+function text(node) { return [node.textContent,...(node.children||[]).map(text)].join(' '); }
+
+const unresolved = text(renderAutomation({reason:'ownership_unresolved',state:null,receipts:[],waivers:[],
+  ownership:{authority:'missing',owned_here:false}}));
+assert.match(unresolved,/ownership_unresolved/);
+assert.match(unresolved,/No owner machine is registered/);
+assert.match(unresolved,/set owner_machine on the definition/);
+
+const elsewhere = text(renderAutomation({reason:'owned_elsewhere',state:null,receipts:[],waivers:[],
+  ownership:{owner_machine:'hm_other',authority:'workspace',owned_here:false}}));
+assert.match(elsewhere,/Owned by machine hm_other/);
+
+const conflicting = text(renderAutomation({reason:'ownership_unresolved',state:null,receipts:[],waivers:[],
+  ownership:{authority:'conflicting',owned_here:false}}));
+assert.match(conflicting,/contradictory/);
+
+const owned = text(renderAutomation({reason:'not_due',receipts:[],waivers:[],
+  ownership:{owner_machine:'hm_local',authority:'workspace',owned_here:true},
+  state:{consumer:'hm_local/ws/auto-task/delivery-qa',baseline:{commit:'a',tree:'b'},
+    observed:{commit:'a',tree:'b'},covered:{commit:'a',tree:'b'},pending:[],pending_commits:[],unresolved:{}}}));
+assert.doesNotMatch(owned,/Owned by machine/);
+"#,
+    );
+}
+
 /// The task-detail image preview, driven through the shipped `tasks.js` module
 /// against a DOM double rather than asserted against source text: what matters
 /// is that a PNG artifact renders as an `<img>` a reader can actually see, that

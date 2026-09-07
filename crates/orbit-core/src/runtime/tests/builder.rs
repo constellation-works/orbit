@@ -40,6 +40,7 @@ fn registry_neutral_binding_controls_workspace_id_repo_root_and_ship_mode() {
     let binding = WorkspaceRuntimeBinding {
         logical_workspace_id: "ws_bound".to_string(),
         workspace_id: "ws_bound".to_string(),
+        owner_machine_id: None,
         repo_root: custom_repo_root.clone(),
         ship_mode: ShipMode::Pr,
     };
@@ -74,6 +75,7 @@ fn registry_neutral_binding_rejects_a_conflicting_workspace_config() {
         WorkspaceRuntimeBinding {
             logical_workspace_id: "ws_other".to_string(),
             workspace_id: "ws_other".to_string(),
+            owner_machine_id: None,
             repo_root: root.path().join("repo"),
             ship_mode: ShipMode::Local,
         },

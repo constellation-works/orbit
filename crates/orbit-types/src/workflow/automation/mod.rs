@@ -18,7 +18,9 @@ pub enum CoverageClass {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeliveryTrigger {
-    /// Stable registry machine ID; execution remains inert until explicitly selected.
+    /// Stable registry machine ID. When omitted, the registered owner of the
+    /// workspace owns the definition; execution stays inert while that owner
+    /// is missing or contradicted.
     #[serde(default)]
     pub owner_machine: Option<String>,
     pub branch: String,
@@ -243,6 +245,52 @@ pub struct AcceptedCoverage {
     pub accepted_at: DateTime<Utc>,
 }
 
+/// How the effective owner of a delivery consumer was determined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerAuthority {
+    /// The definition names `owner_machine` explicitly.
+    Definition,
+    /// Inherited from the registered owner of this workspace, which is
+    /// authoritative whenever the definition omits an owner.
+    Workspace,
+    /// Nothing names an owner: the workspace record predates host identity,
+    /// or this checkout is not registered.
+    Missing,
+    /// The workspace record and this checkout's replica role name different
+    /// owners, so neither may be trusted.
+    Conflicting,
+}
+
+/// Effective ownership of one delivery consumer on this host. Preview,
+/// inspection and real evaluation all report it, so "no admission here" is
+/// never indistinguishable from a definition the operator disabled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryOwnership {
+    /// The machine allowed to admit work, when one could be resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_machine: Option<String>,
+    pub authority: OwnerAuthority,
+    /// True only when this host is the resolved owner. Admission is
+    /// impossible otherwise, whatever the definition's `enabled` says.
+    pub owned_here: bool,
+}
+
+impl DeliveryOwnership {
+    /// Scheduling reason for an enabled definition this host may not admit
+    /// work for; `None` when this host is the owner.
+    pub fn refusal(&self) -> Option<&'static str> {
+        if self.owned_here {
+            return None;
+        }
+
+        Some(match self.authority {
+            OwnerAuthority::Definition | OwnerAuthority::Workspace => "owned_elsewhere",
+            OwnerAuthority::Missing | OwnerAuthority::Conflicting => "ownership_unresolved",
+        })
+    }
+}
+
 /// Existing inspection surfaces render the same domain projection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutomationDiagnostic {
@@ -250,6 +298,10 @@ pub struct AutomationDiagnostic {
     pub state: Option<AutomationState>,
     pub receipts: Vec<CoverageReceiptSummary>,
     pub waivers: Vec<BatchWaiver>,
+    /// Resolved ownership for a delivery consumer. Absent on state-trigger
+    /// routines, whose trigger always names its owner outright.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<DeliveryOwnership>,
 }
 
 /// Core-verified writer authority for exact artifact bytes; this is not coverage.

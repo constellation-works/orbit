@@ -27,7 +27,6 @@ name: delivery-qa
 enabled: false
 schedule:
   deliveries_landed:
-    owner_machine: hm_your_registered_machine
     branch: agent-main
     threshold: 3
     max_wait_minutes: 360
@@ -37,11 +36,32 @@ schedule:
 # Retain the normal template, dedupe and attribution fields.
 ```
 
-`owner_machine` must explicitly select the stable registered machine ID shown by
-preview before an enabled definition can baseline or admit work. Cmd supplies the
-local identity; Core does not read the registry. A different machine fails closed
-until ownership is explicitly reassigned. Retain/settle the old owner's debt and
-preview the new baseline before that reassignment.
+`owner_machine` is optional and selects the stable registered machine ID shown by
+preview. Omitted, the definition is owned by the machine registered as this
+workspace's owner, so an unambiguously owned workspace needs no redundant
+per-definition configuration. Cmd supplies both the local identity and the
+registered workspace owner through the runtime binding; Core does not read the
+registry itself. An explicit `owner_machine` stays authoritative and overrides
+that default, and because the epoch is derived from the resolved owner, dropping
+an explicit owner that names the same machine keeps the consumer's state, frozen
+batches, receipts and coverage.
+
+A machine that is not the resolved owner fails closed as `owned_elsewhere`: it
+reconciles work it already admitted and admits nothing new, so a replica cannot
+claim a workspace by omitting the field. When no owner can be resolved at all —
+no registered workspace owner, or a workspace record and replica checkout naming
+different owners — an enabled definition reports `ownership_unresolved` rather
+than `disabled`, and `disabled` continues to mean the operator disabled it.
+Preview, inspection and real evaluation report the same effective owner and the
+same refusal. Fix it by registering the workspace owner or by setting
+`owner_machine` explicitly. Reassigning ownership is a definition change: retain
+and settle the old owner's debt and preview the new baseline first.
+
+A delivery review definition mints its tasks with the crew named in its own
+template, exactly like any other auto-task. `operation.review_crew` is a
+different setting: it selects the reviewer for `before-pr` review only and does
+not apply to `after-landing` review, which runs through this definition. See
+[operation-mode operations](../operation-mode/5_operations.md).
 
 `coverage` is `integrated_qa_v1` or `landed_code_review_v1`. Threshold must be
 positive and at most `max_items` (maximum 50). Maximum wait is positive and retries
@@ -74,7 +94,7 @@ observation records an explicit baseline exclusion; it does not certify that old
 history was examined. Source repository identity and branch are retained.
 
 To migrate, first inspect and disable the corresponding legacy time-triggered
-consumer, finish any existing open sweep, review the delivery template, explicit owner and branch,
+consumer, finish any existing open sweep, review the delivery template, resolved owner and branch,
 preview its baseline, and explicitly enable the delivery definition through the
 existing toggle surface. Enable the existing scheduler routine/clock separately
 if needed. No shipped change activates live automation or imports prose cursors
@@ -155,11 +175,15 @@ input, gaps and validation reason. **Accepted evidence** downloads the accepted
 bytes; replacing the current task artifact does not change that receipt. Usage is
 shown as unknown until an authoritative measurement exists.
 
+Every delivery diagnostic also carries `ownership`: the resolved
+`owner_machine`, the `authority` that supplied it (`definition`, `workspace`,
+`missing` or `conflicting`) and whether it is `owned_here`.
+
 Read-only inspection reports persisted scheduling reasons including
-`awaiting_baseline`, `disabled`, `owned_elsewhere`, `definition_changed`,
-`open_instance`, `threshold_reached`, `max_wait_reached`, `batch_pending`,
-`retry_backoff`, `retry_deadline_expired`, `needs_attention`, and
-`evidence_unavailable`. It does not fetch source or provider evidence: source
+`awaiting_baseline`, `disabled`, `owned_elsewhere`, `ownership_unresolved`,
+`definition_changed`, `open_instance`, `threshold_reached`, `max_wait_reached`,
+`batch_pending`, `retry_backoff`, `retry_deadline_expired`, `needs_attention`,
+and `evidence_unavailable`. It does not fetch source or provider evidence: source
 history failures are reported by an evaluation run, not fabricated by inspection.
 Validation failures such as `unauthorized_submitter`, `batch_or_attempt_mismatch`
 and `incomplete_examination` remain attached to the relevant admission or evidence
