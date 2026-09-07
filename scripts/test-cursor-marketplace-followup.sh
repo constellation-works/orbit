@@ -35,6 +35,8 @@ require "follow-up after publish" "needs: publish-release"
 require "non-blocking follow-up" "continue-on-error: true"
 require "follow-up script invocation" "./scripts/cursor-marketplace-followup.sh"
 require "catalog-not-published comment" "does not publish the Cursor catalog"
+require "maintained acknowledgement branch" "ref: agent-main"
+require "tag version passed to reminder" 'GITHUB_REF_NAME#v'
 
 # publish-release must not wait on the reminder, and sibling post-publish jobs
 # must keep running if the reminder is unacknowledged.
@@ -112,6 +114,16 @@ def expect_missing(result: subprocess.CompletedProcess[str], label: str) -> None
             errors.append(f"{label}: missing checklist text {needle!r}\n{combined}")
 
 
+def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
 scratch = Path(tempfile.mkdtemp(prefix="orbit-cursor-followup."))
 try:
     missing_root = scratch / "missing"
@@ -168,6 +180,59 @@ try:
         errors.append(
             f"{live_ack.relative_to(repo_root)} must not exist while listing 2280865 is stale"
         )
+
+    # A receipt is necessarily committed after a release tag. Model the real
+    # sequence: tag without an ack, add the receipt on agent-main, then recheck
+    # against that maintained branch without changing the tag.
+    release_repo = scratch / "release-repo"
+    release_repo.mkdir()
+    git(release_repo, "init", "--initial-branch=agent-main")
+    git(release_repo, "config", "user.email", "release-test@example.invalid")
+    git(release_repo, "config", "user.name", "Release test")
+    (release_repo / "plugin").mkdir()
+    (release_repo / ".github" / "cursor-marketplace-followup").mkdir(parents=True)
+    (release_repo / "plugin" / "plugin.json").write_text(
+        '{"version":"0.19.0"}\n', encoding="utf-8"
+    )
+    git(release_repo, "add", ".")
+    git(release_repo, "commit", "-m", "release package")
+    git(release_repo, "tag", "v0.19.0")
+
+    tagged_checkout = scratch / "tagged-checkout"
+    git(release_repo, "worktree", "add", "--detach", str(tagged_checkout), "v0.19.0")
+    maintained_ack_root = release_repo / ".github" / "cursor-marketplace-followup"
+    tag_without_ack = run(maintained_ack_root, "0.19.0")
+    expect_missing(tag_without_ack, "tag without later receipt")
+
+    receipt = maintained_ack_root / "0.19.0.ack"
+    receipt.write_text("version=0.19.0\n", encoding="utf-8")
+    git(release_repo, "add", str(receipt.relative_to(release_repo)))
+    git(release_repo, "commit", "-m", "acknowledge Cursor follow-up")
+    tag_ack = git(
+        release_repo,
+        "show",
+        "v0.19.0:.github/cursor-marketplace-followup/0.19.0.ack",
+        check=False,
+    )
+    if tag_ack.returncode == 0:
+        errors.append("post-release receipt unexpectedly changed the immutable tag")
+
+    recheck = subprocess.run(
+        [
+            str(script),
+            "--repo-root",
+            str(tagged_checkout),
+            "--ack-root",
+            str(maintained_ack_root),
+            "--version",
+            "0.19.0",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if recheck.returncode != 0:
+        errors.append(f"post-release recheck: expected success\n{recheck.stdout}{recheck.stderr}")
 finally:
     shutil.rmtree(scratch, ignore_errors=True)
 

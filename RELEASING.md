@@ -351,7 +351,7 @@ tag and matching npm version exist:
 2. Identify stale listing **2280865**, which still describes `danieljhkim/orbit` at **0.5.1**. Historical provenance stays as-is; active distribution is `constellation-works`.
 3. Install through Cursor plugin search and verify the listed version and MCP launch pin (`npx -y @orbit-tools/cli@<version> mcp serve`).
 4. If review stalls, escalate to `marketplace-publishing@cursor.com`. Do not send that mail from CI.
-5. When the version-specific submission is done, add `.github/cursor-marketplace-followup/<version>.ack` containing `version=<version>`. That file acknowledges the follow-up; it does not mean the catalog is live.
+5. When the version-specific submission is done, add `.github/cursor-marketplace-followup/<version>.ack` containing `version=<version>` to the maintained `agent-main` branch. Do not move the immutable tag to add a post-release receipt. Re-run that release tag's `cursor-marketplace-followup` job after the receipt lands; it reads `agent-main` while validating the original tag version. That file acknowledges the follow-up; it does not mean the catalog is live.
 
 Do not retag, republish npm, rewrite immutable releases, or treat a green
 package pipeline as catalog publication. Manual Cursor install remains

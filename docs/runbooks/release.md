@@ -180,8 +180,12 @@ version exist:
    send that mail from CI or assume a public catalog push API exists.
 5. When the version-specific submission is done, add
    `.github/cursor-marketplace-followup/<version>.ack` containing
-   `version=<version>`. `scripts/cursor-marketplace-followup.sh` then exits 0.
-   The ack records the follow-up; it does not mean the curated listing is live.
+   `version=<version>` to the maintained `agent-main` branch. Do not move the
+   immutable release tag to add this receipt. Re-run that tag's
+   `cursor-marketplace-followup` job after the receipt merges: the job checks
+   out `agent-main` for the receipt and passes the original tag version to the
+   validator. The ack records the follow-up; it does not mean the curated
+   listing is live.
 
 Local check without external writes:
 

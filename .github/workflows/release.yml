@@ -237,7 +237,9 @@ jobs:
 
   cursor-marketplace-followup:
     # Visible reminder only; does not publish the Cursor catalog and must not
-    # block GitHub Release, Homebrew, or installer smokes.
+    # block GitHub Release, Homebrew, or installer smokes. Acknowledgements
+    # land on agent-main after the tag, so a re-run can observe the receipt
+    # without moving the immutable release tag.
     name: Cursor marketplace follow-up
     needs: publish-release
     if: ${{ !cancelled() && needs.publish-release.result == 'success' }}
@@ -248,10 +250,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent-main
 
       - name: Remind maintainer to update the Cursor listing
         shell: bash
-        run: ./scripts/cursor-marketplace-followup.sh
+        run: |
+          set -euo pipefail
+          ./scripts/cursor-marketplace-followup.sh --version "${GITHUB_REF_NAME#v}"
 
   bump-homebrew-tap:
     name: Update Homebrew tap

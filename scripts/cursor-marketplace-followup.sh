@@ -3,8 +3,10 @@
 # is a human-reviewed catalog update — not part of package publication.
 #
 # Exit 0 when `.github/cursor-marketplace-followup/<version>.ack` names this
-# version. Exit 1 and print the checklist when the ack is missing or wrong.
-# This script never writes, never emails, and never calls Cursor or npm.
+# version. In the tag workflow, the ack root is checked out from agent-main so
+# a receipt committed after the tag can be rechecked without moving that tag.
+# Exit 1 and print the checklist when the ack is missing or wrong. This script
+# never writes, never emails, and never calls Cursor or npm.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
