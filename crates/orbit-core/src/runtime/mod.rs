@@ -305,6 +305,13 @@ impl OrbitRuntime {
         orbit_store::compose::automation_store(Store::open(&self.context.persistence().audit_db)?)
     }
 
+    /// Operation-mode grants and recovery ledgers in the host store [ORB-11332].
+    pub fn operation_store(
+        &self,
+    ) -> Result<Arc<dyn orbit_store::contracts::OperationStoreBackend>, OrbitError> {
+        orbit_store::compose::operation_store(Store::open(&self.context.persistence().audit_db)?)
+    }
+
     pub fn sqlite_store(&self) -> Result<Store, OrbitError> {
         Store::open(&self.context.persistence().audit_db)
     }
@@ -369,6 +376,13 @@ impl OrbitRuntime {
     /// definitions nobody registered explicitly.
     pub fn routines_source(&self) -> bool {
         self.context.settings().routines_source()
+    }
+
+    /// The resolved operation-mode preferences (`[operation]` layered over
+    /// the built-in supervised defaults) with per-field provenance. These are
+    /// preferences: they authorize nothing by themselves [ORB-11332].
+    pub fn operation_policy(&self) -> &orbit_config::OperationPolicy {
+        self.context.settings().operation()
     }
 
     /// Build the activity catalog for `target: activity:<name>` resolution

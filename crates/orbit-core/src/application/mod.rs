@@ -691,6 +691,7 @@ pub(crate) mod docs;
 pub(crate) mod executor;
 pub mod gc;
 pub mod job;
+pub mod operation;
 pub(crate) mod routine;
 pub mod routines;
 pub(crate) mod search;

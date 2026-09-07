@@ -12,5 +12,6 @@ pub(crate) mod tool_store;
 pub(crate) mod v2_audit_store;
 
 pub(crate) mod automation;
+pub(crate) mod operation;
 #[cfg(test)]
 pub(crate) mod tests;

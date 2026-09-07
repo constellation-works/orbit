@@ -16,6 +16,11 @@ use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, CrewAssignment, resolve_crew};
 use orbit_types::workflow::Provider;
+
+use crate::operation::{
+    self, CompletionPreference, DeliveryCap, OperationPreset, PreparationPreference,
+    PromotionPreference, RecoveryPreference, ReviewPolicy, admit_choice,
+};
 use serde::de::DeserializeOwned;
 use serde_json::{Value as JsonValue, json};
 
@@ -142,6 +147,66 @@ define_config_settings! {
         description: "Environment variable names allow-listed for passthrough into agent subprocesses.",
         resolve: |raw: Option<Vec<String>>| raw.map(normalize_pass_list).unwrap_or_else(|| Ok(default_pass_list())),
     },
+    operation_completion: Option<String> => String {
+        key: "operation.completion", value_type: "string",
+        description: "Operation-mode completion preference: review or done. Preset-managed; bounded by operation.delivery_cap and the grant.",
+        resolve: |raw: Option<String>| admit_choice::<CompletionPreference>(raw, CompletionPreference::as_str),
+    },
+    operation_delivery_cap: Option<String> => String {
+        key: "operation.delivery_cap", value_type: "string",
+        description: "Repository ceiling on managed delivery: review (default) or done. Independent of the preset.",
+        resolve: |raw: Option<String>| admit_choice::<DeliveryCap>(raw, DeliveryCap::as_str),
+    },
+    operation_leaf_ceiling: Option<u32> => u32 {
+        key: "operation.leaf_ceiling", value_type: "integer",
+        description: "Operation-mode ceiling on concurrently live leaf runs (1..=500). Preset-managed; the job's hard limit still applies.",
+        resolve: |raw: Option<u32>| operation::leaf_ceiling(raw),
+    },
+    operation_preparation: Option<String> => String {
+        key: "operation.preparation", value_type: "string",
+        description: "Operation-mode preparation preference: manual or automatic. Preset-managed.",
+        resolve: |raw: Option<String>| admit_choice::<PreparationPreference>(raw, PreparationPreference::as_str),
+    },
+    operation_preparation_due_seconds: Option<u64> => u64 {
+        key: "operation.preparation_due_seconds", value_type: "integer",
+        description: "Seconds after a material change before an in-grant task's preparation is due (1..=86400). Preset-managed.",
+        resolve: |raw: Option<u64>| operation::preparation_due_seconds(raw),
+    },
+    operation_preset: Option<String> => String {
+        key: "operation.preset", value_type: "string",
+        description: "Operation-mode preset: supervised (default) or autonomous. Selecting a preset resets the preset-managed operation.* fields at that layer. Grants nothing by itself.",
+        resolve: |raw: Option<String>| admit_choice::<OperationPreset>(raw, OperationPreset::as_str),
+    },
+    operation_promotion: Option<String> => String {
+        key: "operation.promotion", value_type: "string",
+        description: "Operation-mode promotion preference: separate_approval or automatic. Preset-managed; automatic promotion still needs a grant with the promote right.",
+        resolve: |raw: Option<String>| admit_choice::<PromotionPreference>(raw, PromotionPreference::as_str),
+    },
+    operation_recovery: Option<String> => String {
+        key: "operation.recovery", value_type: "string",
+        description: "Operation-mode recovery preference: existing or scheduled. Preset-managed.",
+        resolve: |raw: Option<String>| admit_choice::<RecoveryPreference>(raw, RecoveryPreference::as_str),
+    },
+    operation_recovery_episodes_per_task: Option<u32> => u32 {
+        key: "operation.recovery_episodes_per_task", value_type: "integer",
+        description: "Aggregate recovery episodes allowed per task inside a grant (0..=10). Preset-managed.",
+        resolve: |raw: Option<u32>| operation::recovery_episodes_per_task(raw),
+    },
+    operation_recovery_minutes_per_task: Option<u32> => u32 {
+        key: "operation.recovery_minutes_per_task", value_type: "integer",
+        description: "Aggregate recovery wall-time minutes allowed per task inside a grant (1..=1440). Preset-managed.",
+        resolve: |raw: Option<u32>| operation::recovery_minutes_per_task(raw),
+    },
+    operation_review_crew: Option<String> => String {
+        key: "operation.review_crew", value_type: "string",
+        description: "Crew selected for automatic review. Independent of the preset.",
+        resolve: |raw: Option<String>| operation::review_crew(raw),
+    },
+    operation_review_policy: Option<String> => String {
+        key: "operation.review_policy", value_type: "string",
+        description: "Automatic review timing: none (default), before-pr, or after-landing. Independent of the preset; before-pr is accepted but not yet supported at admission.",
+        resolve: |raw: Option<String>| admit_choice::<ReviewPolicy>(raw, ReviewPolicy::as_str),
+    },
     pr_task_url_template: Option<String> => String {
         key: "pr.task_url_template", value_type: "string",
         description: "URL template used to link a task ID in PR descriptions.",
@@ -258,7 +323,7 @@ pub(crate) fn all_key_names() -> Vec<String> {
         .collect()
 }
 
-fn read_optional<T: DeserializeOwned>(
+pub(crate) fn read_optional<T: DeserializeOwned>(
     document: &toml::Value,
     key: &str,
     config_path: &Path,

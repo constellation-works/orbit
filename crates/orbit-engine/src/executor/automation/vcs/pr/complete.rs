@@ -68,7 +68,7 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
         .map(|task| task.id.clone())
         .collect::<Vec<_>>();
     let authorization = authorization_note(input, &context.batch_id);
-    let completion = complete_tasks(host, &task_ids, &authorization)?;
+    let completion = complete_tasks(host, &context.batch_id, &task_ids, &authorization)?;
 
     Ok(json!({
         "phase": "complete",

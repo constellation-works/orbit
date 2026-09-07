@@ -63,6 +63,11 @@ pub(super) fn execute(
         OrbitBuiltinAction::Friction(verb) => {
             super::friction_tools::dispatch(runtime, verb, input, model)
         }
+        // [ORB-11332] Operation-mode verbs are registry data joined here by
+        // their verb enum, like friction.
+        OrbitBuiltinAction::OperationMode(verb) => {
+            super::operation_mode_tools::dispatch(runtime, verb, input, agent, model)
+        }
         OrbitBuiltinAction::PipelineInvoke => {
             super::pipeline_tools::invoke(runtime, input, agent, model, reservation_owner)
         }

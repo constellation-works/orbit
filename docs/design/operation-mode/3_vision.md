@@ -1,8 +1,8 @@
 ---
 title: Operation Mode — Vision
 owner: codex
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-09-07
+last_validated: 2026-09-07
 status: Draft
 feature: operation-mode
 doc_role: vision
@@ -22,9 +22,20 @@ contract. [Current behavior](./2_design.md) provides the source evidence. The
 proposal reuses the existing pipeline engine and admission/recovery boundaries.
 
 State preparation now has a shared material fingerprint and accepted readiness
-record in `orbit-automation` [ORB-11331]. Mode integration must consume that
-record and separately recheck its grant; populated selectors or wrapper success
+record in `orbit-automation` [ORB-11331]. Mode integration consumes that
+record and separately rechecks its grant; populated selectors or wrapper success
 are insufficient. See [implemented state operations](../automation-triggers/5_operations.md).
+
+**Implemented by [ORB-11332]** (see [Operations](./5_operations.md)): the
+preference resolution and explanation of §3.2–3.3, the promotion validity
+rules of §3.4 (exact task-meaning and landing-commit equality), the
+concurrency/expiry/restart/retuning rules of §3.5, the aggregate recovery
+allowance of §3.6 (episodes and wall time; not provider cost), stages 1–4 of
+§3.7 for finite explicit task sets, and the observability records of §3.8
+that existing projections could carry. Open questions 1, 2, 4, 5, 6 (stop and
+expiry semantics) and 7 were decided conservatively as documented there;
+question 5 was answered with a separate `--grant` binding rather than a
+tri-state `--completion` flag. Everything in §3.10–3.15 remains proposed.
 
 ## 1. Open Questions
 

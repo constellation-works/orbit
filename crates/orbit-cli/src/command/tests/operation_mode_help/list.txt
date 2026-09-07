@@ -1,0 +1,9 @@
+List recent operation-mode grants
+
+Usage: orbit operation list [OPTIONS]
+
+Options:
+      --limit <LIMIT>  Maximum number of grants to return (default 20)
+      --root <ROOT>    Override the Orbit root directory (highest precedence)
+      --json           Output as JSON
+  -h, --help           Print help

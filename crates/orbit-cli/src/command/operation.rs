@@ -624,6 +624,23 @@ impl Commands {
                     runtime_dispatch!(Friction),
                 )
             }
+            // [ORB-11332] Operation mode is registry-driven like friction; the
+            // governed verbs are enforced at the tool chokepoint, not here.
+            Commands::Operation(command) => {
+                let invocation = &command.command;
+                CommandOperation::new(
+                    RuntimeNeed::Required,
+                    Some(admin_meta(
+                        "operation",
+                        Some(invocation.spec.name),
+                        Some("operation"),
+                        invocation.target_id(),
+                    )),
+                    invocation.json.then_some(true),
+                    false,
+                    runtime_dispatch!(Operation),
+                )
+            }
             Commands::Audit(command) => {
                 use super::audit::AuditSubcommand;
                 // `audit` emits no command-level audit row (it would audit

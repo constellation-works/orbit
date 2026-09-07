@@ -175,7 +175,7 @@ where
         );
         action_failed(action, message)
     })?;
-    if invoke_output_admissions_stopped(&invoke_output) {
+    if invoke_output_skipped(&invoke_output) {
         return Ok(serde_json::json!({
             "skipped": true,
             "status": "succeeded",
@@ -414,7 +414,7 @@ pub(super) fn invoke_detached(
             );
             action_failed(action, message)
         })?;
-    if invoke_output_admissions_stopped(&invoke_output) {
+    if invoke_output_skipped(&invoke_output) {
         return Ok(invoke_output);
     }
 
@@ -489,9 +489,15 @@ fn child_invoke_context(
     Ok(tool_context)
 }
 
-fn invoke_output_admissions_stopped(output: &Value) -> bool {
+/// Whether the admission path declined to create a child: an admissions stop,
+/// or one of the grant-bound refusals [ORB-11332]. The reason travels with the
+/// output so the coordinator's step record explains what happened.
+fn invoke_output_skipped(output: &Value) -> bool {
     output.get("skipped").and_then(Value::as_bool) == Some(true)
-        && output.get("reason").and_then(Value::as_str) == Some("admissions_stopped")
+        && output
+            .get("reason")
+            .and_then(Value::as_str)
+            .is_some_and(|reason| !reason.is_empty())
 }
 
 /// Re-check live workflow admission for `admission_task_ids` immediately before

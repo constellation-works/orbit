@@ -6,7 +6,7 @@ use crate::delivery::{definition_epoch, digest};
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::{members::*, *};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub mod incidents;
 pub mod preparation;
@@ -60,6 +60,41 @@ pub struct MemberEvaluation<'a> {
     pub enabled: bool,
     pub dry_run: bool,
     pub now: DateTime<Utc>,
+    /// Resolved operation-mode scheduling preferences and admission scope
+    /// supplied by Core [ORB-11332]. Empty constraints leave the trigger's
+    /// own timing untouched.
+    pub constraints: MemberConstraints,
+}
+
+/// Operation-mode inputs to the shared due decision [ORB-11332].
+///
+/// Core resolves preferences and the active grant; this evaluator only applies
+/// them. A member inside `scope` becomes due once it has settled for
+/// `due_after_seconds`, in addition to the trigger's own debounce/max-wait
+/// rule. Members outside the scope, and every member when the scope is
+/// empty, keep the operator's routine timing unchanged, so a grant can only
+/// accelerate the work it names and never gates an independently enabled
+/// routine. Constraints never grant authority: admission still goes through
+/// [`MemberHost::admission`] and the pipeline's own checks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberConstraints {
+    /// Task ids the active grant covers.
+    pub scope: BTreeSet<String>,
+    /// Seconds after the last material change before an in-scope member is
+    /// due. `None` applies no acceleration.
+    pub due_after_seconds: Option<u64>,
+}
+
+impl MemberConstraints {
+    /// Whether the constraints accelerate `member`.
+    fn accelerates(&self, member: &StateMember, now: DateTime<Utc>) -> bool {
+        let Some(due_after) = self.due_after_seconds else {
+            return false;
+        };
+        member.task_ids.iter().any(|id| self.scope.contains(id))
+            && now.signed_duration_since(member.changed_at).num_seconds()
+                >= i64::try_from(due_after).unwrap_or(i64::MAX)
+    }
 }
 
 pub fn evaluate(
@@ -74,6 +109,7 @@ pub fn evaluate(
         enabled,
         dry_run,
         now,
+        constraints,
     } = request;
 
     trigger.validate().map_err(orbit_common::OrbitError::from)?;
@@ -226,6 +262,7 @@ pub fn evaluate(
                 >= i64::from(trigger.debounce_minutes)
                 || now.signed_duration_since(member.first_seen).num_minutes()
                     >= i64::from(trigger.max_wait_minutes)
+                || constraints.accelerates(member, now)
         })
         .cloned()
         .collect::<Vec<_>>();

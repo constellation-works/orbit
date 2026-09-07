@@ -10,7 +10,12 @@
 //! - a registry key is one setting, so a workspace value for a registered
 //!   table key replaces the global table rather than merging into it;
 //! - the replace-only keys below never inherit from global once a distinct
-//!   workspace file exists.
+//!   workspace file exists;
+//! - an explicit workspace `operation.preset` resets the preset-managed
+//!   `operation.*` keys, so a global explicit value for one of them is not
+//!   inherited past a workspace preset selection [ORB-11332]. The typed
+//!   resolution in [`crate::operation`] is the authority; the merged document
+//!   mirrors it so `orbit config show` and the effective policy agree.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,6 +24,9 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
+use crate::operation::{
+    OperationLayer, OperationLayerSource, OperationPolicy, OperationPreset, PRESET_MANAGED_KEYS,
+};
 use crate::persistence::PersistenceConfig;
 use crate::registry::CONFIG_KEY_REGISTRY;
 use crate::resolved::ResolvedConfig;
@@ -171,6 +179,13 @@ pub(crate) fn load_layered_resolved(
                 remove_value_at_path(&mut merged, key);
             }
         }
+        if value_at_path(&workspace_document.value, OperationPreset::KEY).is_some() {
+            for key in PRESET_MANAGED_KEYS {
+                if value_at_path(&workspace_document.value, key).is_none() {
+                    remove_value_at_path(&mut merged, key);
+                }
+            }
+        }
     }
 
     let config_path = workspace
@@ -184,12 +199,33 @@ pub(crate) fn load_layered_resolved(
             redact_home_dir(&config_path.display().to_string())
         ))
     })?;
-    let resolved = ResolvedConfig::from_raw_str(&merged_raw, config_path, persistence)?;
+    let mut resolved = ResolvedConfig::from_raw_str(&merged_raw, config_path, persistence)?;
+    resolved.operation = resolve_operation_layers(global.as_ref(), workspace.as_ref())?;
     Ok(LoadedResolvedConfig {
         resolved,
         global,
         workspace,
     })
+}
+
+/// Resolve operation-mode preferences from the exact layers rather than the
+/// merged document, so the preset-reset rule is applied per layer.
+fn resolve_operation_layers(
+    global: Option<&ConfigDocument>,
+    workspace: Option<&ConfigDocument>,
+) -> Result<OperationPolicy, OrbitError> {
+    let global_layer = global
+        .map(|document| OperationLayer::from_document(&document.value, &document.path))
+        .transpose()?
+        .unwrap_or_default();
+    let workspace_layer = workspace
+        .map(|document| OperationLayer::from_document(&document.value, &document.path))
+        .transpose()?
+        .unwrap_or_default();
+    Ok(OperationPolicy::resolve(&[
+        (OperationLayerSource::Global, &global_layer),
+        (OperationLayerSource::Workspace, &workspace_layer),
+    ]))
 }
 
 fn read_config_document(path: &Path) -> Result<Option<ConfigDocument>, OrbitError> {
@@ -345,6 +381,14 @@ fn source_for_key(
         return file_source(ConfigValueSourceKind::Workspace, &document.path);
     }
     if workspace.is_some() && WORKSPACE_REPLACE_ONLY_KEYS.contains(&key) {
+        return built_in_source();
+    }
+    // A workspace preset selection resets the preset-managed keys: the global
+    // explicit value did not survive the merge, so it is not the source.
+    if PRESET_MANAGED_KEYS.contains(&key)
+        && workspace
+            .is_some_and(|document| value_at_path(&document.value, OperationPreset::KEY).is_some())
+    {
         return built_in_source();
     }
     if let Some(document) = global

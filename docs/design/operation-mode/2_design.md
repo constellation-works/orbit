@@ -1,9 +1,9 @@
 ---
 title: Operation Mode — Design
 owner: codex
-last_updated: 2026-09-05
-last_validated: 2026-09-05
-status: Draft
+last_updated: 2026-09-07
+last_validated: 2026-09-07
+status: Accepted
 feature: operation-mode
 doc_role: design
 type: design
@@ -20,8 +20,10 @@ related_artifacts: [ORB-11314, ORB-11316]
 verified at checkout `8da5a925f313ac9ae8ac29f8dcf0b9c56c869656` on 2026-09-05.
 The review/delivery inventory in section 5 was verified for [ORB-11316] at
 `32da9a9e57a7912fa71c665b0bdecde8fc014bf4` on the same date.
-There is no implemented global operation-mode setting. New behavior belongs
-in [the proposal](./3_vision.md). Versioned workspace resources are evidence of
+Since [ORB-11332] the `[operation]` settings, grants, and grant-bound drains
+described in [Operations](./5_operations.md) exist; the seams below are the
+ones that implementation composed over and remain accurate for unbound runs.
+New behavior beyond that belongs in [the proposal](./3_vision.md). Versioned workspace resources are evidence of
 this checkout's configuration, not proof that a host clock is currently running.
 
 ## 1. Configuration and resource ownership
@@ -171,8 +173,9 @@ Review coverage must not suppress that distinct integrated-behavior check.
 
 This inspection reads source and checked-in resources, not live host telemetry.
 It establishes extension seams, not that enabling a preset is already safe.
-General grant enforcement, comprehensive preparation freshness, an admission
-policy snapshot, and cross-retry budgets still need implementation. Scheduler
+General grant enforcement, exact preparation freshness at promotion, the
+admission policy snapshot, and cross-retry budgets shipped in [ORB-11332];
+provider cost accounting and review coverage did not. Scheduler
 timing depends on the external sweep clock, host role/pin, and capacity.
 Current numeric defaults describe this revision and may change independently.
 Neither the inspected PR job nor the auto-task scheduler enforces the proposed

@@ -122,3 +122,15 @@ Squash merges make raw commit counts incomparable to histories with merge
 commits; report merged PRs or first-parent landings alongside raw counts.
 Do not claim equal task difficulty, quality, or human-only authorship from
 commit counts. Never infer spend from token usage or invent missing costs.
+
+## Scoped operation-mode grants
+
+`orbit operation enable --task <ids> --for <window> --right prepare,promote[,complete]`
+records one bounded, attributable authorization for a finite task set;
+`orbit run auto --grant <ID>` starts a drain whose every admission rechecks
+it. `--complete` and `--grant` are separate mechanisms and cannot be
+combined. A grant never authorizes merge, and the `complete` right is
+refused unless the workspace sets `operation.delivery_cap = "done"`. Use
+`orbit operation explain` to see each effective setting with its source and
+the limiting reasons before enabling anything; `stop` ends new admissions
+and `revoke` also withdraws completion from admitted work.

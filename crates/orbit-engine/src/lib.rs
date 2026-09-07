@@ -50,8 +50,8 @@ pub use activity_job::{
 };
 pub use context::{
     AGENT_INVOCATION_FAILED, AGENT_TIMEOUT, ActivityInvocationResult, CrewConfig, PrConfig,
-    ResolvedActivityTools, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
-    WORKFLOW_RUN_FAILED_EVENT, blocked_workflow_failure_update,
+    ResolvedActivityTools, RuntimeHost, StepRecoveryAdmission, TaskActivityUpdate,
+    TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT, blocked_workflow_failure_update,
 };
 pub use executor::automation::vcs::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees};
 pub use executor::automation::{

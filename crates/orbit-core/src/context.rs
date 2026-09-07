@@ -243,6 +243,9 @@ pub(crate) struct OrbitRuntimeSettings {
     crews: std::collections::BTreeMap<String, Crew>,
     default_crew: Option<String>,
     system_crew: String,
+    /// Resolved operation-mode preferences with provenance (`[operation]`).
+    /// Preferences only; authority is a separate durable grant [ORB-11332].
+    operation: orbit_config::OperationPolicy,
 }
 
 impl OrbitRuntimeSettings {
@@ -258,6 +261,7 @@ impl OrbitRuntimeSettings {
         crews: std::collections::BTreeMap<String, Crew>,
         default_crew: Option<String>,
         system_crew: String,
+        operation: orbit_config::OperationPolicy,
     ) -> Self {
         Self {
             persistence,
@@ -270,7 +274,12 @@ impl OrbitRuntimeSettings {
             crews,
             default_crew,
             system_crew,
+            operation,
         }
+    }
+
+    pub(crate) fn operation(&self) -> &orbit_config::OperationPolicy {
+        &self.operation
     }
 
     pub(crate) fn pr_config(&self) -> &PrConfig {

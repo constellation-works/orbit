@@ -229,3 +229,46 @@ fn decode_json_string_array(raw: &str) -> Option<Vec<String>> {
     }
     Some(values)
 }
+
+/// Parse a bounded human duration (`30m`, `2h`, `1d`) into seconds.
+///
+/// One vocabulary for every surface that accepts a window: `s`, `m`, `h`,
+/// `d`, and `w`. Empty, unitless, unknown-unit, and overflowing inputs are
+/// refused with the offending text.
+pub fn parse_duration_seconds(raw: &str) -> Result<u64, OrbitError> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(OrbitError::InvalidInput(
+            "duration must not be empty".to_string(),
+        ));
+    }
+    let split_at = value
+        .find(|c: char| c.is_alphabetic())
+        .ok_or_else(|| OrbitError::InvalidInput(format!("invalid duration: {raw}")))?;
+    let (number, unit) = value.split_at(split_at);
+    let number: u64 = number
+        .parse()
+        .map_err(|_| OrbitError::InvalidInput(format!("invalid duration number: {raw}")))?;
+    let seconds = match unit {
+        "s" => Some(number),
+        "m" => number.checked_mul(60),
+        "h" => number.checked_mul(3600),
+        "d" => number.checked_mul(86_400),
+        "w" => number.checked_mul(604_800),
+        _ => {
+            return Err(OrbitError::InvalidInput(format!(
+                "invalid duration unit: {unit} (expected s/m/h/d/w)"
+            )));
+        }
+    };
+    seconds.ok_or_else(|| {
+        OrbitError::InvalidInput(format!("duration '{raw}' is too large to represent"))
+    })
+}
+
+/// An optional duration field, parsed with [`parse_duration_seconds`].
+pub fn optional_duration_seconds(input: &Value, key: &str) -> Result<Option<u64>, OrbitError> {
+    optional_string(input, key)?
+        .map(|raw| parse_duration_seconds(&raw))
+        .transpose()
+}

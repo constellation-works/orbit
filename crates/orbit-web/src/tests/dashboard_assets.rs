@@ -2149,3 +2149,119 @@ if (!preview.textContent.includes("plain body"))
 "#,
     );
 }
+
+/// [ORB-11332] The operation-mode panel projects `orbit operation explain`
+/// and offers only the two governed grant controls; enablement is not a
+/// dashboard action.
+#[test]
+fn dashboard_operation_mode_panel_is_explained_governed_and_guarded() {
+    let index = include_str!("../../assets/dashboard/index.html");
+    let operations = include_str!("../../assets/dashboard/operations.js");
+
+    for id in [
+        "operation-mode-panel",
+        "operation-mode-count",
+        "operation-mode-operation-feedback",
+        "operation-mode-body",
+    ] {
+        assert!(index.contains(&format!(r#"id="{id}""#)), "{id}");
+    }
+    assert!(
+        operations.contains(r#"fetchJson("/api/operation/explain")"#),
+        "the panel must project the runtime explanation, not recompute policy"
+    );
+    assert!(
+        operations.contains("postJson(`/api/operation/${kind}`"),
+        "stop and revoke must post through the governed endpoints"
+    );
+    assert!(
+        operations.contains("expected_revision: authority.revision"),
+        "grant controls must carry the rendered revision for compare-and-set"
+    );
+    assert!(
+        operations.contains("Changing a preference activates nothing")
+            && operations.contains("no grant authorizes merge"),
+        "the panel must state that preferences activate nothing and merge is never granted"
+    );
+    assert!(
+        !operations.contains("/api/operation/enable"),
+        "enablement stays a CLI/MCP operator decision"
+    );
+    assert!(
+        operations.contains("if (pendingOperations.has(key)) return;")
+            && operations.contains("pendingOperations.delete(key);"),
+        "grant controls must guard against duplicate submission"
+    );
+}
+
+/// The rendered panel: policy fields with sources, the grant, limiting
+/// reasons, and a stop click that posts the compare-and-set request.
+#[test]
+fn dashboard_operation_mode_renders_sources_and_posts_a_guarded_stop() {
+    run_dashboard_javascript_test(
+        r#"
+const nodes = [];
+class Node {
+  constructor(id = "") { this.id = id; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.hidden = false; this.disabled = false; nodes.push(this); }
+  appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
+  append(...children) { for (const child of children) this.appendChild(child); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  querySelectorAll() { return []; }
+  querySelector() { return null; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+globalThis.document = { getElementById: get, createElement: () => new Node(), createTextNode: (text) => Object.assign(new Node(), { textContent: text }), body: new Node("body") };
+let confirmed = false;
+globalThis.window = { confirm: () => { confirmed = true; return true; }, location: new URL("http://dashboard.test/"), addEventListener: () => {}, localStorage: { getItem: () => null, setItem: () => {} } };
+const requests = [];
+const explanation = {
+  policy: { preset: { value: "autonomous", source: "workspace" }, leaf_ceiling: { value: 10, source: "preset:autonomous@workspace" }, preparation: { value: "automatic", source: "preset:autonomous@workspace" }, promotion: { value: "automatic", source: "preset:autonomous@workspace" }, completion: { value: "done", source: "preset:autonomous@workspace" }, recovery: { value: "scheduled", source: "preset:autonomous@workspace" }, review_policy: { value: "none", source: "built-in" }, delivery_cap: { value: "review", source: "built-in" } },
+  authority: { grant_id: "ogrant-1", status: "active", admission: "open", rights: ["prepare", "promote"], task_ids: ["ORB-1", "ORB-2"], expires_at: "2026-09-07T12:00:00Z", revision: 3 },
+  delivery: { effective_completion: "review", cap: "delivery_cap_review" },
+  limiting_reasons: ["delivery_cap_review"],
+  controls_authorized: true,
+};
+globalThis.fetch = async (path, opts = {}) => {
+  const url = String(path); requests.push({ url, method: opts.method || "GET", body: opts.body ? JSON.parse(opts.body) : null });
+  const payload = url.startsWith("/api/operation/explain") ? explanation
+    : url.startsWith("/api/operation/stop") ? { grant_id: "ogrant-1", outcome: "stopped", revision: 4 }
+    : {};
+  return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
+};
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const { setWorkspace } = await import("./common.js");
+const { initOperations, fetchAndRenderOperationMode } = await import("./operations.js");
+setWorkspace("one");
+initOperations({ getWorkspaces: () => [{ id: "one", name: "one", status: "active" }], formatAbsoluteTime: (value) => value });
+await fetchAndRenderOperationMode();
+const body = get("operation-mode-body");
+const text = body.textContent;
+for (const expected of ["autonomous [workspace]", "10 [preset:autonomous@workspace]", "none [built-in]", "review (cap: delivery_cap_review)", "ogrant-1", "Limiting reasons: delivery_cap_review", "prepare, promote", "2 task(s)"]) {
+  if (!text.includes(expected)) throw new Error(`panel is missing ${JSON.stringify(expected)} in: ${text}`);
+}
+if (!get("operation-mode-count").textContent.includes("open")) throw new Error("count must show the grant admission");
+const buttons = nodes.filter((node) => node.listeners.click && (node.textContent === "Stop grant" || node.textContent === "Revoke grant"));
+if (buttons.length !== 2) throw new Error(`expected two grant controls, found ${buttons.length}`);
+const stop = buttons.find((node) => node.textContent === "Stop grant");
+if (stop.disabled) throw new Error("stop must be enabled for an open, authorized grant");
+await stop.listeners.click();
+await tick(); await tick();
+const posted = requests.find((request) => request.url.startsWith("/api/operation/stop"));
+if (!confirmed) throw new Error("stop must confirm before posting");
+if (!posted || posted.method !== "POST") throw new Error(`stop did not post: ${JSON.stringify(requests)}`);
+if (posted.body.grant_id !== "ogrant-1" || posted.body.expected_revision !== 3) throw new Error(`stop body lacked the compare-and-set revision: ${JSON.stringify(posted.body)}`);
+if (!get("operation-mode-operation-feedback").textContent.includes("stopped")) throw new Error("feedback must report the outcome");
+if (requests.filter((request) => request.url.startsWith("/api/operation/explain")).length < 2) throw new Error("the panel must refresh after a control");
+
+// Unauthorized callers see the controls disabled, never a silent no-op.
+explanation.controls_authorized = false;
+await fetchAndRenderOperationMode();
+const disabled = nodes.filter((node) => node.listeners.click && node.textContent === "Revoke grant").pop();
+if (!disabled.disabled) throw new Error("controls must be disabled for an unauthorized caller");
+"#,
+    );
+}

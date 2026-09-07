@@ -4,6 +4,7 @@ pub mod command;
 pub mod docs;
 pub mod friction;
 pub mod operation;
+pub mod operation_mode;
 pub mod pipeline;
 pub mod search;
 pub mod semantic;
@@ -53,6 +54,7 @@ pub fn register(registry: &mut ToolRegistry) {
     // Friction schemas and MCP exposure are declared once in the shared
     // operation registry and registered from there.
     friction::register(registry);
+    operation_mode::register(registry);
     registry.register_mcp(task::add::OrbitTaskAddTool, McpToolScope::WorkspaceRequired);
     // Attach and read are the two halves of one artifact surface: without a
     // read verb an agent can store a reference it can never inspect again.

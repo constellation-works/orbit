@@ -1,27 +1,31 @@
 ---
 title: Operation Mode — Overview
 owner: codex
-last_updated: 2026-09-05
-last_validated: 2026-09-05
-status: Draft
+last_updated: 2026-09-07
+last_validated: 2026-09-07
+status: Accepted
 feature: operation-mode
 doc_role: overview
 type: design
-summary: Proposed operation-mode presets and independent review timing, scoped repair, and delivery coverage through existing Orbit pipelines.
+summary: Operation-mode presets, scoped grants and bounded recovery (shipped in ORB-11332) plus the still-proposed review timing, scoped repair, and delivery coverage.
 tags: [operation-mode, automation, authorization, review-policy]
 paths: ["crates/orbit-core/assets/jobs/**", "crates/orbit-core/src/application/job/**", "crates/orbit-config/src/**"]
 related_features: [activity-job, routines, task-artifacts, auditability]
-related_artifacts: [ORB-11314, ORB-11316, ORB-11315]
+related_artifacts: [ORB-11314, ORB-11316, ORB-11315, ORB-11332]
 ---
 
 # Operation Mode — Overview
 
-**Proposed; documentation only.** Operation mode would bundle Orbit's existing
-pipeline controls into two understandable presets, tentatively **supervised**
-and **autonomous**. Astra would retain engineering judgment about worthwhile
-work, scope, architecture, and unresolved tradeoffs. Orbit would take over
-repeated preparation, eligible promotion, admission, polling, and bounded
-recovery. This proposal neither implements nor enables those changes.
+**Partly implemented.** [ORB-11332] shipped the preset preferences, typed
+global/workspace/run resolution with per-field provenance, durable scoped
+grants, grant-bound drains with atomic child rechecks, evidence-driven
+promotion, and aggregate recovery budgets; [Operations](./5_operations.md) is
+the shipped contract. Operation mode bundles Orbit's existing pipeline
+controls into two presets, **supervised** and **autonomous**. Astra retains
+engineering judgment about worthwhile work, scope, architecture, and
+unresolved tradeoffs. Orbit takes over repeated preparation, eligible
+promotion, admission, polling, and bounded recovery — only inside an
+explicit grant. Nothing is activated by default.
 
 [ORB-11316] extends this same proposal with **review-policy**, independently
 selectable as **none**, **before-pr**, or **after-landing** under either preset.
@@ -58,11 +62,12 @@ The proposed preset behavior is:
 | Leaf concurrency | Existing default five, overridable | Suggested ceiling ten, bounded by capacity, hard limits, reservations, and conflicts |
 | Window | Existing one-tick/window behavior | Explicit admission scope, with a bounded window recommended; standing scope requires explicit selection |
 
-These are proposed defaults, not shipped mode values. Selecting the autonomous
-preference in a global config must not itself authorize a workspace's future
-tasks. The proposed enable operation makes the scope and requested promotion /
-completion rights explicit and records that authorization once. It need not
-ask again for each eligible task inside that grant.
+These are the shipped preset defaults; every number is configurable under
+`[operation]`. Selecting the autonomous preference in a global config does not
+itself authorize a workspace's future tasks. `orbit operation enable` makes
+the finite scope and the requested prepare / promotion / completion rights
+explicit and records that authorization once, for a bounded window. It does
+not ask again for each eligible task inside that grant.
 
 ## 2. Core Concepts
 
@@ -99,6 +104,7 @@ weaker validation, and changes to merge authorization or protected branches.
 
 | Concern | File | Task |
 | --- | --- | --- |
+| Shipped settings, grants, admission rules, recovery budgets, surfaces, rollback | [Operations](./5_operations.md) | [ORB-11332] |
 | Source-verified current behavior and extension seams | [Current design](./2_design.md) | [ORB-11314] |
 | Proposed resolution, authority, promotion, recovery, rollout, and evaluation | [Vision](./3_vision.md) | [ORB-11314] |
 | Review timing, repair limits, coverage, and rollout | [Review proposal](./3_vision.md#310-independent-review-policy) | [ORB-11316] |
@@ -110,5 +116,6 @@ weaker validation, and changes to merge authorization or protected branches.
 - [ORB-11314] — proposes operation-mode presets without runtime changes.
 - [ORB-11316] — extends the proposal with review timing, repair, and coverage.
 - [ORB-11315] — will define shared automation triggers and scheduling checkpoints.
+- [ORB-11332] — implements presets, scoped grants, grant-bound drains, and bounded recovery.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

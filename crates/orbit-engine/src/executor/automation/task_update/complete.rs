@@ -27,7 +27,7 @@ pub(in crate::executor::automation) fn task_complete<H: RuntimeHost + ?Sized>(
 ) -> Result<Value, OrbitError> {
     let run_id = required_job_run_id(input, "task_complete")?;
     let task_ids = completion_task_ids(input)?;
-    complete_tasks(host, &task_ids, &authorization_note(input, run_id))
+    complete_tasks(host, run_id, &task_ids, &authorization_note(input, run_id))
 }
 
 /// The transition itself, over an already-resolved task selection.
@@ -37,9 +37,14 @@ pub(in crate::executor::automation) fn task_complete<H: RuntimeHost + ?Sized>(
 /// selection from raw input.
 pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
     host: &H,
+    run_id: &str,
     task_ids: &[String],
     authorization: &str,
 ) -> Result<Value, OrbitError> {
+    // [ORB-11332] A run admitted under an operation-mode grant rechecks that
+    // grant here, at the transition itself, so a hard revocation stops
+    // completion even after the admission window expired.
+    host.authorize_task_completion(run_id, task_ids)?;
     let mut completed_task_ids = Vec::new();
     let mut skipped_task_ids = Vec::new();
     for task_id in task_ids {

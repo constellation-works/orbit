@@ -5,7 +5,7 @@ use orbit_types::identity::normalize_optional_attribution_label;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::job::pipeline::ChildPipelineAdmission;
+use crate::application::job::pipeline::{ChildPipelineAdmission, ChildSubmission};
 
 use super::input::{
     parse_optional_poll_interval_seconds, parse_optional_timeout_seconds, parse_string_array_field,
@@ -42,7 +42,7 @@ pub(super) fn invoke(
             actor.as_deref(),
             &admission,
         )?,
-        None => Some(runtime.submit_pipeline_run(
+        None => ChildSubmission::Submitted(runtime.submit_pipeline_run(
             &job_name,
             payload,
             priority.as_deref(),
@@ -50,12 +50,12 @@ pub(super) fn invoke(
         )?),
     };
     match result {
-        Some(result) => {
+        ChildSubmission::Submitted(result) => {
             serde_json::to_value(result).map_err(serialize_error("serialize pipeline invoke"))
         }
-        None => Ok(serde_json::json!({
+        ChildSubmission::Skipped(reason) => Ok(serde_json::json!({
             "skipped": true,
-            "reason": "admissions_stopped",
+            "reason": reason,
             "job_name": job_name,
         })),
     }

@@ -50,6 +50,7 @@ use serde_json::{Map, Value};
 
 use orbit_common::OrbitError;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::operation_mode::OperationModeVerb;
 use orbit_types::tool::ToolSchema;
 
 /// Fast operation timeout (1 s). Used for local command resolution (e.g. `which`).
@@ -102,6 +103,8 @@ pub enum OrbitBuiltinAction {
     /// ADR-0209 bearing 1 [ORB-10358]: friction verbs are registry data, so one
     /// action variant carries the verb instead of one variant per verb.
     Friction(FrictionVerb),
+    /// Operation-mode verbs are registry data too [ORB-11332].
+    OperationMode(OperationModeVerb),
     PipelineInvoke,
     PipelineWait,
     Search,

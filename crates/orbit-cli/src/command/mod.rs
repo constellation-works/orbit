@@ -16,6 +16,7 @@ pub mod mcp;
 pub mod migrate;
 pub mod operation;
 pub mod operation_args;
+pub mod operation_mode;
 pub mod policy;
 pub mod routine;
 pub mod run;
@@ -92,6 +93,7 @@ Operate:
   task        Create, update, and manage tasks
   docs        Search and manage the indexed docs corpus
   friction    Report, list, and triage friction records
+  operation   Explain, enable, stop, and revoke scoped operation-mode automation
 
 Observe:
   search      Search tasks, docs, and frictions
@@ -150,6 +152,8 @@ pub enum Commands {
     Task(Box<task::TaskCommand>),
     Docs(docs::DocsCommand),
     Friction(friction::FrictionCommand),
+    #[command(name = "operation")]
+    Operation(operation_mode::OperationModeCommand),
 
     // ── Observe ──
     Search(search::SearchCommand),
