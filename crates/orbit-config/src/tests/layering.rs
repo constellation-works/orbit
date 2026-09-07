@@ -226,6 +226,73 @@ model = "workspace-model"
         values["crews.build.provider"].source.path(),
         Some(global_config_path.as_path())
     );
+    assert!(
+        !values.contains_key("crews.build.effort"),
+        "omitted effort must not appear as a configured value"
+    );
+}
+
+#[test]
+fn effective_config_projects_configured_crew_effort_with_layer_provenance() {
+    let global = tempdir().expect("global tempdir");
+    let workspace = tempdir().expect("workspace tempdir");
+    write_config(
+        global.path(),
+        r#"
+[workflow]
+default_crew = "sol"
+
+[crews.sol]
+model = "gpt-5.6-sol"
+provider = "codex"
+effort = "medium"
+
+[crews.opus]
+model = "opus"
+provider = "claude"
+"#,
+    );
+    write_config(
+        workspace.path(),
+        r#"
+[crews.sol]
+effort = "high"
+"#,
+    );
+
+    let effective = load_effective_config(&roots(global.path(), workspace.path()))
+        .expect("effective config loads");
+    let values = effective
+        .values()
+        .iter()
+        .map(|entry| (entry.key.as_str(), entry))
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(values["crews.sol.effort"].value, serde_json::json!("high"));
+    assert_eq!(
+        values["crews.sol.effort"].source.kind(),
+        ConfigValueSourceKind::Workspace
+    );
+    assert_eq!(
+        values["crews.sol.effort"].source.path(),
+        Some(workspace.path().join("config.toml").as_path())
+    );
+    assert_eq!(
+        values["crews.sol.model"].source.kind(),
+        ConfigValueSourceKind::Global
+    );
+    assert!(
+        !values.contains_key("crews.opus.effort"),
+        "omitted Claude effort must not invent a configured value"
+    );
+    assert_eq!(
+        effective.value_for("crews.sol.effort"),
+        Some(serde_json::json!("high"))
+    );
+    assert_eq!(
+        effective.value_for("crews.opus.effort"),
+        Some(serde_json::Value::Null)
+    );
 }
 
 #[test]

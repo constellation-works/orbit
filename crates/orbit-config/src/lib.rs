@@ -72,7 +72,8 @@ pub use operation::{
 pub use persistence::PersistenceConfig;
 pub use raw::CrewSeed;
 pub use registry::{
-    CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSnapshot, describe as describe_config_key,
+    CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSnapshot, admit_config_key,
+    describe as describe_config_key,
 };
 pub use resolved::{CodexExecutionPolicy, ExecutionEnvPolicy, PrSettings, ResolvedConfig};
 pub use roots::ConfigRoots;
