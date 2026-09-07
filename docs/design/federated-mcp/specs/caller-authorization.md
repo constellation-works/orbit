@@ -82,7 +82,8 @@ Row keys:
 | `label` | no | Operator-facing display name. Never an identity input. |
 | `workspaces` | no | Narrows the grant to these logical `ws_*` IDs. Omitted means every workspace on this destination. |
 | `ssh_key_fingerprint` | no | Binds the row to a key sshd authenticated, in the `SHA256:…` form `ssh-keygen -l` prints. See Tier 2. |
-| `agent_invoke` | no | Explicitly grants remote trusted-host agent invocation on the listed workspaces. Requires `operator` and a workspace list. |
+| `agent_invoke` | no | Explicitly grants remote trusted-host agent invocation on the operation's workspace scope. Requires `operator` and a workspace scope. |
+| `agent_invoke_workspaces` | no | Narrows `agent_invoke` to logical `ws_*` IDs without narrowing ordinary capabilities. Omitted preserves the legacy `workspaces` scope. |
 | `agent_invoke_mode` | no | Trust model for `agent_invoke`: omitted or `key-bound` preserves strict Tier-2 admission; `cooperative` accepts the existing same-OS-account SSH operator channel while retaining a self-asserted identity proof. Invalid without `agent_invoke = true`. |
 
 File-level invariants:
@@ -92,7 +93,7 @@ File-level invariants:
 3. An unknown key, an unknown capability value, an empty `capabilities`, a `default` other than `agent` or `deny`, a malformed `machine_id`, or an `ssh_key_fingerprint` that is not a well-formed `SHA256:` digest invalidates the file at load. A malformed file is never served as if absent. The fingerprint format is checked here rather than at comparison time because a fingerprint in the wrong shape — an `MD5:` one, most plausibly — would otherwise never match and would present as a key mismatch on every session.
 4. `runner` is not a grantable value. It is stamped in-process by a managed run and can never arrive over a transport.
 5. Load happens once per server process, at startup, alongside identity resolution. A session's ceiling does not change under it mid-session.
-6. `agent_invoke = true` additionally requires `operator` and an explicit `workspaces` list. Its default/key-bound mode also requires `ssh_key_fingerprint`. `agent_invoke_mode = "cooperative"` is the only mode that may omit the fingerprint; an unknown mode or a mode without the operation grant invalidates the file.
+6. `agent_invoke = true` additionally requires `operator` and an explicit workspace scope: `agent_invoke_workspaces`, or legacy `workspaces` when the new key is omitted. Both scopes reject empty or non-`ws_*` lists. Its default/key-bound mode also requires `ssh_key_fingerprint`. `agent_invoke_mode = "cooperative"` is the only mode that may omit the fingerprint; an unknown mode or invocation-only option without the operation grant invalidates the file.
 
 ## Remote origination is decided by the destination, not by argv
 
@@ -128,11 +129,26 @@ Invariants:
 ## Operation-specific remote agent invocation
 
 Remote trusted-host invocation adds admission rules after ordinary capability
-resolution. Every remote caller needs `operator`, `agent_invoke = true`, and a
-row narrowed to the resolved logical workspace. The file default never grants
+resolution. Every remote caller needs `operator`, `agent_invoke = true`, and an
+invocation scope covering the resolved logical workspace. `agent_invoke_workspaces`
+keeps that exception independent from ordinary `workspaces`; omitting it preserves
+the original behavior of using `workspaces` for both. The file default never grants
 the operation, the admission covers one invocation, the timeout remains
 bounded, ordinary job input cannot supply the reserved admission, and a run
 carrying an admission cannot be resumed.
+
+For the existing trusted Mac caller on `dk-server-1`, whose row already has
+`capabilities = ["agent", "operator"]` and no `workspaces` narrowing, the
+minimal nonbreaking cooperative configuration is:
+
+```toml
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = ["ws_orbit"]
+```
+
+These keys are added to the existing `hm_ba054a1a8fbfb914` row; production
+installation and reconnect remain an operator action.
 
 Omitting `agent_invoke_mode` preserves the shipped strict behavior: the row
 must pin a fingerprint and the session's identity proof must be `key-bound`.

@@ -1364,13 +1364,18 @@ default = "deny"
 [[callers]]
 machine_id = "hm_caller"
 capabilities = ["agent", "operator"]
-workspaces = ["ws_wrong"]
 ssh_key_fingerprint = "{CALLER_KEY_FINGERPRINT}"
 agent_invoke = true
+agent_invoke_workspaces = ["ws_wrong"]
 "#,
         ),
     );
     let mut wrong_workspace = workspace.serve_with_generated_command(&generated);
+    assert_eq!(
+        wrong_workspace.call_tool_ok("orbit_workflow_run_list", json!({}))["items"],
+        json!([]),
+        "the invocation-only scope must not reduce ordinary operator access"
+    );
     let denied = wrong_workspace.call_tool_err(
         "orbit_agent_invoke",
         json!({
@@ -1391,9 +1396,9 @@ default = "deny"
 [[callers]]
 machine_id = "hm_caller"
 capabilities = ["agent", "operator"]
-workspaces = ["{workspace_id}"]
 ssh_key_fingerprint = "{CALLER_KEY_FINGERPRINT}"
 agent_invoke = true
+agent_invoke_workspaces = ["{workspace_id}"]
 "#,
         ),
     );
@@ -1512,9 +1517,9 @@ default = "deny"
 [[callers]]
 machine_id = "hm_caller"
 capabilities = ["agent", "operator"]
-workspaces = ["{workspace_id}"]
 agent_invoke = true
 agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = ["{workspace_id}"]
 "#,
         ),
     );

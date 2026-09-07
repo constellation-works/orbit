@@ -310,6 +310,42 @@ agent_invoke_mode = "cooperative"
 }
 
 #[test]
+fn invocation_workspace_scope_does_not_narrow_ordinary_operator_access() {
+    let (_dir, path) = write(
+        r#"
+default = "deny"
+
+[[callers]]
+machine_id = "hm_beta"
+capabilities = ["agent", "operator"]
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = ["ws_orbit"]
+"#,
+    );
+    let file = load_callers(&path).expect("independent invocation scope");
+    let policy = SessionCapabilityPolicy::from_grant(
+        McpSessionAuthority::Operator,
+        file.resolve(&caller("hm_beta")),
+    );
+
+    assert_eq!(policy.effective_for(Some("ws_orbit")), operator());
+    assert_eq!(policy.effective_for(Some("ws_other")), operator());
+    assert!(
+        policy
+            .grant_for(Some("ws_orbit"))
+            .expect("remote grant")
+            .agent_invoke
+    );
+    assert!(
+        !policy
+            .grant_for(Some("ws_other"))
+            .expect("remote grant")
+            .agent_invoke
+    );
+}
+
+#[test]
 fn incomplete_agent_invoke_grants_fail_the_callers_file_closed() {
     for (contents, expected) in [
         (
@@ -336,6 +372,50 @@ agent_invoke = true
 "#,
             ),
             "workspaces",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = []
+"#
+            .to_string(),
+            "agent_invoke_workspaces",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+agent_invoke_workspaces = ["ws_orbit"]
+"#
+            .to_string(),
+            "without enabling `agent_invoke`",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = ["orbit"]
+"#
+            .to_string(),
+            "agent_invoke_workspaces",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+agent_invoke_workspcaes = ["ws_orbit"]
+"#
+            .to_string(),
+            "unknown field",
         ),
         (
             r#"

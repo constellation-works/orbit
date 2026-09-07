@@ -90,9 +90,9 @@ default = "deny"
 machine_id = "<caller-machine-id>"
 label = "<display-name>"
 capabilities = ["agent", "operator"]
-workspaces = ["<allowed-workspace-id>"]
 ssh_key_fingerprint = "SHA256:<caller-public-key-fingerprint>"
 agent_invoke = true
+agent_invoke_workspaces = ["<invocation-workspace-id>"]
 ```
 
 The destination can instead opt one row into the existing cooperative SSH
@@ -105,9 +105,9 @@ default = "deny"
 machine_id = "<caller-machine-id>"
 label = "<display-name>"
 capabilities = ["agent", "operator"]
-workspaces = ["<allowed-workspace-id>"]
 agent_invoke = true
 agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = ["<invocation-workspace-id>"]
 ```
 
 This is an explicit destination-owner statement that callers using the same
@@ -117,6 +117,21 @@ The policy prevents accidental use and limits Orbit's admission to the named
 workspace and one invocation; it does not isolate mutually malicious peers who
 share the account and already control that account's files and processes.
 Never describe a cooperative admission as key-bound.
+
+`agent_invoke_workspaces` is independent from ordinary `workspaces`. When a
+caller already has general operator access, add the operation scope without
+narrowing that access. Leave its existing capabilities and absent `workspaces`
+unchanged, then add only:
+
+```toml
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = ["ws_orbit"]
+```
+
+Omitting `agent_invoke_workspaces` preserves the older behavior where
+`workspaces` is also the invocation scope. Empty, malformed, or unknown scope
+shapes fail closed.
 
 For either mode, install the updated Orbit binary on the destination, review
 and edit `~/.orbit/mcp-callers.toml` there, run `orbit mcp callers check

@@ -102,12 +102,14 @@ pub struct CallerRow {
     /// not evidence of a mismatch.
     #[serde(default)]
     pub ssh_key_fingerprint: Option<String>,
-    /// Explicitly admits `orbit.agent.invoke` for this caller on the row's
-    /// narrowed workspaces. Requires operator capability, a workspace
-    /// narrowing, and a key-bound identity unless the destination explicitly
-    /// selects the cooperative same-account mode below.
+    /// Explicitly admits `orbit.agent.invoke` for this caller on its
+    /// operation-specific workspace scope. When the independent scope is
+    /// absent, `workspaces` remains the legacy invocation scope.
     #[serde(default)]
     pub agent_invoke: bool,
+    /// Narrows `agent_invoke` without narrowing ordinary capabilities.
+    #[serde(default)]
+    pub agent_invoke_workspaces: Option<Vec<String>>,
     /// Trust model for `agent_invoke`. Omission preserves strict key-bound
     /// admission; `cooperative` deliberately accepts the self-asserted caller
     /// label on the existing SSH operator channel.
@@ -172,30 +174,13 @@ fn validate_callers(file: &CallersFile, path: &Path) -> Result<(), OrbitError> {
             )
         })?;
         parse_capabilities(row, path)?;
-        if let Some(workspaces) = &row.workspaces {
-            if workspaces.is_empty() {
-                return Err(invalid(
-                    path,
-                    format!(
-                        "caller '{}' has an empty `workspaces` list; omit the key to grant every \
-                         workspace on this destination",
-                        row.machine_id
-                    ),
-                ));
-            }
-            for workspace in workspaces {
-                if !workspace.starts_with("ws_") {
-                    return Err(invalid(
-                        path,
-                        format!(
-                            "caller '{}' narrows to '{workspace}', which is not a logical \
-                             workspace ID; `workspaces` takes `ws_*` IDs",
-                            row.machine_id
-                        ),
-                    ));
-                }
-            }
-        }
+        validate_workspace_scope(row, row.workspaces.as_deref(), "workspaces", path)?;
+        validate_workspace_scope(
+            row,
+            row.agent_invoke_workspaces.as_deref(),
+            "agent_invoke_workspaces",
+            path,
+        )?;
         if let Some(defect) = row
             .ssh_key_fingerprint
             .as_deref()
@@ -219,12 +204,12 @@ fn validate_callers(file: &CallersFile, path: &Path) -> Result<(), OrbitError> {
                     ),
                 ));
             }
-            if row.workspaces.is_none() {
+            if row.workspaces.is_none() && row.agent_invoke_workspaces.is_none() {
                 return Err(invalid(
                     path,
                     format!(
-                        "caller '{}' enables `agent_invoke` without a `workspaces` narrowing; \
-                         remote trusted-host execution must name its destination workspaces",
+                        "caller '{}' enables `agent_invoke` without a workspace scope; set \
+                         `agent_invoke_workspaces` or the legacy `workspaces` narrowing",
                         row.machine_id
                     ),
                 ));
@@ -241,12 +226,46 @@ fn validate_callers(file: &CallersFile, path: &Path) -> Result<(), OrbitError> {
                     ),
                 ));
             }
-        } else if row.agent_invoke_mode.is_some() {
+        } else if row.agent_invoke_mode.is_some() || row.agent_invoke_workspaces.is_some() {
             return Err(invalid(
                 path,
                 format!(
-                    "caller '{}' sets `agent_invoke_mode` without enabling `agent_invoke`; the \
-                     mode only qualifies that operation-specific grant",
+                    "caller '{}' sets an agent-invocation option without enabling `agent_invoke`; \
+                     those options only qualify that operation-specific grant",
+                    row.machine_id
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_workspace_scope(
+    row: &CallerRow,
+    workspaces: Option<&[String]>,
+    field: &str,
+    path: &Path,
+) -> Result<(), OrbitError> {
+    let Some(workspaces) = workspaces else {
+        return Ok(());
+    };
+    if workspaces.is_empty() {
+        return Err(invalid(
+            path,
+            format!(
+                "caller '{}' has an empty `{field}` list; omit the key rather than granting no \
+                 workspaces",
+                row.machine_id
+            ),
+        ));
+    }
+    for workspace in workspaces {
+        if !workspace.starts_with("ws_") {
+            return Err(invalid(
+                path,
+                format!(
+                    "caller '{}' narrows `{field}` to '{workspace}', which is not a logical \
+                     workspace ID; workspace scopes take `ws_*` IDs",
                     row.machine_id
                 ),
             ));
@@ -362,9 +381,10 @@ pub struct ResolvedCallerGrant {
     /// The `ws_*` IDs [`Self::granted`] applies to. `None` means every
     /// workspace on this destination.
     pub workspaces: Option<BTreeSet<String>>,
-    /// Whether the matched row explicitly admits trusted-host agent
-    /// invocation on its covered workspaces.
+    /// Whether the matched row explicitly admits trusted-host agent invocation.
     pub agent_invoke: bool,
+    /// The `ws_*` IDs the explicit agent-invocation grant applies to.
+    pub agent_invoke_workspaces: Option<BTreeSet<String>>,
     /// Trust mode selected for agent invocation, when it is enabled.
     pub agent_invoke_mode: Option<RemoteAgentInvokeMode>,
     /// Whether a row matched, or the file default answered.
@@ -392,7 +412,7 @@ impl ResolvedCallerGrant {
     /// Whether the explicit agent-invocation grant covers `workspace_id`.
     pub fn agent_invoke_for_workspace(&self, workspace_id: Option<&str>) -> bool {
         self.agent_invoke
-            && match (&self.workspaces, workspace_id) {
+            && match (&self.agent_invoke_workspaces, workspace_id) {
                 (Some(covered), Some(workspace_id)) => covered.contains(workspace_id),
                 (Some(_), None) | (None, _) => false,
             }
@@ -431,6 +451,7 @@ impl CallersFile {
                 elsewhere: default,
                 workspaces: None,
                 agent_invoke: false,
+                agent_invoke_workspaces: None,
                 agent_invoke_mode: None,
                 matched: false,
             };
@@ -455,6 +476,11 @@ impl CallersFile {
                 .as_ref()
                 .map(|workspaces| workspaces.iter().cloned().collect()),
             agent_invoke: row.agent_invoke,
+            agent_invoke_workspaces: row
+                .agent_invoke_workspaces
+                .as_ref()
+                .or(row.workspaces.as_ref())
+                .map(|workspaces| workspaces.iter().cloned().collect()),
             agent_invoke_mode: row
                 .agent_invoke
                 .then_some(row.agent_invoke_mode.unwrap_or_default()),
