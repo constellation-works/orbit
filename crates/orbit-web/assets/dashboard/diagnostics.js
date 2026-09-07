@@ -66,10 +66,22 @@ function getDiagMetricsColumns(ctx) {
   ];
 }
 
+function errorRunLabel(row) {
+  if (row.job_run) return row.job_run;
+  if (row.affiliation === "unaffiliated") return "unaffiliated";
+  return "-";
+}
+
 function getDiagErrorsColumns(ctx) {
   return [
     { key: "ts", label: "time", num: false, render: (v) => fmtRelativeValue(ctx, v) },
     { key: "source", label: "source", num: false },
+    {
+      key: "job_run",
+      label: "run",
+      num: false,
+      render: (_v, row) => errorRunLabel(row),
+    },
     { key: "provider", label: "provider", num: false, render: (v) => v || "-" },
     { key: "step", label: "step", num: false, render: (v) => v || "-" },
     {
@@ -130,8 +142,11 @@ function renderDiagnosticsTable(rows, columns, ctx) {
       td.textContent = text;
       tr.appendChild(td);
     }
-    tr.dataset.key = `diag-${row.ts || ''}-${row.step || i}-${row.command || row.actor_identity || ''}`;
+    tr.dataset.key = `diag-${row.ts || ''}-${row.job_run || row.affiliation || ''}-${row.step || i}-${row.command || row.actor_identity || ''}`;
     tr.dataset.hash = JSON.stringify(row);
+    if (row.affiliation === "unaffiliated") {
+      tr.classList.add("unaffiliated");
+    }
     if (row.job_run) {
       tr.classList.add("clickable");
       tr.title = "Open owning run";
