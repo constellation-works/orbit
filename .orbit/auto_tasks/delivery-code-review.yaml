@@ -1,7 +1,7 @@
 schemaVersion: 1
 name: delivery-code-review
 description: Review a frozen delivery batch using typed artifact evidence
-enabled: false
+enabled: true
 schedule:
   deliveries_landed:
     branch: agent-main
@@ -30,7 +30,7 @@ template:
   - delivery-code-review
   - no-diff-expected
   priority: medium
-  crew: system
+  crew: sol
   status: backlog
 dedupe: skip_if_open
 created_by: system

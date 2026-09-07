@@ -1,11 +1,11 @@
 schemaVersion: 1
 name: delivery-qa
 description: Exercise a frozen delivery batch using typed artifact evidence
-enabled: false
+enabled: true
 schedule:
   deliveries_landed:
     branch: agent-main
-    threshold: 3
+    threshold: 5
     max_wait_minutes: 360
     coverage: integrated_qa_v1
     max_items: 20
@@ -30,7 +30,7 @@ template:
   - delivery-qa
   - no-diff-expected
   priority: medium
-  crew: system
+  crew: terra
   status: backlog
 dedupe: skip_if_open
 created_by: system
