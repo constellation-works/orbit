@@ -90,7 +90,12 @@ That is unavailable evidence, not a clean CI result.
 
 - **`qa-sweep`** — hourly. Identifies recent changes, exercises them hands-on
   through their real user-facing paths rather than just re-running the test
-  suite, and files a task for each non-duplicate issue found.
+  suite, and files a task for each non-duplicate issue found. In agent-executor
+  sandboxes and linked job-run worktrees, the managed `.git` mount is read-only
+  by design (must not be worked around by chmod or host-side gitdir writes).
+  Use `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base` to build a
+  baseline revision without writing `.git`, and `git show HEAD:<path> > <path>`
+  to revert a tracked file when `git checkout --` cannot take `index.lock`.
 - **`friction-curation`** — daily. Deduplicates the open friction corpus against
   task history, verifies each survivor still reproduces, resolves the ones that
   don't, and files fix tasks for the ones that do. → [friction.md](../friction.md)

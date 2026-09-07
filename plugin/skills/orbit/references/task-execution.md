@@ -87,6 +87,18 @@ pop can restore another session's work. Record the worktree's initial
 `git rev-parse HEAD` and compare against that explicit baseline with
 `git diff <baseline-sha> -- <paths>`.
 
+**Managed `.git` mounts are read-only by design.** In agent-executor sandboxes
+and linked job-run worktrees, the repository's `.git` mount is read-only and
+must not be worked around by chmod or host-side gitdir writes. Commands that
+write to `.git` fail:
+- Do not use `git worktree add` to inspect or build other revisions; use
+  `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base` to extract a
+  baseline revision without touching `.git` or creating `.git/worktrees/*`,
+  then build with a separate build cache/target directory.
+- When `git checkout -- <path>` fails because it cannot acquire `index.lock`,
+  revert the tracked file with `git show HEAD:<path> > <path>`.
+- Read-only inspection commands succeed with `GIT_OPTIONAL_LOCKS=0 git status --short`.
+
 ## Step 5 — Summarize and hand off
 
 Persist `execution_summary` via `orbit.task.update` **first**.
