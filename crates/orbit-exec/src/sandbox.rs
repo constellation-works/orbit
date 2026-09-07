@@ -1,9 +1,20 @@
+use std::process::Child;
+
 use orbit_common::OrbitError;
 
 use crate::runner::ExecRequest;
 
 pub trait Sandbox {
     fn validate(&self, req: &ExecRequest) -> Result<(), OrbitError>;
+
+    /// Create the child after [`Self::validate`] succeeds.
+    ///
+    /// The default launches through [`crate::process::spawn`]. Implementations
+    /// that confine the child at the process boundary override this instead of
+    /// wrapping the program in argv.
+    fn spawn(&self, req: &ExecRequest) -> Result<Child, OrbitError> {
+        crate::process::spawn(req)
+    }
 }
 
 /// A sandbox strategy that adds no Orbit-specific validation or containment.

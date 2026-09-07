@@ -1,9 +1,12 @@
 use std::path::{Path, PathBuf};
+use std::process::Child;
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_common::tracing;
-use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, run_process};
+use orbit_exec::{
+    EnvironmentMode, ExecRequest, Sandbox, StdinMode, run_process, spawn_under_linux_landlock,
+};
 use orbit_types::policy::FsOperation;
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
@@ -116,17 +119,36 @@ impl Tool for ProcSpawnTool {
     }
 }
 
-/// Request-time filesystem gate for activity-scoped subprocesses.
+/// Request-time filesystem gate plus process-boundary confinement for
+/// activity-scoped subprocesses.
 ///
-/// An allowed program does not grant access to a path that the owning
-/// activity cannot read. Existing path arguments (including `--key=path`)
-/// are resolved symlink-safely by the same policy engine used by filesystem
-/// tools before the child is created.
+/// Existing path arguments (including `--key=path`) are still resolved
+/// symlink-safely before spawn so an explicit `git -C /etc` stays a
+/// `policy_denied`. The child's own interpreter — git aliases, `rg --pre`,
+/// and any descendant — is confined by the Landlock read profile applied at
+/// spawn, not by guessing which argv strings look like paths.
 struct ActivityFsSandbox<'a> {
     ctx: &'a ToolContext,
 }
 
 impl Sandbox for ActivityFsSandbox<'_> {
+    fn spawn(&self, request: &ExecRequest) -> Result<Child, OrbitError> {
+        if !self.ctx.proc_spawn_activity_scoped {
+            return orbit_exec::process::spawn(request);
+        }
+        let (Some(policy), Some(profile), Some(workspace_root)) = (
+            self.ctx.policy_engine.as_ref(),
+            self.ctx.fs_profile.as_deref(),
+            self.ctx.workspace_root.as_deref(),
+        ) else {
+            return Err(OrbitError::PolicyDenied(
+                "activity-scoped proc.spawn is missing its resolved filesystem policy".to_string(),
+            ));
+        };
+        let resolved = policy.def().effective_profile(profile)?;
+        spawn_under_linux_landlock(request, workspace_root, &resolved)
+    }
+
     fn validate(&self, request: &ExecRequest) -> Result<(), OrbitError> {
         if !self.ctx.proc_spawn_activity_scoped {
             return Ok(());

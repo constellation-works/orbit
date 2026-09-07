@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 
 use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
 
-pub(crate) fn spawn(req: &ExecRequest) -> Result<Child, OrbitError> {
+pub(crate) fn command(req: &ExecRequest) -> Command {
     let mut command = Command::new(&req.program);
     command.args(&req.args).stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -41,6 +41,10 @@ pub(crate) fn spawn(req: &ExecRequest) -> Result<Child, OrbitError> {
     }
 
     command
+}
+
+pub fn spawn(req: &ExecRequest) -> Result<Child, OrbitError> {
+    command(req)
         .spawn()
         .map_err(|e| OrbitError::Execution(format!("failed to spawn `{}`: {e}", req.program)))
 }

@@ -55,7 +55,11 @@ plus global `denyRead` / `denyModify` rules, evaluated by `orbit-policy`.
 
 For built-in Orbit tools that still consult `orbit-policy` (today `proc.*`
 program allowlists, not a shipped `fs.*` family), evaluation applies on every
-platform and is the sole in-process enforcement point for those tools.
+platform. Activity-scoped `proc.spawn` additionally confines the child at
+spawn time: on Linux, Landlock enforces the resolved `fsProfile` read set
+(plus existing `denyRead` matches) so an allowed program cannot read a
+denied path by interpreting argv as code. The program allowlist and
+cleared child environment remain fail-closed.
 
 For `backend: cli` agents (an agent CLI such as Codex/Claude/Gemini/Grok
 spawned as a subprocess, making its own syscalls outside Orbit's tool
