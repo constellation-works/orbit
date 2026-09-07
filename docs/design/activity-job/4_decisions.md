@@ -1312,6 +1312,30 @@ Providers may edit assigned worktree files but must not create commits or otherw
 - Git authorship remains attributable to the persisted crew model, the committer remains process-scoped, and durable task/run records carry workflow provenance without mandatory Git trailers.
 - Cost: a legitimate manual or provider-side commit in an assigned worktree is rejected even when its contents and attribution could have been proven safe; recovery requires returning the candidate to an uncommitted worktree diff before rerunning the workflow.
 
+## Resumed shipment accepts only its durable Orbit preservation commit
+
+**Recorded:** 2026-09-07 · [ORB-11456]
+**Extends:** [Workflow alone creates shipment commits while dirty failures remain recoverable](#workflow-alone-creates-shipment-commits-while-dirty-failures-remain-recoverable), [Resume is a durable submission scoped by explicit retry lineage](#resume-is-a-durable-submission-scoped-by-explicit-retry-lineage)
+**Paths:** `crates/orbit-types/src/workflow/run_state.rs`, `crates/orbit-engine/src/activity_job/job_executor/**`, `crates/orbit-engine/src/executor/automation/vcs/**`, `crates/orbit-core/src/adapter/engine_host/runtime_host.rs`
+
+### Context
+
+The single-committer guard introduced by `48d52bf04` ([ORB-10519]) correctly rejected provider or user movement away from the immutable worktree base. A later terminal `pr_failure_handoff`, however, is itself an Orbit-owned committer: it must commit the dirty candidate before publishing a blocked PR. Resume reused the original successful worktree checkpoint, including its original `base_sha`, but had no structured record authorizing the preservation commit now at HEAD. A resumed implementation could therefore finish new edits only for `git_commit` to misclassify the earlier Orbit preservation as unknown movement. Relaxing the global HEAD guard, replacing the historical base, or trusting the open PR would also admit arbitrary commits or unrelated retries.
+
+### Decision
+
+Persist each successful terminal failure activity in `PipelineState.failure_activity_checkpoint`, separately from successful step outputs so the failed step remains the resume cursor. `pr_failure_handoff` includes the task id, handoff run id, reused worktree owner, original base, exact resulting HEAD, and whether that action created the commit.
+
+When a resumed task-PR workflow has not completed its `commit` step, authenticate a moved HEAD before the first unfinished step runs. The evidence must be an Orbit-created candidate commit from `pr_failure_handoff`; it must match the immutable source-run state, original worktree base, exact current HEAD, task target and current owner; and the active run must descend from the handoff run without crossing jobs. `git_commit` repeats the durable-state, ownership, lineage, base, and exact-HEAD checks immediately before staging. It then treats that one preserved HEAD as the effective starting HEAD while retaining the original `base_sha` as the delivery base. No other changed HEAD is admitted.
+
+### Consequences
+
+- A failed implementation can be preserved, resumed, extended by new edits, committed by the workflow, and delivered through the same PR.
+- Original worktree-base evidence and the Orbit preservation commit remain immutable and visible; the resumed workflow commit is a child of the preservation commit and retains normal crew-model authorship.
+- Missing or forged evidence, unknown later commits, unrelated retry lineage, and changed task ownership fail before resumed implementation or before staging, without resetting candidate or user changes.
+- Completion-tail resumes whose `commit` step already succeeded retain their existing checkpoints and do not reinterpret historical delivery commits.
+- Cost: terminal failure activity output becomes durable run state, and resume performs read-only Git and task/run provenance checks before dispatching unfinished work.
+
 ## Ship duplicate-dispatch guard lives in the shared submission path
 
 **Recorded:** 2026-08-01 21:00:01.786577Z · [ORB-10544]
@@ -1523,6 +1547,9 @@ which is a broken install and the only artifact fault that escalates
 
 ## Task References
 
+- **[ORB-11456]** — Preserve terminal failure-activity evidence and admit only
+  its exact Orbit-created candidate across resume
+  ([Resumed shipment accepts only its durable Orbit preservation commit](#resumed-shipment-accepts-only-its-durable-orbit-preservation-commit)).
 - **[ORB-10800]** — Extend managed provenance to skills, auto-tasks, and
   routines, and add the `orbit doctor` definition-artifact check plus
   `--fix-stale-artifacts` ([All five definition-artifact kinds carry managed provenance, and doctor reports it](#all-five-definition-artifact-kinds-carry-managed-provenance-and-doctor-reports-it), extending [Track bundled activity and job ownership by content digest before retirement](#track-bundled-activity-and-job-ownership-by-content-digest-before-retirement)).

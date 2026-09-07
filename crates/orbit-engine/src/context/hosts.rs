@@ -519,6 +519,19 @@ pub trait RuntimeHost: Send + Sync {
         Ok(())
     }
 
+    /// Persist a successful terminal failure activity separately from normal
+    /// step checkpoints. The failed step remains failed; this records only the
+    /// recovery evidence a later resume may authenticate.
+    fn checkpoint_failure_activity(
+        &self,
+        _run_id: &str,
+        _activity_name: &str,
+        _failed_step_id: &str,
+        _output: &Value,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+
     fn tool_context_for_activity(
         &self,
         _run_id: Option<&str>,

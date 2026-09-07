@@ -49,6 +49,19 @@ pub struct DrainWorkerLimit {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Durable result of a job-level terminal failure activity.
+///
+/// A failure activity is not a successful workflow step, so its output cannot
+/// live in `step_outputs`. Keeping it separately preserves the evidence needed
+/// to resume from a recovery action without treating the failed step as
+/// completed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FailureActivityCheckpoint {
+    pub activity_name: String,
+    pub failed_step_id: String,
+    pub output: Value,
+}
+
 /// Persistent pipeline state for a job run.
 ///
 /// Stored as `state.json` in the run bundle directory. Steps read accumulated
@@ -111,6 +124,13 @@ pub struct PipelineState {
     /// finished coordinator is distinguished from cancellation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain_admissions_stop: Option<DrainAdmissionsStop>,
+    /// Successful terminal failure activity output, when one ran.
+    ///
+    /// This remains distinct from the successful-step maps: the original step
+    /// failure stays authoritative while a resume can still authenticate any
+    /// candidate the failure activity preserved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_activity_checkpoint: Option<FailureActivityCheckpoint>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -133,6 +153,7 @@ impl PipelineState {
             child_dispatches: Vec::new(),
             drain_worker_limit: None,
             drain_admissions_stop: None,
+            failure_activity_checkpoint: None,
             updated_at: Utc::now(),
         }
     }
@@ -203,6 +224,22 @@ impl PipelineState {
         });
         self.updated_at = Utc::now();
         true
+    }
+
+    /// Preserve the successful terminal failure activity without converting
+    /// the failed workflow step into a completed checkpoint.
+    pub fn record_failure_activity(
+        &mut self,
+        activity_name: String,
+        failed_step_id: String,
+        output: Value,
+    ) {
+        self.failure_activity_checkpoint = Some(FailureActivityCheckpoint {
+            activity_name,
+            failed_step_id,
+            output,
+        });
+        self.updated_at = Utc::now();
     }
 
     /// Record step recovery metadata and advance the resume cursor.

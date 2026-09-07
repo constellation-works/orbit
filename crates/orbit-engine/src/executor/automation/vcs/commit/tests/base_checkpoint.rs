@@ -13,7 +13,10 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::task::NO_DIFF_EXPECTED_TAG;
+use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
+
+use crate::context::RuntimeHost;
 
 use super::super::git_commit;
 use super::test_support::*;
@@ -21,6 +24,8 @@ use super::test_support::*;
 use super::super::super::git::{git_output, git_success};
 
 const MOVING_BASE_REF: &str = "origin/agent-main";
+const HANDOFF_RUN_ID: &str = "batch-1";
+const RESUME_RUN_ID: &str = "resume-1";
 
 fn commit_all(workspace: &Path, message: &str) -> String {
     git_success(workspace, &["add", "--all", "--", "."]).expect("stage fixture change");
@@ -50,6 +55,43 @@ fn batch_input(workspace: &Path, base_sha: &str) -> Value {
         "base_ref": MOVING_BASE_REF,
         "base_sha": base_sha,
     })
+}
+
+fn preserved_run_state(run_id: &str, base_sha: &str, head_sha: &str) -> PipelineState {
+    let mut state = PipelineState::new(
+        run_id.to_string(),
+        "task_pr_pipeline".to_string(),
+        json!({"task_ids": ["T1"]}),
+    );
+    state.record_failure_activity(
+        "pr_failure_handoff".to_string(),
+        "implement_bundle".to_string(),
+        json!({
+            "phase": "failure_handoff",
+            "decision": "blocked_failure_pr",
+            "task_id": "T1",
+            "handoff_run_id": HANDOFF_RUN_ID,
+            "checkpoint_owner": HANDOFF_RUN_ID,
+            "preservation_commit_created": true,
+            "head_sha": head_sha,
+            "original_base_sha": base_sha,
+        }),
+    );
+    state
+}
+
+fn host_with_preservation(
+    workspace: &Path,
+    base_sha: &str,
+    preserved_head: &str,
+) -> CommitTestHost {
+    let task = task_with_file("T1", "Preserved resume", "task.txt", "claude");
+    let source = preserved_run_state(HANDOFF_RUN_ID, base_sha, preserved_head);
+    let mut resumed = source.clone();
+    resumed.run_id = RESUME_RUN_ID.to_string();
+    CommitTestHost::new(vec![task], workspace.to_path_buf())
+        .with_run_state(HANDOFF_RUN_ID, None, source)
+        .with_run_state(RESUME_RUN_ID, Some(HANDOFF_RUN_ID), resumed)
 }
 
 #[test]
@@ -144,6 +186,129 @@ fn commit_rejects_any_head_change_from_the_pinned_base() {
     assert!(
         !message.contains("nothing to commit"),
         "the immutable-base failure must not reuse the empty-stage wording: {message}"
+    );
+}
+
+#[test]
+fn commit_accepts_only_the_exact_orbit_preservation_head_for_a_resume() {
+    let temp = initialized_git_repo();
+    let workspace = temp.path();
+    let base_sha = git_output(workspace, &["rev-parse", "HEAD"]).expect("read checkpoint");
+    git_success(workspace, &["checkout", "-b", "orbit/T1"]).expect("create task branch");
+    fs::write(workspace.join("candidate.txt"), "preserved candidate\n").unwrap();
+    let preserved_head = commit_all(workspace, "[T1] Orbit failure preservation");
+    fs::write(workspace.join("task.txt"), "resumed edit\n").unwrap();
+
+    let host = host_with_preservation(workspace, &base_sha, &preserved_head);
+    let mut input = batch_input(workspace, &base_sha);
+    input["run_id"] = json!(RESUME_RUN_ID);
+
+    let result = git_commit(&host, &input).expect("known preservation head is accepted");
+
+    assert_eq!(result["decision"], "performed");
+    assert_eq!(result["base_sha"], base_sha);
+    assert_eq!(
+        git_output(workspace, &["rev-parse", "HEAD^1"]).expect("read commit parent"),
+        preserved_head,
+        "the resumed workflow commit extends the preservation commit",
+    );
+    let source = host
+        .read_run_state(HANDOFF_RUN_ID)
+        .expect("read source state")
+        .expect("source state exists");
+    assert_eq!(source.run_id, HANDOFF_RUN_ID);
+    assert_eq!(
+        source
+            .failure_activity_checkpoint
+            .expect("preservation evidence")
+            .output["original_base_sha"],
+        base_sha,
+        "the original base evidence remains unchanged",
+    );
+}
+
+#[test]
+fn commit_rejects_a_commit_after_the_recorded_preservation_head_without_mutation() {
+    let temp = initialized_git_repo();
+    let workspace = temp.path();
+    let base_sha = git_output(workspace, &["rev-parse", "HEAD"]).expect("read checkpoint");
+    git_success(workspace, &["checkout", "-b", "orbit/T1"]).expect("create task branch");
+    fs::write(workspace.join("candidate.txt"), "preserved candidate\n").unwrap();
+    let preserved_head = commit_all(workspace, "[T1] Orbit failure preservation");
+    fs::write(
+        workspace.join("unknown.txt"),
+        "unknown committed movement\n",
+    )
+    .unwrap();
+    let unknown_head = commit_all(workspace, "unknown commit");
+    fs::write(workspace.join("task.txt"), "user work must survive\n").unwrap();
+    let status_before = git_output(
+        workspace,
+        &["status", "--porcelain", "--untracked-files=all"],
+    )
+    .expect("status before refusal");
+
+    let host = host_with_preservation(workspace, &base_sha, &preserved_head);
+    let mut input = batch_input(workspace, &base_sha);
+    input["run_id"] = json!(RESUME_RUN_ID);
+    let error = git_commit(&host, &input).expect_err("unknown movement remains rejected");
+
+    assert!(error.to_string().contains("expected base"), "{error}");
+    assert_eq!(
+        git_output(workspace, &["rev-parse", "HEAD"]).expect("head after refusal"),
+        unknown_head,
+    );
+    assert_eq!(
+        git_output(
+            workspace,
+            &["status", "--porcelain", "--untracked-files=all"]
+        )
+        .expect("status after refusal"),
+        status_before,
+        "candidate and user changes are untouched",
+    );
+}
+
+#[test]
+fn preservation_evidence_cannot_launder_an_unknown_parent_commit() {
+    let temp = initialized_git_repo();
+    let workspace = temp.path();
+    let base_sha = git_output(workspace, &["rev-parse", "HEAD"]).expect("read checkpoint");
+    git_success(workspace, &["checkout", "-b", "orbit/T1"]).expect("create task branch");
+    fs::write(
+        workspace.join("unknown.txt"),
+        "unknown committed movement\n",
+    )
+    .unwrap();
+    let unknown_head = commit_all(workspace, "unknown commit");
+    fs::write(workspace.join("candidate.txt"), "claimed preservation\n").unwrap();
+    let claimed_preservation = commit_all(workspace, "Orbit preservation");
+    fs::write(workspace.join("task.txt"), "user work must survive\n").unwrap();
+    let status_before = git_output(
+        workspace,
+        &["status", "--porcelain", "--untracked-files=all"],
+    )
+    .expect("status before refusal");
+
+    let host = host_with_preservation(workspace, &base_sha, &claimed_preservation);
+    let mut input = batch_input(workspace, &base_sha);
+    input["run_id"] = json!(RESUME_RUN_ID);
+    let error = git_commit(&host, &input).expect_err("unknown parent remains rejected");
+
+    let message = error.to_string();
+    assert!(message.contains("unowned parent"), "{message}");
+    assert!(message.contains(&unknown_head), "{message}");
+    assert_eq!(
+        git_output(workspace, &["rev-parse", "HEAD"]).expect("head after refusal"),
+        claimed_preservation,
+    );
+    assert_eq!(
+        git_output(
+            workspace,
+            &["status", "--porcelain", "--untracked-files=all"]
+        )
+        .expect("status after refusal"),
+        status_before,
     );
 }
 
