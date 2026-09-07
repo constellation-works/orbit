@@ -29,9 +29,15 @@ pub struct CommitTestHost {
     scoreboard_dir: PathBuf,
     job_runs: Mutex<Vec<JobRun>>,
     run_states: Mutex<HashMap<String, PipelineState>>,
+    artifacts: Vec<TaskArtifact>,
 }
 
 impl CommitTestHost {
+    pub fn with_artifacts(mut self, artifacts: Vec<TaskArtifact>) -> Self {
+        self.artifacts = artifacts;
+        self
+    }
+
     pub fn new(tasks: Vec<Task>, repo_root: PathBuf) -> Self {
         let data_root = repo_root.join(".orbit-test-data");
         let scoreboard_dir = data_root.join("scoreboard");
@@ -44,6 +50,7 @@ impl CommitTestHost {
             scoreboard_dir,
             job_runs: Mutex::new(Vec::new()),
             run_states: Mutex::new(HashMap::new()),
+            artifacts: Vec::new(),
         }
     }
 
@@ -126,7 +133,7 @@ impl RuntimeHost for CommitTestHost {
     }
 
     fn get_task_artifacts(&self, _task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
-        Ok(Vec::new())
+        Ok(self.artifacts.clone())
     }
 
     fn list_tasks_filtered(
@@ -186,12 +193,14 @@ impl RuntimeHost for CommitTestHost {
 
     fn update_task_from_activity(
         &self,
-        _task_id: &str,
-        _update: TaskActivityUpdate,
+        task_id: &str,
+        update: TaskActivityUpdate,
     ) -> Result<Task, OrbitError> {
-        Err(OrbitError::Execution(
-            "update_task_from_activity is not needed by commit tests".to_string(),
-        ))
+        let mut tasks = self.tasks.lock().unwrap();
+        let task = tasks.iter_mut().find(|task| task.id == task_id).unwrap();
+        assert_eq!(task.status, update.expected_status);
+        task.status = update.status;
+        Ok(task.clone())
     }
 
     fn apply_task_automation_update(
@@ -204,6 +213,9 @@ impl RuntimeHost for CommitTestHost {
             .iter_mut()
             .find(|task| task.id == task_id)
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
+        if let Some(status) = update.status {
+            task.status = status;
+        }
         if let Some(execution_summary) = update.execution_summary {
             task.execution_summary = execution_summary.clone();
             self.persisted_summaries

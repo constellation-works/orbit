@@ -78,6 +78,8 @@ spec:
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         scope: all
+        # This pipeline rechecks accepted landing evidence at both handoffs.
+        verify_already_landed: true
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_ref: "{{ steps.worktree.output.base_ref }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
@@ -214,6 +216,7 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         no_diff_expected: true
+        already_landed_checkpoint: "{{ steps.commit.output }}"
 
     - id: complete_pr
       when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true"
@@ -235,7 +238,9 @@ spec:
         base_sync: "{{ input.base_sync }}"
 
     # A no-diff bundle delivered nothing to merge; its validation is the
-    # delivery, so completion needs no PR.
+    # delivery, so completion needs no PR. Verified already-landed retries
+    # take this route with their full evidence checkpoint; they create no
+    # new code delivery and do not acquire the side-effect-only task tag.
     - id: complete_no_diff
       when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} == true"
       recovery_activity: step_failure_recovery
@@ -245,3 +250,4 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         no_diff_expected: true
+        already_landed_checkpoint: "{{ steps.commit.output }}"

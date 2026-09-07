@@ -4,6 +4,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod already_landed;
 mod ci_sweep;
 mod completion;
 mod epic_review_gate;

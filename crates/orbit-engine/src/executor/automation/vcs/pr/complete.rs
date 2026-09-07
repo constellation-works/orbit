@@ -58,8 +58,8 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
 
     // A `no-diff-expected` bundle delivered nothing to merge, so there is no PR
     // to verify. Its validation *is* the delivery, and completion authority
-    // covers it — but only when every task in the bundle actually carries the
-    // tag, mirroring the same guard `pr_promote` applies.
+    // covers it. Untagged already-landed work must instead recheck the exact
+    // accepted evidence, mirroring the same guard `pr_promote` applies.
     let no_diff_expected = input
         .get("no_diff_expected")
         .and_then(Value::as_bool)
@@ -70,8 +70,23 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
         .map(|task| task.id.clone())
         .collect::<Vec<_>>();
     let merge_outcome = if no_diff_expected {
-        ensure_all_tasks_no_diff_expected(&context.tasks)?;
-        json!({ "merged": false, "reason": "no_diff_expected" })
+        if let Some(checkpoint) = input.get("already_landed_checkpoint").filter(|value| {
+            value.get("decision").and_then(Value::as_str) == Some("verified_already_landed")
+        }) {
+            super::super::commit::already_landed::verify_handoff(
+                host,
+                &context.tasks,
+                &context.workspace_path,
+                input_string_field(input, "run_id")
+                    .as_deref()
+                    .unwrap_or(&context.batch_id),
+                checkpoint,
+            )?;
+            json!({ "merged": false, "reason": "verified_already_landed", "evidence": checkpoint })
+        } else {
+            ensure_all_tasks_no_diff_expected(&context.tasks)?;
+            json!({ "merged": false, "reason": "no_diff_expected" })
+        }
     } else {
         let workspace_path = context.workspace_path.to_string_lossy().into_owned();
         let pr_number = resolve_pr_number(input, &context.tasks)?;
