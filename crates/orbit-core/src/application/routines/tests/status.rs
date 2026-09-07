@@ -1,10 +1,14 @@
 use std::fs;
+use std::path::PathBuf;
 
+use orbit_automation::routines::validation::RoutinePinValidation;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use tempfile::tempdir;
 
 use super::super::loader::{LoadedRoutine, RoutineOrigin};
-use super::super::status::{RoutineToggleOutcome, set_routine_enabled};
+use super::super::status::{
+    RoutineStatus, RoutineToggleOutcome, ScheduleDisplayState, set_routine_enabled,
+};
 
 fn loaded(path: std::path::PathBuf) -> LoadedRoutine {
     let raw = fs::read_to_string(&path).expect("read fixture");
@@ -92,5 +96,85 @@ fn routine_toggle_reports_an_exact_noop_without_rewriting() {
             .modified()
             .expect("fixture mtime after noop"),
         before
+    );
+}
+
+fn display_status(
+    yaml: &str,
+    pinned: bool,
+    paused: bool,
+    observed: bool,
+    next_due: Option<&str>,
+    automation: Option<serde_json::Value>,
+) -> RoutineStatus {
+    RoutineStatus {
+        routine: LoadedRoutine {
+            definition: parse_routine_yaml(yaml).expect("parse fixture"),
+            origin: RoutineOrigin::Committed,
+            source_workspace: "orbit".to_string(),
+            source_orbit_dir: PathBuf::from("/tmp"),
+            path: PathBuf::from("/tmp/nightly.yaml"),
+        },
+        pinned_to_host: pinned,
+        validation: RoutinePinValidation {
+            eligible: pinned,
+            diagnostics: Vec::new(),
+        },
+        paused_at: paused.then(|| "2026-09-07T21:00:00+00:00".to_string()),
+        first_observed_at: observed.then(|| "2026-09-07T20:00:00+00:00".to_string()),
+        last_evaluated_slot: None,
+        next_due: next_due.map(str::to_string),
+        last_fire: None,
+        automation,
+    }
+}
+
+const CRON_YAML: &str = "schemaVersion: 1\nname: nightly\nenabled: true\nhosts: [host-a]\ntrigger:\n  cron: '0 2 * * *'\ntarget: job:nightly\n";
+const DISABLED_YAML: &str = "schemaVersion: 1\nname: nightly\nenabled: false\nhosts: [host-a]\ntrigger:\n  cron: '0 2 * * *'\ntarget: job:nightly\n";
+const DELIVERY_YAML: &str = "schemaVersion: 1\nname: ship\nenabled: true\nhosts: [host-a]\npolicy:\n  overlap: forbid\ntrigger:\n  deliveries_landed:\n    branch: agent-main\n    threshold: 1\n    max_wait_minutes: 60\n    coverage: integrated_qa_v1\ntarget: job:ship\n";
+
+#[test]
+fn schedule_display_state_distinguishes_paused_disabled_waiting_and_unobserved() {
+    let next = Some("2026-09-07T21:30:00-07:00");
+    assert_eq!(
+        display_status(DISABLED_YAML, true, false, true, next, None).schedule_display_state(),
+        ScheduleDisplayState::Disabled
+    );
+    assert_eq!(
+        display_status(CRON_YAML, true, true, true, next, None).schedule_display_state(),
+        ScheduleDisplayState::Paused
+    );
+    assert_eq!(
+        display_status(CRON_YAML, false, false, true, next, None).schedule_display_state(),
+        ScheduleDisplayState::Unavailable
+    );
+    assert_eq!(
+        display_status(DELIVERY_YAML, true, false, true, None, None).schedule_display_state(),
+        ScheduleDisplayState::Waiting
+    );
+    assert_eq!(
+        display_status(CRON_YAML, true, false, false, None, None).schedule_display_state(),
+        ScheduleDisplayState::NeverObserved
+    );
+    assert_eq!(
+        display_status(CRON_YAML, true, false, true, next, None).schedule_display_state(),
+        ScheduleDisplayState::Scheduled
+    );
+    assert!(
+        display_status(DISABLED_YAML, true, false, true, next, None)
+            .schedule_display_state()
+            .is_hypothetical()
+    );
+    assert_eq!(
+        display_status(
+            DELIVERY_YAML,
+            true,
+            false,
+            true,
+            None,
+            Some(serde_json::json!({"reason": "state_unavailable"})),
+        )
+        .schedule_display_state(),
+        ScheduleDisplayState::Unavailable
     );
 }

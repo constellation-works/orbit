@@ -12,9 +12,9 @@ use orbit_common::governance::authorization::{
 };
 use orbit_core::OrbitRuntime;
 use orbit_core::application::auto_tasks::{
-    collect_auto_tasks, cursor_state_path, load_cursor_state,
+    AutoTaskCursor, collect_auto_tasks, cursor_state_path, load_cursor_state,
 };
-use orbit_core::application::routines::parse_cron;
+use orbit_core::application::routines::{ScheduleDisplayState, parse_cron};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag,
@@ -25,7 +25,8 @@ use serde_json::{Value, json};
 use super::map_runtime_error;
 use super::routines::{
     OperationsQuery, action_capability, authorization_denied, authorized_caller,
-    explicit_workspace, named_entity_not_found, record_operation_audit, selection_conflict,
+    explicit_workspace, named_entity_not_found, next_evaluation_json, record_operation_audit,
+    selection_conflict,
 };
 use crate::state::DashboardState;
 
@@ -404,7 +405,13 @@ fn definition_json(
         })),
         "last_minted_task_id": last_minted_task_id,
         "last_minted_task_status": last_minted_task_status,
-        "next_evaluation": next_evaluation(&definition.schedule, cursor, now),
+        "next_evaluation": next_evaluation_projection(
+            definition.enabled,
+            &definition.schedule,
+            cursor,
+            automation.as_ref(),
+            now,
+        ),
         "open_duplicate": open_duplicate,
         "may_create_open_duplicate": open_duplicate,
     })
@@ -458,12 +465,50 @@ fn template_summary(template: &AutoTaskTemplate) -> String {
     parts.join(" · ")
 }
 
-fn next_evaluation(
+fn next_evaluation_projection(
+    enabled: bool,
     schedule: &AutoTaskSchedule,
-    cursor: Option<&orbit_core::application::auto_tasks::AutoTaskCursor>,
+    cursor: Option<&AutoTaskCursor>,
+    automation: Option<&Value>,
+    now: DateTime<Utc>,
+) -> Value {
+    if !enabled {
+        return next_evaluation_json(
+            ScheduleDisplayState::Disabled,
+            theoretical_next(schedule, cursor, now),
+        );
+    }
+    if automation_unavailable(automation) {
+        return next_evaluation_json(ScheduleDisplayState::Unavailable, None);
+    }
+    match schedule {
+        AutoTaskSchedule::Deliveries { .. } => {
+            next_evaluation_json(ScheduleDisplayState::Waiting, None)
+        }
+        AutoTaskSchedule::Cron { .. } | AutoTaskSchedule::Interval { .. } => {
+            if cursor.is_none() {
+                return next_evaluation_json(ScheduleDisplayState::NeverObserved, None);
+            }
+            match theoretical_next(schedule, cursor, now) {
+                Some(at) => next_evaluation_json(ScheduleDisplayState::Scheduled, Some(at)),
+                None => next_evaluation_json(ScheduleDisplayState::Unavailable, None),
+            }
+        }
+    }
+}
+
+fn automation_unavailable(automation: Option<&Value>) -> bool {
+    automation
+        .and_then(|value| value.get("reason"))
+        .and_then(Value::as_str)
+        .is_some_and(|reason| reason == "source_unavailable" || reason == "state_unavailable")
+}
+
+fn theoretical_next(
+    schedule: &AutoTaskSchedule,
+    cursor: Option<&AutoTaskCursor>,
     now: DateTime<Utc>,
 ) -> Option<String> {
-    let cursor = cursor?;
     match schedule {
         AutoTaskSchedule::Deliveries { .. } => None,
         AutoTaskSchedule::Cron { cron } => {
@@ -472,17 +517,17 @@ fn next_evaluation(
             parsed
                 .find_next_occurrence(&now_local, false)
                 .ok()
-                .map(|slot| slot.with_timezone(&Utc).to_rfc3339())
+                .map(|slot| slot.to_rfc3339())
         }
         AutoTaskSchedule::Interval { every_minutes } => {
-            next_interval(*every_minutes, cursor, now).map(|slot| slot.to_rfc3339())
+            next_interval(*every_minutes, cursor?, now).map(|slot| slot.to_rfc3339())
         }
     }
 }
 
 fn next_interval(
     every_minutes: u64,
-    cursor: &orbit_core::application::auto_tasks::AutoTaskCursor,
+    cursor: &AutoTaskCursor,
     now: DateTime<Utc>,
 ) -> Option<DateTime<Utc>> {
     if every_minutes == 0 {

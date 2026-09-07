@@ -18,6 +18,42 @@ use super::validation::{
     RoutineRegistryStatus, validate_routine_pins,
 };
 
+/// Operator-facing schedule readiness. Theoretical next-slot math may still be
+/// present; this state says whether that time is armed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleDisplayState {
+    /// Enabled, eligible, and a next slot is a real scheduled evaluation.
+    Scheduled,
+    /// Definition `enabled` is false. A next slot, if present, is hypothetical.
+    Disabled,
+    /// Host-local pause. A next slot, if present, is hypothetical.
+    Paused,
+    /// Enabled delivery- or state-triggered work is waiting on that trigger.
+    Waiting,
+    /// The scheduler has never recorded a cursor for this definition.
+    NeverObserved,
+    /// Pin, source, or trigger state cannot be shown as a next evaluation.
+    Unavailable,
+}
+
+impl ScheduleDisplayState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Scheduled => "scheduled",
+            Self::Disabled => "disabled",
+            Self::Paused => "paused",
+            Self::Waiting => "waiting",
+            Self::NeverObserved => "never_observed",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
+    /// Disabled and paused rows may still carry a theoretical next slot.
+    pub fn is_hypothetical(self) -> bool {
+        matches!(self, Self::Disabled | Self::Paused)
+    }
+}
+
 /// Full effective state of one routine on this host.
 #[derive(Debug, Clone)]
 pub struct RoutineStatus {
@@ -46,6 +82,41 @@ impl RoutineStatus {
     pub fn effective(&self) -> bool {
         self.routine.definition.enabled && self.pinned_to_host && self.paused_at.is_none()
     }
+
+    /// How Operations (and other projections) should label the next slot.
+    pub fn schedule_display_state(&self) -> ScheduleDisplayState {
+        if !self.routine.definition.enabled {
+            return ScheduleDisplayState::Disabled;
+        }
+        if self.paused_at.is_some() {
+            return ScheduleDisplayState::Paused;
+        }
+        if !self.pinned_to_host {
+            return ScheduleDisplayState::Unavailable;
+        }
+        if automation_unavailable(self.automation.as_ref()) {
+            return ScheduleDisplayState::Unavailable;
+        }
+        if self.routine.definition.trigger.deliveries_landed.is_some()
+            || self.routine.definition.trigger.state.is_some()
+        {
+            return ScheduleDisplayState::Waiting;
+        }
+        if self.next_due.is_some() {
+            return ScheduleDisplayState::Scheduled;
+        }
+        if self.first_observed_at.is_none() {
+            return ScheduleDisplayState::NeverObserved;
+        }
+        ScheduleDisplayState::Unavailable
+    }
+}
+
+fn automation_unavailable(automation: Option<&serde_json::Value>) -> bool {
+    automation
+        .and_then(|value| value.get("reason"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|reason| reason == "source_unavailable" || reason == "state_unavailable")
 }
 
 /// Everything `orbit routine list` renders.

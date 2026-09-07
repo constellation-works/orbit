@@ -412,6 +412,10 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(operations.contains("routine.target"));
     assert!(operations.contains("last_evaluated_slot"));
     assert!(operations.contains("next_tick_at"));
+    assert!(operations.contains("Last scheduler evaluation"));
+    assert!(operations.contains("hypothetical next"));
+    assert!(operations.contains("Waiting for deliveries"));
+    assert!(operations.contains("Never observed"));
     assert!(operations.contains("acknowledge_unconditional: true"));
     assert!(operations.contains("UNCONDITIONAL_MINT_WARNING"));
     assert!(operations.contains(
@@ -442,6 +446,99 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(css.contains("body.operations-active"));
     assert!(css.contains(".operation-mint-warning"));
     assert!(router.contains(r#"classList.toggle("operations-active", top === "operations")"#));
+}
+
+/// ORB-11558: disabled/paused rows must not look scheduled; clock cadence is a
+/// duration; timestamps name a timezone, including PST/PDT across DST.
+#[test]
+fn dashboard_operations_label_paused_schedules_timezones_and_clock_units() {
+    run_dashboard_javascript_test(
+        r#"
+process.env.TZ = "America/Los_Angeles";
+const nodes = [];
+class Node {
+  constructor(id = "") { this.id = id; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.hidden = false; this.disabled = false; this.value = ""; nodes.push(this); }
+  appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
+  append(...children) { for (const child of children) this.appendChild(child); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  querySelectorAll() { return []; }
+  querySelector() { return null; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+for (const id of ["routines-body", "clock-body", "auto-tasks-body", "auto-drain-body", "operation-mode-body", "routines-count", "clock-host", "auto-tasks-count", "auto-drain-count", "operation-mode-count", "operations-session", "routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "operation-mode-operation-feedback"]) get(id);
+globalThis.document = { getElementById: get, createElement: () => new Node(), createTextNode: (text) => Object.assign(new Node(), { textContent: text }), body: new Node("body") };
+globalThis.window = { confirm: () => true, location: new URL("http://dashboard.test/"), addEventListener: () => {}, localStorage: { getItem: () => null, setItem: () => {} } };
+const pad = (n) => String(n).padStart(2, "0");
+const formatAbsoluteTime = (value) => {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+const routines = {
+  host_id: "host-1",
+  session_explanation: "test",
+  capabilities: {},
+  clock: {
+    health: "healthy", provider: "systemd", enabled: true, loaded: true, running: true, schedulable: true,
+    configured_cadence_seconds: 300, effective_cadence_seconds: 300,
+    last_tick_at: "2026-09-07T21:00:00Z", next_tick_at: "2026-09-07T21:05:00Z",
+  },
+  routines: [
+    { name: "ship-sweep-orbit", source: "one", target: "job:ship", enabled: false, effective: false, cron: "30 14 * * *", hosts: ["host-1"], pinned_to_host: true, next_due: "2026-09-07T21:30:00Z", next_evaluation: { state: "disabled", at: "2026-09-07T21:30:00Z", hypothetical: true }, last_fire: null },
+    { name: "paused-nightly", source: "one", target: "job:nightly", enabled: true, effective: false, paused_at: "2026-09-07T20:00:00Z", cron: "0 2 * * *", hosts: ["host-1"], pinned_to_host: true, next_due: "2026-09-08T09:00:00Z", next_evaluation: { state: "paused", at: "2026-09-08T09:00:00Z", hypothetical: true }, last_fire: null },
+    { name: "delivery-cover", source: "one", target: "job:cover", enabled: true, effective: true, trigger: { deliveries_landed: { threshold: 3, branch: "agent-main" } }, hosts: ["host-1"], pinned_to_host: true, next_evaluation: { state: "waiting", at: null, hypothetical: false }, last_fire: null },
+  ],
+};
+const autoTasks = {
+  unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.",
+  capabilities: { auto_task_toggle: { authorized: true }, auto_task_mint: { authorized: true } },
+  definitions: [
+    { name: "ci-failure-remediation", enabled: false, schedule_summary: "every 15 minutes", template_summary: "[auto-task] remediate", next_evaluation: { state: "disabled", at: "2026-09-07T21:15:00Z", hypothetical: true }, last_evaluation: null, last_minted_task_id: null },
+    { name: "hourly", enabled: true, schedule_summary: "every 60 minutes", last_evaluation: { kind: "fired", last_task_id: "ORB-00001", last_fired_at: "2026-09-07T20:00:00Z" }, last_minted_task_id: "ORB-00099", last_minted_task_status: "backlog", next_evaluation: { state: "scheduled", at: "2026-09-07T22:00:00Z", hypothetical: false } },
+    { name: "fresh", enabled: true, schedule_summary: "every 60 minutes", last_evaluation: null, last_minted_task_id: null, next_evaluation: { state: "never_observed", at: null, hypothetical: false } },
+    { name: "broken-cover", enabled: true, schedule_summary: "3 deliveries on agent-main", next_evaluation: { state: "unavailable", at: null, hypothetical: false } },
+  ],
+};
+globalThis.fetch = async (path) => {
+  const url = String(path);
+  const payload = url.startsWith("/api/routines") ? routines
+    : url.startsWith("/api/auto-tasks") ? autoTasks
+    : {};
+  return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
+};
+const { setWorkspace } = await import("./common.js");
+const { initOperations, fetchAndRenderOperations } = await import("./operations.js");
+setWorkspace("one");
+initOperations({ getWorkspaces: () => [{ id: "one", name: "one", status: "active" }], formatAbsoluteTime });
+await fetchAndRenderOperations();
+const routineText = get("routines-body").textContent;
+const autoText = get("auto-tasks-body").textContent;
+const clockText = get("clock-body").textContent;
+for (const expected of ["Disabled · hypothetical next", "Paused · hypothetical next", "Waiting for deliveries"]) {
+  if (!routineText.includes(expected)) throw new Error(`routines missing ${JSON.stringify(expected)} in: ${routineText}`);
+}
+if (routineText.includes("Next evaluation2026-09-07") && !routineText.includes("hypothetical")) {
+  throw new Error(`unqualified next evaluation in: ${routineText}`);
+}
+for (const expected of ["Disabled · hypothetical next", "Never observed", "Unavailable", "Last scheduler evaluation", "manual mint"]) {
+  if (!autoText.includes(expected)) throw new Error(`auto-tasks missing ${JSON.stringify(expected)} in: ${autoText}`);
+}
+if (!clockText.includes("every 5 minutes (300s)")) throw new Error(`cadence should be a duration, got: ${clockText}`);
+const tzName = (iso) => new Intl.DateTimeFormat("en-US", { timeZoneName: "short" }).formatToParts(new Date(iso)).find((part) => part.type === "timeZoneName")?.value;
+if (tzName("2026-01-15T20:00:00Z") !== "PST") throw new Error(`expected PST in January, got ${tzName("2026-01-15T20:00:00Z")}`);
+if (tzName("2026-07-15T19:00:00Z") !== "PDT") throw new Error(`expected PDT in July, got ${tzName("2026-07-15T19:00:00Z")}`);
+if (!routineText.includes("14:30 PDT") || !routineText.includes("hypothetical")) {
+  throw new Error(`disabled 14:30 must be labeled PDT and hypothetical: ${routineText}`);
+}
+if (!clockText.includes("14:00 PDT") && !clockText.includes("14:05 PDT")) {
+  throw new Error(`clock last/next tick must be absolute local times with a timezone: ${clockText}`);
+}
+"#,
+    );
 }
 
 /// ORB-11250: the bounded auto-delivery window action. Default completion

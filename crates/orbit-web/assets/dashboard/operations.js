@@ -60,10 +60,78 @@ function feedback(id, kind, message) {
   node.textContent = message || "";
 }
 
+function timezoneName(date) {
+  return new Intl.DateTimeFormat("en-US", { timeZoneName: "short" })
+    .formatToParts(date)
+    .find((part) => part.type === "timeZoneName")?.value || "UTC";
+}
+
+function looksLikeDuration(value) {
+  const text = String(value).trim();
+  return /\d+\s*(?:h|hr|hrs|hour|hours|min|mins|minute|minutes|s|sec|secs|seconds)\b/i.test(text)
+    && Number.isNaN(new Date(text).getTime());
+}
+
 function time(value) {
   if (!value) return "Not observed";
+  if (looksLikeDuration(value)) return `Duration ${value}`;
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? String(value) : context.formatAbsoluteTime(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  const formatted = String(context.formatAbsoluteTime(value));
+  const tz = timezoneName(parsed);
+  if (formatted.includes(tz) || /\bUTC\b/.test(formatted) || /[+-]\d{2}:\d{2}$/.test(formatted)) {
+    return formatted;
+  }
+  return `${formatted} ${tz}`;
+}
+
+function cadenceText(seconds) {
+  if (seconds == null || seconds === "") return "Inactive";
+  const n = Number(seconds);
+  if (!Number.isFinite(n)) return String(seconds);
+  if (n % 60 === 0) {
+    const minutes = n / 60;
+    const label = minutes === 1 ? "every 1 minute" : `every ${minutes} minutes`;
+    return `${label} (${n}s)`;
+  }
+  return `every ${n}s`;
+}
+
+function nextEvaluationText(projection, fallbackAt) {
+  const state = projection?.state;
+  const at = projection?.at || (state === "disabled" || state === "paused" ? fallbackAt : null);
+  const when = at ? time(at) : null;
+  if (state === "disabled") return when ? `Disabled · hypothetical next ${when}` : "Disabled";
+  if (state === "paused") return when ? `Paused · hypothetical next ${when}` : "Paused";
+  if (state === "waiting") return "Waiting for deliveries";
+  if (state === "never_observed") return "Never observed";
+  if (state === "unavailable") return "Unavailable";
+  if (state === "scheduled") return when || "Scheduled";
+  return when || "Unavailable";
+}
+
+function lastMintedText(definition) {
+  if (!definition.last_minted_task_id) return "None";
+  const status = definition.last_minted_task_status ? ` · ${definition.last_minted_task_status}` : "";
+  const schedulerId = definition.last_evaluation?.last_task_id;
+  const source = schedulerId && definition.last_minted_task_id !== schedulerId
+    ? " · manual mint"
+    : schedulerId
+      ? " · scheduler"
+      : "";
+  return `${definition.last_minted_task_id}${status}${source}`;
+}
+
+function clockTickText(value, clock) {
+  if (value) {
+    if (looksLikeDuration(value)) {
+      return `Duration from boot ${value} (not a wall-clock tick)`;
+    }
+    return time(value);
+  }
+  if (!clock.enabled) return "Paused";
+  if (clock.schedulable) return "Armed; exact wall-clock time unavailable";
+  return "Not scheduled";
 }
 
 function field(label, value) {
@@ -200,7 +268,7 @@ function renderOperations(payload) {
         field("Schedule", routine.trigger?.deliveries_landed ? `${routine.trigger.deliveries_landed.threshold} verified deliveries on ${routine.trigger.deliveries_landed.branch}` : routine.cron),
         field("Host pin", (routine.hosts || []).join(", ") || "Local host"),
         field("Last evaluation", time(routine.last_evaluated_slot || routine.first_observed_at)),
-        field("Next evaluation", time(routine.next_due)),
+        field("Next evaluation", nextEvaluationText(routine.next_evaluation, routine.next_due)),
         field("Last fire", fire ? time(fire.finished_at || fire.started_at) : "Never"),
         field("Linked run / outcome", fire ? `${fire.run_id || "No run"} · ${fire.state}` : "No fire recorded"),
       ]),
@@ -255,12 +323,12 @@ function renderClock(payload) {
       el("span", { text: clock.enabled ? "service enabled" : "service paused" }),
     ]),
     el("div", { class: "operation-grid" }, [
-      field("Configured cadence", `${clock.configured_cadence_seconds}s`),
-      field("Effective cadence", clock.effective_cadence_seconds ? `${clock.effective_cadence_seconds}s` : "Inactive"),
+      field("Configured cadence", cadenceText(clock.configured_cadence_seconds)),
+      field("Effective cadence", cadenceText(clock.effective_cadence_seconds)),
       field("Loaded", clock.loaded ? "Yes" : "No"),
       field("Running / waiting", clock.running == null ? "Provider does not expose" : clock.running ? "Yes" : "No"),
-      field("Last tick", clock.last_tick_at || "Provider does not expose"),
-      field("Next expected tick", clock.next_tick_at || (clock.schedulable ? "Armed; exact time unavailable" : "Not scheduled")),
+      field("Last tick", clock.last_tick_at ? time(clock.last_tick_at) : "Provider does not expose"),
+      field("Next expected tick", clockTickText(clock.next_tick_at, clock)),
     ]),
   );
   if (clock.health_issue) body.appendChild(el("p", { class: "operation-control-note error", text: clock.health_issue }));
@@ -417,11 +485,9 @@ function renderAutoTasks(payload) {
       el("div", { class: "operation-grid" }, [
         field("Schedule", definition.schedule_summary || "—"),
         field("Dedupe", definition.dedupe === "always" ? "always fire" : "skip if open"),
-        field("Last evaluation / mint", lastEvaluationText(definition)),
-        field("Last minted task", definition.last_minted_task_id
-          ? `${definition.last_minted_task_id}${definition.last_minted_task_status ? ` · ${definition.last_minted_task_status}` : ""}`
-          : "None"),
-        field("Next evaluation", time(definition.next_evaluation)),
+        field("Last scheduler evaluation", lastEvaluationText(definition)),
+        field("Last minted task", lastMintedText(definition)),
+        field("Next evaluation", nextEvaluationText(definition.next_evaluation)),
         field("Open duplicate", definition.open_duplicate ? "Yes — mint will create another" : "No"),
       ]),
     );
