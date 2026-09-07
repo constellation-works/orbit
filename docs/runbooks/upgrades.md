@@ -5,7 +5,7 @@ tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-11280, ORB-11344]
-last_validated: 2026-09-06
+last_validated: 2026-09-07
 ---
 
 # Upgrade Orbit Safely
@@ -67,8 +67,8 @@ includes that root explicitly, so retrying from a different checkout does not si
 workspace being repaired.
 
 The outgoing executable stays at `<orbit>.previous`. Restore it only if `.orbit/` state was not
-migrated: once a migration has been applied, an older binary refuses to open the workspace by
-design. See [Respect the downgrade guard](#respect-the-downgrade-guard).
+migrated to a format it cannot read: an older binary refuses unsupported compatibility
+versions. Additive storage can remain compatible, as described below. See [Respect the downgrade guard](#respect-the-downgrade-guard).
 
 Without a root override, `orbit update` converges **the workspace you run it from**. `ORBIT_ROOT`
 selects an environment-only override, while an explicit `--root` takes precedence over it. Run
@@ -102,6 +102,71 @@ Two ledgers guard `.orbit/` state and auto-apply on workspace open:
 - **Store schema:** the `schema_meta` ledger table inside `orbit.db`, backed by
   `crates/orbit-store/src/driver/sqlite/migration/`. Each migration and its ledger row commit in one
   transaction.
+
+The host task registry has a separate reader-compatibility marker:
+`PRAGMA user_version` in `~/.orbit/tasks/index.sqlite` (or the configured global
+root). Its v5 task/allocator format also supports the additive `task_action_keys`
+table. The repaired executable ensures that table when opening a writable v5
+registry, without raising the reader-compatibility floor. A complete v5 registry
+can still open read-only; missing additive storage requires a writable open.
+
+### Recover a task registry marked version 6
+
+A previous build marked this additive table as registry v6, causing v5 readers
+to fail even on ordinary workspace/task access. A build containing the repair
+recognizes the shipped compatible v6 columns, keys, indexes, and allocation
+constraints, then restores the v5 marker in a transaction. Existing task data,
+allocator state, and permanent action reservations remain intact. Repeated or
+concurrent recovery is safe. Unknown schema versions or unrecognized v6 shapes
+remain refused; recovery never means discarding tables or task data.
+
+Executable upgrade and database recovery are separate steps. An already-installed
+old executable does not learn a future migration. Install a build containing this
+repair through its owning install channel, then invoke **that exact executable**
+to open the registry. No manual SQL or registry reset is needed. `orbit migrate`
+reports workspace layout and store-schema migrations; its dry-run report is not
+an inventory of task-registry additive setup.
+
+For mixed macOS installations, inspect the paths before rollout:
+
+```sh
+type -a orbit
+command -v orbit
+ls -l /opt/homebrew/bin/orbit
+/opt/homebrew/bin/orbit --version
+~/.cargo/bin/orbit --version
+```
+
+For example, `/opt/homebrew/bin/orbit` may still point to
+`Cellar/orbit/0.19.0` while `~/.cargo/bin/orbit` is a different checkout build.
+Building the latter does not upgrade Homebrew or change shell command selection.
+A version string alone may not distinguish two checkout builds; confirm the
+selected executable was built from a revision containing the repair. Upgrade
+Homebrew through Homebrew when a release containing the fix is available, or use
+an explicitly selected, validated repaired build under the rollout owner's direction.
+
+Quiesce the build that writes v6 and take a consistent backup of the registry
+and canonical bundles using [the state inventory](./state-and-backup.md). Then
+open through the repaired build on that host, for example:
+
+```sh
+/path/to/repaired/orbit workspace list
+/path/to/repaired/orbit tool run orbit.task.show --input '{"id":"<real-task-id>","model":"codex"}'
+```
+
+After this supported open has recovered a compatible v6 registry, a v5 reader
+can again read its existing workspaces and tasks. Before that open, an old v5
+executable still refuses v6. Do not keep the defective v6 writer running: it can
+raise the marker again. Align `PATH`, any explicit `ORBIT_BIN`, MCP/service
+launch paths, and restarted workers with the intended executable. Other host
+store/layout/host-config compatibility guards still apply; registry recovery is
+not a guarantee that every older release can read every other store.
+
+If recovery is refused, use the reported database and executable paths to check
+which installation is running. Upgrade the selected executable or escalate the
+unrecognized format to the rollout owner; never lower `user_version` manually.
+This repair's automated fixtures run on Linux. macOS Homebrew/PATH behavior and
+live host rollout require verification on the affected Mac by the rollout owner.
 
 ## Back up before a major upgrade
 

@@ -17,8 +17,7 @@ use super::queries::{
     workspace_checkout_by_paths, write_task_index_rows,
 };
 use super::schema::{
-    apply_schema, assert_registry_user_version, registry_user_version,
-    reject_unsupported_registry_schema,
+    apply_schema, assert_registry_user_version, ensure_compatible_schema, registry_user_version,
 };
 use super::util::{
     normalize_path, now_string, parse_relation_type_name, path_to_string, relation_type_name,
@@ -44,7 +43,7 @@ impl TaskRegistryStore {
             .unwrap_or_else(|| PathBuf::from("."));
         let workspaces_dir = normalize_path(&registry_dir.join("workspaces"));
         let opened = orbit_common::storage::sqlite::open_private(path)?;
-        let conn = opened.connection;
+        let mut conn = opened.connection;
         let read_only = opened.read_only;
         if !read_only {
             orbit_common::storage::sqlite::create_private_dir_all(&workspaces_dir)?;
@@ -70,10 +69,10 @@ impl TaskRegistryStore {
                 return Err(mapped);
             }
         }
-        reject_unsupported_registry_schema(&conn)?;
         if registry_user_version(&conn)? < super::REGISTRY_SCHEMA_VERSION {
             apply_schema(&conn)?;
         }
+        ensure_compatible_schema(&mut conn, path)?;
         assert_registry_user_version(&conn)?;
 
         Ok(Self {

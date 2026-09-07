@@ -16,9 +16,11 @@ mod store;
 mod util;
 mod workspace_id;
 
-// Required action-key storage must advance the version so existing v5
-// registries run schema setup before admission. Older binaries fail closed.
-const REGISTRY_SCHEMA_VERSION: u32 = 6;
+// Reader compatibility floor, not a counter for additive setup. Action keys
+// preserve the v5 task/allocator format and can be ignored by older readers.
+// Version 6 was shipped for that addition alone; schema.rs recovers it. Never
+// reuse 6 for an incompatible format.
+const REGISTRY_SCHEMA_VERSION: u32 = 5;
 
 pub fn task_registry_path(global_root: &Path) -> PathBuf {
     global_root.join("tasks").join("index.sqlite")
