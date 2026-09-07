@@ -3,9 +3,9 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 //! End-to-end coverage for the task surface after ORB-10428:
-//! approve/reject/unarchive folded into `update --status` and `prune-context`
-//! folded into `lint --fix`. Lock administration lives under `task locks`
-//! (`list`/`release`).
+//! direct audited status classification through `update --status` and
+//! `prune-context` folded into `lint --fix`. Lock administration lives under
+//! `task locks` (`list`/`release`).
 
 use std::fs;
 use std::path::Path;
@@ -17,33 +17,39 @@ use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
 #[test]
-fn update_status_backlog_restores_archived_task() {
+fn update_status_restores_archived_task_directly_to_any_status() {
     let workspace = TestWorkspace::new();
     let id = workspace.add_task("Restore me");
     workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
     workspace.run(&["task", "archive", &id], "archive");
 
-    let restored = workspace.task_json(&["task", "update", &id, "--status", "backlog", "--json"]);
-    assert_eq!(restored["status"], json!("backlog"));
+    let restored =
+        workspace.task_json(&["task", "update", &id, "--status", "in-progress", "--json"]);
+    assert_eq!(restored["status"], json!("in-progress"));
 }
 
 #[test]
-fn update_status_rejected_rejects_illegal_jump_from_done() {
+fn update_status_reopens_done_directly_and_accepts_accompanying_edits() {
     let workspace = TestWorkspace::new();
     let id = workspace.add_task("Terminal task");
     workspace.drive_to_done(&id);
 
-    let output = workspace.run_raw(&["task", "update", &id, "--status", "rejected"]);
-    assert!(
-        !output.status.success(),
-        "done -> rejected must fail:\n{}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("done"),
-        "stderr should name the terminal status:\n{stderr}"
-    );
+    let reopened = workspace.task_json(&[
+        "task",
+        "update",
+        &id,
+        "--status",
+        "rejected",
+        "--title",
+        "Reclassified task",
+        "--json",
+    ]);
+    assert_eq!(reopened["status"], json!("rejected"));
+    assert_eq!(reopened["title"], json!("Reclassified task"));
+    assert!(!reopened["execution_summary"].as_str().unwrap().is_empty());
+
+    let archived = workspace.task_json(&["task", "update", &id, "--status", "archived", "--json"]);
+    assert_eq!(archived["status"], json!("archived"));
 }
 
 #[test]

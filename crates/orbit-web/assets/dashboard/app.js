@@ -44,12 +44,13 @@ const STATUS_ORDER = [
   "proposed",
   "backlog",
   "someday",
+  "done",
+  "rejected",
+  "archived",
 ];
 
-const DEFAULT_INACTIVE_STATUSES = new Set(["someday"]);
-const STATUS_UPDATE_TARGETS = STATUS_ORDER
-  .filter((status) => !["rejected", "archived"].includes(status))
-  .concat(["done"]);
+const DEFAULT_INACTIVE_STATUSES = new Set(["someday", "done", "rejected", "archived"]);
+const STATUS_UPDATE_TARGETS = STATUS_ORDER;
 // ORB-10874: the statuses shown when no `status` filter is represented in the
 // URL — a single source both the initial in-memory state and the hash-parsing
 // default (applyTasksHashQuery) read from, so they cannot drift apart.

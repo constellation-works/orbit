@@ -168,40 +168,6 @@ pub struct TaskUpdateParams {
     pub upsert_artifacts: Vec<TaskArtifact>,
 }
 
-impl TaskUpdateParams {
-    pub(crate) fn has_comment_update(&self) -> bool {
-        self.comment.is_some()
-    }
-
-    pub(crate) fn has_non_comment_mutation(&self) -> bool {
-        self.title.is_some()
-            || self.description.is_some()
-            || self.acceptance_criteria.is_some()
-            || self.dependencies.is_some()
-            || self.relations.is_some()
-            || self.tags.is_some()
-            || self.plan.is_some()
-            || self.execution_summary.is_some()
-            || self.status.is_some()
-            || self.priority.is_some()
-            || self.complexity.is_some()
-            || self.task_type.is_some()
-            || self.source_task_id.is_some()
-            || self.planned_by.is_some()
-            || self.implemented_by.is_some()
-            || self.pr_status.is_some()
-            || self.job_run_id.is_some()
-            || self.crew.is_some()
-            || self.orchestrator.is_some()
-            || self.context_files.is_some()
-            || !self.upsert_artifacts.is_empty()
-    }
-
-    pub(crate) fn has_any_mutation(&self) -> bool {
-        self.has_comment_update() || self.has_non_comment_mutation()
-    }
-}
-
 impl From<TaskUpdateParams> for TaskRecordUpdateParams {
     fn from(p: TaskUpdateParams) -> Self {
         Self {

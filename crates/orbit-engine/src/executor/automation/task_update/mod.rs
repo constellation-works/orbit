@@ -44,6 +44,7 @@ pub(super) fn update_task<H: RuntimeHost + ?Sized>(
         task_id,
         TaskActivityUpdate {
             status,
+            expected_status: task.status,
             // ORB-10603: this step never authors the execution summary. The
             // durable summary is written upstream — by the implementing agent,
             // or derived from the delivered change by the commit step — and a

@@ -688,28 +688,14 @@ impl OrbitRuntime {
     }
 
     pub fn archive_task(&self, id: &str) -> Result<(), OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        let task = self.get_task(id)?;
-
-        if task.status == TaskStatus::Archived {
-            return Err(OrbitError::InvalidInput(format!(
-                "task '{id}' is already archived"
-            )));
-        }
-
-        self.with_mutation(|| {
-            let _ = self.stores().task_records().update(
-                id,
-                StoreTaskUpdateParams {
-                    actor: self.actor_label().to_string(),
-                    status: Some(TaskStatus::Archived),
-                    ..Default::default()
-                },
-            )?;
-            Ok(((), OrbitEvent::TaskArchived { id: id.to_string() }))
-        })?;
-
-        Ok(())
+        self.update_task(
+            id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Archived),
+                ..Default::default()
+            },
+        )
+        .map(|_| ())
     }
 
     pub fn delete_task(&self, id: &str) -> Result<(), OrbitError> {

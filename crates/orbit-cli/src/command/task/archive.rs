@@ -6,7 +6,7 @@ use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 use super::output::task_to_json_for_runtime;
 
 #[derive(Args)]
-#[command(after_help = "Restore an archived task with `orbit task update <id> --status backlog`.")]
+#[command(after_help = "Restore an archived task by updating it to any other status.")]
 pub struct TaskArchiveArgs {
     /// Task ID
     pub id: String,
