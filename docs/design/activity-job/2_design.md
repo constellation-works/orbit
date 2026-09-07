@@ -219,11 +219,19 @@ other phase checkpoints. The run ID comes from the executor. This lets normal
 task-context loading, worktree-pair validation, and sandbox preparation use the
 same assignment as the failed step; no primary-checkout fallback is needed.
 System-crew selection still enforces the original run's crew allowlist.
-The dedicated conflict-recovery leaf may finish the already stopped rebase only
-when its Git metadata matches the prepared branch, original HEAD, and pinned
-target SHA. The boundary requires a clean result on that same branch with the
-target as an ancestor and a remaining candidate commit. Ordinary providers
-still cannot move HEAD; primary-checkout drift checks apply to recovery too.
+The dedicated conflict-recovery leaf edits conflict files only. Its managed
+sandbox deliberately retains the read-only linked-worktree Git metadata
+boundary: the leaf does not stage, abort, continue, or restart a rebase. After
+a successful terminal invocation, the host-side worktree boundary rechecks the
+live run and task owner, retry-lineage worktree checkpoint, prepared branch,
+original HEAD and merge base, pinned target ref and SHA, stopped-rebase
+metadata, and exact unmerged path set. It rejects incomplete or out-of-scope
+file edits, stages only that authenticated set, and runs one `rebase
+--continue`. A later conflict or changed/cancelled owner remains a failed
+recovery; the terminal handoff keeps the original error and preserved
+candidate/PR evidence. The boundary finally requires the target as an ancestor
+and a remaining candidate commit. Ordinary providers still cannot move HEAD;
+primary-checkout drift checks apply to recovery too.
 
 `step.recovery_attempted` retains a bounded, redacted `error_message` and
 `failure_phase` when authorization, input preparation, crew resolution, dispatch,
@@ -232,7 +240,7 @@ events and successful attempts. They supplement the original step conflict,
 which remains the returned error and terminal handoff evidence. An admitted
 attempt settles its recovery budget even when preparation fails before launch.
 
-After [ORB-10382], a recovery activity's structured result is **advisory only**, and its `output_schema_json` declares no `required` fields to keep it that way. A `recovery_activity` is a step attribute rather than a step, so it has no step id and no `{{ steps.<id>.output.* }}` template can consume it; `attempt_recovery_activity` gates the executor's single post-recovery attempt on dispatch success, never on a returned `recovered` field. For `pr_conflict_recovery`, success is established when the deterministic `git_rebase` retry verifies a clean index, no stopped rebase, the pinned target-base ancestry, and the expected branch rewrite; later push/open/promote/complete checkpoints remain the normal authorities.
+After [ORB-10382], a recovery activity's structured result is **advisory only**, and its `output_schema_json` declares no `required` fields to keep it that way. A `recovery_activity` is a step attribute rather than a step, so it has no step id and no `{{ steps.<id>.output.* }}` template can consume it; `attempt_recovery_activity` gates the executor's single post-recovery attempt on dispatch success, never on a returned `recovered` field. `pr_conflict_recovery` no longer advertises such a field at all. Its host-side continuation is authorized by the executor-selected activity and authenticated checkpoints, not response JSON. Final success is established when the deterministic `git_rebase` retry verifies a clean index, no stopped rebase, pinned target-base ancestry, and the expected branch rewrite; later push/open/promote/complete checkpoints remain the normal authorities.
 
 After [ORB-10499], that post-recovery attempt is identified as the source of the "duplicate implement invocation" reported in [F2026-07-174], and an implement invocation can now cancel itself once its task stops accepting writes. The audit trail of the reported run settles the dispatch question the friction could not: the two `implement_one` invocations were serial and deliberate, not concurrent. Attempt #1 exited 0 with `timed_out: false` and was classified `error`, `step_failure_recovery` reported success, `step.recovery_attempted` fired, and attempt #2 ran 848s to completion — after which `commit` reported `skipped_no_diff_expected`. So there is no double-dispatch bug and no retry-after-perceived-timeout policy, only the executor's bounded post-recovery attempt working as designed. Why attempt #2's work was unpersistable is a separate fact the friction conflated with the first: the task's own history shows `status_changed` and then `review_approved` landing *inside* attempt #2's window, attributable to no step of the run — `promote_no_diff` did not run until the end — and recorded against actor `unknown`, so which actor promoted it is not recoverable from the evidence and is deliberately not asserted. What both halves share is one assumption: that an implement invocation is the only actor on its task for the duration of its run. The executor assumes a step classified as failed leaves its task untouched, and the agent assumes its dispatch-time envelope stays valid until its final write. The fix keeps the re-dispatch — most failed attempts do leave the task unfinished — and instead makes the invocation able to see its situation. `agent_task_context_json` injects `status` and `terminal` into the `task` envelope (`terminal` mirroring the `update_task` write gate, where `Done` refuses every non-comment mutation and `Archived` refuses everything but a bare restore), and `agent_implement`'s instruction opens with a terminal-task precheck that stops before resolving context files and returns `success` with `skipped_reason: "task_terminal"`. Because the reported task went terminal mid-run, the dispatch-time snapshot alone is not sufficient: the contract also requires re-reading status through `orbit.task.show` at each checkpoint where the remaining work is still expensive, and treats a terminal-status write rejection as a stop rather than something to retry around. The guard is advisory in the sense of [L-0115] — the executor still gates on durable state and still pays subprocess startup — and an engine-side claim/lock refusing the re-dispatch outright was rejected both as hard-coding a task-lifecycle judgment into the generic step executor and as ineffective here, since the task was still `in-progress` when attempt #2 was dispatched.
 
@@ -270,17 +278,16 @@ After [ORB-10363], `JobV2.failure_activity` is a terminal, best-effort hook dist
 
 The preserved live ORB-11472 / PR1478 incident is an installed-runtime follow-up, not validation performed by [ORB-11488]. After this change is merged to `agent-main` and that build is installed on the owning host, first verify `orbit run show jrun-20260907-0339-14 --json` still names ORB-11472 and its preserved worktree/branch, and verify `gh pr view 1478 --json number,state,mergeStateStatus,headRefName,baseRefName` still reports the same open candidate. Then run `orbit job resume jrun-20260907-0339-14 --json` and retain the returned descendant run ID. Resume reuses successful publication and promotion checkpoints but resolves the current `complete_pr` definition, so the installed typed recovery path—not a blind retry of the old failed process—must perform any repair. Finally, verify the descendant run succeeded, PR1478 is `MERGED`, ORB-11472 is `done`, and its task branch was updated once rather than replaced by a new branch or PR. Until those host-side checks are recorded, source tests establish the recovery mechanism only; they do not establish that PR1478 recovered live.
 
-The ORB-11479 / PR1481 stale-`sync_base` incident likewise remains an
-installed-runtime verification target for [ORB-11493]. The observed deployed
-revision was `21b64aac2987379660b802aa741514e230e16f62` (executable SHA-256
-`87ad10a1b0a123a0635758c45efc9e5740efc203060c7d970330c8bb2fcc097d`), and
-the preserved source is `jrun-20260907-0341-12` through failed resume
-`jrun-20260907-0504`. After an ORB-11493 build is installed, verify those runs,
-the preserved branch, and PR1481 still agree before resuming the failed run.
-The descendant must show a new `prepare_branch.resume_refresh`, enter typed
-conflict recovery if Git proves unmerged entries, reuse PR1481, and complete
-only under its retained `completion: done` authority. Source tests do not prove
-that host-side recovery, so it remains required after delivery.
+The ORB-11479 / PR1481 and ORB-11477 / PR1482 preserved conflicts remain
+installed-runtime verification targets. Source tests exercise the host
+continuation boundary, but do not prove the installed Linux sandbox/process
+composition or a same-PR GitHub completion. After deploying this change, the
+orchestrator must select an eligible, unconsumed recovery checkpoint, verify
+its run/task/worktree/branch/base and open PR identity, resume it without
+restarting implementation, and record that the real sandboxed leaf edits files
+while the host completes Git metadata mutation. The descendant must reuse and
+complete the same PR under retained `completion: done` authority. A consumed
+checkpoint must not be blindly replayed or have its history reset.
 
 After [ORB-10385] / [The runtime reports its deterministic-action registry, and job validation gates on it](./4_decisions.md#the-runtime-reports-its-deterministic-action-registry-and-job-validation-gates-on-it), a job's reachable deterministic actions are checked against the executing runtime before its first step runs. `RuntimeHost::has_deterministic_action` reports the shared typed registry; `validate_job_deterministic_actions` walks the job's `recovery_activity`, `failure_activity`, every step's `recovery_activity`, and every resolved deterministic target (recursing through `parallel:`, `fan_out:`, and `loop:`) and fails the run with `DeterministicActionUnavailable` naming both the activity and the action. Because the check runs inside `execute_job_with_resume` ahead of step one, the run never reaches `worktree_setup`, so no task is admitted and no worktree is created. Unknown actions are never skipped, and the default trait implementation reports `true`, so a host that cannot enumerate its registry keeps surfacing the miss at dispatch. The gate does not weaken the failure hook: an action that becomes unavailable after admission still leaves the original failed-step error authoritative.
 

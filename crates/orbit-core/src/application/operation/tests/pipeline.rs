@@ -8,13 +8,13 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_config::OperationLayer;
-use orbit_engine::{RuntimeHost, StepRecoveryAdmission};
+use orbit_engine::{RuntimeHost, StepRecoveryAdmission, TaskAutomationUpdate};
 use orbit_tools::ToolContext;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::automation::members::{MemberAssessment, MemberState};
 use orbit_types::workflow::automation::{AutomationState, SourceRevision};
 use orbit_types::workflow::{
-    GrantRights, JobRun, OPERATION_ADMISSION_KEY, OperationAdmission, OperationGrant,
+    GrantRights, JobRun, JobRunState, OPERATION_ADMISSION_KEY, OperationAdmission, OperationGrant,
 };
 use serde_json::{Value, json};
 
@@ -553,6 +553,153 @@ fn recovery_budget_spans_step_hooks_and_triage_and_escalates_when_spent() {
         .expect("ledger exists");
     assert_eq!(ledger.episodes.len(), 2);
     assert_eq!(ledger.consumed_seconds, 90);
+}
+
+#[test]
+fn recovery_git_mutation_requires_live_task_run_and_worktree_lineage() {
+    let cancelled_fixture = fixture(AUTONOMOUS_DONE);
+    let runtime = &cancelled_fixture.runtime;
+    let task = seed_task(runtime, "recoverable owner", TaskStatus::Backlog);
+    let grant = enable(
+        runtime,
+        std::slice::from_ref(&task.id),
+        all_rights(),
+        OperationLayer::default(),
+    );
+    let (drain, _) = start_drain(runtime, &grant.id);
+    let child = submitted_run(runtime, admit_leaf(runtime, &drain.run_id, &task.id));
+    let mut state = runtime
+        .read_run_state(&child.run_id)
+        .expect("read child state")
+        .expect("child pipeline state");
+    state.sync_pipeline(json!({
+        "worktree": {
+            "workspace_path": cancelled_fixture.repo,
+            "job_run_id": child.run_id,
+        }
+    }));
+    runtime
+        .write_run_state(&child.run_id, &state)
+        .expect("checkpoint assigned worktree");
+
+    let cancelled = runtime
+        .cancel_job_run(&child.run_id)
+        .expect("cancel pending child");
+    assert_eq!(cancelled.final_state, "cancelled");
+    let error = runtime
+        .validate_step_recovery_mutation(
+            &child.run_id,
+            "sync_base",
+            std::slice::from_ref(&task.id),
+            &cancelled_fixture.repo,
+        )
+        .expect_err("cancelled run must not mutate Git");
+    assert!(error.to_string().contains("state 'cancelled'"), "{error}");
+
+    let other = cancelled_fixture.repo.join("other");
+    std::fs::create_dir(&other).expect("other directory");
+    let mismatch = runtime
+        .validate_step_recovery_mutation(
+            &child.run_id,
+            "sync_base",
+            std::slice::from_ref(&task.id),
+            &other,
+        )
+        .expect_err("cancelled state remains authoritative before path mismatch");
+    assert!(
+        mismatch.to_string().contains("state 'cancelled'"),
+        "{mismatch}"
+    );
+
+    let live_fixture = fixture(AUTONOMOUS_DONE);
+    let live_runtime = &live_fixture.runtime;
+    let live_task = seed_task(live_runtime, "live recovery owner", TaskStatus::Backlog);
+    let live_grant = enable(
+        live_runtime,
+        std::slice::from_ref(&live_task.id),
+        all_rights(),
+        OperationLayer::default(),
+    );
+    let (live_drain, _) = start_drain(live_runtime, &live_grant.id);
+    let live_child = submitted_run(
+        live_runtime,
+        admit_leaf(live_runtime, &live_drain.run_id, &live_task.id),
+    );
+    live_runtime
+        .apply_task_automation_update(
+            &live_task.id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some(live_child.run_id.clone()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("couple task to recovery owner");
+    let live_retry = live_runtime
+        .insert_job_run(
+            &live_child.job_id,
+            live_child.attempt + 1,
+            Utc::now(),
+            live_child.input.clone(),
+            Some(live_child.run_id.clone()),
+        )
+        .expect("insert recovery retry");
+    live_runtime
+        .mark_job_run_running(&live_retry.run_id, Utc::now(), std::process::id())
+        .expect("mark recovery retry running");
+    let mut live_state = orbit_types::workflow::PipelineState::new(
+        live_retry.run_id.clone(),
+        live_retry.job_id.clone(),
+        live_retry.input.clone().expect("retry input"),
+    );
+    live_state.sync_pipeline(json!({
+        "worktree": {
+            "workspace_path": live_fixture.repo,
+            "job_run_id": live_child.run_id,
+        }
+    }));
+    live_runtime
+        .write_run_state(&live_retry.run_id, &live_state)
+        .expect("checkpoint live worktree");
+
+    live_runtime
+        .validate_step_recovery_mutation(
+            &live_retry.run_id,
+            "sync_base",
+            std::slice::from_ref(&live_task.id),
+            &live_fixture.repo,
+        )
+        .expect("matching live ownership permits host mutation");
+    let wrong_tasks = live_runtime
+        .validate_step_recovery_mutation(
+            &live_retry.run_id,
+            "sync_base",
+            &["ORB-unrelated".to_string()],
+            &live_fixture.repo,
+        )
+        .expect_err("run task identity must match");
+    assert!(
+        wrong_tasks.to_string().contains("task lineage"),
+        "{wrong_tasks}"
+    );
+    let wrong_path = live_runtime
+        .validate_step_recovery_mutation(
+            &live_retry.run_id,
+            "sync_base",
+            std::slice::from_ref(&live_task.id),
+            &live_fixture.repo.join(".orbit"),
+        )
+        .expect_err("assigned path must match the worktree checkpoint");
+    assert!(
+        wrong_path.to_string().contains("does not match"),
+        "{wrong_path}"
+    );
+    live_runtime
+        .finalize_job_run(&live_retry.run_id, JobRunState::Success, Utc::now(), None)
+        .expect("finalize live fixture run");
+    live_runtime
+        .cancel_job_run(&live_child.run_id)
+        .expect("cancel source fixture run");
 }
 
 #[test]

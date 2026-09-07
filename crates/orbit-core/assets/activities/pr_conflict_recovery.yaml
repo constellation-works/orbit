@@ -7,9 +7,8 @@ spec:
   description: >
     Leaf recovery for a typed task-PR rebase conflict, including one discovered
     after PR publication during authorized completion. It uses the configured
-    system crew to reconcile the live candidate against its pinned target base,
-    validate the result, and leave the failed step ready for one executor-owned
-    retry.
+    system crew to repair only the live conflict files. The host executor then
+    validates, stages, and continues the pinned rebase before one retry.
   input_schema_json:
     type: object
     additionalProperties: false
@@ -73,13 +72,11 @@ spec:
         type: string
       system_crew:
         type: boolean
-  # Advisory only. The executor judges recovery by retrying the deterministic
-  # rebase step once against the durable Git state.
+  # Advisory only. Neither this result nor any agent-returned flag authorizes
+  # Git mutation; the host boundary and deterministic retry judge recovery.
   output_schema_json:
     type: object
     properties:
-      recovered:
-        type: boolean
       summary:
         type: string
       validations:
@@ -111,16 +108,19 @@ spec:
        acceptance criteria, candidate changes, and both sides of the conflict.
        Preserve the candidate intent and the target-base changes. Do not take a
        whole-file side merely to make the index clean.
-    3. Stage only the resolutions and continue the existing rebase. Do not
-       start a new rebase onto a moving branch name: the supplied
-       `target_base_sha` is authoritative for this attempt.
-    4. Verify that no unmerged index entry or rebase state remains, that the
-       target base SHA is an ancestor of the recovered branch, and that the
-       task candidate is still present. Run focused affected tests followed by
-       the repository-required `make ci-fast` and `make ci-lint` gates. For a
-       completion conflict, do not push or merge; the retried completion step
-       verifies the pinned rewrite, uses the existing remote lease, and reuses
-       the same PR.
+    3. Do not stage, commit, continue, abort, or restart the rebase, and do not
+       write any Git metadata. The managed sandbox intentionally keeps the
+       linked-worktree Git directory read-only. After your successful terminal
+       response, Orbit's host boundary revalidates live run/task/worktree,
+       branch, original HEAD, base, rebase, and conflict-path identity; it then
+       stages exactly the supplied conflict paths and continues the existing
+       rebase onto `target_base_sha`.
+    4. Confirm every supplied conflict file is fully repaired and no unrelated
+       path changed. Run focused affected tests followed by the repository-
+       required `make ci-fast` and `make ci-lint` gates. For a completion
+       conflict, do not push or merge; the retried completion step verifies the
+       host-owned pinned rewrite, uses the existing remote lease, and reuses the
+       same PR.
     5. Return success only after those checks pass. On ambiguity, validation
        failure, a concurrently changed branch/base checkpoint, or exhausted
        resolution, preserve the current evidence and return failed. The job's
@@ -128,7 +128,8 @@ spec:
        candidate branch/PR, and block the task with the original evidence.
 
     Return exactly one Orbit response envelope. Result fields are advisory;
-    durable Git state and the executor's deterministic retry decide recovery.
+    durable Git state and the executor's host-owned continuation plus
+    deterministic retry decide recovery.
   tools:
     - orbit.task.*
     - proc.spawn

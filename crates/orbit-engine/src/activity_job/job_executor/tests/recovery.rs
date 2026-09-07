@@ -257,6 +257,20 @@ fn pr_recovery_projects_rendered_candidate_context_without_overriding_run_author
         "/../orbit-core/assets/activities/pr_conflict_recovery.yaml"
     )))
     .unwrap();
+    let ActivityV2Spec::AgentLoop(agent) = &asset.spec.spec else {
+        panic!("conflict recovery must remain an agent leaf")
+    };
+    assert!(
+        agent
+            .instruction
+            .contains("Do not stage, commit, continue, abort")
+    );
+    assert!(
+        asset.spec.output_schema_json["properties"]
+            .get("recovered")
+            .is_none(),
+        "agent output cannot claim Git recovery authority"
+    );
     let schema = jsonschema::JSONSchema::compile(&asset.spec.input_schema_json).unwrap();
     let mut agent_input = input.clone();
     agent_input.as_object_mut().unwrap().remove("step_id");
@@ -462,7 +476,10 @@ fn typed_vcs_conflict_invokes_pr_recovery_once_and_retries_the_same_step_once() 
                 Ok(json!({"decision": "reused_recovery"})),
             ],
         ),
-        ("pr_conflict_recovery", vec![Ok(json!({"recovered": true}))]),
+        (
+            "pr_conflict_recovery",
+            vec![Ok(json!({"recovered": false}))],
+        ),
     ]);
     let mut job = recovery_job(None, None, "flaky", None, 4);
     job.steps[0].recovery_activity = Some("pr_conflict_recovery".to_string());
@@ -544,17 +561,26 @@ fn exhausted_pr_conflict_recovery_preserves_the_original_typed_error() {
     job.steps[0].resolved_recovery_activity =
         Some(deterministic_activity("pr_conflict_recovery", None));
 
+    let writer = Arc::new(test_writer("run-pr-conflict-exhausted"));
     let error = execute_job(
         &job,
         Value::Null,
         "run-pr-conflict-exhausted",
-        Arc::new(test_writer("run-pr-conflict-exhausted")),
+        writer.clone(),
         &host,
     )
     .expect_err("failed recovery must preserve the typed conflict");
 
     assert_eq!(error.to_string(), conflict.to_string());
     assert_eq!(host.actions(), vec!["flaky", "pr_conflict_recovery"]);
+    let event = serde_json::to_value(recovery_events(&writer.events_snapshot().unwrap())[0])
+        .expect("serialize recovery event");
+    assert_eq!(event["failure_phase"], "dispatch");
+    assert!(
+        event["error_message"]
+            .as_str()
+            .is_some_and(|message| message.contains("validation failed"))
+    );
 }
 
 #[test]
