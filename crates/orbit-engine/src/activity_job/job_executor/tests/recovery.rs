@@ -239,6 +239,8 @@ fn pr_recovery_projects_rendered_candidate_context_without_overriding_run_author
         "workspace_path": "{{ input.assigned }}",
         "head": "candidate-branch", "head_sha": "candidate-sha",
         "pr_number": "123", "run_id": "stale-input-run",
+        "completion": "done", "published_head_sha": "candidate-sha",
+        "base": "agent-main", "base_sync": "remote",
     }));
     let writer = Arc::new(test_writer("run-candidate-context"));
     execute_job(
@@ -269,6 +271,11 @@ fn pr_recovery_projects_rendered_candidate_context_without_overriding_run_author
     assert_eq!(input["failed_step_input"]["head"], "candidate-branch");
     assert_eq!(input["failed_step_input"]["head_sha"], "candidate-sha");
     assert_eq!(input["failed_step_input"]["pr_number"], "123");
+    assert_eq!(input["failed_step_input"]["completion"], "done");
+    assert_eq!(
+        input["failed_step_input"]["published_head_sha"],
+        "candidate-sha"
+    );
     assert!(input.get("completion").is_none());
     assert_eq!(
         host.actions(),

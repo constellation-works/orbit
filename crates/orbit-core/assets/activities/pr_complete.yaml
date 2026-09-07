@@ -25,6 +25,16 @@ spec:
         type: string
       pr_number:
         type: string
+      completion:
+        const: done
+      head:
+        type: string
+      published_head_sha:
+        type: string
+      base:
+        type: string
+      base_sync:
+        enum: [local, remote]
       no_diff_expected:
         type: boolean
       max_wait_seconds:

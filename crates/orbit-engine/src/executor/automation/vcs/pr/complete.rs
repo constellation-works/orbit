@@ -16,6 +16,12 @@
 //! ordinary `gh pr merge` (optionally `--auto`); no administrative bypass is
 //! reachable from this path, so a PR that GitHub reports as `BLOCKED` fails the
 //! run rather than being forced through.
+//!
+//! A `DIRTY` PR is narrower than those policy refusals. With the pipeline's
+//! retained `completion: done`, published-head, branch, and base checkpoints,
+//! completion reuses the ordinary pinned `git_rebase` and lease-checked push
+//! boundaries. Only a rebase that proves unmerged index entries can reach the
+//! existing bounded conflict-recovery leaf.
 
 use std::thread::sleep;
 use std::time::Duration;
@@ -28,8 +34,13 @@ use crate::context::RuntimeHost;
 
 use super::super::super::input::input_string_field;
 use super::super::super::task_update::{authorization_note, complete_tasks};
+use super::super::freshness::{
+    branch_freshness_against_ref, commit_sha, rebase_pr_branch, remote_branch_sha,
+};
+use super::super::git::{base_sync_mode_from_input, resolve_worktree_start_point};
 use super::super::handoff::load_handoff_context;
 use super::super::operations;
+use super::super::push::push_batch_changes;
 use super::merge::{MergeCapabilities, MergeStrategy, resolve_merge_capabilities};
 
 /// Default budget for waiting out required checks before giving up.
@@ -94,6 +105,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let mut waited_seconds = 0_u64;
     let mut auto_merge_requested = false;
     let mut merge_requested = false;
+    let mut conflict_refresh_attempted = false;
     let mut merge_capabilities: Option<MergeCapabilities> = None;
 
     loop {
@@ -120,6 +132,17 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                      branch protection or required reviews are unsatisfied and this run does not \
                      bypass them — the task stays in review"
                 )));
+            }
+            PrMergeState::Conflict => {
+                if conflict_refresh_attempted || !has_completion_recovery_checkpoint(input) {
+                    return Err(completion_conflict_error(pr_number));
+                }
+                refresh_conflicting_pr_branch(host, input, workspace_path, pr_number, &status)?;
+                conflict_refresh_attempted = true;
+                // The existing PR remains authoritative. Re-read its state
+                // after the branch update rather than inferring mergeability
+                // from a successful push.
+                continue;
             }
             PrMergeState::Mergeable => {
                 if !merge_requested {
@@ -196,6 +219,9 @@ enum PrMergeState {
     Closed,
     /// Merging is refused by a gate this run must not bypass.
     Blocked(String),
+    /// GitHub reports a content conflict. The local rebase boundary must prove
+    /// actual unmerged entries before an agent may be launched.
+    Conflict,
     /// Ready to merge now.
     Mergeable,
     /// Required checks are still in flight.
@@ -228,7 +254,7 @@ fn classify(pull_request: &Value) -> PrMergeState {
         "PENDING" => PrMergeState::Pending,
         // Requires human action this run is not authorized to substitute for.
         "BLOCKED" => PrMergeState::Blocked("required reviews or checks are not satisfied".into()),
-        "DIRTY" => PrMergeState::Blocked("the branch has merge conflicts".into()),
+        "DIRTY" => PrMergeState::Conflict,
         "BEHIND" => {
             PrMergeState::Blocked("the branch is behind its base and must be updated".into())
         }
@@ -237,6 +263,106 @@ fn classify(pull_request: &Value) -> PrMergeState {
         // GitHub reports UNKNOWN while it computes mergeability.
         _ => PrMergeState::Pending,
     }
+}
+
+fn has_completion_recovery_checkpoint(input: &Value) -> bool {
+    input.get("completion").and_then(Value::as_str) == Some("done")
+        && ["head", "published_head_sha", "base"]
+            .into_iter()
+            .all(|key| input_string_field(input, key).is_some())
+}
+
+fn completion_conflict_error(pr_number: &str) -> OrbitError {
+    OrbitError::Execution(format!(
+        "pr_complete: pull request #{pr_number} cannot be merged (the branch has merge conflicts); \
+         the task stays in review"
+    ))
+}
+
+/// Reconcile a published candidate with the base that GitHub currently sees.
+///
+/// This deliberately composes the existing pinned rebase and lease-checked
+/// push boundaries. A real conflict therefore becomes the same typed
+/// `RecoverableVcsConflict` as the pre-publication synchronization step; all
+/// other fetch, ownership, authorization, and push failures stay untyped and
+/// cannot launch the conflict-recovery agent.
+fn refresh_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    workspace_path: &str,
+    pr_number: &str,
+    pull_request: &Value,
+) -> Result<(), OrbitError> {
+    let head =
+        input_string_field(input, "head").ok_or_else(|| completion_conflict_error(pr_number))?;
+    let published_head_sha = input_string_field(input, "published_head_sha")
+        .ok_or_else(|| completion_conflict_error(pr_number))?;
+    let base =
+        input_string_field(input, "base").ok_or_else(|| completion_conflict_error(pr_number))?;
+    let workspace = std::path::Path::new(workspace_path);
+
+    let pr_head = input_string_field(pull_request, "headRefName")
+        .ok_or_else(|| completion_conflict_error(pr_number))?;
+    let pr_base = input_string_field(pull_request, "baseRefName")
+        .ok_or_else(|| completion_conflict_error(pr_number))?;
+    let expected_base = base.strip_prefix("origin/").unwrap_or(&base);
+    if pr_head != head || pr_base != expected_base {
+        return Err(OrbitError::Execution(format!(
+            "pr_complete: pull request #{pr_number} identity changed from branch '{head}' into \
+             '{expected_base}' to branch '{pr_head}' into '{pr_base}'; refusing completion \
+             conflict repair"
+        )));
+    }
+
+    let observed_remote_sha = remote_branch_sha(workspace, &head)?;
+    if observed_remote_sha.as_deref() != Some(published_head_sha.as_str()) {
+        return Err(OrbitError::Execution(format!(
+            "pr_complete: published branch 'origin/{head}' moved away from completion checkpoint \
+             '{published_head_sha}'; refusing to replace stale or concurrently updated candidate \
+             while pull request #{pr_number} stays in review"
+        )));
+    }
+
+    let base_ref =
+        resolve_worktree_start_point(workspace, &base, base_sync_mode_from_input(input)?)?;
+    let target_base_sha = commit_sha(workspace, &base_ref)?;
+    let published_freshness =
+        branch_freshness_against_ref(workspace, &published_head_sha, &base_ref, &target_base_sha)?;
+    if published_freshness.commits_ahead == 0 {
+        return Err(OrbitError::Execution(format!(
+            "pr_complete: published candidate '{published_head_sha}' is no longer ahead of \
+             target base checkpoint '{target_base_sha}'; refusing completion conflict repair"
+        )));
+    }
+    if published_freshness.commits_behind == 0 {
+        return Err(completion_conflict_error(pr_number));
+    }
+
+    let rebase_input = json!({
+        "job_run_id": input.get("job_run_id").cloned().unwrap_or(Value::Null),
+        "completed_task_ids": input.get("completed_task_ids").cloned().unwrap_or(Value::Null),
+        "workspace_path": workspace_path,
+        "head": head,
+        "head_sha": published_head_sha,
+        "base": base,
+        "base_ref": base_ref,
+        "base_sha": target_base_sha,
+        "remote_sha": observed_remote_sha,
+        "commits_behind": published_freshness.commits_behind,
+        "sync_required": true,
+    });
+    let synced = rebase_pr_branch(host, &rebase_input)?;
+    let push_input = json!({
+        "job_run_id": input.get("job_run_id").cloned().unwrap_or(Value::Null),
+        "completed_task_ids": input.get("completed_task_ids").cloned().unwrap_or(Value::Null),
+        "workspace_path": workspace_path,
+        "branch": synced["head"],
+        "rewrite_performed": synced["rewritten"],
+        "rewrite_head_before": synced["head_sha_before"],
+        "expected_remote_sha": synced["remote_sha_before"],
+    });
+    push_batch_changes(host, &push_input)?;
+    Ok(())
 }
 
 fn read_pr_status<H: RuntimeHost + ?Sized>(

@@ -57,8 +57,6 @@ fn completion_merge_failure_routes_to_review_recovery_without_republishing() {
     job.steps.retain(|step| step.id == "complete_pr");
     let complete = job.steps.first_mut().expect("complete_pr step");
     complete.when = None;
-    complete.recovery_activity = None;
-    complete.resolved_recovery_activity = None;
     let JobV2StepBody::Target(complete) = &mut complete.body else {
         panic!("resolved complete_pr target");
     };

@@ -174,13 +174,21 @@ spec:
 
     - id: complete_pr
       when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true"
-      recovery_activity: step_failure_recovery
+      # A DIRTY PR is repaired only after pr_complete reuses git_rebase to
+      # prove real unmerged entries. Protection, review, check, auth, stale
+      # ownership, and lease failures remain ineligible for agent recovery.
+      recovery_activity: pr_conflict_recovery
       target: activity:pr_complete
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
+        completion: "{{ input.completion }}"
+        head: "{{ steps.sync_base.output.head }}"
+        published_head_sha: "{{ steps.push.output.local_sha }}"
+        base: "{{ steps.sync_base.output.base }}"
+        base_sync: "{{ input.base_sync }}"
 
     # A no-diff bundle delivered nothing to merge; its validation is the
     # delivery, so completion needs no PR.
