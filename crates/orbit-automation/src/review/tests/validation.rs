@@ -15,7 +15,13 @@ fn record(
         outcome,
         role,
         note: note.map(Into::into),
+        check: None,
     }
+}
+
+fn with_check(mut record: ReviewValidation, check: &str) -> ReviewValidation {
+    record.check = Some(check.into());
+    record
 }
 
 fn required(command: &str, outcome: ValidationOutcome) -> ReviewValidation {
@@ -171,19 +177,39 @@ fn an_outcome_that_contradicts_its_classification_blocks() {
 
 #[test]
 fn a_superseded_attempt_needs_the_later_check_that_replaced_it() {
-    // The shape ORB-11516 recorded: a leaked sandbox allowlist failed the
-    // first attempt, and the corrected environment passed. The failure stays
-    // in the record.
-    let corrected = vec![
+    // A same-command rerun is an unambiguous replacement without an extra
+    // identity field.
+    let same_command = vec![
         record(
             "cargo test --package orbit-core",
             ValidationOutcome::Failed,
             ValidationRole::Superseded,
-            Some("sandbox allowlist leak; rerun below in a corrected environment"),
+            Some("first attempt; rerun below after the repair"),
         ),
-        required(
-            "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
-            ValidationOutcome::Passed,
+        required("cargo test --package orbit-core", ValidationOutcome::Passed),
+    ];
+    assert_eq!(validation_evidence(&same_command), Ok(()));
+
+    // The shape ORB-11516 recorded: a leaked sandbox allowlist failed the
+    // first attempt, and the corrected environment passed. The commands
+    // differ, so both records name the same check identity. The failure
+    // stays in the record.
+    let corrected = vec![
+        with_check(
+            record(
+                "cargo test --package orbit-core",
+                ValidationOutcome::Failed,
+                ValidationRole::Superseded,
+                Some("sandbox allowlist leak; rerun below in a corrected environment"),
+            ),
+            "orbit-core-tests",
+        ),
+        with_check(
+            required(
+                "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+                ValidationOutcome::Passed,
+            ),
+            "orbit-core-tests",
         ),
     ];
     assert_eq!(validation_evidence(&corrected), Ok(()));
@@ -212,6 +238,150 @@ fn a_superseded_attempt_needs_the_later_check_that_replaced_it() {
             command: "cargo test --package orbit-core".into(),
         }),
         "a check recorded before the attempt cannot resolve it"
+    );
+}
+
+#[test]
+fn an_unrelated_later_required_pass_does_not_replace_a_superseded_test() {
+    // The ORB-11528 gap: a failed test classified superseded, followed only
+    // by an unrelated formatter, was treated as replaced.
+    let unrelated = vec![
+        record(
+            "cargo test",
+            ValidationOutcome::Failed,
+            ValidationRole::Superseded,
+            Some("rerun after repair"),
+        ),
+        required("cargo fmt --check", ValidationOutcome::Passed),
+    ];
+    assert_eq!(
+        validation_evidence(&unrelated),
+        Err(ValidationDefect::SupersededWithoutReplacement {
+            command: "cargo test".into(),
+        }),
+        "a later formatter is not the check that replaced the test"
+    );
+}
+
+#[test]
+fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_closed() {
+    let superseded = |check: Option<&str>| {
+        let record = record(
+            "cargo test --package orbit-core",
+            ValidationOutcome::Failed,
+            ValidationRole::Superseded,
+            Some("sandbox allowlist leak"),
+        );
+        match check {
+            Some(identity) => with_check(record, identity),
+            None => record,
+        }
+    };
+
+    // Corrected command with no shared identity: missing relationship.
+    let missing_identity = vec![
+        superseded(None),
+        required(
+            "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+            ValidationOutcome::Passed,
+        ),
+    ];
+    assert_eq!(
+        validation_evidence(&missing_identity),
+        Err(ValidationDefect::SupersededWithoutReplacement {
+            command: "cargo test --package orbit-core".into(),
+        }),
+        "a different command is not a replacement without a shared check identity"
+    );
+
+    // Identity on only one side does not bind to the other record's command.
+    let one_sided = vec![
+        superseded(Some("orbit-core-tests")),
+        required(
+            "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+            ValidationOutcome::Passed,
+        ),
+    ];
+    assert_eq!(
+        validation_evidence(&one_sided),
+        Err(ValidationDefect::SupersededWithoutReplacement {
+            command: "cargo test --package orbit-core".into(),
+        }),
+        "a one-sided check identity is not an unambiguous replacement"
+    );
+
+    // Empty and whitespace identities match nothing.
+    for invalid in ["", "   "] {
+        let invalid_identity = vec![
+            with_check(
+                record(
+                    "cargo test",
+                    ValidationOutcome::Failed,
+                    ValidationRole::Superseded,
+                    Some("rerun after repair"),
+                ),
+                invalid,
+            ),
+            required("cargo test", ValidationOutcome::Passed),
+        ];
+        assert_eq!(
+            validation_evidence(&invalid_identity),
+            Err(ValidationDefect::SupersededWithoutReplacement {
+                command: "cargo test".into(),
+            }),
+            "an empty or whitespace check identity is invalid: {invalid:?}"
+        );
+    }
+
+    // A related later required check that did not pass is not a replacement.
+    let related_failed = vec![
+        with_check(
+            record(
+                "cargo test --package orbit-core",
+                ValidationOutcome::Failed,
+                ValidationRole::Superseded,
+                Some("sandbox allowlist leak"),
+            ),
+            "orbit-core-tests",
+        ),
+        with_check(
+            required(
+                "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+                ValidationOutcome::Failed,
+            ),
+            "orbit-core-tests",
+        ),
+    ];
+    assert_eq!(
+        validation_evidence(&related_failed),
+        Err(ValidationDefect::SupersededWithoutReplacement {
+            command: "cargo test --package orbit-core".into(),
+        }),
+        "a related required check that failed is not a replacement"
+    );
+
+    // Identity present but pointing at a different check is not a replacement.
+    let mismatched = vec![
+        with_check(
+            record(
+                "cargo test",
+                ValidationOutcome::Failed,
+                ValidationRole::Superseded,
+                Some("rerun after repair"),
+            ),
+            "unit-tests",
+        ),
+        with_check(
+            required("cargo fmt --check", ValidationOutcome::Passed),
+            "formatting",
+        ),
+    ];
+    assert_eq!(
+        validation_evidence(&mismatched),
+        Err(ValidationDefect::SupersededWithoutReplacement {
+            command: "cargo test".into(),
+        }),
+        "distinct check identities are not a replacement relationship"
     );
 }
 
@@ -245,6 +415,10 @@ fn an_unexplained_reclassification_is_refused_and_legacy_records_stay_required()
     )
     .expect("legacy validation records");
     assert!(legacy.iter().all(|r| r.role == ValidationRole::Required));
+    assert!(
+        legacy.iter().all(|r| r.check.is_none()),
+        "role-less evidence does not gain a check identity"
+    );
     assert_eq!(
         validation_evidence(&legacy),
         Err(ValidationDefect::RequiredNotPassed {

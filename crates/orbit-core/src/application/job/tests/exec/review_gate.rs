@@ -266,6 +266,7 @@ impl<'a> ScriptedReviewHost<'a> {
                 outcome: ValidationOutcome::Passed,
                 role: ValidationRole::Required,
                 note: None,
+                check: None,
             }],
             escalation: (self.reviewer.verdict == ReviewVerdict::ChangesRequired)
                 .then(|| "decide on the note".to_string()),

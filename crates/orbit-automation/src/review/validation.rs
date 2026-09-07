@@ -76,8 +76,8 @@ impl ValidationDefect {
                 outcome.as_str()
             ),
             ValidationDefect::SupersededWithoutReplacement { command } => format!(
-                "validation_incomplete: superseded attempt `{command}` is followed by no required \
-                 check that passed on the final candidate"
+                "validation_incomplete: superseded attempt `{command}` is followed by no related \
+                 required check that passed on the final candidate"
             ),
             ValidationDefect::ClassificationUnexplained { command, role } => format!(
                 "validation_unexplained: `{command}` is recorded as {} with no note explaining it",
@@ -93,10 +93,11 @@ impl ValidationDefect {
 /// Every required check must have passed and at least one must exist; a
 /// declared negative control must have failed; an excluded action must have
 /// stayed unperformed; a superseded attempt must be followed by the required
-/// check that replaced it. Every classification other than `required` must
-/// explain itself, so an unexplained reclassification is refused rather than
-/// trusted. Records carrying no classification are required checks, which
-/// keeps evidence written before this contract conservative.
+/// check that replaced it — the same command, or the same non-empty `check`
+/// identity. Every classification other than `required` must explain itself,
+/// so an unexplained reclassification is refused rather than trusted. Records
+/// carrying no classification are required checks, which keeps evidence
+/// written before this contract conservative.
 pub fn validation_evidence(records: &[ReviewValidation]) -> Result<(), ValidationDefect> {
     let mut required_passed = false;
 
@@ -128,7 +129,9 @@ pub fn validation_evidence(records: &[ReviewValidation]) -> Result<(), Validatio
             {
                 return Err(contradiction(record));
             }
-            ValidationRole::Superseded if !replaced_by_required_check(&records[index + 1..]) => {
+            ValidationRole::Superseded
+                if !replaced_by_required_check(record, &records[index + 1..]) =>
+            {
                 return Err(ValidationDefect::SupersededWithoutReplacement {
                     command: record.command.clone(),
                 });
@@ -177,9 +180,36 @@ fn explained(record: &ReviewValidation) -> bool {
 
 /// Whether a later record is the required check the superseded attempt was
 /// replaced by. Order carries the meaning: a supersession must be resolved
-/// after it, never by a check recorded before it.
-fn replaced_by_required_check(later: &[ReviewValidation]) -> bool {
+/// after it, never by a check recorded before it. The later record must
+/// name the same check: the same command, or the same non-empty `check`
+/// identity when the command or environment was corrected. Any later
+/// required pass is not enough.
+fn replaced_by_required_check(superseded: &ReviewValidation, later: &[ReviewValidation]) -> bool {
+    let Some(identity) = replacement_identity(superseded) else {
+        return false;
+    };
     later.iter().any(|record| {
-        record.role == ValidationRole::Required && record.outcome == ValidationOutcome::Passed
+        record.role == ValidationRole::Required
+            && record.outcome == ValidationOutcome::Passed
+            && replacement_identity(record) == Some(identity)
     })
+}
+
+/// The identity a superseded attempt and its replacement share.
+///
+/// A present `check` is the identity when it is non-empty after trim.
+/// Otherwise the command string is the identity, so a same-command rerun
+/// still binds. An empty or whitespace-only `check` is invalid and matches
+/// nothing.
+fn replacement_identity(record: &ReviewValidation) -> Option<&str> {
+    match record.check.as_deref() {
+        Some(value) => {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        }
+        None => {
+            let command = record.command.as_str();
+            (!command.trim().is_empty()).then_some(command)
+        }
+    }
 }

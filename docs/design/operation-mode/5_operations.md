@@ -11,7 +11,7 @@ summary: Shipped operation-mode contract — typed preferences, scoped grants, g
 tags: [operation-mode, automation, authorization, recovery, operations]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/operation/**", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/operation/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/members/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, routines]
-related_artifacts: [ORB-11528, ORB-11333, ORB-11332, ORB-11331, ORB-11330]
+related_artifacts: [ORB-11545, ORB-11528, ORB-11333, ORB-11332, ORB-11331, ORB-11330]
 ---
 
 # Operation Mode — Operations [ORB-11332]
@@ -262,10 +262,11 @@ and 30-minute wall clock. It reads the manifest, verifies claims against code,
 repairs only concrete in-scope defects directly in the worktree, runs
 validation, and persists `review-report.json` (schema version 1: verdict,
 findings with dispositions, validation records with `passed` / `failed` /
-`denied` / `not_run` and the `role` each is evidence of, escalation). It never
+`denied` / `not_run`, the `role` each is evidence of, and optional `check`
+identity, escalation). It never
 runs Git writes, changes task lifecycle, approves, or merges.
 
-### What the validation records establish [ORB-11528]
+### What the validation records establish [ORB-11528] [ORB-11545]
 
 An honest reviewer records more than the checks that had to pass, so each
 validation record also carries a `role` saying what it is evidence of, and
@@ -279,7 +280,7 @@ spent.
 | `required` (default) | A check the final candidate must pass | `passed`; `failed`, `denied`, and `not_run` all block |
 | `expected_failure` | A negative control — the superseded assertion, the pre-fix reproduction | `failed`; any other outcome contradicts the claim |
 | `excluded` | An action outside the authorized scope, deliberately not performed | `not_run` or `denied`; actually running it contradicts the exclusion |
-| `superseded` | A diagnostic attempt a later required check replaced | a later record in the list that is `required` and `passed` |
+| `superseded` | A diagnostic attempt a later required check replaced | a later record that is `required` and `passed` and names the same check: the same `command`, or the same non-empty `check` identity when the command or environment was corrected. An unrelated later pass, a missing/empty/one-sided identity, or a related check that did not pass is not a replacement |
 
 At least one `required` record must have passed, so a set of controls and
 exclusions alone is never coverage. Every role other than `required` must
@@ -293,9 +294,11 @@ reason: the runner refused, which is neither a defect in the candidate nor
 evidence about it.
 
 The contract version stays 1: a record carrying no role decides exactly as it
-did before, so no existing certificate is reinterpreted and none has to be
-reissued. Candidates already refused under the old rule recover through a
-fresh run, not by editing stored evidence.
+did before, so older role-less evidence is not reinterpreted. A superseded
+attempt now requires the later required pass that names the same check; a
+certificate that treated an unrelated later pass as a replacement becomes
+incomplete when coverage re-reads the records. Candidates already refused
+under the old rule recover through a fresh run, not by editing stored evidence.
 
 Settlement rechecks the checked-out head against the admitted candidate,
 reads the report with its artifact provenance (missing, predating the
