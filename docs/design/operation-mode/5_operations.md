@@ -313,9 +313,10 @@ consumer excludes; QA counts every landing. Excluded landings leave
 threshold, and are absent from `examined_deliveries`. An exclusively excluded
 prefix advances the covered cursor without an examination receipt so
 observation cannot stall; interleaved exclusions travel with the next frozen
-batch as readable context (`exclusions`) and retire with that examined range. Later edits, task drift, a different base, an unreviewed
-conflict repair, missing objects, or an external landing race keep the
-landing an ordinary obligation. Exclusions apply when a landing is first
+batch as readable context (`exclusions`) and retire with that examined
+range. Later edits, task drift, a different base, an unreviewed conflict
+repair, missing objects, or an external landing race keep the landing an
+ordinary obligation. Exclusions apply when a landing is first
 observed; a certificate that arrives later does not rewrite pending debt.
 
 ### Surfaces

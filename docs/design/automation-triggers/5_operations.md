@@ -220,9 +220,10 @@ not mint an examination receipt. An exclusively excluded prefix advances the
 covered cursor and leaves the pending window so later uncovered landings can
 still be observed. Interleaved exclusions travel with the next frozen batch
 as readable context (`exclusions`) and retire with that examined range.
-`integrated_qa_v1` consumers ignore exclusions entirely. A different base tree, any later edit, an unreviewed conflict
-repair, task drift, missing objects, or an external landing race keeps the
-landing an ordinary obligation. Inspection surfaces and the dashboard list
+`integrated_qa_v1` consumers ignore exclusions entirely. A different base
+tree, any later edit, an unreviewed conflict repair, task drift, missing
+objects, or an external landing race keeps the landing an ordinary
+obligation. Inspection surfaces and the dashboard list
 excluded landings with their certificate and assurance label.
 
 ## State preparation and failure triage [ORB-11331]
