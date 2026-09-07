@@ -173,6 +173,19 @@ reported as `covering_proof_missing` and remains proposed for a later bounded pi
 of being treated as already landed. The routine is a scheduling surface only: an
 operator-triggered run of the job behaves identically to a scheduled fire.
 
+Publication shares that release boundary. A job can fail because the repository already
+records a version, tag, or artifact its operator has not published or promoted yet; the
+only correct repair is that release action, which this sweep never performs. The pilot
+states that intent explicitly by returning `release_action_required` with the action and
+its evidence, and admission then reports
+`release_publication_or_operator_action_needed` — carrying the red run, the pilot's
+finding, and any selectors it withheld — while the deduped task stays in proposed
+quarantine and keeps owning the preserved failure evidence. Admission never infers this
+from which files a proposed repair would touch, so a defect the repository does own — a
+wrong dependency requirement, a broken manifest, a packaging script bug — remains eligible
+for ordinary promotion. The same finding also clears the state automation's readiness flag,
+so neither promotion path can turn a pending publication into automatic version edits.
+
 The seeded `ship_sweep` targets `job:workspace_ship_pipeline` with `missed_run: skip` and
 `overlap: forbid`. The wrapper resolves the source runtime's ship mode and configured base
 branch, invokes and waits for `task_auto_pipeline` without explicit task IDs, and guards

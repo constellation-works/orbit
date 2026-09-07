@@ -3,7 +3,7 @@ use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 
-use super::super::task_pilot::{apply, prepare};
+use super::super::task_pilot::{apply, member_ready, prepare};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_layout, write_workspace_file,
@@ -106,6 +106,37 @@ fn partition_result(partition_index: usize, task_ids: &[String], tasks: Vec<Valu
         "tasks": tasks,
         "summary": "fixture partition",
     })
+}
+
+#[test]
+fn automatic_readiness_requires_selectors_and_no_deferring_finding() {
+    let mut assessment = json!({
+        "task_id": "ORB-FIXTURE",
+        "disposition": "selectors",
+        "context_files_after": ["file:src/existing.rs"],
+        "blocked_by": [],
+        "duplicate_of": null,
+        "already_landed": null,
+        "release_action_required": null,
+        "adr_conflicts": [],
+        "utility_warnings": [],
+        "surface_warnings": [],
+    });
+    assert!(member_ready(&assessment));
+
+    // A pilot may return the selectors it would change and still report that
+    // the correct repair is an operator-reserved release action. That finding
+    // withholds automatic promotion the same way a duplicate does.
+    assessment["release_action_required"] = json!({
+        "action": "publish the recorded release version as a release operation",
+        "evidence": "the failing job resolves a version this repository records but never published",
+    });
+    assert!(!member_ready(&assessment));
+
+    assessment["release_action_required"] = Value::Null;
+    assert!(member_ready(&assessment));
+    assessment["disposition"] = json!("verified_no_diff");
+    assert!(!member_ready(&assessment));
 }
 
 #[test]
