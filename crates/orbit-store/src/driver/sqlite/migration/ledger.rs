@@ -11,6 +11,10 @@
 //!   ledger insert, so an interrupted migration rolls back instead of
 //!   leaving half-applied schema (SQLite ALTER/rename-copy-drop batches
 //!   are wrappable in a transaction).
+//! - Concurrent openers serialize on `BEGIN IMMEDIATE` and re-read the
+//!   ledger inside that transaction, so a waiter neither hits
+//!   `SQLITE_BUSY_SNAPSHOT` nor re-applies a version another process
+//!   just committed.
 //! - A database whose recorded version is newer than
 //!   [`SUPPORTED_SCHEMA_VERSION`] is refused with
 //!   [`OrbitError::Migration`] (downgrade guard).
@@ -20,7 +24,7 @@
 //!   no-op that then records version 1.
 
 use orbit_common::OrbitError;
-use rusqlite::{Connection, ErrorCode, params};
+use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior, params};
 
 /// One entry in the migration registry.
 pub(crate) struct Migration {
@@ -189,10 +193,7 @@ pub(crate) fn run_migrations(
     let current = current_schema_version(conn)?;
     let supported = migrations.last().map(|m| m.version).unwrap_or(0);
     if current > supported {
-        return Err(OrbitError::Migration(format!(
-            "store database schema version {current} is newer than the newest version this \
-            orbit binary supports ({supported}); upgrade orbit to open this database"
-        )));
+        return Err(newer_than_supported(current, supported));
     }
     // A current store needs no write transaction. Return before the
     // idempotent CREATE TABLE so read-only mounts remain genuinely readable.
@@ -200,10 +201,11 @@ pub(crate) fn run_migrations(
         return Ok(());
     }
 
-    ensure_schema_meta_table(conn)?;
-
+    // `current` is only a hint for which versions to attempt. `apply_one`
+    // re-reads the ledger under BEGIN IMMEDIATE and skips anything another
+    // opener already committed while this connection waited.
     for migration in migrations.iter().filter(|m| m.version > current) {
-        apply_one(conn, migration)?;
+        apply_one(conn, migration, supported)?;
     }
 
     Ok(())
@@ -254,16 +256,29 @@ pub(crate) fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigrati
     Ok(applied)
 }
 
-fn apply_one(conn: &Connection, migration: &Migration) -> Result<(), OrbitError> {
-    // `unchecked_transaction` rolls back on drop, so a failure inside the
-    // migration (or a process crash) leaves neither partial schema nor a
-    // ledger row behind.
-    let tx = conn.unchecked_transaction().map_err(|e| {
+fn apply_one(conn: &Connection, migration: &Migration, supported: u32) -> Result<(), OrbitError> {
+    // BEGIN IMMEDIATE takes the reserved lock before any read so a WAL
+    // snapshot cannot be pinned under DEFERRED while another opener
+    // commits. `new_unchecked` is the `&Connection` form of
+    // `transaction_with_behavior(TransactionBehavior::Immediate)`.
+    // Drop rolls back, so a failure or panic leaves neither partial
+    // schema nor a ledger row behind.
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(|e| {
         OrbitError::Migration(format!(
             "failed to begin transaction for migration v{} ({}): {e}",
             migration.version, migration.name
         ))
     })?;
+
+    let current = current_schema_version(&tx)?;
+    if current > supported {
+        return Err(newer_than_supported(current, supported));
+    }
+    if current >= migration.version {
+        return Ok(());
+    }
+
+    ensure_schema_meta_table(&tx)?;
 
     (migration.apply)(&tx).map_err(|error| {
         OrbitError::Migration(format!(
@@ -298,6 +313,13 @@ fn apply_one(conn: &Connection, migration: &Migration) -> Result<(), OrbitError>
         "applied store schema migration",
     );
     Ok(())
+}
+
+fn newer_than_supported(current: u32, supported: u32) -> OrbitError {
+    OrbitError::Migration(format!(
+        "store database schema version {current} is newer than the newest version this \
+        orbit binary supports ({supported}); upgrade orbit to open this database"
+    ))
 }
 
 pub(super) fn commit_migration_error(migration: &Migration, error: rusqlite::Error) -> OrbitError {
