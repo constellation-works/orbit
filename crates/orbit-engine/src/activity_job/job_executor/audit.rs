@@ -154,6 +154,36 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
                 );
             }
         }
+        V2AuditEventKind::StepPostRecoveryAttempt {
+            step_id,
+            recovery_activity,
+            outcome,
+            error_message,
+        } => {
+            if outcome == "success" {
+                tracing::info!(
+                    target: "orbit.job.step_post_recovery_attempt",
+                    job_run_id = job_run_id,
+                    task_id = task_id,
+                    step_id = step_id.as_str(),
+                    recovery_activity = recovery_activity.as_str(),
+                    outcome = outcome.as_str(),
+                    error_message = error_message.as_deref(),
+                    "step post-recovery attempt",
+                );
+            } else {
+                tracing::warn!(
+                    target: "orbit.job.step_post_recovery_attempt",
+                    job_run_id = job_run_id,
+                    task_id = task_id,
+                    step_id = step_id.as_str(),
+                    recovery_activity = recovery_activity.as_str(),
+                    outcome = outcome.as_str(),
+                    error_message = error_message.as_deref(),
+                    "step post-recovery attempt",
+                );
+            }
+        }
         V2AuditEventKind::StepDenied { step_id, reason } => {
             tracing::error!(
                 target: "orbit.job.step_denied",

@@ -91,6 +91,14 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,
     },
+    /// The failed step's single re-attempt after recovery completed.
+    StepPostRecoveryAttempt {
+        step_id: String,
+        recovery_activity: String,
+        outcome: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_message: Option<String>,
+    },
     StepDenied {
         step_id: String,
         reason: String,
@@ -284,6 +292,7 @@ impl V2AuditEventKind {
             V2AuditEventKind::StepSkipped { .. } => "step.skipped",
             V2AuditEventKind::StepRetry { .. } => "step.retry",
             V2AuditEventKind::StepRecoveryAttempted { .. } => "step.recovery_attempted",
+            V2AuditEventKind::StepPostRecoveryAttempt { .. } => "step.post_recovery_attempt",
             V2AuditEventKind::StepDenied { .. } => V2_EVENT_TYPE_STEP_DENIED,
             V2AuditEventKind::StepJoin { .. } => "step.join",
             V2AuditEventKind::FanoutDispatched { .. } => "fanout.dispatched",

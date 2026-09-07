@@ -15,18 +15,51 @@ pub(super) fn recover_or_return_original(
     };
 
     if attempt_recovery_activity(step, ctx, &recovery, &original_err, attempt, max_attempts) {
-        match run_step_body(step, ctx) {
-            Ok(outcome) if outcome.success => return Ok(outcome),
-            // Once VCS recovery succeeded, the old conflict is resolved. A
-            // stale base or other new failure must describe the remaining state.
-            result if matches!(original_err, DispatchError::RecoverableVcsConflict { .. }) => {
-                return result;
-            }
-            Ok(_) | Err(_) => {}
-        }
+        return post_recovery_attempt(step, ctx, &recovery, original_err);
     }
 
     Err(original_err)
+}
+
+fn post_recovery_attempt(
+    step: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+    recovery: &ResolvedRecoveryActivity,
+    original_err: DispatchError,
+) -> Result<StepOutcome, DispatchError> {
+    let reattempt = run_step_body(step, ctx);
+    let (outcome, error_message) = match &reattempt {
+        Ok(outcome) if outcome.success => ("success", None),
+        Ok(outcome) => (
+            "failed",
+            Some(
+                outcome
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "step completed with success=false".to_string()),
+            ),
+        ),
+        Err(error) => ("error", Some(error.to_string())),
+    };
+    let error_message = error_message.map(|message| redacted_recovery_diagnostic(&message));
+    emit_job_event_lossy(
+        &ctx.audit,
+        ctx.task_id(),
+        V2AuditEventKind::StepPostRecoveryAttempt {
+            step_id: step.id.clone(),
+            recovery_activity: recovery.name.clone(),
+            outcome: outcome.to_string(),
+            error_message: error_message.clone(),
+        },
+    );
+
+    match reattempt {
+        Ok(outcome) if outcome.success => Ok(outcome),
+        Ok(_) | Err(_) => Err(DispatchError::JobExecution(format!(
+            "post-recovery attempt {outcome}: {}; original error before recovery: {original_err}",
+            error_message.unwrap_or_else(|| "no diagnostic".to_string()),
+        ))),
+    }
 }
 
 pub(super) fn recovery_activity_for_step(

@@ -103,7 +103,7 @@ fn recovery_success_runs_one_post_recovery_attempt_with_exact_input_and_fs_profi
 }
 
 #[test]
-fn recovery_success_with_post_recovery_failure_returns_original_error_text() {
+fn recovery_success_with_post_recovery_failure_surfaces_re_run_error() {
     let original_error = retryable_error("flaky", "first failure");
     let post_recovery_error = retryable_error("flaky", "post recovery still failing");
     let host = RecoveryHost::new([
@@ -112,7 +112,7 @@ fn recovery_success_with_post_recovery_failure_returns_original_error_text() {
             vec![
                 Err(original_error.clone()),
                 Err(original_error.clone()),
-                Err(post_recovery_error),
+                Err(post_recovery_error.clone()),
             ],
         ),
         ("recover", vec![Ok(json!({"recovered": true}))]),
@@ -127,15 +127,37 @@ fn recovery_success_with_post_recovery_failure_returns_original_error_text() {
         writer.clone(),
         &host,
     )
-    .expect_err("post-recovery failure should surface original error");
+    .expect_err("post-recovery failure should surface the re-run error");
 
-    assert_eq!(err.to_string(), original_error.to_string());
+    assert!(err.to_string().contains(&post_recovery_error.to_string()));
+    assert!(err.to_string().contains(&original_error.to_string()));
     assert_eq!(host.action_count("recover"), 1);
-    assert_eq!(recovery_events(&writer.events_snapshot().unwrap()).len(), 1);
+    let events = writer.events_snapshot().expect("audit snapshot");
+    assert!(matches!(
+        events.iter().find(|event| matches!(
+            event.kind,
+            V2AuditEventKind::StepPostRecoveryAttempt { .. }
+        )).map(|event| &event.kind),
+        Some(V2AuditEventKind::StepPostRecoveryAttempt {
+            outcome,
+            error_message: Some(error_message),
+            ..
+        }) if outcome == "error" && error_message.contains(&post_recovery_error.to_string())
+    ));
+    assert!(matches!(
+        events.iter().find(|event| matches!(
+            event.kind,
+            V2AuditEventKind::StepFinished { .. }
+        )).map(|event| &event.kind),
+        Some(V2AuditEventKind::StepFinished {
+            error_message: Some(error_message),
+            ..
+        }) if error_message.contains(&post_recovery_error.to_string())
+    ));
 }
 
 #[test]
-fn successful_vcs_recovery_reports_the_new_failure_instead_of_resolved_conflicts() {
+fn successful_vcs_recovery_reports_the_new_failure_with_original_context() {
     let original = recoverable_vcs_conflict();
     let remaining = retryable_error("flaky", "prepared base moved after recovery");
     let host = RecoveryHost::new([
@@ -151,8 +173,8 @@ fn successful_vcs_recovery_reports_the_new_failure_instead_of_resolved_conflicts
         &host,
     )
     .unwrap_err();
-    assert_eq!(error.to_string(), remaining.to_string());
-    assert!(!error.to_string().contains("conflicting paths"));
+    assert!(error.to_string().contains(&remaining.to_string()));
+    assert!(error.to_string().contains("conflicting paths"));
     assert_eq!(host.actions(), vec!["flaky", "recover", "flaky"]);
 }
 
@@ -749,14 +771,15 @@ fn worktree_integrity_unsuccessful_recovery_returns_original() {
 }
 
 #[test]
-fn worktree_integrity_post_recovery_failure_returns_original() {
+fn worktree_integrity_post_recovery_failure_surfaces_the_new_error() {
     let integrity_error = worktree_integrity_error("run-integrity-post-failed");
+    let post_recovery_error = retryable_error("flaky", "still unsafe");
     let host = RecoveryHost::new([
         (
             "flaky",
             vec![
                 Err(integrity_error.clone()),
-                Err(retryable_error("flaky", "still unsafe")),
+                Err(post_recovery_error.clone()),
             ],
         ),
         ("recover", vec![Ok(json!({"recovered": true}))]),
@@ -771,9 +794,10 @@ fn worktree_integrity_post_recovery_failure_returns_original() {
         writer.clone(),
         &host,
     )
-    .expect_err("failed post-recovery attempt must preserve the integrity failure");
+    .expect_err("failed post-recovery attempt must surface the remaining failure");
 
-    assert_eq!(err.to_string(), integrity_error.to_string());
+    assert!(err.to_string().contains(&post_recovery_error.to_string()));
+    assert!(err.to_string().contains(&integrity_error.to_string()));
     assert_eq!(host.actions(), vec!["flaky", "recover", "flaky"]);
     assert_eq!(recovery_events(&writer.events_snapshot().unwrap()).len(), 1);
 }
