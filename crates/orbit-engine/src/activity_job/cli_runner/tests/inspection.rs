@@ -27,7 +27,10 @@ fn repository() -> (TempDir, String) {
     git(root.path(), &["config", "user.email", "test@example.com"]);
     git(root.path(), &["config", "commit.gpgsign", "false"]);
     fs::write(root.path().join("target.txt"), "pinned\n").unwrap();
-    git(root.path(), &["add", "target.txt"]);
+    // Repositories legitimately track symlinks (Orbit's own per-crate
+    // AGENTS.md files are one), so every slot carries them into its checkout.
+    std::os::unix::fs::symlink("target.txt", root.path().join("linked.txt")).unwrap();
+    git(root.path(), &["add", "target.txt", "linked.txt"]);
     git(root.path(), &["commit", "--quiet", "-m", "initial"]);
     let revision = git(root.path(), &["rev-parse", "HEAD"]);
     (root, revision)
@@ -79,6 +82,71 @@ fn snapshot_stays_pinned_and_live_leases_are_never_reclaimed() {
             .filter(|line| line.starts_with("worktree "))
             .collect::<Vec<_>>()
     );
+}
+
+/// The slot must not sit under authoritative Git metadata: host protection
+/// refuses every symlink there, and a checkout of tracked content has them.
+#[test]
+fn slots_carry_tracked_symlinks_and_stay_outside_the_git_metadata_tree() {
+    let (repo, revision) = repository();
+    let common = git(
+        repo.path(),
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    );
+    let snapshot = inspect(repo.path(), &revision);
+
+    let linked = snapshot.root().join("linked.txt");
+    assert!(
+        fs::symlink_metadata(&linked)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_to_string(&linked).unwrap(), "pinned\n");
+    snapshot.verify().unwrap();
+
+    assert!(
+        !snapshot.root().starts_with(&common),
+        "{} is inside the common Git directory {common}",
+        snapshot.root().display()
+    );
+    assert!(
+        snapshot
+            .root()
+            .starts_with(repo.path().join(".orbit/state/source-inspections-v1")),
+        "{}",
+        snapshot.root().display()
+    );
+}
+
+/// A crash could abandon a checkout in the pool this module used to keep
+/// inside the common Git directory, where host protection refuses its tracked
+/// symlinks. The current pool never leases that slot again, so creating an
+/// inspection retires the whole legacy pool instead.
+#[test]
+fn creating_an_inspection_retires_an_abandoned_in_metadata_pool() {
+    let (repo, revision) = repository();
+    let common = git(
+        repo.path(),
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    );
+    let legacy = Path::new(&common).join("orbit-source-inspections-v1");
+    let abandoned = legacy.join("0/checkout");
+    fs::create_dir_all(&abandoned).unwrap();
+    fs::write(legacy.join("0/owner"), "orbit-source-inspection-v1\n").unwrap();
+    std::os::unix::fs::symlink("target.txt", abandoned.join("linked.txt")).unwrap();
+
+    let snapshot = inspect(repo.path(), &revision);
+    assert!(!legacy.exists());
+    drop(snapshot);
+
+    // An entry this module did not write stays for an operator to inspect.
+    let foreign = legacy.join("0");
+    fs::create_dir_all(&foreign).unwrap();
+    fs::write(foreign.join("owner"), "another tool\n").unwrap();
+    let snapshot = inspect(repo.path(), &revision);
+    assert!(foreign.exists());
+    drop(snapshot);
 }
 
 #[test]
