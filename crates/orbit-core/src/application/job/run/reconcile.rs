@@ -214,11 +214,7 @@ impl OrbitRuntime {
 
     /// Timestamp of the most recent audit event recorded for a run.
     fn last_run_activity_at(&self, run_id: &str) -> Result<Option<DateTime<Utc>>, OrbitError> {
-        Ok(self
-            .collect_run_audit_events(run_id)?
-            .into_iter()
-            .filter_map(|event| event.timestamp)
-            .max())
+        self.latest_run_audit_timestamp(run_id)
     }
 
     pub(super) fn reconcile_job_run_records(&self, runs: &[JobRun]) -> Result<usize, OrbitError> {

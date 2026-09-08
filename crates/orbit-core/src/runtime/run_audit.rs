@@ -319,6 +319,25 @@ impl OrbitRuntime {
         Ok(events)
     }
 
+    /// The newest valid timestamp carried by the bounded v2 envelope rows for
+    /// a run. This deliberately reads the envelope payload rather than the
+    /// audit row ordering: imports and delayed writers can persist rows out of
+    /// timestamp order.
+    pub(crate) fn latest_run_audit_timestamp(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<DateTime<Utc>>, OrbitError> {
+        let rows = self.list_v2_audit_events(V2AuditEventFilter {
+            workspace_id: String::new(),
+            run_id: Some(run_id.to_string()),
+            source: Some("v2_envelope".to_string()),
+            limit: Some(50_000),
+            ..Default::default()
+        })?;
+
+        Ok(latest_timestamp_from_envelope_rows(rows))
+    }
+
     pub fn collect_run_audit_steps(&self, run_id: &str) -> Result<Vec<RunAuditStep>, OrbitError> {
         Ok(audit_steps_from_events(
             &self.collect_run_audit_events(run_id)?,
@@ -371,8 +390,7 @@ impl OrbitRuntime {
     ) -> Result<Vec<RunCliInvocationRecord>, OrbitError> {
         let events = self.collect_run_audit_events(run_id)?;
         let blob_store = BlobStore::new(self.v2_audit_blob_root());
-        let step_index_by_id = self
-            .collect_run_audit_steps(run_id)?
+        let step_index_by_id = audit_steps_from_events(&events)
             .into_iter()
             .map(|step| (step.step_id, step.step_index))
             .collect::<HashMap<_, _>>();
@@ -440,6 +458,24 @@ impl OrbitRuntime {
     fn v2_audit_blob_root(&self) -> PathBuf {
         self.data_root().join("state").join("audit").join("blobs")
     }
+}
+
+fn latest_timestamp_from_envelope_rows(
+    rows: impl IntoIterator<Item = orbit_store::V2AuditEventRow>,
+) -> Option<DateTime<Utc>> {
+    rows.into_iter()
+        .filter_map(|row| serde_json::from_str::<Value>(&row.payload_json).ok())
+        // Match the full audit projection's envelope validity boundary without
+        // reconstructing parent links or activity steps just to read `ts`.
+        .filter(|value| value.get("event_id").and_then(Value::as_str).is_some())
+        .filter_map(|value| {
+            value
+                .get("ts")
+                .and_then(Value::as_str)
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&Utc))
+        })
+        .max()
 }
 
 /// Reconstruct a run's activity steps from an already-read audit trail, in
