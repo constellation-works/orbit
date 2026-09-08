@@ -1559,6 +1559,7 @@ fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
     .expect("serialize parent workspace registration");
     let parent_checkout_before = serde_json::to_vec(
         workspace_registry::find_checkout(&registry_before, &parent_id)
+            .expect("lookup parent checkout")
             .expect("parent checkout registration"),
     )
     .expect("serialize parent checkout registration");
@@ -1615,6 +1616,7 @@ fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
         .find(|workspace| workspace.id == child_id)
         .expect("child workspace registration");
     let child_checkout = workspace_registry::find_checkout(&registry_after, &child_id)
+        .expect("lookup child checkout")
         .expect("child checkout registration");
     assert_eq!(child_workspace.name, "independent-child");
     assert_eq!(
@@ -1633,6 +1635,7 @@ fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
     .expect("serialize preserved parent workspace registration");
     let parent_checkout_after = serde_json::to_vec(
         workspace_registry::find_checkout(&registry_after, &parent_id)
+            .expect("lookup parent checkout")
             .expect("preserved parent checkout registration"),
     )
     .expect("serialize preserved parent checkout registration");
@@ -1686,6 +1689,7 @@ fn workspace_init_with_root_override_uses_custom_registry() {
         .find(|workspace| workspace.name == "custom-root")
         .expect("registered workspace");
     let checkout = workspace_registry::find_checkout(&registry, &workspace_record.id)
+        .expect("lookup registered checkout")
         .expect("registered checkout");
     assert_eq!(
         std::fs::canonicalize(&checkout.repo_root).expect("canonical registered root"),

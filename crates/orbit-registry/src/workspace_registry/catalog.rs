@@ -113,7 +113,7 @@ pub fn rebind_workspace_source_remote(
     })?;
     validate_machine_id(local_machine_id)?;
 
-    let workspace = find_workspace(registry, id_or_name)
+    let workspace = find_workspace(registry, id_or_name)?
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
     let workspace_id = workspace.id.clone();
     let old_remote = workspace.git_remote.clone().ok_or_else(|| {
@@ -217,7 +217,7 @@ pub fn assign_checkout_role(
     owner_machine_id: Option<&str>,
     local_machine_id: Option<&str>,
 ) -> Result<(), OrbitError> {
-    let workspace = find_workspace(registry, id_or_name)
+    let workspace = find_workspace(registry, id_or_name)?
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
     let workspace_id = workspace.id.clone();
     let declared_owner = workspace.owner_machine_id.clone();
@@ -314,10 +314,14 @@ pub fn remove_workspace(
     registry: &mut WorkspaceRegistry,
     id_or_name: &str,
 ) -> Result<Workspace, OrbitError> {
+    let workspace_id = find_workspace(registry, id_or_name)?
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?
+        .id
+        .clone();
     let idx = registry
         .workspaces
         .iter()
-        .position(|w| w.id == id_or_name || w.name == id_or_name)
+        .position(|workspace| workspace.id == workspace_id)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
     let removed = registry.workspaces.remove(idx);
     registry
@@ -337,15 +341,16 @@ pub fn remove_workspace(
     Ok(removed)
 }
 
-/// Finds a workspace by id or name.
+/// Finds a workspace by id or name, rejecting ambiguous selectors.
 pub fn find_workspace<'a>(
     registry: &'a WorkspaceRegistry,
     id_or_name: &str,
-) -> Option<&'a Workspace> {
-    registry
-        .workspaces
-        .iter()
-        .find(|w| w.id == id_or_name || w.name == id_or_name)
+) -> Result<Option<&'a Workspace>, OrbitError> {
+    match resolve_logical_workspace_match(registry, id_or_name) {
+        LogicalWorkspaceMatch::Found(workspace) => Ok(Some(workspace)),
+        LogicalWorkspaceMatch::NotFound => Ok(None),
+        LogicalWorkspaceMatch::Ambiguous => Err(ambiguous_workspace_selector(id_or_name)),
+    }
 }
 
 /// Resolve a logical selector (registered name or `ws_*` id) to exactly one workspace.
@@ -357,15 +362,34 @@ pub fn resolve_logical_workspace<'a>(
     registry: &'a WorkspaceRegistry,
     selector: &str,
 ) -> Result<&'a Workspace, OrbitError> {
-    let matches: Vec<&Workspace> = registry
+    match resolve_logical_workspace_match(registry, selector) {
+        LogicalWorkspaceMatch::Found(workspace) => Ok(workspace),
+        LogicalWorkspaceMatch::NotFound => Err(unknown_workspace_selector(selector)),
+        LogicalWorkspaceMatch::Ambiguous => Err(ambiguous_workspace_selector(selector)),
+    }
+}
+
+enum LogicalWorkspaceMatch<'a> {
+    Found(&'a Workspace),
+    NotFound,
+    Ambiguous,
+}
+
+fn resolve_logical_workspace_match<'a>(
+    registry: &'a WorkspaceRegistry,
+    selector: &str,
+) -> LogicalWorkspaceMatch<'a> {
+    let mut matches = registry
         .workspaces
         .iter()
-        .filter(|workspace| workspace.id == selector || workspace.name == selector)
-        .collect();
-    match matches.as_slice() {
-        [workspace] => Ok(workspace),
-        [] => Err(unknown_workspace_selector(selector)),
-        _ => Err(ambiguous_workspace_selector(selector)),
+        .filter(|workspace| workspace.id == selector || workspace.name == selector);
+    let Some(workspace) = matches.next() else {
+        return LogicalWorkspaceMatch::NotFound;
+    };
+    if matches.next().is_some() {
+        LogicalWorkspaceMatch::Ambiguous
+    } else {
+        LogicalWorkspaceMatch::Found(workspace)
     }
 }
 
@@ -385,12 +409,14 @@ pub(crate) fn ambiguous_workspace_selector(selector: &str) -> OrbitError {
 pub fn find_checkout<'a>(
     registry: &'a WorkspaceRegistry,
     id_or_name: &str,
-) -> Option<&'a WorkspaceCheckout> {
-    let workspace = find_workspace(registry, id_or_name)?;
-    registry
+) -> Result<Option<&'a WorkspaceCheckout>, OrbitError> {
+    let Some(workspace) = find_workspace(registry, id_or_name)? else {
+        return Ok(None);
+    };
+    Ok(registry
         .checkouts
         .iter()
-        .find(|checkout| checkout.workspace_id == workspace.id)
+        .find(|checkout| checkout.workspace_id == workspace.id))
 }
 
 /// Iterates logical workspaces that have a machine-local checkout binding.

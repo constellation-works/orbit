@@ -12,7 +12,7 @@ use tempfile::tempdir;
 
 use crate::workspace_registry::{
     assign_checkout_role, find_checkout_by_path, find_workspace, find_workspace_by_path,
-    load_registry_from, load_registry_from_with_writer, register_checkout,
+    load_registry_from, load_registry_from_with_writer, register_checkout, remove_workspace,
     rename_local_owner_host_id, resolve_logical_workspace, save_registry_to, set_path_override,
     validate_workspaces,
 };
@@ -348,11 +348,15 @@ fn identity_lookup_is_path_independent_and_path_lookup_is_checkout_only() {
         .push(PathBuf::from("/repos/inner"));
 
     assert_eq!(
-        find_workspace(&registry, "ws_remote").map(|workspace| workspace.id.as_str()),
+        find_workspace(&registry, "ws_remote")
+            .expect("lookup by id")
+            .map(|workspace| workspace.id.as_str()),
         Some("ws_remote")
     );
     assert_eq!(
-        find_workspace(&registry, "remote").map(|workspace| workspace.id.as_str()),
+        find_workspace(&registry, "remote")
+            .expect("lookup by name")
+            .map(|workspace| workspace.id.as_str()),
         Some("ws_remote")
     );
     assert_eq!(
@@ -524,6 +528,57 @@ fn resolve_logical_workspace_accepts_name_or_id_and_fails_closed() {
         }
         other => panic!("expected InvalidInput, got {other}"),
     }
+}
+
+#[test]
+fn mutation_helpers_reject_a_name_that_matches_another_workspace_id() {
+    let mut registry = WorkspaceRegistry {
+        workspaces: vec![
+            logical_workspace("ws_1", None),
+            logical_workspace("ws_2", None),
+        ],
+        checkouts: vec![WorkspaceCheckout::owner(
+            "ws_1".to_string(),
+            PathBuf::from("/repos/one"),
+            PathBuf::from("/repos/one/.orbit"),
+        )],
+        ..Default::default()
+    };
+    registry.workspaces[0].name = "x".to_string();
+    registry.workspaces[1].name = "ws_1".to_string();
+    let before = registry.clone();
+
+    let resolved = resolve_logical_workspace(&registry, "ws_1")
+        .expect_err("selector must be ambiguous")
+        .to_string();
+    assert!(
+        resolved.contains("ambiguous workspace selector"),
+        "{resolved}"
+    );
+
+    let removed = remove_workspace(&mut registry, "ws_1")
+        .expect_err("removal must reject an ambiguous selector")
+        .to_string();
+    assert!(
+        removed.contains("ambiguous workspace selector"),
+        "{removed}"
+    );
+    assert_eq!(registry, before);
+
+    let assigned = assign_checkout_role(
+        &mut registry,
+        "ws_1",
+        WorkspaceCheckoutRole::Owner,
+        None,
+        None,
+    )
+    .expect_err("role assignment must reject an ambiguous selector")
+    .to_string();
+    assert!(
+        assigned.contains("ambiguous workspace selector"),
+        "{assigned}"
+    );
+    assert_eq!(registry, before);
 }
 
 #[test]

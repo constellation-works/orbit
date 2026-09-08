@@ -115,7 +115,7 @@ impl Execute for WorkspacePublicationShowArgs {
         let registry = workspace_registry::load_registry_from(
             &workspace_registry::registry_path_for(&runtime.global_root()),
         )?;
-        match workspace_registry::find_publication_binding(&registry, &workspace_id) {
+        match workspace_registry::find_publication_binding(&registry, &workspace_id)? {
             Some(binding) => {
                 Ok(Payload::detail(binding_json(binding, "shown"), format_binding(binding)).into())
             }

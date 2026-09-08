@@ -141,7 +141,10 @@ pub(crate) fn resolve_ship_mode(
         .iter()
         .find(|checkout| checkout.orbit_dir == orbit_dir)
         .and_then(|checkout| {
-            orbit_registry::workspace_registry::find_workspace(&registry, &checkout.workspace_id)
+            registry
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.id == checkout.workspace_id)
         })
         .map(orbit_core::resolved_ship_mode);
     let Some(mode) = mode else {
