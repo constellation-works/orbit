@@ -8,6 +8,13 @@ use orbit_types::task::Task;
 use orbit_types::workflow::automation::members::MemberAssessment;
 use serde_json::{Value, json};
 
+/// Repository instructions captured from one immutable source revision.
+///
+/// The serialized form deliberately remains the fingerprint input used before
+/// this cache existed, so sharing it changes work performed, not evidence.
+#[derive(Clone)]
+pub(crate) struct InstructionSnapshot(String);
+
 /// Bound on the consumer states one lookup reads.
 const MAX_CONSUMER_STATES: usize = 50;
 
@@ -47,26 +54,27 @@ pub(crate) fn fingerprint(
     task: &Task,
     revision: &str,
 ) -> Result<String, AutomationError> {
+    let instructions = instructions(runtime, revision)?;
+    fingerprint_with_instructions(runtime, task, revision, &instructions)
+}
+
+pub(crate) fn instructions(
+    runtime: &OrbitRuntime,
+    revision: &str,
+) -> Result<InstructionSnapshot, AutomationError> {
     let source = Source::new(&runtime.paths().repo_root);
-
-    let mut dependencies = Vec::new();
-
-    for id in task.dependencies().iter().take(51) {
-        if dependencies.len() == 50 {
-            return Err(AutomationError::Deferred("dependency_scan_budget".into()));
-        }
-        let dependency = runtime.get_task(id)?;
-        dependencies.push(json!({"id": id, "status": dependency.status,
-            "relations": dependency.relations, "criteria": dependency.acceptance_criteria,
-            "description": dependency.description, "plan": dependency.plan,
-            "refs": dependency.external_refs, "pr_status": dependency.pr_status}));
-    }
-
-    dependencies.sort_by_key(|value| value["id"].as_str().unwrap_or_default().to_string());
 
     // The pinned tree includes every repository instruction, including nested
     // selectors. Dirty local instructions cannot certify this pinned source.
-    let paths = source.git(&["ls-tree", "-r", "--name-only", revision])?;
+    let paths = source.git(&[
+        "ls-tree",
+        "-r",
+        "--name-only",
+        revision,
+        "--",
+        "**/AGENTS.md",
+        "**/CLAUDE.md",
+    ])?;
 
     let mut instructions = Vec::new();
 
@@ -83,16 +91,37 @@ pub(crate) fn fingerprint(
         ));
     }
 
+    Ok(InstructionSnapshot(
+        serde_json::to_string(&instructions)
+            .map_err(|error| AutomationError::Evidence(error.to_string()))?,
+    ))
+}
+
+pub(crate) fn fingerprint_with_instructions(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    revision: &str,
+    instructions: &InstructionSnapshot,
+) -> Result<String, AutomationError> {
+    let mut dependencies = Vec::new();
+
+    for id in task.dependencies().iter().take(51) {
+        if dependencies.len() == 50 {
+            return Err(AutomationError::Deferred("dependency_scan_budget".into()));
+        }
+        let dependency = runtime.get_task(id)?;
+        dependencies.push(json!({"id": id, "status": dependency.status,
+            "relations": dependency.relations, "criteria": dependency.acceptance_criteria,
+            "description": dependency.description, "plan": dependency.plan,
+            "refs": dependency.external_refs, "pr_status": dependency.pr_status}));
+    }
+
+    dependencies.sort_by_key(|value| value["id"].as_str().unwrap_or_default().to_string());
+
     // The crew a task would actually run under is part of its material input.
     let assignment = runtime.resolve_crew_for_task(None, task.crew.as_deref())?;
     dependencies.push(json!({"effective_assignment": {"crew": assignment.name,
         "model": assignment.assignment.model, "provider": assignment.assignment.provider}}));
 
-    preparation::fingerprint(
-        task,
-        revision,
-        &Value::Array(dependencies),
-        &serde_json::to_string(&instructions)
-            .map_err(|e| AutomationError::Evidence(e.to_string()))?,
-    )
+    preparation::fingerprint(task, revision, &Value::Array(dependencies), &instructions.0)
 }

@@ -521,7 +521,7 @@ pub(crate) fn path_execution_fallback_rationale() -> &'static str {
     // a process with write access to ~/.orbit/embed/bin/ between freshness
     // check and exec can still substitute the binary. Tracked for posix_spawn
     // /dev/fd/N exploration as a follow-up to ORB-00271."
-    "this platform (notably macOS, plus Windows) does not expose fexecve through libc, so the managed companion keeps the pre-existing path execution behavior after descriptor-based freshness validation; the descriptor-vs-path TOCTOU window from ORB-00271 remains open on these targets"
+    "this platform (notably macOS, plus Windows) does not expose fexecve through libc, so the managed companion keeps the pre-existing path execution behavior after descriptor-based freshness validation; the descriptor-vs-path TOCTOU window remains open on these targets"
 }
 
 #[derive(Debug, Deserialize, Serialize)]

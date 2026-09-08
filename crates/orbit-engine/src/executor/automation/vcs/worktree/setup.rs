@@ -286,7 +286,7 @@ fn inspect_registered_worktree(
     )
     .unwrap_or(true);
     let evidence = format!(
-        "HEAD={}, branch={}, gitdir={}, index={}, status={}, unique_commits={unique_commits}. Completeness does not treat deleted tracked files as an incomplete checkout (they may be intended edits). Timeout recovery is not conflict or failure-handoff recovery. Stale-branch provenance (ORB-11639) refuses a complete checkout whose HEAD is not the requested base without resetting it.",
+        "HEAD={}, branch={}, gitdir={}, index={}, status={}, unique_commits={unique_commits}. Completeness does not treat deleted tracked files as an incomplete checkout (they may be intended edits). Timeout recovery is not conflict or failure-handoff recovery. Stale-branch provenance refuses a complete checkout whose HEAD is not the requested base without resetting it.",
         head.as_deref().unwrap_or("missing"),
         branch.as_deref().unwrap_or("missing"),
         git_dir.as_deref().unwrap_or("missing"),

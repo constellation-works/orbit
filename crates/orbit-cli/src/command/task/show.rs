@@ -8,7 +8,7 @@ use crate::command::{Block, CommandOut, Execute, Payload};
 
 use super::output::{
     format_task_fields, is_human_visible_history_event, task_fields_to_json,
-    task_to_json_for_runtime,
+    task_to_json_with_sidecars,
 };
 
 #[derive(Args)]
@@ -64,7 +64,8 @@ impl Execute for TaskShowArgs {
         // The task may have been reached through the global registry rather
         // than the cwd, so every full projection names where it was read from.
         let owner = bound_workspace_identity(runtime);
-        let mut doc = task_to_json_for_runtime(runtime, &task)?;
+        let projection = task_to_json_with_sidecars(runtime, &task, &status_by_id)?;
+        let mut doc = projection.doc;
         if let Some(owner) = &owner {
             insert_workspace_identity(&mut doc, owner)?;
         }
@@ -183,10 +184,9 @@ impl Execute for TaskShowArgs {
                     task.execution_summary
                 );
             }
-            let comments = runtime.get_task_comments(&task.id)?;
-            if !comments.is_empty() {
+            if !projection.comments.is_empty() {
                 let _ = writeln!(out, "{}", bold("Comments:"));
-                for comment in &comments {
+                for comment in &projection.comments {
                     let _ = writeln!(
                         out,
                         "  {} {}: {}",
@@ -223,8 +223,8 @@ impl Execute for TaskShowArgs {
             if let Some(ref orchestrator) = task.orchestrator {
                 let _ = writeln!(out, "{} {}", bold("Orchestrator:"), orchestrator);
             }
-            let history = runtime.get_task_history(&task.id)?;
-            let visible_history: Vec<_> = history
+            let visible_history: Vec<_> = projection
+                .history
                 .iter()
                 .filter(|entry| is_human_visible_history_event(&entry.event))
                 .collect();
@@ -299,7 +299,7 @@ fn relation_type_label(relation_type: TaskRelationType) -> &'static str {
 pub(crate) fn attach_bound_workspace_identity(
     tool_name: &str,
     input: &Value,
-    runtime: &OrbitRuntime,
+    owner: Option<&WorkspaceIdentity>,
     mut output: Value,
 ) -> Result<Value, OrbitError> {
     if tool_name != "orbit.task.show" {
@@ -308,8 +308,8 @@ pub(crate) fn attach_bound_workspace_identity(
     if input.get("field").is_some() || input.get("fields").is_some() {
         return Ok(output);
     }
-    if let Some(owner) = bound_workspace_identity(runtime) {
-        insert_workspace_identity(&mut output, &owner)?;
+    if let Some(owner) = owner {
+        insert_workspace_identity(&mut output, owner)?;
     }
     Ok(output)
 }

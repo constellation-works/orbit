@@ -392,31 +392,31 @@ impl OrbitRuntime {
     pub fn automation_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::AutomationStoreBackend>, OrbitError> {
-        orbit_store::compose::automation_store(Store::open(&self.context.persistence().audit_db)?)
+        Ok(Arc::clone(&self.context.stores().host.automation))
     }
 
     /// Before-PR review ledgers, certificates, and landings [ORB-11333].
     pub fn review_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::ReviewStoreBackend>, OrbitError> {
-        orbit_store::compose::review_store(Store::open(&self.context.persistence().audit_db)?)
+        Ok(Arc::clone(&self.context.stores().host.review))
     }
 
     /// Operation-mode grants and recovery ledgers in the host store [ORB-11332].
     pub fn operation_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::OperationStoreBackend>, OrbitError> {
-        orbit_store::compose::operation_store(Store::open(&self.context.persistence().audit_db)?)
+        Ok(Arc::clone(&self.context.stores().host.operation))
     }
 
     pub fn sqlite_store(&self) -> Result<Store, OrbitError> {
-        Store::open(&self.context.persistence().audit_db)
+        Ok(self.context.stores().host.sqlite.clone())
     }
 
     pub fn v2_audit_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::V2AuditStoreBackend>, OrbitError> {
-        orbit_store::compose::v2_audit_store(&self.context.persistence().audit_db)
+        Ok(Arc::clone(&self.context.stores().host.v2_audit))
     }
 
     pub fn ensure_persistence_ready(&self) -> Result<(), OrbitError> {

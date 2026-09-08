@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use serde_json::json;
 
 use super::super::run::{
@@ -17,6 +19,7 @@ fn task_show_id_is_read_only_from_orbit_task_show_input() {
         fields: Vec::new(),
         full: false,
         pretty: false,
+        parsed_input: OnceLock::new(),
     };
     assert_eq!(show.task_show_id().as_deref(), Some("ORB-10961"));
 
@@ -93,7 +96,7 @@ fn show_output_preserves_task_details_by_default() {
 fn local_invocation_context_has_trace_and_explicit_identity_fallback() {
     let runtime = orbit_core::OrbitRuntime::in_memory().expect("in-memory runtime");
 
-    let context = local_tool_session_context(&runtime).expect("local invocation context");
+    let context = local_tool_session_context(&runtime, None).expect("local invocation context");
 
     assert!(
         context
@@ -111,6 +114,34 @@ fn local_invocation_context_has_trace_and_explicit_identity_fallback() {
     );
     assert_eq!(context.caller_ip, None);
     assert!(context.effective_capabilities.is_empty());
+}
+
+#[test]
+fn parsed_input_reads_an_input_file_once() {
+    let file = tempfile::NamedTempFile::new().expect("input file");
+    std::fs::write(file.path(), r#"{"id":"first"}"#).expect("write initial input");
+    let show = ToolRunArgs {
+        name: "orbit.task.show".to_string(),
+        input: None,
+        input_file: Some(file.path().to_string_lossy().into_owned()),
+        agent: None,
+        model: None,
+        dry_run: false,
+        fields: Vec::new(),
+        full: false,
+        pretty: false,
+        parsed_input: OnceLock::new(),
+    };
+
+    assert_eq!(
+        show.parsed_input().expect("first parse"),
+        json!({"id":"first"})
+    );
+    std::fs::write(file.path(), r#"{"id":"second"}"#).expect("write replacement input");
+    assert_eq!(
+        show.parsed_input().expect("cached parse"),
+        json!({"id":"first"})
+    );
 }
 
 #[test]

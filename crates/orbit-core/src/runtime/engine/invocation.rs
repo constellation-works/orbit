@@ -390,5 +390,5 @@ fn valid_cost(cost: f64) -> bool {
 fn open_invocation_store(
     runtime: &OrbitRuntime,
 ) -> Result<Arc<dyn InvocationStoreBackend>, OrbitError> {
-    orbit_store::compose::invocation_store(&runtime.context.persistence().audit_db)
+    Ok(Arc::clone(&runtime.context.stores().host.invocation))
 }

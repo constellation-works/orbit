@@ -393,6 +393,11 @@ pub struct JobRunQuery {
     /// Whether to include only states for which `JobRunState::is_terminal()`
     /// returns true. Applied before ordering and limiting.
     pub terminal_only: bool,
+    /// Whether to include only `pending` and `running` rows. Applied before
+    /// ordering, limiting, and step hydration so admission and orphan scans
+    /// never read terminal history [ORB-11762]. Independent of `state` and
+    /// `terminal_only`; combining this with `terminal_only` yields no rows.
+    pub active_only: bool,
     pub created_since: Option<DateTime<Utc>>,
     pub limit: Option<usize>,
     /// Which timestamp `limit` truncates against. Defaults to `CreatedAt` so

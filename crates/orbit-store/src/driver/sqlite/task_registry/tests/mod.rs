@@ -17,12 +17,13 @@ use tempfile::TempDir;
 
 use super::REGISTRY_SCHEMA_VERSION;
 use super::schema::registry_user_version;
-use super::util::{normalize_path, now_string};
+use super::util::now_string;
 use super::{
     BindWorkspaceParams, ProjectionRebuildResult, RegisterWorkspaceParams, TaskIndexFilter,
     TaskRegistryStore, WorkspaceCheckoutBinding, task_registry_path,
 };
 use crate::contracts::WorkspaceConfig;
+use crate::fs::path_safety::normalize_path;
 use crate::{
     read_workspace_config, read_workspace_config_optional, workspace_config_path,
     workspace_id_for_orbit_dir, write_workspace_config,
@@ -1214,6 +1215,62 @@ fn workspace_config_round_trips_and_validates() {
         read_workspace_config(&orbit_dir),
         Err(OrbitError::InvalidInput(_))
     ));
+}
+
+#[test]
+fn persistence_consumers_share_workspace_id_grammar() {
+    let cases = [
+        ("ws_orbit", Some("ws_orbit")),
+        ("ws_orbit-main_2", Some("ws_orbit-main_2")),
+        ("orbit-test-abcdef", Some("orbit-test-abcdef")),
+        ("  orbit-test-abcdef  ", Some("orbit-test-abcdef")),
+        ("ws_", None),
+        ("ws_Orbit", None),
+        ("-orbit-abcdef", None),
+        ("orbit--test-abcdef", None),
+        ("orbit-ABCDEF", None),
+        ("orbit-abcde", None),
+        ("orbit-abcdef0", None),
+        ("orbit/test-abcdef", None),
+    ];
+
+    for (raw, expected) in cases {
+        let temp = TempDir::new().expect("tempdir");
+        let orbit_dir = temp.path().join(".orbit");
+        let file_result = write_workspace_config(
+            &orbit_dir,
+            &WorkspaceConfig {
+                schema_version: 1,
+                workspace_id: raw.into(),
+            },
+        );
+        let store = store(&temp);
+        let registry_result = store.register_workspace(RegisterWorkspaceParams {
+            workspace_id: raw.into(),
+            slug: "Workspace".into(),
+            repo_fingerprint: None,
+        });
+
+        match expected {
+            Some(expected) => {
+                file_result.expect("file workspace binding accepts id");
+                assert_eq!(
+                    read_workspace_config(&orbit_dir)
+                        .expect("read file workspace binding")
+                        .workspace_id,
+                    expected
+                );
+                assert_eq!(
+                    registry_result.expect("registry accepts id").workspace_id,
+                    expected
+                );
+            }
+            None => {
+                assert!(file_result.is_err(), "file binding accepted {raw:?}");
+                assert!(registry_result.is_err(), "registry accepted {raw:?}");
+            }
+        }
+    }
 }
 
 #[test]

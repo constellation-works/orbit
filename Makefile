@@ -49,7 +49,7 @@ help:
 	@echo "  make audit        Supply-chain audit (cargo-deny: advisories + licenses)"
 	@echo "  make tree         Print dependency tree"
 	@echo "  make ci           Full CI pass (clippy + tests + doc + guardrails; also runs on PRs)"
-	@echo "  make ci-fast      Pre-handoff gate for agents (fmt-check + guardrail scripts; no compile)"
+	@echo "  make ci-fast      Pre-handoff gate for agents (fast guardrail mode; skips full workspace compile/test/doc steps)"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
 	@echo "  make docs-index   Regenerate docs/INDEX.md"
 	@echo "  make stability    Verify per-crate stability tier markers"
@@ -146,32 +146,9 @@ tree:
 ci:
 	$(BUILD_BUDGET) -- ./scripts/ci-guardrails.sh
 
-# Pre-handoff gate for agents: fast checks, no compile. Full make ci runs on PRs.
+# Pre-handoff gate for agents: shared guardrails in fast mode. Full make ci runs on PRs.
 ci-fast:
-	cargo fmt --all -- --check
-	./scripts/generate-doc-indexes.sh --check
-	./scripts/check-installer-pubkey.sh
-	./scripts/test-installer-security.sh
-	./scripts/check-dependency-direction.sh
-	./scripts/check-cli-imports.sh
-	./scripts/check-terminal-state-guard.sh
-	./scripts/check-history-note-size.sh
-	./scripts/check-stability.sh
-	./scripts/check-artifact-redaction-guardrail.sh
-	./scripts/check-public-artifact-ids.py
-	./scripts/check-changelog-style.sh
-	./scripts/check-error-translation.sh
-	./scripts/check-orphan-modules.sh
-	./scripts/check-crate-agent-guides.sh
-	./scripts/check-embedded-asset-portability.py
-	./scripts/sync-activity-assets.sh --check
-	./scripts/sync-plugin-skills.sh --check
-	./scripts/test-validate-codex-plugin.sh
-	./scripts/test-validate-agent-plugin.sh
-	./scripts/test-cursor-marketplace-followup.sh
-	./scripts/smoke-plugin-install.sh
-	./scripts/test-build-budget.sh
-	./scripts/test-compiler-cache.sh
+	./scripts/ci-guardrails.sh --fast
 
 # Compile-time pre-handoff gate for agents. Keep this invocation aligned with
 # the default workspace clippy pass in scripts/ci-guardrails.sh.

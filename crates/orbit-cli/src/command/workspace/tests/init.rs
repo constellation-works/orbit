@@ -11,7 +11,7 @@ use orbit_types::workspace::{
 use crate::tests::env_isolation::EnvGuard;
 
 use super::super::init::{
-    ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id,
+    ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id, checked_out_branch,
     onboarding_finalize_guidance, render_task_id_start,
 };
 use super::super::list::{format_workspace_list, workspace_list_json};
@@ -22,6 +22,81 @@ use super::super::support::orbit_gitignore_block;
 #[test]
 fn task_id_start_uses_the_host_task_prefix() {
     assert_eq!(render_task_id_start(Some("DANI"), 20_000), "DANI-20000");
+}
+
+#[test]
+fn workspace_init_uses_the_checked_out_branch_when_base_branch_is_omitted() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    let global = home.path().join(".orbit");
+    std::fs::create_dir_all(&global).expect("create global orbit");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_branch\"\nhost_id = \"branch-host\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("write host identity");
+
+    let git_init = std::process::Command::new("git")
+        .args(["init", "--quiet", "--initial-branch", "master"])
+        .arg(workspace.path())
+        .status()
+        .expect("run git init");
+    assert!(git_init.success(), "initialize master branch repository");
+    let git_commit = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.email=branch@example.test",
+            "-c",
+            "user.name=Branch Test",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "initial commit",
+        ])
+        .current_dir(workspace.path())
+        .status()
+        .expect("create initial commit");
+    assert!(git_commit.success(), "commit master branch fixture");
+
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
+    WorkspaceInitArgs {
+        name: Some("checked-out-branch".to_string()),
+        base_branch: None,
+        ship_mode: Some("local".to_string()),
+        role: None,
+        owner: None,
+        task_id_start: None,
+        mcp: false,
+        inject_agent_rules: false,
+        refresh_defaults: false,
+        force: false,
+    }
+    .execute_without_runtime(None)
+    .expect("workspace init");
+
+    let registry = workspace_registry::load_registry_from(&global.join("workspaces.json"))
+        .expect("load workspace registry");
+    let registered = registry.workspaces.first().expect("registered workspace");
+    assert_eq!(registered.base_branch, "master");
+    assert_eq!(registered.ship_mode.as_deref(), Some("local"));
+    assert!(
+        registered.git_remote.is_none(),
+        "fixture must have no remote"
+    );
+}
+
+#[test]
+fn checked_out_branch_keeps_main_as_the_default_for_main_checkouts() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let git_init = std::process::Command::new("git")
+        .args(["init", "--quiet", "--initial-branch", "main"])
+        .arg(workspace.path())
+        .status()
+        .expect("run git init");
+    assert!(git_init.success(), "initialize main branch repository");
+
+    assert_eq!(checked_out_branch(workspace.path()), "main");
 }
 
 #[test]

@@ -1299,7 +1299,7 @@
     "name": "orbit.workflow.run.list",
     "parameters": [
       {
-        "description": "Maximum runs to return (default 25, maximum 200).",
+        "description": "Maximum runs to return (default 25; values above 200 are rejected).",
         "name": "limit",
         "param_type": "integer",
         "required": false

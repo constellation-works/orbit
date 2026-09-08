@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_cmd::task_owner::bound_workspace_identity;
@@ -37,9 +39,35 @@ pub struct ToolRunArgs {
     /// Compatibility alias for pretty-printing JSON error output
     #[arg(long, hide = true)]
     pub pretty: bool,
+    #[arg(skip)]
+    pub(crate) parsed_input: OnceLock<Result<Value, String>>,
 }
 
 impl ToolRunArgs {
+    /// Read and parse tool input once for all pre-dispatch and execution paths
+    /// in this invocation. An unreadable `--input-file` must not be silently
+    /// retried by task-owner bootstrap or audit metadata.
+    pub(crate) fn parsed_input(&self) -> Result<Value, OrbitError> {
+        self.parsed_input
+            .get_or_init(|| self.load_input())
+            .clone()
+            .map_err(OrbitError::InvalidInput)
+    }
+
+    fn load_input(&self) -> Result<Value, String> {
+        if let Some(path) = &self.input_file {
+            let raw = std::fs::read_to_string(path)
+                .map_err(|error| format!("cannot read input file '{path}': {error}"))?;
+            serde_json::from_str(&raw).map_err(|error| format!("invalid JSON in '{path}': {error}"))
+        } else {
+            match &self.input {
+                Some(raw) => serde_json::from_str(raw)
+                    .map_err(|error| format!("invalid JSON input: {error}")),
+                None => Ok(Value::Object(Default::default())),
+            }
+        }
+    }
+
     /// Globally unique task ID from `orbit tool run orbit.task.show` input.
     ///
     /// The CLI bootstraps that one tool through the host task registry rather
@@ -49,12 +77,7 @@ impl ToolRunArgs {
         if self.name != "orbit.task.show" {
             return None;
         }
-        let raw = if let Some(path) = &self.input_file {
-            std::fs::read_to_string(path).ok()?
-        } else {
-            self.input.clone()?
-        };
-        let value: Value = serde_json::from_str(&raw).ok()?;
+        let value = self.parsed_input().ok()?;
         value
             .get("id")
             .and_then(Value::as_str)
@@ -66,19 +89,7 @@ impl ToolRunArgs {
 
 impl Execute for ToolRunArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let mut input: Value = if let Some(path) = &self.input_file {
-            let raw = std::fs::read_to_string(path).map_err(|e| {
-                OrbitError::InvalidInput(format!("cannot read input file '{path}': {e}"))
-            })?;
-            serde_json::from_str(&raw)
-                .map_err(|e| OrbitError::InvalidInput(format!("invalid JSON in '{path}': {e}")))?
-        } else {
-            match &self.input {
-                Some(raw) => serde_json::from_str(raw)
-                    .map_err(|e| OrbitError::InvalidInput(format!("invalid JSON input: {e}")))?,
-                None => Value::Object(Default::default()),
-            }
-        };
+        let mut input = self.parsed_input()?;
 
         // Resolve `workspace` once above local CLI tools, then bind or fail
         // closed. MCP uses its own server-side selector resolution.
@@ -112,7 +123,8 @@ impl Execute for ToolRunArgs {
             return Ok(Payload::detail(doc, text).into());
         }
 
-        let session_context = local_tool_session_context(runtime)?;
+        let owner = bound_workspace_identity(runtime);
+        let session_context = local_tool_session_context(runtime, owner.as_ref())?;
         let output = runtime.execute_tool_command_with_session_context(
             &self.name,
             input.clone(),
@@ -121,7 +133,10 @@ impl Execute for ToolRunArgs {
             session_context,
         )?;
         let output = crate::command::task::show::attach_bound_workspace_identity(
-            &self.name, &input, runtime, output,
+            &self.name,
+            &input,
+            owner.as_ref(),
+            output,
         )?;
         let output = shape_tool_output(&self.name, output, self.full, &self.fields);
 
@@ -133,11 +148,12 @@ pub(super) const LOCAL_MACHINE_ID_FALLBACK: &str = "host/local";
 
 pub(super) fn local_tool_session_context(
     runtime: &OrbitRuntime,
+    owner: Option<&orbit_cmd::task_owner::WorkspaceIdentity>,
 ) -> Result<ToolSessionContext, OrbitError> {
     let (machine_id, host_id) = local_machine_identity(&runtime.global_root())?;
     Ok(ToolSessionContext {
-        workspace_id: bound_workspace_identity(runtime)
-            .map(|owner| owner.id)
+        workspace_id: owner
+            .map(|owner| owner.id.clone())
             .or_else(|| runtime.workspace_id().ok()),
         caller_machine_id: Some(machine_id.clone()),
         caller_host_id: host_id.clone(),
