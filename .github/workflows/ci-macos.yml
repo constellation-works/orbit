@@ -73,7 +73,7 @@ jobs:
       # runner forbids `sandbox-exec`, `sandbox_exec_can_apply()` self-skips the
       # apply-time tests rather than failing — never worse than the Linux gate.
       - name: Run orbit-exec sandbox tests (real sandbox-exec)
-        run: cargo test -p orbit-exec --locked
+        run: cargo test --no-fail-fast -p orbit-exec --locked
 
       # [ORB-11055] The nested `orbit.task.update` regression needs the CLI
       # binary; the child-runtime inventory test lives in orbit-core.
@@ -81,12 +81,12 @@ jobs:
         run: cargo build -p orbit-cli --locked --bin orbit
 
       - name: Run orbit-core sandbox tests
-        run: cargo test -p orbit-core --locked sandbox
+        run: cargo test --no-fail-fast -p orbit-core --locked sandbox
 
       # Linux cannot exercise Darwin's libproc zombie/group semantics. Keep
       # these filters aligned with the owner/liveness path triggers above.
       - name: Run process identity and job-run owner tests
         run: |
-          cargo test -p orbit-common --locked process::tests::identity -- --nocapture
-          cargo test -p orbit-core --locked application::job::run::tests::owner -- --nocapture
-          cargo test -p orbit-core --locked application::job::run::tests::actions -- --nocapture
+          cargo test --no-fail-fast -p orbit-common --locked process::tests::identity -- --nocapture
+          cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::owner -- --nocapture
+          cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::actions -- --nocapture

@@ -28,12 +28,12 @@ if [[ "$fast" == false ]]; then
   "$repo_root/scripts/check-ci-macos.sh"
   cargo clippy --workspace --all-targets -- -D warnings
   if cargo nextest --version >/dev/null 2>&1; then
-    cargo nextest run --workspace --lib --bins --tests
+    cargo nextest run --no-fail-fast --workspace --lib --bins --tests
   else
     echo "cargo-nextest not found; falling back to cargo test" >&2
-    cargo test --workspace --lib --bins --tests
+    cargo test --no-fail-fast --workspace --lib --bins --tests
   fi
-  cargo test --workspace --doc
+  cargo test --no-fail-fast --workspace --doc
   RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
   # Supply-chain gate: dependency advisories + license allow-list (deny.toml).
   # [ORB-00416] Soft-presence like nextest above — CI installs a pinned version;
