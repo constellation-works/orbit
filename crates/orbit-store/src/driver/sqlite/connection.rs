@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::{apply_default_pragmas, open_private};
-use rusqlite::{Connection, Transaction, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 
 use crate::driver::sqlite::migration;
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
@@ -114,6 +114,18 @@ impl Store {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
+        })
+    }
+
+    /// Open an existing database for an observational probe, without creating
+    /// the database, applying migrations, or changing database pragmas. Use a fresh
+    /// connection so a cached runtime handle cannot hide a replaced path.
+    pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            readers: None,
         })
     }
 

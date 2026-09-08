@@ -413,6 +413,13 @@ impl OrbitRuntime {
         Ok(self.context.stores().host.sqlite.clone())
     }
 
+    /// Probe the configured database path independently of cached runtime
+    /// handles. Diagnostics must observe missing or replaced files and must
+    /// not repair or migrate them as a side effect.
+    pub fn sqlite_store_for_diagnostics(&self) -> Result<Store, OrbitError> {
+        Store::open_read_only(&self.context.persistence().audit_db)
+    }
+
     pub fn v2_audit_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::V2AuditStoreBackend>, OrbitError> {
