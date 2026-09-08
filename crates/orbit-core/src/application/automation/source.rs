@@ -11,6 +11,22 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(test)]
+static LS_TREE_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(super) fn reset_ls_tree_invocations() {
+    LS_TREE_INVOCATIONS.store(0, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(super) fn ls_tree_invocations() -> usize {
+    LS_TREE_INVOCATIONS.load(Ordering::SeqCst)
+}
+
 pub(crate) struct Source<'a> {
     root: &'a Path,
     started: Instant,
@@ -26,6 +42,11 @@ impl<'a> Source<'a> {
 
     /// Run one bounded child process, capturing stdout under a size and time budget.
     fn command(&self, program: &str, args: &[&str]) -> Result<String, AutomationError> {
+        #[cfg(test)]
+        if program == "git" && args.first() == Some(&"ls-tree") {
+            LS_TREE_INVOCATIONS.fetch_add(1, Ordering::SeqCst);
+        }
+
         if self.started.elapsed() > Duration::from_secs(30) {
             return Err(AutomationError::Deferred("source_deadline".into()));
         }

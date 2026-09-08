@@ -1,6 +1,10 @@
 //! Host observe/admission fixtures for incident inventory reuse [ORB-11633].
 
-use super::super::members::Host;
+use super::super::{
+    members::Host,
+    preparation,
+    source::{ls_tree_invocations, reset_ls_tree_invocations},
+};
 use crate::OrbitRuntime;
 use chrono::Utc;
 use orbit_automation::members::{MemberAdmission, MemberHost};
@@ -69,6 +73,13 @@ fn trigger() -> StateTrigger {
     }
 }
 
+fn preparation_trigger() -> StateTrigger {
+    StateTrigger {
+        kind: StateTriggerKind::PreparationEligible,
+        ..trigger()
+    }
+}
+
 fn create_backlog_task(runtime: &OrbitRuntime, repo_root: &Path, id_hint: &str) -> String {
     runtime
         .stores()
@@ -102,6 +113,42 @@ fn create_backlog_task(runtime: &OrbitRuntime, repo_root: &Path, id_hint: &str) 
             comments: Vec::new(),
         })
         .expect("create task")
+        .id
+}
+
+fn create_proposed_task(runtime: &OrbitRuntime, repo_root: &Path, id_hint: &str) -> String {
+    runtime
+        .stores()
+        .task_records()
+        .create(TaskCreateParams {
+            actor: "test".into(),
+            parent_id: None,
+            title: format!("task {id_hint}"),
+            description: "test".into(),
+            acceptance_criteria: Vec::new(),
+            dependencies: Vec::new(),
+            relations: Vec::new(),
+            tags: Vec::new(),
+            required_tools: Vec::new(),
+            plan: "test plan".into(),
+            execution_summary: String::new(),
+            context_files: Vec::new(),
+            workspace_path: Some(repo_root.to_string_lossy().into_owned()),
+            repo_root: None,
+            created_by: Some("test".into()),
+            planned_by: None,
+            implemented_by: None,
+            status: TaskStatus::Proposed,
+            priority: TaskPriority::Medium,
+            complexity: None,
+            task_type: TaskType::Chore,
+            external_refs: Vec::new(),
+            source_task_id: None,
+            crew: None,
+            orchestrator: None,
+            comments: Vec::new(),
+        })
+        .expect("create proposed task")
         .id
 }
 
@@ -199,6 +246,48 @@ fn couple_parent_to_child(
     state.record_child_dispatch(dispatch);
     runtime.write_run_state(&parent, &state).unwrap();
     parent
+}
+
+#[test]
+fn preparation_page_lists_instructions_once_for_all_eligible_tasks() {
+    let (_root, runtime, repo) = test_runtime();
+    for hint in ["one", "two", "three"] {
+        create_proposed_task(&runtime, &repo, hint);
+    }
+
+    reset_ls_tree_invocations();
+    let trigger = preparation_trigger();
+    let page = Host::new(&runtime, &trigger)
+        .observe(None, Utc::now())
+        .unwrap();
+
+    assert_eq!(page.candidates.len(), 3);
+    assert_eq!(
+        ls_tree_invocations(),
+        1,
+        "one revision-scoped instruction listing serves the entire page"
+    );
+}
+
+#[test]
+fn cached_instruction_snapshot_preserves_preparation_fingerprint_bytes() {
+    let (_root, runtime, repo) = test_runtime();
+    std::fs::write(repo.join("AGENTS.md"), "Follow the pinned instructions.\n")
+        .expect("write instructions");
+    git(&repo, &["add", "AGENTS.md"]);
+    git(&repo, &["commit", "-m", "add instructions"]);
+
+    let id = create_proposed_task(&runtime, &repo, "fingerprint");
+    let task = runtime.get_task(&id).expect("task");
+    let revision = preparation::head_revision(&runtime, "agent-main").expect("head");
+
+    let before = preparation::fingerprint(&runtime, &task, &revision).expect("fingerprint");
+    let instructions = preparation::instructions(&runtime, &revision).expect("instructions");
+    let after =
+        preparation::fingerprint_with_instructions(&runtime, &task, &revision, &instructions)
+            .expect("fingerprint with cached instructions");
+
+    assert_eq!(before, after);
 }
 
 #[test]

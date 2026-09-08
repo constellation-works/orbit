@@ -1,6 +1,6 @@
 //! Narrow Core adapter for the shared state scheduling domain.
 
-use super::{consumer_key, preparation, source::Source};
+use super::{consumer_key, preparation, preparation::InstructionSnapshot, source::Source};
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_automation::{
@@ -74,6 +74,7 @@ pub(crate) struct Host<'a> {
     runtime: &'a OrbitRuntime,
     trigger: &'a StateTrigger,
     incidents: RefCell<super::incidents::IncidentSession>,
+    instructions: RefCell<BTreeMap<String, InstructionSnapshot>>,
 }
 
 impl<'a> Host<'a> {
@@ -82,7 +83,28 @@ impl<'a> Host<'a> {
             runtime,
             trigger,
             incidents: RefCell::new(super::incidents::IncidentSession::new()),
+            instructions: RefCell::new(BTreeMap::new()),
         }
+    }
+
+    fn fingerprint(
+        &self,
+        task: &orbit_types::task::Task,
+        revision: &str,
+    ) -> Result<String, AutomationError> {
+        let instructions = {
+            let mut cached = self.instructions.borrow_mut();
+            match cached.get(revision) {
+                Some(snapshot) => snapshot.clone(),
+                None => {
+                    let snapshot = preparation::instructions(self.runtime, revision)?;
+                    cached.insert(revision.to_string(), snapshot.clone());
+                    snapshot
+                }
+            }
+        };
+
+        preparation::fingerprint_with_instructions(self.runtime, task, revision, &instructions)
     }
 
     #[cfg(test)]
@@ -146,14 +168,13 @@ impl MemberHost for Host<'_> {
                         withheld.insert(task.id, "task_ineligible".into());
                         continue;
                     }
-                    let fingerprint =
-                        match preparation::fingerprint(self.runtime, &task, &source.commit) {
-                            Ok(fingerprint) => fingerprint,
-                            Err(error) => {
-                                withheld.insert(task.id, error.to_string());
-                                continue;
-                            }
-                        };
+                    let fingerprint = match self.fingerprint(&task, &source.commit) {
+                        Ok(fingerprint) => fingerprint,
+                        Err(error) => {
+                            withheld.insert(task.id, error.to_string());
+                            continue;
+                        }
+                    };
                     candidates.push(StateMember {
                         key: task.id.clone(),
                         task_ids: vec![task.id.clone()],
@@ -246,7 +267,7 @@ impl MemberHost for Host<'_> {
                         return Ok(MemberAdmission::Retire("task_ineligible".into()));
                     }
                     let (_, source) = self.head(&self.trigger.branch)?;
-                    preparation::fingerprint(self.runtime, &task, &source.commit)?
+                    self.fingerprint(&task, &source.commit)?
                 }
                 StateTriggerKind::ExecutionFailed => {
                     match super::incidents::observe(self.runtime, &task) {
