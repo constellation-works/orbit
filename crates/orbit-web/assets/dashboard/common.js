@@ -305,6 +305,34 @@ export function el(tag, opts = {}, children = []) {
   return node;
 }
 
+// ORB-11658: expanding a row is the dashboard's primary interaction, so it has
+// to be operable without a mouse. The row itself carries the button semantics —
+// wrapping the cells in a real <button> would break the CSS grid every row type
+// lays out in — so this is the one place that grants the tab stop, the ARIA
+// role and state, and the Enter/Space binding, and it binds `click` from the
+// same handler so pointer and keyboard can never drift apart.
+//
+// `expanded` is omitted for rows that navigate instead of disclosing; those get
+// button semantics with no expansion state. `controls` names the detail node
+// when the row renders one with a stable id.
+export function makeToggleRow(node, { expanded, onToggle, controls } = {}) {
+  node.tabIndex = 0;
+  node.setAttribute("role", "button");
+  if (expanded != null) node.setAttribute("aria-expanded", String(!!expanded));
+  if (controls) node.setAttribute("aria-controls", controls);
+  node.addEventListener("click", onToggle);
+  node.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    // Key events target whatever holds focus. A nested select or button is its
+    // own tab stop and owns its keys; only the row's own activation belongs to
+    // the row, so a bubbled key press must not toggle it.
+    if (event.target !== node) return;
+    event.preventDefault();
+    onToggle(event);
+  });
+  return node;
+}
+
 // ORB-11655: a panel refresh rebuilds its nodes every 30 s, but disclosure is
 // operator state, not payload state — a <details> the operator opened has to
 // come back open. Keyed in one store so every rebuilt panel restores the same
