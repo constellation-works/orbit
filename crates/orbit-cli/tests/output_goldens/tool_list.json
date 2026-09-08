@@ -1469,7 +1469,7 @@
         "required": false
       },
       {
-        "description": "Execution timeout in milliseconds",
+        "description": "Execution timeout in milliseconds (default 15000; larger values are clamped to 60000)",
         "name": "timeout_ms",
         "param_type": "u64",
         "required": false
