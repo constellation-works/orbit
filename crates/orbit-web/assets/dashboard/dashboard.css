@@ -980,6 +980,20 @@
         outline-offset: 2px;
       }
 
+      /* ORB-11658: expandable rows and the collapsible field headers are
+         keyboard-operable (role="button" plus Enter/Space), so focus has to be
+         visible on them as well. The ring is inset because an outward one on a
+         full-bleed row is clipped by the panel's scroll container. */
+      .row:focus-visible,
+      .artifact-row:focus-visible,
+      .audit-row:focus-visible,
+      .step-row:focus-visible,
+      .runs-row:focus-visible,
+      .field-block.collapsible h4:focus-visible {
+        outline: 2px solid var(--accent-hover);
+        outline-offset: -2px;
+      }
+
       .filter-summary {
         padding: 6px 16px;
         font-family: var(--font-mono);
@@ -4215,6 +4229,16 @@
         background: var(--bg);
         display: flex; align-items: center; gap: 12px;
         font-family: var(--font-mono); font-size: 11px; color: var(--fg-dim);
+      }
+      /* ORB-11658: the log-foot controls are real <button>s so they are
+         focusable and announced as toggles; strip the user-agent chrome the
+         <span>s they replaced never carried. */
+      .log-foot button { font: inherit; background: none; border: none; color: inherit; padding: 0; }
+      .log-foot .filter-pill:focus-visible,
+      .log-foot .seg.right:focus-visible,
+      .log-foot .count:focus-visible {
+        outline: 2px solid var(--accent-hover);
+        outline-offset: 2px;
       }
       .log-foot .seg { display: inline-flex; align-items: center; gap: 6px; }
       .log-foot .seg b { color: var(--fg); font-weight: 500; }

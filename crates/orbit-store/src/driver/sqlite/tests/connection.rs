@@ -207,3 +207,51 @@ fn file_store_is_private_under_permissive_umask() {
         assert_eq!(mode, 0o600, "private SQLite file {}", file.display());
     }
 }
+
+#[test]
+fn read_only_probe_does_not_create_a_missing_database() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("missing.db");
+    assert!(Store::open_read_only(&path).is_err());
+    assert!(!path.exists(), "diagnosis must not create the database");
+}
+
+#[test]
+fn read_only_probe_preserves_unmigrated_database_and_rejects_writes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("store.db");
+    let connection = rusqlite::Connection::open(&path).expect("fixture database");
+    connection
+        .execute_batch("CREATE TABLE fixture (id INTEGER)")
+        .expect("fixture table");
+    drop(connection);
+    let before = std::fs::read(&path).expect("database before probe");
+
+    let probe = Store::open_read_only(&path).expect("read-only probe");
+    probe.quick_check().expect("valid database");
+    assert_eq!(probe.schema_version().expect("version"), 0);
+    assert!(
+        probe
+            .with_transaction(|tx| {
+                tx.connection()
+                    .execute("INSERT INTO fixture VALUES (1)", [])
+                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                Ok(())
+            })
+            .is_err(),
+        "probe must reject writes"
+    );
+    drop(probe);
+    assert_eq!(std::fs::read(&path).expect("database after probe"), before);
+}
+
+#[test]
+fn read_only_probe_reports_malformed_database_without_repair() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("store.db");
+    let content = b"not a SQLite database";
+    std::fs::write(&path, content).expect("malformed fixture");
+    let probe = Store::open_read_only(&path).expect("open existing file");
+    assert!(probe.quick_check().is_err());
+    assert_eq!(std::fs::read(&path).expect("unchanged file"), content);
+}

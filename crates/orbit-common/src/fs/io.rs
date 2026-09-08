@@ -22,7 +22,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fs2::FileExt;
+use super::file_lock::acquire_shared_file_lock;
+pub use super::file_lock::{
+    DEFAULT_FILE_LOCK_TIMEOUT, FileLockGuard, FileLockHolderInfo, FileLockOptions, FileLockTimeout,
+    acquire_exclusive_file_lock, read_file_lock_holder, try_acquire_exclusive_file_lock,
+};
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -342,8 +346,8 @@ fn claim_lock_path(path: &Path) -> Option<HeldLockPath> {
 ///
 /// The lock is re-entrant per thread: a nested call for the same lock path
 /// runs `op` directly under the outermost acquisition instead of deadlocking
-/// on a second descriptor. Cross-thread and cross-process callers still block
-/// on the flock as before, including readers holding
+/// on a second descriptor. Cross-thread and cross-process callers wait up to
+/// [`DEFAULT_FILE_LOCK_TIMEOUT`] on the flock, including readers holding
 /// [`with_shared_file_lock`] on the same target.
 ///
 /// The closure returns `Result<T, E>` where any filesystem error hit while
@@ -354,6 +358,20 @@ fn claim_lock_path(path: &Path) -> Option<HeldLockPath> {
 /// `label` prefixes error messages for diagnosability when the lock path
 /// alone isn't enough context.
 pub fn with_exclusive_file_lock<T, E, F>(target_path: &Path, label: &str, op: F) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    with_exclusive_file_lock_options(target_path, label, FileLockOptions::default(), op)
+}
+
+/// [`with_exclusive_file_lock`] with an explicit, testable acquisition policy.
+pub fn with_exclusive_file_lock_options<T, E, F>(
+    target_path: &Path,
+    label: &str,
+    options: FileLockOptions,
+    op: F,
+) -> Result<T, E>
 where
     F: FnOnce() -> Result<T, E>,
     E: From<io::Error>,
@@ -381,24 +399,7 @@ where
     let Some(_held) = claim_lock_path(&lock_path) else {
         return op();
     };
-    let mut options = OpenOptions::new();
-    options.create(true).read(true).write(true).truncate(false);
-    apply_private_file_mode(&mut options);
-    let lock_file = options.open(&lock_path).map_err(|e| {
-        classify_or_wrap_lock_io(&lock_path, e, |e| {
-            format!("open {label} lock '{}': {e}", lock_path.display())
-        })
-    })?;
-    set_private_file_permissions(&lock_path).map_err(|e| {
-        classify_or_wrap_lock_io(&lock_path, e, |e| {
-            format!("chmod {label} lock '{}': {e}", lock_path.display())
-        })
-    })?;
-    lock_file.lock_exclusive().map_err(|e| {
-        classify_or_wrap_lock_io(&lock_path, e, |e| {
-            format!("lock {label} '{}': {e}", lock_path.display())
-        })
-    })?;
+    let _lock = acquire_exclusive_file_lock(&lock_path, label, options)?;
 
     op()
 }
@@ -420,6 +421,8 @@ where
 /// - Acquisition is best effort. A store on a read-only mount, or any
 ///   filesystem that refuses the lock file, still serves the read unlocked
 ///   rather than failing it — the same exposure as before this lock existed.
+///   Active contention waits up to the configured deadline and returns a typed
+///   timeout instead of reading through a live writer.
 /// - Re-entrancy is shared with the exclusive variant, so a read nested inside
 ///   a writer's own critical section runs directly instead of deadlocking on a
 ///   second descriptor.
@@ -428,6 +431,20 @@ where
 /// target. A nested request never upgrades the outer acquisition, so the
 /// mutation would run under a shared lock that concurrent readers also hold.
 pub fn with_shared_file_lock<T, E, F>(target_path: &Path, label: &str, op: F) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    with_shared_file_lock_options(target_path, label, FileLockOptions::default(), op)
+}
+
+/// [`with_shared_file_lock`] with an explicit, testable acquisition policy.
+pub fn with_shared_file_lock_options<T, E, F>(
+    target_path: &Path,
+    label: &str,
+    options: FileLockOptions,
+    op: F,
+) -> Result<T, E>
 where
     F: FnOnce() -> Result<T, E>,
     E: From<io::Error>,
@@ -442,8 +459,9 @@ where
     let Some(_held) = claim_lock_path(&lock_path) else {
         return op();
     };
-    let _lock_file = match acquire_shared_lock(&lock_path) {
+    let _lock_file = match acquire_shared_file_lock(&lock_path, label, options) {
         Ok(file) => Some(file),
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => return Err(E::from(error)),
         Err(error) => {
             crate::tracing::debug!(
                 target: "orbit.common.fs",
@@ -457,14 +475,6 @@ where
     };
 
     op()
-}
-
-fn acquire_shared_lock(lock_path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.create(true).read(true).write(true).truncate(false);
-    let lock_file = open_private_file(lock_path, &mut options)?;
-    lock_file.lock_shared()?;
-    Ok(lock_file)
 }
 
 /// The lock path to open and to key re-entrancy on, resolved through symlinks
@@ -497,7 +507,7 @@ fn lock_path_for(path: &Path) -> io::Result<PathBuf> {
     Ok(path.with_file_name(format!(".{file_name}.lock")))
 }
 
-fn open_private_file(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
+pub(crate) fn open_private_file(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     apply_private_file_mode(options);
     let file = options.open(path)?;
     set_private_file_permissions(path)?;
@@ -587,14 +597,14 @@ pub(crate) fn write_access_error_message(path: &Path, err: &io::Error) -> Option
     })
 }
 
-fn classify_lock_io(path: &Path, err: io::Error) -> io::Error {
+pub(crate) fn classify_lock_io(path: &Path, err: io::Error) -> io::Error {
     match write_access_error_message(path, &err) {
         Some(message) => io::Error::new(err.kind(), message),
         None => err,
     }
 }
 
-fn classify_or_wrap_lock_io(
+pub(crate) fn classify_or_wrap_lock_io(
     path: &Path,
     err: io::Error,
     fallback: impl FnOnce(&io::Error) -> String,

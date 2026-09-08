@@ -204,9 +204,10 @@ export function initLogTail() {
   
   const followBtn = $("log-follow-tail");
   if (followBtn) {
-    followBtn.addEventListener("click", (e) => {
+    followBtn.addEventListener("click", () => {
       logFollowTail = !logFollowTail;
-      e.currentTarget.classList.toggle("on", logFollowTail);
+      followBtn.classList.toggle("on", logFollowTail);
+      followBtn.setAttribute("aria-pressed", String(logFollowTail));
       if (logFollowTail) {
         flushBufferedLogs();
       }
@@ -221,8 +222,8 @@ export function initLogTail() {
   }
 
   document.querySelectorAll("#side-dock .filter-pill").forEach(pill => {
-    pill.addEventListener("click", (e) => {
-      const filter = e.currentTarget.dataset.filter;
+    pill.addEventListener("click", () => {
+      const filter = pill.dataset.filter;
       if (filter === "all") {
         activeLogFilters.clear();
         activeLogFilters.add("all");
@@ -237,10 +238,8 @@ export function initLogTail() {
           activeLogFilters.add(filter);
         }
       }
-      
-      document.querySelectorAll("#side-dock .filter-pill").forEach(p => {
-        p.classList.toggle("on", activeLogFilters.has(p.dataset.filter));
-      });
+
+      syncLogFilterPills();
       applyLogFilters();
     });
   });
@@ -269,6 +268,17 @@ function enforceLogBounds() {
     for (const row of toRemove) {
       row.remove();
     }
+  }
+}
+
+// The pills are toggle buttons: `on` carries the visual state and `aria-pressed`
+// carries the same fact for assistive tech, so both are written from the one
+// active-filter set rather than from the click target.
+function syncLogFilterPills() {
+  for (const pill of document.querySelectorAll("#side-dock .filter-pill")) {
+    const on = activeLogFilters.has(pill.dataset.filter);
+    pill.classList.toggle("on", on);
+    pill.setAttribute("aria-pressed", String(on));
   }
 }
 

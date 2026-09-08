@@ -214,7 +214,9 @@ fn dashboard_task_actions_route_to_selected_workspace() {
         "withWorkspace must be exported from common.js so other modules can reuse it"
     );
     assert!(
-        tasks.contains("withWorkspace } from './common.js'"),
+        tasks
+            .lines()
+            .any(|line| line.contains("from './common.js'") && line.contains("withWorkspace")),
         "tasks.js must import withWorkspace from common.js"
     );
     assert!(
@@ -1669,13 +1671,21 @@ globalThis.document = {
 };
 const location = new URL("http://dashboard.test/");
 globalThis.window = { location, innerHeight: 900, addEventListener: () => {}, localStorage: { getItem: () => null, setItem: () => {} } };
-const retryFns = [];
+// Long timers are held rather than run so the retry can be driven by hand.
+// clearTimeout has to actually clear: fetchJson arms a 30s abort timer and
+// cancels it in its `finally`, and a no-op stub would leave that behind and
+// make it look like a pending stream retry.
+const pendingTimers = new Map();
+let nextTimerId = 1;
 const nativeSetTimeout = setTimeout;
 globalThis.setTimeout = (fn, ms = 0) => {
-  if (ms >= 250) { retryFns.push(fn); return retryFns.length; }
-  return nativeSetTimeout(fn, ms);
+  if (ms < 250) return nativeSetTimeout(fn, ms);
+  const id = nextTimerId++;
+  pendingTimers.set(id, fn);
+  return id;
 };
-globalThis.clearTimeout = () => {};
+globalThis.clearTimeout = (id) => { pendingTimers.delete(id); };
+const retryFns = () => [...pendingTimers.values()];
 const sources = [];
 class MockEventSource {
   static CONNECTING = 0;
@@ -1710,8 +1720,8 @@ if (label.textContent !== "log stream unavailable, retrying") {
 }
 if (!bar.classList.contains("disconnected")) throw new Error("status bar did not mark disconnected");
 if (!get("side-dock").classList.contains("disconnected")) throw new Error("dock did not mark disconnected");
-if (retryFns.length !== 1) throw new Error(`expected one retry timer, got ${retryFns.length}`);
-retryFns[0]();
+if (retryFns().length !== 1) throw new Error(`expected one retry timer, got ${retryFns().length}`);
+retryFns()[0]();
 if (sources.length !== 2) throw new Error(`retry did not open a new EventSource, got ${sources.length}`);
 if (!sources[1].url.includes("from=42")) throw new Error(`retry lost resume offset: ${sources[1].url}`);
 sources[1].readyState = EventSource.OPEN;
@@ -3456,4 +3466,78 @@ fn dashboard_loading_rejects_stale_responses_and_reports_panel_errors() {
         include_str!("dashboard_loading_dom.mjs"),
         include_str!("dashboard_loading.mjs")
     ));
+}
+
+// ORB-11658: the dashboard's primary interaction is expanding a row, and the
+// log dock's level filters gate what the operator can even see. Both were
+// pointer-only. Two things carry the fix and are asserted separately: the
+// shipped markup (a real <button> is what makes Space activate a pill, and
+// document order is what makes Tab reach a row from the search box), and the
+// shipped modules (role, tab stop, aria state, and the key handlers), which the
+// Node scenario drives directly.
+#[test]
+fn dashboard_log_dock_controls_are_real_toggle_buttons() {
+    let index = include_str!("../../assets/dashboard/index.html");
+
+    for control in [
+        r#"<button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">all</button>"#,
+        r#"<button type="button" class="filter-pill" data-filter="err" aria-pressed="false">err</button>"#,
+        r#"<button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">deny</button>"#,
+        r#"<button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">warn</button>"#,
+        r#"<button type="button" class="seg right on" id="log-follow-tail" title="Follow the tail" aria-pressed="true">"#,
+        r#"<button type="button" class="count" id="log-buffered-count""#,
+    ] {
+        assert!(
+            index.contains(control),
+            "the log dock must ship this control as a pressable button: {control}"
+        );
+    }
+    assert!(
+        !index.contains(r#"<span class="filter-pill"#),
+        "no log filter may remain a <span>"
+    );
+
+    // Tab order is document order: the search box has to come before the rows
+    // it filters for "Tab from the search box reaches the first task row".
+    let search = index
+        .find(r#"id="task-search""#)
+        .expect("task search input must exist");
+    let rows = index
+        .find(r#"id="tasks-body""#)
+        .expect("task list body must exist");
+    assert!(
+        search < rows,
+        "the task search box must precede the task rows in document order"
+    );
+}
+
+#[test]
+fn dashboard_rows_are_keyboard_operable_without_changing_click_behaviour() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        include_str!("dashboard_keyboard.mjs")
+    ));
+}
+
+// The focus ring is the other half of keyboard operability: a row that can be
+// focused but shows nothing is not usable.
+#[test]
+fn dashboard_css_shows_focus_on_every_operable_row() {
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+
+    for selector in [
+        ".row:focus-visible",
+        ".artifact-row:focus-visible",
+        ".audit-row:focus-visible",
+        ".step-row:focus-visible",
+        ".runs-row:focus-visible",
+        ".field-block.collapsible h4:focus-visible",
+        ".log-foot .filter-pill:focus-visible",
+    ] {
+        assert!(
+            css.contains(selector),
+            "{selector} must have a visible focus ring"
+        );
+    }
 }

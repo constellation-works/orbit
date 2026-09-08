@@ -124,12 +124,12 @@
           <div class="dock-pane" data-pane="log">
             <section class="panel" id="log-panel">
               <div class="log-foot log-filters">
-                <span class="filter-pill on" data-filter="all">all</span>
-                <span class="filter-pill" data-filter="err">err</span>
-                <span class="filter-pill" data-filter="deny">deny</span>
-                <span class="filter-pill" data-filter="warn">warn</span>
-                <span class="seg right on" id="log-follow-tail" title="Follow the tail"><b>&#8595;</b> follow</span>
-                <span class="count" id="log-buffered-count" style="display: none;">0 buffered</span>
+                <button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">all</button>
+                <button type="button" class="filter-pill" data-filter="err" aria-pressed="false">err</button>
+                <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">deny</button>
+                <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">warn</button>
+                <button type="button" class="seg right on" id="log-follow-tail" title="Follow the tail" aria-pressed="true"><b>&#8595;</b> follow</button>
+                <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
               </div>
               <div class="log-stream">
                 <div class="inner" id="logInner"></div>

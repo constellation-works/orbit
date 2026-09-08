@@ -283,6 +283,27 @@ fn unopenable_store_database_fails_the_database_check() {
     );
 }
 
+#[test]
+fn missing_store_database_is_reported_without_recreating_it() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let db_path = temp.path().join("global").join("orbit.db");
+    fs::remove_file(&db_path).expect("remove store db");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let database = status_of(&results, "database");
+    assert_eq!(
+        database.status,
+        WorkspaceDoctorStatus::Error,
+        "{database:?}"
+    );
+    assert!(database.message.contains("cannot open store database"));
+    assert!(
+        !db_path.exists(),
+        "doctor must not recreate a missing database"
+    );
+}
+
 #[cfg(unix)]
 fn reaped_child_pid() -> u32 {
     let mut child = std::process::Command::new("true")
