@@ -254,6 +254,17 @@ impl Store {
         )))
     }
 
+    /// Probe the current database path without creating or migrating it.
+    /// A fresh read-write connection detects replaced paths and must acquire
+    /// the write lock; cached handles and read-only opens cannot prove readiness.
+    pub fn check_path_writable(path: &Path) -> Result<(), OrbitError> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(1))
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        check_connection_writable(&conn)
+    }
+
     /// Prove the database accepts writes without mutating it: acquire the
     /// write lock via `BEGIN IMMEDIATE`, then roll back. Fails when the
     /// database file (or its WAL sidecars) is not writable, or when the
@@ -263,7 +274,11 @@ impl Store {
             .conn
             .lock()
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
-            .map_err(|e| OrbitError::Store(format!("write probe failed: {e}")))
+        check_connection_writable(&conn)
     }
+}
+
+fn check_connection_writable(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
+        .map_err(|error| OrbitError::Store(format!("write probe failed: {error}")))
 }

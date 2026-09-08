@@ -35,6 +35,40 @@ fn check_writable_acquires_and_releases_write_lock() {
 }
 
 #[test]
+fn path_write_probe_does_not_create_or_migrate_databases() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("probe.db");
+    assert!(Store::check_path_writable(&path).is_err());
+    assert!(!path.exists(), "probe must not create a missing database");
+
+    let conn = rusqlite::Connection::open(&path).expect("create plain database");
+    conn.execute_batch("CREATE TABLE sentinel(value INTEGER); INSERT INTO sentinel VALUES (7);")
+        .expect("create existing data");
+    Store::check_path_writable(&path).expect("existing writable database passes");
+    let tables: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count tables after probe");
+    assert_eq!(tables, 1, "probe must not apply Orbit migrations");
+    let value: i64 = conn
+        .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
+        .expect("read unchanged data");
+    assert_eq!(value, 7);
+
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .expect("hold write lock");
+    assert!(
+        Store::check_path_writable(&path).is_err(),
+        "probe must acquire actual write access"
+    );
+    conn.execute_batch("ROLLBACK").expect("release write lock");
+    Store::check_path_writable(&path).expect("probe succeeds after write lock release");
+}
+
+#[test]
 fn transaction_and_read_callbacks_expose_scoped_sql_connections() {
     let store = Store::open_in_memory().expect("open in-memory store");
     store

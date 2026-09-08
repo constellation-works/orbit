@@ -421,6 +421,12 @@ impl OrbitRuntime {
         Store::open_read_only(&self.context.persistence().audit_db)
     }
 
+    /// Check write readiness at the configured path without recreating or
+    /// migrating the database, independently of cached runtime connections.
+    pub fn check_sqlite_store_writable(&self) -> Result<(), OrbitError> {
+        Store::check_path_writable(&self.context.persistence().audit_db)
+    }
+
     pub fn v2_audit_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::V2AuditStoreBackend>, OrbitError> {
