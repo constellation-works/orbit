@@ -35,6 +35,8 @@ fn spawn_test_request<'a>(
         on_spawn: None,
         wait: None,
         live_readers: None,
+        #[cfg(unix)]
+        cancel_pair: None,
     }
 }
 
@@ -227,6 +229,36 @@ fn spawn_with_timeout_redacts_tracing_line_without_redacting_raw_stdout() {
         !formatted_output.contains("abc123"),
         "formatted tracing output leaked secret: {formatted_output}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn spawn_with_timeout_captures_delayed_stdout_when_cancel_pair_creation_fails() {
+    use std::io;
+
+    let args = sh_args("sleep 0.1; printf '%s\\n' delayed-output");
+    let cancel_pair = || Err(io::Error::other("injected cancel pair failure"));
+    let mut request = spawn_test_request(
+        "/bin/sh",
+        &args,
+        None,
+        Duration::from_secs(5),
+        SpawnTraceContext {
+            provider: "codex",
+            job_run_id: "job-cancel-pair-failure",
+            task_id: Some("TCANCELPAIR"),
+            cwd: None,
+        },
+    );
+    request.cancel_pair = Some(&cancel_pair);
+
+    let (stdout, stderr, exit_code, _duration, timed_out) =
+        spawn_with_timeout(request).expect("spawn succeeds without a cancel pair");
+
+    assert_eq!(stdout.bytes(), b"delayed-output\n");
+    assert!(stderr.bytes().is_empty());
+    assert_eq!(exit_code, Some(0));
+    assert!(!timed_out);
 }
 
 #[test]

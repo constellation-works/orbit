@@ -64,6 +64,8 @@ const OUTPUT_LINE_EVENT_LIMIT_BYTES: usize = 64 * 1024;
 
 type SharedOutputCapture = Arc<Mutex<RollingOutputCapture>>;
 type WaitHook<'a> = &'a dyn Fn(&mut Child) -> std::io::Result<Option<ExitStatus>>;
+#[cfg(unix)]
+type CancelPairHook<'a> = &'a dyn Fn() -> io::Result<(UnixStream, UnixStream)>;
 
 #[derive(Debug)]
 pub(super) struct CapturedOutput {
@@ -204,6 +206,10 @@ pub(super) struct SpawnWithTimeoutRequest<'a> {
     /// lifetime of its thread so tests can observe finalization without
     /// sampling process-wide thread counts.
     pub(super) live_readers: Option<Arc<AtomicUsize>>,
+    /// Test seam for exercising output capture when the pollable cancellation
+    /// channel cannot be constructed.
+    #[cfg(unix)]
+    pub(super) cancel_pair: Option<CancelPairHook<'a>>,
 }
 
 struct OutputReaderContext {
@@ -259,6 +265,8 @@ pub(super) fn spawn_with_timeout(
         on_spawn,
         wait,
         live_readers,
+        #[cfg(unix)]
+        cancel_pair,
     } = request;
 
     let started = Instant::now();
@@ -303,6 +311,8 @@ pub(super) fn spawn_with_timeout(
                 dispatch: dispatch.clone(),
             },
             live_readers.clone(),
+            #[cfg(unix)]
+            cancel_pair,
         )
     });
     let stderr_reader = child.stderr.take().map(|handle| {
@@ -318,6 +328,8 @@ pub(super) fn spawn_with_timeout(
                 dispatch,
             },
             live_readers,
+            #[cfg(unix)]
+            cancel_pair,
         )
     });
 
@@ -406,6 +418,7 @@ fn spawn_output_reader<R>(
     buf: SharedOutputCapture,
     context: OutputReaderContext,
     live_readers: Option<Arc<AtomicUsize>>,
+    cancel_pair: Option<CancelPairHook<'_>>,
 ) -> OutputReaderHandle
 where
     R: Read + IntoRawFd + Send + 'static,
@@ -413,9 +426,12 @@ where
     let fd = handle.into_raw_fd();
     // SAFETY: `into_raw_fd` transferred ownership of a valid pipe descriptor.
     let mut reader = unsafe { File::from_raw_fd(fd) };
-    let _ = set_nonblocking(reader.as_raw_fd());
-    let (wakeup, cancel) = match UnixStream::pair() {
+    let pair_result = cancel_pair.map_or_else(UnixStream::pair, |make_pair| make_pair());
+    let (wakeup, cancel) = match pair_result {
         Ok((wakeup, cancel)) => {
+            // The fallback below uses a blocking read loop, so only make the
+            // pipe nonblocking when its pollable cancel channel exists.
+            let _ = set_nonblocking(reader.as_raw_fd());
             let _ = wakeup.set_nonblocking(true);
             let _ = cancel.set_nonblocking(true);
             (Some(wakeup), Some(cancel))
