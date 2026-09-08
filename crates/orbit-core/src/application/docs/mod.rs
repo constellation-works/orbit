@@ -129,7 +129,11 @@ impl OrbitRuntime {
     }
 
     pub fn add_docs_root(&self, path: &str) -> Result<DocAddOutcome, OrbitError> {
-        add_docs_root(&self.paths().repo_root, &self.config_path(), path)
+        add_docs_root(
+            &self.paths().repo_root,
+            &self.shared_root().join("config.toml"),
+            path,
+        )
     }
 
     pub fn index_docs(&self, params: DocIndexParams) -> Result<DocIndexResult, OrbitError> {

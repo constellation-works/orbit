@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_config::{ConfigScope, ConfigStore};
 
 use super::config::{DocsRoot, parse_docs_roots_from_config_toml};
 use super::path_util::path_to_slash_string;
@@ -12,12 +13,7 @@ pub(super) fn add_docs_root(
     path: &str,
 ) -> Result<DocAddOutcome, OrbitError> {
     let normalized = normalize_docs_root_arg(repo_root, path)?;
-    let raw = if config_path.exists() {
-        std::fs::read_to_string(config_path)
-            .map_err(|error| OrbitError::Io(format!("read {}: {error}", config_path.display())))?
-    } else {
-        String::new()
-    };
+    let raw = read_config(config_path)?;
     let mut roots = parse_docs_roots_from_config_toml(&raw)?;
     if roots_equal_contains(&roots, &normalized) {
         return Ok(DocAddOutcome {
@@ -27,7 +23,7 @@ pub(super) fn add_docs_root(
         });
     }
     roots.push(DocsRoot::new(normalized.clone()));
-    write_docs_roots_to_config(config_path, &raw, &roots)?;
+    write_docs_roots_to_config(config_path, &roots)?;
     Ok(DocAddOutcome {
         path: normalized,
         added: true,
@@ -88,38 +84,21 @@ fn comparable_root(raw: &str) -> String {
     raw.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
-fn write_docs_roots_to_config(
-    config_path: &Path,
-    raw: &str,
-    roots: &[DocsRoot],
-) -> Result<(), OrbitError> {
-    let mut value = if raw.trim().is_empty() {
-        toml::Value::Table(Default::default())
-    } else {
-        raw.parse::<toml::Value>().map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "invalid config.toml while updating [docs].roots: {error}"
-            ))
-        })?
-    };
-    let table = value
-        .as_table_mut()
-        .ok_or_else(|| OrbitError::InvalidInput("config.toml must be a TOML table".to_string()))?;
-    let docs = table
-        .entry("docs".to_string())
-        .or_insert_with(|| toml::Value::Table(Default::default()));
-    let docs_table = docs.as_table_mut().ok_or_else(|| {
-        OrbitError::InvalidInput("[docs] config must be a TOML table".to_string())
-    })?;
-    docs_table.insert("roots".to_string(), docs_roots_to_toml_value(roots));
-    let rendered = toml::to_string_pretty(&value)
-        .map_err(|error| OrbitError::Execution(format!("serialize config.toml: {error}")))?;
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| OrbitError::Io(format!("create {}: {error}", parent.display())))?;
+fn write_docs_roots_to_config(config_path: &Path, roots: &[DocsRoot]) -> Result<(), OrbitError> {
+    let mut store = ConfigStore::open(ConfigScope::Workspace, config_path)?;
+    store.set_document_value("docs.roots", &docs_roots_to_toml_value(roots).to_string())?;
+    store.save()
+}
+
+fn read_config(config_path: &Path) -> Result<String, OrbitError> {
+    match std::fs::read_to_string(config_path) {
+        Ok(raw) => Ok(raw),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(OrbitError::Io(format!(
+            "read {}: {error}",
+            config_path.display()
+        ))),
     }
-    std::fs::write(config_path, rendered)
-        .map_err(|error| OrbitError::Io(format!("write {}: {error}", config_path.display())))
 }
 
 fn docs_roots_to_toml_value(roots: &[DocsRoot]) -> toml::Value {
