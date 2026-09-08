@@ -1216,7 +1216,7 @@
           "type": "string"
         },
         "limit": {
-          "description": "Maximum runs to return (default 25, maximum 200).",
+          "description": "Maximum runs to return (default 25; values above 200 are rejected).",
           "type": "integer"
         },
         "since": {
