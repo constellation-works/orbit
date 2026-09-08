@@ -177,11 +177,18 @@ where
     }
 
     let max_tasks = bounded_u64(input, "max_tasks", DEFAULT_MAX_TASKS, MAX_MAX_TASKS)? as usize;
-    let failures = evidence
-        .get("current_failures")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let (failures, inconclusive) = split_inconclusive_cancellations(
+        evidence
+            .get("current_failures")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        evidence
+            .get("inconclusive")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    );
     let audit = audit_summary(evidence, &failures);
     let mut retryable_errors = evidence
         .get("retryable_errors")
@@ -201,6 +208,7 @@ where
         .into_iter()
         .map(normalize_retryable_error)
         .collect();
+    retryable_errors = drop_inconclusive_log_errors(retryable_errors, &inconclusive);
     // A gap in one run's evidence is a fact about that run. Letting it also
     // withhold every complete finding in the same snapshot is how a sweep that
     // had three fully evidenced regressions in hand filed nothing at all.
@@ -285,7 +293,7 @@ where
             "reasons": reasons,
         }));
     }
-    let audit = deferral_audit(audit, &deferred);
+    let audit = inconclusive_audit(deferral_audit(audit, &deferred), &inconclusive);
     let clusters = cluster_failures(&complete);
 
     if !complete.is_empty() && clusters.is_empty() {
@@ -322,8 +330,13 @@ where
             "skipped_existing": [],
             "skipped_over_cap": [],
             "deferred": [],
+            "inconclusive": inconclusive,
             "audit": audit,
-            "detail": "the queries ran and found no current, non-superseded failure",
+            "detail": if inconclusive.is_empty() {
+                "the queries ran and found no current, non-superseded failure"
+            } else {
+                "the queries ran and found no current, non-superseded failure; cancelled jobs without failed steps remain explicit inconclusive evidence, not a pass"
+            },
         }));
     }
 
@@ -524,6 +537,7 @@ where
         "repair_assessments": repair_assessments,
         "skipped_over_cap": skipped_over_cap,
         "deferred": deferred,
+        "inconclusive": inconclusive,
         "max_tasks": max_tasks,
         "audit": final_audit,
     }))
@@ -538,6 +552,121 @@ fn run_id_key(entry: &Value) -> Option<String> {
         Some(Value::String(text)) if !text.trim().is_empty() => Some(text.trim().to_string()),
         _ => None,
     }
+}
+
+fn job_is_cancelled_without_failed_steps(job: &Value) -> bool {
+    job.get("conclusion").and_then(Value::as_str) == Some("cancelled")
+        && job
+            .get("failed_steps")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+}
+
+fn is_inconclusive_cancellation(failure: &Value) -> bool {
+    if failure.get("evidence_state").and_then(Value::as_str) == Some("inconclusive") {
+        return true;
+    }
+    match failure.get("failed_jobs").and_then(Value::as_array) {
+        Some(jobs) if !jobs.is_empty() => jobs.iter().all(job_is_cancelled_without_failed_steps),
+        Some(_) | None => {
+            failure.get("conclusion").and_then(Value::as_str) == Some("cancelled")
+                && failure.get("investigated").and_then(Value::as_bool) == Some(true)
+        }
+    }
+}
+
+fn split_inconclusive_cancellations(
+    failures: Vec<Value>,
+    mut inconclusive: Vec<Value>,
+) -> (Vec<Value>, Vec<Value>) {
+    let mut seen: BTreeSet<(Option<String>, Option<u64>)> = inconclusive
+        .iter()
+        .map(|entry| {
+            (
+                run_id_key(entry),
+                entry.get("job_id").and_then(Value::as_u64),
+            )
+        })
+        .collect();
+    let mut remaining = Vec::new();
+    for failure in failures {
+        if is_inconclusive_cancellation(&failure) {
+            let identity = (
+                run_id_key(&failure),
+                failure.get("job_id").and_then(Value::as_u64),
+            );
+            if seen.insert(identity) {
+                inconclusive.push(failure);
+            }
+        } else {
+            remaining.push(failure);
+        }
+    }
+    (remaining, inconclusive)
+}
+
+fn log_or_checkout_investigation_operation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "run_logs"
+            | "run_logs_all"
+            | "checkout_evidence"
+            | "checkout_evidence_budget"
+            | "job_log_truncated"
+            | "job_log_budget"
+    )
+}
+
+/// Absent logs for a cancelled job with no failed steps are not a repair
+/// gap. Keep transport, auth, listing, and genuine-failure log errors.
+fn drop_inconclusive_log_errors(errors: Vec<Value>, inconclusive: &[Value]) -> Vec<Value> {
+    let inconclusive_runs: BTreeSet<String> = inconclusive.iter().filter_map(run_id_key).collect();
+    let inconclusive_jobs: BTreeSet<(String, u64)> = inconclusive
+        .iter()
+        .filter_map(|entry| {
+            Some((
+                run_id_key(entry)?,
+                entry.get("job_id").and_then(Value::as_u64)?,
+            ))
+        })
+        .collect();
+    errors
+        .into_iter()
+        .filter(|error| {
+            let operation = error
+                .get("operation")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !log_or_checkout_investigation_operation(operation) {
+                return true;
+            }
+            let Some(run_id) = run_id_key(error) else {
+                return true;
+            };
+            match error.get("job_id").and_then(Value::as_u64) {
+                Some(job_id) => !inconclusive_jobs.contains(&(run_id, job_id)),
+                None => !inconclusive_runs.contains(&run_id),
+            }
+        })
+        .collect()
+}
+
+fn inconclusive_audit(mut audit: Value, inconclusive: &[Value]) -> Value {
+    audit["inconclusive"] = json!(inconclusive.len());
+    audit["inconclusive_run_ids"] = json!(
+        inconclusive
+            .iter()
+            .filter_map(|entry| entry.get("run_id").cloned())
+            .collect::<Vec<_>>()
+    );
+    audit["inconclusive_job_ids"] = json!(
+        inconclusive
+            .iter()
+            .filter_map(|entry| entry.get("job_id").cloned())
+            .filter(|value| !value.is_null())
+            .collect::<Vec<_>>()
+    );
+    audit
 }
 
 /// Split retryable errors by blast radius.

@@ -2,7 +2,10 @@
 
 use serde_json::{Value, json};
 
-use super::collect::{Bounds, investigation_slots, push_retryable_error, run_is_completed};
+use super::collect::{
+    Bounds, investigation_slots, job_is_cancelled_without_failed_steps, push_retryable_error,
+    run_is_completed,
+};
 use super::query::{CiQueries, LogScope};
 
 /// Inspect each failed job independently. The row keeps run freshness metadata,
@@ -44,6 +47,11 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
         .cloned()
         .unwrap_or_default();
     if jobs.is_empty() {
+        if run_is_completed(failure)
+            && failure.get("conclusion").and_then(Value::as_str) == Some("cancelled")
+        {
+            return vec![inconclusive_cancellation_finding(failure, None)];
+        }
         if run_is_completed(failure) {
             push_retryable_error(
                 retryable_errors,
@@ -56,22 +64,38 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
         return vec![failure.clone()];
     }
 
+    // Stable numeric identity makes a provider's job ordering irrelevant to
+    // which findings receive the bounded reads on repeated sweeps.
+    let mut jobs = jobs;
+    jobs.sort_by_key(|job| job.get("job_id").and_then(Value::as_u64));
+    let mut findings = Vec::new();
+    let mut actionable = Vec::new();
+    for job in jobs {
+        if job_is_cancelled_without_failed_steps(&job) {
+            findings.push(inconclusive_cancellation_finding(failure, Some(&job)));
+        } else {
+            actionable.push(job);
+        }
+    }
+    if actionable.is_empty() {
+        return findings;
+    }
+
     let remaining_reads = bounds.max_job_log_reads.saturating_sub(*job_log_reads);
     let selected = if remaining_reads == 1 {
         // Runs reserve a single slot for integration priority. Within a run,
         // equally relevant failed jobs must rotate even with only one read.
         std::collections::BTreeSet::from([
-            (bounds.investigation_cursor % jobs.len() as u64) as usize
+            (bounds.investigation_cursor % actionable.len() as u64) as usize
         ])
     } else {
-        investigation_slots(jobs.len(), remaining_reads, bounds.investigation_cursor)
+        investigation_slots(
+            actionable.len(),
+            remaining_reads,
+            bounds.investigation_cursor,
+        )
     };
-    let mut findings = Vec::new();
-    // Stable numeric identity makes a provider's job ordering irrelevant to
-    // which findings receive the bounded reads on repeated sweeps.
-    let mut jobs = jobs;
-    jobs.sort_by_key(|job| job.get("job_id").and_then(Value::as_u64));
-    for (index, job) in jobs.into_iter().enumerate() {
+    for (index, job) in actionable.into_iter().enumerate() {
         let mut finding = failure.clone();
         finding["job_id"] = job.get("job_id").cloned().unwrap_or(Value::Null);
         finding["failed_jobs"] = json!([job]);
@@ -116,6 +140,18 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
         findings.push(finding);
     }
     findings
+}
+
+fn inconclusive_cancellation_finding(failure: &Value, job: Option<&Value>) -> Value {
+    let mut finding = failure.clone();
+    if let Some(job) = job {
+        finding["job_id"] = job.get("job_id").cloned().unwrap_or(Value::Null);
+        finding["failed_jobs"] = json!([job]);
+    }
+    finding["investigated"] = json!(true);
+    finding["evidence_state"] = json!("inconclusive");
+    finding["inconclusive_reason"] = json!("cancelled_without_failed_steps");
+    finding
 }
 
 fn investigate_job<Q: CiQueries + ?Sized>(
