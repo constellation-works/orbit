@@ -62,8 +62,7 @@ fn availability_requires_the_abi_that_carries_the_relocation_right() {
 #[test]
 fn a_platform_without_landlock_refuses_to_spawn_at_all() {
     let error = spawn_under_linux_landlock(&request(), Path::new("."), &profile())
-        .err()
-        .expect("an unsupported platform must not spawn");
+        .expect_err("an unsupported platform must not spawn");
 
     assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error:?}");
 }
