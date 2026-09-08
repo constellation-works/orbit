@@ -618,3 +618,208 @@ fn waiting_locks_from_reserve_output_extracts_unique_conflict_files() {
         ]
     );
 }
+
+fn seed_run_with_state(runtime: &OrbitRuntime) -> String {
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_gate_pipeline", 1, Utc::now(), Some(json!({})), None)
+        .expect("insert run");
+    runtime
+        .stores()
+        .jobs()
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({})),
+        )
+        .expect("write state");
+    run.run_id
+}
+
+fn apply_competing_admissions_stop(runtime: &OrbitRuntime, run_id: &str) {
+    runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            state.set_drain_admissions_stop(
+                "operator".to_string(),
+                Some("drain closed".to_string()),
+            );
+            Ok(())
+        })
+        .expect("competing admissions stop");
+}
+
+/// Prior waiting-reason writer: read the document, then write it back whole.
+/// `between_read_and_write` is the lost-update window a concurrent control
+/// used to occupy.
+fn update_run_waiting_reasons_read_then_write(
+    runtime: &OrbitRuntime,
+    input: &serde_json::Value,
+    waiting_on_deps: Option<Vec<String>>,
+    waiting_on_locks: Option<Vec<String>>,
+    action: &str,
+    between_read_and_write: impl FnOnce(),
+) -> Result<(), DispatchError> {
+    let Some(run_id) = input.get("run_id").and_then(serde_json::Value::as_str) else {
+        return Ok(());
+    };
+    let Some(mut state) =
+        runtime
+            .read_run_state(run_id)
+            .map_err(|err| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: format!("{err}"),
+            })?
+    else {
+        return Ok(());
+    };
+    between_read_and_write();
+    state.set_waiting_reasons(waiting_on_deps, waiting_on_locks);
+    runtime.write_run_state(run_id, &state).map_err(|err| {
+        DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("{err}"),
+        }
+    })
+}
+
+#[test]
+fn read_then_write_waiting_reasons_drop_a_competing_admissions_stop() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = seed_run_with_state(&runtime);
+
+    update_run_waiting_reasons_read_then_write(
+        &runtime,
+        &json!({ "run_id": run_id }),
+        Some(vec!["ORB-1".to_string()]),
+        None,
+        "reserve_locks",
+        || apply_competing_admissions_stop(&runtime, &run_id),
+    )
+    .expect("prior writer");
+
+    let state = runtime
+        .read_run_state(&run_id)
+        .expect("read run state")
+        .expect("state exists");
+    assert_eq!(state.waiting_on_deps, Some(vec!["ORB-1".to_string()]));
+    assert!(
+        !state.admissions_stopped(),
+        "the stale whole-document write must drop the stop that landed in between"
+    );
+}
+
+#[test]
+fn update_run_waiting_reasons_preserves_a_competing_admissions_stop() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = seed_run_with_state(&runtime);
+
+    // Same competing control the prior writer lost, applied as its own
+    // transactional update. The repaired writer must merge waiting reasons
+    // onto the current document rather than replacing it.
+    apply_competing_admissions_stop(&runtime, &run_id);
+    update_run_waiting_reasons(
+        &runtime,
+        &json!({ "run_id": run_id }),
+        Some(vec!["ORB-1".to_string()]),
+        Some(vec!["file:src/lib.rs".to_string()]),
+        "reserve_locks",
+    )
+    .expect("transactional writer");
+
+    let state = runtime
+        .read_run_state(&run_id)
+        .expect("read run state")
+        .expect("state exists");
+    assert!(state.admissions_stopped(), "control data must survive");
+    assert_eq!(state.waiting_on_deps, Some(vec!["ORB-1".to_string()]));
+    assert_eq!(
+        state.waiting_on_locks,
+        Some(vec!["file:src/lib.rs".to_string()])
+    );
+}
+
+#[test]
+fn update_run_waiting_reasons_is_a_noop_without_run_id_run_or_state() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+    update_run_waiting_reasons(
+        &runtime,
+        &json!({}),
+        Some(vec!["ORB-1".to_string()]),
+        None,
+        "reserve_locks",
+    )
+    .expect("missing run_id is a no-op");
+
+    update_run_waiting_reasons(
+        &runtime,
+        &json!({ "run_id": "jrun-missing" }),
+        Some(vec!["ORB-1".to_string()]),
+        None,
+        "reserve_locks",
+    )
+    .expect("missing run is a no-op");
+
+    let pending = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_gate_pipeline", 1, Utc::now(), Some(json!({})), None)
+        .expect("insert run without state");
+    update_run_waiting_reasons(
+        &runtime,
+        &json!({ "run_id": pending.run_id }),
+        Some(vec!["ORB-1".to_string()]),
+        None,
+        "reserve_locks",
+    )
+    .expect("missing pipeline state is a no-op");
+    assert!(
+        runtime
+            .read_run_state(&pending.run_id)
+            .expect("read run state")
+            .is_none(),
+        "a stateless run must not grow a document just to record waiting reasons"
+    );
+}
+
+#[test]
+fn reserve_locks_records_waiting_on_locks_in_run_state() {
+    let (_root, runtime, repo_root) = super::super::test_support::runtime_with_workspace_layout();
+    super::super::test_support::write_workspace_file(&repo_root, "src/lib.rs");
+    let holder = crate::adapter::tool_host::test_support::create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::InProgress,
+        &["file:src/lib.rs"],
+    );
+    let waiting = crate::adapter::tool_host::test_support::create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::Backlog,
+        &["file:src/lib.rs"],
+    );
+
+    let (run_id, result) = reserve_locks_for(&runtime, vec![waiting.id.clone()]);
+    let output = result.expect("lock conflict is a wait, not a dispatch error");
+
+    assert_eq!(output["reserved"], json!(false));
+    assert_eq!(
+        output["conflicts"],
+        json!([{
+            "file": "file:src/lib.rs",
+            "held_by": "task",
+            "held_by_id": holder.id,
+        }])
+    );
+    let state = runtime
+        .read_run_state(&run_id)
+        .expect("read run state")
+        .expect("state exists");
+    assert_eq!(
+        state.waiting_on_locks,
+        Some(vec!["file:src/lib.rs".to_string()])
+    );
+    assert_eq!(state.waiting_on_deps, None);
+}

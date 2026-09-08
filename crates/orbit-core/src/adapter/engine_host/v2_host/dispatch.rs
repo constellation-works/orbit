@@ -575,7 +575,11 @@ pub(super) fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
         .collect()
 }
 
-fn update_run_waiting_reasons(
+// `pub(super)` (not private): the sibling `tests/dispatch.rs` unit-tests this
+// writer directly for no-op, error, lock, and lost-update coverage rather
+// than only through a full `reserve_locks` setup — see
+// docs/design-patterns/test_layout.md migration recipe step 6.
+pub(super) fn update_run_waiting_reasons(
     runtime: &OrbitRuntime,
     input: &Value,
     waiting_on_deps: Option<Vec<String>>,
@@ -585,23 +589,23 @@ fn update_run_waiting_reasons(
     let Some(run_id) = input.get("run_id").and_then(Value::as_str) else {
         return Ok(());
     };
-    let Some(mut state) =
-        runtime
-            .read_run_state(run_id)
-            .map_err(|err| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("{err}"),
-            })?
-    else {
-        return Ok(());
-    };
-    state.set_waiting_reasons(waiting_on_deps, waiting_on_locks);
-    runtime.write_run_state(run_id, &state).map_err(|err| {
-        DispatchError::DeterministicActionFailed {
+    // Same transactional primitive as checkpoints and child dispatch: a
+    // separate read then whole-document write would discard a concurrent
+    // admissions-stop or worker-limit that landed in between.
+    let mut waiting_on_deps = waiting_on_deps;
+    let mut waiting_on_locks = waiting_on_locks;
+    runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            state.set_waiting_reasons(waiting_on_deps.take(), waiting_on_locks.take());
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|err| DispatchError::DeterministicActionFailed {
             action: action.to_string(),
             message: format!("{err}"),
-        }
-    })
+        })
 }
 
 fn non_empty(values: Vec<String>) -> Option<Vec<String>> {
