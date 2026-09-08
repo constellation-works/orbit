@@ -184,10 +184,10 @@ done < <(load_workspace_dependencies)
 # Keep the runtime kernel independent from use cases and protocol adapters;
 # composition is the only owner allowed to join resolved config, bootstrap,
 # runtime construction, and adapter registration.
-if rg -n 'crate::(command|application)' \
+if rg -n 'crate::(command|application|bootstrap|adapter)' \
   "$repo_root/crates/orbit-core/src/runtime" \
   -g '*.rs' -g '!**/tests/**'; then
-  echo "forbidden orbit-core runtime-to-command/application import"
+  echo "forbidden orbit-core runtime-to-command/application/bootstrap/adapter import"
   fail=1
 fi
 

@@ -11,6 +11,7 @@
 //! [`OrbitRuntime`]. The `engine`, `audit`, `mutation`, and `tool_exec` sub-modules
 //! provide the high-level operations exposed to command handlers.
 
+pub(crate) mod assets;
 pub mod audit;
 mod authorization;
 pub mod builder;
@@ -48,10 +49,10 @@ use orbit_types::record::{Audit, OrbitEvent};
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspacePaths};
 use serde_json::Value;
 
-use crate::bootstrap::activity::DEFAULT_ACTIVITY_FILES;
 use crate::context::ActorIdentity;
 use crate::context::OrbitContext;
 use crate::context::OrbitStores;
+use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 use orbit_types::workflow::{ShipMode, resolved_ship_mode};
 
 pub(crate) use resolve::{resolve_bootstrap_roots, resolve_initialize_roots};

@@ -59,7 +59,7 @@ use super::{
 };
 use crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES;
 use crate::application::routine::DEFAULT_ROUTINE_FILES;
-use crate::bootstrap::activity::DEFAULT_ACTIVITY_FILES;
+use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 /// The five definition-artifact kinds Orbit ships defaults for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

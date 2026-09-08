@@ -28,7 +28,7 @@ use crate::OrbitRuntime;
 #[cfg(target_os = "macos")]
 use crate::adapter::engine_host::v2_host::test_support::seed_executor;
 #[cfg(target_os = "macos")]
-use crate::bootstrap::activity::DEFAULT_ACTIVITY_FILES;
+use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 /// A managed child launched from a disposable linked worktree carries the same
 /// registry locator and provenance the CLI runner emits. Both a capability

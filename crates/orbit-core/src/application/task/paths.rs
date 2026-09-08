@@ -91,15 +91,7 @@ pub(crate) fn normalize_context_files_for_write(
         .collect()
 }
 
-pub(crate) fn canonicalize_context_files_for_read(
-    candidates: &[String],
-    workspace_root: &Path,
-) -> Vec<String> {
-    candidates
-        .iter()
-        .filter_map(|entry| canonical_selector_in_workspace(entry, workspace_root).ok())
-        .collect()
-}
+pub(crate) use crate::runtime::task::canonicalize_context_files_for_read;
 
 /// Compute advisory warnings for an `orbit.task.add` call based on the raw
 /// `context_files` (or legacy `context`) values supplied by the caller and the

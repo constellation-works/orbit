@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::runtime::coordination_audit::{CoordinationAuditEvent, record_coordination_audit_event};
+use crate::runtime::task::canonicalize_context_files_for_read;
 
 pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     let workspace_id = workspace_task_reservation_id(runtime)?;
@@ -474,16 +475,6 @@ fn existing_context_files_at_root(task: &Task, workspace_root: &Path) -> Vec<Str
     let canonical = canonicalize_context_files_for_read(&task.context_files, workspace_root);
     let (kept, _dropped) = prune_missing_context_files(workspace_root, canonical);
     kept
-}
-
-fn canonicalize_context_files_for_read(
-    candidates: &[String],
-    workspace_root: &Path,
-) -> Vec<String> {
-    candidates
-        .iter()
-        .filter_map(|entry| canonical_selector_in_workspace(entry, workspace_root).ok())
-        .collect()
 }
 
 fn task_is_descendant_of(
