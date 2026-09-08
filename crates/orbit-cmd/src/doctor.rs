@@ -211,7 +211,7 @@ fn doctor_check_config(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
 
 /// `PRAGMA quick_check` plus migration-ledger schema version vs binary.
 fn doctor_check_database(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    let store = match runtime.sqlite_store() {
+    let store = match runtime.sqlite_store_for_diagnostics() {
         Ok(store) => store,
         Err(error) => {
             return check(
