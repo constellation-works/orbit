@@ -12,6 +12,8 @@ if ! command -v rg >/dev/null 2>&1; then
   exit 1
 fi
 
+"$repo_root/scripts/check-ci-macos.sh"
+
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 if cargo nextest --version >/dev/null 2>&1; then
