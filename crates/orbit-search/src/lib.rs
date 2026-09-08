@@ -56,7 +56,10 @@ pub use lexical::docs::{
     DocSearchResult, DocSearchSource, SearchResult, score_doc_record, sort_search_results,
 };
 pub use noop::NoopEmbedder;
-pub use rpc::{RpcError, RpcRequest, RpcResponse, RpcResult, rpc_error_to_orbit};
+pub use rpc::{
+    RpcError, RpcRequest, RpcResponse, RpcResult, UNCORRELATED_REQUEST_ID, rpc_error_to_orbit,
+    unparsed_request_id,
+};
 pub use subprocess::SubprocessEmbedder;
 pub use vector::{
     DocEmbeddingSource, EmbedWorker, SOURCE_KIND_DOC, SOURCE_KIND_TASK, SemanticStats,

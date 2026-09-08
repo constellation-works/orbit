@@ -1,5 +1,5 @@
-//! Unit tests for `subprocess` retry hygiene (ORB-10006) and RPC/Drop
-//! deadlines — sibling layout.
+//! Unit tests for `subprocess` retry hygiene (ORB-10006), RPC-stream
+//! resynchronization (ORB-11705) and RPC/Drop deadlines — sibling layout.
 
 use std::time::Duration;
 
@@ -61,6 +61,8 @@ mod fake_companion {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::{Duration, Instant};
+
+    use orbit_common::OrbitError;
 
     use crate::embedder::Embedder;
     use crate::subprocess::{
@@ -131,6 +133,7 @@ done
 
         let embedder =
             SubprocessEmbedder::with_path_and_model(script, "fake").expect("construct embedder");
+        let pid = embedder.child_id().expect("companion pid");
         let err = embedder
             .embed(&["hello"])
             .expect_err("companion error must surface");
@@ -138,8 +141,127 @@ done
             err.to_string().contains("input_too_large"),
             "error should carry the companion code: {err}"
         );
+        assert!(
+            err.to_string().contains("nope"),
+            "error should carry the companion message: {err}"
+        );
         let attempts = std::fs::read(&log).expect("embed log").len();
         assert_eq!(attempts, 1, "permanent RPC error must not be retried");
+        assert_eq!(
+            embedder.child_id().expect("companion pid"),
+            pid,
+            "an answered request must not discard the companion"
+        );
+    }
+
+    #[test]
+    fn stray_response_line_recovers_through_respawn() {
+        // The first-generation companion prefixes its first embed answer with
+        // one extra stdout line, exactly once across restarts. The stray line
+        // desynchronizes the response stream — and leaves the real answer
+        // queued behind it — so the embedder must discard that companion,
+        // respawn, and answer from a clean stream. Later calls must see no
+        // trace of the stale queue.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let marker = temp.path().join("stray-emitted");
+        let embed_body = format!(
+            r#"if [ ! -f "{marker}" ]; then touch "{marker}"; printf '{{"id":424242,"result":{{"ok":true}}}}\n'; fi
+      printf '{{"id":%s,"result":{{"vectors":[[0.5,0.25]]}}}}\n' "$id""#,
+            marker = marker.display()
+        );
+        let script = write_companion_script(temp.path(), &embed_body);
+
+        let embedder =
+            SubprocessEmbedder::with_path_and_model(script, "fake").expect("construct embedder");
+        let first_pid = embedder.child_id().expect("companion pid");
+
+        assert_eq!(
+            embedder
+                .embed(&["hello"])
+                .expect("embed must recover from the stray line"),
+            vec![vec![0.5, 0.25]]
+        );
+        assert!(marker.exists(), "first generation must emit the stray line");
+        assert_ne!(
+            embedder.child_id().expect("companion pid"),
+            first_pid,
+            "the desynchronized companion must be replaced, not reused"
+        );
+
+        assert_eq!(
+            embedder
+                .embed(&["world"])
+                .expect("stream must stay clean after recovery"),
+            vec![vec![0.5, 0.25]]
+        );
+    }
+
+    #[test]
+    fn unparseable_response_exhausts_the_retry_budget_without_orphans() {
+        let err = assert_protocol_violation_exhausts_budget("printf 'this is not json\\n'");
+        assert!(
+            err.contains("unparseable") && err.contains("this is not json"),
+            "error should quote the offending line: {err}"
+        );
+    }
+
+    #[test]
+    fn mismatched_response_id_exhausts_the_retry_budget_without_orphans() {
+        let err = assert_protocol_violation_exhausts_budget(
+            r#"printf '{"id":%s,"result":{"vectors":[[0.5,0.25]]}}\n' "$((id+1000))""#,
+        );
+        assert!(
+            err.contains("response id"),
+            "error should name the foreign response id: {err}"
+        );
+    }
+
+    /// Drive a companion that violates the protocol on every embed and assert
+    /// the shared contract: the retry budget is spent exactly once per
+    /// attempt, the failure surfaces as a protocol violation naming the
+    /// budget, and no child or reader is left behind. Returns the rendered
+    /// error so each caller can check its own diagnosis.
+    fn assert_protocol_violation_exhausts_budget(bad_response: &str) -> String {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let log = temp.path().join("embed-requests.log");
+        let embed_body = format!(
+            r#"printf 'x' >> "{log}"
+      {bad_response}"#,
+            log = log.display()
+        );
+        let script = write_companion_script(temp.path(), &embed_body);
+        let embedder = SubprocessEmbedder::with_path_model_stderr_and_timeouts(
+            script.clone(),
+            "fake",
+            CompanionStderr::Suppress,
+            Duration::from_millis(500),
+            Duration::from_millis(200),
+        )
+        .expect("construct embedder");
+        let first_pid = embedder.child_id().expect("companion pid");
+
+        let err = embedder
+            .embed(&["hello"])
+            .expect_err("a persistent protocol violation must fail");
+        assert!(
+            matches!(err, OrbitError::AgentProtocolViolation(_)),
+            "persistent violations must stay diagnosable as protocol violations: {err:?}"
+        );
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(&format!("after {RPC_MAX_ATTEMPTS} attempts")),
+            "error should name the exhausted budget: {rendered}"
+        );
+
+        let attempts = std::fs::read(&log).expect("embed log").len();
+        assert_eq!(
+            attempts, RPC_MAX_ATTEMPTS as usize,
+            "each attempt must respawn and retry exactly once"
+        );
+        // Every generation is reaped on its own failing attempt; a hung
+        // reader thread would deadlock the join inside that reap.
+        assert_no_companion_processes(&script, first_pid);
+        rendered
     }
 
     #[test]

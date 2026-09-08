@@ -5,14 +5,23 @@
 //! `Exit`, closes stdin, and reaps the child within a bounded wait
 //! (killing the process group if it ignores `exit`).
 //!
-//! ## Retry hygiene (ORB-10006)
+//! ## Retry hygiene (ORB-10006, ORB-11705)
 //!
 //! Transport-level failures — spawn resource exhaustion, a crashed/exited
 //! companion (EOF), broken pipes, a wedged companion that misses its read
 //! deadline — are transient: the request is retried a bounded number of
 //! times with exponential backoff + full jitter, respawning the companion
-//! between attempts. Companion-reported RPC errors and protocol violations
-//! are permanent and surface immediately.
+//! between attempts.
+//!
+//! A companion whose stdout stream has lost sync with the request stream —
+//! an unparseable line, or a response addressed to another request id — is
+//! treated the same way, because the offending child also holds however many
+//! queued lines the next request would otherwise consume. It is reaped and
+//! respawned so the retry reads from a clean stream; if every attempt is
+//! spent the failure still surfaces as a protocol violation.
+//!
+//! Only a companion-reported error carrying the request's own id is
+//! permanent: that is the companion answering, not losing sync.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -47,6 +56,10 @@ pub(crate) const DEFAULT_DROP_TIMEOUT: Duration = Duration::from_secs(2);
 
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+/// Cap on how much of an unparseable response line is quoted back in an
+/// error message: enough to diagnose, bounded for an arbitrarily long line.
+const RESPONSE_EXCERPT_CHARS: usize = 200;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompanionStderr {
     Inherit,
@@ -55,11 +68,60 @@ pub(crate) enum CompanionStderr {
 
 /// Classification of a single RPC attempt failure (ORB-10006).
 pub(crate) enum RequestFailure {
-    /// The companion is gone or the pipe broke — a respawn may fix it.
-    Transient(String),
-    /// Deterministic failure (companion-reported error, protocol violation,
-    /// serialization) — retrying cannot fix it.
+    /// The companion is unusable for this attempt — a respawn may fix it.
+    Transient(TransientFailure),
+    /// Deterministic failure (companion-reported error, serialization) —
+    /// retrying cannot fix it.
     Permanent(OrbitError),
+}
+
+/// A retryable attempt failure: `detail` explains this attempt, and `kind`
+/// selects the error surfaced once the retry budget is spent.
+pub(crate) struct TransientFailure {
+    kind: TransientKind,
+    detail: String,
+}
+
+/// Why an attempt is retryable. Both kinds force a respawn; they differ only
+/// in the diagnosis a caller sees after the last attempt (ORB-11705).
+#[derive(Clone, Copy)]
+enum TransientKind {
+    /// Spawn, pipe, EOF or read-deadline failure.
+    Transport,
+    /// The companion's response stream no longer matches the request stream.
+    Desync,
+}
+
+impl TransientFailure {
+    fn transport(detail: impl Into<String>) -> Self {
+        Self {
+            kind: TransientKind::Transport,
+            detail: detail.into(),
+        }
+    }
+
+    fn desync(detail: impl Into<String>) -> Self {
+        Self {
+            kind: TransientKind::Desync,
+            detail: detail.into(),
+        }
+    }
+
+    fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    /// Error to surface once every attempt has been spent.
+    fn into_exhausted_error(self) -> OrbitError {
+        let message = format!(
+            "search companion RPC failed after {RPC_MAX_ATTEMPTS} attempts: {}",
+            self.detail
+        );
+        match self.kind {
+            TransientKind::Transport => OrbitError::Execution(message),
+            TransientKind::Desync => OrbitError::AgentProtocolViolation(message),
+        }
+    }
 }
 
 /// Whether a spawn `io::Error` is deterministic. `NotFound` / rejected
@@ -184,8 +246,9 @@ impl SubprocessEmbedder {
     }
 
     fn request(&self, request: RpcRequest) -> Result<RpcResult, OrbitError> {
+        // Every request gets its own id: an id reused across requests would
+        // let a stale queued response pass the correlation check below.
         let request = match request {
-            RpcRequest::Info { id: 0 } => RpcRequest::Info { id: 1 },
             RpcRequest::Info { .. } => RpcRequest::Info {
                 id: self.next_request_id(),
             },
@@ -215,7 +278,7 @@ impl SubprocessEmbedder {
             .lock()
             .map_err(|error| OrbitError::Execution(format!("companion mutex poisoned: {error}")))?;
         let mut jitter = JitterRng::seeded(&self.model_arg);
-        let mut last_transient = String::new();
+        let mut last_transient: Option<TransientFailure> = None;
         for attempt in 0..RPC_MAX_ATTEMPTS {
             if attempt > 0 {
                 let sleep_ms = jitter.full_jitter(retry_backoff_bound_ms(attempt));
@@ -224,18 +287,23 @@ impl SubprocessEmbedder {
                 {
                     Ok(fresh) => {
                         io.kill_and_reap();
+                        // Installing the fresh `ChildIo` also drops the old
+                        // response channel, so lines the previous companion
+                        // left queued cannot leak into this attempt.
                         *io = fresh;
                     }
                     Err(error) => {
                         if spawn_error_is_permanent(&error) {
                             return Err(spawn_error_to_orbit(&self.companion_path, &error));
                         }
-                        last_transient = format!("companion respawn failed: {error}");
                         tracing::warn!(
                             attempt,
                             error = %error,
                             "search companion respawn failed; will retry"
                         );
+                        last_transient = Some(TransientFailure::transport(format!(
+                            "companion respawn failed: {error}"
+                        )));
                         continue;
                     }
                 }
@@ -243,19 +311,22 @@ impl SubprocessEmbedder {
             match request_once(&mut io, &line, id, deadline) {
                 Ok(result) => return Ok(result),
                 Err(RequestFailure::Permanent(error)) => return Err(error),
-                Err(RequestFailure::Transient(message)) => {
+                Err(RequestFailure::Transient(failure)) => {
                     tracing::warn!(
                         attempt,
-                        error = %message,
-                        "search companion RPC transport failure; respawning companion"
+                        error = %failure.detail(),
+                        "search companion RPC attempt failed; respawning companion"
                     );
-                    last_transient = message;
+                    last_transient = Some(failure);
                 }
             }
         }
-        Err(OrbitError::Execution(format!(
-            "search companion RPC failed after {RPC_MAX_ATTEMPTS} attempts: {last_transient}"
-        )))
+        Err(match last_transient {
+            Some(failure) => failure.into_exhausted_error(),
+            None => OrbitError::Execution(
+                "search companion RPC made no attempts; retry budget is zero".to_string(),
+            ),
+        })
     }
 
     fn next_request_id(&self) -> u64 {
@@ -264,33 +335,38 @@ impl SubprocessEmbedder {
 }
 
 /// One request/response round-trip against the current companion child.
-/// Transport failures (write/read errors, EOF, deadline) are transient;
-/// malformed or mismatched responses and companion-reported errors are
-/// permanent.
+///
+/// Transport failures (write/read errors, EOF, deadline) and a stream that
+/// has lost sync (unparseable line, foreign response id) are transient and
+/// leave the child reaped for the caller to respawn. Only a companion-reported
+/// error carrying this request's id is permanent.
 fn request_once(
     io: &mut ChildIo,
     line: &str,
     id: u64,
     deadline: Duration,
 ) -> Result<RpcResult, RequestFailure> {
-    let stdin = io
-        .stdin
-        .as_mut()
-        .ok_or_else(|| RequestFailure::Transient("search companion stdin is closed".to_string()))?;
+    let stdin = io.stdin.as_mut().ok_or_else(|| {
+        RequestFailure::Transient(TransientFailure::transport(
+            "search companion stdin is closed",
+        ))
+    })?;
     stdin
         .write_all(line.as_bytes())
         .and_then(|_| stdin.write_all(b"\n"))
         .and_then(|_| stdin.flush())
         .map_err(|error| {
-            RequestFailure::Transient(format!("failed to write companion RPC: {error}"))
+            RequestFailure::Transient(TransientFailure::transport(format!(
+                "failed to write companion RPC: {error}"
+            )))
         })?;
 
     let response_line = match io.lines.recv_timeout(deadline) {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
             io.kill_and_reap();
-            return Err(RequestFailure::Transient(format!(
-                "failed to read companion RPC: {error}"
+            return Err(RequestFailure::Transient(TransientFailure::transport(
+                format!("failed to read companion RPC: {error}"),
             )));
         }
         Err(RecvTimeoutError::Timeout) => {
@@ -299,35 +375,57 @@ fn request_once(
                 "search companion RPC timed out; killing companion"
             );
             io.kill_and_reap();
-            return Err(RequestFailure::Transient(format!(
-                "search companion RPC timed out after {}ms",
-                deadline.as_millis()
+            return Err(RequestFailure::Transient(TransientFailure::transport(
+                format!(
+                    "search companion RPC timed out after {}ms",
+                    deadline.as_millis()
+                ),
             )));
         }
         Err(RecvTimeoutError::Disconnected) => {
             io.kill_and_reap();
-            return Err(RequestFailure::Transient(
-                "search companion exited before sending a response".to_string(),
-            ));
+            return Err(RequestFailure::Transient(TransientFailure::transport(
+                "search companion exited before sending a response",
+            )));
         }
     };
-    let response: RpcResponse = serde_json::from_str(&response_line).map_err(|error| {
-        RequestFailure::Permanent(OrbitError::AgentProtocolViolation(error.to_string()))
-    })?;
+
+    // A line we cannot parse, or one addressed to a different request, means
+    // the stream is no longer request-aligned. Whatever else this companion
+    // has queued would be misread by the next call, so discard the child
+    // along with its response channel rather than surfacing a bare error.
+    let Ok(response) = serde_json::from_str::<RpcResponse>(&response_line) else {
+        io.kill_and_reap();
+        return Err(RequestFailure::Transient(TransientFailure::desync(
+            format!(
+                "companion sent an unparseable response to request {id}: {}",
+                response_excerpt(&response_line)
+            ),
+        )));
+    };
+    if response.id() != id {
+        io.kill_and_reap();
+        return Err(RequestFailure::Transient(TransientFailure::desync(
+            format!(
+                "companion answered request {id} with response id {}",
+                response.id()
+            ),
+        )));
+    }
+
     match response {
-        RpcResponse::Result {
-            id: response_id,
-            result,
-        } if response_id == id => Ok(result),
-        RpcResponse::Error {
-            id: response_id,
-            error,
-        } if response_id == id => Err(RequestFailure::Permanent(rpc_error_to_orbit(error))),
-        other => Err(RequestFailure::Permanent(
-            OrbitError::AgentProtocolViolation(format!(
-                "companion response id mismatch for request {id}: {other:?}"
-            )),
-        )),
+        RpcResponse::Result { result, .. } => Ok(result),
+        RpcResponse::Error { error, .. } => {
+            Err(RequestFailure::Permanent(rpc_error_to_orbit(error)))
+        }
+    }
+}
+
+fn response_excerpt(line: &str) -> String {
+    let line = line.trim();
+    match line.char_indices().nth(RESPONSE_EXCERPT_CHARS) {
+        Some((cut, _)) => format!("{}...", &line[..cut]),
+        None => line.to_string(),
     }
 }
 
