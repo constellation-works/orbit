@@ -9,6 +9,9 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::with_shared_file_lock;
+
+use crate::driver::file::task_bundle::{PENDING_WRITE_FILE_NAME, bundle_lock_target};
 
 /// Compression level for the zstd frame. Task bundles are small text; a moderate
 /// level keeps archives compact without a slow compress path.
@@ -55,13 +58,61 @@ pub(super) fn write_archive(
 
     for (task_id, dir) in bundle_dirs {
         let arcname = format!("{BUNDLES_DIR}/{task_id}");
-        builder
-            .append_dir_all(&arcname, dir)
-            .map_err(map_io("append bundle"))?;
+        with_shared_file_lock(&bundle_lock_target(dir), "task migration export", || {
+            if !dir.is_dir() {
+                return Err(OrbitError::Store(format!(
+                    "canonical bundle for '{task_id}' disappeared while exporting at {}",
+                    dir.display()
+                )));
+            }
+            append_bundle_tree(&mut builder, &arcname, dir)
+        })?;
     }
 
     let encoder = builder.into_inner().map_err(map_io("finalize tar"))?;
     encoder.finish().map_err(map_io("finalize zstd"))?;
+    Ok(())
+}
+
+/// Append one canonical bundle while its shared lock is held. The pending-write
+/// record is recovery machinery, not bundle content; all other dotfiles remain
+/// eligible payloads and must round-trip unchanged.
+fn append_bundle_tree<W: std::io::Write>(
+    builder: &mut tar::Builder<W>,
+    archive_dir: &str,
+    source_dir: &Path,
+) -> Result<(), OrbitError> {
+    builder
+        .append_dir(archive_dir, source_dir)
+        .map_err(map_io("append bundle directory"))?;
+
+    let mut entries = std::fs::read_dir(source_dir)
+        .map_err(map_io("read bundle directory"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_io("read bundle directory"))?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        let name = entry.file_name();
+        if name == PENDING_WRITE_FILE_NAME {
+            continue;
+        }
+
+        let source = entry.path();
+        let archive_path = format!("{archive_dir}/{}", name.to_string_lossy());
+        if entry
+            .file_type()
+            .map_err(map_io("inspect bundle entry"))?
+            .is_dir()
+        {
+            append_bundle_tree(builder, &archive_path, &source)?;
+        } else {
+            builder
+                .append_path_with_name(&source, archive_path)
+                .map_err(map_io("append bundle entry"))?;
+        }
+    }
+
     Ok(())
 }
 
