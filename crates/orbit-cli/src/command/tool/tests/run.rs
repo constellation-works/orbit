@@ -13,12 +13,10 @@ fn task_show_id_is_read_only_from_orbit_task_show_input() {
         input_file: None,
         agent: None,
         model: None,
-        timeout: None,
         dry_run: false,
         fields: Vec::new(),
         full: false,
         pretty: false,
-        output: super::super::run::OutputFormat::Json,
     };
     assert_eq!(show.task_show_id().as_deref(), Some("ORB-10961"));
 

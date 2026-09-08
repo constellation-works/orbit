@@ -667,7 +667,7 @@ fn log_tail_format_ndjson_emits_three_event_lines() {
 }
 
 #[test]
-fn global_format_outranks_local_json_and_tool_output_flags() {
+fn global_format_controls_tool_run_output() {
     let fixture = Fixture::new();
     let (task_id, title) = first_listed_task(&fixture);
 
@@ -684,22 +684,11 @@ fn global_format_outranks_local_json_and_tool_output_flags() {
     );
     assert!(table_text.contains(&title), "{table_text}");
 
-    let json_over_output_text = parse_json_stdout(
-        &fixture.run(
-            &[
-                "tool",
-                "run",
-                "orbit.task.list",
-                "--output",
-                "text",
-                "--format",
-                "json",
-            ],
-            &[],
-        ),
-        "tool run --output text --format json",
+    let tool_output = parse_json_stdout(
+        &fixture.run(&["tool", "run", "orbit.task.list", "--format", "json"], &[]),
+        "tool run --format json",
     );
-    assert!(json_over_output_text.as_array().is_some());
+    assert!(tool_output.as_array().is_some());
 
     let config = parse_json_stdout(
         &fixture.run(

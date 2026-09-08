@@ -113,18 +113,6 @@ fn json_error_preferences_are_derived_from_operations() {
         Some(true)
     );
     assert_eq!(
-        operation_for(&[
-            "orbit",
-            "tool",
-            "run",
-            "orbit.task.show",
-            "--output",
-            "text",
-        ])
-        .json_error_preference,
-        None
-    );
-    assert_eq!(
         operation_for(&["orbit", "docs", "list", "--json"]).json_error_preference,
         Some(true)
     );
