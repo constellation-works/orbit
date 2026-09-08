@@ -89,8 +89,8 @@ outputs and grant manifests are attached to ORB-11546.
 | Existing Bubblewrap mounts and post-run guard | Masks existing paths; cannot deny every future matching basename in a writable tree; after-exit checks cannot recover leaked bytes | Requires admitted namespace setup; already owned by orbit-exec | Retain write isolation; not the missing live read layer |
 | AppArmor pathname LSM, stacked before exec | Candidate for checking actual resolved opens and new names; allowed creation remains possible | Requires enabled LSM, operator-loaded enforcing profile, allowed stacking, parser/version support | Smallest next Linux experiment; offline compilation works, live profile unavailable in this runner |
 | Seccomp notification with pathname check then `CONTINUE`; ptrace pathname filter; preload wrapper | Pointer mutation or path rename can invalidate userspace decisions; preload also misses direct syscalls/static binaries | A syscall tracer needs architecture and descendant coverage | Reject as a security boundary in this form |
-| Seccomp broker that performs opens and injects FDs | Can avoid tracee-pointer races by copying arguments and using `ADDFD`; still must bind policy to the actual object and cover mutation, alternate I/O and descriptor acquisition | New broker lifecycle, syscall/ABI compatibility, deadlock and resource budgets | Fallback research only if the LSM contract is rejected; not a small open-hook patch |
-| Filtered filesystem / FUSE | Could own name mutations and use the canonical evaluator; raw backing access must be inaccessible | Requires mount admission and a filesystem service; caching, mmap, hardlink and external-writer semantics need design | Not established as necessary; do not introduce it before testing existing LSM support |
+| Seccomp broker that performs opens and injects FDs | Can avoid tracee-pointer races by copying arguments and using `ADDFD`; still must bind policy to the actual object and cover mutation, alternate I/O and descriptor acquisition | New broker lifecycle, syscall/ABI compatibility, deadlock and resource budgets | Acquisition alternative; FD injection alone does not revoke later access |
+| Filtered filesystem / FUSE | Could own name mutations and use the canonical evaluator; raw backing access must be inaccessible | Requires mount admission and a filesystem service; caching, mmap, hardlink and external-writer semantics need design | Alternative for owned mutations; caching and previously acquired bytes remain separate constraints |
 
 Landlock governs filesystem objects and hierarchies, not a negative basename
 language. Its documented ABI rules also make cross-directory rename/link fail
@@ -195,8 +195,8 @@ retained as evidence rather than discarded.
 
 ### Races, aliases and the contract decision
 
-The defensible next contract is **authorization at acquisition of new file
-access**, using the resolved kernel path, with controlled descriptor inheritance.
+One candidate contract is **authorization at acquisition of new file access**,
+using the resolved kernel path, with controlled descriptor inheritance.
 It is not retroactive erasure of data previously read. This interpretation needs
 an explicit owner decision before production implementation; this task does not
 silently amend the original mandate.
@@ -308,3 +308,160 @@ experiment; ratify acquisition-time versus revocation/provenance semantics; defi
 an explicit GitHub credential capability for authenticated recovery; and require
 separate supported-platform evidence. Until those gates settle, this is a
 reviewable experiment and design handoff, not proof of a complete production fix.
+
+### Revised evaluation and executable handoff (2026-09-08)
+
+The earlier measurements above remain historical evidence. The original installed
+`proc.spawn` artifact was rerun unchanged: the `!cat` alias still returns
+`SCOPED_HOST_SENTINEL`, direct `git -C /etc` returns `policy_denied`, directory
+Landlock grants admit dynamic denied files, and file-only grants both block new
+allowed files and retain access to renamed inodes. The revised isolated
+fixture adds deterministic classification tests, paired baseline controls, a
+preexisting hardlink, and a read-before-rename memory control. It also exercises
+real git, cargo and gh clients against a local authenticated fixture. It still
+makes **no whole-contract feasibility claim** and changes no production defaults.
+
+Run the complete experiment from a new directory:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s crates/orbit-exec/tests -p test_live_read_probe.py -v
+PYTHONDONTWRITEBYTECODE=1 python3 crates/orbit-exec/tests/live_read_fixture.py prepare /tmp/orbit-live-read-UNIQUE --execution-context admitted-worker > /tmp/orbit-live-read-prepare.json
+PYTHONDONTWRITEBYTECODE=1 python3 crates/orbit-exec/tests/live_read_fixture.py run /tmp/orbit-live-read-UNIQUE --execution-context admitted-worker > /tmp/orbit-live-read-evidence.json
+```
+
+`prepare` prints the exact compile, load, test and remove commands for its unique
+profile. It never executes load/remove. An authorized operator owns profile
+provisioning and removal after all experimental children exit. Use
+`--execution-context operator-host` on the actual host; this is an explicit
+operator assertion, not an automatic attestation. Run through normal worker
+admission as a separate measurement. Profile attachment is still stack-only and
+cannot relax the outer label. Preserve the JSON and generated profile before
+removing the run-owned temporary fixture; do not remove any shared profile or
+workspace. A failed load must not be followed by a replacement/unconfined exec.
+
+The harness records the exact minimal bwrap command, uid, kernel, parent label,
+and `/dev/fuse` presence separately from confinement results. In this worker the
+minimal namespace probe fails with “No permissions to create new namespace” and
+`/dev/fuse` is absent. The orchestrator's task comment records an exit-0 host
+namespace probe on the same date. These are different execution contexts; neither
+result establishes an enforcing AppArmor profile or a usable FUSE mount. No host
+policy load or namespace bypass was attempted by this leaf.
+
+The local recovery server binds an ephemeral IPv4 loopback port in a separate
+process and exits in a `finally` cleanup after the clients finish. It serves a
+small Git repository containing a library dependency and a fixture JSON endpoint.
+Every request requires the synthetic bearer token. The manifest grants exactly
+`<fixture>/recovery-token.txt`, a mode-0600 file outside the workspace, in addition
+to the existing explicit runtime grants. No real token or ambient credential is
+used. Client environments are cleared and composed from the manifest. The shell
+reads that exact file; git receives an explicit HTTP header, cargo invokes git to
+fetch the dependency, and gh receives the fixture header/token. Each run uses a
+fresh clone, Cargo home and build directory, so a warm cache cannot stand in for
+a successful dependency fetch. Request evidence records only path and whether
+authentication matched; each backend gets only its own request log slice.
+
+`--local-recovery` on the lower-level probe replaces the two public-network probes
+with these three local checks. Without it, the original TLS-git and credential-free
+gh probes remain available. Local HTTP proves capability plumbing and cold fetch,
+not TLS/resolver behavior, a real provider credential helper, or actual production
+activity admission. The earlier TLS result remains historical, not a current
+local-fixture pass. The fixture server is trusted infrastructure outside the
+client restriction, not a filesystem broker or part of the enforcement claim.
+
+Current paired results on Linux `6.8.0-139-generic`:
+
+| Boundary or behavior | Baseline | Landlock | AppArmor |
+| --- | --- | --- | --- |
+| Outside, symlink-outside and detached descendant open | Synthetic bytes returned | EACCES; no marker returned | Unavailable: stack-on-exec ENOENT |
+| Existing denied name, dynamic creation and rename then reopen | Synthetic bytes returned | Synthetic bytes returned | Unavailable |
+| Child-created and preexisting allowed-name hardlinks | Synthetic bytes returned | Synthetic bytes returned | Unavailable |
+| Inherited outside FD | Synthetic bytes returned | Synthetic bytes returned | Unavailable |
+| FD read and mmap access after rename to denied name | Synthetic bytes returned | Synthetic bytes returned | Unavailable |
+| Bytes read into memory before rename, output after rename | Synthetic bytes returned | Synthetic bytes returned | Unavailable |
+| New allowed files, git/rg/make and offline cargo | Pass | Pass | Unavailable |
+| Authenticated local git clone, cold cargo dependency build, gh API | Pass; 13 authenticated requests | Pass; 13 authenticated requests | Unavailable; zero requests |
+
+The 22-row local suite reports baseline 10 pass / 8 fail / 4 observations,
+Landlock 13 pass / 5 fail / 4 observations, and AppArmor 22 unavailable / zero
+passes. Raw observation rows are preserved for compatibility; the new
+`contract_assessment` independently marks descriptor acquisition, later-access
+revocation and previously acquired byte secrecy **failed**, not satisfied or
+ignored. Missing rows are unavailable. Paired negative controls require a
+successful baseline body returning the marker before a candidate denial counts
+as exercised. A marker returned before a crash, timeout or malformed response is
+a confidentiality failure. Empty output, malformed JSON, descendant failure,
+setup failure and ENOENT are never permission-denial passes. Eleven deterministic
+tests cover these rules; focused tests against the original classifier reproduce
+its malformed-output and leak-after-failure defects.
+
+### Exact remaining contract decisions and alternatives
+
+No candidate currently meets all the requested semantics. These are separate
+requirements, not one profile-provisioning problem:
+
+1. **New pathname acquisition:** retain the requirement that resolved forbidden
+   opens cannot return bytes, including create/rename and racing link changes.
+   Landlock demonstrably fails dynamic names. AppArmor remains the smallest
+   unproved pathname candidate. Its profile must be loaded and tested through
+   normal admission, with adversarial open/openat/openat2, concurrent symlink and
+   parent-directory swaps, and canonical/stable mount views. This harness's
+   sequential cases do not claim race coverage or arbitrary-policy equivalence.
+2. **Alias provenance:** the new preexisting hardlink probe has one inode with
+   both an allowed and a denied name before confinement. Denying creation of a
+   new alias cannot fix that case. The current resolved-path evaluator checks
+   the selected name, not every alias. An owner must choose resolved-name
+   semantics or require a privately owned backing tree with explicit alias
+   rejection/provenance rules and no external writers. This task adopts neither
+   choice as a silent contract amendment.
+3. **Later FD/mmap access:** retaining ordinary readable descriptors while
+   requiring later pathname changes to revoke them needs a different mechanism
+   from acquisition-only LSM/broker opens. The FD and mmap probes retain this
+   failure as an explicit gate. A policy filesystem could mediate uncached reads
+   while serializing its own mutations, but cached pages and mappings require a
+   separately validated design. Disabling mmap would also change tool behavior;
+   passing `rg --no-mmap` alone would not prove general rg compatibility.
+4. **Previously acquired bytes:** `rename_cached` reads an allowed file into
+   ordinary process memory, renames it, then outputs only the saved memory.
+   A pathname filesystem, AppArmor rule, or open broker has no later file read to
+   reject. Requiring erasure of those bytes while allowing the original read and
+   rename is incompatible with this boundary. An owner must explicitly exclude
+   retroactive memory secrecy, prohibit the transition, or require an entirely
+   different information-flow execution model. Output marker filtering is not a
+   repair because the child already possessed the bytes and can encode them.
+5. **Descriptor admission:** close nonessential inherited FDs and use owned stdin;
+   account separately for dirfds, SCM_RIGHTS, pidfd and process-memory interfaces.
+   The inherited-FD result proves that pathname grants alone do not suffice.
+   A production fix cannot simply omit that row from acceptance.
+
+A seccomp open broker using copied arguments and FD injection remains a possible
+**acquisition** implementation after these decisions. It must never use pathname
+validation followed by `CONTINUE`, and must own safe object resolution and all
+alternate descriptor acquisition routes. Returning a readable FD does not repair
+items 3–4. A FUSE prototype likewise cannot establish item 4: cached userspace
+bytes bypass filesystem requests regardless of its I/O mode. Thus adding a new
+broker here would not resolve the measured whole-contract incompatibility, and
+none is represented as a proven substitute. Kernel documentation describes
+[notification/FD injection](https://docs.kernel.org/userspace-api/seccomp_filter.html)
+and [FUSE caching and mmap modes](https://www.kernel.org/doc/html/latest/filesystems/fuse/fuse-io.html);
+the memory-control conclusion follows from the executed probe, not a claim that
+these facilities provide revocation.
+
+Keep the canonical evaluator and production targets in the ownership section
+above. The next implementation must supply explicit semantics for items 1–5,
+compile the full ordered policy without duplicating it in the transport, and use
+one confined spawn path. Gate host-grant composition and credential admission in
+Core, resolved policy semantics in Types/Policy, and attachment/lifecycle in Exec.
+Require original sentinel/direct-path controls plus program/environment fail-closed
+tests at Tools, and real kernel denial/positive tests at Exec. Unsupported
+platforms must reject before untrusted execution. No production default switch,
+release, or landing of the unsafe candidate is authorized by these probe results.
+
+The original six-criterion mapping above remains current: criteria 1/2/6 retain
+live name/race/availability gates; criterion 3 has additional real client evidence
+but still needs production allowlist/environment regression tests; criterion 4
+retains the authoritative spawn integration gate; criterion 5 now has cold local
+authenticated recovery evidence, with actual activity admission and real-service
+validation explicitly outstanding. Neither local tests nor workspace lint turn
+those unmet production criteria into passes. The collector records per-command
+latency, including failures; no live AppArmor overhead, large-tree bound or
+supported-platform performance is claimed from these measurements.

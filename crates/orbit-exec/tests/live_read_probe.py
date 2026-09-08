@@ -129,6 +129,7 @@ def prepare(root):
     (root / "outside.txt").write_text(MARKER)
     (workspace / "existing.env").write_text(MARKER)
     (workspace / "allowed.txt").write_text(GENERATED)
+    os.link(workspace / "existing.env", workspace / "preexisting-alias.txt")
     (workspace / "worker.py").write_bytes(Path(__file__).read_bytes())
     for name in ["home", "cargo-home", "tmp", "src", "gh-config"]:
         (workspace / name).mkdir()
@@ -198,6 +199,11 @@ def prepare(root):
     manifest = {"schemaVersion": 1, "root": str(root), "workspace": str(workspace),
                 "profile": profile_name, "programs": programs, "host_read_grants": grants,
                 "environment": env}
+    import live_read_recovery
+
+    credential, _server_root = live_read_recovery.prepare(root, manifest)
+    grants.append({"path": str(credential), "tree": False, "directory": False,
+                   "access": 4, "purpose": "synthetic local endpoint credential only"})
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
     # A fixed fixture policy, NOT an implementation of Orbit glob evaluation.
@@ -234,12 +240,14 @@ def child_probe(action, root, inherited_fd):
     workspace = root / "workspace"
     target = root / "outside.txt"
     try:
-        if action == "existing_denied":
+        if action == "preexisting_alias":
+            target = workspace / "preexisting-alias.txt"
+        elif action == "existing_denied":
             target = workspace / "existing.env"
         elif action in ["create_denied", "create_allowed"]:
             target = workspace / (".env" if action == "create_denied" else "generated.txt")
             target.write_text(MARKER if action == "create_denied" else GENERATED)
-        elif action in ["rename_denied", "rename_open_fd", "rename_mmap"]:
+        elif action in ["rename_denied", "rename_open_fd", "rename_mmap", "rename_cached"]:
             source = workspace / "rename-source.txt"
             source.write_text(MARKER)
             target = workspace / "renamed.env"
@@ -247,6 +255,8 @@ def child_probe(action, root, inherited_fd):
                 inherited_fd = os.open(source, os.O_RDONLY)
             if action == "rename_mmap":
                 mapping = mmap.mmap(inherited_fd, 0, access=mmap.ACCESS_READ)
+            if action == "rename_cached":
+                cached = os.read(inherited_fd, 4096).decode()
             source.rename(target)
         elif action == "symlink_outside":
             target = workspace / "outside-link.txt"
@@ -269,7 +279,9 @@ def child_probe(action, root, inherited_fd):
         return {"outcome": "setup_failed", "errno": error.errno, "reason": str(error)}
 
     try:
-        if action == "rename_mmap":
+        if action == "rename_cached":
+            content = cached
+        elif action == "rename_mmap":
             content = mapping[:].decode()
         elif action in ["inherited_fd", "rename_open_fd"]:
             content = os.read(inherited_fd, 4096).decode()
@@ -286,17 +298,29 @@ def child_probe(action, root, inherited_fd):
 
 
 def classify(record, expected):
-    if "status" in record:
+    """Classify completed bodies without mistaking setup failures for denial."""
+    leaked = MARKER in record.get("stdout", "") or MARKER in record.get("stderr", "")
+    if expected == "deny" and leaked:
+        record.update(status="fail", reason="forbidden bytes reached output")
+        return record
+    if record.get("status") == "unavailable":
         return record
     if expected == "positive":
         record["status"] = "pass" if record["exit_code"] == 0 else "fail"
         return record
+    if expected not in {"allow", "deny", "observation"}:
+        raise ValueError(f"unknown expectation: {expected}")
     try:
         outcomes = [json.loads(line) for line in record["stdout"].splitlines()]
+        if not all(isinstance(item, dict) for item in outcomes):
+            raise ValueError("worker records must be objects")
+        if any(item.get("wait_status") != 0 for item in outcomes
+               if item.get("outcome") == "descendant_complete"):
+            raise ValueError("descendant did not exit successfully")
         outcomes = [item for item in outcomes if item.get("outcome") != "descendant_complete"]
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, KeyError):
         outcomes = []
-    if record["exit_code"] != 0 or not outcomes or any(
+    if record.get("exit_code") != 0 or not outcomes or any(
         item.get("outcome") == "setup_failed" for item in outcomes
     ):
         record.update(status="unavailable", reason="probe body did not complete")
@@ -305,7 +329,6 @@ def classify(record, expected):
     elif expected == "deny":
         denied = all(item.get("outcome") == "denied" and item.get("errno") in
                      [errno.EACCES, errno.EPERM] for item in outcomes)
-        leaked = MARKER in record["stdout"] or MARKER in record["stderr"]
         record["status"] = "pass" if denied and not leaked else "fail"
     else:
         record["status"] = "pass" if all(item.get("content") == GENERATED
@@ -313,7 +336,32 @@ def classify(record, expected):
     return record
 
 
-def run(root, backend):
+def contract_assessment(probes):
+    """Keep stronger semantics visible without choosing a weaker contract."""
+    groups = {
+        "pathname_acquisition": ["outside", "existing_denied", "create_denied",
+                                 "rename_denied", "symlink_outside", "descendant_outside"],
+        "alias_provenance": ["hardlink_denied", "preexisting_alias"],
+        "descriptor_acquisition": ["inherited_fd"],
+        "later_access_revocation": ["rename_open_fd", "rename_mmap"],
+        "previously_acquired_bytes": ["rename_cached"],
+        "generated_files": ["allowed", "create_allowed"],
+    }
+    assessment = {}
+    for group, names in groups.items():
+        statuses = []
+        for name in names:
+            record = dict(probes.get(name, {"status": "unavailable"}))
+            if record.get("status") == "observed":
+                record.pop("status")
+            expected = "allow" if group == "generated_files" else "deny"
+            statuses.append(classify(record, expected)["status"])
+        assessment[group] = ("fail" if "fail" in statuses else
+                             "unavailable" if "unavailable" in statuses else "pass")
+    return assessment
+
+
+def run(root, backend, local_recovery=False):
     manifest = json.loads((root / "manifest.json").read_text())
     if manifest["root"] != str(root):
         raise ValueError("fixture was moved; prepare a new profile instead")
@@ -330,10 +378,12 @@ def run(root, backend):
         restriction = lambda: landlock(grants)
     elif backend == "apparmor":
         # Explicit stack API preserves every outer profile. No change_profile fallback.
-        apparmor = ctypes.CDLL("libapparmor.so.1", use_errno=True)
-        apparmor.aa_stack_onexec.argtypes = [ctypes.c_char_p]
-
         def restriction():
+            apparmor = ctypes.CDLL("libapparmor.so.1", use_errno=True)
+            try:
+                apparmor.aa_stack_onexec.argtypes = [ctypes.c_char_p]
+            except AttributeError as error:
+                raise OSError(errno.ENOSYS, "AppArmor stacking API unavailable") from error
             checked(apparmor.aa_stack_onexec(manifest["profile"].encode()))
 
     results = {"schemaVersion": 1, "backend": backend, "kernel": platform.release(),
@@ -341,7 +391,8 @@ def run(root, backend):
     probes = results["probes"]
     actions = ["outside", "existing_denied", "create_denied", "rename_denied",
                "symlink_outside", "hardlink_denied", "descendant_outside", "allowed",
-               "create_allowed", "inherited_fd", "rename_open_fd", "rename_mmap"]
+               "create_allowed", "inherited_fd", "rename_open_fd", "rename_mmap",
+               "preexisting_alias", "rename_cached"]
     for action in actions:
         # Only remove paths this probe itself creates; fixtures are run-owned.
         for name in [".env", "generated.txt", "rename-source.txt", "renamed.env",
@@ -363,7 +414,7 @@ def run(root, backend):
                 os.close(fd)
         if action in ["allowed", "create_allowed"]:
             expected = "allow"
-        elif action in ["inherited_fd", "rename_open_fd", "rename_mmap"]:
+        elif action in ["inherited_fd", "rename_open_fd", "rename_mmap", "rename_cached"]:
             expected = "observation"
         else:
             expected = "deny"
@@ -378,6 +429,20 @@ def run(root, backend):
         "gh_public_api_without_credentials": [programs["gh"], "api", "meta"],
         "git_network_tls": [programs["git"], "ls-remote", "https://github.com/git/git.git", "HEAD"],
     }
+    if local_recovery:
+        import live_read_recovery
+
+        commands.pop("gh_public_api_without_credentials")
+        commands.pop("git_network_tls")
+        try:
+            results["local_recovery"] = live_read_recovery.run(
+                root, manifest, restriction, invoke, classify)
+        except OSError as error:
+            results["local_recovery"] = {"probes": {
+                name: {"status": "unavailable", "reason": str(error)} for name in
+                ["git_authenticated_local_clone", "cargo_cold_local_dependency",
+                 "gh_authenticated_local_api"]}}
+        probes.update(results["local_recovery"]["probes"])
     for name, argv in commands.items():
         if not argv[0]:
             probes[name] = {"status": "unavailable", "reason": "program not installed"}
@@ -386,6 +451,7 @@ def run(root, backend):
     counts = {status: sum(item["status"] == status for item in probes.values())
               for status in ["pass", "fail", "unavailable", "observed"]}
     results["counts"] = counts
+    results["contract_assessment"] = contract_assessment(probes)
     results["complete_contract_proven"] = False  # Operator race/platform/credential gates remain.
     return results
 
@@ -396,6 +462,8 @@ def main():
     parser.add_argument("root", type=Path)
     parser.add_argument("--backend", choices=["baseline", "landlock", "apparmor"],
                         default="apparmor")
+    parser.add_argument("--local-recovery", action="store_true",
+                        help="use authenticated loopback fixtures instead of public network probes")
     parser.add_argument("--action")
     parser.add_argument("--inherited-fd", type=int, default=-1)
     args = parser.parse_args()
@@ -405,7 +473,7 @@ def main():
     elif args.operation == "child":
         result = child_probe(args.action, root, args.inherited_fd)
     else:
-        result = run(root, args.backend)
+        result = run(root, args.backend, args.local_recovery)
     print(json.dumps(result, indent=None if args.operation == "child" else 2))
     if args.operation == "run":
         # Evidence collection must not look like a green full-contract test.
