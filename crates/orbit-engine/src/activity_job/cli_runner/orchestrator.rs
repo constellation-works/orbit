@@ -458,6 +458,7 @@ pub fn run_cli_backend(
         output_capture_limit: None,
         on_spawn: Some(&on_spawn),
         wait: None,
+        live_readers: None,
     });
 
     let (stdout, stderr, exit_code, duration, timed_out) = match spawn_result {

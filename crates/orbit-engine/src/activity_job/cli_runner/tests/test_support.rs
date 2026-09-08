@@ -52,6 +52,16 @@ pub(in crate::activity_job::cli_runner) fn capture_events<F, T>(f: F) -> (T, Vec
 where
     F: FnOnce() -> T,
 {
+    let (result, log) = capture_events_live(f);
+    (result, log.snapshot())
+}
+
+/// Captures tracing events and keeps the subscriber alive so a test can
+/// observe emissions after the producing call returns.
+pub(in crate::activity_job::cli_runner) fn capture_events_live<F, T>(f: F) -> (T, EventLog)
+where
+    F: FnOnce() -> T,
+{
     let events = Arc::new(Mutex::new(Vec::new()));
     let subscriber = CaptureSubscriber {
         events: Arc::clone(&events),
@@ -59,8 +69,24 @@ where
     };
     let dispatch = tracing::Dispatch::new(subscriber);
     let result = tracing::dispatcher::with_default(&dispatch, f);
-    let events = events.lock().expect("events lock").clone();
-    (result, events)
+    (
+        result,
+        EventLog {
+            events,
+            _dispatch: dispatch,
+        },
+    )
+}
+
+pub(in crate::activity_job::cli_runner) struct EventLog {
+    events: Arc<Mutex<Vec<CapturedEvent>>>,
+    _dispatch: tracing::Dispatch,
+}
+
+impl EventLog {
+    pub(in crate::activity_job::cli_runner) fn snapshot(&self) -> Vec<CapturedEvent> {
+        self.events.lock().expect("events lock").clone()
+    }
 }
 
 pub(in crate::activity_job::cli_runner) fn capture_redacted_tracing_output<F>(
