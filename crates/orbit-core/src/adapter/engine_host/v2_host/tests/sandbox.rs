@@ -1058,3 +1058,29 @@ mod pi_state_roots {
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_resolution_appends_git_protection_after_provider_grants() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    std::fs::create_dir_all(repo_root.join(".git")).unwrap();
+    seed_executor(
+        &runtime,
+        "codex",
+        Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+    );
+    let sandbox = runtime
+        .resolve_executor_sandbox("codex", None, Some(&repo_root))
+        .unwrap()
+        .unwrap();
+    let git_dir = repo_root.join(".git").canonicalize().unwrap();
+    assert_eq!(
+        sandbox.fs_profile.modify.last(),
+        Some(&format!("!{}/**", git_dir.display()))
+    );
+    assert!(
+        linux_bwrap_write_grant_diagnostic(&sandbox.fs_profile, &git_dir.join("HEAD"))
+            .unwrap()
+            .is_some()
+    );
+}

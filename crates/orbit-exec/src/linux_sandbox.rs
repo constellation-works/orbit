@@ -575,6 +575,33 @@ pub fn compile_linux_bwrap_argv(
             push_mount(&mut out, "--bind", &path);
         }
     }
+    // Bind every writable ancestor entry of an existing deny before applying
+    // restrictions. Linux permits renaming an ancestor of a mount; making each
+    // such entry a mountpoint prevents moving it aside to replace the path.
+    let mut anchors = BTreeSet::new();
+    for denied in profile
+        .modify
+        .iter()
+        .filter_map(|rule| rule.strip_prefix('!'))
+    {
+        for path in mount_paths_for_rule(denied, false)? {
+            for ancestor in path.ancestors().skip(1) {
+                if writable_roots.iter().any(|root| ancestor.starts_with(root)) {
+                    anchors.insert(ancestor.to_path_buf());
+                }
+            }
+        }
+    }
+    for anchor in anchors {
+        let rendered = anchor.display().to_string();
+        let already_mounted = out
+            .windows(3)
+            .any(|args| args[0] == "--bind" && args[1] == rendered && args[2] == rendered);
+        if !already_mounted {
+            push_mount(&mut out, "--bind", &anchor);
+        }
+    }
+
     for (index, rule) in profile.modify.iter().enumerate() {
         if let Some(denied) = rule.strip_prefix('!') {
             if !is_exact_or_subtree(denied)
@@ -705,6 +732,15 @@ fn append_stable_toolchain_mounts(out: &mut Vec<String>, cwd: &Path) -> Result<(
         ))
     })?;
     let target = canonical_existing(&target, "stable build mount")?;
+    // Bind sources are host paths: a second bind does not inherit the first
+    // destination's policy overlays. Replay the ordered mounts through both
+    // aliases, clipping a containing restriction to the alias root itself.
+    let policy_mounts: Vec<_> = out
+        .windows(3)
+        .filter(|args| matches!(args[0].as_str(), "--bind" | "--ro-bind"))
+        .filter(|args| args[1] == args[2] && args[1] != "/")
+        .map(|args| (args[0].clone(), PathBuf::from(&args[1])))
+        .collect();
     out.extend([
         "--dir".to_string(),
         LINUX_STABLE_WORKSPACE_MOUNT.to_string(),
@@ -717,6 +753,25 @@ fn append_stable_toolchain_mounts(out: &mut Vec<String>, cwd: &Path) -> Result<(
         target.display().to_string(),
         LINUX_STABLE_BUILD_MOUNT.to_string(),
     ]);
+    for (root, alias) in [
+        (cwd, Path::new(LINUX_STABLE_WORKSPACE_MOUNT)),
+        (target.as_path(), Path::new(LINUX_STABLE_BUILD_MOUNT)),
+    ] {
+        for (option, source) in &policy_mounts {
+            let (source, destination) = if let Ok(relative) = source.strip_prefix(root) {
+                (source.as_path(), alias.join(relative))
+            } else if root.starts_with(source) {
+                (root, alias.to_path_buf())
+            } else {
+                continue;
+            };
+            out.extend([
+                option.clone(),
+                source.display().to_string(),
+                destination.display().to_string(),
+            ]);
+        }
+    }
     Ok(())
 }
 

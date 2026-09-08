@@ -288,6 +288,64 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
     assert!(!script.with_extension("sync_base.json").exists());
 }
 
+// A byte-for-byte Git copy can satisfy the old HEAD/index/ref checks. The
+// host must reject its identity before staging, and must reject edits to the
+// sequencer instructions even when the three checkpoint fields still match.
+#[test]
+fn conflict_recovery_rejects_metadata_copy_redirection_and_poisoned_todo() {
+    for attack in ["redirect", "replace", "pointer", "todo"] {
+        let recovery = stopped_rebase_fixture(false);
+        let script = recovery.fixture.root().join("codex");
+        let scratch = recovery.fixture.root().join("scratch-git");
+        let body = match attack {
+            "redirect" => format!(
+                "cp -a \"$gitdir\" '{scratch}'\nprintf '%s\\n' \"$common\" > '{scratch}/commondir'\nprintf 'gitdir: %s\\n' '{scratch}' > .git",
+                scratch = scratch.display(),
+            ),
+            "replace" => format!(
+                "cp -a \"$gitdir\" '{scratch}'\nmv \"$gitdir\" \"$gitdir.original\"\nmv '{scratch}' \"$gitdir\"",
+                scratch = scratch.display(),
+            ),
+            "pointer" => format!("cp .git '{scratch}'\nmv '{scratch}' .git", scratch = scratch.display()),
+            "todo" => "printf 'exec touch poisoned-by-host\\n' >> \"$gitdir/rebase-merge/git-rebase-todo\"".to_string(),
+            _ => unreachable!(),
+        };
+        write_executable(
+            &script,
+            &format!(
+                r##"#!/bin/sh
+set -eu
+cat > /dev/null
+gitdir=$(git rev-parse --absolute-git-dir)
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+{body}
+printf 'candidate and target\n' > README.md
+printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{}},"error":null}}'
+"##
+            ),
+        );
+        let mut host = TestHost::with_command(script.display().to_string());
+        host.workspace_root = Some(recovery.fixture.primary.clone());
+        let error = run_cli_backend(
+            &host,
+            &test_agent_loop_spec(Duration::from_secs(30)),
+            "pr_conflict_recovery",
+            "run-rebase-recovery",
+            test_audit("run-metadata-poison", "codex"),
+            &conflict_recovery_input(&recovery),
+            None,
+        )
+        .expect_err("host must not consume copied or poisoned metadata");
+        assert!(
+            error.to_string().contains("changed Git metadata"),
+            "{attack}: {error}"
+        );
+        assert!(!script.with_extension("sync_base.json").exists());
+        assert!(!recovery.fixture.assigned.join("poisoned-by-host").exists());
+        assert!(!git_bytes(&recovery.fixture.assigned, &["ls-files", "-u"]).is_empty());
+    }
+}
+
 struct StoppedRebaseFixture {
     fixture: LinkedWorktreeFixture,
     original: String,

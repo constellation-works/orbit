@@ -4,7 +4,7 @@ type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
 last_updated: 2026-09-08
-last_validated: 2026-09-08
+last_validated: 2026-09-07
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -262,6 +262,55 @@ and runs the provider without `linux-bwrap`.
 This subsection records the shipped Linux behavior from [ORB-10552] and the Ubuntu host rescue
 context from [ORB-10553]. No sandbox design decision changed, and this operational remediation
 requires no new ADR.
+
+---
+
+### Git integrity and host recovery
+
+The Linux host appends non-overridable Git write denials after provider and
+runtime convenience grants. It discovers the registered and active checkout's
+`.git` entry, its real gitdir and `commondir`. Those directories include refs,
+rebase state and host recovery payloads at
+`<git-common-dir>/orbit/worktree-recovery/<run-id>/`. Git inspection stays
+readable; source files remain writable according to the activity profile.
+Metadata paths containing symlinks, symlink entries inside metadata, and
+special files or hard-linked metadata files fail closed before launch: a read-only mount cannot
+protect a writable alias of the same inode. This deliberately does not support
+local clones whose metadata is hard-linked into another repository.
+
+The compiler pins writable ancestor entries of existing denied paths as mount
+points so they cannot be renamed aside. It replays the ordered policy overlays
+at both stable workspace and build aliases, including clipping a containing
+deny to an alias root. A build directory redirected into Git metadata therefore
+cannot create a writable metadata mount. These are per-child namespace mounts;
+they do not change the host's filesystem permissions.
+
+For an admitted stopped rebase, the host retains the original Git pointer,
+open metadata-directory handles and hashes of all rebase instruction files in
+memory. Before staging it rejects a different gitdir/common directory, replaced
+directory inodes or changed recovery instructions, then checks the existing
+commit/index/conflict set and live ownership/authorization. Scratch copies are
+permitted as readable data but cannot substitute for this host checkpoint.
+Only the host stages the authorized conflict paths and continues the rebase.
+
+This protects the live invocation's in-memory checkpoint and Git destinations.
+Durable recovery certificates also live in `job_runs.pipeline_state_json` in
+`<global-root>/orbit.db`. The existing child-runtime grants allow that database
+and its sidecars for nested Orbit tools. They do not provide a host-only raw
+filesystem boundary for durable recovery certificates; protecting that store
+requires separating host writes from leaf tool execution. Git mount tests do
+not establish database integrity.
+
+The required live integrity fixture is explicit and fails on namespace denial:
+
+```sh
+cargo test -p orbit-exec --test linux_sandbox kernel_git_metadata_integrity_through_original_and_build_aliases -- --ignored --exact --nocapture
+```
+
+Run it on an authorized Linux host where `/usr/bin/bwrap` can create user and
+mount namespaces with the shipped probe flags. Deterministic compilation and
+host-recovery fixtures do not establish kernel confinement; a nested runner's
+namespace denial leaves this gate incomplete until host execution succeeds.
 
 ---
 

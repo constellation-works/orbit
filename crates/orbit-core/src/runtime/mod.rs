@@ -19,6 +19,8 @@ mod coordination_audit;
 pub mod engine;
 pub mod event_bus;
 pub(crate) mod friction;
+#[cfg(target_os = "linux")]
+pub(crate) mod git_sandbox;
 pub mod mutation;
 mod resolve;
 pub mod run_audit;
