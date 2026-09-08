@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::atomic_write_text_volatile as write_atomic;
+use orbit_common::fs::io::{atomic_write_text, atomic_write_text_volatile};
 
 pub(crate) fn parse_yaml_with<T: serde::de::DeserializeOwned, F>(
     raw: &str,
@@ -33,5 +33,19 @@ where
     F: FnOnce(serde_yaml::Error) -> OrbitError,
 {
     let yaml = serialize_yaml_with(value, invalid)?;
-    write_atomic(path, &yaml).map_err(|err| OrbitError::from_write_io(path, err))
+    atomic_write_text_volatile(path, &yaml).map_err(|err| OrbitError::from_write_io(path, err))
+}
+
+/// Durable YAML publish: temp-file `sync_all` plus parent-directory fsync.
+/// Used for task envelopes, artifact manifests, and the pending-write record.
+pub(crate) fn write_yaml_durable_with<T: serde::Serialize, F>(
+    path: &Path,
+    value: &T,
+    invalid: F,
+) -> Result<(), OrbitError>
+where
+    F: FnOnce(serde_yaml::Error) -> OrbitError,
+{
+    let yaml = serialize_yaml_with(value, invalid)?;
+    atomic_write_text(path, &yaml).map_err(|err| OrbitError::from_write_io(path, err))
 }

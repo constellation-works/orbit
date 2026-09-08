@@ -1,4 +1,5 @@
 use super::*;
+use crate::driver::file::task_bundle::{BundleWriteFault, PendingWriteGuard, fail_if_injected};
 
 impl TaskV2Store {
     pub(crate) fn update_task_document(
@@ -14,6 +15,7 @@ impl TaskV2Store {
         }
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
+            let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             let mut envelope_changed = false;
             let mut title_changed = false;
             let mut previous_title: Option<String> = None;
@@ -162,6 +164,7 @@ impl TaskV2Store {
                 bundle.events.push(event);
             }
 
+            fail_if_injected(BundleWriteFault::AfterJsonlAppend)?;
             if envelope_changed
                 || fields.description.is_some()
                 || fields.acceptance_criteria.is_some()
@@ -170,7 +173,10 @@ impl TaskV2Store {
             {
                 bundle.envelope.updated_at = Utc::now();
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
+                pending.finish();
                 self.replace_index_best_effort(&bundle.envelope, "task document update");
+            } else {
+                pending.finish();
             }
             Ok(())
         })
@@ -190,6 +196,7 @@ impl TaskV2Store {
 
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
+            let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             let now = Utc::now();
             let current_status = bundle.envelope.status;
             // [ORB-11305] Compare-and-set, evaluated against the bundle we just
@@ -199,6 +206,7 @@ impl TaskV2Store {
             if let Some(expected) = &fields.expected_status
                 && !expected.contains(&current_status)
             {
+                pending.finish();
                 return Err(OrbitError::InvalidInput(format!(
                     "task '{id}' status changed to '{current_status}' before this write; \
                      expected one of [{}]",
@@ -263,6 +271,7 @@ impl TaskV2Store {
                 bundle.events.push(event);
             }
 
+            fail_if_injected(BundleWriteFault::AfterJsonlAppend)?;
             if !fields.append_history.is_empty()
                 || !fields.append_comments.is_empty()
                 || fields.status.is_some()
@@ -272,7 +281,10 @@ impl TaskV2Store {
                 bundle.envelope.status = target_status;
                 bundle.envelope.updated_at = now;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
+                pending.finish();
                 self.replace_index_best_effort(&bundle.envelope, "task history update");
+            } else {
+                pending.finish();
             }
             Ok(())
         })

@@ -20,7 +20,17 @@ use sha2::{Digest, Sha256};
 
 use super::migrations as task_migrations;
 use super::types::TaskBundleV2;
-use crate::fs::yaml::{parse_yaml_with, write_yaml_atomic_with};
+use crate::fs::yaml::{parse_yaml_with, write_yaml_durable_with};
+
+mod commit;
+
+pub(crate) use commit::{
+    BundleWriteFault, PendingWriteGuard, fail_if_injected, publish_envelope,
+    recover_pending_bundle_at,
+};
+
+#[cfg(test)]
+pub(crate) use commit::{PENDING_WRITE_FILE_NAME, inject_bundle_write_faults};
 
 static STAGING_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -93,7 +103,7 @@ where
 
 fn write_bundle_contents(bundle_dir: &Path, bundle: &TaskBundleV2) -> Result<(), OrbitError> {
     ensure_bundle_dirs(bundle_dir)?;
-    write_yaml_atomic_with(
+    write_yaml_durable_with(
         &bundle_dir.join(TASK_ENVELOPE_FILE_NAME),
         &bundle.envelope,
         |err| OrbitError::Store(err.to_string()),
@@ -114,7 +124,7 @@ fn write_bundle_contents(bundle_dir: &Path, bundle: &TaskBundleV2) -> Result<(),
     write_jsonl_file(&bundle_dir.join(TASK_EVENTS_FILE_NAME), &bundle.events)?;
     write_jsonl_file(&bundle_dir.join(TASK_COMMENTS_FILE_NAME), &bundle.comments)?;
     if let Some(manifest) = &bundle.artifact_manifest {
-        write_yaml_atomic_with(
+        write_yaml_durable_with(
             &bundle_dir
                 .join(TASK_ARTIFACTS_DIR_NAME)
                 .join(TASK_ARTIFACT_MANIFEST_FILE_NAME),
@@ -241,7 +251,7 @@ fn read_bundle_for_id(
     bundle_dir: &Path,
     expected_task_id: &str,
 ) -> Result<TaskBundleV2, OrbitError> {
-    let bundle = TaskBundleV2 {
+    let mut bundle = TaskBundleV2 {
         envelope: read_envelope_for_id(bundle_dir, expected_task_id)?,
         description: read_required_text(&bundle_dir.join(TASK_DESCRIPTION_FILE_NAME))?,
         acceptance: read_required_text(&bundle_dir.join(TASK_ACCEPTANCE_FILE_NAME))?,
@@ -251,6 +261,7 @@ fn read_bundle_for_id(
         comments: read_task_comments(&bundle_dir.join(TASK_COMMENTS_FILE_NAME))?,
         artifact_manifest: read_artifact_manifest(bundle_dir)?,
     };
+    commit::apply_pending_read_view(bundle_dir, &mut bundle)?;
     validate_bundle(&bundle)?;
     Ok(bundle)
 }

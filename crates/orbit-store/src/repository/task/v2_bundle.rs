@@ -18,8 +18,8 @@ use orbit_types::task::{
 
 pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2};
 use crate::driver::file::task_bundle::{
-    append_jsonl_row, cleanup_partial_bundle_best_effort, read_bundle_at, read_envelope_at,
-    write_bundle_at,
+    append_jsonl_row, cleanup_partial_bundle_best_effort, publish_envelope, read_bundle_at,
+    read_envelope_at, write_bundle_at,
 };
 use crate::driver::file::task_bundle::{
     remove_task_bundle_lock_sentinel, task_bundle_lock_sentinel_path,
@@ -27,7 +27,7 @@ use crate::driver::file::task_bundle::{
 use crate::driver::sqlite::task_registry::{
     ProjectionRebuildResult, TaskBundleBinding, TaskRegistryStore,
 };
-use crate::fs::yaml::write_yaml_atomic_with;
+use crate::fs::yaml::write_yaml_durable_with;
 use crate::repository::checkout_projection::{
     ensure_projection_entry_removable, remove_projection_entry,
 };
@@ -289,12 +289,14 @@ impl TaskBundleStoreV2 {
     /// List bundles registered to this workspace.
     ///
     /// Corruption is still fail-fast — one damaged bundle fails the list so
-    /// store damage is never silently hidden. What is *not* fail-fast is a
-    /// bundle caught mid-publication or mid-removal by a concurrent writer
-    /// (ORB-10988 / F2026-07-119): the binding list is a snapshot, so a create
-    /// or delete of one task would otherwise fail every read of every other
-    /// task. Those bundles are skipped, exactly as they would be had the
-    /// snapshot been taken a moment earlier or later.
+    /// store damage is never silently hidden. An incomplete multi-file write
+    /// is recognized by `.pending-write.yaml` and recovered rather than
+    /// reported as damage. What is *not* fail-fast is a bundle caught
+    /// mid-publication or mid-removal by a concurrent writer (ORB-10988 /
+    /// F2026-07-119): the binding list is a snapshot, so a create or delete of
+    /// one task would otherwise fail every read of every other task. Those
+    /// bundles are skipped, exactly as they would be had the snapshot been
+    /// taken a moment earlier or later.
     pub(crate) fn list_bundles(&self) -> Result<Vec<TaskBundleV2>, OrbitError> {
         let bindings = self.registry.tasks_for_workspace(&self.workspace_id)?;
         let mut bundles = Vec::with_capacity(bindings.len());
@@ -359,10 +361,9 @@ impl TaskBundleStoreV2 {
             )));
         }
         envelope.validate()?;
-        write_yaml_atomic_with(
+        publish_envelope(
             &self.bundle_path(task_id)?.join(TASK_ENVELOPE_FILE_NAME),
             envelope,
-            |err| OrbitError::Store(err.to_string()),
         )
     }
 
@@ -372,7 +373,7 @@ impl TaskBundleStoreV2 {
         manifest: &ArtifactManifestV2,
     ) -> Result<(), OrbitError> {
         manifest.validate()?;
-        write_yaml_atomic_with(
+        write_yaml_durable_with(
             &self
                 .bundle_path(task_id)?
                 .join(TASK_ARTIFACTS_DIR_NAME)

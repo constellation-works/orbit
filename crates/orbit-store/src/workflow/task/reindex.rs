@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use orbit_types::task::is_valid_orb_task_id;
 
-use crate::driver::file::task_bundle::read_bundle_at;
+use crate::driver::file::task_bundle::recover_pending_bundle_at;
 use crate::driver::sqlite::task_registry::{
     ProjectionRebuildResult, TaskRegistryStore, parse_orb_task_number,
 };
@@ -58,11 +58,12 @@ pub fn reindex_workspace(
     }
 
     // Register every on-disk bundle (idempotent upsert) and collect envelopes.
+    // An incomplete multi-file write is aborted or finalized from its pending record.
     let mut envelopes = Vec::with_capacity(on_disk.len());
     let mut max_number: Option<u32> = None;
     for task_id in &on_disk {
         let dir = registry.canonical_task_bundle_path(&workspace_id, task_id)?;
-        let bundle = read_bundle_at(&dir)?;
+        let bundle = recover_pending_bundle_at(&dir)?;
         registry.register_task_bundle(task_id, &workspace_id, &dir)?;
         if let Some(number) = parse_orb_task_number(task_id) {
             max_number = Some(max_number.map_or(number, |current| current.max(number)));
