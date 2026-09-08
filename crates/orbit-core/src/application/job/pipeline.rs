@@ -1441,6 +1441,8 @@ impl OrbitRuntime {
         let child_pid = child.id();
         let mut claimed = false;
         loop {
+            #[cfg(test)]
+            worker_observer_read_counter::record(run_id);
             let run = self
                 .get_job_run_backend(run_id)?
                 .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
@@ -1463,11 +1465,33 @@ impl OrbitRuntime {
                 claimed = true;
             }
 
-            if let Some(status) = child.try_wait().map_err(|error| {
-                OrbitError::Execution(format!(
-                    "observe pipeline worker process for run '{run_id}': {error}"
-                ))
-            })? {
+            // A persisted owner or non-pending state settles the only startup
+            // question this observer owns. Waiting for the child avoids a
+            // full run/step SQLite read every 25ms throughout normal work.
+            let status = if run.pid.is_some() || run.state != JobRunState::Pending {
+                Some(child.wait().map_err(|error| {
+                    OrbitError::Execution(format!(
+                        "wait for pipeline worker process for run '{run_id}': {error}"
+                    ))
+                })?)
+            } else {
+                child.try_wait().map_err(|error| {
+                    OrbitError::Execution(format!(
+                        "observe pipeline worker process for run '{run_id}': {error}"
+                    ))
+                })?
+            };
+
+            if let Some(status) = status {
+                // The worker may have changed the run after the last startup
+                // observation. Exit handling must use fresh state so duplicate
+                // ownership, cancellation, and terminal outcomes stay
+                // authoritative.
+                #[cfg(test)]
+                worker_observer_read_counter::record(run_id);
+                let run = self.get_job_run_backend(run_id)?.ok_or_else(|| {
+                    OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string())
+                })?;
                 let output = read_pipeline_worker_log_tail(worker_log);
                 let output_detail = output
                     .as_deref()
@@ -2114,5 +2138,57 @@ pub(crate) mod worker_command_override {
             .current_dir(workspace)
             .stdin(Stdio::null());
         Some(command)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod worker_observer_read_counter {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+
+    static COUNTS: LazyLock<Mutex<HashMap<String, usize>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    pub(crate) struct Counter {
+        run_id: String,
+    }
+
+    pub(crate) fn track(run_id: &str) -> Counter {
+        COUNTS
+            .lock()
+            .expect("test observer counters are not poisoned")
+            .insert(run_id.to_string(), 0);
+        Counter {
+            run_id: run_id.to_string(),
+        }
+    }
+
+    pub(crate) fn record(run_id: &str) {
+        if let Some(count) = COUNTS
+            .lock()
+            .expect("test observer counters are not poisoned")
+            .get_mut(run_id)
+        {
+            *count += 1;
+        }
+    }
+
+    impl Counter {
+        pub(crate) fn reads(&self) -> usize {
+            *COUNTS
+                .lock()
+                .expect("test observer counters are not poisoned")
+                .get(&self.run_id)
+                .expect("tracked observer counter exists")
+        }
+    }
+
+    impl Drop for Counter {
+        fn drop(&mut self) {
+            COUNTS
+                .lock()
+                .expect("test observer counters are not poisoned")
+                .remove(&self.run_id);
+        }
     }
 }
