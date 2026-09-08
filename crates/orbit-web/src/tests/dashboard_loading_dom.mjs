@@ -77,6 +77,7 @@ const wrap = get("global-id-wrap");
 wrap.className = "global-id-wrap";
 wrap.appendChild(get("global-task-id"));
 wrap.appendChild(get("global-task-id-error"));
+const documentListeners = {};
 globalThis.document = {
   body: new Node("body"),
   hidden: false,
@@ -98,7 +99,7 @@ globalThis.document = {
     if (tabMatch) return tabs.find((tab) => tab.dataset.tab === tabMatch[1]) || null;
     return new Node();
   },
-  addEventListener: () => {},
+  addEventListener: (name, fn) => { documentListeners[name] = fn; },
 };
 const location = new URL("http://dashboard.test/?workspace=one");
 location.hash = "#tasks";
@@ -132,4 +133,3 @@ Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText
 globalThis.requestAnimationFrame = (fn) => fn();
 globalThis.setInterval = () => 0;
 globalThis.EventSource = class { constructor() {} close() {} };
-

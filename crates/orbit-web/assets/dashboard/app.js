@@ -1514,7 +1514,7 @@ async function refreshDashboard() {
   $("conn-status").className = "status-dot orange";
   // Refresh stays available so a slow request never locks navigation or retry.
   const results = await Promise.allSettled(activeRefreshJobs());
-  if (sequence !== refreshSequence || revision !== getWorkspaceRevision()) return;
+  if (sequence !== refreshSequence || revision !== getWorkspaceRevision()) return null;
   const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
   const offline = errors.some(error => error.networkFailure);
   for (const error of errors) console.error(error);
@@ -1522,6 +1522,7 @@ async function refreshDashboard() {
   const label = offline ? "offline" : errors.length ? "panel update failed" : `refreshed ${refreshLabel()}`;
   $("meta-text").textContent = `${label} · ${new Date().toLocaleTimeString()}`;
   if (activeTab === "tasks") fitLogPanelToViewport();
+  return errors.length === 0;
 }
 
 // Invalidate caches at the scope boundary, including programmatic selections.
