@@ -12,7 +12,9 @@
 # - `file` (deterministic): clusters the snapshot's current, non-stale failures
 #   by root cause and files each surviving cluster as a `proposed` bug task
 #   carrying that evidence inline. Filing is deduped against still-open tasks
-#   by failure key. Proposed is the quarantine boundary: an active auto-drain
+#   by failure key. Completed owners require structured diagnostic, validation,
+#   delivery and branch proof; covered observations never become pilot candidates.
+#   Proposed is the quarantine boundary: an active auto-drain
 #   cannot see the finding yet.
 # - `pilots` (bounded fan-out): invokes the existing task_pilot_pipeline once
 #   for each newly filed task and each still-proposed matching task from an

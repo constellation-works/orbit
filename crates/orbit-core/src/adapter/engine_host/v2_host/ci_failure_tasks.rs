@@ -2,11 +2,11 @@
 //! proposed tasks.
 //!
 //! The snapshot arrives from the host-owned `collect_ci_evidence` step, which
-//! ran `gh` outside any agent sandbox. Everything below is a pure function of
-//! that JSON plus the workspace's open tasks: cluster the current failures by
-//! root cause, drop the clusters a still-open task already covers, and file
-//! what is left as `proposed` bug tasks whose descriptions carry the evidence
-//! inline. The CI sweep then pilots and revalidates those tasks before a
+//! ran `gh` outside any agent sandbox. Filing combines that JSON with workspace
+//! task/run evidence and Git applicability: cluster current failures by
+//! root cause, reuse open owners or completed owners with verified repair
+//! evidence, and file what is left as `proposed` bug tasks with inline evidence.
+//! The CI sweep then pilots and revalidates those tasks before a
 //! separate admission boundary may expose them to backlog auto-drain.
 //!
 //! A filed task deliberately has no `required_tools`: the pilot and eventual
@@ -43,6 +43,9 @@ use crate::adapter::engine_host::v2_host::duplicate_tasks::{
     DuplicateTaskMatch, find_covering_task,
 };
 use crate::application::task::TaskAddParams;
+
+#[path = "ci_repair_assessment.rs"]
+mod repair_assessment;
 
 /// Wire contract with `collect_ci_evidence` (`orbit-engine`'s
 /// `executor::automation::ci`), also stated in both activity assets' schemas.
@@ -343,10 +346,12 @@ where
 
     // Complete every external lookup before the first task write. A transient
     // duplicate-check failure must leave no partial filing or dedupe state.
+    let mut assessor = repair_assessment::Assessor::new(runtime);
+    let mut repair_assessments = Vec::new();
     let duplicate_matches = clusters
         .iter()
         .map(|cluster| {
-            cluster.find_covering_task(lookup).map_err(|error| {
+            let existing = cluster.find_covering_task(lookup).map_err(|error| {
                 retryable_pipeline_error(
                     "dedupe_lookup",
                     &audit,
@@ -358,9 +363,21 @@ where
                         "message": bounded_error(&error.to_string()),
                     })],
                 )
-            })
+            })?;
+            if existing.is_some() {
+                return Ok(existing);
+            }
+            let assessment = assessor.assess(cluster);
+            if !assessment.evidence.is_null() {
+                repair_assessments.push(assessment.evidence.clone());
+            }
+            Ok(assessment.owner.map(|task_id| DuplicateTaskMatch {
+                task_id,
+                match_kind: "covered_by_repair",
+                evidence: assessment.evidence,
+            }))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, OrbitError>>()?;
     let duplicate_tasks = duplicate_matches
         .iter()
         .map(|duplicate_match| {
@@ -394,6 +411,9 @@ where
             evidence,
         }) = duplicate_match
         {
+            if match_kind == "covered_by_repair" {
+                repair_assessment::retain(runtime, &task_id, &evidence)?;
+            }
             if let Some(existing) = duplicate_task {
                 let expected_key_tag =
                     format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", cluster.failure_key);
@@ -501,6 +521,7 @@ where
         "pilot_candidate_count": pilot_candidates.len(),
         "pilot_candidates": pilot_candidates,
         "skipped_existing": skipped_existing,
+        "repair_assessments": repair_assessments,
         "skipped_over_cap": skipped_over_cap,
         "deferred": deferred,
         "max_tasks": max_tasks,
