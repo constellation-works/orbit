@@ -245,6 +245,8 @@ The bundle remains canonical. The registry maintains generated projections from 
 
 Task mutations rewrite the generated rows after the envelope write. The index row `updated_at` is a version stamp for the canonical envelope. V2 list and filter paths may use the index only when every registered task has an index row and every indexed `updated_at` matches the bundle envelope. Count or version mismatches trigger a lazy rebuild from registered bundles; if rebuild fails, queries fall back to reading bundles directly. Full-text search still scans task content until the Phase 5 lexical/semantic indexes land.
 
+That comparison also supplies the metadata candidate selection filters and orders by, so it runs against every registered envelope. To keep it from re-parsing unchanged files, each process holds the parsed envelopes in memory and re-proves one against its file's stamp — filesystem identity, length, and modification time — before reusing it; anything the stamp cannot vouch for is read and parsed again. A stamp is evidence that a file was not rewritten rather than proof that its bytes are unchanged, so it never stands alone: the `updated_at` comparison above still runs on every reused envelope, and explicit reindex re-reads and re-validates every bundle from disk.
+
 ## 8. Crash Consistency
 
 The v2 bundle is local and file-backed, so multi-file mutations are not fully transactional. The implementation keeps the envelope canonical and makes generated data rebuildable, but the following interrupted states are expected repair cases:
