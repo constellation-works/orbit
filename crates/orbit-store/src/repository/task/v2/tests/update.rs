@@ -487,3 +487,143 @@ fn executor_origin_is_store_authored_and_normalized_alias_cannot_forge_it() {
     }
     assert_eq!(store.get_task_artifacts(&task.id).unwrap().unwrap(), files);
 }
+
+fn assert_pre_transition(store: &TaskV2Store) {
+    let task = store
+        .get_task("ORB-00000")
+        .expect("get task")
+        .expect("task exists");
+    assert_eq!(task.status, TaskStatus::Backlog);
+    let listed = store.list_tasks().expect("list tasks");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].status, TaskStatus::Backlog);
+}
+
+fn transition_to_in_progress(store: &TaskV2Store) -> Result<(), orbit_common::OrbitError> {
+    store.update_task_history(
+        "ORB-00000",
+        &TaskHistoryUpdateParams {
+            actor: "codex:gpt-5.5".to_string(),
+            status: Some(TaskStatus::InProgress),
+            ..Default::default()
+        },
+    )
+}
+
+/// After jsonl append, before envelope publish: abort restores the pre-call
+/// bundle so listing stays on the old status.
+#[test]
+fn history_update_aborts_when_jsonl_append_is_followed_by_injected_failure() {
+    use crate::driver::file::task_bundle::{BundleWriteFault, inject_bundle_write_faults};
+
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    store
+        .create_task(create_params("Abort after append", TaskStatus::Backlog))
+        .expect("create task");
+    inject_bundle_write_faults(&[BundleWriteFault::AfterJsonlAppend]);
+    let error = transition_to_in_progress(&store).expect_err("injected after append");
+    assert!(error.to_string().contains("AfterJsonlAppend"), "{error}");
+    assert_pre_transition(&store);
+}
+
+/// Envelope is staged but not renamed: abort still yields the pre-call status.
+#[test]
+fn history_update_aborts_when_envelope_stage_fails_before_rename() {
+    use crate::driver::file::task_bundle::{BundleWriteFault, inject_bundle_write_faults};
+
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    store
+        .create_task(create_params("Abort after stage", TaskStatus::Backlog))
+        .expect("create task");
+    inject_bundle_write_faults(&[BundleWriteFault::AfterEnvelopeStage]);
+    let error = transition_to_in_progress(&store).expect_err("injected after stage");
+    assert!(error.to_string().contains("AfterEnvelopeStage"), "{error}");
+    assert_pre_transition(&store);
+}
+
+/// Compensation itself fails: pending evidence remains, listing still serves
+/// the pre-call view, and reindex retries recovery to a consistent bundle.
+#[test]
+fn reindex_recovers_an_incomplete_write_left_by_failed_compensation() {
+    use orbit_types::task::TASK_EVENTS_FILE_NAME;
+
+    use crate::driver::file::task_bundle::{
+        BundleWriteFault, PENDING_WRITE_FILE_NAME, inject_bundle_write_faults,
+    };
+    use crate::workflow::task::reindex_workspace;
+
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    store
+        .create_task(create_params("Interrupted", TaskStatus::Backlog))
+        .expect("create task");
+    let bundle_dir = store
+        .bundle_store
+        .bundle_path("ORB-00000")
+        .expect("bundle path");
+    let events_before =
+        std::fs::read(bundle_dir.join(TASK_EVENTS_FILE_NAME)).expect("events before");
+
+    inject_bundle_write_faults(&[
+        BundleWriteFault::AfterJsonlAppend,
+        BundleWriteFault::DuringCompensation,
+    ]);
+    transition_to_in_progress(&store).expect_err("injected incomplete write");
+    assert!(
+        bundle_dir.join(PENDING_WRITE_FILE_NAME).is_file(),
+        "failed compensation must retain pending-write evidence"
+    );
+    assert_ne!(
+        std::fs::read(bundle_dir.join(TASK_EVENTS_FILE_NAME)).expect("events after inject"),
+        events_before,
+        "the status event was appended before compensation failed"
+    );
+    assert_pre_transition(&store);
+
+    inject_bundle_write_faults(&[BundleWriteFault::DuringRecovery]);
+    reindex_workspace(&store.registry, &store.workspace_id).expect_err("injected recovery failure");
+    assert!(bundle_dir.join(PENDING_WRITE_FILE_NAME).is_file());
+    assert_pre_transition(&store);
+
+    inject_bundle_write_faults(&[]);
+    reindex_workspace(&store.registry, &store.workspace_id).expect("reindex recovers");
+    assert!(
+        !bundle_dir.join(PENDING_WRITE_FILE_NAME).is_file(),
+        "recovery removes pending-write evidence"
+    );
+    assert_eq!(
+        std::fs::read(bundle_dir.join(TASK_EVENTS_FILE_NAME)).expect("events after recover"),
+        events_before
+    );
+    assert_pre_transition(&store);
+}
+
+#[test]
+fn document_update_aborts_description_when_envelope_stage_fails() {
+    use crate::driver::file::task_bundle::{BundleWriteFault, inject_bundle_write_faults};
+
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    store
+        .create_task(create_params("Docs", TaskStatus::Backlog))
+        .expect("create task");
+    inject_bundle_write_faults(&[BundleWriteFault::AfterEnvelopeStage]);
+    store
+        .update_task_document(
+            "ORB-00000",
+            &TaskDocumentUpdateParams {
+                actor: "codex:gpt-5.5".to_string(),
+                description: Some("should not stick".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect_err("injected envelope stage failure");
+    let task = store
+        .get_task("ORB-00000")
+        .expect("get task")
+        .expect("task exists");
+    assert_eq!(task.description, "Detailed task description");
+    assert_eq!(task.status, TaskStatus::Backlog);
+}

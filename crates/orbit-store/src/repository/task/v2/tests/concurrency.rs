@@ -294,8 +294,9 @@ fn a_reader_never_observes_a_transition_between_its_event_and_its_envelope() {
     });
 }
 
-/// The tolerance stays narrow: once no writer holds the bundle, an event log
-/// that disagrees with the envelope is real damage and must still surface.
+/// The tolerance stays narrow: once no writer holds the bundle and no pending
+/// write record exists, an event log that disagrees with the envelope is real
+/// damage and must still surface.
 #[test]
 fn a_settled_event_and_envelope_mismatch_is_still_corruption() {
     let temp = TempDir::new().expect("tempdir");
