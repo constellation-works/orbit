@@ -31,4 +31,4 @@ pub(crate) fn run_private_operation(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

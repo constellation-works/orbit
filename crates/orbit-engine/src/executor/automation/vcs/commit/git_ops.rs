@@ -77,7 +77,8 @@ fn git_success_dynamic_with_identity(
         ("GIT_COMMITTER_EMAIL", committer.email()),
     ];
     let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let mut request = git_request(current_dir, &args_ref, 30_000);
+    let timeout_ms = super::super::git::GitTimeoutBudget::current().timeout_for(&args_ref);
+    let mut request = git_request(current_dir, &args_ref, timeout_ms);
     if let EnvironmentMode::ClearAndSet(environment) = &mut request.environment_mode {
         environment.extend(
             env_overrides

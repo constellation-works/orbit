@@ -19,6 +19,9 @@ use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate};
 
+#[cfg(unix)]
+use crate::executor::automation::vcs::tests::with_fake_git;
+
 use super::super::resolve_worktree_path_from_prefix;
 use super::super::setup::{ensure_worktree, setup_worktree, worktree_setup_output};
 
@@ -182,6 +185,126 @@ fn worktree_setup_publishes_the_resolved_base_commit_alongside_the_moving_ref() 
         output["base_sha"],
         json!("2222222222222222222222222222222222222222")
     );
+}
+
+#[test]
+fn completeness_leaves_deletions_dirty_files_and_retained_commits_intact() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let worktree = temp.path().join("worktree");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, "base.txt", "v1");
+    let first_base = commit_file(&repo, "keep.txt", "tracked");
+
+    assert_eq!(
+        ensure_worktree(&repo, &worktree, &first_base, "orbit/test").unwrap(),
+        "orbit/test"
+    );
+    let retained = commit_file(&worktree, "child.txt", "landed");
+    fs::remove_file(worktree.join("keep.txt")).unwrap();
+    fs::write(worktree.join("dirty.txt"), "untracked work").unwrap();
+
+    let second_base = commit_file(&repo, "base.txt", "v2");
+    let reattached = ensure_worktree(&repo, &worktree, &second_base, "orbit/new-name").unwrap();
+
+    assert_eq!(reattached, "orbit/test");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), retained);
+    assert!(
+        !worktree.join("keep.txt").exists(),
+        "tracked deletion must not be restored by completeness"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join("dirty.txt")).unwrap(),
+        "untracked work"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join("child.txt")).unwrap(),
+        "landed"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_add_timeout_after_registration_is_not_admitted_on_retry() {
+    let stamp_dir = tempdir().unwrap();
+    let stamp = stamp_dir.path().join("worktree-once");
+    if !with_fake_git(
+        module_path!(),
+        "worktree_add_timeout_after_registration_is_not_admitted_on_retry",
+        &[("ORBIT_TEST_GIT_WORKTREE_ONCE", stamp.display().to_string())],
+    ) {
+        return;
+    }
+
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, "base.txt", "v1");
+    let host = FakeHost::new(&repo, &["ORB-11606"]);
+    let run_id = "jrun-timeout-worktree";
+    let input = json!({
+        "task_ids": ["ORB-11606"],
+        "run_id": run_id,
+        "base": "agent-main",
+        "base_sync": "local",
+        "dependency_delivery": "ignore",
+        "git_timeouts": { "worktree_add": 400 },
+    });
+
+    let first = setup_worktree(&host, &input).expect_err("first add must time out");
+    let first_message = first.to_string();
+    assert!(
+        first_message.contains("timed out"),
+        "expected timeout diagnostic, got {first_message}"
+    );
+    assert!(
+        first_message.contains("timeout recovery") || first_message.contains("Timeout recovery"),
+        "timeout recovery must be named: {first_message}"
+    );
+    assert!(
+        !first_message.contains("unresolved conflict"),
+        "timeout must not be labeled a conflict: {first_message}"
+    );
+    assert!(
+        host.admitted().is_empty(),
+        "timed-out setup must not admit the task"
+    );
+
+    let worktree_path = resolve_worktree_path_from_prefix(&repo, "orbit", run_id).unwrap();
+    let second = setup_worktree(&host, &input);
+    match second {
+        Ok(_) => {
+            assert!(
+                git_ok(&worktree_path, &["rev-parse", "--verify", "HEAD^{commit}"]),
+                "retry may admit only a complete checkout"
+            );
+            assert_eq!(host.admitted(), vec!["ORB-11606".to_string()]);
+        }
+        Err(error) => {
+            let message = error.to_string();
+            assert!(
+                host.admitted().is_empty(),
+                "retry must not admit an incomplete checkout"
+            );
+            assert!(
+                message.contains("incomplete") || message.contains("leaving checkout"),
+                "refusal must preserve evidence: {message}"
+            );
+            assert!(
+                worktree_path.exists(),
+                "quarantined checkout must remain for inspection"
+            );
+        }
+    }
+}
+
+fn git_ok(current_dir: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .args(args)
+        .current_dir(current_dir)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 fn init_repo(path: &Path, branch: &str) {

@@ -6,7 +6,12 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
-use super::super::git::{BaseSyncMode, fetch_remote_base, resolve_worktree_start_point};
+use orbit_exec::EnvironmentMode;
+use serde_json::json;
+
+use super::super::git::{
+    BaseSyncMode, GitTimeoutBudget, fetch_remote_base, git_request, resolve_worktree_start_point,
+};
 
 #[test]
 fn remote_mode_fetches_origin_base_when_local_base_is_stale() {
@@ -180,6 +185,98 @@ fn local_mode_resolves_local_base_without_origin_remote() {
         resolve_worktree_start_point(&repo, "agent-main", BaseSyncMode::Local).unwrap();
 
     assert_eq!(start_point, "agent-main");
+}
+
+#[test]
+fn git_timeout_budget_defaults_are_finite_and_operation_specific() {
+    let budget = GitTimeoutBudget::DEFAULT;
+    assert_eq!(budget.timeout_for(&["status"]), 30_000);
+    assert_eq!(budget.timeout_for(&["rev-parse", "HEAD"]), 30_000);
+    assert_eq!(budget.timeout_for(&["fetch", "origin", "main"]), 60_000);
+    assert_eq!(
+        budget.timeout_for(&["worktree", "add", "/tmp/wt", "main"]),
+        120_000
+    );
+    assert_eq!(budget.timeout_for(&["rebase", "abc"]), 120_000);
+    assert!(budget.default_ms >= GitTimeoutBudget::MIN_MS);
+    assert!(budget.worktree_add_ms <= GitTimeoutBudget::MAX_MS);
+    assert!(budget.rebase_ms <= GitTimeoutBudget::MAX_MS);
+}
+
+#[test]
+fn git_timeout_budget_accepts_valid_overrides() {
+    let blanket = GitTimeoutBudget::from_input(&json!({ "git_timeout_ms": 2_000 })).unwrap();
+    assert_eq!(blanket.timeout_for(&["status"]), 2_000);
+    assert_eq!(blanket.timeout_for(&["fetch", "origin"]), 2_000);
+    assert_eq!(blanket.timeout_for(&["worktree", "add", "p"]), 2_000);
+    assert_eq!(blanket.timeout_for(&["rebase", "abc"]), 2_000);
+
+    let overlay = GitTimeoutBudget::from_input(&json!({
+        "git_timeout_ms": 5_000,
+        "git_timeouts": { "rebase": 8_000, "worktree_add": 7_000 }
+    }))
+    .unwrap();
+    assert_eq!(overlay.timeout_for(&["status"]), 5_000);
+    assert_eq!(overlay.timeout_for(&["rebase", "abc"]), 8_000);
+    assert_eq!(overlay.timeout_for(&["worktree", "add", "p"]), 7_000);
+    assert_eq!(overlay.timeout_for(&["fetch", "origin"]), 5_000);
+}
+
+#[test]
+fn git_timeout_budget_rejects_invalid_and_extreme_values() {
+    for (input, needle) in [
+        (json!({ "git_timeout_ms": 0 }), "between"),
+        (json!({ "git_timeout_ms": 600_001u64 }), "between"),
+        (json!({ "git_timeout_ms": -1 }), "integer"),
+        (json!({ "git_timeout_ms": "unbounded" }), "integer"),
+        (json!({ "git_timeouts": { "rebase": 0 } }), "between"),
+        (
+            json!({ "git_timeouts": { "clone": 1_000 } }),
+            "unknown git_timeouts key",
+        ),
+        (json!({ "git_timeouts": [] }), "must be an object"),
+    ] {
+        let error = GitTimeoutBudget::from_input(&input).expect_err("invalid budget");
+        assert!(
+            error.to_string().contains(needle),
+            "expected '{needle}' in {error} for {input}"
+        );
+    }
+}
+
+#[test]
+fn git_request_always_sets_a_bounded_timeout_and_keeps_hook_policy() {
+    let temp = tempdir().unwrap();
+    let request = git_request(temp.path(), &["status"], 15_000);
+    assert_eq!(request.timeout_ms, Some(15_000));
+    assert_ne!(request.timeout_ms, None);
+    assert!(
+        request
+            .args
+            .windows(2)
+            .any(|pair| pair == ["-c", "core.hooksPath=/dev/null"]),
+        "hooks remain disabled: {:?}",
+        request.args
+    );
+    assert!(
+        request
+            .args
+            .windows(2)
+            .any(|pair| pair == ["-c", "gc.auto=0"]),
+        "gc.auto remains disabled: {:?}",
+        request.args
+    );
+    let EnvironmentMode::ClearAndSet(env) = request.environment_mode else {
+        panic!("git request must clear the environment");
+    };
+    assert!(
+        env.iter()
+            .any(|(key, value)| key == "GIT_OPTIONAL_LOCKS" && value == "0")
+    );
+    assert!(
+        !env.iter()
+            .any(|(key, _)| key.starts_with("ORBIT_") && key.contains("TOKEN"))
+    );
 }
 
 fn init_repo(path: &Path, branch: &str) {
