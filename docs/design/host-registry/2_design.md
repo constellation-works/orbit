@@ -3,7 +3,7 @@ summary: "Host Registry — Design"
 type: design
 title: "Host Registry — Design"
 owner: codex
-last_updated: 2026-08-15
+last_updated: 2026-09-08
 last_validated: 2026-09-07
 status: Accepted
 feature: host-registry
@@ -69,7 +69,7 @@ RegisteredRuntimeFactory projects task_prefix into the global task allocator bef
 - checkouts are machine-local bindings: workspace ID, repo_root, orbit_dir, role, optional replica owner and path overrides;
 - owner_host_ids maps owner machine IDs referenced by local workspace records to display names. It is a local presentation projection, not a fleet inventory.
 
-A logical workspace may exist without a local checkout. Runtime callers require both. The catalog allows at most one local checkout per logical workspace and rejects duplicate workspace IDs or names. Mutation helpers also reject reusing a registered repo_root or orbit_dir.
+A logical workspace may exist without a local checkout. Runtime callers require both. The catalog allows at most one local checkout per logical workspace and rejects duplicate workspace IDs or names. Load and save reject a `repo_root` or `path_override` claimed by more than one checkout. `register_checkout` refuses a reused `repo_root`; `set_path_override` refuses a path already claimed as another checkout's `repo_root` or override. Distinct checkouts may share an `orbit_dir`.
 
 ### Owner and replica roles
 
