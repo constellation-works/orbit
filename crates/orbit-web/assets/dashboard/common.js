@@ -305,6 +305,22 @@ export function el(tag, opts = {}, children = []) {
   return node;
 }
 
+// ORB-11655: a panel refresh rebuilds its nodes every 30 s, but disclosure is
+// operator state, not payload state — a <details> the operator opened has to
+// come back open. Keyed in one store so every rebuilt panel restores the same
+// way; `key` must identify the disclosure across renders, not the node.
+const expandedDetails = new Set();
+
+export function detailsPanel(key, opts = {}) {
+  const panel = el("details", opts);
+  panel.open = expandedDetails.has(key);
+  panel.addEventListener("toggle", () => {
+    if (panel.open) expandedDetails.add(key);
+    else expandedDetails.delete(key);
+  });
+  return panel;
+}
+
 export function statusPill(status) {
   const color = `var(--status-${status}, var(--fg))`;
   const pill = el("span", { class: "pill mono", text: status });

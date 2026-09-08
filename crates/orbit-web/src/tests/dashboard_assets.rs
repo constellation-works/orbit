@@ -529,8 +529,7 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(css.contains(".operation-row-head"));
     assert!(css.contains(".operation-details summary"));
     assert!(operations.contains("operation-row-head"));
-    assert!(operations.contains(r#"el("details", { class: "operation-details" })"#));
-    assert!(operations.contains("expandedOperations"));
+    assert!(operations.contains(r#"{ class: "operation-details" }"#));
     assert!(router.contains(r#"classList.toggle("operations-active", top === "operations")"#));
 }
 
@@ -1345,6 +1344,160 @@ if (!select) throw new Error("status select did not render");
 const values = select.children.map((option) => option.value).filter(Boolean);
 const expected = statuses.filter((status) => status !== "done");
 if (JSON.stringify(values) !== JSON.stringify(expected)) throw new Error(`status options ${JSON.stringify(values)} != ${JSON.stringify(expected)}`);
+"#,
+    );
+}
+
+/// ORB-11655: the Tasks detail node is diffed on the whole task object, so any
+/// field change (an agent bumping `updated_at`) rebuilt it — discarding a
+/// comment the operator was still typing inside it.
+#[test]
+fn dashboard_task_refresh_keeps_a_half_written_comment() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(tag = "") { this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const old = child.parentNode; if (old) old.children = old.children.filter((candidate) => candidate !== child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  replaceWith(next) { const parent = this.parentNode; if (!parent) return; parent.children = parent.children.map((candidate) => candidate === this ? next : candidate); next.parentNode = parent; this.parentNode = null; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  focus() {}
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() { return { add: (...names) => { this.className = `${this.className} ${names.join(" ")}`.trim(); } }; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node()), byId.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: (tag) => new Node(tag),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+};
+globalThis.window = { location: new URL("http://dashboard.test/#tasks"), addEventListener: () => {}, confirm: () => false };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+globalThis.setTimeout = () => 0;
+
+const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
+const task = { id: "ORB-1", title: "Reviewable", status: "review", updated_at: "2026-09-08T01:00:00Z", history: [], artifacts: [] };
+const context = {
+  getTasks: () => [task], getTasksMeta: () => null, getSearchQuery: () => "",
+  getActiveStatuses: () => new Set(["review"]), statusOrder: statuses,
+  statusUpdateTargets: statuses, fmtAbsTime: (value) => value,
+  refreshDashboard: () => Promise.resolve(),
+};
+const { renderTasks } = await import("./tasks.js");
+
+function find(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
+  return null;
+}
+const body = get("tasks-body");
+const detail = () => find(body, (node) => node.dataset.key === "detail-ORB-1");
+const tick = () => { task.updated_at = `${task.updated_at}+`; renderTasks([task], context); };
+
+renderTasks([task], context);
+find(body, (node) => node.dataset.key === "task-ORB-1").listeners.click();
+
+// Control: with no draft open, a task field change does rebuild the detail.
+const before = detail();
+if (!before) throw new Error("expanding the task did not render its detail");
+tick();
+if (detail() === before) throw new Error("a changed task must still rebuild its detail");
+
+const held = detail();
+find(held, (node) => node.className === "action comment").listeners.click({ stopPropagation: () => {} });
+const textarea = find(held, (node) => node.tag === "textarea");
+if (!textarea) throw new Error("the comment form did not render a textarea");
+textarea.value = "half written";
+
+tick();
+if (detail() !== held) throw new Error("the refresh replaced a detail holding an open comment form");
+const live = find(body, (node) => node.tag === "textarea");
+if (live !== textarea) throw new Error("the refresh replaced the textarea the operator was typing in");
+if (live.value !== "half written") throw new Error(`the draft text was lost: ${JSON.stringify(live.value)}`);
+
+// Closing the form hands the detail back to the data: the next tick rebuilds it.
+find(held, (node) => node.className === "action cancel").listeners.click({ stopPropagation: () => {} });
+tick();
+if (detail() === held) throw new Error("the detail stayed frozen after the draft was cancelled");
+if (find(body, (node) => node.tag === "textarea")) throw new Error("the cancelled comment form is still rendered");
+"#,
+    );
+}
+
+/// ORB-11655: the Audit summary and the Diagnostics side card are their own
+/// scroll boxes. Emptying them on the 30 s tick collapsed their height and
+/// dropped the operator's scroll position, so they diff by keyed card instead.
+#[test]
+fn dashboard_summary_scroll_boxes_replace_only_the_cards_whose_data_moved() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(tag = "") { this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const old = child.parentNode; if (old) old.children = old.children.filter((candidate) => candidate !== child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() { return { add: () => {} }; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node()), byId.get(id));
+globalThis.document = { getElementById: get, createElement: (tag) => new Node(tag), createTextNode: (text) => Object.assign(new Node(), { textContent: text }) };
+globalThis.window = { location: new URL("http://dashboard.test/#audit"), addEventListener: () => {} };
+
+const ctx = { fmtDuration: (value) => String(value) };
+const { renderAuditSummary } = await import("./audit.js");
+const { renderDiagnosticsSideCard } = await import("./diagnostics.js");
+
+const cardsIn = (container) => new Map(container.children.filter((node) => node.dataset.key).map((node) => [node.dataset.key, node]));
+function expectStable(label, container, before, changedKey) {
+  const after = cardsIn(container);
+  if (after.size !== before.size) throw new Error(`${label}: card set changed (${before.size} -> ${after.size})`);
+  for (const [key, node] of before) {
+    const reused = after.get(key) === node;
+    if (key === changedKey && reused) throw new Error(`${label}: the ${key} card was not rebuilt after its data moved`);
+    if (key !== changedKey && !reused) throw new Error(`${label}: the ${key} card was rebuilt with unchanged data`);
+  }
+}
+
+const summary = {
+  window: "24h",
+  duration_by_tool: [{ tool: "orbit.task.show", count: 3, avg: 10, p95: 20 }],
+  role_split: [{ label: "human", count: 1, mcp: 1, cli: 0, other: 0, no_subcommand: 0 }],
+  mcp_vs_cli_split: [{ label: "mcp", count: 1 }],
+};
+const auditBody = get("audit-summary-body");
+renderAuditSummary(summary, ctx);
+const auditCards = cardsIn(auditBody);
+if (auditCards.size !== 3) throw new Error(`expected three keyed audit cards, got ${auditCards.size}`);
+renderAuditSummary(summary, ctx);
+expectStable("audit summary", auditBody, auditCards, null);
+summary.role_split[0].count = 2;
+renderAuditSummary(summary, ctx);
+expectStable("audit summary", auditBody, auditCards, "role-split");
+
+const diagnostics = {
+  completion_by_complexity: [{ complexity: "low", total: 2, statuses: [{ status: "done", count: 1 }] }],
+  implement_one_by_complexity: [],
+  implement_one: [{ actor: "claude", n: 2, avg: 5, p50: 4, p95: 9 }],
+};
+const diagBody = get("diag-implement-one-body");
+renderDiagnosticsSideCard(diagnostics, ctx);
+const diagCards = cardsIn(diagBody);
+if (diagCards.size !== 2) throw new Error(`expected two keyed diagnostics cards, got ${diagCards.size}`);
+renderDiagnosticsSideCard(diagnostics, ctx);
+expectStable("diagnostics side card", diagBody, diagCards, null);
+diagnostics.implement_one[0].n = 3;
+renderDiagnosticsSideCard(diagnostics, ctx);
+expectStable("diagnostics side card", diagBody, diagCards, "implement-one");
 "#,
     );
 }
@@ -2584,7 +2737,7 @@ const {renderAutomation} = await import('./automation.js');
 const panel = renderAutomation({reason:'fresh_unready',state:{consumer:'host/ws/routine/pilot',members:{
   pending:{}, assessed:{task:{ready:false,resulting_fingerprint:'f'}},withheld:{other:'human_block'},failed:{},
   active:{member:{key:'task'},attempt:2,max_attempts:2,deadline:'2026-09-06T12:00:00Z',action_id:'run'}
-},unresolved:{}},receipts:[],waivers:[]});
+},unresolved:{}},receipts:[],waivers:[]}, 'routine:pilot:automation');
 function text(node) { return [node.textContent,...(node.children||[]).map(text)].join(' '); }
 const rendered=text(panel);
 assert.match(rendered,/State automation/);
@@ -2594,6 +2747,109 @@ assert.match(rendered,/2026-09-06T12:00:00Z/);
 assert.match(rendered,/Unknown/);
 assert.match(rendered,/does not authorize promotion/);
 assert.doesNotMatch(rendered,/Examined through/);
+"#,
+    );
+}
+
+/// ORB-11655: `refreshDashboard` rebuilds every Operations panel on a 30 s
+/// timer the operator did not trigger. Disclosure state and an unapplied
+/// cadence choice are operator state, not payload state, and must survive it.
+#[test]
+fn dashboard_operations_refresh_keeps_open_details_and_an_unapplied_cadence() {
+    run_dashboard_javascript_test(
+        r#"
+const created = [];
+class Node {
+  constructor(id = "", tag = "") { this.id = id; this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; this.open = false; created.push(this); }
+  appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
+  append(...children) { for (const child of children) this.appendChild(child); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() { return { add: () => {}, toggle: () => {} }; }
+  querySelectorAll() { return []; }
+  querySelector() { return null; }
+  insertBefore(child, before) { const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); return child; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+globalThis.document = { getElementById: get, createElement: (tag) => new Node("", tag), createTextNode: (text) => Object.assign(new Node(), { textContent: text }), body: new Node("body") };
+globalThis.window = { confirm: () => true, location: new URL("http://dashboard.test/"), addEventListener: () => {} };
+
+const routines = {
+  host_id: "hm_local",
+  session_explanation: "session access",
+  capabilities: { routine_toggle: { authorized: true }, clock_service: { authorized: true }, clock_cadence: { authorized: true } },
+  routines: [{
+    name: "pilot", source: "one", target: "orbit.workflow.auto", enabled: true, effective: true,
+    pinned_to_host: true, cron: "*/5 * * * *", hosts: ["hm_local"], description: "pilot routine",
+    next_evaluation: { state: "scheduled", at: "2026-09-08T01:00:00Z" }, last_fire: null,
+    automation: {
+      reason: "not_due", ownership: { owned_here: true }, receipts: [], waivers: [],
+      state: { consumer: "hm_local/one/routine/pilot", baseline: null, observed: null, covered: null, pending: [], pending_commits: [], unresolved: {} },
+    },
+  }],
+  clock: { provider: "systemd", enabled: true, health: "healthy", schedulable: true, loaded: true, running: true, configured_cadence_seconds: 60, effective_cadence_seconds: 60, next_tick_at: "2026-09-08T01:00:00Z", last_tick_at: null },
+};
+const payloads = {
+  "/api/routines": routines,
+  "/api/auto-tasks": { definitions: [], capabilities: {} },
+  "/api/workflows/auto/readiness": { tasks: [], capacity: {}, controls_authorized: true },
+  "/api/operation/explain": { policy: {}, authority: {}, delivery: {}, limiting_reasons: [], controls_authorized: true },
+};
+globalThis.fetch = async (path) => {
+  const url = String(path).split("?")[0];
+  const payload = payloads[url] || {};
+  return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
+};
+
+const { setWorkspace } = await import("./common.js");
+const { initOperations, fetchAndRenderOperations } = await import("./operations.js");
+setWorkspace("one");
+initOperations({ getWorkspaces: () => [{ id: "one", name: "one", status: "active" }], formatAbsoluteTime: (value) => value });
+
+const latest = (predicate) => created.filter(predicate).pop();
+const automationPanel = () => latest((node) => node.className === "automation-diagnostic");
+const routineDetails = () => latest((node) => node.className === "operation-details" && node.textContent.includes("pilot routine"));
+const cadenceSelect = () => latest((node) => node.tag === "select" && node.title === "Clock cadence");
+const applyButton = () => latest((node) => node.textContent === "Apply cadence");
+const chosenCadence = (select) => select.children.filter((option) => option.selected).map((option) => option.value);
+
+await fetchAndRenderOperations();
+if (automationPanel().open) throw new Error("an automation diagnostic must start closed");
+
+// The operator opens both disclosures and picks a cadence without applying it.
+for (const panel of [routineDetails(), automationPanel()]) {
+  if (typeof panel.listeners.toggle !== "function") throw new Error("a disclosure must record its open state on toggle");
+  panel.open = true;
+  panel.listeners.toggle();
+}
+const select = cadenceSelect();
+select.value = "300";
+select.listeners.change();
+if (applyButton().disabled) throw new Error("a changed cadence must enable Apply");
+
+// The 30 s tick: same payload, every panel rebuilt.
+await fetchAndRenderOperations();
+
+if (!routineDetails().open) throw new Error("the routine details snapped shut on refresh");
+if (!automationPanel().open) throw new Error("the automation diagnostic snapped shut on refresh");
+const rechosen = chosenCadence(cadenceSelect());
+if (JSON.stringify(rechosen) !== JSON.stringify(["300"])) throw new Error(`refresh reverted the cadence choice to ${JSON.stringify(rechosen)}`);
+if (applyButton().disabled) throw new Error("refresh disabled Apply for a still-unapplied cadence");
+
+// Once the host reports the chosen cadence as configured, the select follows
+// the payload again rather than pinning the stale choice forever.
+routines.clock.configured_cadence_seconds = 300;
+await fetchAndRenderOperations();
+if (!applyButton().disabled) throw new Error("Apply must be disabled once the chosen cadence is the configured one");
+routines.clock.configured_cadence_seconds = 900;
+await fetchAndRenderOperations();
+const configured = chosenCadence(cadenceSelect());
+if (JSON.stringify(configured) !== JSON.stringify(["900"])) throw new Error(`the select must track the configured cadence again, got ${JSON.stringify(configured)}`);
 "#,
     );
 }
@@ -2617,23 +2873,23 @@ const {renderAutomation} = await import('./automation.js');
 function text(node) { return [node.textContent,...(node.children||[]).map(text)].join(' '); }
 
 const unresolved = text(renderAutomation({reason:'ownership_unresolved',state:null,receipts:[],waivers:[],
-  ownership:{authority:'missing',owned_here:false}}));
+  ownership:{authority:'missing',owned_here:false}}, 'a:automation'));
 assert.match(unresolved,/ownership_unresolved/);
 assert.match(unresolved,/No owner machine is registered/);
 assert.match(unresolved,/set owner_machine on the definition/);
 
 const elsewhere = text(renderAutomation({reason:'owned_elsewhere',state:null,receipts:[],waivers:[],
-  ownership:{owner_machine:'hm_other',authority:'workspace',owned_here:false}}));
+  ownership:{owner_machine:'hm_other',authority:'workspace',owned_here:false}}, 'b:automation'));
 assert.match(elsewhere,/Owned by machine hm_other/);
 
 const conflicting = text(renderAutomation({reason:'ownership_unresolved',state:null,receipts:[],waivers:[],
-  ownership:{authority:'conflicting',owned_here:false}}));
+  ownership:{authority:'conflicting',owned_here:false}}, 'c:automation'));
 assert.match(conflicting,/contradictory/);
 
 const owned = text(renderAutomation({reason:'not_due',receipts:[],waivers:[],
   ownership:{owner_machine:'hm_local',authority:'workspace',owned_here:true},
   state:{consumer:'hm_local/ws/auto-task/delivery-qa',baseline:{commit:'a',tree:'b'},
-    observed:{commit:'a',tree:'b'},covered:{commit:'a',tree:'b'},pending:[],pending_commits:[],unresolved:{}}}));
+    observed:{commit:'a',tree:'b'},covered:{commit:'a',tree:'b'},pending:[],pending_commits:[],unresolved:{}}}, 'd:automation'));
 assert.doesNotMatch(owned,/Owned by machine/);
 "#,
     );

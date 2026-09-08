@@ -455,20 +455,25 @@ function renderDiagnostics(ctx = {}) {
   );
 }
 
+// ORB-11655: keyed cards, so the 30 s refresh replaces only what moved.
+// Emptying this scroll box instead dropped the operator's scroll position on
+// every tick.
 export function renderDiagnosticsSideCard(last, ctx) {
   const container = $("diag-implement-one-body");
   if (!container) return;
-  container.innerHTML = "";
-  renderCompletionByComplexityCard(container, last.completion_by_complexity || [], ctx);
-  renderImplementOneCard(
-    container,
-    last.implement_one_by_complexity || [],
-    last.implement_one || [],
-    ctx,
-  );
+  syncNodes(container, [
+    completionByComplexityCard(last.completion_by_complexity || []),
+    ...implementOneCards(last.implement_one_by_complexity || [], last.implement_one || [], ctx),
+  ]);
 }
 
-function renderMetricsCard(container, title, rows, cols) {
+function keyed(node, key, source) {
+  node.dataset.key = key;
+  node.dataset.hash = JSON.stringify(source);
+  return node;
+}
+
+function metricsCard(title, rows, cols) {
   const card = el("div", { class: "audit-summary-card" });
   card.appendChild(el("div", { class: "card-title", text: title }));
   const body = el("div", { class: "card-body" });
@@ -492,7 +497,7 @@ function renderMetricsCard(container, title, rows, cols) {
   table.appendChild(tbody);
   body.appendChild(table);
   card.appendChild(body);
-  container.appendChild(card);
+  return card;
 }
 
 function formatCountRate(count, total) {
@@ -506,15 +511,14 @@ function complexityLabel(value) {
   return value === "unset" ? "unset (unlabeled)" : (value || "unset (unlabeled)");
 }
 
-function renderCompletionByComplexityCard(container, rows, _ctx = {}) {
+function completionByComplexityCard(rows) {
   if (!rows.length) {
     const card = el("div", { class: "audit-summary-card" });
     card.appendChild(el("div", { class: "card-title", text: "Task completion by complexity" }));
     const body = el("div", { class: "card-body" });
     body.appendChild(el("div", { class: "empty", text: "No tasks." }));
     card.appendChild(body);
-    container.appendChild(card);
-    return;
+    return keyed(card, "completion-by-complexity", []);
   }
   const statusCols = [
     { key: "complexity", label: "complexity" },
@@ -538,10 +542,14 @@ function renderCompletionByComplexityCard(container, rows, _ctx = {}) {
       archived: cell("archived"),
     };
   });
-  renderMetricsCard(container, "Task completion by complexity", tableRows, statusCols);
+  return keyed(
+    metricsCard("Task completion by complexity", tableRows, statusCols),
+    "completion-by-complexity",
+    tableRows,
+  );
 }
 
-function renderImplementOneCard(container, byComplexity, fallbackRows, ctx = {}) {
+function implementOneCards(byComplexity, fallbackRows, ctx = {}) {
   const durCols = [
     { key: "actor", label: "actor" },
     { key: "n", label: "n", num: true },
@@ -551,25 +559,28 @@ function renderImplementOneCard(container, byComplexity, fallbackRows, ctx = {})
   ];
   const bands = Array.isArray(byComplexity) ? byComplexity.filter((band) => (band.actors || []).length) : [];
   if (bands.length) {
-    for (const band of bands) {
+    return bands.map((band) => {
       const label = complexityLabel(band.complexity);
-      renderMetricsCard(
-        container,
-        `Average implement_one duration by actor (30d) · ${label} · n=${band.n || 0}`,
-        band.actors,
-        durCols,
+      return keyed(
+        metricsCard(
+          `Average implement_one duration by actor (30d) · ${label} · n=${band.n || 0}`,
+          band.actors,
+          durCols,
+        ),
+        `implement-one:${band.complexity}`,
+        [band.n || 0, band.actors],
       );
-    }
-    return;
+    });
   }
   if (!fallbackRows.length) {
-    container.appendChild(el("div", { class: "empty", text: "No implement_one runs in last 30d." }));
-    return;
+    const empty = el("div", { class: "empty", text: "No implement_one runs in last 30d." });
+    return [keyed(empty, "implement-one", [])];
   }
-  renderMetricsCard(container, "Average implement_one duration by actor (30d)", fallbackRows, durCols);
+  return [keyed(
+    metricsCard("Average implement_one duration by actor (30d)", fallbackRows, durCols),
+    "implement-one",
+    fallbackRows,
+  )];
 }
 
-export {
-  renderDiagnostics,
-  renderImplementOneCard,
-};
+export { renderDiagnostics };

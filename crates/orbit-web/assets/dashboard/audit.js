@@ -354,7 +354,16 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 function renderAuditSummary(data, ctx) {
   const container = $("audit-summary-body");
   if (!container) return;
-  container.innerHTML = "";
+
+  // ORB-11655: keyed cards, so the 30 s refresh replaces only the cards whose
+  // data moved. Emptying the container instead collapsed this scroll box and
+  // dropped the operator's scroll position on every tick.
+  const cards = [];
+  const addCard = (key, card, source) => {
+    card.dataset.key = key;
+    card.dataset.hash = JSON.stringify(source);
+    cards.push(card);
+  };
 
   const createCard = (title, renderBody) => {
     const card = el("div", { class: "audit-summary-card" });
@@ -405,12 +414,12 @@ function renderAuditSummary(data, ctx) {
   const namedRates = (data.failure_rate_by_tool || []).filter((row) => isNamedTool(row.tool));
   const namedFailures = (data.failures_by_tool || []).filter((row) => isNamedTool(row.tool));
   if (namedRates.length) {
-    container.appendChild(renderFailuresByToolCard(
+    addCard("failures-by-tool", renderFailuresByToolCard(
       namedRates,
       namedFailures,
       filterByTool,
       data.window || "24h",
-    ));
+    ), [namedRates, namedFailures, data.window || "24h"]);
   }
 
   const categoryOrder = ["unexpected", "expected", "denied", "diagnostic"];
@@ -423,7 +432,7 @@ function renderAuditSummary(data, ctx) {
     affected_runs: Number(categories[key] && categories[key].affected_runs) || 0,
   }));
   if (categoryRows.some((row) => row.incidents || row.raw_events)) {
-    container.appendChild(createCard(
+    addCard("failure-categories", createCard(
       `Failure categories · window ${data.window || "24h"}`,
       renderTable(categoryRows, [
         { key: "label", label: "classification" },
@@ -431,7 +440,7 @@ function renderAuditSummary(data, ctx) {
         { key: "raw_events", label: "raw events", num: true },
         { key: "affected_runs", label: "affected runs", num: true },
       ]),
-    ));
+    ), [categoryRows, data.window || "24h"]);
   }
 
   const lifecycleFailures = Number(data.lifecycle_diagnostic_events) || 0;
@@ -451,11 +460,17 @@ function renderAuditSummary(data, ctx) {
       text: `Failure-only diagnostic surfaces; excluded from callable-tool denominators and rates · window ${window}`,
     }));
     lifecycleCard.appendChild(body);
-    container.appendChild(lifecycleCard);
+    addCard("lifecycle-diagnostics", lifecycleCard, [
+      label,
+      window,
+      lifecycleIncidents,
+      lifecycleFailures,
+      Number(data.lifecycle_diagnostic_affected_run_count) || 0,
+    ]);
   }
 
   if (data.duration_by_tool) {
-    container.appendChild(createCard("Top duration (avg)", renderTable(
+    addCard("duration-by-tool", createCard("Top duration (avg)", renderTable(
       data.duration_by_tool,
       [
         { key: "tool", label: "tool" },
@@ -464,7 +479,7 @@ function renderAuditSummary(data, ctx) {
         { key: "p95", label: "p95", num: true, format: (v) => fmtDurationValue(ctx, v) }
       ],
       filterByTool
-    )));
+    )), data.duration_by_tool);
   }
 
   if (data.denials_by_tool || data.denials_by_reason) {
@@ -491,11 +506,11 @@ function renderAuditSummary(data, ctx) {
       null
     )(body);
     card.appendChild(body);
-    container.appendChild(card);
+    addCard("denials", card, [toolRows, reasonRows]);
   }
 
   if (data.role_split) {
-    container.appendChild(createCard("Role split", renderTable(
+    addCard("role-split", createCard("Role split", renderTable(
       data.role_split,
       [
         { key: "label", label: "role" },
@@ -510,16 +525,18 @@ function renderAuditSummary(data, ctx) {
         syncAuditControls();
         window.location.hash = buildAuditHash();
       }
-    )));
+    )), data.role_split);
   }
 
   if (data.mcp_vs_cli_split) {
-    container.appendChild(createCard("MCP vs CLI", renderTable(
+    addCard("mcp-vs-cli", createCard("MCP vs CLI", renderTable(
       data.mcp_vs_cli_split,
       [{ key: "label", label: "surface" }, { key: "count", label: "count", num: true }],
       null
-    )));
+    )), data.mcp_vs_cli_split);
   }
+
+  syncNodes(container, cards);
 }
 
 function fetchAndRenderPolicy(ctx) {

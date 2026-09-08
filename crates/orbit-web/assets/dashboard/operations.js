@@ -1,6 +1,6 @@
 // Routine-definition, host sweep-clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { requestPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson } from './common.js';
+import { requestPanel, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson } from './common.js';
 import { navigateToRun } from './router.js';
 import { renderAutomation } from './automation.js';
 
@@ -19,7 +19,9 @@ let lastAutoDrainRun = null;
 let lastOperationMode = null;
 let context = null;
 let unsubscribeWorkspace = null;
-const expandedOperations = new Set();
+// The operator's unapplied cadence choice, held outside the rebuilt <select>
+// so a background refresh cannot revert it. Host-scoped, like the clock itself.
+let pendingCadenceSeconds = null;
 
 export function initOperations(nextContext) {
   context = nextContext;
@@ -167,16 +169,11 @@ function operationFact(label, value) {
 }
 
 function operationDetails(key, children) {
-  const panel = el("details", { class: "operation-details" });
-  panel.open = expandedOperations.has(key);
+  const panel = detailsPanel(key, { class: "operation-details" });
   panel.appendChild(el("summary", { text: "Details" }));
   for (const child of children) {
     if (child) panel.appendChild(child);
   }
-  panel.addEventListener("toggle", () => {
-    if (panel.open) expandedOperations.add(key);
-    else expandedOperations.delete(key);
-  });
   return panel;
 }
 
@@ -296,6 +293,7 @@ function renderOperations(payload) {
     const fire = routine.last_fire;
     const state = routine.enabled ? (routine.effective ? "enabled" : "blocked") : "disabled";
     const schedule = routineScheduleText(routine);
+    const detailsKey = `routine:${routine.name}`;
     const card = el("article", { class: "operation-card routine-card" });
     card.append(
       el("div", { class: "operation-row-head" }, [
@@ -307,7 +305,7 @@ function renderOperations(payload) {
         ]),
         el("div", { class: "operation-card-actions" }, [routineButton(payload, routine)]),
       ]),
-      operationDetails(`routine:${routine.name}`, [
+      operationDetails(detailsKey, [
         el("div", { class: "operation-target mono", text: routine.target }),
         el("div", { class: "operation-grid" }, [
           field("Source workspace", routine.source),
@@ -318,7 +316,7 @@ function renderOperations(payload) {
           field("Last fire", fire ? time(fire.finished_at || fire.started_at) : "Never"),
           field("Linked run / outcome", fire ? `${fire.run_id || "No run"} · ${fire.state}` : "No fire recorded"),
         ]),
-        renderAutomation(routine.automation),
+        renderAutomation(routine.automation, `${detailsKey}:automation`),
         routine.description ? el("p", { class: "operation-description", text: routine.description }) : null,
       ]),
     );
@@ -385,18 +383,28 @@ function renderClock(payload) {
   if (clock.health_issue) body.appendChild(el("p", { class: "operation-control-note error", text: clock.health_issue }));
   const actions = el("div", { class: "operation-clock-actions" });
   actions.appendChild(clockButton(payload, clock.enabled ? "disable" : "enable", clock.enabled ? "Pause clock" : "Enable clock"));
+  // A cadence the operator picked but has not applied yet outlives this render;
+  // it clears once the host reports that value as configured, whoever applied it.
+  if (pendingCadenceSeconds === clock.configured_cadence_seconds) pendingCadenceSeconds = null;
+  const selectedCadence = pendingCadenceSeconds ?? clock.configured_cadence_seconds;
   const cadence = el("select", { class: "operation-cadence", title: "Clock cadence" });
   for (const seconds of [60, 300, 900, 1800, 3600]) {
     const option = el("option", { text: seconds === 60 ? "Every minute" : `Every ${seconds / 60} minutes` });
     option.value = String(seconds);
-    option.selected = seconds === clock.configured_cadence_seconds;
+    option.selected = seconds === selectedCadence;
     cadence.appendChild(option);
   }
   cadence.disabled = Boolean(reason) || pendingOperations.has(key);
   const apply = el("button", { class: "operation-button secondary", text: pendingOperations.has(key) ? "Pending…" : "Apply cadence", title: "Reload cadence without changing whether the clock is enabled" });
   apply.type = "button";
-  apply.disabled = Boolean(reason) || pendingOperations.has(key) || Number(cadence.value) === clock.configured_cadence_seconds;
-  cadence.addEventListener("change", () => { apply.disabled = Boolean(reason) || pendingOperations.has(key) || Number(cadence.value) === clock.configured_cadence_seconds; });
+  const syncApplyState = (chosen) => {
+    apply.disabled = Boolean(reason) || pendingOperations.has(key) || chosen === clock.configured_cadence_seconds;
+  };
+  syncApplyState(selectedCadence);
+  cadence.addEventListener("change", () => {
+    pendingCadenceSeconds = Number(cadence.value);
+    syncApplyState(pendingCadenceSeconds);
+  });
   apply.addEventListener("click", () => {
     if (reason || !selection.current()) return;
     return runOperation({
@@ -524,6 +532,7 @@ function renderAutoTasks(payload) {
   }
   for (const definition of definitions) {
     const state = definition.enabled ? "enabled" : "disabled";
+    const detailsKey = `auto-task:${definition.name}`;
     const actions = el("div", { class: "operation-card-actions" }, [
       autoTaskToggleButton(payload, definition),
       autoTaskMintButton(payload, definition),
@@ -540,7 +549,7 @@ function renderAutoTasks(payload) {
         ]),
         actions,
       ]),
-      operationDetails(`auto-task:${definition.name}`, [
+      operationDetails(detailsKey, [
         el("div", { class: "operation-target mono", text: definition.template_summary || definition.template?.title || "" }),
         el("div", { class: "operation-grid" }, [
           field("Schedule", definition.schedule_summary || "—"),
@@ -550,7 +559,7 @@ function renderAutoTasks(payload) {
           field("Next evaluation", nextEvaluationText(definition.next_evaluation)),
           field("Open duplicate", duplicate),
         ]),
-        renderAutomation(definition.automation),
+        renderAutomation(definition.automation, `${detailsKey}:automation`),
         definition.description ? el("p", { class: "operation-description", text: definition.description }) : null,
         el("p", {
           class: "operation-control-note operation-mint-warning",
