@@ -86,7 +86,7 @@ See [Delivery Workflows](../../getting-started/workflows/).
 
 | Command | Purpose |
 |---|---|
-| `orbit search <query>` | Search tasks, docs, and frictions. `--hybrid` adds vector ranking; `orbit search similar <id>` finds task neighbors; `orbit search path <path>` does applicability lookup. |
+| `orbit search <query>` | Search tasks, docs, and frictions. `--hybrid` adds vector ranking; `--workspaces <SELECTOR>` (repeatable) federates across registered checkouts and is distinct from the global `--workspace` routing selector; `orbit search similar <id>` finds task neighbors; `orbit search path <path>` does applicability lookup. |
 | `orbit audit list` \| `show` \| `prune` \| `export` \| `stats` | Query the audit event log. |
 | `orbit run history` | Recent job runs. `-j <job_id>` filters to one job. |
 | `orbit run show [run_id]` | State and step summary for a run; defaults to the most recent. `-s <step_id>`. |
