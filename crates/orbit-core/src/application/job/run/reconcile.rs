@@ -1,7 +1,6 @@
 //! Stale-run reconciliation, terminal timing repair, and audit helpers.
 
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
@@ -27,21 +26,12 @@ pub(super) struct ReconcilePass {
     healthy: HashSet<OwnerSnapshotKey>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct OwnerSnapshotKey {
     run_id: String,
     state: JobRunState,
     pid: Option<u32>,
     pid_start_time: Option<String>,
-}
-
-impl Hash for OwnerSnapshotKey {
-    fn hash<H: Hasher>(&self, hasher: &mut H) {
-        self.run_id.hash(hasher);
-        std::mem::discriminant(&self.state).hash(hasher);
-        self.pid.hash(hasher);
-        self.pid_start_time.hash(hasher);
-    }
 }
 
 impl ReconcilePass {
