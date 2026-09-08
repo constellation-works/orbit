@@ -8,6 +8,7 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use crate::application::job::{DrainWorkerLimitRequest, JobRunListParams};
+use crate::runtime::run_audit::{RunExecutionProgress, RunProviderProcess};
 use crate::{OrbitRuntime, ShipMode};
 
 use super::input::{parse_optional_string_array_field, parse_string_array_field};
@@ -61,7 +62,47 @@ pub(super) fn ship(
 
 pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let id = orbit_common::protocol::tool_input::required_string(&input, &["id"], "id")?;
-    run_json_with_lineage(runtime, &runtime.show_job_run(&id)?)
+    let run = runtime.show_job_run(&id)?;
+    let mut value = run_json_with_lineage(runtime, &run)?;
+    value["execution_progress"] = execution_progress_json(runtime, &run.run_id);
+    Ok(value)
+}
+
+/// [ORB-11752] What the run is doing right now, for the reader that asked
+/// about exactly one run.
+///
+/// Without it this surface can report a `running` wrapper PID and nothing
+/// else, so a healthy implementation agent and an abandoned wrapper look
+/// identical here and an orchestrator has to fall back to an operator command.
+/// `list` deliberately does not carry it: the evidence costs an audit scan plus
+/// a liveness probe per open child, which is the right price for one deliberate
+/// read and the wrong one for a 200-run page.
+///
+/// The projection is identifiers, timestamps and process facts only — no
+/// provider output — so it stays bounded and carries nothing to redact. An
+/// unreadable audit trail degrades to `unavailable` rather than failing the
+/// durable run read, as every other evidence field here does.
+fn execution_progress_json(runtime: &OrbitRuntime, run_id: &str) -> Value {
+    let progress = runtime
+        .collect_run_execution_progress(run_id)
+        .unwrap_or_else(|_| RunExecutionProgress::unavailable());
+    json!({
+        "state": progress.state,
+        "active_step": progress.active_step.map(|step| json!({
+            "step_id": step.step_id,
+            "step_index": step.step_index,
+            "started_at": step.started_at.map(|value| value.to_rfc3339()),
+        })),
+        "provider_processes": {
+            "limit": progress.limit,
+            "truncated": progress.truncated,
+            "items": progress
+                .provider_processes
+                .iter()
+                .map(RunProviderProcess::to_json)
+                .collect::<Vec<_>>(),
+        },
+    })
 }
 
 pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
