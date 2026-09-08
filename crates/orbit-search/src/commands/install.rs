@@ -37,6 +37,9 @@ use crate::{CompanionPaths, platform_companion_filename};
 const COMPANION_URL_ENV: &str = "ORBIT_SEARCH_COMPANION_URL";
 const COMPANION_SHA256_ENV: &str = "ORBIT_SEARCH_COMPANION_SHA256";
 const COMPANION_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Longest silence tolerated on an accepted companion connection. This is an
+/// idle bound, not a transfer deadline: see [`companion_download_client`].
+pub(crate) const COMPANION_STALLED_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const CHECKSUM_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
@@ -238,12 +241,20 @@ fn validate_download_url(url: &str) -> Result<(), OrbitError> {
     Ok(())
 }
 
-fn companion_download_client() -> Result<Client, OrbitError> {
+/// Builds the companion download client.
+///
+/// Companion assets are large enough that a whole-request deadline rejects
+/// healthy slow links, so the client carries no transfer deadline. reqwest's
+/// blocking client re-arms `timeout` for every individual operation — the send
+/// phase, then each [`std::io::Read::read`] on the streamed response — so the
+/// bound below only fires when a connection goes silent, and resets after each
+/// chunk that arrives. Reading a companion body must therefore stay on the
+/// streaming loop in [`download_companion_to_temp`]; the buffering accessors
+/// (`Response::bytes`, `text`, `json`) apply the same value once to the whole
+/// body, which is exactly the total deadline this must not reintroduce.
+pub(crate) fn companion_download_client() -> Result<Client, OrbitError> {
     Client::builder()
-        // Companion assets are large enough that a whole-request deadline
-        // rejects healthy slow links. A bounded connection phase still avoids
-        // waiting indefinitely for an unreachable server.
-        .timeout(None)
+        .timeout(COMPANION_STALLED_READ_TIMEOUT)
         .connect_timeout(COMPANION_CONNECT_TIMEOUT)
         .build()
         .map_err(|error| {
@@ -251,7 +262,7 @@ fn companion_download_client() -> Result<Client, OrbitError> {
         })
 }
 
-fn download_companion_to_temp(
+pub(crate) fn download_companion_to_temp(
     client: &Client,
     url: &str,
     temp_path: &Path,
