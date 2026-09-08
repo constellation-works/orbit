@@ -188,6 +188,24 @@ pub(crate) fn reserve(
     model: Option<String>,
     reservation_owner: Option<ReservationOwnerContext>,
 ) -> Result<Value, OrbitError> {
+    let index = TaskLockIndex::load(runtime)?;
+    reserve_with_index(runtime, input, agent, model, reservation_owner, &index)
+}
+
+/// Reserve a task-lock scope using an index loaded by the calling operation.
+///
+/// The v2 `reserve_locks` action needs the same task index for its one-poll
+/// admission path and its reservation check. Keeping the actual reservation
+/// behavior here gives both callers one canonical implementation while letting
+/// that action avoid reloading every task bundle.
+pub(crate) fn reserve_with_index(
+    runtime: &OrbitRuntime,
+    input: Value,
+    agent: Option<String>,
+    model: Option<String>,
+    reservation_owner: Option<ReservationOwnerContext>,
+    index: &TaskLockIndex,
+) -> Result<Value, OrbitError> {
     let reservation_scope = parse_task_lock_reservation_scope(&input)?;
     let ttl_seconds =
         optional_u32_alias(&input, &["ttl_seconds", "ttlSeconds", "ttl-seconds"])?.unwrap_or(1800);
@@ -199,12 +217,11 @@ pub(crate) fn reserve(
 
     let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref());
     let workspace_id = workspace_task_reservation_id(runtime)?;
-    let index = TaskLockIndex::load(runtime)?;
     let repo_root = runtime.paths().repo_root.as_path();
     let (task_ids, requested_files) = match &reservation_scope {
         TaskLockReservationScope::TaskIds(task_ids) => (
             task_ids.clone(),
-            requested_task_files_indexed(&index, task_ids, repo_root)?,
+            requested_task_files_indexed(index, task_ids, repo_root)?,
         ),
         TaskLockReservationScope::Files(files) => (
             Vec::new(),
@@ -212,7 +229,7 @@ pub(crate) fn reserve(
         ),
     };
     runtime.reconcile_stale_owned_reservations_for_files(&requested_files, 32)?;
-    let mut conflicts = task_lock_conflicts_indexed(&index, &task_ids, &requested_files, repo_root);
+    let mut conflicts = task_lock_conflicts_indexed(index, &task_ids, &requested_files, repo_root);
 
     record_task_lock_audit_event(
         runtime,

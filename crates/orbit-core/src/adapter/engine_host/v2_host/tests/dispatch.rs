@@ -5,11 +5,117 @@ use crate::{ShipMode, WorkspaceRuntimeBinding};
 use chrono::Utc;
 use orbit_engine::DispatchError;
 use orbit_engine::RuntimeHost;
+use orbit_store::TaskStoreBackend;
 use orbit_tools::ToolContext;
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{DeterministicAction, PipelineState};
 use serde_json::json;
 use tempfile::tempdir;
+
+struct CountingTaskStore {
+    inner: std::sync::Arc<dyn TaskStoreBackend>,
+    list_tasks_calls: std::sync::atomic::AtomicUsize,
+}
+
+impl CountingTaskStore {
+    fn new(inner: std::sync::Arc<dyn TaskStoreBackend>) -> Self {
+        Self {
+            inner,
+            list_tasks_calls: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn list_tasks_calls(&self) -> usize {
+        self.list_tasks_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl TaskStoreBackend for CountingTaskStore {
+    fn task_candidates(
+        &self,
+        filter: &orbit_store::contracts::TaskListFilter,
+        limit: usize,
+    ) -> Result<orbit_store::contracts::TaskCandidates, orbit_common::OrbitError> {
+        self.inner.task_candidates(filter, limit)
+    }
+
+    fn query_task_rows(
+        &self,
+        filter: &orbit_store::contracts::TaskListFilter,
+        limit: usize,
+        residual: orbit_store::contracts::TaskResidualFilter<'_>,
+    ) -> Result<orbit_store::contracts::TaskPage, orbit_common::OrbitError> {
+        self.inner.query_task_rows(filter, limit, residual)
+    }
+
+    fn get_task_row(
+        &self,
+        id: &str,
+        list_read: bool,
+    ) -> Result<Option<orbit_store::contracts::TaskRow>, orbit_common::OrbitError> {
+        self.inner.get_task_row(id, list_read)
+    }
+
+    fn create_task(
+        &self,
+        params: orbit_store::TaskCreateParams,
+    ) -> Result<orbit_types::task::Task, orbit_common::OrbitError> {
+        self.inner.create_task(params)
+    }
+
+    fn list_tasks(&self) -> Result<Vec<orbit_types::task::Task>, orbit_common::OrbitError> {
+        self.list_tasks_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.list_tasks()
+    }
+
+    fn task_status_index(
+        &self,
+    ) -> Result<
+        std::collections::BTreeMap<String, orbit_types::task::TaskStatus>,
+        orbit_common::OrbitError,
+    > {
+        self.inner.task_status_index()
+    }
+
+    fn list_tasks_filtered(
+        &self,
+        status: Option<orbit_types::task::TaskStatus>,
+        priority: Option<orbit_types::task::TaskPriority>,
+        parent_id: Option<&str>,
+        job_run_id: Option<&str>,
+        external_ref: Option<&orbit_types::task::ExternalRef>,
+        has_external_ref_system: Option<&str>,
+    ) -> Result<Vec<orbit_types::task::Task>, orbit_common::OrbitError> {
+        self.inner.list_tasks_filtered(
+            status,
+            priority,
+            parent_id,
+            job_run_id,
+            external_ref,
+            has_external_ref_system,
+        )
+    }
+
+    fn get_task(
+        &self,
+        id: &str,
+    ) -> Result<Option<orbit_types::task::Task>, orbit_common::OrbitError> {
+        self.inner.get_task(id)
+    }
+
+    fn search_tasks(
+        &self,
+        query: &str,
+    ) -> Result<Vec<orbit_types::task::Task>, orbit_common::OrbitError> {
+        self.inner.search_tasks(query)
+    }
+
+    fn delete_task(&self, id: &str) -> Result<bool, orbit_common::OrbitError> {
+        self.inner.delete_task(id)
+    }
+}
 
 fn dispatch_declared_action(
     runtime: &OrbitRuntime,
@@ -549,6 +655,28 @@ fn reserve_locks_publishes_empty_waiting_on_deps_when_dependencies_are_met() {
 
     assert_eq!(output["waiting_on_deps"], json!([]));
     assert_eq!(output["reserved"], json!(true));
+}
+
+#[test]
+fn reserve_locks_loads_the_task_store_once_per_poll() {
+    let mut runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let ready = seed_task(&runtime, "Ready", TaskStatus::Backlog, Vec::new());
+    let counting_store = std::sync::Arc::new(CountingTaskStore::new(
+        runtime.context.task_store_for_test(),
+    ));
+    runtime
+        .context
+        .replace_task_store_for_test(counting_store.clone());
+
+    let (_, result) = reserve_locks_for(&runtime, vec![ready]);
+    let output = result.expect("reserve locks");
+
+    assert_eq!(output["reserved"], json!(true));
+    assert_eq!(
+        counting_store.list_tasks_calls(),
+        1,
+        "one ReserveLocks poll must load its lock index once"
+    );
 }
 
 /// ORB-11349: admission loads every task, so one unrelated task's lifecycle
