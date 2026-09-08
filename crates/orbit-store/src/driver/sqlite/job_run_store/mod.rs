@@ -156,16 +156,14 @@ impl JobRunStoreBackend for SqliteJobRunStore {
 
     fn list_pending_or_running_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError> {
         validate_path_stem(job_id, "job")?;
-        let mut runs = self.store.list_job_runs_for_workspace(
+        self.store.list_job_runs_for_workspace(
             &self.workspace_id,
             &JobRunQuery {
                 job_id: Some(job_id.to_string()),
+                active_only: true,
                 ..Default::default()
             },
-        )?;
-        runs.retain(|run| matches!(run.state, JobRunState::Pending | JobRunState::Running));
-        runs.sort_by_key(|run| std::cmp::Reverse(run.created_at));
-        Ok(runs)
+        )
     }
 
     fn insert_job_run(
@@ -506,15 +504,13 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     }
 
     fn list_all_pending_or_running_runs(&self) -> Result<Vec<JobRun>, OrbitError> {
-        let mut runs = self.store.list_job_runs_for_workspace(
+        self.store.list_job_runs_for_workspace(
             &self.workspace_id,
             &JobRunQuery {
+                active_only: true,
                 ..Default::default()
             },
-        )?;
-        runs.retain(|run| matches!(run.state, JobRunState::Pending | JobRunState::Running));
-        runs.sort_by_key(|run| std::cmp::Reverse(run.created_at));
-        Ok(runs)
+        )
     }
 
     fn archive_job_run(&self, run_id: &str) -> Result<String, OrbitError> {
@@ -1053,6 +1049,9 @@ fn job_run_filter_sql(
         conditions.push(
             "state IN ('success', 'failed', 'timeout', 'cancelled', 'interrupted')".to_string(),
         );
+    }
+    if query.active_only {
+        conditions.push("state IN ('pending', 'running')".to_string());
     }
     if let Some(created_since) = query.created_since {
         conditions.push(format!("created_at >= ?{}", params.len() + 1));
