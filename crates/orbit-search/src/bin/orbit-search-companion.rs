@@ -94,6 +94,21 @@ impl FastembedServer {
                 },
                 Err(error) => error_response(id, "token_count_failed", error.to_string()),
             },
+            RpcRequest::TokenBoundaries { text, .. } => {
+                match self.model.tokenizer.encode(text, true) {
+                    Ok(encoding) => RpcResponse::Result {
+                        id,
+                        result: RpcResult::TokenBoundaries {
+                            ends: encoding
+                                .get_offsets()
+                                .iter()
+                                .filter_map(|(start, end)| (end > start).then_some(*end))
+                                .collect(),
+                        },
+                    },
+                    Err(error) => error_response(id, "token_boundaries_failed", error.to_string()),
+                }
+            }
             RpcRequest::Exit { .. } => RpcResponse::Result {
                 id,
                 result: RpcResult::Exit { ok: true },

@@ -1,6 +1,7 @@
 //! JSON-Lines RPC envelope shared between the orbit binary and the
 //! `orbit-search-companion` subprocess. The protocol is deliberately small:
-//! `info`, `embed`, `token_count`, `exit`. Both sides serialize via serde.
+//! `info`, `embed`, `token_count`, `token_boundaries`, `exit`. Both sides
+//! serialize via serde.
 
 use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,7 @@ pub enum RpcRequest {
     Info { id: u64 },
     Embed { id: u64, texts: Vec<String> },
     TokenCount { id: u64, text: String },
+    TokenBoundaries { id: u64, text: String },
     Exit { id: u64 },
 }
 
@@ -20,6 +22,7 @@ impl RpcRequest {
             Self::Info { id }
             | Self::Embed { id, .. }
             | Self::TokenCount { id, .. }
+            | Self::TokenBoundaries { id, .. }
             | Self::Exit { id } => *id,
         }
     }
@@ -46,6 +49,9 @@ pub enum RpcResult {
     },
     TokenCount {
         tokens: usize,
+    },
+    TokenBoundaries {
+        ends: Vec<usize>,
     },
     Exit {
         ok: bool,
