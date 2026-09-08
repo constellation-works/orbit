@@ -307,6 +307,7 @@ fn read_only_envelope(generated_at: DateTime<Utc>, workspace: Option<&str>, reas
         "read_only_reason": reason,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "definitions": [],
+        "cursor_state_error": null,
         "load_errors": [],
     })
 }
@@ -318,7 +319,9 @@ fn list_json(
     generated_at: DateTime<Utc>,
 ) -> Value {
     let collection = collect_auto_tasks(&runtime.paths().local_dir);
-    let cursors = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir));
+    let cursor_load = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir));
+    let cursor_state_error = cursor_load.as_ref().err().map(ToString::to_string);
+    let cursors = cursor_load.as_ref().ok();
     let now = Utc::now();
     let definitions = collection
         .definitions
@@ -327,7 +330,8 @@ fn list_json(
             definition_json(
                 runtime,
                 &loaded.definition,
-                cursors.definitions.get(&loaded.definition.name),
+                cursors.and_then(|state| state.definitions.get(&loaded.definition.name)),
+                cursor_state_error.is_some(),
                 now,
             )
         })
@@ -346,6 +350,7 @@ fn list_json(
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "definitions": definitions,
+        "cursor_state_error": cursor_state_error,
         "load_errors": collection.errors.iter().map(|error| json!({
             "path": error.path.as_ref().map(|path| path.display().to_string()),
             "message": error.message,
@@ -357,6 +362,7 @@ fn definition_json(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     cursor: Option<&orbit_core::application::auto_tasks::AutoTaskCursor>,
+    cursor_state_unavailable: bool,
     now: DateTime<Utc>,
 ) -> Value {
     let automation = match &definition.schedule {
@@ -402,6 +408,10 @@ fn definition_json(
             "last_slot": cursor.last_slot,
             "last_fired_at": cursor.last_fired_at,
             "last_task_id": cursor.last_task_id,
+            "pending": cursor.pending.as_ref().map(|pending| json!({
+                "slot": pending.slot,
+                "task_id": pending.task_id,
+            })),
         })),
         "last_minted_task_id": last_minted_task_id,
         "last_minted_task_status": last_minted_task_status,
@@ -409,6 +419,7 @@ fn definition_json(
             definition.enabled,
             &definition.schedule,
             cursor,
+            cursor_state_unavailable,
             automation.as_ref(),
             now,
         ),
@@ -469,6 +480,7 @@ fn next_evaluation_projection(
     enabled: bool,
     schedule: &AutoTaskSchedule,
     cursor: Option<&AutoTaskCursor>,
+    cursor_state_unavailable: bool,
     automation: Option<&Value>,
     now: DateTime<Utc>,
 ) -> Value {
@@ -478,7 +490,7 @@ fn next_evaluation_projection(
             theoretical_next(schedule, cursor, now),
         );
     }
-    if automation_unavailable(automation) {
+    if cursor_state_unavailable || automation_unavailable(automation) {
         return next_evaluation_json(ScheduleDisplayState::Unavailable, None);
     }
     match schedule {
