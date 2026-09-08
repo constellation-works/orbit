@@ -4,8 +4,9 @@ mod auto_task_tools;
 mod command_tools;
 mod dispatch;
 mod docs_tools;
-pub(crate) mod friction_tools;
+mod friction_tools;
 mod host;
+mod hub_registry;
 mod input;
 mod json;
 mod operation_mode_tools;
@@ -22,5 +23,5 @@ mod tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use host::HubCoordinationExecutor;
 pub(crate) use host::build_orbit_tool_host;
+pub use hub_registry::HubCoordinationExecutor;
