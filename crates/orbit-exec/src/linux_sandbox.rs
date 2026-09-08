@@ -840,16 +840,33 @@ fn expand_rules(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitError> {
                 "invalid linux-bwrap filesystem glob `{rule}`: {error}"
             ))
         })?;
-        let root = nearest_existing_ancestor(&static_prefix(rule))?;
-        by_root.entry(root).or_default().push(regex);
+        let prefix = static_prefix(rule);
+        let display_root = existing_ancestor(&prefix)?;
+        let root = canonical_existing(&display_root, "glob search root")?;
+        by_root.entry(root).or_default().push((regex, display_root));
     }
     let mut matches = BTreeSet::new();
-    for (root, regexes) in by_root {
+    for (root, matchers) in by_root {
         let mut candidates = Vec::new();
         walk_paths(&root, &mut candidates)?;
         for candidate in candidates {
             let rendered = candidate.to_string_lossy().replace('\\', "/");
-            if regexes.iter().any(|regex| regex.is_match(&rendered)) {
+            let relative = candidate.strip_prefix(&root).map_err(|error| {
+                OrbitError::Execution(format!(
+                    "glob candidate `{}` must remain beneath search root `{}`: {error}",
+                    candidate.display(),
+                    root.display()
+                ))
+            })?;
+            if matchers.iter().any(|(regex, display_root)| {
+                regex.is_match(&rendered)
+                    || regex.is_match(
+                        &display_root
+                            .join(relative)
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    )
+            }) {
                 matches.insert(canonical_existing(&candidate, "denyModify match")?);
             }
         }
@@ -875,7 +892,7 @@ fn static_prefix(rule: &str) -> PathBuf {
     PathBuf::from(prefix)
 }
 
-fn nearest_existing_ancestor(path: &Path) -> Result<PathBuf, OrbitError> {
+fn existing_ancestor(path: &Path) -> Result<PathBuf, OrbitError> {
     let mut current = path.to_path_buf();
     while !current.exists() {
         if !current.pop() {
@@ -885,7 +902,7 @@ fn nearest_existing_ancestor(path: &Path) -> Result<PathBuf, OrbitError> {
             )));
         }
     }
-    canonical_existing(&current, "glob search root")
+    Ok(current)
 }
 
 /// `root` itself and everything beneath it, each path once.
