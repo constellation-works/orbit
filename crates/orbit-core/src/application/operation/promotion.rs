@@ -14,7 +14,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_config::PromotionPreference;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_types::task::{TaskStatus, task_dependencies_ready};
+use orbit_types::task::{TaskReferenceIndex, TaskStatus, task_dependencies_ready_with_index};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::OperationGrant;
 use serde::Serialize;
@@ -68,6 +68,7 @@ pub(crate) fn promote_within_grant(
         .into_iter()
         .map(|task| (task.id, task.status))
         .collect();
+    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let branch = runtime.workflow_base_branch().to_string();
     let mut source: Option<(String, InstructionSnapshot)> = None;
 
@@ -101,7 +102,7 @@ pub(crate) fn promote_within_grant(
             ));
             continue;
         }
-        if !task_dependencies_ready(&task, &status_by_id) {
+        if !task_dependencies_ready_with_index(&task, &status_by_id, &reference_index) {
             decisions.push(PromotionDecision::withheld(task_id, "unmet_dependency"));
             continue;
         }

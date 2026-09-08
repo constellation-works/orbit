@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, TaskStatus, task_dependencies_ready, unmet_task_dependencies};
+use orbit_types::task::{
+    Task, TaskReferenceIndex, TaskStatus, task_dependencies_ready_with_index,
+    unmet_task_dependencies_with_index,
+};
 use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, OperationAdmission};
 use serde_json::{Value, json};
 
@@ -435,6 +438,7 @@ pub fn explain_workspace_auto_readiness(
         ids
     };
 
+    let reference_index = TaskReferenceIndex::from_status_index(&snapshot.status_by_id);
     let tasks = selected_ids
         .iter()
         .filter_map(|id| snapshot.task_lookup.get(id))
@@ -451,7 +455,11 @@ pub fn explain_workspace_auto_readiness(
             if task.status != TaskStatus::Backlog {
                 return Value::Object(object.clone());
             }
-            let unmet = unmet_task_dependencies(task, &snapshot.status_by_id);
+            let unmet = unmet_task_dependencies_with_index(
+                task,
+                &snapshot.status_by_id,
+                &reference_index,
+            );
             if !unmet.is_empty() {
                 object.insert("reason".to_string(), Value::String("unmet_dependency".to_string()));
                 object.insert(
@@ -858,13 +866,14 @@ fn next_admissible_epic_root(
                 action: action.to_string(),
                 message: format!("load global task status projection: {err}"),
             })?;
+    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
 
     let mut backlog_epics = all_tasks
         .into_iter()
         .filter(|task| {
             task.status == TaskStatus::Backlog
                 && epic_family_membership(task, &task_lookup) == Some(EpicFamilyMembership::Root)
-                && task_dependencies_ready(task, &status_by_id)
+                && task_dependencies_ready_with_index(task, &status_by_id, &reference_index)
                 && allowlist.is_none_or(|allowlist| {
                     runtime
                         .auto_task_crew_eligibility(task, pools, allowlist)

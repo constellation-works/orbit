@@ -8,7 +8,9 @@ use std::path::Path;
 
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
-use orbit_core::{JobRunState, OrbitError, TaskStatus, task_dependencies_ready};
+use orbit_core::{
+    JobRunState, OrbitError, TaskReferenceIndex, TaskStatus, task_dependencies_ready_with_index,
+};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceStatus};
 use serde_json::{Value, json};
@@ -199,10 +201,12 @@ fn sweep_active_workspace(
 
     let tasks = runtime.list_tasks()?;
     let status_by_id = runtime.task_status_index()?;
+    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let ready_backlog = tasks
         .iter()
         .filter(|task| {
-            task.status == TaskStatus::Backlog && task_dependencies_ready(task, &status_by_id)
+            task.status == TaskStatus::Backlog
+                && task_dependencies_ready_with_index(task, &status_by_id, &reference_index)
         })
         .count();
     if ready_backlog == 0 {
