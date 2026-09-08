@@ -112,13 +112,12 @@ impl WorkspaceInitArgs {
         if let Some(start) = task_id_start {
             let outcome =
                 orbit_core::bootstrap::task_migration::seed_task_id_start(&global_root, start)?;
+            let rendered_id =
+                render_task_id_start(init_result.task_prefix.as_deref(), outcome.next);
             if outcome.changed {
-                println!("  id_start:  allocator seeded to ORB-{:05}", outcome.next);
+                println!("  id_start:  allocator seeded to {rendered_id}");
             } else {
-                println!(
-                    "  id_start:  allocator already at ORB-{:05} (unchanged)",
-                    outcome.next
-                );
+                println!("  id_start:  allocator already at {rendered_id} (unchanged)");
             }
         }
 
@@ -172,12 +171,15 @@ impl WorkspaceInitArgs {
         if let Some(mode) = self.ship_mode.as_deref() {
             orbit_core::ShipMode::parse(mode)?;
         }
-        let (local_machine_id, local_host_id) = match inspect_host_identity(global_root)? {
-            HostIdentityState::Present(identity) => {
-                (Some(identity.machine_id), Some(identity.host_id))
-            }
-            HostIdentityState::Legacy { .. } | HostIdentityState::Absent => (None, None),
-        };
+        let (local_machine_id, local_host_id, task_prefix) =
+            match inspect_host_identity(global_root)? {
+                HostIdentityState::Present(identity) => (
+                    Some(identity.machine_id),
+                    Some(identity.host_id),
+                    Some(identity.task_prefix),
+                ),
+                HostIdentityState::Legacy { .. } | HostIdentityState::Absent => (None, None, None),
+            };
         let explicit_role = self.role.map(WorkspaceCheckoutRole::from);
         match (explicit_role, self.owner.as_deref()) {
             (None, Some(_)) => {
@@ -412,7 +414,15 @@ impl WorkspaceInitArgs {
             name,
             root: cwd.to_path_buf(),
             orbit_dir: orbit_dir.to_path_buf(),
+            task_prefix,
         })
+    }
+}
+
+pub(super) fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> String {
+    match task_prefix {
+        Some(task_prefix) => format!("{task_prefix}-{next:05}"),
+        None => format!("{next:05}"),
     }
 }
 
@@ -614,4 +624,5 @@ struct WorkspaceInitResult {
     name: String,
     root: PathBuf,
     orbit_dir: PathBuf,
+    task_prefix: Option<String>,
 }

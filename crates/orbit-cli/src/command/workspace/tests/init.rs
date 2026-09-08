@@ -12,12 +12,17 @@ use crate::tests::env_isolation::EnvGuard;
 
 use super::super::init::{
     ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id,
-    onboarding_finalize_guidance,
+    onboarding_finalize_guidance, render_task_id_start,
 };
 use super::super::list::{format_workspace_list, workspace_list_json};
 use super::super::role::CliCheckoutRole;
 use super::super::show::format_workspace_show;
 use super::super::support::orbit_gitignore_block;
+
+#[test]
+fn task_id_start_uses_the_host_task_prefix() {
+    assert_eq!(render_task_id_start(Some("DANI"), 20_000), "DANI-20000");
+}
 
 #[test]
 fn workspace_reinit_requires_force_and_force_reconciles_matching_registration() {
