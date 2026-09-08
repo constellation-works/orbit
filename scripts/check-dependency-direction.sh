@@ -127,22 +127,21 @@ workspace_crates = {
     and package["name"].startswith("orbit-")
 }
 for crate in sorted(workspace_crates):
+    manifest = workspace_crates[crate]["manifest_path"]
     for dependency in workspace_crates[crate]["dependencies"]:
         dependency_name = dependency["name"]
         if dependency_name.startswith("orbit-"):
             kind = dependency["kind"] or "normal"
-            print(f"{crate}\t{dependency_name}\t{kind}")
+            print(f"{crate}\t{manifest}\t{dependency_name}\t{kind}")
 '
 }
 
 workspace_crates=()
 workspace_manifests=()
-declare -A workspace_manifest_by_crate=()
 while IFS=$'\t' read -r crate manifest; do
   if [[ -n "$crate" ]]; then
     workspace_crates+=("$crate")
     workspace_manifests+=("$manifest")
-    workspace_manifest_by_crate["$crate"]="$manifest"
   fi
 done < <(load_workspace_crates)
 
@@ -166,8 +165,7 @@ for index in "${!workspace_crates[@]}"; do
   fi
 done
 
-while IFS=$'\t' read -r crate dependency kind; do
-  manifest="${workspace_manifest_by_crate[$crate]}"
+while IFS=$'\t' read -r crate manifest dependency kind; do
   allowed="$(allowed_internal_deps "$crate")"
 
   if contains_word "$(allowed_dev_only_deps "$crate")" "$dependency" && [[ "$kind" != "dev" ]]; then
