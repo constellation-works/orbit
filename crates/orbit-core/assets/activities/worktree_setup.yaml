@@ -7,6 +7,12 @@ spec:
   description: >
     Create a worktree and branch for one task or a task bundle, stamp the task
     records with job-run/workspace metadata, and move them to `in-progress`.
+    An existing branch or registered checkout is reused only when its HEAD
+    already equals the resolved `base_sha`. An unexplained mismatch refuses
+    before admission, names branch/tip/base, and leaves retained work
+    untouched. Retrying without recovering that leftover refuses again;
+    inspect it, then move the branch aside or delete it only after confirming
+    no retained candidate is needed.
   input_schema_json:
     type: object
     properties:
@@ -59,6 +65,10 @@ spec:
         description: Moving start-point ref name, for steps that reconcile against the live base.
       base_sha:
         type: string
-        description: Commit the worktree was created at, resolved once here so later steps never re-resolve the moving ref.
+        description: >
+          Immutable commit this worktree was created at, resolved once so later
+          steps never re-resolve the moving ref. A successful setup guarantees
+          the checkout HEAD equals this id; setup never publishes it against
+          unexplained reused history.
   action: worktree_setup
   config: {}

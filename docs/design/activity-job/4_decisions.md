@@ -1557,7 +1557,7 @@ Host Git helpers shared a 30s deadline. A timeout during `worktree add` could le
 
 Give heavyweight Git children explicit finite budgets through `ExecRequest.timeout_ms`, with per-operation defaults and optional activity overlays (`git_timeout_ms` / `git_timeouts`). Reject 0, unknown keys, and values above 600s; never omit the deadline. Keep the secured Git environment and hook policy.
 
-On timeout, mutate only state this attempt owns. Remove a newly registered worktree only when ownership and lack of retained work are established; otherwise refuse with evidence and never admit an incomplete checkout. Abort an interrupted rebase only when provenance shows this attempt started it; leave pre-existing or foreign rebase state intact. Deleted tracked files, dirty files, and retained candidate commits are not completeness failures and must not be restored or deleted as a shortcut. Unexplained stale-branch provenance stays with [ORB-11639].
+On timeout, mutate only state this attempt owns. Remove a newly registered worktree only when ownership and lack of retained work are established; otherwise refuse with evidence and never admit an incomplete checkout. Abort an interrupted rebase only when provenance shows this attempt started it; leave pre-existing or foreign rebase state intact. Deleted tracked files, dirty files, and retained candidate commits are not completeness failures and must not be restored or deleted as a shortcut. Unexplained stale-branch provenance is [Worktree setup refuses unexplained stale branch reuse before publishing checkpoints](#worktree-setup-refuses-unexplained-stale-branch-reuse-before-publishing-checkpoints).
 
 ### Consequences
 
@@ -1566,8 +1566,29 @@ On timeout, mutate only state this attempt owns. Remove a newly registered workt
 - Conflicted rebases still take the typed conflict path; failure-handoff still publishes the candidate.
 - Cost: operators who previously relied on `git clean -fd` during worktree reuse keep dirty files until they reconcile them; that is the intended preservation.
 
+## Worktree setup refuses unexplained stale branch reuse before publishing checkpoints
+
+**Recorded:** 2026-09-08 · [ORB-11639]
+
+### Context
+
+`worktree_setup` resolves a fresh `base_sha` and then may attach an existing orphan branch or reuse a registered checkout without checking that HEAD already equals that commit. The published checkpoint therefore names a base the worktree is not on, and downstream `git_commit` rejects the mismatch as `worktree_head_changed`. Completeness checks from [Timeout recovery is not conflict or failure-handoff recovery](#timeout-recovery-is-not-conflict-or-failure-handoff-recovery) already refuse to reset retained commits or dirty files; they do not own this provenance question. Validated failure-handoff resume and epic `allow_moved_head` already accept a moved HEAD against the *original* setup checkpoint; they must not be implemented as a setup-time reuse that republishes old history under a new `base_sha`.
+
+### Decision
+
+Before creating a worktree, admitting a task, or returning checkpoints, compare the existing branch tip or registered checkout HEAD with the freshly resolved `base_sha`. Reuse only when they already match. An unexplained mismatch fails closed, naming branch, tip, and requested base, and leaves the leftover untouched — including a retained candidate that has been pushed. Setup does not reset, clean, or attach that history, and does not invent an unchecked branch-reuse escape. `base_ref` stays the moving start-point name; `base_sha` stays the immutable commit a successful setup's HEAD equals.
+
+Retrying setup while the stale leftover remains keeps refusing. Recovery is operator-led: inspect the branch and checkout, then move them aside or delete them only after confirming no retained candidate is needed. Authorized moved-head and failure-handoff continue to run at commit/resume against the original checkpoint.
+
+### Consequences
+
+- A temporary repo whose base moved while an orphan branch or registered checkout stayed behind fails before admission instead of publishing a checkpoint commit will reject.
+- Retained candidate commits and dirty work survive the refusal; being pushed is not a license to discard them.
+- Cost: a fresh setup that finds unexplained leftover history requires an explicit recovery step. That is cheaper than admitting a run whose later commit cannot reconcile.
+
 ## Task References
 
+- **[ORB-11639]** — Validate reused worktree branch provenance before publishing setup checkpoints ([Worktree setup refuses unexplained stale branch reuse before publishing checkpoints](#worktree-setup-refuses-unexplained-stale-branch-reuse-before-publishing-checkpoints)).
 - **[ORB-11606]** — Bound heavyweight Git operations and recover only owned interrupted mutations ([Timeout recovery is not conflict or failure-handoff recovery](#timeout-recovery-is-not-conflict-or-failure-handoff-recovery)).
 - **[ORB-11456]** — Preserve terminal failure-activity evidence and admit only
   its exact Orbit-created candidate across resume

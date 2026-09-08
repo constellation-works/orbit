@@ -65,6 +65,8 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     // worktree off this `.git`; a sibling run's fetch or a merge can move it
     // mid-run. Resolve it exactly once here and hand the resulting commit id to
     // both the worktree creation and every downstream step that needs the base.
+    // ORB-11639: this commit is also the only HEAD a reused branch or checkout
+    // may already occupy; setup never republishes it against unexplained history.
     let base_sha = git_output(
         repo_root,
         &[
@@ -112,6 +114,9 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
 
     let worktree_path = identity.path(repo_root)?;
 
+    // ORB-11639: `ensure_worktree` refuses an existing branch or registered
+    // checkout whose HEAD is not `base_sha`, so admission never sees a
+    // checkpoint that later commit provenance would reject.
     let branch_name = ensure_worktree(repo_root, &worktree_path, &base_sha, &branch_name)?;
 
     // ORB-10602: mount-anchor materialization deliberately does *not* happen
@@ -162,8 +167,10 @@ pub(crate) fn worktree_setup_output(
         // The moving name, for steps that legitimately reconcile against the
         // live base (`sync_base`, `pr_open`).
         "base_ref": base_ref,
-        // ORB-10380: the immutable commit this worktree was created at. Steps
-        // that must reason about the history this run authored consume this.
+        // ORB-10380 / ORB-11639: the immutable commit this worktree was created
+        // at, and the actual HEAD of a successful setup. Steps that must reason
+        // about the history this run authored consume this; a reused checkout
+        // is admitted only when its HEAD already equals this id.
         "base_sha": base_sha,
     })
 }
@@ -193,7 +200,10 @@ pub(crate) fn ensure_worktree(
         // checkout that happens to sit at the resolved path.
         if is_registered_worktree(repo_root, worktree_path)? {
             match inspect_registered_worktree(repo_root, worktree_path, &target, branch_name)? {
-                RegisteredWorktree::Usable { branch } => return Ok(branch),
+                RegisteredWorktree::Usable { branch, head } => {
+                    refuse_stale_branch(&branch, &head, &target, worktree_path)?;
+                    return Ok(branch);
+                }
                 RegisteredWorktree::Incomplete {
                     retained_work,
                     evidence,
@@ -238,6 +248,7 @@ pub(crate) fn ensure_worktree(
 enum RegisteredWorktree {
     Usable {
         branch: String,
+        head: String,
     },
     Incomplete {
         retained_work: bool,
@@ -275,7 +286,7 @@ fn inspect_registered_worktree(
     )
     .unwrap_or(true);
     let evidence = format!(
-        "HEAD={}, branch={}, gitdir={}, index={}, status={}, unique_commits={unique_commits}. Completeness does not treat deleted tracked files as an incomplete checkout (they may be intended edits). Timeout recovery is not conflict or failure-handoff recovery; stale-branch provenance is owned by ORB-11639.",
+        "HEAD={}, branch={}, gitdir={}, index={}, status={}, unique_commits={unique_commits}. Completeness does not treat deleted tracked files as an incomplete checkout (they may be intended edits). Timeout recovery is not conflict or failure-handoff recovery. Stale-branch provenance (ORB-11639) refuses a complete checkout whose HEAD is not the requested base without resetting it.",
         head.as_deref().unwrap_or("missing"),
         branch.as_deref().unwrap_or("missing"),
         git_dir.as_deref().unwrap_or("missing"),
@@ -297,7 +308,13 @@ fn inspect_registered_worktree(
                 evidence,
             });
         };
-        return Ok(RegisteredWorktree::Usable { branch });
+        let Some(head) = head else {
+            return Ok(RegisteredWorktree::Incomplete {
+                retained_work: true,
+                evidence,
+            });
+        };
+        return Ok(RegisteredWorktree::Usable { branch, head });
     }
 
     let retained_work = unique_commits
@@ -340,6 +357,15 @@ fn add_worktree(
     let branch_ref = format!("refs/heads/{branch_name}");
     let args = if git_command_success(repo_root, &["show-ref", "--verify", "--quiet", &branch_ref])?
     {
+        let tip = git_output(
+            repo_root,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("{branch_name}^{{commit}}"),
+            ],
+        )?;
+        refuse_stale_branch(branch_name, &tip, target, Path::new(&branch_ref))?;
         vec![
             "worktree".to_string(),
             "add".to_string(),
@@ -371,7 +397,31 @@ fn add_worktree(
     if !outcome.success {
         return Err(git_failure_error(repo_root, &arg_refs, &outcome.stderr));
     }
+    let head = git_output(worktree_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    refuse_stale_branch(branch_name, &head, target, worktree_path)?;
     Ok(branch_name.to_string())
+}
+
+/// ORB-11639: a reused branch or checkout may be admitted only when its actual
+/// HEAD already equals the freshly resolved base. Setup never resets, cleans,
+/// or republishes unexplained history as a new `base_sha`.
+fn refuse_stale_branch(
+    branch: &str,
+    tip: &str,
+    base: &str,
+    location: &Path,
+) -> Result<(), OrbitError> {
+    if tip.trim() == base.trim() {
+        return Ok(());
+    }
+    Err(OrbitError::Execution(format!(
+        "worktree setup refusing stale branch '{branch}' at tip {tip}; requested base {base}. \
+         Left '{}' untouched. Setup does not reset or discard a retained candidate, and does not \
+         publish a new base_sha for unexplained history. Inspect the leftover, then move the \
+         branch aside or delete it only after confirming no retained work is needed; retrying \
+         setup without that recovery will refuse again.",
+        location.display()
+    )))
 }
 
 fn remove_owned_incomplete_worktree(
@@ -439,8 +489,8 @@ fn recover_worktree_add_timeout(
 
     let evidence = match &inspection {
         Some(RegisteredWorktree::Incomplete { evidence, .. }) => evidence.clone(),
-        Some(RegisteredWorktree::Usable { branch }) => {
-            format!("usable attached branch '{branch}'")
+        Some(RegisteredWorktree::Usable { branch, head }) => {
+            format!("usable attached branch '{branch}' at {head}")
         }
         None => format!("registered={registered}, path={}", worktree_path.display()),
     };
