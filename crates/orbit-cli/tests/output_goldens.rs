@@ -353,6 +353,45 @@ fn plain_and_json_forms_match_their_goldens() {
     }
 }
 
+#[test]
+fn task_show_relations_and_artifacts_match_golden() {
+    let fixture = Fixture::new();
+    let listed = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
+    let task_id = listed[0]["id"].as_str().expect("task id");
+    let blocker_id = listed[1]["id"].as_str().expect("blocker id");
+    let update = serde_json::to_string(&json!({
+        "id": task_id,
+        "relations": [{"type": "blocked_by", "target": blocker_id}],
+    }))
+    .expect("serialize task update");
+
+    fixture.run(
+        &["tool", "run", "orbit.task.update", "--input", &update],
+        &[],
+    );
+    let artifact_source = fixture.work.join("evidence.txt");
+    std::fs::write(&artifact_source, "relation evidence").expect("write artifact source");
+    let artifact_source = artifact_source
+        .to_str()
+        .expect("artifact source path is UTF-8");
+    fixture.run(
+        &[
+            "task",
+            "artifact",
+            "put",
+            task_id,
+            artifact_source,
+            "--path",
+            "evidence.txt",
+        ],
+        &[],
+    );
+
+    let shown = fixture.run(&["task", "show", task_id], &[]);
+    let shown_stdout = fixture.redact(&String::from_utf8_lossy(&shown.stdout));
+    assert_golden("task_show_relations_artifacts.plain.txt", &shown_stdout);
+}
+
 /// table-rendering.md §4: "truncation never applies to json ... or the
 /// plain piped form." color-and-styling.md §4: json/ndjson/plain carry no
 /// escape sequences under any flag. Since this harness never gives the

@@ -1,7 +1,7 @@
 use clap::Args;
 use orbit_cmd::task_owner::{WorkspaceIdentity, bound_workspace_identity};
 use orbit_core::{OrbitError, OrbitRuntime, TaskRelatedDoc};
-use orbit_types::task::is_task_show_projection_field;
+use orbit_types::task::{TaskRelationType, is_task_show_projection_field};
 use serde_json::{Value, json};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -117,6 +117,36 @@ impl Execute for TaskShowArgs {
                     let _ = writeln!(out, "  - {}", dependency.label());
                 }
             }
+            let relations = orbit_core::resolve_task_relations(&task, &status_by_id);
+            if !relations.is_empty() {
+                let _ = writeln!(out, "{}", bold("Relations:"));
+                for relation in relations {
+                    let status = relation
+                        .verification
+                        .or_else(|| status_by_id.get(&relation.target).map(ToString::to_string))
+                        .unwrap_or_else(|| "missing".to_string());
+                    let _ = writeln!(
+                        out,
+                        "  - {}: {} [{}]",
+                        relation_type_label(relation.relation_type),
+                        relation.target,
+                        status
+                    );
+                }
+            }
+            let artifacts = runtime.get_task_artifacts(&task.id)?;
+            if !artifacts.is_empty() {
+                let _ = writeln!(out, "{}", bold("Artifacts:"));
+                for artifact in artifacts {
+                    let _ = writeln!(
+                        out,
+                        "  - {} ({}, {} bytes)",
+                        artifact.path,
+                        artifact.media_type,
+                        artifact.content.len()
+                    );
+                }
+            }
             if !task.tags.is_empty() {
                 let _ = writeln!(out, "{} {}", bold("Tags:"), task.tags.join(", "));
             }
@@ -224,6 +254,9 @@ impl Execute for TaskShowArgs {
             if let Some(ref pr_status) = task.pr_status {
                 let _ = writeln!(out, "{} {}", bold("PR Status:"), pr_status);
             }
+            if let Some(review) = doc.get("review") {
+                let _ = writeln!(out, "{} {}", bold("Review:"), review);
+            }
             if let Some(source_task_id) = task.source_task_id() {
                 let _ = writeln!(out, "{} {}", bold("Source Task:"), source_task_id);
             }
@@ -242,6 +275,19 @@ impl Execute for TaskShowArgs {
             blocks.push(Block::text(out));
             Ok(Payload::blocks(doc, blocks).into())
         }
+    }
+}
+
+fn relation_type_label(relation_type: TaskRelationType) -> &'static str {
+    match relation_type {
+        TaskRelationType::BlockedBy => "blocked_by",
+        TaskRelationType::ChildOf => "child_of",
+        TaskRelationType::SpawnedFrom => "spawned_from",
+        TaskRelationType::RegressionFrom => "regression_from",
+        TaskRelationType::Supersedes => "supersedes",
+        TaskRelationType::RelatedTo => "related_to",
+        TaskRelationType::Produces => "produces",
+        TaskRelationType::Resolves => "resolves",
     }
 }
 
