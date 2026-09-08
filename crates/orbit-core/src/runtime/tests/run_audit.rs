@@ -508,6 +508,72 @@ fn recovery_attempt_projection_bounds_history_and_marks_legacy_absence() {
     assert!(not_attempted.attempts.is_empty());
 }
 
+/// [ORB-11625] A page loads recovery evidence in two bounded queries and
+/// keeps per-run attribution when histories are uneven.
+#[test]
+fn recovery_attempts_for_runs_are_partitioned_and_counted_once() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let busy = "jrun-busy";
+    let quiet = "jrun-quiet";
+    let empty = "jrun-empty";
+    seed_v2_audit_events(
+        &runtime,
+        busy,
+        (0..20).map(|index| {
+            json!({
+                "event_id": format!("evt-busy-{index}"),
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+            })
+        }),
+    );
+    seed_v2_audit_events(
+        &runtime,
+        quiet,
+        [
+            json!({"event_id": "evt-quiet-start", "body_kind": "step_started", "step_id": "sync_base"}),
+            json!({
+                "event_id": "evt-quiet-recovery",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": true,
+            }),
+        ],
+    );
+
+    let page = runtime
+        .collect_run_recovery_attempts_for_runs(&[
+            busy.to_string(),
+            quiet.to_string(),
+            empty.to_string(),
+        ])
+        .expect("batch collect");
+
+    assert_eq!(page.event_queries, 1);
+    assert_eq!(page.presence_queries, 1);
+    assert_eq!(page.per_run_fetch_limit, 9);
+    assert!(page.by_run_id[busy].truncated);
+    assert_eq!(page.by_run_id[busy].attempts.len(), 8);
+    assert_eq!(page.by_run_id[busy].attempts[0].event_id, "evt-busy-12");
+    assert!(
+        page.by_run_id[busy]
+            .attempts
+            .iter()
+            .all(|attempt| attempt.run_id == busy)
+    );
+    assert_eq!(page.by_run_id[quiet].state, "recorded");
+    assert!(!page.by_run_id[quiet].truncated);
+    assert_eq!(
+        page.by_run_id[quiet].attempts[0].event_id,
+        "evt-quiet-recovery"
+    );
+    assert_eq!(page.by_run_id[empty].state, "unavailable");
+    assert!(page.by_run_id[empty].attempts.is_empty());
+}
+
 #[test]
 fn malformed_jsonl_and_missing_blobs_are_tolerated() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
