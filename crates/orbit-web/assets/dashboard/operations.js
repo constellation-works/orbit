@@ -19,6 +19,7 @@ let lastAutoDrainRun = null;
 let lastOperationMode = null;
 let context = null;
 let unsubscribeWorkspace = null;
+const expandedOperations = new Set();
 
 export function initOperations(nextContext) {
   context = nextContext;
@@ -141,6 +142,47 @@ function field(label, value) {
   ]);
 }
 
+function lastFireText(fire) {
+  if (!fire) return "Never";
+  const when = time(fire.finished_at || fire.started_at);
+  return fire.state ? `${fire.state} · ${when}` : when;
+}
+
+function routineScheduleText(routine) {
+  if (routine.trigger?.deliveries_landed) {
+    return `${routine.trigger.deliveries_landed.threshold} verified deliveries on ${routine.trigger.deliveries_landed.branch}`;
+  }
+  return routine.cron || "—";
+}
+
+function operationIdentity(name, state) {
+  return el("div", { class: "operation-identity" }, [
+    el("strong", { text: name }),
+    el("span", { class: `operation-state ${state}`, text: state }),
+  ]);
+}
+
+function operationFact(label, value) {
+  return el("div", { class: "operation-fact" }, [
+    el("span", { class: "operation-fact-label", text: label }),
+    el("span", { class: "operation-fact-value", text: value == null || value === "" ? "—" : String(value) }),
+  ]);
+}
+
+function operationDetails(key, children) {
+  const panel = el("details", { class: "operation-details" });
+  panel.open = expandedOperations.has(key);
+  panel.appendChild(el("summary", { text: "Details" }));
+  for (const child of children) {
+    if (child) panel.appendChild(child);
+  }
+  panel.addEventListener("toggle", () => {
+    if (panel.open) expandedOperations.add(key);
+    else expandedOperations.delete(key);
+  });
+  return panel;
+}
+
 function actionReason(payload, action) {
   const selectionReason = workspaceReadOnlyReason();
   if (selectionReason) return selectionReason;
@@ -256,27 +298,33 @@ function renderOperations(payload) {
   for (const routine of routines) {
     const fire = routine.last_fire;
     const state = routine.enabled ? (routine.effective ? "enabled" : "blocked") : "disabled";
+    const schedule = routineScheduleText(routine);
     const card = el("article", { class: "operation-card routine-card" });
     card.append(
-      el("div", { class: "operation-card-title" }, [
-        el("div", {}, [el("strong", { text: routine.name }), el("span", { class: `operation-state ${state}`, text: state })]),
-        routineButton(payload, routine),
+      el("div", { class: "operation-row-head" }, [
+        operationIdentity(routine.name, state),
+        el("div", { class: "operation-row-facts" }, [
+          operationFact("Schedule", schedule),
+          operationFact("Next", nextEvaluationText(routine.next_evaluation, routine.next_due)),
+          operationFact("Last outcome", lastFireText(fire)),
+        ]),
+        el("div", { class: "operation-card-actions" }, [routineButton(payload, routine)]),
       ]),
-      el("div", { class: "operation-target mono", text: routine.target }),
-      el("div", { class: "operation-grid" }, [
-        field("Source workspace", routine.source),
-        field("Schedule", routine.trigger?.deliveries_landed ? `${routine.trigger.deliveries_landed.threshold} verified deliveries on ${routine.trigger.deliveries_landed.branch}` : routine.cron),
-        field("Host pin", (routine.hosts || []).join(", ") || "Local host"),
-        field("Last evaluation", time(routine.last_evaluated_slot || routine.first_observed_at)),
-        field("Next evaluation", nextEvaluationText(routine.next_evaluation, routine.next_due)),
-        field("Last fire", fire ? time(fire.finished_at || fire.started_at) : "Never"),
-        field("Linked run / outcome", fire ? `${fire.run_id || "No run"} · ${fire.state}` : "No fire recorded"),
+      operationDetails(`routine:${routine.name}`, [
+        el("div", { class: "operation-target mono", text: routine.target }),
+        el("div", { class: "operation-grid" }, [
+          field("Source workspace", routine.source),
+          field("Schedule", schedule),
+          field("Host pin", (routine.hosts || []).join(", ") || "Local host"),
+          field("Last evaluation", time(routine.last_evaluated_slot || routine.first_observed_at)),
+          field("Next evaluation", nextEvaluationText(routine.next_evaluation, routine.next_due)),
+          field("Last fire", fire ? time(fire.finished_at || fire.started_at) : "Never"),
+          field("Linked run / outcome", fire ? `${fire.run_id || "No run"} · ${fire.state}` : "No fire recorded"),
+        ]),
+        renderAutomation(routine.automation),
+        routine.description ? el("p", { class: "operation-description", text: routine.description }) : null,
       ]),
     );
-    const automation = renderAutomation(routine.automation);
-    if (automation) card.appendChild(automation);
-    if (routine.description) card.appendChild(el("p", { class: "operation-description", text: routine.description }));
-
     body.appendChild(card);
   }
   $("routines-count").textContent = workspace ? `${routines.length} · ${workspace}` : "read-only";
@@ -322,13 +370,19 @@ function renderClock(payload) {
       el("span", { class: "mono", text: clock.provider }),
       el("span", { text: clock.enabled ? "service enabled" : "service paused" }),
     ]),
-    el("div", { class: "operation-grid" }, [
-      field("Configured cadence", cadenceText(clock.configured_cadence_seconds)),
-      field("Effective cadence", cadenceText(clock.effective_cadence_seconds)),
-      field("Loaded", clock.loaded ? "Yes" : "No"),
-      field("Running / waiting", clock.running == null ? "Provider does not expose" : clock.running ? "Yes" : "No"),
-      field("Last tick", clock.last_tick_at ? time(clock.last_tick_at) : "Provider does not expose"),
-      field("Next expected tick", clockTickText(clock.next_tick_at, clock)),
+    el("div", { class: "operation-row-facts" }, [
+      operationFact("Cadence", cadenceText(clock.configured_cadence_seconds)),
+      operationFact("Next tick", clockTickText(clock.next_tick_at, clock)),
+    ]),
+    operationDetails("clock", [
+      el("div", { class: "operation-grid" }, [
+        field("Configured cadence", cadenceText(clock.configured_cadence_seconds)),
+        field("Effective cadence", cadenceText(clock.effective_cadence_seconds)),
+        field("Loaded", clock.loaded ? "Yes" : "No"),
+        field("Running / waiting", clock.running == null ? "Provider does not expose" : clock.running ? "Yes" : "No"),
+        field("Last tick", clock.last_tick_at ? time(clock.last_tick_at) : "Provider does not expose"),
+        field("Next expected tick", clockTickText(clock.next_tick_at, clock)),
+      ]),
     ]),
   );
   if (clock.health_issue) body.appendChild(el("p", { class: "operation-control-note error", text: clock.health_issue }));
@@ -373,6 +427,11 @@ function lastEvaluationText(definition) {
     return `${time(evaluation.last_fired_at || evaluation.last_slot)}${task}`;
   }
   return `Baselined ${time(evaluation.baseline_at)}; no fire yet`;
+}
+
+function lastOutcomeText(definition) {
+  if (definition.last_minted_task_id) return lastMintedText(definition);
+  return lastEvaluationText(definition);
 }
 
 function autoTaskToggleButton(payload, definition) {
@@ -472,35 +531,36 @@ function renderAutoTasks(payload) {
       autoTaskToggleButton(payload, definition),
       autoTaskMintButton(payload, definition),
     ]);
+    const duplicate = definition.open_duplicate ? "Yes — mint will create another" : "No";
     const card = el("article", { class: "operation-card auto-task-card" });
     card.append(
-      el("div", { class: "operation-card-title" }, [
-        el("div", {}, [
-          el("strong", { text: definition.name }),
-          el("span", { class: `operation-state ${state}`, text: state }),
+      el("div", { class: "operation-row-head" }, [
+        operationIdentity(definition.name, state),
+        el("div", { class: "operation-row-facts" }, [
+          operationFact("Schedule", definition.schedule_summary || "—"),
+          operationFact("Next", nextEvaluationText(definition.next_evaluation)),
+          operationFact("Last outcome", lastOutcomeText(definition)),
         ]),
         actions,
       ]),
-      el("div", { class: "operation-target mono", text: definition.template_summary || definition.template?.title || "" }),
-      el("div", { class: "operation-grid" }, [
-        field("Schedule", definition.schedule_summary || "—"),
-        field("Dedupe", definition.dedupe === "always" ? "always fire" : "skip if open"),
-        field("Last scheduler evaluation", lastEvaluationText(definition)),
-        field("Last minted task", lastMintedText(definition)),
-        field("Next evaluation", nextEvaluationText(definition.next_evaluation)),
-        field("Open duplicate", definition.open_duplicate ? "Yes — mint will create another" : "No"),
+      operationDetails(`auto-task:${definition.name}`, [
+        el("div", { class: "operation-target mono", text: definition.template_summary || definition.template?.title || "" }),
+        el("div", { class: "operation-grid" }, [
+          field("Schedule", definition.schedule_summary || "—"),
+          field("Dedupe", definition.dedupe === "always" ? "always fire" : "skip if open"),
+          field("Last scheduler evaluation", lastEvaluationText(definition)),
+          field("Last minted task", lastMintedText(definition)),
+          field("Next evaluation", nextEvaluationText(definition.next_evaluation)),
+          field("Open duplicate", duplicate),
+        ]),
+        renderAutomation(definition.automation),
+        definition.description ? el("p", { class: "operation-description", text: definition.description }) : null,
+        el("p", {
+          class: "operation-control-note operation-mint-warning",
+          text: payload.unconditional_mint_warning || UNCONDITIONAL_MINT_WARNING,
+        }),
       ]),
     );
-    const automation = renderAutomation(definition.automation);
-    if (automation) card.appendChild(automation);
-    if (definition.description) {
-      card.appendChild(el("p", { class: "operation-description", text: definition.description }));
-    }
-    card.appendChild(el("p", {
-      class: "operation-control-note operation-mint-warning",
-      text: payload.unconditional_mint_warning || UNCONDITIONAL_MINT_WARNING,
-    }));
-
     body.appendChild(card);
   }
   const count = $("auto-tasks-count");
@@ -772,43 +832,53 @@ function renderOperationMode(payload) {
   const authority = payload.authority || {};
   const delivery = payload.delivery || {};
   const grantPolicy = authority.policy;
-  if (grantPolicy) {
-    body.append(
+  body.append(
+    el("div", { class: "operation-row-head" }, [
+      operationIdentity(authority.grant_id || "No grant", authority.admission || "none"),
+      el("div", { class: "operation-row-facts" }, [
+        operationFact("Completion", `${delivery.effective_completion ?? "—"}${delivery.cap ? ` (cap: ${delivery.cap})` : ""}`),
+        operationFact("Expires", authority.expires_at ? time(authority.expires_at) : "—"),
+      ]),
+    ]),
+    operationDetails("operation-mode", [
+      grantPolicy
+        ? el("p", {
+          class: "operation-control-note",
+          text: "Active grant policy (captured at enablement; retuning preferences does not change it).",
+        })
+        : null,
+      grantPolicy ? policyGrid(grantPolicy) : null,
       el("p", {
         class: "operation-control-note",
-        text: "Active grant policy (captured at enablement; retuning preferences does not change it).",
-      }),
-      policyGrid(grantPolicy),
-      el("p", {
-        class: "operation-control-note",
-        text: "Current preferences (apply to a future grant only).",
+        text: grantPolicy
+          ? "Current preferences (apply to a future grant only)."
+          : "Current preferences.",
       }),
       policyGrid(policy),
-    );
-  } else {
-    body.appendChild(policyGrid(policy));
-  }
-  body.appendChild(el("div", { class: "operation-grid" }, [
-    field("Effective completion", `${delivery.effective_completion ?? "—"}${delivery.cap ? ` (cap: ${delivery.cap})` : ""}`),
-    field("Grant", authority.grant_id ?? "none"),
-    field("Admission", authority.admission ?? "none"),
-    field("Rights", Array.isArray(authority.rights) && authority.rights.length ? authority.rights.join(", ") : "—"),
-    field("Scope", Array.isArray(authority.task_ids) ? `${authority.task_ids.length} task(s)` : "—"),
-    field("Expires", authority.expires_at ? time(authority.expires_at) : "—"),
-  ]));
-  const reasons = Array.isArray(payload.limiting_reasons) ? payload.limiting_reasons : [];
-  body.appendChild(el("p", {
-    class: "operation-control-note",
-    text: reasons.length ? `Limiting reasons: ${reasons.join(", ")}` : "No limiting reasons.",
-  }));
-  body.appendChild(el("p", {
-    class: "operation-control-note",
-    text: "Changing a preference activates nothing. Only an explicit grant (orbit operation enable) authorizes scoped automation, and no grant authorizes merge.",
-  }));
-  body.appendChild(el("p", {
-    class: "operation-control-note",
-    text: "Review crew selects the reviewer for before-PR review only. After-landing review runs from its own delivery auto-task, which mints tasks with that definition's template crew.",
-  }));
+      el("div", { class: "operation-grid" }, [
+        field("Effective completion", `${delivery.effective_completion ?? "—"}${delivery.cap ? ` (cap: ${delivery.cap})` : ""}`),
+        field("Grant", authority.grant_id ?? "none"),
+        field("Admission", authority.admission ?? "none"),
+        field("Rights", Array.isArray(authority.rights) && authority.rights.length ? authority.rights.join(", ") : "—"),
+        field("Scope", Array.isArray(authority.task_ids) ? `${authority.task_ids.length} task(s)` : "—"),
+        field("Expires", authority.expires_at ? time(authority.expires_at) : "—"),
+      ]),
+      el("p", {
+        class: "operation-control-note",
+        text: Array.isArray(payload.limiting_reasons) && payload.limiting_reasons.length
+          ? `Limiting reasons: ${payload.limiting_reasons.join(", ")}`
+          : "No limiting reasons.",
+      }),
+      el("p", {
+        class: "operation-control-note",
+        text: "Changing a preference activates nothing. Only an explicit grant (orbit operation enable) authorizes scoped automation, and no grant authorizes merge.",
+      }),
+      el("p", {
+        class: "operation-control-note",
+        text: "Review crew selects the reviewer for before-PR review only. After-landing review runs from its own delivery auto-task, which mints tasks with that definition's template crew.",
+      }),
+    ]),
+  );
   if (authority.grant_id) {
     body.appendChild(el("div", { class: "operation-clock-actions" }, [
       operationControlButton(payload, "stop"),

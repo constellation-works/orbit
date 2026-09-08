@@ -109,6 +109,7 @@
         grid-template-columns: 216px minmax(0, 1fr);
         flex: 1 1 auto;
         min-height: 0;
+        min-width: 0;
       }
 
       .rail {
@@ -117,6 +118,7 @@
         display: flex;
         flex-direction: column;
         min-height: 0;
+        min-width: 0;
         overflow-y: auto;
       }
 
@@ -307,6 +309,84 @@
       .refresh-btn:disabled {
         cursor: wait;
         opacity: 0.55;
+      }
+
+      /* ORB-11559: below ~760px the 216px rail steals the content column.
+         Stack the shell, scroll tabs horizontally, and put diagnostics
+         subtabs on a second row so every destination stays reachable.
+         This block follows the base `.topbar` / `.kpi` rules so height and
+         label hiding win the cascade. */
+      @media (max-width: 760px) {
+        .shell {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: auto minmax(0, 1fr);
+        }
+        .rail {
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+          overflow-x: auto;
+          overflow-y: visible;
+        }
+        .rail-brand { display: none; }
+        .rail .tabs {
+          flex-direction: row;
+          flex-wrap: wrap;
+          overflow-x: auto;
+          min-width: 0;
+          padding: 6px 8px 0;
+          gap: 2px;
+        }
+        .rail-group { display: contents; }
+        .rail-group-label { display: none; }
+        .rail .tab {
+          width: auto;
+          flex: 0 0 auto;
+          white-space: nowrap;
+        }
+        .rail-label { flex: 0 1 auto; }
+        .rail-subtabs {
+          flex: 1 1 100%;
+          flex-direction: row;
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          padding: 2px 0 6px;
+          gap: 2px;
+        }
+        .rail-subtabs .subtab {
+          padding: 5px 8px;
+          white-space: nowrap;
+          flex: 0 0 auto;
+        }
+        .rail-foot {
+          margin-top: 0;
+          flex-direction: row;
+          flex-wrap: wrap;
+          align-items: center;
+          border-top: 1px solid var(--hair);
+          padding: 8px 10px;
+        }
+        .rail-workspace { flex: 1 1 12rem; min-width: 0; }
+        .topbar {
+          height: auto;
+          min-height: 52px;
+          flex-wrap: wrap;
+          row-gap: 8px;
+          padding: 8px 12px;
+        }
+        .kpi .k { display: none; }
+        .kpi-spark { display: none; }
+        .global-id-error {
+          white-space: normal;
+          max-width: min(100vw - 24px, 280px);
+          overflow-wrap: anywhere;
+        }
+        .tab-pane[data-tab="operations"] .subtabs,
+        #operations-subtabs {
+          overflow-x: auto;
+          flex-wrap: nowrap;
+        }
+        .subtab { white-space: nowrap; }
+        .log-statusbar { overflow: hidden; }
       }
 
       /* ORB-00030 multi-workspace: header selector + per-task workspace badge */
@@ -889,7 +969,13 @@
       .chip:focus-visible,
       .mutation-undo:focus-visible,
       .rail .tab:focus-visible,
-      .dock-seg:focus-visible {
+      .rail-subtabs .subtab:focus-visible,
+      .dock-seg:focus-visible,
+      .subtab:focus-visible,
+      .operation-button:focus-visible,
+      .operation-cadence:focus-visible,
+      .operation-details summary:focus-visible,
+      .operation-action-unavailable:focus-visible {
         outline: 2px solid var(--accent-hover);
         outline-offset: 2px;
       }
@@ -4231,7 +4317,7 @@
       .tab-pane[data-tab="operations"] .subtabs { border-bottom: 1px solid var(--border); }
       .operation-feedback {
         min-height: 30px; padding: 7px 14px; border-bottom: 1px solid var(--border);
-        color: var(--fg-dim); font: 11px/1.4 var(--font-mono);
+        color: var(--fg-dim); font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere;
       }
       .operation-feedback:empty { display: none; }
       .operation-feedback.pending { color: var(--priority-medium); }
@@ -4239,16 +4325,40 @@
       .operation-feedback.error { color: var(--state-failed); }
       #routines-body, #clock-body, #auto-tasks-body, #auto-drain-body { padding: 12px; background: var(--bg); }
       .operation-card {
-        padding: 12px; margin-bottom: 10px; border: 1px solid var(--border);
+        padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--border);
         border-radius: 4px; background: var(--bg-elev);
       }
       .operation-card:last-child { margin-bottom: 0; }
       .operation-card-title, .operation-clock-summary, .operation-clock-actions, .operation-card-actions {
         display: flex; align-items: center; justify-content: space-between; gap: 10px;
       }
-      .operation-card-actions { justify-content: flex-end; flex-wrap: wrap; }
+      .operation-card-actions { justify-content: flex-end; flex-wrap: wrap; min-width: 0; }
       .operation-card-title > div, .operation-clock-summary { display: flex; align-items: center; gap: 8px; min-width: 0; }
-      .operation-card-title strong { overflow-wrap: anywhere; }
+      .operation-card-title strong, .operation-identity strong { overflow-wrap: anywhere; }
+      .operation-row-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr) auto;
+        gap: 8px 12px;
+        align-items: start;
+      }
+      .operation-identity {
+        display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap;
+      }
+      .operation-row-facts { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      .operation-fact { display: flex; gap: 8px; min-width: 0; }
+      .operation-fact-label {
+        flex: 0 0 auto; color: var(--fg-dim); font: 9px var(--font-sans);
+        text-transform: uppercase; letter-spacing: .08em;
+      }
+      .operation-fact-value {
+        min-width: 0; color: var(--fg); font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere;
+      }
+      .operation-details { margin-top: 8px; min-width: 0; }
+      .operation-details summary {
+        cursor: pointer; color: var(--fg-dim); font: 11px var(--font-sans);
+      }
+      .operation-details[open] summary { margin-bottom: 8px; }
+      .operation-action-unavailable { display: inline-flex; min-width: 0; }
       .operation-state {
         padding: 2px 6px; border: 1px solid var(--border); border-radius: 999px;
         color: var(--fg-dim); font: 10px var(--font-mono); text-transform: uppercase;
@@ -4291,7 +4401,8 @@
       }
       @media (max-width: 720px) {
         .operation-grid { grid-template-columns: 1fr; }
-        .operation-card-title { align-items: flex-start; flex-wrap: wrap; }
+        .operation-card-title, .operation-row-head { align-items: flex-start; flex-wrap: wrap; }
+        .operation-row-head { grid-template-columns: minmax(0, 1fr); }
         .operation-card-actions { width: 100%; }
         .operation-mint-warning { overflow-wrap: anywhere; }
       }
@@ -4300,7 +4411,7 @@
         .operations-layout .panel { margin-bottom: 8px; }
         .operation-grid { grid-template-columns: 1fr; }
         .operation-card-title { align-items: flex-start; }
-        .operation-card-title > div { align-items: flex-start; flex-direction: column; }
+        .operation-card-title > div, .operation-identity { align-items: flex-start; flex-direction: column; }
         .operation-clock-actions, .operation-card-actions { align-items: stretch; }
         .operation-clock-actions > *, .operation-card-actions > * { flex: 1 1 100%; }
       }
