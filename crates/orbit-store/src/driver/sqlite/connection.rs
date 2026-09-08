@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
@@ -7,6 +8,14 @@ use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use crate::driver::sqlite::migration;
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
+
+thread_local! {
+    static FILE_OPEN_PATHS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+}
+
+fn record_file_open(path: &Path) {
+    FILE_OPEN_PATHS.with(|paths| paths.borrow_mut().push(path.to_path_buf()));
+}
 
 /// SQLite store handle: one writer connection behind a mutex (WAL permits a
 /// single writer) plus a read-only connection pool so reads never queue
@@ -70,7 +79,22 @@ impl Store {
         .map_err(|e| OrbitError::Store(e.to_string()))?;
         Ok(())
     }
+    /// Writer-handle constructions of `path` on this thread via [`Store::open`].
+    ///
+    /// Read-pool checkouts use `Connection::open` and are not counted. In-memory
+    /// stores have no file path and are also excluded.
+    pub fn thread_file_open_count_for(path: &Path) -> u64 {
+        FILE_OPEN_PATHS.with(|paths| {
+            paths
+                .borrow()
+                .iter()
+                .filter(|opened| opened.as_path() == path)
+                .count() as u64
+        })
+    }
+
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
+        record_file_open(path);
         let opened = open_private(path)?;
         let conn = opened.connection;
         let read_only = opened.read_only;
