@@ -1,15 +1,37 @@
 #!/usr/bin/env bash
-# Deterministic process tests for the cross-worktree build budget [ORB-11754].
+# Deterministic process tests for the cross-worktree build budget [ORB-11754] [ORB-11760].
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WRAPPER="$ROOT/scripts/build-budget.py"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+BACKGROUND_PIDS=()
+cleanup() {
+  local pid
+  if ((${#BACKGROUND_PIDS[@]})); then
+    for pid in "${BACKGROUND_PIDS[@]}"; do
+      kill "$pid" 2>/dev/null || true
+    done
+  fi
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 fail() {
   printf 'test-build-budget: FAIL: %s\n' "$*" >&2
   exit 1
+}
+
+forget_pid() {
+  local target="$1"
+  local pid
+  local remaining=()
+  for pid in "${BACKGROUND_PIDS[@]}"; do
+    if [[ "$pid" != "$target" ]]; then
+      remaining+=("$pid")
+    fi
+  done
+  BACKGROUND_PIDS=("${remaining[@]}")
 }
 
 wait_for() {
@@ -184,5 +206,259 @@ ORBIT_BUILD_BUDGET=0 ORBIT_CARGO_JOBS=8 \
   "$WRAPPER" -- "$TMP/helper.py" "$TMP/bypass" bypass sleep 0.01
 grep -Fq 'jobs=8' "$TMP/bypass/events" || fail "bypass lost Cargo job setting"
 grep -Fq 'slot=None' "$TMP/bypass/events" || fail "bypass unexpectedly acquired a slot"
+
+cat >"$TMP/fake-app" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >"${FAKE_RUN_ARGS}"
+touch "${FAKE_RUN_STARTED}"
+while [[ ! -e "${FAKE_RUN_RELEASE}" ]]; do
+  sleep 0.02
+done
+exit "${FAKE_RUN_EXIT:-0}"
+SH
+chmod +x "$TMP/fake-app"
+
+cat >"$TMP/fake-make-cargo" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+cmd="${1:-}"
+if [[ "$#" -gt 0 ]]; then
+  shift
+fi
+printf 'event=invoke cmd=%s slot=%s held=%s\n' \
+  "$cmd" "${ORBIT_BUILD_BUDGET_SLOT:-}" "${ORBIT_BUILD_BUDGET_HELD:-}" \
+  >>"${FAKE_MAKE_LOG}"
+
+case "$cmd" in
+  build)
+    printf '%s\n' "$@" >>"${FAKE_BUILD_ARGS}"
+    case "${FAKE_ARTIFACT_MODE:-ok}" in
+      ok)
+        python3 -c 'import json, os; print(json.dumps({"reason":"compiler-artifact","executable":os.environ["FAKE_APP"],"target":{"name":"orbit"}}))'
+        ;;
+      none)
+        python3 -c 'import json; print(json.dumps({"reason":"compiler-artifact","executable":None,"target":{"name":"orbit"}}))'
+        ;;
+      malformed)
+        printf 'not-json\n'
+        ;;
+      *)
+        exit 64
+        ;;
+    esac
+    touch "${FAKE_BUILD_STARTED}"
+    exit "${FAKE_BUILD_EXIT:-0}"
+    ;;
+  run)
+    printf 'event=invoke cmd=run-after-release\n' >>"${FAKE_MAKE_LOG}"
+    printf 'fake cargo run must not run after the build slot is released\n' >&2
+    exit 64
+    ;;
+  watch)
+    trap 'exit 143' TERM
+    printf '%s\n' "$$" >"${FAKE_WATCH_PID}"
+    commands=()
+    while [[ "$#" -gt 0 ]]; do
+      if [[ "$1" == "-s" ]]; then
+        [[ "$#" -ge 2 ]] || exit 2
+        commands+=("$2")
+        shift 2
+      else
+        shift
+      fi
+    done
+    [[ "${#commands[@]}" -gt 0 ]] || exit 2
+    export FAKE_WATCH_ITER=1
+    for shell_cmd in "${commands[@]}"; do
+      sh -c "$shell_cmd"
+    done
+    touch "${FAKE_WATCH_IDLE}"
+    while [[ ! -e "${FAKE_WATCH_AGAIN}" ]]; do
+      sleep 0.02
+    done
+    export FAKE_WATCH_ITER=2
+    for shell_cmd in "${commands[@]}"; do
+      sh -c "$shell_cmd"
+    done
+    touch "${FAKE_WATCH_SECOND}"
+    while true; do
+      sleep 1
+    done
+    ;;
+  check|test)
+    printf 'event=iteration cmd=%s iter=%s slot=%s held=%s\n' \
+      "$cmd" "${FAKE_WATCH_ITER:-}" "${ORBIT_BUILD_BUDGET_SLOT:-}" \
+      "${ORBIT_BUILD_BUDGET_HELD:-}" >>"${FAKE_MAKE_LOG}"
+    touch "${FAKE_WATCH_DIR}/started-${cmd}-${FAKE_WATCH_ITER:-unknown}"
+    if [[ "$cmd" == "check" && "${FAKE_WATCH_ITER:-}" == "1" ]]; then
+      sleep "${FAKE_CHECK_SLEEP:-0}"
+    fi
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+SH
+chmod +x "$TMP/fake-make-cargo"
+
+# make run admits compilation, then launches the resolved binary without cargo run.
+FAKE_APP="$TMP/fake-app"
+FAKE_MAKE_LOG="$TMP/make-run.log"
+FAKE_BUILD_ARGS="$TMP/make-run-build-args"
+FAKE_BUILD_STARTED="$TMP/make-run-build-started"
+FAKE_RUN_ARGS="$TMP/make-run-app-args"
+FAKE_RUN_STARTED="$TMP/make-run-app-started"
+FAKE_RUN_RELEASE="$TMP/make-run-app-release"
+FAKE_RUN_EXIT=0
+FAKE_BUILD_EXIT=0
+FAKE_ARTIFACT_MODE=ok
+FAKE_WATCH_DIR="$TMP/run-unused-watch"
+mkdir -p "$FAKE_WATCH_DIR"
+: >"$FAKE_MAKE_LOG"
+: >"$FAKE_BUILD_ARGS"
+export FAKE_APP FAKE_MAKE_LOG FAKE_BUILD_ARGS FAKE_BUILD_STARTED FAKE_RUN_ARGS \
+  FAKE_RUN_STARTED FAKE_RUN_RELEASE FAKE_RUN_EXIT FAKE_BUILD_EXIT \
+  FAKE_ARTIFACT_MODE FAKE_WATCH_DIR
+
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-run" ORBIT_BUILD_SLOTS=1 \
+  make -s -C "$ROOT" run CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
+  ARGS='alpha beta' >"$TMP/make-run.out" 2>"$TMP/make-run.err" &
+RUN_PID=$!
+BACKGROUND_PIDS+=("$RUN_PID")
+wait_for "$FAKE_RUN_STARTED"
+grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
+  || fail "make run build was not admitted"
+[[ "$(grep -c '^event=invoke cmd=build ' "$FAKE_MAKE_LOG")" == "1" ]] \
+  || fail "make run invoked cargo build more than once"
+if grep -Eq '^event=invoke cmd=run' "$FAKE_MAKE_LOG"; then
+  fail "make run invoked a compilation-capable cargo run after slot release"
+fi
+grep -Fxq -- '-p' "$FAKE_BUILD_ARGS" && grep -Fxq -- 'orbit-cli' "$FAKE_BUILD_ARGS" \
+  && grep -Fxq -- '--bin' "$FAKE_BUILD_ARGS" && grep -Fxq -- 'orbit' "$FAKE_BUILD_ARGS" \
+  && grep -Fxq -- '--message-format=json-render-diagnostics' "$FAKE_BUILD_ARGS" \
+  || fail "make run build lost package, binary, or artifact-format arguments"
+printf 'alpha\nbeta\n' >"$TMP/expected-run-args"
+diff -q "$FAKE_RUN_ARGS" "$TMP/expected-run-args" >/dev/null \
+  || fail "make run did not preserve application arguments"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-run" ORBIT_BUILD_SLOTS=1 \
+  timeout 2 "$WRAPPER" -- true \
+  || fail "make run application runtime retained the build slot"
+touch "$FAKE_RUN_RELEASE"
+set +e
+wait "$RUN_PID"
+run_status=$?
+set -e
+forget_pid "$RUN_PID"
+[[ "$run_status" == "0" ]] || fail "make run lost a successful application exit ($run_status)"
+
+FAKE_RUN_EXIT=42
+export FAKE_RUN_EXIT
+rm -f "$FAKE_RUN_STARTED"
+: >"$FAKE_MAKE_LOG"
+: >"$FAKE_BUILD_ARGS"
+touch "$FAKE_RUN_RELEASE"
+set +e
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-run" ORBIT_BUILD_SLOTS=1 \
+  make -s -C "$ROOT" run CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
+  ARGS='alpha beta' >"$TMP/make-run-fail.out" 2>"$TMP/make-run-fail.err"
+fail_status=$?
+set -e
+[[ "$fail_status" != "0" ]] || fail "make run succeeded despite application exit 42"
+grep -Fq 'Error 42' "$TMP/make-run-fail.err" \
+  || fail "make run did not report application exit status 42"
+if grep -Eq '^event=invoke cmd=run' "$FAKE_MAKE_LOG"; then
+  fail "failing make run invoked cargo run after slot release"
+fi
+
+assert_make_run_does_not_start_app() {
+  local label="$1"
+  rm -f "$FAKE_RUN_STARTED"
+  : >"$FAKE_MAKE_LOG"
+  : >"$FAKE_BUILD_ARGS"
+  set +e
+  ORBIT_BUILD_BUDGET_DIR="$TMP/locks-run" ORBIT_BUILD_SLOTS=1 \
+    make -s -C "$ROOT" run CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
+    ARGS='should-not-run' >"$TMP/make-run-$label.out" 2>"$TMP/make-run-$label.err"
+  local status=$?
+  set -e
+  [[ "$status" != "0" ]] || fail "make run $label succeeded"
+  [[ ! -e "$FAKE_RUN_STARTED" ]] || fail "make run $label executed the built artifact"
+  if grep -Eq '^event=invoke cmd=run' "$FAKE_MAKE_LOG"; then
+    fail "make run $label invoked cargo run"
+  fi
+}
+
+FAKE_ARTIFACT_MODE=ok
+FAKE_BUILD_EXIT=23
+export FAKE_ARTIFACT_MODE FAKE_BUILD_EXIT
+assert_make_run_does_not_start_app failed-build
+grep -Fq 'Error 23' "$TMP/make-run-failed-build.err" \
+  || fail "make run did not stop on cargo build failure"
+
+FAKE_ARTIFACT_MODE=malformed
+FAKE_BUILD_EXIT=0
+export FAKE_ARTIFACT_MODE FAKE_BUILD_EXIT
+assert_make_run_does_not_start_app malformed-artifact
+grep -Fq 'make run: cargo did not report an executable' "$TMP/make-run-malformed-artifact.err" \
+  || fail "make run did not reject malformed cargo artifact JSON"
+
+FAKE_ARTIFACT_MODE=none
+export FAKE_ARTIFACT_MODE
+assert_make_run_does_not_start_app missing-executable
+grep -Fq 'make run: cargo did not report an executable' "$TMP/make-run-missing-executable.err" \
+  || fail "make run did not reject a cargo artifact without an executable"
+
+FAKE_ARTIFACT_MODE=ok
+FAKE_BUILD_EXIT=0
+export FAKE_ARTIFACT_MODE FAKE_BUILD_EXIT
+
+# make watch admits each check/test iteration; idle watcher lifetime does not hold a slot.
+FAKE_MAKE_LOG="$TMP/make-watch.log"
+FAKE_WATCH_DIR="$TMP/watch-state"
+FAKE_WATCH_IDLE="$TMP/watch-idle"
+FAKE_WATCH_AGAIN="$TMP/watch-again"
+FAKE_WATCH_SECOND="$TMP/watch-second"
+FAKE_WATCH_PID="$TMP/watch-pid"
+FAKE_CHECK_SLEEP=0.8
+mkdir -p "$FAKE_WATCH_DIR"
+: >"$FAKE_MAKE_LOG"
+export FAKE_MAKE_LOG FAKE_WATCH_DIR FAKE_WATCH_IDLE FAKE_WATCH_AGAIN \
+  FAKE_WATCH_SECOND FAKE_WATCH_PID FAKE_CHECK_SLEEP
+
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-watch" ORBIT_BUILD_SLOTS=1 \
+  make -s -C "$ROOT" watch CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
+  >"$TMP/make-watch.out" 2>"$TMP/make-watch.err" &
+WATCH_MAKE_PID=$!
+BACKGROUND_PIDS+=("$WATCH_MAKE_PID")
+wait_for "$FAKE_WATCH_DIR/started-check-1"
+set +e
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-watch" ORBIT_BUILD_SLOTS=1 \
+  timeout 0.4 "$WRAPPER" -- true
+during_check=$?
+set -e
+[[ "$during_check" == "124" ]] || fail "watch check iteration did not hold a slot (status $during_check)"
+wait_for "$FAKE_WATCH_IDLE"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-watch" ORBIT_BUILD_SLOTS=1 \
+  timeout 2 "$WRAPPER" -- true \
+  || fail "idle watch retained a build slot"
+grep -Eq '^event=invoke cmd=watch slot= held=$' "$FAKE_MAKE_LOG" \
+  || fail "watch driver should not hold a slot"
+grep -Eq '^event=iteration cmd=check iter=1 slot=1 held=1$' "$FAKE_MAKE_LOG" \
+  || fail "first watch check was not admitted"
+grep -Eq '^event=iteration cmd=test iter=1 slot=1 held=1$' "$FAKE_MAKE_LOG" \
+  || fail "first watch test was not admitted"
+touch "$FAKE_WATCH_AGAIN"
+wait_for "$FAKE_WATCH_SECOND"
+grep -Eq '^event=iteration cmd=check iter=2 slot=1 held=1$' "$FAKE_MAKE_LOG" \
+  || fail "second watch check was not admitted"
+grep -Eq '^event=iteration cmd=test iter=2 slot=1 held=1$' "$FAKE_MAKE_LOG" \
+  || fail "second watch test was not admitted"
+if [[ -f "$FAKE_WATCH_PID" ]]; then
+  kill "$(cat "$FAKE_WATCH_PID")" 2>/dev/null || true
+fi
+kill "$WATCH_MAKE_PID" 2>/dev/null || true
+wait "$WATCH_MAKE_PID" 2>/dev/null || true
+forget_pid "$WATCH_MAKE_PID"
 
 printf 'test-build-budget: ok\n'

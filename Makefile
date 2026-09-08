@@ -77,8 +77,38 @@ release:
 # ------------------------------------------------------------
 # Run
 # ------------------------------------------------------------
+# Resolve the built executable from Cargo JSON artifact messages. `cargo run`
+# is compilation-capable and must not run after the slot is released.
+define CARGO_EXECUTABLE_FROM_JSON
+import json, sys
+path = None
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw.startswith("{"):
+        continue
+    try:
+        message = json.loads(raw)
+    except json.JSONDecodeError:
+        continue
+    executable = message.get("executable")
+    if message.get("reason") == "compiler-artifact" and executable:
+        path = executable
+if not path:
+    sys.stderr.write("make run: cargo did not report an executable\n")
+    raise SystemExit(1)
+print(path)
+endef
+export CARGO_EXECUTABLE_FROM_JSON
+
+# Admit compilation only, then launch the resolved binary without a build slot.
 run:
-	$(BUILD_BUDGET) -- $(CARGO) run -p $(BIN_CRATE) --bin $(BINARY) -- $(ARGS)
+	@set -eu; \
+	json="$$(mktemp)"; \
+	trap 'rm -f "$$json"' EXIT; \
+	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) --message-format=json-render-diagnostics >"$$json"; \
+	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" <"$$json")"; \
+	rm -f "$$json"; \
+	"$$bin" $(ARGS)
 
 # Direct execution (after build)
 dev: build
@@ -204,5 +234,6 @@ compiler-cache-bench:
 # ------------------------------------------------------------
 # Dev Loop
 # ------------------------------------------------------------
+# Idle watcher lifetime stays outside the budget; each check/test iteration is admitted.
 watch:
-	$(BUILD_BUDGET) -- $(CARGO) watch -x "check" -x "test"
+	$(CARGO) watch -s "$(BUILD_BUDGET) -- $(CARGO) check" -s "$(BUILD_BUDGET) -- $(CARGO) test"
