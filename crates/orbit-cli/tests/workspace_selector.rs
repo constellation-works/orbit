@@ -84,6 +84,24 @@ fn global_workspace_flag_selects_by_name_and_id_from_a_foreign_checkout() {
         "name selector from a foreign cwd must list orbit tasks: {by_name}"
     );
 
+    let post_subcommand = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "task",
+            "list",
+            "--limit",
+            "10",
+            "--json",
+            "--workspace",
+            "orbit",
+        ],
+    );
+    assert_eq!(
+        post_subcommand, by_name,
+        "a post-subcommand --workspace selector must match the top-level form"
+    );
+
     let by_id = run_orbit_json(
         &elsewhere,
         &home,
@@ -128,6 +146,43 @@ fn global_workspace_flag_selects_by_name_and_id_from_a_foreign_checkout() {
     assert!(
         !task_ids(&other_cwd).contains(&orbit_task_id),
         "cwd discovery without --workspace must keep binding the other checkout: {other_cwd}"
+    );
+
+    let selected_by_post_subcommand = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "task",
+            "add",
+            "--title",
+            "Selected workspace task",
+            "--complexity",
+            "low",
+            "--workspace",
+            "orbit",
+            "--json",
+        ],
+    );
+    let selected_task_id = selected_by_post_subcommand["id"]
+        .as_str()
+        .expect("selected task id")
+        .to_string();
+    let selected_from_workspace = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "task",
+            "list",
+            "--limit",
+            "10",
+            "--json",
+            "--workspace",
+            "orbit",
+        ],
+    );
+    assert!(
+        task_ids(&selected_from_workspace).contains(&selected_task_id),
+        "post-subcommand --workspace on task add must select the workspace: {selected_from_workspace}"
     );
 }
 
