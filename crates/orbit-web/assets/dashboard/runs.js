@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { panelCanRender, el, stateCell, syncNodes, postJson } from './common.js';
+import { panelCanRender, el, stateCell, syncNodes, postJson, makeToggleRow } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -675,7 +675,9 @@ export function renderRuns(runs) {
     row.dataset.key = `run-${runIdentity(r)}`;
     row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${friction.denials}-${friction.toolFails}-${friction.durationMs}-${friction.longRun}`;
     row.style.cursor = "pointer";
-    row.addEventListener("click", () => doNavigateToRun(r.run_id, r.workspace_id));
+    // A run row opens the run detail view rather than disclosing inline, so it
+    // gets button semantics with no expansion state.
+    makeToggleRow(row, { onToggle: () => doNavigateToRun(r.run_id, r.workspace_id) });
     frag.appendChild(row);
   }
   syncNodes(body, Array.from(frag.children));

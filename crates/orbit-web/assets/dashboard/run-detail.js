@@ -15,7 +15,7 @@
 // No behavior change: identical rendering, expand/collapse, tooltips, routing, subtab
 // activation, and scroll-to-step.
 
-import { el, syncNodes, stateCell, positiveIntParam } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -262,12 +262,18 @@ export function renderRunSteps() {
       el("span", { class: exitClass, text: exit == null ? "-" : String(exit) }),
     ]);
     row.dataset.key = `step-${step.step_index}`;
-    row.dataset.hash = `${step.step_index}-${step.state}-${exit}`;
+    // Expansion is part of the row's identity: without it the keyed diff reuses
+    // the collapsed node and drops the `expanded` class and `aria-expanded`
+    // the toggle just set.
+    row.dataset.hash = `${step.step_index}-${step.state}-${exit}-${expandedStepIndices.has(step.step_index)}`;
     if (expandedStepIndices.has(step.step_index)) row.classList.add("expanded");
-    row.addEventListener("click", () => {
-      if (expandedStepIndices.has(step.step_index)) expandedStepIndices.delete(step.step_index);
-      else expandedStepIndices.add(step.step_index);
-      renderRunSteps();
+    makeToggleRow(row, {
+      expanded: expandedStepIndices.has(step.step_index),
+      onToggle: () => {
+        if (expandedStepIndices.has(step.step_index)) expandedStepIndices.delete(step.step_index);
+        else expandedStepIndices.add(step.step_index);
+        renderRunSteps();
+      },
     });
     frag.appendChild(row);
     if (expandedStepIndices.has(step.step_index)) {

@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { onWorkspaceChange, panelCanRender, el, statusPill, patchJson, postJson, syncNodes, isAggregateView, withWorkspace } from './common.js';
+import { onWorkspaceChange, panelCanRender, el, statusPill, patchJson, postJson, syncNodes, isAggregateView, withWorkspace, makeToggleRow } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 
 const $ = (id) => document.getElementById(id);
@@ -654,7 +654,7 @@ function buildArtifactPreview(artifact, response) {
 
 export function buildArtifacts(task) {
   const wrap = el("div", { class: "artifacts" });
-  for (const artifact of task.artifacts) {
+  for (const [index, artifact] of task.artifacts.entries()) {
     const path = String(artifact.path || "");
     const mediaType = String(artifact.media_type || "application/octet-stream");
     const row = el("div", {
@@ -662,27 +662,38 @@ export function buildArtifacts(task) {
       text: `${path} · ${mediaType} · ${fmtSize(artifact.size_bytes)}`,
     });
     const preview = el("div", { class: "artifact-preview" });
+    // Artifact paths are free-form, so the position in the list is what makes a
+    // stable id the row's `aria-controls` can point at.
+    preview.id = `artifact-preview-${task.id}-${index}`;
     preview.hidden = true;
-    row.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      if (preview.dataset.loaded === "true" && !preview.hidden) {
-        preview.hidden = true;
-        return;
-      }
-      if (preview.dataset.loaded === "true") {
-        preview.hidden = false;
-        return;
-      }
-      preview.hidden = false;
-      preview.textContent = "loading...";
-      try {
-        const response = await fetch(artifactUrl(task.id, path));
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        preview.replaceChildren(await buildArtifactPreview(artifact, response));
-        preview.dataset.loaded = "true";
-      } catch (error) {
-        preview.textContent = `Unable to load ${path}: ${error.message}`;
-      }
+
+    // Disclosure lives on the preview's `hidden` flag; keeping the two in one
+    // setter is what stops the announced state from drifting from the visible one.
+    const revealPreview = (visible) => {
+      preview.hidden = !visible;
+      row.setAttribute("aria-expanded", String(visible));
+    };
+
+    makeToggleRow(row, {
+      expanded: false,
+      controls: preview.id,
+      onToggle: async (e) => {
+        e.stopPropagation();
+        if (preview.dataset.loaded === "true") {
+          revealPreview(preview.hidden);
+          return;
+        }
+        revealPreview(true);
+        preview.textContent = "loading...";
+        try {
+          const response = await fetch(artifactUrl(task.id, path));
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          preview.replaceChildren(await buildArtifactPreview(artifact, response));
+          preview.dataset.loaded = "true";
+        } catch (error) {
+          preview.textContent = `Unable to load ${path}: ${error.message}`;
+        }
+      },
     });
     wrap.appendChild(row);
     wrap.appendChild(preview);
@@ -704,9 +715,13 @@ function buildTaskDetail(task, context) {
     const block = el("div", { class: classes });
     const h4 = el("h4", { text: title });
     if (collapsible) {
-      h4.addEventListener("click", (e) => {
-        e.stopPropagation();
-        block.classList.toggle("collapsed");
+      makeToggleRow(h4, {
+        expanded: !collapsed,
+        onToggle: (e) => {
+          e.stopPropagation();
+          const nowCollapsed = block.classList.toggle("collapsed");
+          h4.setAttribute("aria-expanded", String(!nowCollapsed));
+        },
       });
     }
     block.appendChild(h4);
@@ -1264,9 +1279,13 @@ function buildPinnedTask(ptask, context) {
     buildStatusUpdateControl(ptask, context),
     buildCrewUpdateControl(ptask, context),
   ]);
-  row.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (navigator.clipboard) navigator.clipboard.writeText(ptask.id).catch(() => {});
+  // The pinned row's detail is always open, so the row is a plain copy-the-id
+  // action rather than a disclosure.
+  makeToggleRow(row, {
+    onToggle: (e) => {
+      e.stopPropagation();
+      if (navigator.clipboard) navigator.clipboard.writeText(ptask.id).catch(() => {});
+    },
   });
   row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, ptask.id)}-${feedbackSignature(crewFeedback, ptask.id)}`;
 
@@ -1414,20 +1433,26 @@ export function renderTasks(tasks, context) {
       row.dataset.key = `task-${t.id}`;
       // Basic hash based on row presentation parameters + expanded state
       row.dataset.hash = `${t.id}-${t.title}-${t.status}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${expandedTaskIds.has(t.id)}`;
-      row.addEventListener("click", () => {
-        const toggle = () => {
-          if (expandedTaskIds.has(t.id)) expandedTaskIds.delete(t.id);
-          else expandedTaskIds.add(t.id);
-          renderTasks(taskList(context), context);
-        };
-        if (document.startViewTransition) {
-          row.style.viewTransitionName = `task-row-${t.id}`;
-          document.startViewTransition(toggle).finished.then(() => {
-            row.style.viewTransitionName = "";
-          });
-        } else {
-          toggle();
-        }
+      makeToggleRow(row, {
+        expanded: expandedTaskIds.has(t.id),
+        // The detail node only exists while the row is open, so the IDREF is
+        // only published while it actually resolves.
+        controls: expandedTaskIds.has(t.id) ? `detail-${t.id}` : null,
+        onToggle: () => {
+          const toggle = () => {
+            if (expandedTaskIds.has(t.id)) expandedTaskIds.delete(t.id);
+            else expandedTaskIds.add(t.id);
+            renderTasks(taskList(context), context);
+          };
+          if (document.startViewTransition) {
+            row.style.viewTransitionName = `task-row-${t.id}`;
+            document.startViewTransition(toggle).finished.then(() => {
+              row.style.viewTransitionName = "";
+            });
+          } else {
+            toggle();
+          }
+        },
       });
       if (expandedTaskIds.has(t.id)) row.classList.add("expanded");
       nodes.push(row);
@@ -1439,6 +1464,8 @@ export function renderTasks(tasks, context) {
         } else {
           const detail = buildTaskDetail(t, context);
           detail.dataset.key = key;
+          // The row's `aria-controls` points here, so the detail needs a real id.
+          detail.id = key;
           // Diff by full task object stringified
           detail.dataset.hash = JSON.stringify(t);
           nodes.push(detail);
