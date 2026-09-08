@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::{
     DiagnosticsQuery, HISTORY_DEFAULT_LIMIT, bounded_limit, current_year_month_utc,
-    map_runtime_error, month_bounds_utc, server_error, validate_year_month,
+    map_runtime_error, month_bounds_utc, validate_year_month,
 };
 use crate::log_format::{
     Filters as LogFilters, format_message_html, format_source, read_recent_matching_events,
@@ -30,24 +30,20 @@ pub(super) async fn list_diagnostics_metrics(
         return map_runtime_error(e);
     }
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
-    match runtime.read_metrics_entries_limited(&month, limit) {
-        Ok(mut entries) => {
-            entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
-            entries.truncate(limit);
-            let value = if entries.is_empty() {
-                match diagnostics_metrics_from_invocations(&runtime, &month, limit) {
-                    Ok(rows) => Value::Array(rows),
-                    Err(e) => return map_runtime_error(e),
-                }
-            } else {
-                match serde_json::to_value(&entries) {
-                    Ok(value) => value,
-                    Err(e) => return server_error(orbit_core::OrbitError::Store(e.to_string())),
-                }
-            };
-            Json(value).into_response()
+    match super::blocking("diagnostics metrics", move || {
+        let mut entries = runtime.read_metrics_entries_limited(&month, limit)?;
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
+        entries.truncate(limit);
+        if entries.is_empty() {
+            diagnostics_metrics_from_invocations(&runtime, &month, limit).map(Value::Array)
+        } else {
+            serde_json::to_value(&entries).map_err(|e| orbit_core::OrbitError::Store(e.to_string()))
         }
-        Err(e) => map_runtime_error(e),
+    })
+    .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => *response,
     }
 }
 
@@ -132,14 +128,17 @@ fn v2_audit_values(
     until: Option<chrono::DateTime<chrono::Utc>>,
     limit: usize,
 ) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let rows = runtime.list_v2_audit_events(V2AuditEventFilter {
-        workspace_id: String::new(),
-        since,
-        until,
-        source: Some("v2_envelope".to_string()),
-        limit: Some(limit),
-        ..Default::default()
-    })?;
+    let rows = OrbitRuntime::list_v2_audit_events(
+        runtime,
+        V2AuditEventFilter {
+            workspace_id: String::new(),
+            since,
+            until,
+            source: Some("v2_envelope".to_string()),
+            limit: Some(limit),
+            ..Default::default()
+        },
+    )?;
     Ok(rows
         .into_iter()
         .rev()
@@ -530,24 +529,20 @@ pub(super) async fn list_diagnostics_friction(
         return map_runtime_error(e);
     }
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
-    match runtime.read_friction_entries_limited(&month, limit) {
-        Ok(mut entries) => {
-            entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
-            entries.truncate(limit);
-            let value = if entries.is_empty() {
-                match diagnostics_friction_from_v2_audit(&runtime, &month, limit) {
-                    Ok(rows) => Value::Array(rows),
-                    Err(e) => return map_runtime_error(e),
-                }
-            } else {
-                match serde_json::to_value(&entries) {
-                    Ok(value) => value,
-                    Err(e) => return server_error(orbit_core::OrbitError::Store(e.to_string())),
-                }
-            };
-            Json(value).into_response()
+    match super::blocking("diagnostics friction", move || {
+        let mut entries = runtime.read_friction_entries_limited(&month, limit)?;
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
+        entries.truncate(limit);
+        if entries.is_empty() {
+            diagnostics_friction_from_v2_audit(&runtime, &month, limit).map(Value::Array)
+        } else {
+            serde_json::to_value(&entries).map_err(|e| orbit_core::OrbitError::Store(e.to_string()))
         }
-        Err(e) => map_runtime_error(e),
+    })
+    .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => *response,
     }
 }
 

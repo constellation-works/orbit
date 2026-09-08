@@ -22,7 +22,7 @@ use super::denials::{
 use super::incidents::{ROLLUP_SCAN_LIMIT, failure_category_summaries};
 use super::{
     AuditQuery, AuditSummaryQuery, DEFAULT_SUMMARY_WINDOW, HISTORY_DEFAULT_LIMIT,
-    HISTORY_MAX_LIMIT, bad_request, bounded_limit, map_runtime_error, server_error,
+    HISTORY_MAX_LIMIT, bad_request, blocking, bounded_limit, map_runtime_error, server_error,
     truncate_to_hour,
 };
 use crate::parse::parse_since;
@@ -119,22 +119,24 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
             .map(str::to_lowercase),
     };
 
-    let page = if post_filter.is_empty() {
-        // Every requested predicate has a column, so the page is exactly the
-        // SQL window: no prefetch, no Rust-side slicing.
-        match runtime.list_audit_events_filtered(&filter) {
-            Ok(events) => events,
-            Err(e) => return server_error(e),
+    match blocking("audit list", move || {
+        let events = if post_filter.is_empty() {
+            // Every requested predicate has a column, so the page is exactly the
+            // SQL window: no prefetch, no Rust-side slicing.
+            runtime.list_audit_events_filtered(&filter)?
+        } else {
+            scan_audit_page(&runtime, &mut filter, &post_filter, offset, limit)?
+        };
+        Ok(events)
+    })
+    .await
+    {
+        Ok(page) => {
+            let page: Vec<Value> = page.iter().map(audit_event_to_json).collect();
+            Json(Value::Array(page)).into_response()
         }
-    } else {
-        match scan_audit_page(&runtime, &mut filter, &post_filter, offset, limit) {
-            Ok(events) => events,
-            Err(e) => return server_error(e),
-        }
-    };
-
-    let page: Vec<Value> = page.iter().map(audit_event_to_json).collect();
-    Json(Value::Array(page)).into_response()
+        Err(response) => *response,
+    }
 }
 
 /// Predicates the SQLite schema has no column for, applied to each fetched
@@ -202,7 +204,7 @@ fn scan_audit_page(
     filter.limit = HISTORY_MAX_LIMIT;
     filter.offset = 0;
     while matched.len() < wanted && scanned < AUDIT_POST_FILTER_SCAN_CAP {
-        let batch = runtime.list_audit_events_filtered(filter)?;
+        let batch = OrbitRuntime::list_audit_events_filtered(runtime, filter)?;
         let fetched = batch.len();
         scanned += fetched;
         matched.extend(batch.into_iter().filter(|e| post_filter.matches(e)));

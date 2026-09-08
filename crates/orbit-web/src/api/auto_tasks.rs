@@ -22,6 +22,7 @@ use orbit_types::workflow::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::blocking;
 use super::map_runtime_error;
 use super::routines::{
     OperationsQuery, action_capability, authorization_denied, authorized_caller,
@@ -115,7 +116,13 @@ pub(super) async fn toggle_auto_task(
         }
     };
     let started = Instant::now();
-    let current = match runtime.auto_task_show(&body.name) {
+    let name = body.name.clone();
+    let current = match blocking("auto-task show", {
+        let runtime = runtime.clone();
+        move || runtime.auto_task_show(&name)
+    })
+    .await
+    {
         Ok(Some(definition)) => definition,
         Ok(None) => {
             return named_entity_not_found(
@@ -123,7 +130,7 @@ pub(super) async fn toggle_auto_task(
                 format!("auto-task '{}' was not found", body.name),
             );
         }
-        Err(error) => return map_runtime_error(error),
+        Err(response) => return *response,
     };
     if current.enabled != body.expected_enabled {
         return (
@@ -145,9 +152,16 @@ pub(super) async fn toggle_auto_task(
         }))
         .into_response();
     }
-    let updated = match runtime.auto_task_toggle(&body.name, body.enabled) {
-        Ok(updated) => updated,
-        Err(error) => {
+    let updated = match blocking("auto-task toggle", {
+        let runtime = runtime.clone();
+        let name = body.name.clone();
+        let enabled = body.enabled;
+        move || Ok(runtime.auto_task_toggle(&name, enabled))
+    })
+    .await
+    {
+        Ok(Ok(updated)) => updated,
+        Ok(Err(error)) => {
             let error_message = error.to_string();
             record_operation_audit(
                 &runtime,
@@ -163,6 +177,7 @@ pub(super) async fn toggle_auto_task(
             );
             return map_runtime_error(error);
         }
+        Err(response) => return *response,
     };
     record_operation_audit(
         &runtime,
@@ -230,9 +245,15 @@ pub(super) async fn mint_auto_task(
         }
     };
     let started = Instant::now();
-    let minted = match runtime.auto_task_mint(&body.name) {
-        Ok(task) => task,
-        Err(error) => {
+    let minted = match blocking("auto-task mint", {
+        let runtime = runtime.clone();
+        let name = body.name.clone();
+        move || Ok(runtime.auto_task_mint(&name))
+    })
+    .await
+    {
+        Ok(Ok(task)) => task,
+        Ok(Err(error)) => {
             let error_message = error.to_string();
             record_operation_audit(
                 &runtime,
@@ -248,6 +269,7 @@ pub(super) async fn mint_auto_task(
             );
             return map_runtime_error(error);
         }
+        Err(response) => return *response,
     };
     record_operation_audit(
         &runtime,

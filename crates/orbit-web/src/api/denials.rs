@@ -73,13 +73,16 @@ pub(super) fn scan_v2_loop_denials(
 ) -> Result<Vec<DenialRow>, orbit_core::OrbitError> {
     let mut rows = Vec::new();
     for event_type in v2_denial_event_types() {
-        let events = runtime.list_v2_audit_events(V2AuditEventFilter {
-            workspace_id: String::new(),
-            since,
-            event_type: Some((*event_type).to_string()),
-            limit: Some(SQLITE_DENIAL_SCAN_LIMIT),
-            ..Default::default()
-        })?;
+        let events = OrbitRuntime::list_v2_audit_events(
+            runtime,
+            V2AuditEventFilter {
+                workspace_id: String::new(),
+                since,
+                event_type: Some((*event_type).to_string()),
+                limit: Some(SQLITE_DENIAL_SCAN_LIMIT),
+                ..Default::default()
+            },
+        )?;
         for event in events {
             let value: Value = match serde_json::from_str(&event.payload_json) {
                 Ok(value) => value,
@@ -177,7 +180,8 @@ fn scan_sqlite_denials(
     profile_filter: Option<&str>,
     agent_filter: Option<&str>,
 ) -> Result<Vec<DenialRow>, orbit_core::OrbitError> {
-    let events = runtime.list_audit_events(
+    let events = OrbitRuntime::list_audit_events(
+        runtime,
         since,
         None,
         Some(AuditEventStatus::Denied),

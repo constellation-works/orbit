@@ -10,7 +10,7 @@ use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{bad_request, bounded_limit, map_runtime_error, server_error, validate_id};
+use super::{bad_request, blocking, bounded_limit, map_runtime_error, server_error, validate_id};
 use crate::projections::job_catalog_to_json_with_last_run;
 
 const JOB_RUN_DEFAULT_LIMIT: usize = 25;
@@ -213,19 +213,26 @@ pub(super) async fn resume_job_run_action(
         Err(message) => return bad_request(message),
     };
     let Json(body) = body.unwrap_or_default();
-    match runtime.submit_resume_run(id, Some("dashboard"), body.claim_token.as_deref()) {
-        Ok(invoke) => Json(json!({
+    let id = id.to_string();
+    let retry_source_run_id = id.clone();
+    match blocking("resume run", move || {
+        Ok(runtime.submit_resume_run(&id, Some("dashboard"), body.claim_token.as_deref()))
+    })
+    .await
+    {
+        Ok(Ok(invoke)) => Json(json!({
             "workflow": "resume",
             "job_id": invoke.job_name,
             "run_id": invoke.run_id,
-            "retry_source_run_id": id,
+            "retry_source_run_id": retry_source_run_id,
             "state": if invoke.queued { "queued" } else { "submitted" },
             "submitted_at": invoke.submitted_at,
         }))
         .into_response(),
-        Err(orbit_core::OrbitError::JobValidation(message)) => {
+        Ok(Err(orbit_core::OrbitError::JobValidation(message))) => {
             (StatusCode::CONFLICT, Json(json!({ "error": message }))).into_response()
         }
-        Err(e) => map_runtime_error(e),
+        Ok(Err(e)) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }

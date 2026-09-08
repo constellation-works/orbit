@@ -17,6 +17,7 @@ use orbit_core::{OperationGrantControlRequest, OperationGrantControlResult, Orbi
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::blocking;
 use super::map_runtime_error;
 use super::routines::{authorization_denied, authorized_caller, record_operation_audit};
 
@@ -57,13 +58,35 @@ pub(super) async fn stop_operation_action(
     body: Option<Json<GrantControlBody>>,
 ) -> Response {
     let Json(body) = body.unwrap_or_default();
-    control(
-        &runtime,
-        &DASHBOARD_OPERATION_STOP,
-        "operation.stop",
-        &body,
-        |request| runtime.stop_operation_grant(request),
-    )
+    let caller =
+        match authorize_control(&runtime, &DASHBOARD_OPERATION_STOP, "operation.stop", &body) {
+            Ok(caller) => caller,
+            Err(response) => return *response,
+        };
+    let grant_id = body.grant_id.clone();
+    let reason = body.reason.clone();
+    let expected_revision = body.expected_revision;
+    let claim_token = body.claim_token.clone();
+    let started = Instant::now();
+    let result = match blocking("operation stop", {
+        let runtime = runtime.clone();
+        move || {
+            Ok(runtime.stop_operation_grant(OperationGrantControlRequest {
+                grant_id: grant_id.as_deref(),
+                reason: reason.as_deref(),
+                expected_revision,
+                actor: "dashboard",
+                source: "dashboard",
+                claim_token: claim_token.as_deref(),
+            }))
+        }
+    })
+    .await
+    {
+        Ok(inner) => inner,
+        Err(response) => return *response,
+    };
+    finish_control(&runtime, "operation.stop", &body, &caller, started, result)
 }
 
 /// `POST /operation/revoke?workspace=<id>` — hard-revoke a grant.
@@ -72,24 +95,56 @@ pub(super) async fn revoke_operation_action(
     body: Option<Json<GrantControlBody>>,
 ) -> Response {
     let Json(body) = body.unwrap_or_default();
-    control(
+    let caller = match authorize_control(
         &runtime,
         &DASHBOARD_OPERATION_REVOKE,
         "operation.revoke",
         &body,
-        |request| runtime.revoke_operation_grant(request),
+    ) {
+        Ok(caller) => caller,
+        Err(response) => return *response,
+    };
+    let grant_id = body.grant_id.clone();
+    let reason = body.reason.clone();
+    let expected_revision = body.expected_revision;
+    let claim_token = body.claim_token.clone();
+    let started = Instant::now();
+    let result = match blocking("operation revoke", {
+        let runtime = runtime.clone();
+        move || {
+            Ok(
+                runtime.revoke_operation_grant(OperationGrantControlRequest {
+                    grant_id: grant_id.as_deref(),
+                    reason: reason.as_deref(),
+                    expected_revision,
+                    actor: "dashboard",
+                    source: "dashboard",
+                    claim_token: claim_token.as_deref(),
+                }),
+            )
+        }
+    })
+    .await
+    {
+        Ok(inner) => inner,
+        Err(response) => return *response,
+    };
+    finish_control(
+        &runtime,
+        "operation.revoke",
+        &body,
+        &caller,
+        started,
+        result,
     )
 }
 
-fn control(
+fn authorize_control(
     runtime: &OrbitRuntime,
     governed: &'static GovernedOperation,
     operation: &str,
     body: &GrantControlBody,
-    apply: impl FnOnce(
-        OperationGrantControlRequest<'_>,
-    ) -> Result<OperationGrantControlResult, orbit_core::OrbitError>,
-) -> Response {
+) -> Result<orbit_common::governance::authorization::CallerCapabilities, Box<Response>> {
     let workspace = runtime.workspace_id().unwrap_or_default();
     let target = body
         .grant_id
@@ -100,9 +155,8 @@ fn control(
         "reason": body.reason,
         "expected_revision": body.expected_revision,
     });
-    let started = Instant::now();
-    let caller = match authorized_caller(governed) {
-        Ok(caller) => caller,
+    match authorized_caller(governed) {
+        Ok(caller) => Ok(caller),
         Err(denial) => {
             record_operation_audit(
                 runtime,
@@ -114,18 +168,30 @@ fn control(
                 None,
                 Some(&denial),
                 None,
-                started,
+                Instant::now(),
             );
-            return authorization_denied(denial);
+            Err(Box::new(authorization_denied(denial)))
         }
-    };
-    let result = apply(OperationGrantControlRequest {
-        grant_id: body.grant_id.as_deref(),
-        reason: body.reason.as_deref(),
-        expected_revision: body.expected_revision,
-        actor: "dashboard",
-        source: "dashboard",
-        claim_token: body.claim_token.as_deref(),
+    }
+}
+
+fn finish_control(
+    runtime: &OrbitRuntime,
+    operation: &str,
+    body: &GrantControlBody,
+    caller: &orbit_common::governance::authorization::CallerCapabilities,
+    started: Instant,
+    result: Result<OperationGrantControlResult, orbit_core::OrbitError>,
+) -> Response {
+    let workspace = runtime.workspace_id().unwrap_or_default();
+    let target = body
+        .grant_id
+        .clone()
+        .unwrap_or_else(|| "active".to_string());
+    let arguments = json!({
+        "grant_id": body.grant_id,
+        "reason": body.reason,
+        "expected_revision": body.expected_revision,
     });
     match result {
         Ok(result) => {
@@ -136,7 +202,7 @@ fn control(
                 &result.grant.id,
                 "",
                 &arguments,
-                Some(&caller),
+                Some(caller),
                 None,
                 None,
                 started,
@@ -163,7 +229,7 @@ fn control(
                 &target,
                 "",
                 &arguments,
-                Some(&caller),
+                Some(caller),
                 None,
                 Some(&message),
                 started,
