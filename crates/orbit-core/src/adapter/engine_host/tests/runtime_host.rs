@@ -11,12 +11,14 @@ use orbit_engine::{
     RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate, V2AuditWriter, V2DispatchInput,
 };
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{ExternalRef, Task, TaskStatus, push_external_ref_if_missing};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, DeterministicSpec};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskAddParams, TaskUpdateParams};
+use crate::application::task::{
+    SYSTEM_ACTOR_LABEL, TaskAddParams, TaskRecordUpdateParams, TaskUpdateParams,
+};
 use crate::application::workflow::ShipMode;
 use crate::runtime::WorkspaceRuntimeBinding;
 use crate::{ActorIdentity, OrbitRuntime};
@@ -959,6 +961,141 @@ fn generic_automation_status_update_uses_system_history_and_preserves_implemente
         .expect("review transition history");
     assert_eq!(status_entry.by, SYSTEM_ACTOR_LABEL);
     assert_eq!(updated.implemented_by.as_deref(), Some("gpt-test"));
+}
+
+#[test]
+fn apply_task_automation_update_keeps_external_refs_written_after_locked_read() {
+    let (_root, runtime) = test_runtime();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Concurrent refs".to_string(),
+            description: "Exercise automation external_ref merge under the task lock.".to_string(),
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("add task");
+    let concurrent_ref = ExternalRef::github_pr("200").expect("concurrent github-pr ref");
+    let automation_ref = ExternalRef::github_pr("100").expect("automation github-pr ref");
+    runtime.set_after_locked_state_read_hook(Arc::new({
+        let runtime = runtime.clone();
+        let task_id = task.id.clone();
+        let concurrent_ref = concurrent_ref.clone();
+        move |snapshot| {
+            if snapshot.id != task_id {
+                return;
+            }
+            let mut refs = snapshot.external_refs.clone();
+            push_external_ref_if_missing(&mut refs, concurrent_ref.clone());
+            runtime
+                .stores()
+                .task_records()
+                .update(
+                    &task_id,
+                    TaskRecordUpdateParams {
+                        actor: "concurrent-writer".to_string(),
+                        external_refs: Some(refs),
+                        ..Default::default()
+                    },
+                )
+                .expect("write concurrent ref under the re-entrant lock");
+        }
+    }));
+
+    runtime
+        .apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                external_refs: vec![automation_ref.clone()],
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("automation ref write");
+
+    let updated = runtime.get_task(&task.id).expect("reload task");
+    assert!(
+        updated
+            .external_refs
+            .iter()
+            .any(|reference| reference.has_key(&automation_ref.system, &automation_ref.id)),
+        "automation ref must survive: {:?}",
+        updated.external_refs
+    );
+    assert!(
+        updated
+            .external_refs
+            .iter()
+            .any(|reference| reference.has_key(&concurrent_ref.system, &concurrent_ref.id)),
+        "concurrent ref must survive: {:?}",
+        updated.external_refs
+    );
+}
+
+#[test]
+fn apply_task_automation_update_refuses_done_when_status_changes_after_locked_read() {
+    let (_root, runtime) = test_runtime();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Operator withdrawal".to_string(),
+            description: "Exercise automation expected_status compare-and-set.".to_string(),
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("add task");
+    let task = approve_for_execution(&runtime, &task);
+    runtime
+        .start_task(&task.id, Some("start task".to_string()), None)
+        .expect("start task");
+    runtime
+        .apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                execution_summary: Some("Ready for merge.".to_string()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("move to review");
+
+    runtime.set_after_locked_state_read_hook(Arc::new({
+        let runtime = runtime.clone();
+        let task_id = task.id.clone();
+        move |snapshot| {
+            if snapshot.id != task_id || snapshot.status != TaskStatus::Review {
+                return;
+            }
+            runtime
+                .update_task(
+                    &task_id,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                )
+                .expect("operator reclassifies to backlog");
+        }
+    }));
+
+    let error = runtime
+        .apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect_err("stale done write must lose to the operator");
+    let message = error.to_string();
+    assert!(
+        message.contains("status changed"),
+        "names the race: {message}"
+    );
+    assert!(
+        message.contains("backlog"),
+        "names the new status: {message}"
+    );
+
+    let current = runtime.get_task(&task.id).expect("reload task");
+    assert_eq!(current.status, TaskStatus::Backlog);
 }
 
 #[test]

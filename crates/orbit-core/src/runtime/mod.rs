@@ -36,6 +36,8 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -65,6 +67,9 @@ pub use resolve::{is_global_orbit_root, resolve_global_root, try_resolve_initial
 pub use run_input::managed_workspace_selector_from_env;
 pub(crate) use task::{failed_run_error_context, is_workflow_failure_state};
 
+#[cfg(test)]
+pub(crate) type AfterLockedStateReadHook = Arc<dyn Fn(&orbit_types::task::Task) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct OrbitRuntime {
     pub(crate) context: OrbitContext,
@@ -84,6 +89,12 @@ pub struct OrbitRuntime {
     /// current). Surfaced by `orbit migrate`.
     layout_report: Arc<orbit_store::workflow::layout::LayoutUpgradeReport>,
     _temp_dir: Option<Arc<builder::TempDir>>,
+    /// Test-only seam for `apply_task_automation_update`: fired after the
+    /// authoritative locked `get_task`, before the derived write. The lock is
+    /// re-entrant, so a hook may mutate the same task and observe whether the
+    /// automation write merges or refuses.
+    #[cfg(test)]
+    after_locked_state_read: Arc<Mutex<Option<AfterLockedStateReadHook>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,6 +169,8 @@ impl OrbitRuntime {
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(layout_report),
             _temp_dir: None,
+            #[cfg(test)]
+            after_locked_state_read: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -193,6 +206,8 @@ impl OrbitRuntime {
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(orbit_store::workflow::layout::LayoutUpgradeReport::default()),
             _temp_dir: Some(Arc::new(temp_dir)),
+            #[cfg(test)]
+            after_locked_state_read: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -205,6 +220,26 @@ impl OrbitRuntime {
     pub fn with_actor(mut self, actor: ActorIdentity) -> Self {
         self.context.set_actor(actor);
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_after_locked_state_read_hook(&self, hook: AfterLockedStateReadHook) {
+        *self
+            .after_locked_state_read
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn invoke_after_locked_state_read(&self, task: &orbit_types::task::Task) {
+        let hook = self
+            .after_locked_state_read
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(hook) = hook {
+            hook(task);
+        }
     }
 
     /// Registry-owning composition supplies stable machine identity; Core never discovers it.
