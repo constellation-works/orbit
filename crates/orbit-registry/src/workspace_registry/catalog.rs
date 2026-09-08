@@ -1,6 +1,6 @@
 //! Versioned logical workspace catalog and machine-local checkout bindings.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -443,20 +443,45 @@ pub fn find_workspace_by_path<'a>(
 }
 
 /// Sets a path override binding a directory to a workspace.
+///
+/// The path must not already be another checkout's `repo_root` or override.
+/// Persistence repeats this uniqueness rule so a hand-edited or CLI-rewritten
+/// registry cannot save a collision that would make `find_checkout_by_path`
+/// order-dependent.
 pub fn set_path_override(
     registry: &mut WorkspaceRegistry,
     path: PathBuf,
     workspace_id: &str,
 ) -> Result<(), OrbitError> {
-    let checkout = registry
+    let checkout_index = registry
         .checkouts
-        .iter_mut()
-        .find(|checkout| checkout.workspace_id == workspace_id)
+        .iter()
+        .position(|checkout| checkout.workspace_id == workspace_id)
         .ok_or_else(|| {
             OrbitError::WorkspaceError(format!(
                 "workspace '{workspace_id}' has no local checkout binding"
             ))
         })?;
+    if let Some(existing) = registry
+        .checkouts
+        .iter()
+        .enumerate()
+        .find(|(index, checkout)| {
+            *index != checkout_index
+                && (checkout.repo_root == path
+                    || checkout
+                        .path_overrides
+                        .iter()
+                        .any(|claimed| claimed == &path))
+        })
+        .map(|(_, checkout)| checkout.workspace_id.as_str())
+    {
+        return Err(OrbitError::WorkspaceError(format!(
+            "checkout path '{}' is already registered to workspace '{existing}'",
+            path.display()
+        )));
+    }
+    let checkout = &mut registry.checkouts[checkout_index];
     if !checkout.path_overrides.contains(&path) {
         checkout.path_overrides.push(path);
         checkout.path_overrides.sort();
@@ -741,6 +766,23 @@ pub fn validate_workspace_registry(
         checkout.path_overrides.dedup();
         changed |= checkout.path_overrides.len() != before;
     }
+
+    // A path may belong to only one checkout. `register_checkout` and
+    // `set_path_override` refuse the same collision early; this check is the
+    // persistence rule so a rewritten `repo_root` or hand-edited override
+    // cannot save and then resolve by JSON order.
+    let mut claimed_paths: HashMap<&Path, &str> = HashMap::new();
+    for checkout in &registry.checkouts {
+        claim_checkout_path(
+            &mut claimed_paths,
+            &checkout.repo_root,
+            &checkout.workspace_id,
+        )?;
+        for override_path in &checkout.path_overrides {
+            claim_checkout_path(&mut claimed_paths, override_path, &checkout.workspace_id)?;
+        }
+    }
+
     if context.machine_id.is_some() {
         for workspace in &registry.workspaces {
             if workspace.owner_machine_id.is_none() {
@@ -858,6 +900,31 @@ pub fn rename_local_owner_host_id(
             .insert(machine_id.to_string(), new_host_id.to_string());
     }
     Ok(affected)
+}
+
+fn claim_checkout_path<'a>(
+    claimed: &mut HashMap<&'a Path, &'a str>,
+    path: &'a Path,
+    workspace_id: &'a str,
+) -> Result<(), OrbitError> {
+    match claimed.get(path) {
+        Some(existing) if *existing != workspace_id => {
+            let (first, second) = if *existing <= workspace_id {
+                (*existing, workspace_id)
+            } else {
+                (workspace_id, *existing)
+            };
+            Err(invalid_registry(format!(
+                "checkout path '{}' is claimed by both '{first}' and '{second}'",
+                path.display()
+            )))
+        }
+        Some(_) => Ok(()),
+        None => {
+            claimed.insert(path, workspace_id);
+            Ok(())
+        }
+    }
 }
 
 fn invalid_registry(message: String) -> OrbitError {
