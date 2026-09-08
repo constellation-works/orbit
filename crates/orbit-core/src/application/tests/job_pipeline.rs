@@ -320,6 +320,36 @@ fn routine_style_detached_worker_is_claimed_within_ownership_window() {
     assert_child_reaped(worker_pid);
 }
 
+#[test]
+fn observer_read_counts_isolate_identical_run_ids_in_independent_stores() {
+    let (_first_root, first) = test_runtime();
+    let (_second_root, second) = test_runtime();
+    let run = first
+        .stores()
+        .jobs()
+        .insert_job_run("task_gate_pipeline", 1, Utc::now(), None, None)
+        .expect("insert fixture run");
+    // Deliberately use the same ID for both stores, independent of allocator
+    // timing, to reproduce cross-test counter collisions deterministically.
+    let first_count = worker_observer_read_counter::track(&first, &run.run_id);
+    let second_count = worker_observer_read_counter::track(&second, &run.run_id);
+
+    worker_observer_read_counter::record(&first.clone(), &run.run_id);
+    assert_eq!(first_count.reads(), 1, "runtime clones share the counter");
+    assert_eq!(second_count.reads(), 0, "another database is isolated");
+
+    worker_observer_read_counter::record(&second, &run.run_id);
+    assert_eq!(first_count.reads(), 1);
+    assert_eq!(second_count.reads(), 1);
+    drop(first_count);
+    worker_observer_read_counter::record(&second, &run.run_id);
+    assert_eq!(
+        second_count.reads(),
+        2,
+        "dropping another store keeps this counter"
+    );
+}
+
 /// Once a worker has claimed the run, the startup observer waits for its exit
 /// instead of polling the run row for the rest of the worker lifetime.
 #[cfg(unix)]
@@ -332,7 +362,7 @@ fn claimed_sleeping_worker_does_not_keep_polling_the_run_store() {
         .jobs()
         .insert_job_run("task_gate_pipeline", 1, Utc::now(), None, None)
         .expect("insert pending run");
-    let observer_reads = worker_observer_read_counter::track(&run.run_id);
+    let observer_reads = worker_observer_read_counter::track(&runtime, &run.run_id);
     let command = worker_command_override::command(&runtime.paths().repo_root, &run.run_id)
         .expect("build sleeping worker command");
     let log_path = pipeline_worker_log_path(&runtime.paths().logs_dir, &run.run_id);
