@@ -393,6 +393,36 @@ async fn patch_task_crew_null_clears_stale_explicit_crew_to_default() {
 }
 
 #[tokio::test]
+async fn extractor_rejections_return_json_errors() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+    let response =
+        patch_task_body(runtime.clone(), "ORB-invalid", r#"{"crew":5}"#.to_string()).await;
+    assert!(response.status().is_client_error());
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    assert!(body_json(response).await["error"].is_string());
+
+    let response = router()
+        .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
+        .oneshot(
+            Request::builder()
+                .uri("/log?limit=abc")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert!(response.status().is_client_error());
+    assert!(body_json(response).await["error"].is_string());
+}
+
+#[tokio::test]
 async fn crews_endpoint_returns_sorted_runtime_registry() {
     let (_root, runtime) = runtime_with_custom_crews();
 

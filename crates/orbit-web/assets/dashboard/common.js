@@ -419,7 +419,14 @@ export function requestJson(path, method, body) {
   }
   return fetch(withWorkspace(path), opts).then(async (res) => {
     const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
+    let body = {};
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = { error: text };
+      }
+    }
     if (!res.ok) {
       throw new Error(body.error || `${path}: HTTP ${res.status}`);
     }
