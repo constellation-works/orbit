@@ -234,6 +234,8 @@ CREATE VIRTUAL TABLE corpus_fts USING fts5(
 
 The external-content split is what keeps reindexing linear. Everything the writer does outside a `MATCH` — pruning a source, replacing one field, resolving a snippet, asking which fields a source already has indexed — addresses rows by `(source_kind, source_id, field, chunk_idx)` or by rowid. Holding that metadata inside the FTS5 table made each of those a full corpus scan, so a no-op reindex of a few thousand sources cost tens of seconds of pure scanning.
 
+This layout is forward-only. Older Orbit binaries that selected `source_kind` from `corpus_fts` itself cannot read a migrated `semantic.db`. Mixed installed runtimes during an upgrade must restart every process that opens the index onto a current binary; the index is not dual-written for the old reader and is not downgraded. See [Upgrade Orbit Safely](../../runbooks/upgrades.md#mixed-binaries-and-the-workspace-semantic-index).
+
 ### 5.2 Reciprocal Rank Fusion
 
 Both retrievers run in parallel for a query. Each returns a ranked list of `(source_id, field, chunk_idx)` candidates. RRF combines them:
