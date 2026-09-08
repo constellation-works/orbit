@@ -596,6 +596,43 @@ ssh_key_fingerprint = "{PINNED}"
     );
 }
 
+/// [ORB-11712] Observing that no key authenticated is evidence, not the absence
+/// of it. A pinned row exists so a key mismatch is refused, and a password or
+/// keyboard-interactive login under that row is the plainest mismatch it can
+/// have.
+#[test]
+fn a_session_that_authenticated_without_a_key_refuses_a_pinned_row() {
+    let (dir, _path) = write(&format!(
+        r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+ssh_key_fingerprint = "{PINNED}"
+"#
+    ));
+    let identity = RemoteCallerIdentity::key_bound(
+        "hm_alpha",
+        Some(ObservedKeys {
+            fingerprints: Vec::new(),
+            observation: KeyObservation::AuthInfoFile,
+        }),
+    );
+
+    let error =
+        SessionCapabilityPolicy::resolve(dir.path(), McpSessionAuthority::Operator, &identity)
+            .expect_err("a pinned row must not be served to a session that used no key");
+
+    assert!(
+        matches!(
+            error,
+            OrbitError::UnauthorizedCaller(ref message)
+                if message.contains("hm_alpha")
+                    && message.contains("authenticated without a public key")
+        ),
+        "expected a refusal naming the caller and the missing key, got {error:?}"
+    );
+}
+
 /// [ORB-11053] Verification being unavailable is not a mismatch. `ExposeAuthInfo`
 /// is off in a stock sshd, and refusing every pinned caller there would make
 /// the field unusable for the destinations most likely to set it.

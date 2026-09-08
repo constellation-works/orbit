@@ -3,7 +3,7 @@ use base64::Engine as _;
 use super::super::ssh_auth::{
     FORCED_COMMAND_RESTRICTIONS, KeyObservation, ObservedKeys, SSH_ACCEPTANCE_ENV, SshAcceptance,
     auth_info_fingerprints, fingerprint_defect, issue_ssh_acceptance, parse_public_key,
-    verify_ssh_acceptance,
+    read_auth_info, verify_ssh_acceptance,
 };
 
 /// A real `ssh-keygen -t ed25519` key, kept beside the fingerprint
@@ -224,6 +224,31 @@ fn a_session_that_authenticated_without_a_key_has_no_key_to_pin() {
         auth_info_fingerprints("publickey ssh-ed25519 not-base64!\n").is_empty(),
         "an unparseable blob is not a key this destination observed"
     );
+}
+
+/// [ORB-11712] A readable auth-info file is an observation whatever it says.
+/// A password login is a session this destination positively saw authenticate
+/// without a key, and reporting it as unobservable would let a caller who knows
+/// the account password be served a pinned row's grant.
+#[test]
+fn an_auth_info_file_naming_no_key_is_still_an_observation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("auth-info");
+    std::fs::write(&path, "password\n").expect("write auth info");
+
+    let observed = read_auth_info(&path).expect("a readable auth-info file is an observation");
+
+    assert!(observed.fingerprints.is_empty());
+    assert_eq!(observed.observation, KeyObservation::AuthInfoFile);
+}
+
+/// A file sshd already cleaned up says nothing either way, and refusing on it
+/// would refuse sessions no policy meant to refuse.
+#[test]
+fn an_unreadable_auth_info_file_is_not_an_observation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    assert!(read_auth_info(&dir.path().join("absent")).is_none());
 }
 
 #[test]

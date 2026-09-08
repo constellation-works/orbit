@@ -666,6 +666,10 @@ impl SessionCapabilityPolicy {
 /// refusal. `ExposeAuthInfo` is off in a stock `sshd_config`, and there is no
 /// evidence of a mismatch in the absence of evidence; the session is served
 /// and the gap is announced once, where an operator will see it.
+///
+/// Observing that *no* key authenticated is evidence, not the absence of it. A
+/// password or keyboard-interactive login under a pinned row is the plainest
+/// mismatch that row can have, and it is refused like any other.
 fn enforce_key_binding(
     grant: &ResolvedCallerGrant,
     identity: &RemoteCallerIdentity,
@@ -687,12 +691,21 @@ fn enforce_key_binding(
     if observed.matches(pinned) {
         return Ok(());
     }
+
+    let source = observed.observation.label();
+    let mismatch = if observed.fingerprints.is_empty() {
+        format!("this session authenticated without a public key (seen through {source})")
+    } else {
+        format!(
+            "the key that authenticated this session is {keys} (seen through {source})",
+            keys = observed.label(),
+        )
+    };
+
     Err(OrbitError::UnauthorizedCaller(format!(
         "caller '{caller}' is pinned to {pinned} by {CALLERS_FILE_DISPLAY} on this machine, but \
-         the key that authenticated this session is {observed} (seen through {source})",
+         {mismatch}",
         caller = identity.machine_id,
-        observed = observed.label(),
-        source = observed.observation.label(),
     )))
 }
 
