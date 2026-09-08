@@ -9,7 +9,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, to_bytes};
 use axum::http::uri::Authority;
 use axum::http::{Method, Request, StatusCode, header};
 use axum::middleware::{self, Next};
@@ -371,6 +371,35 @@ pub(super) fn server_error(e: orbit_core::OrbitError) -> Response {
         .into_response()
 }
 
+/// Normalize framework-generated client errors to the dashboard's JSON error
+/// contract. Extractor rejections occur before handlers run, so this boundary
+/// covers every route without repeating rejection handling in each handler.
+async fn json_client_error(response: Response) -> Response {
+    if !response.status().is_client_error()
+        || response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .is_some_and(|value| value.as_bytes().starts_with(b"application/json"))
+    {
+        return response;
+    }
+
+    let (parts, body) = response.into_parts();
+    let message = match to_bytes(body, 64 * 1024).await {
+        Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+        Err(error) => format!("failed to read error response: {error}"),
+    };
+    let mut json_response = (parts.status, Json(json!({ "error": message }))).into_response();
+
+    for (name, value) in &parts.headers {
+        if name != header::CONTENT_TYPE {
+            json_response.headers_mut().insert(name, value.clone());
+        }
+    }
+
+    json_response
+}
+
 /// Run a blocking runtime call on the blocking pool instead of the async
 /// worker that is serving the request.
 ///
@@ -557,6 +586,7 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
             get(diagnostics::diagnostics_implement_one),
         )
         .route("/diagnostics/denials", get(denials::list_denials))
+        .layer(middleware::map_response(json_client_error))
         .layer(middleware::from_fn(require_localhost_origin))
 }
 
