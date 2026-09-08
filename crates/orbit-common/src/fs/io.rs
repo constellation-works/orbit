@@ -81,6 +81,13 @@ pub fn atomic_write_bytes(path: &Path, content: &[u8]) -> io::Result<()> {
     staged.commit()
 }
 
+/// Atomically write secret-bearing bytes to `path` with private file
+/// permissions, even when replacing an existing file with broader permissions.
+pub(crate) fn atomic_write_private_bytes(path: &Path, content: &[u8]) -> io::Result<()> {
+    let mut staged = StagedTextFile::new_internal_with_permissions(path, content, true, false)?;
+    staged.commit()
+}
+
 /// Atomically write `content` to `path` without fsyncing the parent.
 /// Cheaper than [`atomic_write_text`] but post-crash the rename may be lost.
 pub fn atomic_write_text_volatile(path: &Path, content: &str) -> io::Result<()> {
@@ -111,6 +118,32 @@ impl StagedTextFile {
     }
 
     fn new_internal(target_path: &Path, content: &[u8], durable: bool) -> io::Result<Self> {
+        Self::new_internal_with_permissions(target_path, content, durable, true)
+    }
+
+    fn new_internal_with_permissions(
+        target_path: &Path,
+        content: &[u8],
+        durable: bool,
+        preserve_existing_permissions: bool,
+    ) -> io::Result<Self> {
+        Self::stage_with(
+            target_path,
+            durable,
+            preserve_existing_permissions,
+            |file| file.write_all(content),
+        )
+    }
+
+    fn stage_with<F>(
+        target_path: &Path,
+        durable: bool,
+        preserve_existing_permissions: bool,
+        write: F,
+    ) -> io::Result<Self>
+    where
+        F: FnOnce(&mut File) -> io::Result<()>,
+    {
         let parent = target_path.parent().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -121,16 +154,19 @@ impl StagedTextFile {
 
         let temp_path = temp_path_for(target_path);
         let mut file = create_new_private_file(&temp_path)?;
+        let mut cleanup = TempFileCleanup::new(temp_path.clone());
 
-        if let Ok(metadata) = fs::metadata(target_path) {
+        if preserve_existing_permissions && let Ok(metadata) = fs::metadata(target_path) {
             fs::set_permissions(&temp_path, metadata.permissions())?;
         }
 
-        file.write_all(content)?;
+        write(&mut file)?;
         if durable {
             file.sync_all()?;
         }
         drop(file);
+
+        cleanup.disarm();
 
         Ok(Self {
             target_path: target_path.to_path_buf(),
@@ -140,6 +176,14 @@ impl StagedTextFile {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn stage_with_for_test<F>(target_path: &Path, write: F) -> io::Result<Self>
+    where
+        F: FnOnce(&mut File) -> io::Result<()>,
+    {
+        Self::stage_with(target_path, true, true, write)
+    }
+
     pub fn commit(&mut self) -> io::Result<()> {
         fs::rename(&self.temp_path, &self.target_path)?;
         self.committed = true;
@@ -147,6 +191,31 @@ impl StagedTextFile {
             sync_parent_dir(&self.target_path)?;
         }
         Ok(())
+    }
+}
+
+/// Removes a newly-created staging file if setup or writing fails before the
+/// staged file can take ownership of cleanup.
+struct TempFileCleanup {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl TempFileCleanup {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TempFileCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
     }
 }
 

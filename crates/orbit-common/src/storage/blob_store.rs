@@ -11,12 +11,12 @@
 //! from those post-redaction bytes.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::fs::io::{create_new_private_file, create_private_dir_all};
+use crate::fs::io::{atomic_write_private_bytes, create_private_dir_all};
 use crate::security::redaction::{PatternRedactor, redact_all};
 
 pub struct BlobStore {
@@ -50,16 +50,8 @@ impl BlobStore {
         let dir = self.root.join(&hash[..2]);
         create_private_dir_all(&dir)?;
         let path = dir.join(&hash);
-        if !path.exists() {
-            let mut f = create_new_private_file(&path).or_else(|err| {
-                if err.kind() == io::ErrorKind::AlreadyExists {
-                    fs::OpenOptions::new().write(true).open(&path)
-                } else {
-                    Err(err)
-                }
-            })?;
-            f.write_all(&redacted)?;
-            f.flush()?;
+        if !path_matches_hash(&path, &hash)? {
+            atomic_write_private_bytes(&path, &redacted)?;
         }
         Ok(hash)
     }
@@ -84,6 +76,14 @@ impl BlobStore {
     pub fn read(&self, sha256: &str) -> io::Result<Vec<u8>> {
         let path = self.root.join(&sha256[..2]).join(sha256);
         fs::read(path)
+    }
+}
+
+fn path_matches_hash(path: &Path, expected_hash: &str) -> io::Result<bool> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(sha256_hex(&bytes) == expected_hash),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
     }
 }
 

@@ -267,3 +267,38 @@ fn atomic_write_bytes_removes_its_temp_file_when_the_rename_fails() {
         "staging files left behind: {leftovers:?}"
     );
 }
+
+#[test]
+fn staged_write_removes_partial_temp_file_when_writing_fails() {
+    use std::io::Write;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("target");
+
+    let error = match super::super::io::StagedTextFile::stage_with_for_test(&target, |file| {
+        file.write_all(b"partial payload")?;
+        Err(io::Error::other("injected write failure"))
+    }) {
+        Ok(_) => panic!("injected write must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert!(!target.exists(), "partial data was published at final path");
+
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "staging files left behind: {leftovers:?}"
+    );
+
+    super::super::io::atomic_write_private_bytes(&target, b"complete payload")
+        .expect("retry write");
+    assert_eq!(
+        std::fs::read(target).expect("read retry"),
+        b"complete payload"
+    );
+}
