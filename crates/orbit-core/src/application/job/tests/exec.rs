@@ -1160,6 +1160,10 @@ fn task_gate_child_failure_still_fails_success_guard() {
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedGateHost::new(&runtime, "failed");
+    let run_id = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_default()
+        .to_string();
 
     let err = try_execute_gate_job(
         &runtime,
@@ -1169,7 +1173,7 @@ fn task_gate_child_failure_still_fails_success_guard() {
             "task_ids": ["ORB-SCRIPTED"],
             "mode": "pr",
         }),
-        "jrun-gate-child-failed",
+        &run_id,
     )
     .expect_err("failed child should fail the gate");
 
