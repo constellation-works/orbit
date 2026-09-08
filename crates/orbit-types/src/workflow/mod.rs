@@ -35,7 +35,8 @@ pub use activity_job::{
 };
 pub use auto_task::{
     AUTO_TASK_SCHEMA_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskDefinition, AutoTaskSchedule,
-    AutoTaskTemplate, DedupePolicy, auto_task_tag, is_valid_auto_task_name,
+    AutoTaskTemplate, DedupePolicy, MAX_AUTO_TASK_INTERVAL_MINUTES, auto_task_tag,
+    is_valid_auto_task_name,
 };
 pub use child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,

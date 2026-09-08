@@ -9,7 +9,7 @@
 
 use chrono::{DateTime, Duration, Local, Utc};
 use orbit_common::OrbitError;
-use orbit_types::workflow::{AutoTaskSchedule, MissedRunPolicy};
+use orbit_types::workflow::{AutoTaskSchedule, MAX_AUTO_TASK_INTERVAL_MINUTES, MissedRunPolicy};
 
 use crate::routines::due::{DueDecision, due_decision, parse_cron};
 
@@ -23,7 +23,7 @@ pub enum AutoTaskDueDecision {
 }
 
 /// Validate a schedule fail-closed: a cron form must parse as a 5-field cron,
-/// an interval must be non-zero. CRUD and the loader call this so a bad
+/// an interval must be within the supported range. CRUD and the loader call this so a bad
 /// schedule is rejected before it can silently never fire.
 pub fn validate_schedule(schedule: &AutoTaskSchedule) -> Result<(), OrbitError> {
     match schedule {
@@ -34,10 +34,12 @@ pub fn validate_schedule(schedule: &AutoTaskSchedule) -> Result<(), OrbitError> 
             parse_cron(cron)?;
             Ok(())
         }
-        AutoTaskSchedule::Interval { every_minutes } if *every_minutes == 0 => {
-            Err(OrbitError::InvalidInput(
-                "auto-task interval every_minutes must be at least 1".to_string(),
-            ))
+        AutoTaskSchedule::Interval { every_minutes }
+            if *every_minutes == 0 || *every_minutes > MAX_AUTO_TASK_INTERVAL_MINUTES =>
+        {
+            Err(OrbitError::InvalidInput(format!(
+                "auto-task interval every_minutes must be between 1 and {MAX_AUTO_TASK_INTERVAL_MINUTES}"
+            )))
         }
         AutoTaskSchedule::Interval { .. } => Ok(()),
     }
@@ -97,6 +99,11 @@ fn decide_interval(
     lower_bound: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<AutoTaskDueDecision, OrbitError> {
+    let every_minutes = i64::try_from(every_minutes).map_err(|_| {
+        OrbitError::InvalidInput(
+            "auto-task interval every_minutes exceeds the supported signed duration".to_string(),
+        )
+    })?;
     if every_minutes == 0 {
         return Err(OrbitError::InvalidInput(
             "auto-task interval every_minutes must be at least 1".to_string(),
@@ -109,8 +116,8 @@ fn decide_interval(
     // A single fire covers however many boundaries fell in a downtime gap
     // (catch-up collapse), because we jump straight to the latest boundary.
     let elapsed_minutes = now.signed_duration_since(baseline).num_minutes();
-    let periods = elapsed_minutes / every_minutes as i64;
-    let latest_slot = baseline + Duration::minutes(every_minutes as i64 * periods);
+    let periods = elapsed_minutes / every_minutes;
+    let latest_slot = baseline + Duration::minutes(every_minutes * periods);
     if latest_slot > lower_bound {
         Ok(AutoTaskDueDecision::Fire {
             slot: latest_slot.to_rfc3339(),
