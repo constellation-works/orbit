@@ -32,7 +32,6 @@ fn task_show_id_is_read_only_from_orbit_task_show_input() {
 fn list_output_uses_minimal_task_projection() {
     let shaped = shape_tool_output(
         "orbit.task.list",
-        &json!({ "status": "backlog" }),
         json!([{
             "id": "T20260422-0001",
             "title": "Backlog task",
@@ -64,6 +63,29 @@ fn list_output_uses_minimal_task_projection() {
             "created_at": "2026-04-22T00:00:00Z",
             "updated_at": "2026-04-22T00:00:00Z"
         }])
+    );
+}
+
+#[test]
+fn show_output_preserves_task_details_by_default() {
+    let output = json!({
+        "id": "T20260422-0001",
+        "title": "Task details",
+        "status": "backlog",
+        "priority": "medium",
+        "type": "feature",
+        "dependencies": [],
+        "resolved_dependencies": [],
+        "implemented_by": null,
+        "created_at": "2026-04-22T00:00:00Z",
+        "updated_at": "2026-04-22T00:00:00Z",
+        "description": "details must remain available",
+        "acceptance_criteria": ["inspect the complete task"]
+    });
+
+    assert_eq!(
+        shape_tool_output("orbit.task.show", output.clone(), false, &[],),
+        output
     );
 }
 
