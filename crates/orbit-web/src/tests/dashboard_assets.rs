@@ -1428,6 +1428,145 @@ fn dashboard_log_dock_has_two_modes_and_an_always_on_status_bar() {
             && css.contains(".col-tasks {\n        min-height: 0;"),
         "the tasks column must be allowed to shrink so #tasks-body can scroll"
     );
+    assert!(
+        css.contains("#side-dock.disconnected .live-dot")
+            && css.contains(".log-statusbar.disconnected .live-dot"),
+        "a failed log stream must restyle the dock and status-bar live dots"
+    );
+}
+
+/// ORB-11660: the tail must resume from the snapshot byte offset, mark the
+/// dock/status bar disconnected when EventSource goes CLOSED (503 / fatal),
+/// show "log stream unavailable, retrying", and recover on the next open.
+#[test]
+fn dashboard_log_tail_resumes_from_snapshot_offset_and_retries_on_close() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(id = "") {
+    this.id = id;
+    this.children = [];
+    this.dataset = {};
+    this.style = {};
+    this.listeners = {};
+    this.className = "";
+    this._text = "";
+    this.parentNode = null;
+    this.attributes = {};
+  }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) {
+    const index = this.children.indexOf(before);
+    if (index < 0) return this.appendChild(child);
+    this.children.splice(index, 0, child);
+    child.parentNode = this;
+    return child;
+  }
+  remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this._text = String(value); this.children = []; }
+  get innerHTML() { return this.textContent; }
+  get firstChild() { return this.children[0] || null; }
+  querySelector(sel) {
+    if (sel.startsWith(".")) {
+      const cls = sel.slice(1);
+      return this.children.find((child) => (child.className || "").split(/\s+/).includes(cls)) || null;
+    }
+    return null;
+  }
+  querySelectorAll() { return []; }
+  get classList() {
+    const self = this;
+    const tokens = () => self.className.split(/\s+/).filter(Boolean);
+    const write = (next) => { self.className = next.join(" "); };
+    return {
+      add: (...c) => write([...new Set([...tokens(), ...c])]),
+      remove: (...c) => write(tokens().filter((token) => !c.includes(token))),
+      toggle: (c, on) => {
+        const has = tokens().includes(c);
+        const should = on === undefined ? !has : Boolean(on);
+        if (should) write([...new Set([...tokens(), c])]);
+        else write(tokens().filter((token) => token !== c));
+        return should;
+      },
+      contains: (c) => tokens().includes(c),
+    };
+  }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+const bar = get("log-statusbar");
+const label = new Node();
+label.className = "sb-label";
+label.textContent = "orbit.log";
+bar.appendChild(label);
+get("logInner");
+get("side-dock");
+globalThis.document = {
+  body: new Node("body"),
+  getElementById: get,
+  createElement: () => new Node(),
+  querySelectorAll: () => [],
+  querySelector: () => null,
+  addEventListener: () => {},
+};
+const location = new URL("http://dashboard.test/");
+globalThis.window = { location, innerHeight: 900, addEventListener: () => {}, localStorage: { getItem: () => null, setItem: () => {} } };
+const retryFns = [];
+const nativeSetTimeout = setTimeout;
+globalThis.setTimeout = (fn, ms = 0) => {
+  if (ms >= 250) { retryFns.push(fn); return retryFns.length; }
+  return nativeSetTimeout(fn, ms);
+};
+globalThis.clearTimeout = () => {};
+const sources = [];
+class MockEventSource {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 2;
+  constructor(url) {
+    this.url = String(url);
+    this.readyState = MockEventSource.CONNECTING;
+    this.onopen = null;
+    this.onmessage = null;
+    this.onerror = null;
+    sources.push(this);
+  }
+  close() { this.readyState = MockEventSource.CLOSED; }
+}
+globalThis.EventSource = MockEventSource;
+globalThis.fetch = async (path) => {
+  const payload = { events: [{ ts: "t", source: "job", code: "OK", level: "info", message_html: "hi" }], offset: 42 };
+  return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
+};
+const tick = () => new Promise((resolve) => nativeSetTimeout(resolve, 0));
+const { initLogTail } = await import("./log-tail.js");
+initLogTail();
+await tick();
+await tick();
+if (sources.length !== 1) throw new Error(`expected one EventSource, got ${sources.length}`);
+if (!sources[0].url.includes("from=42")) throw new Error(`stream url missing snapshot offset: ${sources[0].url}`);
+sources[0].readyState = EventSource.CLOSED;
+sources[0].onerror();
+if (label.textContent !== "log stream unavailable, retrying") {
+  throw new Error(`disconnected copy missing, label=${label.textContent}`);
+}
+if (!bar.classList.contains("disconnected")) throw new Error("status bar did not mark disconnected");
+if (!get("side-dock").classList.contains("disconnected")) throw new Error("dock did not mark disconnected");
+if (retryFns.length !== 1) throw new Error(`expected one retry timer, got ${retryFns.length}`);
+retryFns[0]();
+if (sources.length !== 2) throw new Error(`retry did not open a new EventSource, got ${sources.length}`);
+if (!sources[1].url.includes("from=42")) throw new Error(`retry lost resume offset: ${sources[1].url}`);
+sources[1].readyState = EventSource.OPEN;
+sources[1].onopen();
+if (label.textContent !== "orbit.log") throw new Error(`did not recover label, got ${label.textContent}`);
+if (bar.classList.contains("disconnected")) throw new Error("status bar stayed disconnected after open");
+if (get("side-dock").classList.contains("disconnected")) throw new Error("dock stayed disconnected after open");
+"#,
+    );
 }
 
 /// ORB-10972: the top-level nav is a left rail, and the vertical chrome above

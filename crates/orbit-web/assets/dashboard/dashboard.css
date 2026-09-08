@@ -3161,6 +3161,15 @@
       .log-statusbar .sb-m[data-level="deny"] { color: var(--status-review); }
       .log-statusbar .sb-m[data-level="warn"] { color: var(--status-proposed); }
       .log-statusbar.empty .sb-label { opacity: 0.6; }
+      #side-dock.disconnected .live-dot,
+      .log-statusbar.disconnected .live-dot {
+        background: var(--fg-mute);
+        box-shadow: none;
+        animation: none;
+      }
+      .log-statusbar.disconnected .sb-label {
+        color: var(--status-blocked);
+      }
 
       /* Policy view (Audit sub-tab) */
       .policy-grid {
