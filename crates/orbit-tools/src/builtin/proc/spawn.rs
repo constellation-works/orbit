@@ -48,29 +48,7 @@ impl Tool for ProcSpawnTool {
             .ok_or_else(|| OrbitError::InvalidInput("missing `program`".to_string()))?
             .to_string();
 
-        // Enforce program allowlist when the call sits inside an activity-scoped
-        // tool context, or when a legacy unrestricted context still has a
-        // non-empty list. An activity-scoped call with an empty list denies
-        // every program (fail-closed).
-        let restricted = ctx.proc_spawn_activity_scoped || !ctx.proc_allowed_programs.is_empty();
-        if restricted && !ctx.proc_allowed_programs.iter().any(|p| p == &program) {
-            let matched_rule = if ctx.proc_allowed_programs.is_empty() {
-                "<no allowed programs>".to_string()
-            } else {
-                ctx.proc_allowed_programs.join(", ")
-            };
-            tracing::warn!(
-                target: "orbit.policy.deny",
-                tool = "proc.spawn",
-                path = program.as_str(),
-                profile = "proc.allowed_programs",
-                matched_rule = matched_rule.as_str(),
-            );
-            return Err(OrbitError::PolicyDenied(format!(
-                "program '{}' is not in the allowed list: [{}]",
-                program, matched_rule
-            )));
-        }
+        enforce_program_allowlist(ctx, "proc.spawn", &program)?;
 
         let args = input
             .get("args")
@@ -108,7 +86,7 @@ impl Tool for ProcSpawnTool {
             environment_mode: EnvironmentMode::ClearAndSet(env_pairs),
             debug: false,
         };
-        let sandbox = ActivityFsSandbox { ctx };
+        let sandbox = ActivityFsSandbox::new(ctx);
         let exec_result = run_process(&request, &sandbox)?;
 
         serde_json::to_value(exec_result)
@@ -122,8 +100,14 @@ impl Tool for ProcSpawnTool {
 /// activity cannot read. Existing path arguments (including `--key=path`)
 /// are resolved symlink-safely by the same policy engine used by filesystem
 /// tools before the child is created.
-struct ActivityFsSandbox<'a> {
+pub(crate) struct ActivityFsSandbox<'a> {
     ctx: &'a ToolContext,
+}
+
+impl<'a> ActivityFsSandbox<'a> {
+    pub(crate) fn new(ctx: &'a ToolContext) -> Self {
+        Self { ctx }
+    }
 }
 
 impl Sandbox for ActivityFsSandbox<'_> {
@@ -197,6 +181,38 @@ fn proc_spawn_timeout_ms(input: &Value) -> u64 {
         .get("timeout_ms")
         .and_then(Value::as_u64)
         .unwrap_or(TIMEOUT_DEFAULT_MS)
+}
+
+pub(crate) fn enforce_program_allowlist(
+    ctx: &ToolContext,
+    tool_name: &str,
+    program: &str,
+) -> Result<(), OrbitError> {
+    // Enforce program allowlist when the call sits inside an activity-scoped
+    // tool context, or when a legacy unrestricted context still has a
+    // non-empty list. An activity-scoped call with an empty list denies every
+    // program (fail-closed).
+    let restricted = ctx.proc_spawn_activity_scoped || !ctx.proc_allowed_programs.is_empty();
+    if restricted && !ctx.proc_allowed_programs.iter().any(|p| p == program) {
+        let matched_rule = if ctx.proc_allowed_programs.is_empty() {
+            "<no allowed programs>".to_string()
+        } else {
+            ctx.proc_allowed_programs.join(", ")
+        };
+        tracing::warn!(
+            target: "orbit.policy.deny",
+            tool = tool_name,
+            path = program,
+            profile = "proc.allowed_programs",
+            matched_rule = matched_rule.as_str(),
+        );
+        return Err(OrbitError::PolicyDenied(format!(
+            "program '{}' is not in the allowed list: [{}]",
+            program, matched_rule
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
