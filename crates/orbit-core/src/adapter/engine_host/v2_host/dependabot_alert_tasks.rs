@@ -3,8 +3,10 @@
 mod duplicates;
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::selector::{canonical_selector_in_workspace, exists_in_workspace};
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -298,6 +300,7 @@ where
                 format!("{CODE_KEY_PREFIX}{key}"),
                 "security".to_string(),
             ],
+            context_files: code_context_files(&alert, &runtime.paths().repo_root),
             required_tools: Vec::new(),
             crew: system_crew.clone(),
             priority: priority_for_rank(rank),
@@ -650,6 +653,34 @@ fn location_url(location: &Value) -> String {
         }
     }
     "no location URL".to_string()
+}
+
+/// Scope a Code scanning repair task to the alert's remediation target, read
+/// from the alert's structured `path` rather than the rendered evidence.
+///
+/// The path GitHub reports is repository-relative and may not name anything in
+/// this checkout — the alert can predate a rename or deletion, or describe a
+/// path that escapes the workspace. Emit a selector only when it canonicalizes
+/// and still resolves inside the workspace, so an unusable location yields no
+/// scope instead of an invented one, and one bad alert cannot fail the sweep.
+///
+/// Line numbers stay in the alert evidence: `context_files` selectors address
+/// whole files, and a line suffix would not canonicalize as a `file:` anchor.
+fn code_context_files(alert: &Value, workspace_root: &Path) -> Vec<String> {
+    let path = field(alert, "path");
+    if path.is_empty() {
+        return Vec::new();
+    }
+
+    let Ok(selector) = canonical_selector_in_workspace(&format!("file:{path}"), workspace_root)
+    else {
+        return Vec::new();
+    };
+    if exists_in_workspace(&selector, workspace_root) {
+        vec![selector]
+    } else {
+        Vec::new()
+    }
 }
 
 fn line_suffix(value: &Value) -> String {

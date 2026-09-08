@@ -5,7 +5,9 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
+use crate::adapter::engine_host::v2_host::test_support::{
+    runtime_with_workspace_layout, write_workspace_file,
+};
 
 pub(super) fn alert(number: u64, severity: &str, range: &str, ghsa: &str) -> Value {
     json!({
@@ -571,4 +573,157 @@ fn unavailable_family_does_not_hide_findings_from_collected_family() {
         output["family_outcomes"]["secret_scanning"]["outcome"],
         "capability_unavailable"
     );
+}
+
+/// The location ORB-11779 was filed from: alert #165 reported this path at
+/// line 426, and the minted task must already carry it as scope.
+const ALERT_165_PATH: &str =
+    "crates/orbit-core/src/application/job/tests/workspace_auto_pipeline.rs";
+
+fn code_alert_at(number: u64, path: Value, start_line: Value, end_line: Value) -> Value {
+    let mut alert = code_alert(number, "high");
+    alert["path"] = path;
+    alert["start_line"] = start_line;
+    alert["end_line"] = end_line;
+    alert
+}
+
+fn code_task(runtime: &OrbitRuntime, output: &Value) -> orbit_types::task::Task {
+    let task_id = output["filed"]
+        .as_array()
+        .expect("filed")
+        .iter()
+        .find(|entry| entry["family"] == "code_scanning")
+        .and_then(|entry| entry["task_id"].as_str())
+        .expect("code task id");
+    runtime.get_task(task_id).expect("code task")
+}
+
+#[test]
+fn code_scanning_task_is_scoped_to_the_alert_location_at_creation() {
+    let (_root, runtime, repo) = runtime_with_workspace_layout();
+    write_workspace_file(&repo, ALERT_165_PATH);
+
+    let output = file(
+        &runtime,
+        expanded_snapshot(
+            Vec::new(),
+            vec![code_alert_at(
+                165,
+                json!(ALERT_165_PATH),
+                json!(426),
+                json!(426),
+            )],
+            Vec::new(),
+        ),
+        json!({}),
+    );
+    assert_eq!(output["filed_count"], json!(1));
+
+    // Read straight back from the store: no task-pilot pass and no manual
+    // update ran between minting and this assertion.
+    let task = code_task(&runtime, &output);
+    assert_eq!(task.context_files, vec![format!("file:{ALERT_165_PATH}")]);
+    assert!(
+        task.description.contains("line 426"),
+        "alert evidence lost the line: {}",
+        task.description
+    );
+    assert!(
+        task.acceptance_criteria
+            .iter()
+            .any(|criterion| criterion.contains("line 426"))
+    );
+    assert!(
+        task.context_files
+            .iter()
+            .all(|selector| !selector.contains("426")),
+        "selector must not carry a line suffix: {:?}",
+        task.context_files
+    );
+}
+
+#[test]
+fn code_scanning_locations_outside_the_workspace_produce_no_scope() {
+    let (_root, runtime, repo) = runtime_with_workspace_layout();
+    write_workspace_file(&repo, ALERT_165_PATH);
+
+    for (number, path) in [
+        (30, Value::Null),
+        (31, json!("")),
+        (32, json!("   ")),
+        (33, json!("../outside/leaked.rs")),
+        (34, json!("/etc/passwd")),
+        (35, json!("crates/orbit-core/src/does_not_exist.rs")),
+    ] {
+        let output = file(
+            &runtime,
+            expanded_snapshot(
+                Vec::new(),
+                vec![code_alert_at(number, path.clone(), json!(1), json!(1))],
+                Vec::new(),
+            ),
+            json!({}),
+        );
+        assert_eq!(output["filed_count"], json!(1), "alert #{number} not filed");
+        assert!(
+            code_task(&runtime, &output).context_files.is_empty(),
+            "alert #{number} with location {path} invented a selector"
+        );
+    }
+}
+
+#[test]
+fn an_absolute_in_workspace_location_is_stored_as_a_workspace_relative_selector() {
+    let (_root, runtime, repo) = runtime_with_workspace_layout();
+    write_workspace_file(&repo, ALERT_165_PATH);
+    let absolute = repo.join(ALERT_165_PATH).to_string_lossy().into_owned();
+
+    let output = file(
+        &runtime,
+        expanded_snapshot(
+            Vec::new(),
+            vec![code_alert_at(36, json!(absolute), json!(426), json!(426))],
+            Vec::new(),
+        ),
+        json!({}),
+    );
+    assert_eq!(
+        code_task(&runtime, &output).context_files,
+        vec![format!("file:{ALERT_165_PATH}")]
+    );
+}
+
+#[test]
+fn resweeping_the_same_alert_preserves_the_scoped_task_without_duplicating_it() {
+    let (_root, runtime, repo) = runtime_with_workspace_layout();
+    write_workspace_file(&repo, ALERT_165_PATH);
+    let snapshot = expanded_snapshot(
+        Vec::new(),
+        vec![code_alert_at(
+            165,
+            json!(ALERT_165_PATH),
+            json!(426),
+            json!(426),
+        )],
+        Vec::new(),
+    );
+
+    let first = file(&runtime, snapshot.clone(), json!({}));
+    let task = code_task(&runtime, &first);
+    let expected = vec![format!("file:{ALERT_165_PATH}")];
+    assert_eq!(task.context_files, expected);
+
+    let second = file(&runtime, snapshot, json!({}));
+    assert_eq!(second["filed_count"], json!(0));
+    assert_eq!(
+        second["skipped_existing"]
+            .as_array()
+            .expect("skipped existing")
+            .len(),
+        1
+    );
+
+    let after = runtime.get_task(&task.id).expect("code task");
+    assert_eq!(after.context_files, expected);
 }
