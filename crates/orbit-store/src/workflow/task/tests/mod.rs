@@ -835,6 +835,51 @@ fn round_trip_preserves_artifact_blobs() {
     }
 }
 
+#[test]
+fn import_rejects_tampered_artifact_bytes() {
+    let src = TempDir::new().unwrap();
+    let dst = TempDir::new().unwrap();
+    let archive = src.path().join("tasks.tar.zst");
+    let ws = "ws_art_tamper";
+    let registry = open_registry(src.path());
+    let binding = bind(&registry, src.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("ORB-00000", "artifact task", Vec::new()),
+    );
+    let entry = seed_artifact_blob(&store, "ORB-00000", "top.txt", b"original", "codex");
+    store
+        .rewrite_artifact_manifest(
+            "ORB-00000",
+            &ArtifactManifestV2 {
+                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                files: vec![entry.clone()],
+            },
+        )
+        .expect("rewrite manifest");
+    fs::write(
+        store
+            .bundle_path("ORB-00000")
+            .unwrap()
+            .join(TASK_ARTIFACTS_DIR_NAME)
+            .join(&entry.blob),
+        b"xxxxxxxx",
+    )
+    .unwrap();
+    export_tasks(&registry, ws, ExportSelection::All, &archive, exported_at()).unwrap();
+
+    let target_registry = open_registry(dst.path());
+    let error = import_tasks(&target_registry, &archive, None, ImportConflictPolicy::Fail)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("ORB-00000"), "{error}");
+    assert!(error.contains("sha256 mismatch"), "{error}");
+    assert!(target_registry.tasks_for_workspace(ws).unwrap().is_empty());
+}
+
 /// Regression for the pre-ORB-10042 "half-imported" state: a canonical bundle
 /// with a manifest but no blob files. The documented backfill flow is to copy
 /// the blob tree back from the retained archive. `copy_artifact_blobs` is the

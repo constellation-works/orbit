@@ -321,6 +321,32 @@ fn restore_preserves_crlf_attachment_bytes_despite_gitattributes() {
 }
 
 #[test]
+fn restore_rejects_tampered_publication_artifact_bytes() {
+    let fixture = fixture(AttachmentPolicyKind::Include);
+    let blob = fixture
+        .remote
+        .join("tasks/ORB-00007/artifacts/files/report.txt");
+    fs::write(&blob, b"tampered-secret-content").unwrap();
+    git(&fixture.remote, &["add", "-A"]);
+    git(&fixture.remote, &["commit", "--amend", "--no-edit"]);
+    let registry = fixture.registry();
+    let error = restore_publication(
+        &registry,
+        fixture.request(PublicationRestoreMode::EmptyDestination),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("ORB-00007"), "{error}");
+    assert!(!error.contains("tampered-secret-content"), "{error}");
+    assert!(
+        registry
+            .tasks_for_workspace(&fixture.task_workspace_id)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn collision_and_identity_mismatch_abort_before_mutation() {
     let collision_fixture = fixture(AttachmentPolicyKind::Include);
     let registry = collision_fixture.registry();

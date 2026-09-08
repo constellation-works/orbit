@@ -19,7 +19,7 @@ use crate::driver::file::task_bundle::bundle_lock_target;
 pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2};
 use crate::driver::file::task_bundle::{
     append_jsonl_row, cleanup_partial_bundle_best_effort, publish_envelope, read_bundle_at,
-    read_envelope_at, write_bundle_at,
+    read_bundle_lightweight_at, read_envelope_at, write_bundle_at,
 };
 use crate::driver::sqlite::task_registry::{
     ProjectionRebuildResult, TaskBundleBinding, TaskRegistryStore,
@@ -240,6 +240,7 @@ impl TaskBundleStoreV2 {
         })
     }
 
+    /// Canonical full-bundle read: hashes every artifact payload.
     pub(crate) fn read_bundle(&self, task_id: &str) -> Result<TaskBundleV2, OrbitError> {
         #[cfg(test)]
         self.bundle_reads
@@ -317,17 +318,20 @@ impl TaskBundleStoreV2 {
         Ok(unregistered || exists || published || removed_projection)
     }
 
-    /// List bundles registered to this workspace.
+    /// List bundles registered to this workspace using the lightweight read.
     ///
-    /// Corruption is still fail-fast — one damaged bundle fails the list so
-    /// store damage is never silently hidden. An incomplete multi-file write
-    /// is recognized by `.pending-write.yaml` and recovered rather than
-    /// reported as damage. What is *not* fail-fast is a bundle caught
-    /// mid-publication or mid-removal by a concurrent writer (ORB-10988 /
-    /// F2026-07-119): the binding list is a snapshot, so a create or delete of
-    /// one task would otherwise fail every read of every other task. Those
-    /// bundles are skipped, exactly as they would be had the snapshot been
-    /// taken a moment earlier or later.
+    /// Task-field corruption is still fail-fast — one damaged envelope, body,
+    /// event log, or event/envelope status mismatch fails the list so store
+    /// damage is never silently hidden. Artifact payload existence, size, and
+    /// sha256 are deferred; [`Self::read_bundle`] and explicit reindex, import,
+    /// publication restore, and artifact retrieval still verify those bytes.
+    /// An incomplete multi-file write is recognized by `.pending-write.yaml`
+    /// and recovered rather than reported as damage. What is *not* fail-fast
+    /// is a bundle caught mid-publication or mid-removal by a concurrent
+    /// writer (ORB-10988 / F2026-07-119): the binding list is a snapshot, so a
+    /// create or delete of one task would otherwise fail every read of every
+    /// other task. Those bundles are skipped, exactly as they would be had
+    /// the snapshot been taken a moment earlier or later.
     pub(crate) fn list_bundles(&self) -> Result<Vec<TaskBundleV2>, OrbitError> {
         let bindings = self.registry.tasks_for_workspace(&self.workspace_id)?;
         let mut bundles = Vec::with_capacity(bindings.len());
@@ -342,8 +346,9 @@ impl TaskBundleStoreV2 {
         Ok(bundles)
     }
 
-    /// Read one registered bundle, skipping it when a concurrent writer has it
-    /// in flight. See [`Self::list_bundles`] for the tolerance rule.
+    /// Read one registered bundle on the lightweight listing path, skipping it
+    /// when a concurrent writer has it in flight. See [`Self::list_bundles`]
+    /// for the tolerance rule and the checks this read defers.
     pub(crate) fn read_bundle_if_settled(
         &self,
         task_id: &str,
@@ -491,8 +496,15 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
     })
 }
 
+/// Same lock as [`read_bundle_consistently`], without hashing artifact blobs.
+fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
+        read_bundle_lightweight_at(bundle_dir)
+    })
+}
+
 fn read_bundle_tolerating_in_flight(bundle_dir: &Path) -> Result<Option<TaskBundleV2>, OrbitError> {
-    match read_bundle_consistently(bundle_dir) {
+    match read_bundle_lightweight_consistently(bundle_dir) {
         Ok(bundle) => Ok(Some(bundle)),
         Err(err) => skip_if_in_flight(bundle_dir, err),
     }

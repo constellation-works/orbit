@@ -251,10 +251,10 @@ The v2 bundle is local and file-backed, so multi-file mutations are not fully tr
 
 - Document updates may write Markdown sidecars before `task.yaml`; readers return the sidecar content and the previous envelope metadata until the next successful mutation.
 - History updates may append `events.jsonl` before `task.yaml`; readers reject bundles when the last status event does not match the envelope status.
-- Artifact updates may write files before `manifest.yaml`; unreferenced files under `artifacts/files/` are ignored, while manifest entries with missing files, size drift, or hash drift are corruption and fail loudly.
+- Artifact updates may write files before `manifest.yaml`; unreferenced files under `artifacts/files/` are ignored. Manifest entries with missing files, size drift, or hash drift are corruption on the canonical full-read used by get, reindex, import, publication restore, and artifact retrieval. Listing and search materialization parse the manifest but defer those payload-byte checks.
 - Generated index writes may fail after the envelope changes; `updated_at` validation detects the stale row and rebuilds from bundles before indexed reads.
 
-Malformed registered bundles produce a typed `task_bundle_corrupt` diagnostic naming the affected task and canonical path. Direct reads and task creation do not scan unrelated bundles, while list and search retain their fail-loud behavior. Diagnosis never deletes, moves, or repairs the malformed directory; operators can inspect or quarantine it explicitly. Legacy `review-threads/` sidecars were retired in [ORB-10332], so either their presence or absence is ignored non-destructively.
+Malformed registered bundles produce a typed `task_bundle_corrupt` diagnostic naming the affected task and canonical path. Direct reads and task creation do not scan unrelated bundles. List and search remain fail-loud for envelope, body, and event-log damage, including a settled event/envelope status mismatch; they do not hash artifact payloads on the lightweight materialization path. Diagnosis never deletes, moves, or repairs the malformed directory; operators can inspect or quarantine it explicitly. Legacy `review-threads/` sidecars were retired in [ORB-10332], so either their presence or absence is ignored non-destructively.
 
 Task lock reservations in v2 mode require `.orbit/config.yaml` to provide the workspace binding. If that file disappears while a runtime is active, lock writes fail instead of silently creating legacy `NULL`-workspace reservations.
 
