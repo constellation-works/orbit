@@ -28,11 +28,6 @@ const TRUSTED_PUBLIC_KEY_PATH = PUBLIC_KEY_OVERRIDE
   ? path.resolve(PUBLIC_KEY_OVERRIDE)
   : path.join(PKG_ROOT, 'release-signing.pub');
 const TRUSTED_KEYS_OVERRIDE_PATH = TRUSTED_KEYS_OVERRIDE ? path.resolve(TRUSTED_KEYS_OVERRIDE) : null;
-// orbit-release-key-4 is a PLACEHOLDER pre-staged for the next rotation. The
-// PEM below was generated locally and the matching private key is NOT held by
-// release infrastructure — no production signature will ever verify against
-// it. Replace with a real keypair (generated on the signing host) before
-// rotating off key-3.
 const TRUSTED_RELEASE_KEYS = Object.freeze([
   Object.freeze({
     id: 'orbit-release-key-3',
@@ -48,23 +43,6 @@ Orec31AAFCIIX69YAd21D3MBc4S89/LoYZCq3neDscZ09Y+e6Jg2HpoBstvqSnq/
 npMLlbzNaVfFT7p3IPTxsoEI0SB3ZtO7/XhzuOvOpklYcqjW2DGw/yzr2epAqHE/
 y4rLO3hkxWhxfgF5KPSR2iftc3LMONRGWELK6jpD5KB7No5vwIvjpVPUc5xA45Xw
 tT/bo0mm4TvrumxYr1xyEHrdum+ej/WYz/0BZQlwDOtXAgMBAAE=
------END PUBLIC KEY-----
-`,
-  }),
-  Object.freeze({
-    id: 'orbit-release-key-4',
-    notAfter: '2030-12-31',
-    revokedAt: null,
-    publicKeyPem: `-----BEGIN PUBLIC KEY-----
-MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAiEVVbwQYDnbPg86xYrI8
-Ddm6qpkEJ6GSJOW9NfR/eLpqwwaeWb3EPR9H/U39Rrt8ABPAGObLG9vuvSzg8YqU
-Rz6NjtrSKQ4k9xO/up+qQ/zRsHkOyISEx+6MnIrw5hY/IfkrZ+3+jm8IfXJ+VAjS
-VepR+o58u73ycrnLG1eXWIHtjED3SQSPffJjxSvVDEb3ogiJAsWClCMWNLnEjsQc
-IHYrNdS5N0m5tfcIb9LiV2cDVXgdwdRUU41Ks9sWvBQIHrNup721UWyMdJoK1hTI
-rc4PST3WTHQwFcQvVaAqod9MDPkQYlgD7IjiPkSGLHyIs52kNgFXY55E5DlU4O4e
-9QDbyQTGzZI0XlnoqAuCIXbcNXjMZuEn9UjVN35NeObsj6F/yL07YUhvORnxozjL
-41ouRFtFTWFHNenthtZnH9SUV4+O2cKDmtJpPJd68ZJ/NBqJHM4a6cteT72HJzLb
-t6yto3B43nTeXtp9ozRjetznPnPD7gmI6Zq1P2ce8v49AgMBAAE=
 -----END PUBLIC KEY-----
 `,
   }),

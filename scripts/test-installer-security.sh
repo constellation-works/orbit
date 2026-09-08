@@ -320,8 +320,12 @@ expectThrow(
   'npm untrusted key rejection'
 );
 installer.verifyChecksumSignature(checksumText, signature, publicKey);
-if (!Array.isArray(installer.TRUSTED_RELEASE_KEYS) || installer.TRUSTED_RELEASE_KEYS.length < 2) {
-  throw new Error('npm installer must expose at least two trusted release signing keys');
+if (
+  !Array.isArray(installer.TRUSTED_RELEASE_KEYS) ||
+  installer.TRUSTED_RELEASE_KEYS.length !== 1 ||
+  installer.TRUSTED_RELEASE_KEYS[0].id !== 'orbit-release-key-3'
+) {
+  throw new Error('npm installer must expose only the current release signing key');
 }
 expectThrow(
   () => installer.verifyArchiveChecksum(asset, goodArchive, `0000000000000000000000000000000000000000000000000000000000000000  ${asset}\n`),
