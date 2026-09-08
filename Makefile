@@ -1,9 +1,10 @@
-.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint stability release-check docs-index cleanup-branches compiler-cache-status compiler-cache-setup compiler-cache-bench
+.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench
 
 # ------------------------------------------------------------
 # Config
 # ------------------------------------------------------------
 CARGO ?= cargo
+BUILD_BUDGET ?= ./scripts/build-budget.py
 BINARY := orbit
 BIN_CRATE := orbit-cli
 # Crate sources live under orbit/ (see root Cargo.toml workspace members).
@@ -57,6 +58,8 @@ help:
 	@echo "  make uninstall    Remove installed binary"
 	@echo "  make clean        Clean build artifacts"
 	@echo "  make cleanup-branches  Force-remove worktrees and branches except main/agent-main (DESTRUCTIVE)"
+	@echo "  make build-budget-test   Test cross-worktree build admission without compiling"
+	@echo "  make build-budget-bench  Compare current and budgeted concurrent Cargo checks"
 	@echo "  make compiler-cache-status  Show whether the opt-in rustc cache would enable"
 	@echo "  make compiler-cache-setup   Create ~/.orbit/cache/compiler (SETUP_FLAGS=--install to fetch sccache)"
 	@echo "  make compiler-cache-bench   Two-worktree cold/warm/concurrent compiler-cache timings"
@@ -66,16 +69,16 @@ help:
 # Build
 # ------------------------------------------------------------
 build:
-	$(CARGO) build $(WORKSPACE) $(CARGO_PROFILE)
+	$(BUILD_BUDGET) -- $(CARGO) build $(WORKSPACE) $(CARGO_PROFILE)
 
 release:
-	$(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) --release
+	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) --release
 
 # ------------------------------------------------------------
 # Run
 # ------------------------------------------------------------
 run:
-	$(CARGO) run -p $(BIN_CRATE) --bin $(BINARY) -- $(ARGS)
+	$(BUILD_BUDGET) -- $(CARGO) run -p $(BIN_CRATE) --bin $(BINARY) -- $(ARGS)
 
 # Direct execution (after build)
 dev: build
@@ -85,10 +88,10 @@ dev: build
 # Quality
 # ------------------------------------------------------------
 check:
-	$(CARGO) check $(WORKSPACE)
+	$(BUILD_BUDGET) -- $(CARGO) check $(WORKSPACE)
 
 test:
-	$(CARGO) test $(WORKSPACE)
+	$(BUILD_BUDGET) -- $(CARGO) test $(WORKSPACE)
 
 fmt:
 	$(CARGO) fmt --all
@@ -97,7 +100,7 @@ fmt-check:
 	$(CARGO) fmt --all -- --check
 
 clippy:
-	$(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings
+	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings
 
 # Supply-chain audit: advisories + license allow-list via cargo-deny (deny.toml).
 # Canonical command; CI runs the same check via scripts/ci-guardrails.sh.
@@ -111,7 +114,7 @@ tree:
 
 # Full CI pass
 ci:
-	./scripts/ci-guardrails.sh
+	$(BUILD_BUDGET) -- ./scripts/ci-guardrails.sh
 
 # Pre-handoff gate for agents: fast checks, no compile. Full make ci runs on PRs.
 ci-fast:
@@ -137,12 +140,13 @@ ci-fast:
 	./scripts/test-validate-agent-plugin.sh
 	./scripts/test-cursor-marketplace-followup.sh
 	./scripts/smoke-plugin-install.sh
+	./scripts/test-build-budget.sh
 	./scripts/test-compiler-cache.sh
 
 # Compile-time pre-handoff gate for agents. Keep this invocation aligned with
 # the default workspace clippy pass in scripts/ci-guardrails.sh.
 ci-lint:
-	$(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings
+	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings
 
 # Verify every workspace crate declares its stability tier
 stability:
@@ -160,7 +164,7 @@ docs-index:
 # Install
 # ------------------------------------------------------------
 install:
-	$(CARGO) build -p $(BIN_CRATE) $(INSTALL_CARGO_PROFILE)
+	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) $(INSTALL_CARGO_PROFILE)
 	install -d $(INSTALL_BIN_DIR)
 	install -m 755 $(INSTALL_TARGET_DIR)/$(BINARY) $(INSTALL_BIN_DIR)/$(BINARY)
 
@@ -178,6 +182,13 @@ clean:
 cleanup-branches:
 	./scripts/cleanup-branches.sh
 
+# Cooperative host-wide build admission. See docs/runbooks/build-budget.md.
+build-budget-test:
+	./scripts/test-build-budget.sh
+
+build-budget-bench:
+	./scripts/bench-build-budget.sh
+
 # Opt-in host compiler cache shared across worktrees (sccache). Falls back to
 # ordinary rustc when the cache is missing or unwritable. See
 # docs/runbooks/compiler-cache.md. [ORB-11259]
@@ -194,4 +205,4 @@ compiler-cache-bench:
 # Dev Loop
 # ------------------------------------------------------------
 watch:
-	$(CARGO) watch -x "check" -x "test"
+	$(BUILD_BUDGET) -- $(CARGO) watch -x "check" -x "test"
