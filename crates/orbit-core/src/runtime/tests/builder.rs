@@ -29,6 +29,32 @@ fn v2_runtime() -> (tempfile::TempDir, PathBuf, PathBuf, OrbitRuntime) {
 }
 
 #[test]
+fn in_memory_runtime_initializes_an_isolated_workspace() {
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    let other = OrbitRuntime::in_memory().expect("build second in-memory runtime");
+    assert_eq!(
+        runtime.workspace_id().expect("workspace identity"),
+        "ws_memory"
+    );
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "In-memory task".to_string(),
+            plan: "Start the task".to_string(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("create task in initialized partition");
+    assert_eq!(runtime.list_tasks().expect("list tasks").len(), 1);
+    assert!(other.list_tasks().expect("list isolated tasks").is_empty());
+
+    let started = runtime
+        .start_task(&task.id, Some("start".to_string()), None)
+        .expect("start task with workspace lock reservations");
+    assert_eq!(started.status, TaskStatus::InProgress);
+}
+
+#[test]
 fn registry_neutral_binding_controls_workspace_id_repo_root_and_ship_mode() {
     let root = tempdir().expect("tempdir");
     let global_root = root.path().join("global");

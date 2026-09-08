@@ -191,12 +191,13 @@ impl OrbitRuntime {
 
     pub(crate) fn build_in_memory_from_resolved_config(
         data_root: &Path,
+        workspace_root: &Path,
         runtime_config: &orbit_config::ResolvedConfig,
         temp_dir: builder::TempDir,
     ) -> Result<Self, OrbitError> {
-        // Flattened in-memory roots look like an explicit `--root` data dir.
-        // Supply a checkout binding so task APIs still have a partition;
-        // without it the data-dir skip would refuse to mint parent(tempdir).
+        // Use a distinct checkout root so the normal workspace builder creates
+        // its identity and task partition. A shared explicit data root assumes
+        // those were already initialized by workspace init.
         let binding = WorkspaceRuntimeBinding {
             logical_workspace_id: "ws_memory".to_string(),
             workspace_id: "ws_memory".to_string(),
@@ -207,8 +208,8 @@ impl OrbitRuntime {
         };
         let context = builder::build_context_from_roots(
             data_root,
-            data_root,
-            data_root,
+            workspace_root,
+            workspace_root,
             Some(&binding),
             runtime_config,
             HostLifetime::ShortLived,

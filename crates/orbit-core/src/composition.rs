@@ -203,8 +203,14 @@ impl OrbitRuntime {
             .tempdir()
             .map_err(|error| OrbitError::Io(error.to_string()))?;
         let data_root = temp_dir.path().to_path_buf();
-        let runtime_config = prepare_resolved_config(&data_root, &data_root)?;
-        Self::build_in_memory_from_resolved_config(&data_root, &runtime_config, temp_dir)
+        let workspace_root = data_root.join(".orbit");
+        let runtime_config = prepare_resolved_config(&data_root, &workspace_root)?;
+        Self::build_in_memory_from_resolved_config(
+            &data_root,
+            &workspace_root,
+            &runtime_config,
+            temp_dir,
+        )
     }
 }
 

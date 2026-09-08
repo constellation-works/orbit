@@ -262,7 +262,7 @@ fn ship_rejects_duplicate_task_ids() {
 }
 
 fn write_ship_job_asset(runtime: &OrbitRuntime) {
-    let jobs_dir = runtime.data_root().join("resources/jobs");
+    let jobs_dir = runtime.global_root().join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs directory");
     std::fs::write(
         jobs_dir.join("task_auto_pipeline.yaml"),
