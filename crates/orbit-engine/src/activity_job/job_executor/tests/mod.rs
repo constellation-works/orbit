@@ -195,6 +195,8 @@ pub(super) enum Action {
     EchoInput,
     SleepOk { ms: u64, value: Value },
     SleepInputMsThenEcho { ms_field: &'static str },
+    Panic,
+    PanicOnInputIteration { field: &'static str, iteration: u64 },
 }
 
 pub(super) struct ScriptedHost {
@@ -285,12 +287,18 @@ impl RuntimeHost for ScriptedHost {
             .lock()
             .expect("call log")
             .push(action.to_string());
-        let next = self
-            .responses
-            .lock()
-            .expect("responses")
-            .get_mut(action)
-            .and_then(VecDeque::pop_front);
+        let next = {
+            let mut responses = self.responses.lock().expect("responses");
+            match responses.get_mut(action) {
+                Some(queue)
+                    if matches!(queue.front(), Some(Action::PanicOnInputIteration { .. })) =>
+                {
+                    queue.front().cloned()
+                }
+                Some(queue) => queue.pop_front(),
+                None => None,
+            }
+        };
         let result = match next {
             Some(Action::Ok(value)) => Ok(value),
             Some(Action::Err(err)) => Err(err),
@@ -307,6 +315,13 @@ impl RuntimeHost for ScriptedHost {
                 })?;
                 std::thread::sleep(Duration::from_millis(ms));
                 Ok(input.clone())
+            }
+            Some(Action::Panic) => panic!("scripted deterministic action panicked"),
+            Some(Action::PanicOnInputIteration { field, iteration }) => {
+                if input.get(field).and_then(Value::as_u64) == Some(iteration) {
+                    panic!("scripted deterministic action panicked for iteration {iteration}");
+                }
+                Ok(json!({ "action": action }))
             }
             // Default: succeed with `{ "action": <name> }` so untyped tests
             // don't have to script every call.

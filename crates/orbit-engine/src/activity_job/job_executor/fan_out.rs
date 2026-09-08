@@ -52,7 +52,7 @@ pub(super) fn run_fan_out(
     let results: Mutex<Vec<(u32, Result<StepOutcome, DispatchError>)>> =
         Mutex::new(Vec::with_capacity(items.len()));
 
-    thread::scope(|scope| {
+    let panicked_workers = thread::scope(|scope| {
         let mut handles = Vec::new();
         for (idx, item) in items.iter().enumerate() {
             let idx = idx as u32;
@@ -125,9 +125,31 @@ pub(super) fn run_fan_out(
                     .push((idx, res));
             }));
         }
-        for h in handles {
-            let _ = h.join();
+        let mut panicked_workers = Vec::new();
+        for (idx, h) in handles.into_iter().enumerate() {
+            if let Err(payload) = h.join() {
+                let idx = idx as u32;
+                panicked_workers.push(idx);
+                let message = panic_payload_message(payload.as_ref());
+                emit_job_event_lossy(
+                    &ctx.audit,
+                    ctx.task_id(),
+                    V2AuditEventKind::WorkerState {
+                        step_id: block.worker.id.clone(),
+                        worker_index: idx,
+                        state: "failed".to_string(),
+                    },
+                );
+                results.lock().expect("results poisoned").push((
+                    idx,
+                    Err(DispatchError::JobExecution(format!(
+                        "worker {idx} panicked: {message}"
+                    ))),
+                ));
+            }
         }
+
+        panicked_workers
     });
 
     let mut collected: Vec<Value> = Vec::new();
@@ -135,8 +157,15 @@ pub(super) fn run_fan_out(
     let mut failed_count = 0u32;
     let mut first_error: Option<DispatchError> = None;
     let mut sorted = results.into_inner().expect("results poisoned");
+    if sorted.len() != items.len() {
+        return Err(DispatchError::JobExecution(format!(
+            "fan-out collected {} results for {} items",
+            sorted.len(),
+            items.len()
+        )));
+    }
     sorted.sort_by_key(|(idx, _)| *idx);
-    for (_idx, res) in sorted {
+    for (idx, res) in sorted {
         match res {
             Ok(o) if o.success => {
                 collected_count += 1;
@@ -148,7 +177,7 @@ pub(super) fn run_fan_out(
             }
             Err(e) => {
                 failed_count += 1;
-                if first_error.is_none() {
+                if !panicked_workers.contains(&idx) && first_error.is_none() {
                     first_error = Some(e);
                 }
                 collected.push(Value::Null);
