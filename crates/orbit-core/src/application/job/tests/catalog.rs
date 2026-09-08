@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use tempfile::tempdir;
 
 use crate::OrbitRuntime;
-use crate::bootstrap::activity::DEFAULT_ACTIVITY_FILES;
+use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
