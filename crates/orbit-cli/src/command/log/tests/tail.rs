@@ -14,6 +14,9 @@ use crate::command::log::tail::{
     FollowTestControl, MatchingLineWindow, TailArgs, build_filters, run_tail,
     run_tail_with_test_control,
 };
+use crate::command::{CommandOutput, Execute};
+use crate::output::payload::View;
+use crate::output::sink::{FormatArg, OutputSink, SinkEnv};
 
 fn fixture_lines() -> Vec<String> {
     vec![
@@ -543,6 +546,140 @@ impl Write for TeeWriter {
             let _ = self.tx.send(text.to_string());
         }
         Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn three_event_log(path: &Path) {
+    let lines: Vec<String> = (0..3)
+        .map(|index| {
+            json!({
+                "timestamp": format!("2026-04-27T01:00:0{index}.000000000Z"),
+                "level": "INFO",
+                "target": "orbit.test",
+                "fields": { "message": format!("event {index}") }
+            })
+            .to_string()
+        })
+        .collect();
+    write_fixture(path, &lines);
+}
+
+fn drive_tail_stream(
+    path: PathBuf,
+    json: bool,
+    requested: Option<FormatArg>,
+    legacy_json: bool,
+) -> String {
+    let args = TailArgs {
+        lines: 3,
+        follow: false,
+        target: None,
+        level: None,
+        since: None,
+        json,
+        path: Some(path),
+    };
+    let runtime = orbit_core::OrbitRuntime::in_memory().expect("runtime");
+    let output = args.execute(&runtime).expect("tail payload");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("log tail must return a stream payload, got {output:?}");
+    };
+    let (_, view) = payload.into_view();
+    let View::Stream(stream) = view else {
+        panic!("log tail must be a stream");
+    };
+    let sink = OutputSink::resolve(false, &SinkEnv::default(), None, requested, legacy_json);
+    let mut buf = Vec::new();
+    stream(&sink, &mut buf).expect("stream");
+    String::from_utf8(buf).expect("utf8")
+}
+
+#[test]
+fn execute_stream_emits_three_ndjson_records_from_sink_mode() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("orbit.jsonl");
+    three_event_log(&path);
+
+    let output = drive_tail_stream(path, false, Some(FormatArg::Ndjson), false);
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines.len(), 3, "{output}");
+    for (index, line) in lines.iter().enumerate() {
+        let value: serde_json::Value = serde_json::from_str(line).expect("ndjson line");
+        assert_eq!(value["fields"]["message"], format!("event {index}"));
+    }
+}
+
+#[test]
+fn execute_stream_honors_format_json_when_args_json_is_false() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("orbit.jsonl");
+    three_event_log(&path);
+
+    let output = drive_tail_stream(path, false, Some(FormatArg::Json), false);
+    assert!(
+        output
+            .lines()
+            .all(|line| serde_json::from_str::<serde_json::Value>(line).is_ok()),
+        "sink json mode must emit JSONL, not the column view:\n{output}"
+    );
+}
+
+#[test]
+fn execute_stream_keeps_human_columns_when_format_is_table() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("orbit.jsonl");
+    three_event_log(&path);
+
+    let output = drive_tail_stream(path, true, Some(FormatArg::Table), true);
+    assert!(
+        output.contains("INF"),
+        "--format table must outrank --json:\n{output}"
+    );
+}
+
+#[test]
+fn execute_stream_treats_a_broken_pipe_as_success() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("orbit.jsonl");
+    three_event_log(&path);
+
+    let args = TailArgs {
+        lines: 3,
+        follow: false,
+        target: None,
+        level: None,
+        since: None,
+        json: false,
+        path: Some(path),
+    };
+    let runtime = orbit_core::OrbitRuntime::in_memory().expect("runtime");
+    let output = args.execute(&runtime).expect("tail payload");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("log tail must return a stream payload");
+    };
+    let (_, view) = payload.into_view();
+    let View::Stream(stream) = view else {
+        panic!("log tail must be a stream");
+    };
+    let sink = OutputSink::resolve(
+        false,
+        &SinkEnv::default(),
+        None,
+        Some(FormatArg::Ndjson),
+        false,
+    );
+    stream(&sink, &mut BrokenPipeWriter).expect("broken pipe is success");
+}
+
+struct BrokenPipeWriter;
+
+impl Write for BrokenPipeWriter {
+    fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+        Err(io::Error::from(io::ErrorKind::BrokenPipe))
     }
 
     fn flush(&mut self) -> io::Result<()> {

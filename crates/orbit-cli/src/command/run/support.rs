@@ -3,6 +3,8 @@ use std::fmt::Write as _;
 use orbit_core::{JobRun, JobRunState, JobRunStep, OrbitError, OrbitRuntime, find_workflow};
 use serde_json::{Value, json};
 
+use crate::command::{CommandOut, Payload};
+
 pub(super) const TASK_AUTO_PIPELINE_JOB: &str = "task_auto_pipeline";
 
 #[derive(Clone)]
@@ -91,30 +93,27 @@ pub(crate) fn dispatch_workflow(
     Ok(results)
 }
 
-pub(crate) fn print_workflow_dispatch_results(
+pub(crate) fn workflow_dispatch_payload(
     workflow_alias: &'static str,
     runs: &[WorkflowDispatchResult],
-    json_output: bool,
-) -> Result<(), OrbitError> {
-    if json_output {
-        if runs.len() == 1 {
-            return crate::output::json::print_pretty(&workflow_dispatch_result_to_json(&runs[0]));
-        }
-        return crate::output::json::print_pretty(&json!({
+) -> CommandOut {
+    let doc = if runs.len() == 1 {
+        workflow_dispatch_result_to_json(&runs[0])
+    } else {
+        json!({
             "workflow": workflow_alias,
             "runs": runs
                 .iter()
                 .map(workflow_dispatch_result_to_json)
                 .collect::<Vec<_>>(),
-        }));
-    }
-
-    for run in runs {
-        for line in workflow_dispatch_result_lines(run) {
-            println!("{line}");
-        }
-    }
-    Ok(())
+        })
+    };
+    let text = runs
+        .iter()
+        .flat_map(workflow_dispatch_result_lines)
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(Payload::detail(doc, text).into())
 }
 
 fn summary_step(run: &JobRun) -> Option<&JobRunStep> {

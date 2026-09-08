@@ -3,7 +3,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::bootstrap::init::UnlinkResult;
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
 pub struct SkillUnlinkArgs {
@@ -14,22 +14,22 @@ pub struct SkillUnlinkArgs {
 impl Execute for SkillUnlinkArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let result = orbit_core::bootstrap::init::unlink_skills(&runtime.global_root())?;
-        if self.json {
-            Ok(Payload::document(unlink_result_json(&result)).into())
+        let mut lines = Vec::new();
+        if result.removed_count == 0 {
+            lines.push("No skill symlinks found to remove.".to_string());
         } else {
-            if result.removed_count == 0 {
-                println!("No skill symlinks found to remove.");
-            } else {
-                println!("Removed {} skill symlink(s).", result.removed_count);
-            }
-            if !result.cleaned_dirs.is_empty() {
-                println!("Cleaned up empty directories:");
-                for dir in &result.cleaned_dirs {
-                    println!("  {}", dir.display());
-                }
-            }
-            Ok(CommandOutput::Silent)
+            lines.push(format!(
+                "Removed {} skill symlink(s).",
+                result.removed_count
+            ));
         }
+        if !result.cleaned_dirs.is_empty() {
+            lines.push("Cleaned up empty directories:".to_string());
+            for dir in &result.cleaned_dirs {
+                lines.push(format!("  {}", dir.display()));
+            }
+        }
+        Ok(Payload::detail(unlink_result_json(&result), lines.join("\n")).into())
     }
 }
 

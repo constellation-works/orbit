@@ -7,7 +7,7 @@ use orbit_registry::{HostIdentityState, inspect_host_identity};
 use orbit_types::tool::{McpTransport, ToolSessionContext};
 use serde_json::{Map, Value};
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Clone, ValueEnum, Default)]
 pub enum OutputFormat {
@@ -103,21 +103,26 @@ impl Execute for ToolRunArgs {
 
         if self.dry_run {
             let result = runtime.run_tool_dry_run(&self.name, &input)?;
-            println!("Tool:           {}", result.tool_name);
-            println!(
-                "Policy:         {}",
-                if result.policy_allowed {
-                    "allowed"
-                } else {
-                    "denied"
-                }
-            );
-            if result.missing_params.is_empty() {
-                println!("Missing params: (none)");
+            let policy = if result.policy_allowed {
+                "allowed"
             } else {
-                println!("Missing params: {}", result.missing_params.join(", "));
-            }
-            return Ok(CommandOutput::Silent);
+                "denied"
+            };
+            let missing = if result.missing_params.is_empty() {
+                "(none)".to_string()
+            } else {
+                result.missing_params.join(", ")
+            };
+            let doc = serde_json::json!({
+                "tool_name": result.tool_name,
+                "policy_allowed": result.policy_allowed,
+                "missing_params": result.missing_params,
+            });
+            let text = format!(
+                "Tool:           {}\nPolicy:         {policy}\nMissing params: {missing}",
+                result.tool_name
+            );
+            return Ok(Payload::detail(doc, text).into());
         }
 
         let session_context = local_tool_session_context(runtime)?;
@@ -133,21 +138,12 @@ impl Execute for ToolRunArgs {
         )?;
         let output = shape_tool_output(&self.name, &input, output, self.full, &self.fields);
 
+        // Local `--output`/`--pretty` stay accepted (ORB-11618 owns removing
+        // them). `--format` still wins: a Text human view is ignored when the
+        // sink is json/ndjson, and Json always hands the document to render.
         match self.output {
-            OutputFormat::Json => {
-                if self.pretty {
-                    Ok(Payload::document(output).into())
-                } else {
-                    {
-                        crate::output::json::print(&output)?;
-                        Ok(CommandOutput::Silent)
-                    }
-                }
-            }
-            OutputFormat::Text => {
-                println!("{}", output);
-                Ok(CommandOutput::Silent)
-            }
+            OutputFormat::Json => Ok(Payload::document(output).into()),
+            OutputFormat::Text => Ok(Payload::detail(output.clone(), output.to_string()).into()),
         }
     }
 }

@@ -1,9 +1,9 @@
 use clap::Args;
+use orbit_core::OrbitRuntime;
 use orbit_core::runtime::run_audit::RunCliInvocationRecord;
-use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::steps::{resolve_run, resolve_step_filter};
 
@@ -26,24 +26,15 @@ pub struct RunLogsArgs {
 
 impl Execute for RunLogsArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        {
-            print_run_logs(
-                runtime,
-                self.run_id.as_deref(),
-                self.step_id.as_deref(),
-                self.json,
-            )?;
-            Ok(CommandOutput::Silent)
-        }
+        run_logs_payload(runtime, self.run_id.as_deref(), self.step_id.as_deref())
     }
 }
 
-fn print_run_logs(
+fn run_logs_payload(
     runtime: &OrbitRuntime,
     run_id: Option<&str>,
     step_id: Option<&str>,
-    json_output: bool,
-) -> Result<(), OrbitError> {
+) -> CommandOut {
     let run = resolve_run(runtime, run_id)?;
     let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
     let step_filter = resolve_step_filter(&run, &audit_steps, step_id)?;
@@ -51,25 +42,26 @@ fn print_run_logs(
         runtime.collect_run_cli_invocations(&run.run_id)?,
         step_filter.as_deref(),
     );
-
-    if json_output {
-        return crate::output::json::print_pretty(&json!({
-            "run_id": run.run_id,
-            "job_id": run.job_id,
-            "records": records.iter().map(cli_invocation_record_to_json).collect::<Vec<_>>(),
-        }));
-    }
+    let doc = json!({
+        "run_id": run.run_id,
+        "job_id": run.job_id,
+        "records": records.iter().map(cli_invocation_record_to_json).collect::<Vec<_>>(),
+    });
 
     if records.is_empty() {
-        println!("No raw stdout/stderr blobs recorded.");
-        return Ok(());
+        return Ok(Payload::detail(doc, "No raw stdout/stderr blobs recorded.").into());
     }
 
+    // Subprocess stderr is diagnostic: keep it off the record stream so
+    // `--format json` stdout stays parseable.
     for record in &records {
-        print!("{}", record.stdout);
         eprint!("{}", record.stderr);
     }
-    Ok(())
+    let text = records
+        .iter()
+        .map(|record| record.stdout.as_str())
+        .collect::<String>();
+    Ok(Payload::detail(doc, text).into())
 }
 
 fn filter_cli_invocation_records(

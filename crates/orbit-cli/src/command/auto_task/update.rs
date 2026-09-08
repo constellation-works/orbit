@@ -4,7 +4,7 @@ use orbit_core::{
     TaskStatus, TaskType,
 };
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::output::definition_to_json;
 use super::schedule_args::resolve_schedule;
@@ -143,11 +143,6 @@ impl Execute for AutoTaskUpdateArgs {
             },
         )?;
 
-        if self.json {
-            Ok(Payload::document(definition_to_json(&definition)).into())
-        } else {
-            println!("{}", definition.name);
-            Ok(CommandOutput::Silent)
-        }
+        Ok(Payload::detail(definition_to_json(&definition), definition.name).into())
     }
 }

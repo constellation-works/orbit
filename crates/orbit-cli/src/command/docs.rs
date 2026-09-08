@@ -6,7 +6,7 @@ use orbit_core::{DocType, OrbitError, OrbitRuntime};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::command::{Block, CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{Block, CommandOut, Execute, Payload};
 
 #[derive(Args)]
 #[command(about = "List, show, and curate the indexed docs corpus")]
@@ -145,10 +145,6 @@ impl Execute for DocsShowArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let shown = runtime.show_doc(&self.path)?;
         let doc = docs_document(&shown)?;
-        if self.json {
-            return Ok(Payload::document(doc).into());
-        }
-
         let mut text = String::new();
         text.push_str(&format!("Path: {}\n", shown.path));
         text.push_str(&format!("Type: {}\n", shown.frontmatter.doc_type));
@@ -186,9 +182,6 @@ impl Execute for DocsAddArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let outcome = runtime.add_docs_root(&self.path)?;
         let doc = docs_document(&outcome)?;
-        if self.json {
-            return Ok(Payload::document(doc).into());
-        }
         let line = if outcome.added {
             format!("Added docs root: {}", outcome.path)
         } else {
@@ -205,18 +198,12 @@ impl Execute for DocsIndexArgs {
             force: self.force,
             kind: Some(IndexKind::Docs),
         })?;
-        if self.json {
-            Ok(Payload::document(serde_json::json!(result)).into())
-        } else {
-            {
-                print_docs_index_text(result)?;
-                Ok(CommandOutput::Silent)
-            }
-        }
+        let doc = serde_json::json!(result);
+        Ok(Payload::detail(doc, docs_index_text(result)?).into())
     }
 }
 
-fn print_docs_index_text(result: SemanticIndexResult) -> Result<(), OrbitError> {
+fn docs_index_text(result: SemanticIndexResult) -> Result<String, OrbitError> {
     let SemanticIndexResult::Docs {
         model_id,
         report,
@@ -228,24 +215,20 @@ fn print_docs_index_text(result: SemanticIndexResult) -> Result<(), OrbitError> 
             "docs index alias returned a non-docs report".to_string(),
         ));
     };
-    println!(
+    Ok(format!(
         "Indexed docs: model={} indexed_sources={} embedded_chunks={} skipped_fields={} stale_sources={}",
         model_id,
         indexed_sources,
         report.embedded_chunks,
         report.skipped_fields,
         stale_sources.len()
-    );
-    Ok(())
+    ))
 }
 
 impl Execute for DocsMigrateArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let report = runtime.migrate_docs(!self.confirm)?;
         let doc = docs_document(&report)?;
-        if self.json {
-            return Ok(Payload::document(doc).into());
-        }
         let mut lines = Vec::new();
         if report.changed.is_empty() {
             lines.push("No docs need migration.".to_string());

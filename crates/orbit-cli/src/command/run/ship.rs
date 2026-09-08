@@ -7,9 +7,9 @@ use orbit_core::{CompletionPolicy, OrbitError, OrbitRuntime, find_workflow};
 #[cfg(test)]
 use serde_json::Value;
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use crate::command::{CommandOut, Execute};
 
-use super::support::{WorkflowDispatchResult, print_workflow_dispatch_results};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload};
 
 pub(super) const SHIP_WORKFLOW: &str = "ship";
 
@@ -115,10 +115,7 @@ impl Execute for ShipCommand {
             error_code: None,
             error_message: None,
         };
-        {
-            print_workflow_dispatch_results(SHIP_WORKFLOW, &[run], self.json)?;
-            Ok(CommandOutput::Silent)
-        }
+        workflow_dispatch_payload(SHIP_WORKFLOW, &[run])
     }
 }
 

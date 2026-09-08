@@ -3,7 +3,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::bootstrap::init::LinkResult;
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
 pub struct SkillLinkArgs {
@@ -14,19 +14,16 @@ pub struct SkillLinkArgs {
 impl Execute for SkillLinkArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let result = orbit_core::bootstrap::init::link_skills(&runtime.global_root())?;
-        if self.json {
-            Ok(Payload::document(link_result_json(&result)).into())
+        let text = if result.linked_count == 0 {
+            "Skill symlinks are already up to date.".to_string()
         } else {
-            if result.linked_count == 0 {
-                println!("Skill symlinks are already up to date.");
-            } else {
-                println!("Linked {} skill(s) in:", result.linked_count);
-                for root in &result.roots {
-                    println!("  {}", root.display());
-                }
+            let mut lines = vec![format!("Linked {} skill(s) in:", result.linked_count)];
+            for root in &result.roots {
+                lines.push(format!("  {}", root.display()));
             }
-            Ok(CommandOutput::Silent)
-        }
+            lines.join("\n")
+        };
+        Ok(Payload::detail(link_result_json(&result), text).into())
     }
 }
 

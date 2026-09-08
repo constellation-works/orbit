@@ -3,7 +3,7 @@ use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_types::task::TaskArtifact;
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::output::task_to_json_for_runtime;
 
@@ -138,18 +138,17 @@ impl Execute for TaskUpdateArgs {
             model,
             approve,
             note,
-            json,
+            json: _,
         } = self;
 
         if approve {
             let (agent, model) = super::mutation_identity(model);
             let task = runtime.approve_task_with_identity(&id, note, comment, agent, model)?;
-            return if json {
-                Ok(Payload::document(task_to_json_for_runtime(runtime, &task)?).into())
-            } else {
-                println!("Approved task '{}' -> {}", task.id, task.status);
-                Ok(CommandOutput::Silent)
-            };
+            return Ok(Payload::detail(
+                task_to_json_for_runtime(runtime, &task)?,
+                format!("Approved task '{}' -> {}", task.id, task.status),
+            )
+            .into());
         }
 
         let pr_status = pr_status.map(|value| {
@@ -228,12 +227,11 @@ impl Execute for TaskUpdateArgs {
             model,
         )?;
 
-        if json {
-            Ok(Payload::document(task_to_json_for_runtime(runtime, &task)?).into())
-        } else {
-            println!("Updated task '{}'", task.id);
-            Ok(CommandOutput::Silent)
-        }
+        Ok(Payload::detail(
+            task_to_json_for_runtime(runtime, &task)?,
+            format!("Updated task '{}'", task.id),
+        )
+        .into())
     }
 }
 

@@ -5,7 +5,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::bootstrap::task_migration::{ImportAction, ImportConflictPolicy};
 use serde_json::json;
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 /// `orbit task import` — import task bundles from a tar.zst archive.
 #[derive(Args)]
@@ -63,51 +63,54 @@ impl Execute for TaskImportArgs {
             self.on_conflict.into(),
         )?;
 
-        if self.json {
-            let tasks: Vec<_> = outcome
-                .tasks
-                .iter()
-                .map(|task| {
-                    json!({
-                        "source_id": task.source_id,
-                        "final_id": task.final_id,
-                        "action": action_label(task.action),
-                    })
+        let tasks: Vec<_> = outcome
+            .tasks
+            .iter()
+            .map(|task| {
+                json!({
+                    "source_id": task.source_id,
+                    "final_id": task.final_id,
+                    "action": action_label(task.action),
                 })
-                .collect();
-            return Ok(Payload::document(json!({
-                "workspace_id": outcome.workspace_id,
-                "registered_workspace": outcome.registered_workspace,
-                "id_remap": outcome.id_remap,
-                "id_map_path": outcome.id_map_path.as_ref().map(|p| p.display().to_string()),
-                "projection_degraded": outcome.projection.degraded_reason,
-                "tasks": tasks,
-            }))
-            .into());
-        }
-
-        println!("imported into workspace '{}'", outcome.workspace_id);
+            })
+            .collect();
+        let doc = json!({
+            "workspace_id": outcome.workspace_id,
+            "registered_workspace": outcome.registered_workspace,
+            "id_remap": outcome.id_remap,
+            "id_map_path": outcome.id_map_path.as_ref().map(|p| p.display().to_string()),
+            "projection_degraded": outcome.projection.degraded_reason,
+            "tasks": tasks,
+        });
+        let mut lines = vec![format!(
+            "imported into workspace '{}'",
+            outcome.workspace_id
+        )];
         if outcome.registered_workspace {
-            println!("  registered new workspace binding");
+            lines.push("  registered new workspace binding".to_string());
         }
         for task in &outcome.tasks {
             if task.source_id == task.final_id {
-                println!("  {}  {}", action_label(task.action), task.source_id);
+                lines.push(format!(
+                    "  {}  {}",
+                    action_label(task.action),
+                    task.source_id
+                ));
             } else {
-                println!(
+                lines.push(format!(
                     "  {}  {} -> {}",
                     action_label(task.action),
                     task.source_id,
                     task.final_id
-                );
+                ));
             }
         }
         if let Some(path) = &outcome.id_map_path {
-            println!("  id mapping written to {}", path.display());
+            lines.push(format!("  id mapping written to {}", path.display()));
         }
         if let Some(reason) = &outcome.projection.degraded_reason {
-            println!("  warning: projection degraded: {reason}");
+            lines.push(format!("  warning: projection degraded: {reason}"));
         }
-        Ok(CommandOutput::Silent)
+        Ok(Payload::detail(doc, lines.join("\n")).into())
     }
 }

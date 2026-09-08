@@ -63,12 +63,6 @@ impl Execute for WorktreeGcArgs {
         let doc = serde_json::to_value(&result).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize worktree GC report: {error}"))
         })?;
-        // `--json` keeps forcing the document even on a terminal; the global
-        // `--format` picks between the same document and the lines below.
-        if self.json {
-            return Ok(Payload::document(doc).into());
-        }
-
         let mut lines = Vec::with_capacity(result.reports.len() + 1);
         if result.reports.is_empty() {
             lines.push("No worktrees matched.".to_string());

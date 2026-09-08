@@ -6,10 +6,10 @@ use orbit_core::{
 };
 use serde_json::json;
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 use crate::parse::parse_duration_seconds;
 
-use super::support::{WorkflowDispatchResult, print_workflow_dispatch_results};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload};
 
 pub(super) const AUTO_WORKFLOW: &str = "auto";
 
@@ -112,7 +112,7 @@ pub struct AutoCommand {
 impl Execute for AutoCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.stop {
-            return execute_stop(runtime, self.json, self.claim_token.as_deref());
+            return execute_stop(runtime, self.claim_token.as_deref());
         }
         let complexity_crews = orbit_config::ComplexityCrewPools {
             low: self.low_complexity_crews,
@@ -133,7 +133,6 @@ impl Execute for AutoCommand {
                 &self.allow_crew,
                 &complexity_crews,
                 self.claim_token.as_deref(),
-                self.json,
             );
         }
         let completion = if self.complete {
@@ -163,8 +162,7 @@ impl Execute for AutoCommand {
             error_code: None,
             error_message: None,
         };
-        print_workflow_dispatch_results(AUTO_WORKFLOW, &[run], self.json)?;
-        Ok(CommandOutput::Silent)
+        workflow_dispatch_payload(AUTO_WORKFLOW, &[run])
     }
 }
 
@@ -178,7 +176,6 @@ fn execute_grant_bound(
     allow_crew: &[String],
     complexity_crews: &orbit_config::ComplexityCrewPools,
     claim_token: Option<&str>,
-    json: bool,
 ) -> CommandOut {
     let result = runtime.submit_operation_drain(OperationDrainRequest {
         grant_id: Some(grant_id),
@@ -189,8 +186,8 @@ fn execute_grant_bound(
         actor: None,
         claim_token,
     })?;
-    if json {
-        return Ok(Payload::document(json!({
+    Ok(Payload::detail(
+        json!({
             "workflow": AUTO_WORKFLOW,
             "job_id": result.invoke.job_name,
             "run_id": result.invoke.run_id,
@@ -201,79 +198,80 @@ fn execute_grant_bound(
             "window_seconds": result.window_seconds,
             "leaf_ceiling": result.leaf_ceiling,
             "expires_at": result.admission.expires_at.to_rfc3339(),
-        }))
-        .into());
-    }
-    println!(
-        "Submitted auto run {} under grant {} (completion: {}, window: {}s, leaf ceiling: {}).",
-        result.invoke.run_id,
-        result.admission.grant_id,
-        result.admission.completion,
-        result.window_seconds,
-        result.leaf_ceiling
-    );
-    Ok(CommandOutput::Silent)
+        }),
+        format!(
+            "Submitted auto run {} under grant {} (completion: {}, window: {}s, leaf ceiling: {}).",
+            result.invoke.run_id,
+            result.admission.grant_id,
+            result.admission.completion,
+            result.window_seconds,
+            result.leaf_ceiling
+        ),
+    )
+    .into())
 }
 
-fn execute_stop(runtime: &OrbitRuntime, json: bool, claim_token: Option<&str>) -> CommandOut {
+fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut {
     let result = runtime.stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
         actor: "cli",
         source: "run_auto_stop",
         reason: None,
         claim_token,
     })?;
-    if json {
-        return Ok(Payload::document(json!({
-            "outcome": result.outcome,
-            "coordinators": result.coordinators.iter().map(|change| json!({
-                "run_id": change.run_id,
-                "job_id": change.job_id,
-                "outcome": change.outcome,
-                "remaining_children": change.remaining_children.iter().map(|child| json!({
-                    "run_id": child.run_id,
-                    "job_name": child.job_name,
-                    "phase": child.phase,
-                    "child_status": child.child_status,
-                })).collect::<Vec<_>>(),
+    let doc = json!({
+        "outcome": result.outcome,
+        "coordinators": result.coordinators.iter().map(|change| json!({
+            "run_id": change.run_id,
+            "job_id": change.job_id,
+            "outcome": change.outcome,
+            "remaining_children": change.remaining_children.iter().map(|child| json!({
+                "run_id": child.run_id,
+                "job_name": child.job_name,
+                "phase": child.phase,
+                "child_status": child.child_status,
             })).collect::<Vec<_>>(),
-        }))
-        .into());
-    }
+        })).collect::<Vec<_>>(),
+    });
     if result.coordinators.is_empty() {
-        println!("No active auto coordinator in this workspace.");
-        return Ok(CommandOutput::Silent);
+        return Ok(Payload::detail(doc, "No active auto coordinator in this workspace.").into());
     }
+    let mut lines = Vec::new();
     for change in &result.coordinators {
         match change.outcome {
-            "cancelled_queued" => println!(
+            "cancelled_queued" => lines.push(format!(
                 "Cancelled queued auto run {} before it started; it had not admitted any work.",
                 change.run_id
-            ),
-            "unchanged" => println!("job run {} already has admissions stopped.", change.run_id),
-            _ => println!(
+            )),
+            "unchanged" => lines.push(format!(
+                "job run {} already has admissions stopped.",
+                change.run_id
+            )),
+            _ => lines.push(format!(
                 "Stopped admissions for job run {} ({}).",
                 change.run_id, change.job_id
-            ),
+            )),
         }
         if change.remaining_children.is_empty() {
             if change.outcome != "cancelled_queued" {
-                println!("No remaining children.");
+                lines.push("No remaining children.".to_string());
             }
         } else {
-            println!(
+            lines.push(
                 "Remaining children (still running under their existing completion authority):"
+                    .to_string(),
             );
             for child in &change.remaining_children {
                 let status = child.child_status.as_deref().unwrap_or("-");
-                println!(
+                lines.push(format!(
                     "  {} job={} phase={} status={}",
                     child.run_id, child.job_name, child.phase, status
-                );
+                ));
             }
-            println!(
+            lines.push(
                 "To cancel already-running workers, use `orbit run cancel <run_id> --confirm` on each child."
+                    .to_string(),
             );
         }
     }
-    Ok(CommandOutput::Silent)
+    Ok(Payload::detail(doc, lines.join("\n")).into())
 }

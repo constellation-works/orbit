@@ -4,7 +4,7 @@ use clap::Args;
 use orbit_core::{DrainWorkerLimitRequest, OrbitRuntime};
 use serde_json::json;
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
 #[command(
@@ -57,35 +57,29 @@ impl Execute for RunConcurrencyArgs {
             source: "run_concurrency",
             claim_token: self.claim_token.as_deref(),
         })?;
-        if self.json {
-            return Ok(Payload::document(json!({
-                "run_id": change.run_id,
-                "job_id": change.job_id,
-                "outcome": change.outcome,
-                "previous_concurrency": change.previous_max_active_leaf_runs,
-                "concurrency": change.max_active_leaf_runs,
-                "revision": change.revision,
-                "hard_limit": change.hard_limit,
-            }))
-            .into());
-        }
-        if change.outcome == "unchanged" {
-            println!(
+        let doc = json!({
+            "run_id": change.run_id,
+            "job_id": change.job_id,
+            "outcome": change.outcome,
+            "previous_concurrency": change.previous_max_active_leaf_runs,
+            "concurrency": change.max_active_leaf_runs,
+            "revision": change.revision,
+            "hard_limit": change.hard_limit,
+        });
+        let text = if change.outcome == "unchanged" {
+            format!(
                 "job run {} already admits {} tasks at a time (revision {})",
                 change.run_id, change.max_active_leaf_runs, change.revision
-            );
+            )
         } else {
-            println!(
-                "job run {} now admits {} tasks at a time, was {} (revision {})",
+            format!(
+                "job run {} now admits {} tasks at a time, was {} (revision {})\nRunning children are untouched; the new ceiling applies to the next admission pass.",
                 change.run_id,
                 change.max_active_leaf_runs,
                 change.previous_max_active_leaf_runs,
                 change.revision
-            );
-            println!(
-                "Running children are untouched; the new ceiling applies to the next admission pass."
-            );
-        }
-        Ok(CommandOutput::Silent)
+            )
+        };
+        Ok(Payload::detail(doc, text).into())
     }
 }

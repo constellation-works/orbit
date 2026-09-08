@@ -1,14 +1,6 @@
 use orbit_core::{NotFoundKind, OrbitError};
 use serde_json::{Value, json};
 
-pub fn print(value: &Value) -> Result<(), OrbitError> {
-    print_with_format(value, false)
-}
-
-pub fn print_pretty(value: &Value) -> Result<(), OrbitError> {
-    print_with_format(value, true)
-}
-
 pub fn print_with_format(value: &Value, pretty: bool) -> Result<(), OrbitError> {
     println!("{}", render(value, pretty)?);
     Ok(())
