@@ -175,3 +175,54 @@ fn capture_skips_absent_deny_whose_nested_reallow_will_create_the_root() {
         "grant preparation will create .orbit, so watching it would false-positive"
     );
 }
+
+#[test]
+fn managed_aliases_replay_denies_and_pin_replaceable_parents() {
+    use super::{LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, compile_linux_bwrap_argv};
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let protected = root.join("target/nested/metadata");
+    fs::create_dir_all(&protected).unwrap();
+    fs::write(root.join(".git"), "gitdir: target/nested/metadata").unwrap();
+    let resolved = profile(vec![
+        format!("{}/**", root.display()),
+        format!("!{}", root.join(".git").display()),
+        format!("!{}/**", protected.display()),
+    ]);
+    let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&root), true).unwrap();
+    let mounts: Vec<_> = plan
+        .args
+        .windows(3)
+        .filter(|args| matches!(args[0].as_str(), "--bind" | "--ro-bind"))
+        .collect();
+    for (source, destination, mode) in [
+        (
+            root.join(".git"),
+            PathBuf::from(LINUX_STABLE_WORKSPACE_MOUNT).join(".git"),
+            "--ro-bind",
+        ),
+        (
+            protected.clone(),
+            PathBuf::from(LINUX_STABLE_BUILD_MOUNT).join("nested/metadata"),
+            "--ro-bind",
+        ),
+        (
+            root.join("target/nested"),
+            root.join("target/nested"),
+            "--bind",
+        ),
+        (
+            root.join("target/nested"),
+            PathBuf::from(LINUX_STABLE_BUILD_MOUNT).join("nested"),
+            "--bind",
+        ),
+    ] {
+        let final_mount = mounts
+            .iter()
+            .rfind(|args| args[2] == destination.display().to_string())
+            .unwrap();
+        assert_eq!(final_mount[0], mode);
+        assert_eq!(final_mount[1], source.display().to_string());
+    }
+}
