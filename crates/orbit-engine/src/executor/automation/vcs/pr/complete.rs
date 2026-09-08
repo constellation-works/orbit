@@ -32,6 +32,7 @@ use serde_json::{Value, json};
 
 use crate::context::{ReviewLandingRequest, RuntimeHost};
 
+use super::super::super::ci::bounded_u64;
 use super::super::super::input::input_string_field;
 use super::super::super::task_update::{authorization_note, complete_tasks};
 use super::super::freshness::{
@@ -46,6 +47,9 @@ use super::merge::{MergeCapabilities, MergeStrategy, resolve_merge_capabilities}
 /// Default budget for waiting out required checks before giving up.
 const DEFAULT_MAX_WAIT_SECONDS: u64 = 3600;
 const DEFAULT_POLL_INTERVAL_SECONDS: u64 = 30;
+const MAX_WAIT_SECONDS: u64 = 6 * 60 * 60;
+const MIN_POLL_INTERVAL_SECONDS: u64 = 5;
+const MAX_POLL_INTERVAL_SECONDS: u64 = 10 * 60;
 
 pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -131,9 +135,19 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     workspace_path: &str,
     pr_number: &str,
 ) -> Result<Value, OrbitError> {
-    let max_wait_seconds = input_u64(input, "max_wait_seconds").unwrap_or(DEFAULT_MAX_WAIT_SECONDS);
-    let poll_interval_seconds =
-        input_u64(input, "poll_interval_seconds").unwrap_or(DEFAULT_POLL_INTERVAL_SECONDS);
+    let max_wait_seconds = bounded_u64(
+        input,
+        "max_wait_seconds",
+        DEFAULT_MAX_WAIT_SECONDS,
+        MAX_WAIT_SECONDS,
+    )?;
+    let poll_interval_seconds = bounded_u64(
+        input,
+        "poll_interval_seconds",
+        DEFAULT_POLL_INTERVAL_SECONDS,
+        MAX_POLL_INTERVAL_SECONDS,
+    )?
+    .max(MIN_POLL_INTERVAL_SECONDS);
     let mut waited_seconds = 0_u64;
     let mut auto_merge_requested = false;
     let mut merge_requested = false;
@@ -157,6 +171,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     "strategy": merge_capabilities.map(|capabilities| capabilities.strategy.as_str()),
                     "auto_merge_requested": auto_merge_requested,
                     "waited_seconds": waited_seconds,
+                    "max_wait_seconds": max_wait_seconds,
+                    "poll_interval_seconds": poll_interval_seconds,
                     "landed_commit": landed_commit,
                     "managed_merge": managed_merge,
                     "reviewed_head_sha": reviewed_head_sha,
@@ -271,10 +287,17 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                  #{pr_number} to merge (budget {max_wait_seconds}s); the task stays in review"
             )));
         }
-        if poll_interval_seconds > 0 {
-            sleep(Duration::from_secs(poll_interval_seconds));
+        let remaining_seconds = max_wait_seconds.saturating_sub(waited_seconds);
+        let sleep_seconds = poll_interval_seconds.min(remaining_seconds);
+        sleep(Duration::from_secs(sleep_seconds));
+        waited_seconds = waited_seconds.saturating_add(sleep_seconds);
+
+        if waited_seconds >= max_wait_seconds {
+            return Err(OrbitError::Execution(format!(
+                "pr_complete: timed out after {waited_seconds}s waiting for pull request \
+                 #{pr_number} to merge (budget {max_wait_seconds}s); the task stays in review"
+            )));
         }
-        waited_seconds = waited_seconds.saturating_add(poll_interval_seconds.max(1));
     }
 }
 
@@ -559,8 +582,4 @@ fn ensure_all_tasks_no_diff_expected(tasks: &[Task]) -> Result<(), OrbitError> {
         ));
     }
     Ok(())
-}
-
-fn input_u64(input: &Value, key: &str) -> Option<u64> {
-    input.get(key).and_then(Value::as_u64)
 }

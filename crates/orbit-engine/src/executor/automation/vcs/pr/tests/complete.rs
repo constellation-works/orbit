@@ -2,8 +2,7 @@
 //!
 //! Every case drives the real `pr_complete` / `task_complete` code against the
 //! shared fake host with a scripted sequence of `pr.status` answers, so the
-//! merge-state machine is exercised without GitHub and without a wall clock:
-//! `poll_interval_seconds: 0` makes the poll loop iterate immediately.
+//! merge-state machine is exercised without GitHub.
 
 use std::fs;
 use std::process::Command;
@@ -36,7 +35,7 @@ fn pending_checks_with_auto_merge_disabled_wait_for_an_ordinary_merge() {
     host.queue_merge_capabilities_with_auto_merge(true, true, true, true, false);
 
     let mut input = complete_input(root.path(), &["T1"]);
-    input["max_wait_seconds"] = json!(1);
+    input["max_wait_seconds"] = json!(10);
     let output = pr_complete(&host, &input).expect("complete after checks settle");
 
     assert_eq!(output["merge"]["merged"], true);
@@ -63,6 +62,41 @@ fn pending_checks_with_auto_merge_disabled_time_out_in_review() {
         "disabled auto-merge is never requested"
     );
     assert_eq!(host.task_status("T1"), TaskStatus::Review);
+}
+
+#[test]
+fn zero_poll_interval_is_clamped_and_does_not_hammer_pr_status() {
+    let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+    host.queue_pr_status([state("PENDING")]);
+    host.queue_merge_capabilities_with_auto_merge(true, true, true, true, false);
+
+    let mut input = complete_input(root.path(), &["T1"]);
+    input["poll_interval_seconds"] = json!(0);
+    input["max_wait_seconds"] = json!(5);
+    let error = pr_complete(&host, &input).expect_err("pending checks must time out");
+
+    assert!(error.to_string().contains("timed out"), "{error}");
+    let status_reads = host
+        .vcs_calls()
+        .iter()
+        .filter(|call| call.operation == PR_STATUS_OPERATION)
+        .count();
+    assert!(
+        status_reads <= 1,
+        "a zero input interval must be clamped before polling"
+    );
+}
+
+#[test]
+fn excessive_wait_budget_is_reported_as_the_clamped_ceiling() {
+    let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+    host.queue_pr_status([merged_state()]);
+
+    let mut input = complete_input(root.path(), &["T1"]);
+    input["max_wait_seconds"] = json!(10_000_000);
+    let output = pr_complete(&host, &input).expect("an already merged PR completes");
+
+    assert_eq!(output["merge"]["max_wait_seconds"], json!(6 * 60 * 60));
 }
 
 fn complete_input(workspace_path: &std::path::Path, task_ids: &[&str]) -> Value {
@@ -173,7 +207,7 @@ fn squash_disabled_repository_uses_rebase_for_direct_and_auto_merge() {
         host.queue_pr_status([state(initial), merged_state()]);
         host.queue_merge_capabilities(false, true, true, true);
         let mut input = complete_input(root.path(), &["T1"]);
-        input["max_wait_seconds"] = json!(1);
+        input["max_wait_seconds"] = json!(10);
 
         let output = pr_complete(&host, &input).expect("rebase completion");
 
