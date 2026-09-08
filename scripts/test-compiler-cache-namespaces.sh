@@ -25,6 +25,16 @@ fail() {
   exit 1
 }
 
+# Refuse unit-test fixtures before any skip. Nested sandboxes previously
+# skipped at bwrap and never noticed fake HOME/sccache on a real host.
+if [[ -n "${FAKE_RUSTC_LOG-}" || -n "${FAKE_SCCACHE_LOG-}" ]]; then
+  fail "unit-test fixture environment leaked into live namespace test"
+fi
+if [[ -n "${ORBIT_COMPILER_CACHE_BIN-}" && -f "${ORBIT_COMPILER_CACHE_BIN}" ]] \
+  && grep -Fq 'FAKE_SCCACHE_LOG' "$ORBIT_COMPILER_CACHE_BIN" 2>/dev/null; then
+  fail "ORBIT_COMPILER_CACHE_BIN is the unit-test fake sccache"
+fi
+
 if ! command -v bwrap >/dev/null 2>&1; then
   skip "bwrap not on PATH"
 fi
