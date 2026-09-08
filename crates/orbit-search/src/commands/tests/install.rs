@@ -9,8 +9,8 @@
 use super::super::install::path_execution_fallback_rationale;
 use super::super::install::{
     CompanionIntegrity, CompanionLaunchMode, ManagedCompanion, SemanticInstallParams,
-    checksum_from_manifest, companion_launch_mode, default_release_download_source, run,
-    sha256_hex,
+    checksum_from_manifest, companion_launch_mode, default_release_download_source,
+    install_companion_to_temp, run, sha256_hex,
 };
 
 use orbit_common::security::release::verify_checksum_signature_with_key;
@@ -19,10 +19,98 @@ use crate::companion::{
     ensure_semantic_search_supported_for_platform, unsafe_companion_overrides_enabled,
 };
 use crate::{CompanionPaths, locate_companion, platform_companion_filename};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use tempfile::{TempDir, tempdir};
+
+#[test]
+fn companion_install_streams_a_slow_one_mebibyte_download_without_a_total_timeout() {
+    let _guard = EnvGuard::new();
+    let fixture = InstallFixture::new();
+    let body = vec![b'x'; 1024 * 1024];
+    let checksum = sha256_hex(&body);
+    let url = serve_throttled_response(body, Duration::from_millis(2_400));
+    let temp_path = fixture.paths.bin_dir.join("downloaded-companion");
+
+    remove_env("ORBIT_SEARCH_COMPANION");
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+    set_env("no_proxy", "127.0.0.1,localhost");
+    set_env("ORBIT_SEARCH_COMPANION_URL", &url);
+    set_env("ORBIT_SEARCH_COMPANION_SHA256", &checksum);
+    set_env("ORBIT_SEARCH_COMPANION_ALLOW_UNSAFE", "1");
+
+    let started = Instant::now();
+    let actual_checksum = install_companion_to_temp(&temp_path)
+        .expect("a healthy response taking more than 35 seconds should install");
+
+    assert!(
+        started.elapsed() > Duration::from_secs(35),
+        "the fixture must exceed reqwest's former 30-second whole-request timeout"
+    );
+    assert_eq!(actual_checksum, checksum);
+    assert_eq!(
+        std::fs::metadata(temp_path)
+            .expect("download metadata")
+            .len(),
+        1024 * 1024
+    );
+}
+
+#[test]
+fn companion_install_reports_a_dead_connection() {
+    let _guard = EnvGuard::new();
+    let fixture = InstallFixture::new();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("reserve local port");
+    let address = listener.local_addr().expect("listener address");
+    drop(listener);
+    let temp_path = fixture.paths.bin_dir.join("downloaded-companion");
+
+    remove_env("ORBIT_SEARCH_COMPANION");
+    set_env(
+        "ORBIT_SEARCH_COMPANION_URL",
+        &format!("https://{address}/companion"),
+    );
+    set_env("ORBIT_SEARCH_COMPANION_SHA256", &"0".repeat(64));
+
+    let error = install_companion_to_temp(&temp_path)
+        .expect_err("a closed local port should fail the connection");
+
+    assert!(
+        error.to_string().contains("failed to download companion"),
+        "{error}"
+    );
+}
+
+fn serve_throttled_response(body: Vec<u8>, delay_between_chunks: Duration) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind throttled HTTP server");
+    let address = listener.local_addr().expect("throttled server address");
+
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept companion download");
+        std::io::Write::write_all(
+            &mut stream,
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .expect("write response headers");
+
+        for (index, chunk) in body.chunks(64 * 1024).enumerate() {
+            if index != 0 {
+                thread::sleep(delay_between_chunks);
+            }
+            std::io::Write::write_all(&mut stream, chunk).expect("write throttled response chunk");
+        }
+    });
+
+    format!("http://{address}/companion")
+}
 
 #[test]
 #[cfg(unix)]
@@ -525,6 +613,8 @@ impl EnvGuard {
             "ORBIT_SEARCH_COMPANION_URL",
             "ORBIT_SEARCH_COMPANION_SHA256",
             "ORBIT_SEARCH_COMPANION_ALLOW_UNSAFE",
+            "NO_PROXY",
+            "no_proxy",
         ];
         let vars = names
             .into_iter()
