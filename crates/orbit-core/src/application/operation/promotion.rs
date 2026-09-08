@@ -22,7 +22,7 @@ use serde_json::json;
 
 use super::{PROMOTION_AUDIT, captured_policy};
 use crate::OrbitRuntime;
-use crate::application::automation::preparation;
+use crate::application::automation::preparation::{self, InstructionSnapshot};
 
 /// History event recorded on a task promoted under a grant.
 pub(crate) const PROMOTION_EVENT: &str = "operation_promoted";
@@ -69,7 +69,7 @@ pub(crate) fn promote_within_grant(
         .map(|task| (task.id, task.status))
         .collect();
     let branch = runtime.workflow_base_branch().to_string();
-    let mut head = None;
+    let mut source: Option<(String, InstructionSnapshot)> = None;
 
     for task_id in &grant.task_ids {
         let task = match runtime.get_task(task_id) {
@@ -113,18 +113,37 @@ pub(crate) fn promote_within_grant(
             decisions.push(PromotionDecision::withheld(task_id, "assessment_unready"));
             continue;
         }
-        let revision = match &head {
-            Some(revision) => revision,
-            None => head.insert(preparation::head_revision(runtime, &branch)?),
+        let (revision, instructions) = match &source {
+            Some(source) => (&source.0, &source.1),
+            None => {
+                let revision = preparation::head_revision(runtime, &branch)?;
+                let instructions = preparation::instructions(runtime, &revision)
+                    .map_err(orbit_automation::automation_error_to_orbit)?;
+                source = Some((revision, instructions));
+                let Some(source) = source.as_ref() else {
+                    return Err(OrbitError::Execution(
+                        "operation promotion did not retain its source snapshot".to_string(),
+                    ));
+                };
+                (&source.0, &source.1)
+            }
         };
-        let fingerprint = preparation::fingerprint(runtime, &task, revision)
-            .map_err(orbit_automation::automation_error_to_orbit)?;
+        let fingerprint =
+            preparation::fingerprint_with_instructions(runtime, &task, revision, instructions)
+                .map_err(orbit_automation::automation_error_to_orbit)?;
         if fingerprint != assessment.resulting_fingerprint {
             decisions.push(PromotionDecision::withheld(task_id, "assessment_stale"));
             continue;
         }
 
-        let decision = promote_locked(runtime, grant, task_id, revision, &fingerprint)?;
+        let decision = promote_locked(
+            runtime,
+            grant,
+            task_id,
+            revision,
+            instructions,
+            &fingerprint,
+        )?;
         runtime.record_pipeline_audit(
             PROMOTION_AUDIT,
             None,
@@ -154,6 +173,7 @@ fn promote_locked(
     grant: &OperationGrant,
     task_id: &str,
     revision: &str,
+    instructions: &InstructionSnapshot,
     expected_fingerprint: &str,
 ) -> Result<PromotionDecision, OrbitError> {
     let mut decision = None;
@@ -163,8 +183,9 @@ fn promote_locked(
             decision = Some(PromotionDecision::withheld(task_id, "status_changed"));
             return Ok(());
         }
-        let fingerprint = preparation::fingerprint(runtime, &current, revision)
-            .map_err(orbit_automation::automation_error_to_orbit)?;
+        let fingerprint =
+            preparation::fingerprint_with_instructions(runtime, &current, revision, instructions)
+                .map_err(orbit_automation::automation_error_to_orbit)?;
         if fingerprint != expected_fingerprint {
             decision = Some(PromotionDecision::withheld(task_id, "assessment_stale"));
             return Ok(());
