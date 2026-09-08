@@ -22,6 +22,7 @@ fn post_json(uri: &str, body: Value) -> Request<Body> {
         .method(Method::POST)
         .uri(uri)
         .header(header::ORIGIN, "http://localhost:7878")
+        .header(header::HOST, "localhost:7878")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
         .expect("request")
@@ -32,6 +33,7 @@ fn patch_json(uri: &str, body: Value) -> Request<Body> {
         .method(Method::PATCH)
         .uri(uri)
         .header(header::ORIGIN, "http://localhost:7878")
+        .header(header::HOST, "localhost:7878")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
         .expect("request")
@@ -691,6 +693,7 @@ async fn patch_api_accepts_in_progress_hyphen_from_dashboard_and_returns_in_prog
                 .uri(format!("/api/tasks/{}", task_id))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::ORIGIN, "http://localhost:7878")
+                .header(header::HOST, "localhost:7878")
                 .body(Body::from(r#"{"status":"in-progress"}"#))
                 .expect("build patch request"),
         )
@@ -737,6 +740,7 @@ async fn patch_api_persists_pr_status_with_status_and_execution_summary() {
                 .uri(format!("/tasks/{}", task.id))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::ORIGIN, "http://localhost:7878")
+                .header(header::HOST, "localhost:7878")
                 .body(Body::from(
                     json!({
                         "pr_status": "approved",
@@ -782,6 +786,7 @@ async fn patch_api_persists_complexity_and_omission_preserves_it() {
                 .uri(format!("/tasks/{}", task.id))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::ORIGIN, "http://localhost:7878")
+                .header(header::HOST, "localhost:7878")
                 .body(Body::from(json!({ "complexity": "medium" }).to_string()))
                 .expect("build complexity patch request"),
         )
@@ -808,6 +813,7 @@ async fn patch_api_persists_complexity_and_omission_preserves_it() {
                 .uri(format!("/tasks/{}", task.id))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::ORIGIN, "http://localhost:7878")
+                .header(header::HOST, "localhost:7878")
                 .body(Body::from(
                     json!({ "title": "Retitled without complexity" }).to_string(),
                 ))
@@ -1251,6 +1257,7 @@ async fn create_task_rejects_stray_workspace_body_key() {
                 .method(Method::POST)
                 .uri("/tasks")
                 .header(header::ORIGIN, "http://localhost:7878")
+                .header(header::HOST, "localhost:7878")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     json!({

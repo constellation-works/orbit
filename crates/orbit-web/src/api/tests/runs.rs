@@ -24,7 +24,9 @@ async fn request_cancel(runtime: OrbitRuntime, run_id: &str, origin: Option<&str
         .method(Method::POST)
         .uri(format!("/runs/{run_id}/cancel"));
     if let Some(origin) = origin {
-        builder = builder.header(header::ORIGIN, origin);
+        builder = builder
+            .header(header::ORIGIN, origin)
+            .header(header::HOST, "localhost:3000");
     }
     router()
         .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
@@ -38,7 +40,9 @@ async fn request_resume(runtime: OrbitRuntime, run_id: &str, origin: Option<&str
         .method(Method::POST)
         .uri(format!("/job-runs/{run_id}/resume"));
     if let Some(origin) = origin {
-        builder = builder.header(header::ORIGIN, origin);
+        builder = builder
+            .header(header::ORIGIN, origin)
+            .header(header::HOST, "localhost:3000");
     }
     router()
         .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
@@ -686,7 +690,8 @@ async fn request_ship(runtime: OrbitRuntime, body: Option<Value>) -> Response {
     let mut builder = Request::builder()
         .method(Method::POST)
         .uri("/workflows/ship")
-        .header(header::ORIGIN, "http://localhost:3000");
+        .header(header::ORIGIN, "http://localhost:3000")
+        .header(header::HOST, "localhost:3000");
     let body = match body {
         Some(json) => {
             builder = builder.header(header::CONTENT_TYPE, "application/json");
@@ -728,6 +733,7 @@ async fn request_ship_global(
                 .method(Method::POST)
                 .uri(uri)
                 .header(header::ORIGIN, "http://localhost:7878")
+                .header(header::HOST, "localhost:7878")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body.to_string()))
                 .expect("request"),
@@ -982,7 +988,8 @@ mod auto_drain {
         let mut builder = Request::builder()
             .method(Method::POST)
             .uri("/workflows/auto")
-            .header(header::ORIGIN, "http://localhost:3000");
+            .header(header::ORIGIN, "http://localhost:3000")
+            .header(header::HOST, "localhost:3000");
         let body = match body {
             Some(json) => {
                 builder = builder.header(header::CONTENT_TYPE, "application/json");
@@ -1195,6 +1202,7 @@ mod auto_drain {
                     .method(Method::POST)
                     .uri("/workflows/auto?workspace=ghost")
                     .header(header::ORIGIN, "http://localhost:7878")
+                    .header(header::HOST, "localhost:7878")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(json!({ "for_duration": "30m" }).to_string()))
                     .expect("request"),

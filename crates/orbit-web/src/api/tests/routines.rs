@@ -220,6 +220,7 @@ async fn routine_mutation_denies_an_unidentified_dashboard_caller() {
                         .method(Method::POST)
                         .uri("/routines/toggle?workspace=default")
                         .header("origin", "http://localhost:7878")
+                        .header("host", "localhost:7878")
                         .header("content-type", "application/json")
                         .body(Body::from(
                             r#"{"name":"nightly","source":"default","target":"job:nightly","host_id":"host-a","expected_enabled":true,"enabled":false}"#,
@@ -249,6 +250,7 @@ async fn operations_mutations_require_an_explicit_workspace() {
                 .method(Method::POST)
                 .uri("/routines/clock")
                 .header("origin", "http://localhost:7878")
+                .header("host", "localhost:7878")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     r#"{"action":"disable","host_id":"host-a","expected_enabled":true,"expected_cadence_seconds":60}"#,
@@ -415,6 +417,7 @@ async fn routine_request(
         request = request
             .method(Method::POST)
             .header("origin", "http://localhost:7878")
+            .header("host", "localhost:7878")
             .header("content-type", "application/json");
         Body::from(body.to_string())
     } else {

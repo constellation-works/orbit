@@ -10,6 +10,7 @@
 
 use axum::Router;
 use axum::body::Body;
+use axum::http::uri::Authority;
 use axum::http::{Method, Request, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
@@ -17,6 +18,7 @@ use axum::routing::{get, post};
 use chrono::{DateTime, Duration, TimeZone, Timelike, Utc};
 use serde::Deserialize;
 use serde_json::json;
+use std::str::FromStr;
 use url::Url;
 
 mod audit;
@@ -409,10 +411,14 @@ async fn require_localhost_origin(request: Request<Body>, next: Next) -> Respons
     let allowed = origin
         .and_then(|origin| origin.to_str().ok())
         .and_then(|origin| Url::parse(origin).ok())
-        .is_some_and(|origin| {
-            origin.scheme() == "http"
-                && matches!(origin.host_str(), Some("localhost" | "127.0.0.1"))
-        });
+        .zip(
+            request
+                .headers()
+                .get(header::HOST)
+                .and_then(|host| host.to_str().ok())
+                .and_then(|host| Authority::from_str(host).ok()),
+        )
+        .is_some_and(|(origin, host)| localhost_origin_matches_authority(&origin, &host));
     if !allowed && (unsafe_method || origin.is_some()) {
         return (
             StatusCode::FORBIDDEN,
@@ -421,6 +427,25 @@ async fn require_localhost_origin(request: Request<Body>, next: Next) -> Respons
             .into_response();
     }
     next.run(request).await
+}
+
+fn localhost_origin_matches_authority(origin: &Url, authority: &Authority) -> bool {
+    let Some(origin_host) = origin.host_str().map(|host| host.trim_matches(['[', ']'])) else {
+        return false;
+    };
+
+    let authority_host = authority.host().trim_matches(['[', ']']);
+    let same_host = origin_host.eq_ignore_ascii_case(authority_host);
+    let same_port = origin.port_or_known_default() == authority.port_u16().or(Some(80));
+    let valid_origin = origin.scheme() == "http"
+        && origin.path() == "/"
+        && origin.username().is_empty()
+        && origin.password().is_none()
+        && origin.query().is_none()
+        && origin.fragment().is_none();
+    let approved_loopback_host = matches!(origin_host, "localhost" | "127.0.0.1" | "::1");
+
+    valid_origin && approved_loopback_host && same_host && same_port
 }
 
 /// Tell long-lived streaming handlers (currently `/api/log/stream`) to close

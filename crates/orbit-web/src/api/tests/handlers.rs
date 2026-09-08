@@ -11,12 +11,20 @@ use tower::ServiceExt;
 use super::super::*;
 use super::test_support::{body_json, seed_run, write_seeded_run};
 
-async fn request_cancel(runtime: OrbitRuntime, run_id: &str, origin: Option<&str>) -> Response {
+async fn request_cancel(
+    runtime: OrbitRuntime,
+    run_id: &str,
+    origin: Option<&str>,
+    host: Option<&str>,
+) -> Response {
     let mut builder = Request::builder()
         .method(Method::POST)
         .uri(format!("/runs/{run_id}/cancel"));
     if let Some(origin) = origin {
         builder = builder.header(header::ORIGIN, origin);
+    }
+    if let Some(host) = host {
+        builder = builder.header(header::HOST, host);
     }
     router()
         .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
@@ -66,6 +74,7 @@ async fn patch_task_body(runtime: OrbitRuntime, task_id: &str, body: String) -> 
                 .uri(format!("/tasks/{task_id}"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::ORIGIN, "http://localhost:7878")
+                .header(header::HOST, "localhost:7878")
                 .body(Body::from(body))
                 .expect("request"),
         )
@@ -421,7 +430,13 @@ async fn require_localhost_origin_rejects_prefix_match() {
             JobRunState::Pending,
         );
 
-        let response = request_cancel(runtime.clone(), &run.run_id, Some(origin)).await;
+        let response = request_cancel(
+            runtime.clone(),
+            &run.run_id,
+            Some(origin),
+            Some("localhost:7878"),
+        )
+        .await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN, "{label}");
         let stored = runtime.show_job_run(&run.run_id).expect("show run");
@@ -513,7 +528,13 @@ async fn require_localhost_origin_rejects_https_origin() {
         JobRunState::Pending,
     );
 
-    let response = request_cancel(runtime.clone(), &run.run_id, Some("https://localhost")).await;
+    let response = request_cancel(
+        runtime.clone(),
+        &run.run_id,
+        Some("https://localhost"),
+        Some("localhost:7878"),
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let stored = runtime.show_job_run(&run.run_id).expect("show run");
@@ -521,13 +542,16 @@ async fn require_localhost_origin_rejects_https_origin() {
 }
 
 #[tokio::test]
-async fn require_localhost_origin_accepts_localhost_with_port() {
+async fn require_localhost_origin_matches_loopback_authority_and_effective_http_port() {
     let cases = [
-        ("http://localhost:7878", "localhost"),
-        ("http://127.0.0.1:7878", "127-0-0-1"),
+        ("http://localhost:7878", "localhost:7878", "localhost"),
+        ("http://127.0.0.1:7878", "127.0.0.1:7878", "127-0-0-1"),
+        ("http://[::1]:7878", "[::1]:7878", "ipv6-loopback"),
+        ("http://localhost", "localhost", "implicit-http-port"),
+        ("http://localhost:80", "localhost", "explicit-http-port"),
     ];
 
-    for (origin, label) in cases {
+    for (origin, host, label) in cases {
         let runtime = OrbitRuntime::in_memory().expect("build runtime");
         let run = seed_run(
             &runtime,
@@ -536,12 +560,125 @@ async fn require_localhost_origin_accepts_localhost_with_port() {
             JobRunState::Pending,
         );
 
-        let response = request_cancel(runtime.clone(), &run.run_id, Some(origin)).await;
+        let response = request_cancel(runtime.clone(), &run.run_id, Some(origin), Some(host)).await;
 
         assert_eq!(response.status(), StatusCode::OK, "{label}");
         let stored = runtime.show_job_run(&run.run_id).expect("show run");
         assert_eq!(stored.state, JobRunState::Cancelled, "{label}");
     }
+}
+
+#[tokio::test]
+async fn require_localhost_origin_rejects_mismatched_or_malformed_authorities() {
+    let cases = [
+        (
+            Some("http://localhost:3000"),
+            Some("localhost:7878"),
+            "mismatched port",
+        ),
+        (
+            Some("http://localhost:7878"),
+            Some("127.0.0.1:7878"),
+            "mismatched host",
+        ),
+        (Some("http://localhost:7878"), None, "missing host"),
+        (
+            Some("http://localhost:7878"),
+            Some("localhost:not-a-port"),
+            "malformed host",
+        ),
+        (Some("null"), Some("localhost:7878"), "null origin"),
+        (
+            Some("http://localhost:7878/path"),
+            Some("localhost:7878"),
+            "malformed origin",
+        ),
+        (
+            Some("https://localhost:7878"),
+            Some("localhost:7878"),
+            "unsupported scheme",
+        ),
+        (
+            Some("http://example.test:7878"),
+            Some("example.test:7878"),
+            "non-loopback",
+        ),
+    ];
+
+    for (index, (origin, host, label)) in cases.into_iter().enumerate() {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+        let run = seed_run(
+            &runtime,
+            &format!("jrun-web-cancel-rejected-authority-{index}"),
+            "web_cancel_rejected_authority",
+            JobRunState::Pending,
+        );
+
+        let response = request_cancel(runtime.clone(), &run.run_id, origin, host).await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{label}");
+        assert_eq!(
+            runtime.show_job_run(&run.run_id).expect("show run").state,
+            JobRunState::Pending,
+            "{label}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn require_localhost_origin_does_not_trust_forwarded_authority_headers() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run = seed_run(
+        &runtime,
+        "jrun-web-cancel-forwarded-authority",
+        "web_cancel_forwarded_authority",
+        JobRunState::Pending,
+    );
+
+    let response = router()
+        .with_state(crate::state::DashboardState::single(Arc::new(
+            runtime.clone(),
+        )))
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/runs/{}/cancel", run.run_id))
+                .header(header::ORIGIN, "http://localhost:7878")
+                .header(header::HOST, "example.test:7878")
+                .header("x-forwarded-host", "localhost:7878")
+                .header("forwarded", "host=localhost:7878")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        runtime.show_job_run(&run.run_id).expect("show run").state,
+        JobRunState::Pending
+    );
+}
+
+#[tokio::test]
+async fn require_localhost_origin_preserves_missing_origin_behavior() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run = seed_run(
+        &runtime,
+        "jrun-web-cancel-missing-origin",
+        "web_cancel_missing_origin",
+        JobRunState::Pending,
+    );
+
+    let unsafe_response = request_cancel(runtime.clone(), &run.run_id, None, None).await;
+    assert_eq!(unsafe_response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        runtime.show_job_run(&run.run_id).expect("show run").state,
+        JobRunState::Pending
+    );
+
+    let safe_response = request_tasks(runtime).await;
+    assert_eq!(safe_response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -555,6 +692,7 @@ async fn require_localhost_origin_blocks_cross_origin_get_with_attacker_origin()
                 .method(Method::GET)
                 .uri("/tasks")
                 .header(header::ORIGIN, "http://localhost.evil.com")
+                .header(header::HOST, "localhost.evil.com")
                 .body(Body::empty())
                 .expect("request"),
         )

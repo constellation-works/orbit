@@ -85,6 +85,7 @@ async fn send(
     if !matches!(method, Method::GET) {
         builder = builder
             .header("origin", "http://localhost:7878")
+            .header("host", "localhost:7878")
             .header("content-type", "application/json");
     }
     router()

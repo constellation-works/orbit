@@ -655,6 +655,7 @@ fn post_json(uri: &str, body: serde_json::Value) -> Request<Body> {
         .method(Method::POST)
         .uri(uri)
         .header(header::ORIGIN, "http://localhost:7878")
+        .header(header::HOST, "localhost:7878")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
         .expect("request")
