@@ -23,7 +23,8 @@ async fn request(
     let mut builder = Request::builder()
         .method(method)
         .uri(path)
-        .header(header::ORIGIN, "http://localhost:3000");
+        .header(header::ORIGIN, "http://localhost:3000")
+        .header(header::HOST, "localhost:3000");
     let body = match body {
         Some(value) => {
             builder = builder.header(header::CONTENT_TYPE, "application/json");

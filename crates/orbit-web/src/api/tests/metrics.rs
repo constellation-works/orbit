@@ -52,6 +52,7 @@ async fn ingest_metrics(runtime: OrbitRuntime, params: &InvocationInsertParams) 
                 .uri("/api/metrics/invocations")
                 .header("content-type", "application/json")
                 .header("origin", "http://localhost")
+                .header("host", "localhost")
                 .body(Body::from(
                     serde_json::to_vec(params).expect("serialize invocation params"),
                 ))
