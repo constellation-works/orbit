@@ -160,7 +160,14 @@ fn inference_does_not_hold_store_mutex_or_sqlite_write_lock() {
     let query = noop.embed(&["beta"]).unwrap().remove(0);
     let store_for_query = store.clone();
     let hits = run_unblocked("query on shared store", move || {
-        cosine_top_k(&store_for_query, &query, noop.model_id(), 3, Some("task"))
+        cosine_top_k(
+            &store_for_query,
+            &query,
+            noop.model_id(),
+            3,
+            Some("task"),
+            None,
+        )
     });
     assert!(
         hits.iter().any(|hit| hit.source_id == "VISIBLE"),

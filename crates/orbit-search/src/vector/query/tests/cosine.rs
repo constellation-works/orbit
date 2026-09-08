@@ -38,7 +38,7 @@ fn cosine_top_k_returns_expected_ordering_with_noop_vectors() {
         .unwrap();
 
     let query = embedder.embed(&["beta"]).unwrap().remove(0);
-    let hits = cosine_top_k(&store, &query, embedder.model_id(), 3, Some("task")).unwrap();
+    let hits = cosine_top_k(&store, &query, embedder.model_id(), 3, Some("task"), None).unwrap();
 
     assert_eq!(hits.len(), 3);
     assert_eq!(hits[0].source_id, "T2");

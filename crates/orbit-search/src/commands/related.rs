@@ -75,6 +75,7 @@ pub(crate) fn run_with_embedder(
         embedder.model_id(),
         retriever_limit,
         Some("task"),
+        None,
     )?;
     let candidates = cosine
         .into_iter()

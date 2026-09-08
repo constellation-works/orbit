@@ -20,6 +20,7 @@ pub fn cosine_top_k(
     model_id: &str,
     limit: usize,
     kind: Option<&str>,
+    field: Option<&str>,
 ) -> Result<Vec<CosineHit>, OrbitError> {
     if query.is_empty() || limit == 0 {
         return Ok(Vec::new());
@@ -31,44 +32,25 @@ pub fn cosine_top_k(
         .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
 
     let mut candidates = Vec::new();
-    if let Some(kind) = kind {
-        let mut stmt = conn
-            .prepare(
-                r#"
-                    SELECT source_kind, source_id, field, chunk_idx, embedding
-                    FROM embeddings
-                    WHERE model_id = ?1 AND source_kind = ?2
-                "#,
-            )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        let mut rows = stmt
-            .query(params![model_id, kind])
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        while let Some(row) = rows
-            .next()
-            .map_err(|error| OrbitError::Store(error.to_string()))?
-        {
-            candidates.push(row_to_hit(row, query)?);
-        }
-    } else {
-        let mut stmt = conn
-            .prepare(
-                r#"
-                    SELECT source_kind, source_id, field, chunk_idx, embedding
-                    FROM embeddings
-                    WHERE model_id = ?1
-                "#,
-            )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        let mut rows = stmt
-            .query(params![model_id])
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        while let Some(row) = rows
-            .next()
-            .map_err(|error| OrbitError::Store(error.to_string()))?
-        {
-            candidates.push(row_to_hit(row, query)?);
-        }
+    let mut stmt = conn
+        .prepare(
+            r#"
+                SELECT source_kind, source_id, field, chunk_idx, embedding
+                FROM embeddings
+                WHERE model_id = ?1
+                    AND (?2 IS NULL OR source_kind = ?2)
+                    AND (?3 IS NULL OR field = ?3)
+            "#,
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    let mut rows = stmt
+        .query(params![model_id, kind, field])
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| OrbitError::Store(error.to_string()))?
+    {
+        candidates.push(row_to_hit(row, query)?);
     }
 
     candidates.sort_by(compare_cosine_hits);

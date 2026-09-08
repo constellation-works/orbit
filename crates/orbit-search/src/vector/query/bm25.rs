@@ -18,6 +18,7 @@ pub fn bm25_top_k(
     store: &VectorStore,
     query: &str,
     kind: Option<&str>,
+    field: Option<&str>,
     limit: usize,
 ) -> Result<Vec<Bm25Hit>, OrbitError> {
     if query.trim().is_empty() || limit == 0 {
@@ -32,51 +33,29 @@ pub fn bm25_top_k(
     let fts_err =
         |error| crate::vector::store::schema::translate_corpus_fts_sql_error(&conn, error);
     let mut hits = Vec::new();
-    if let Some(kind) = kind {
-        let mut stmt = conn
-            .prepare(
-                r#"
-                    SELECT
-                        chunks.source_kind,
-                        chunks.source_id,
-                        chunks.field,
-                        chunks.id,
-                        bm25(corpus_fts) AS rank
-                    FROM corpus_fts
-                    JOIN chunks ON chunks.id = corpus_fts.rowid
-                    WHERE corpus_fts MATCH ?1 AND chunks.source_kind = ?2
-                    ORDER BY rank
-                    LIMIT ?3
-                "#,
-            )
-            .map_err(fts_err)?;
-        let mut rows = stmt
-            .query(params![match_query, kind, limit as i64])
-            .map_err(fts_err)?;
-        collect_hits(&mut rows, &mut hits)?;
-    } else {
-        let mut stmt = conn
-            .prepare(
-                r#"
-                    SELECT
-                        chunks.source_kind,
-                        chunks.source_id,
-                        chunks.field,
-                        chunks.id,
-                        bm25(corpus_fts) AS rank
-                    FROM corpus_fts
-                    JOIN chunks ON chunks.id = corpus_fts.rowid
-                    WHERE corpus_fts MATCH ?1
-                    ORDER BY rank
-                    LIMIT ?2
-                "#,
-            )
-            .map_err(fts_err)?;
-        let mut rows = stmt
-            .query(params![match_query, limit as i64])
-            .map_err(fts_err)?;
-        collect_hits(&mut rows, &mut hits)?;
-    }
+    let mut stmt = conn
+        .prepare(
+            r#"
+                SELECT
+                    chunks.source_kind,
+                    chunks.source_id,
+                    chunks.field,
+                    chunks.id,
+                    bm25(corpus_fts) AS rank
+                FROM corpus_fts
+                JOIN chunks ON chunks.id = corpus_fts.rowid
+                WHERE corpus_fts MATCH ?1
+                    AND (?2 IS NULL OR chunks.source_kind = ?2)
+                    AND (?3 IS NULL OR chunks.field = ?3)
+                ORDER BY rank
+                LIMIT ?4
+            "#,
+        )
+        .map_err(fts_err)?;
+    let mut rows = stmt
+        .query(params![match_query, kind, field, limit as i64])
+        .map_err(fts_err)?;
+    collect_hits(&mut rows, &mut hits)?;
     Ok(hits)
 }
 
