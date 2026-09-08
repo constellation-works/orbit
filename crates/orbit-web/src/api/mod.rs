@@ -149,6 +149,10 @@ pub(super) struct LogQuery {
     pub(super) level: Option<String>,
     #[serde(default)]
     pub(super) since: Option<String>,
+    /// Byte offset to resume `/log/stream` from. Ignored by `/log` snapshot.
+    /// Overridden by `Last-Event-ID` when both are present.
+    #[serde(default)]
+    pub(super) from: Option<u64>,
 }
 
 pub(super) fn current_year_month_utc() -> String {
