@@ -5,9 +5,10 @@ use orbit_policy::PolicyEngine;
 use orbit_search::{EmbedWorker, VectorStore};
 use orbit_store::Store;
 use orbit_store::compose::{
-    WorkspaceTaskBackends, audit_event_store_sqlite, coordination_task_backends,
-    global_executor_def_store, global_policy_def_store, layered_policy_def_store,
-    task_reservation_store_sqlite, tool_store_sqlite, workspace_job_run_store,
+    WorkspaceTaskBackends, audit_event_store_sqlite, automation_store, coordination_task_backends,
+    global_executor_def_store, global_policy_def_store, invocation_store_from_store,
+    layered_policy_def_store, operation_store, review_store, task_reservation_store_sqlite,
+    tool_store_sqlite, v2_audit_store_from_store, workspace_job_run_store,
     workspace_policy_def_store, workspace_task_backends,
 };
 use orbit_store::maintenance::task_registry::{
@@ -25,7 +26,8 @@ use orbit_types::workspace::WorkspacePaths;
 
 use crate::context::OrbitContext;
 use crate::context::{
-    ActorIdentity, OrbitExecutionAssets, OrbitPolicyContext, OrbitRuntimeSettings, OrbitStores,
+    ActorIdentity, OrbitExecutionAssets, OrbitHostStore, OrbitPolicyContext, OrbitRuntimeSettings,
+    OrbitStores,
 };
 use crate::runtime::{HostLifetime, WorkspaceRuntimeBinding};
 use crate::skill_catalog::SkillCatalog;
@@ -117,6 +119,14 @@ pub(crate) fn build_context_from_roots(
     let tool_store = tool_store_sqlite(store.clone());
     let audit_event_store = audit_event_store_sqlite(store.clone());
     let task_reservation_store = task_reservation_store_sqlite(store.clone());
+    let host_store = OrbitHostStore {
+        sqlite: store.clone(),
+        automation: automation_store(store.clone())?,
+        review: review_store(store.clone())?,
+        operation: operation_store(store.clone())?,
+        v2_audit: v2_audit_store_from_store(store.clone()),
+        invocation: invocation_store_from_store(store.clone()),
+    };
     let executor_def_store = global_executor_def_store(persistence.executor_dir.clone());
     let global_policy_store = global_policy_def_store(persistence.policy_dir.clone());
     let workspace_policy_store = workspace_policy_def_store(paths.policies_dir.clone());
@@ -181,6 +191,7 @@ pub(crate) fn build_context_from_roots(
             audit_event_store,
             executor_def_store,
             policy_def_store,
+            host_store,
         ),
         OrbitExecutionAssets::new(Arc::new(registry), skill_catalog),
         OrbitPolicyContext::new(
