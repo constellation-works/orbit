@@ -4,11 +4,14 @@ use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::identity::normalize_optional_attribution_label;
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use crate::application::job::{DrainWorkerLimitRequest, JobRunListParams};
-use crate::runtime::run_audit::{RunExecutionProgress, RunProviderProcess};
+use crate::runtime::run_audit::{
+    MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunProviderProcess,
+    RunRecoveryAttempts,
+};
 use crate::{OrbitRuntime, ShipMode};
 
 use super::input::{parse_optional_string_array_field, parse_string_array_field};
@@ -130,11 +133,58 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
         limit: Some(parse_limit(&input)?),
         ..Default::default()
     })?;
+    // Default list stays the enriched projection. A summary mode, if added,
+    // must be an explicit opt-in and cannot replace this path [ORB-11625].
+    let (items, _reads) = project_workflow_run_list(runtime, &runs)?;
+    Ok(json!({ "items": items }))
+}
+
+/// Query counts for one list-page projection. Reconciliation reads that happen
+/// inside `list_job_runs` are excluded: they are not this enrichment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RunListProjectionReads {
+    pub pipeline_state_queries: usize,
+    pub recovery_event_queries: usize,
+    pub recovery_presence_queries: usize,
+    pub per_run_recovery_fetch_limit: usize,
+    pub per_run_recovery_projection_limit: usize,
+}
+
+pub(crate) fn project_workflow_run_list(
+    runtime: &OrbitRuntime,
+    runs: &[JobRun],
+) -> Result<(Vec<Value>, RunListProjectionReads), OrbitError> {
+    let reads = RunListProjectionReads {
+        pipeline_state_queries: usize::from(!runs.is_empty()),
+        recovery_event_queries: usize::from(!runs.is_empty()),
+        recovery_presence_queries: usize::from(!runs.is_empty()),
+        per_run_recovery_fetch_limit: RECOVERY_FETCH_PER_RUN,
+        per_run_recovery_projection_limit: MAX_RECOVERY_ATTEMPTS,
+    };
+    if runs.is_empty() {
+        return Ok((Vec::new(), reads));
+    }
+
+    let run_ids = runs
+        .iter()
+        .map(|run| run.run_id.clone())
+        .collect::<Vec<_>>();
+    let states = runtime.read_run_states(&run_ids).unwrap_or_default();
+    let recoveries = runtime
+        .collect_run_recovery_attempts_for_runs(&run_ids)
+        .map(|page| page.by_run_id)
+        .unwrap_or_default();
     let items = runs
         .iter()
-        .map(|run| run_json_with_lineage(runtime, run))
+        .map(|run| {
+            run_json_enriched(
+                run,
+                states.get(&run.run_id).and_then(Option::as_ref),
+                recoveries.get(&run.run_id),
+            )
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(json!({ "items": items }))
+    Ok((items, reads))
 }
 
 pub(super) fn resume(
@@ -252,10 +302,18 @@ fn run_json(run: &JobRun) -> Result<Value, OrbitError> {
 /// about lineage instead of each reader seeing a different half of the truth.
 /// An unreadable state degrades to an empty list rather than failing the read.
 fn run_json_with_lineage(runtime: &OrbitRuntime, run: &JobRun) -> Result<Value, OrbitError> {
-    let mut value = run_json(run)?;
     let state = runtime.read_run_state(&run.run_id).ok().flatten();
+    let recovery = runtime.collect_run_recovery_attempts(&run.run_id).ok();
+    run_json_enriched(run, state.as_ref(), recovery.as_ref())
+}
+
+fn run_json_enriched(
+    run: &JobRun,
+    state: Option<&PipelineState>,
+    recovery: Option<&RunRecoveryAttempts>,
+) -> Result<Value, OrbitError> {
+    let mut value = run_json(run)?;
     let dispatches = state
-        .as_ref()
         .map(|state| state.child_dispatches.clone())
         .unwrap_or_default();
     value["child_dispatches"] =
@@ -263,25 +321,19 @@ fn run_json_with_lineage(runtime: &OrbitRuntime, run: &JobRun) -> Result<Value, 
     // [ORB-11253] The effective ceiling and who moved it, from the same read:
     // an operator asking why a drain is admitting five tasks rather than seven
     // is asking about this field, not about the submitted input.
-    value["drain_worker_limit"] = serde_json::to_value(
-        state
-            .as_ref()
-            .and_then(|state| state.drain_worker_limit.as_ref()),
-    )
-    .map_err(serialize_error("serialize drain worker limit"))?;
-    value["drain_admissions_stop"] = serde_json::to_value(
-        state
-            .as_ref()
-            .and_then(|state| state.drain_admissions_stop.as_ref()),
-    )
-    .map_err(serialize_error("serialize drain admissions stop"))?;
+    value["drain_worker_limit"] =
+        serde_json::to_value(state.and_then(|state| state.drain_worker_limit.as_ref()))
+            .map_err(serialize_error("serialize drain worker limit"))?;
+    value["drain_admissions_stop"] =
+        serde_json::to_value(state.and_then(|state| state.drain_admissions_stop.as_ref()))
+            .map_err(serialize_error("serialize drain admissions stop"))?;
     // [ORB-11354] An operator tracking an agent invocation reads it here, from
     // the same show/list surface as any other run: its distinguishable outcome,
     // a bounded preview of the answer, and the durable reference to the full
     // captured output.
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
         run,
-        state.as_ref().map(|state| &state.step_outputs),
+        state.map(|state| &state.step_outputs),
     ))
     .map_err(serialize_error("serialize agent invocation result"))?;
     // Recovery evidence remains separate from the run and step errors above:
@@ -289,13 +341,12 @@ fn run_json_with_lineage(runtime: &OrbitRuntime, run: &JobRun) -> Result<Value, 
     // workflow failure that triggered it. Older/unreadable audit trails remain
     // observable as `unavailable` rather than making existing run-show callers
     // fail their ordinary durable run read.
-    let recovery_attempts = runtime.collect_run_recovery_attempts(&run.run_id).ok();
-    value["recovery_attempts"] = match recovery_attempts {
+    value["recovery_attempts"] = match recovery {
         Some(attempts) => json!({
             "state": attempts.state,
             "limit": attempts.limit,
             "truncated": attempts.truncated,
-            "items": attempts.attempts.into_iter().map(|attempt| json!({
+            "items": attempts.attempts.iter().map(|attempt| json!({
                 "run_id": attempt.run_id,
                 "event_id": attempt.event_id,
                 "attempted_at": attempt.attempted_at.map(|value| value.to_rfc3339()),
@@ -309,7 +360,7 @@ fn run_json_with_lineage(runtime: &OrbitRuntime, run: &JobRun) -> Result<Value, 
         }),
         None => json!({
             "state": "unavailable",
-            "limit": 8,
+            "limit": MAX_RECOVERY_ATTEMPTS,
             "truncated": false,
             "items": [],
         }),

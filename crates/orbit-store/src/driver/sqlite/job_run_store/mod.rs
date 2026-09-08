@@ -540,6 +540,14 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             .read_job_run_state_for_workspace(&self.workspace_id, run_id)
     }
 
+    fn read_run_states(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError> {
+        self.store
+            .read_job_run_states_for_workspace(&self.workspace_id, run_ids)
+    }
+
     fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError> {
         self.store
             .write_job_run_state_for_workspace(&self.workspace_id, run_id, state)
@@ -733,6 +741,56 @@ impl Store {
                 .map_err(|e| OrbitError::Store(format!("invalid pipeline_state_json: {e}")))
         })
         .transpose()
+    }
+
+    /// Pipeline state for a page of runs in one query per chunk.
+    ///
+    /// Unreadable JSON is `None` for that run rather than failing the page:
+    /// list projection already treats a per-run read error as empty lineage.
+    pub fn read_job_run_states_for_workspace(
+        &self,
+        workspace_id: &str,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError> {
+        let mut states: HashMap<String, Option<PipelineState>> = HashMap::new();
+        if run_ids.is_empty() {
+            return Ok(states);
+        }
+        let conn = self.read()?;
+        for chunk in run_ids.chunks(STEP_RUN_ID_CHUNK) {
+            let placeholders = (0..chunk.len())
+                .map(|index| format!("?{}", index + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT run_id, pipeline_state_json FROM job_runs \
+                     WHERE workspace_id = ?1 AND run_id IN ({placeholders})"
+                ))
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+                vec![Box::new(workspace_id.to_string())];
+            params.extend(
+                chunk
+                    .iter()
+                    .map(|run_id| Box::new(run_id.clone()) as Box<dyn rusqlite::types::ToSql>),
+            );
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|b| b.as_ref()).collect();
+            let rows = stmt
+                .query_map(param_refs.as_slice(), |row| {
+                    let run_id: String = row.get(0)?;
+                    let raw: Option<String> = row.get(1)?;
+                    Ok((run_id, raw))
+                })
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            for row in rows {
+                let (run_id, raw) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+                let state = raw.and_then(|raw| serde_json::from_str(&raw).ok());
+                states.insert(run_id, state);
+            }
+        }
+        Ok(states)
     }
 
     pub fn write_job_run_state_for_workspace(

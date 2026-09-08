@@ -75,8 +75,41 @@ pub struct RunRecoveryAttempts {
     pub truncated: bool,
 }
 
-const MAX_RECOVERY_ATTEMPTS: usize = 8;
+impl RunRecoveryAttempts {
+    pub fn unavailable() -> Self {
+        Self {
+            state: "unavailable",
+            attempts: Vec::new(),
+            limit: MAX_RECOVERY_ATTEMPTS,
+            truncated: false,
+        }
+    }
+
+    pub fn not_attempted() -> Self {
+        Self {
+            state: "not_attempted",
+            attempts: Vec::new(),
+            limit: MAX_RECOVERY_ATTEMPTS,
+            truncated: false,
+        }
+    }
+}
+
+pub(crate) const MAX_RECOVERY_ATTEMPTS: usize = 8;
+/// One extra recovery row per run so `truncated` is visible without a
+/// page-wide LIMIT that would starve later runs [ORB-11625].
+pub(crate) const RECOVERY_FETCH_PER_RUN: usize = MAX_RECOVERY_ATTEMPTS + 1;
 const MAX_RECOVERY_DIAGNOSTIC_CHARS: usize = 1024;
+
+/// Recovery evidence for a list page, plus the query counts the list
+/// projection uses to prove it did not scan one full envelope per run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunRecoveryAttemptsPage {
+    pub by_run_id: HashMap<String, RunRecoveryAttempts>,
+    pub event_queries: usize,
+    pub presence_queries: usize,
+    pub per_run_fetch_limit: usize,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunCliInvocationRecord {
@@ -353,34 +386,68 @@ impl OrbitRuntime {
         &self,
         run_id: &str,
     ) -> Result<RunRecoveryAttempts, OrbitError> {
-        let events = self.collect_run_audit_events(run_id)?;
-        let audit_state = if events.is_empty() {
-            "unavailable"
-        } else {
-            "not_attempted"
-        };
-        let total = events
-            .iter()
-            .filter(|event| event.body_kind.as_deref() == Some("step_recovery_attempted"))
-            .count();
-        let mut attempts = events
-            .into_iter()
-            .filter(|event| event.body_kind.as_deref() == Some("step_recovery_attempted"))
-            .filter_map(|event| recovery_attempt_from_event(run_id, event))
-            .rev()
-            .take(MAX_RECOVERY_ATTEMPTS)
-            .collect::<Vec<_>>();
-        attempts.reverse();
+        let page = self.collect_run_recovery_attempts_for_runs(&[run_id.to_string()])?;
+        Ok(page
+            .by_run_id
+            .get(run_id)
+            .cloned()
+            .unwrap_or_else(RunRecoveryAttempts::unavailable))
+    }
 
-        Ok(RunRecoveryAttempts {
-            state: if attempts.is_empty() {
-                audit_state
-            } else {
-                "recorded"
-            },
-            attempts,
-            limit: MAX_RECOVERY_ATTEMPTS,
-            truncated: total > MAX_RECOVERY_ATTEMPTS,
+    /// Recovery evidence for a list page from one audit-store handle.
+    ///
+    /// [ORB-11625] The previous list path scanned each run's full v2 envelope
+    /// (`limit: 50_000`) and opened the audit store once per row. This loads
+    /// only `step_recovery_attempted` rows, capped per run at
+    /// [`RECOVERY_FETCH_PER_RUN`], and a presence set for `unavailable` vs
+    /// `not_attempted`. A page-wide LIMIT is not used: it would starve later
+    /// runs with shorter histories. Store-handle reuse is ORB-11632; this
+    /// method must not add a per-run `Store::open`.
+    pub fn collect_run_recovery_attempts_for_runs(
+        &self,
+        run_ids: &[String],
+    ) -> Result<RunRecoveryAttemptsPage, OrbitError> {
+        if run_ids.is_empty() {
+            return Ok(RunRecoveryAttemptsPage {
+                by_run_id: HashMap::new(),
+                event_queries: 0,
+                presence_queries: 0,
+                per_run_fetch_limit: RECOVERY_FETCH_PER_RUN,
+            });
+        }
+
+        let workspace_id = self.workspace_id()?;
+        let store = self.v2_audit_store()?;
+        let rows = store.list_v2_audit_events_for_runs_partitioned(
+            &workspace_id,
+            run_ids,
+            Some("v2_envelope"),
+            Some("step_recovery_attempted"),
+            RECOVERY_FETCH_PER_RUN,
+        )?;
+        let present =
+            store.list_v2_audit_run_ids_with_events(&workspace_id, run_ids, Some("v2_envelope"))?;
+
+        let mut grouped: HashMap<String, Vec<orbit_store::V2AuditEventRow>> = HashMap::new();
+        for row in rows {
+            grouped.entry(row.run_id.clone()).or_default().push(row);
+        }
+
+        let mut by_run_id = HashMap::new();
+        for run_id in run_ids {
+            let attempts = match grouped.get(run_id) {
+                Some(run_rows) => recovery_attempts_from_partitioned_rows(run_id, run_rows),
+                None if present.contains(run_id) => RunRecoveryAttempts::not_attempted(),
+                None => RunRecoveryAttempts::unavailable(),
+            };
+            by_run_id.insert(run_id.clone(), attempts);
+        }
+
+        Ok(RunRecoveryAttemptsPage {
+            by_run_id,
+            event_queries: 1,
+            presence_queries: 1,
+            per_run_fetch_limit: RECOVERY_FETCH_PER_RUN,
         })
     }
 
@@ -771,6 +838,61 @@ fn enclosing_step_id(event: &Value, events: &HashMap<String, Value>) -> Option<S
             .map(str::to_string);
     }
     None
+}
+
+fn recovery_attempts_from_partitioned_rows(
+    run_id: &str,
+    rows: &[orbit_store::V2AuditEventRow],
+) -> RunRecoveryAttempts {
+    let truncated = rows.len() > MAX_RECOVERY_ATTEMPTS;
+    let mut attempts = rows
+        .iter()
+        .filter_map(recovery_event_from_row)
+        .filter_map(|event| recovery_attempt_from_event(run_id, event))
+        .take(MAX_RECOVERY_ATTEMPTS)
+        .collect::<Vec<_>>();
+    attempts.reverse();
+    RunRecoveryAttempts {
+        state: if attempts.is_empty() {
+            "not_attempted"
+        } else {
+            "recorded"
+        },
+        attempts,
+        limit: MAX_RECOVERY_ATTEMPTS,
+        truncated,
+    }
+}
+
+fn recovery_event_from_row(row: &orbit_store::V2AuditEventRow) -> Option<RunAuditEvent> {
+    let raw: Value = serde_json::from_str(&row.payload_json).ok()?;
+    let event_id = raw.get("event_id").and_then(Value::as_str)?.to_string();
+    Some(RunAuditEvent {
+        parent_event_id: raw
+            .get("parent_event_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        event_type: raw
+            .get("event_type")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        body_kind: raw
+            .get("body_kind")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        timestamp: raw
+            .get("ts")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc))
+            .or(Some(row.ts)),
+        step_id: raw
+            .get("step_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        raw,
+        event_id,
+    })
 }
 
 fn recovery_attempt_from_event(run_id: &str, event: RunAuditEvent) -> Option<RunRecoveryAttempt> {

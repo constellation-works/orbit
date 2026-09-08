@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::application::job::{AGENT_INVOKE_JOB_ID, JobRunListParams};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{
@@ -10,7 +11,7 @@ use orbit_types::policy::Role;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
-use orbit_types::workflow::JobRunState;
+use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use super::super::build_orbit_tool_host;
@@ -939,5 +940,326 @@ fn mcp_run_show_marks_a_missing_trail_unavailable_and_bounds_a_long_history() {
             .collect::<Vec<_>>(),
         (500_005_u64..=500_011).collect::<Vec<_>>(),
         "the newest finished retries fill the rest of the budget"
+    );
+}
+
+fn listed_item<'a>(listed: &'a Value, run_id: &str) -> &'a Value {
+    listed["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|item| item["run_id"] == json!(run_id))
+        .unwrap_or_else(|| panic!("missing listed run {run_id}"))
+}
+
+fn insert_named_run(runtime: &OrbitRuntime, job_id: &str) -> String {
+    runtime
+        .stores()
+        .jobs()
+        .insert_job_run(job_id, 1, Utc::now(), None, None)
+        .expect("insert run")
+        .run_id
+}
+
+fn seed_numbered_recovery(runtime: &OrbitRuntime, run_id: &str, count: u32) {
+    for index in 0..count {
+        seed_v2_event(
+            runtime,
+            run_id,
+            &format!("{run_id}-evt-recovery-{index}"),
+            &format!("2026-09-07T05:25:{index:02}Z"),
+            None,
+            json!({
+                "event_type": "step.recovery_attempted",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "implement_one",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": index % 2 == 1,
+            }),
+        );
+    }
+}
+
+/// [ORB-11625] Default list keeps the enriched contract: lineage, drain
+/// controls, invocation results, and recovery availability/truncation.
+#[test]
+fn mcp_run_list_preserves_enriched_default_projection_across_a_mixed_page() {
+    let (_root, runtime, _repo_root) = test_runtime();
+
+    let legacy_id = insert_named_run(&runtime, "task_auto_pipeline");
+
+    let not_attempted_id = insert_named_run(&runtime, "task_auto_pipeline");
+    seed_v2_event(
+        &runtime,
+        &not_attempted_id,
+        "evt-started",
+        "2026-09-07T05:24:00Z",
+        None,
+        json!({"body_kind": "step_started", "step_id": "implement_one"}),
+    );
+
+    let recorded_id = insert_named_run(&runtime, "task_auto_pipeline");
+    seed_numbered_recovery(&runtime, &recorded_id, 2);
+
+    let truncated_id = insert_named_run(&runtime, "task_auto_pipeline");
+    seed_numbered_recovery(&runtime, &truncated_id, 9);
+
+    let drain_id = insert_named_run(&runtime, "workspace_auto_pipeline");
+    let mut drain_state = PipelineState::new(
+        drain_id.clone(),
+        "workspace_auto_pipeline".to_string(),
+        json!({}),
+    );
+    drain_state.record_child_dispatch(
+        ChildDispatch::submitted(
+            "jrun-child-leaves".to_string(),
+            "task_auto_pipeline".to_string(),
+            "invoke_and_wait".to_string(),
+            true,
+            false,
+            Utc::now(),
+        )
+        .with_parent_step_id(Some("ship_leaves".to_string())),
+    );
+    assert!(drain_state.set_drain_worker_limit(
+        7,
+        5,
+        "operator".to_string(),
+        Some("raise".to_string()),
+        None,
+    ));
+    assert!(
+        drain_state
+            .set_drain_admissions_stop("operator".to_string(), Some("window closed".to_string()))
+    );
+    runtime
+        .write_run_state(&drain_id, &drain_state)
+        .expect("seed drain state");
+
+    let invoke_id = insert_named_run(&runtime, AGENT_INVOKE_JOB_ID);
+    let mut invoke_state = PipelineState::new(
+        invoke_id.clone(),
+        AGENT_INVOKE_JOB_ID.to_string(),
+        json!({}),
+    );
+    invoke_state.step_outputs.insert(
+        0,
+        json!({
+            "exit_code": 0,
+            "timed_out": false,
+            "completion_envelope_satisfied": true,
+            "summary": "the clock restarts",
+            "stdout_text": "hello",
+            "stdout_blob_ref": "blob-list",
+        }),
+    );
+    runtime
+        .write_run_state(&invoke_id, &invoke_state)
+        .expect("seed invoke state");
+
+    let listed = run_tool_as_operator(&runtime, "orbit.workflow.run.list", json!({}))
+        .expect("operator run list");
+    assert_eq!(listed["items"].as_array().expect("items").len(), 6);
+
+    let legacy = listed_item(&listed, &legacy_id);
+    assert_eq!(legacy["child_dispatches"], json!([]));
+    assert_eq!(legacy["drain_worker_limit"], Value::Null);
+    assert_eq!(legacy["drain_admissions_stop"], Value::Null);
+    assert_eq!(legacy["agent_invocation"], Value::Null);
+    assert_eq!(legacy["recovery_attempts"]["state"], json!("unavailable"));
+    assert_eq!(legacy["recovery_attempts"]["limit"], json!(8));
+    assert_eq!(legacy["recovery_attempts"]["truncated"], json!(false));
+    assert_eq!(legacy["execution_progress"], Value::Null);
+
+    let not_attempted = listed_item(&listed, &not_attempted_id);
+    assert_eq!(
+        not_attempted["recovery_attempts"]["state"],
+        json!("not_attempted")
+    );
+    assert_eq!(not_attempted["recovery_attempts"]["items"], json!([]));
+
+    let recorded = listed_item(&listed, &recorded_id);
+    assert_eq!(recorded["recovery_attempts"]["state"], json!("recorded"));
+    assert_eq!(recorded["recovery_attempts"]["truncated"], json!(false));
+    assert_eq!(
+        recorded["recovery_attempts"]["items"][0]["event_id"],
+        json!(format!("{recorded_id}-evt-recovery-0"))
+    );
+    assert_eq!(
+        recorded["recovery_attempts"]["items"][1]["event_id"],
+        json!(format!("{recorded_id}-evt-recovery-1"))
+    );
+    assert_eq!(
+        recorded["recovery_attempts"]["items"][0]["run_id"],
+        json!(recorded_id)
+    );
+
+    let truncated = listed_item(&listed, &truncated_id);
+    assert_eq!(truncated["recovery_attempts"]["truncated"], json!(true));
+    assert_eq!(
+        truncated["recovery_attempts"]["items"]
+            .as_array()
+            .expect("items")
+            .len(),
+        8
+    );
+    assert_eq!(
+        truncated["recovery_attempts"]["items"][0]["event_id"],
+        json!(format!("{truncated_id}-evt-recovery-1"))
+    );
+    assert_eq!(
+        truncated["recovery_attempts"]["items"][7]["event_id"],
+        json!(format!("{truncated_id}-evt-recovery-8"))
+    );
+
+    let drain = listed_item(&listed, &drain_id);
+    assert_eq!(
+        drain["child_dispatches"][0]["child_run_id"],
+        json!("jrun-child-leaves")
+    );
+    assert_eq!(
+        drain["drain_worker_limit"]["max_active_leaf_runs"],
+        json!(7)
+    );
+    assert_eq!(drain["drain_admissions_stop"]["actor"], json!("operator"));
+
+    let invoke = listed_item(&listed, &invoke_id);
+    assert_eq!(
+        invoke["agent_invocation"]["completed_envelope"],
+        json!(true)
+    );
+    assert_eq!(
+        invoke["agent_invocation"]["summary"],
+        json!("the clock restarts")
+    );
+
+    let shown_truncated = run_tool_as_operator(
+        &runtime,
+        "orbit.workflow.run.show",
+        json!({"id": truncated_id}),
+    )
+    .expect("operator run show");
+    assert_eq!(
+        shown_truncated["recovery_attempts"],
+        truncated["recovery_attempts"]
+    );
+    assert_eq!(
+        shown_truncated["execution_progress"]["state"],
+        json!("observed")
+    );
+}
+
+/// [ORB-11625] List enrichment is one state read and two bounded recovery
+/// queries for the page, not one full envelope scan per run. Reconciliation
+/// inside `list_job_runs` is excluded from these counts.
+#[test]
+fn mcp_run_list_projection_batches_state_and_recovery_reads_for_a_page() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let quiet = insert_named_run(&runtime, "task_auto_pipeline");
+    let busy = insert_named_run(&runtime, "task_auto_pipeline");
+    seed_v2_event(
+        &runtime,
+        &quiet,
+        "evt-quiet",
+        "2026-09-07T05:24:00Z",
+        None,
+        json!({"body_kind": "step_started", "step_id": "implement_one"}),
+    );
+    seed_numbered_recovery(&runtime, &busy, 12);
+
+    let runs = runtime
+        .list_job_runs(JobRunListParams::default())
+        .expect("load page");
+    let (items, reads) = super::super::workflow_tools::project_workflow_run_list(&runtime, &runs)
+        .expect("project list");
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(reads.pipeline_state_queries, 1);
+    assert_eq!(reads.recovery_event_queries, 1);
+    assert_eq!(reads.recovery_presence_queries, 1);
+    assert_eq!(reads.per_run_recovery_fetch_limit, 9);
+    assert_eq!(reads.per_run_recovery_projection_limit, 8);
+
+    let empty_reads = super::super::workflow_tools::project_workflow_run_list(&runtime, &[])
+        .expect("empty page")
+        .1;
+    assert_eq!(empty_reads.pipeline_state_queries, 0);
+    assert_eq!(empty_reads.recovery_event_queries, 0);
+    assert_eq!(empty_reads.recovery_presence_queries, 0);
+    assert_eq!(empty_reads.per_run_recovery_fetch_limit, 9);
+}
+
+/// [ORB-11625] A busy earlier run cannot steal a later run's recovery
+/// evidence. Missing and unreadable audit stay `unavailable`.
+#[test]
+fn mcp_run_list_keeps_per_run_recovery_attribution_with_uneven_histories() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let missing_id = insert_named_run(&runtime, "task_auto_pipeline");
+    let unreadable_id = insert_named_run(&runtime, "task_auto_pipeline");
+    runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: runtime.workspace_id().expect("workspace id"),
+            event_id: "evt-malformed".to_string(),
+            source: "v2_envelope".to_string(),
+            schema_version: 1,
+            event_type: "test.event".to_string(),
+            ts: Utc::now(),
+            run_id: unreadable_id.clone(),
+            agent_identity: "codex".to_string(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: "{not-json".to_string(),
+        })
+        .expect("seed unreadable audit");
+    let quiet_id = insert_named_run(&runtime, "task_auto_pipeline");
+    seed_numbered_recovery(&runtime, &quiet_id, 1);
+    let busy_id = insert_named_run(&runtime, "task_auto_pipeline");
+    seed_numbered_recovery(&runtime, &busy_id, 20);
+
+    let listed = run_tool_as_operator(&runtime, "orbit.workflow.run.list", json!({}))
+        .expect("operator run list");
+
+    let missing = listed_item(&listed, &missing_id);
+    assert_eq!(missing["recovery_attempts"]["state"], json!("unavailable"));
+    assert_eq!(missing["recovery_attempts"]["items"], json!([]));
+
+    let unreadable = listed_item(&listed, &unreadable_id);
+    assert_eq!(
+        unreadable["recovery_attempts"]["state"],
+        json!("unavailable")
+    );
+
+    let quiet = listed_item(&listed, &quiet_id);
+    assert_eq!(quiet["recovery_attempts"]["state"], json!("recorded"));
+    assert_eq!(quiet["recovery_attempts"]["truncated"], json!(false));
+    assert_eq!(
+        quiet["recovery_attempts"]["items"][0]["event_id"],
+        json!(format!("{quiet_id}-evt-recovery-0"))
+    );
+    assert_eq!(
+        quiet["recovery_attempts"]["items"][0]["run_id"],
+        json!(quiet_id)
+    );
+
+    let busy = listed_item(&listed, &busy_id);
+    assert_eq!(busy["recovery_attempts"]["truncated"], json!(true));
+    let busy_ids = busy["recovery_attempts"]["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| item["event_id"].as_str().expect("event_id").to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        busy_ids,
+        (12..20)
+            .map(|index| format!("{busy_id}-evt-recovery-{index}"))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        busy["recovery_attempts"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|item| item["run_id"] == json!(busy_id))
     );
 }

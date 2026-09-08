@@ -1,5 +1,6 @@
 use chrono::{DateTime, TimeZone, Utc};
-use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType};
+use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType, PipelineState};
+use serde_json::json;
 
 use crate::Store;
 use crate::contracts::{JobRunOrder, JobRunQuery};
@@ -87,6 +88,78 @@ fn listing_hydrates_every_runs_steps_across_id_chunks() {
             assert_eq!(step.target_id, format!("step-{position}"), "{}", run.run_id);
         }
     }
+}
+
+/// [ORB-11625] A list page loads pipeline state in one query per id chunk.
+/// Missing runs stay absent; unreadable JSON degrades to `None` rather than
+/// failing the page.
+#[test]
+fn reading_run_states_hydrates_a_page_and_isolates_unreadable_rows() {
+    let store = Store::open_in_memory().expect("open store");
+    let mut expected = Vec::new();
+    for index in 0..4_u32 {
+        let run_id = format!("jrun-state-{index}");
+        let run = run_with_steps(&run_id, JobRunState::Running, at(index), 0);
+        let mut state = PipelineState::new(run_id.clone(), run.job_id.clone(), json!({}));
+        state.record_child_dispatch(
+            orbit_types::workflow::ChildDispatch::submitted(
+                format!("jrun-child-{index}"),
+                "task_auto_pipeline".to_string(),
+                "invoke_and_wait".to_string(),
+                true,
+                false,
+                at(index),
+            )
+            .with_parent_step_id(Some("ship_leaves".to_string())),
+        );
+        store
+            .upsert_job_run_for_workspace("ws", &run, Some(&state))
+            .expect("insert run with state");
+        expected.push(run_id);
+    }
+    let unreadable = run_with_steps("jrun-bad-json", JobRunState::Pending, at(8), 0);
+    store
+        .upsert_job_run_for_workspace("ws", &unreadable, None)
+        .expect("insert run without state");
+    store
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE job_runs SET pipeline_state_json = '{not-json' \
+                     WHERE workspace_id = ?1 AND run_id = ?2",
+                    rusqlite::params!["ws", "jrun-bad-json"],
+                )
+                .map_err(|e| orbit_common::OrbitError::Store(e.to_string()))?;
+            Ok(())
+        })
+        .expect("seed unreadable state");
+
+    let mut ids = expected.clone();
+    ids.push("jrun-bad-json".to_string());
+    ids.push("jrun-missing".to_string());
+    let states = store
+        .read_job_run_states_for_workspace("ws", &ids)
+        .expect("batch read");
+
+    assert_eq!(states.len(), 5);
+    for (index, run_id) in expected.iter().enumerate() {
+        let state = states
+            .get(run_id)
+            .expect("run present")
+            .as_ref()
+            .expect("readable state");
+        assert_eq!(
+            state.child_dispatches[0].child_run_id,
+            format!("jrun-child-{index}")
+        );
+    }
+    assert!(
+        states
+            .get("jrun-bad-json")
+            .expect("unreadable row is present")
+            .is_none()
+    );
+    assert!(!states.contains_key("jrun-missing"));
 }
 
 /// Counting and duration reads apply the list filter but ignore its limit.
