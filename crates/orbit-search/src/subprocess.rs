@@ -197,6 +197,10 @@ impl SubprocessEmbedder {
                 id: self.next_request_id(),
                 text,
             },
+            RpcRequest::TokenBoundaries { text, .. } => RpcRequest::TokenBoundaries {
+                id: self.next_request_id(),
+                text,
+            },
             RpcRequest::Exit { .. } => RpcRequest::Exit {
                 id: self.next_request_id(),
             },
@@ -546,6 +550,19 @@ impl Embedder for SubprocessEmbedder {
             RpcResult::TokenCount { tokens } => Ok(tokens),
             _ => Err(OrbitError::AgentProtocolViolation(
                 "companion returned non-token_count response".to_string(),
+            )),
+        }
+    }
+
+    fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError> {
+        let result = self.request(RpcRequest::TokenBoundaries {
+            id: 0,
+            text: text.to_string(),
+        })?;
+        match result {
+            RpcResult::TokenBoundaries { ends } => Ok(ends),
+            _ => Err(OrbitError::AgentProtocolViolation(
+                "companion returned non-token_boundaries response".to_string(),
             )),
         }
     }
