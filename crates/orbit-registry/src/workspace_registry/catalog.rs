@@ -353,6 +353,22 @@ pub fn find_workspace<'a>(
     }
 }
 
+/// Finds a workspace by its exact catalog ID.
+///
+/// Checkout bindings and other persisted relations already store
+/// `workspace_id`. Those lookups must not reuse [`find_workspace`], which
+/// treats the argument as an id-or-name selector and fails closed when one
+/// workspace's ID equals another's name.
+pub fn find_workspace_by_id<'a>(
+    registry: &'a WorkspaceRegistry,
+    workspace_id: &str,
+) -> Option<&'a Workspace> {
+    registry
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == workspace_id)
+}
+
 /// Resolve a logical selector (registered name or `ws_*` id) to exactly one workspace.
 ///
 /// The same fail-closed name/id grammar is used by the CLI `--workspace` flag
@@ -424,10 +440,7 @@ pub fn local_workspaces(
     registry: &WorkspaceRegistry,
 ) -> impl Iterator<Item = (&Workspace, &WorkspaceCheckout)> {
     registry.checkouts.iter().filter_map(|checkout| {
-        registry
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.id == checkout.workspace_id)
+        find_workspace_by_id(registry, &checkout.workspace_id)
             .map(|workspace| (workspace, checkout))
     })
 }
@@ -462,10 +475,7 @@ pub fn find_workspace_by_path<'a>(
     cwd: &Path,
 ) -> Option<&'a Workspace> {
     let checkout = find_checkout_by_path(registry, cwd)?;
-    registry
-        .workspaces
-        .iter()
-        .find(|workspace| workspace.id == checkout.workspace_id)
+    find_workspace_by_id(registry, &checkout.workspace_id)
 }
 
 /// Sets a path override binding a directory to a workspace.
