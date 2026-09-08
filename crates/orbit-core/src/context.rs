@@ -394,6 +394,16 @@ impl OrbitContext {
         self.runtime.actor = actor;
     }
 
+    #[cfg(test)]
+    pub(crate) fn replace_task_store_for_test(&mut self, task: Arc<dyn TaskStoreBackend>) {
+        self.stores.task = task;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn task_store_for_test(&self) -> Arc<dyn TaskStoreBackend> {
+        Arc::clone(&self.stores.task)
+    }
+
     pub(crate) fn scoring_enabled(&self) -> bool {
         self.runtime.scoring_enabled
     }
