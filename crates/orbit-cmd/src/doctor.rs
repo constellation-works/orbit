@@ -183,8 +183,7 @@ impl DoctorCommands for OrbitRuntime {
     }
 
     fn health_check_store_writable(&self) -> Result<String, OrbitError> {
-        let store = self.sqlite_store()?;
-        store.check_writable()?;
+        self.check_sqlite_store_writable()?;
         Ok("store database accepts writes".to_string())
     }
 }
