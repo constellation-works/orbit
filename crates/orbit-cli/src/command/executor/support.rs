@@ -11,7 +11,7 @@ pub(super) fn executor_def_json(def: &orbit_core::ExecutorDef) -> Value {
         "env": def.env,
         "sandbox": def.sandbox,
         "allow_fallback": def.allow_fallback,
-        "created_at": def.created_at.to_rfc3339(),
-        "updated_at": def.updated_at.to_rfc3339(),
+        "created_at": def.created_at.map(|t| t.to_rfc3339()),
+        "updated_at": def.updated_at.map(|t| t.to_rfc3339()),
     })
 }

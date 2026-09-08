@@ -40,8 +40,8 @@ fn make_def(
         deny_read: deny_read.into_iter().map(String::from).collect(),
         deny_modify: deny_modify.into_iter().map(String::from).collect(),
         fs_profiles,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
+        created_at: Some(Utc::now()),
+        updated_at: Some(Utc::now()),
     }
 }
 

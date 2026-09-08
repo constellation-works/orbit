@@ -1745,8 +1745,8 @@ fn v2_cli_agent_loop_persists_invocation_metrics() {
             env: HashMap::new(),
             sandbox: None,
             allow_fallback: false,
-            created_at: now,
-            updated_at: now,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
         .expect("seed fake codex executor");
 
@@ -1843,8 +1843,8 @@ fn v2_claude_fable_alias_persists_provider_reported_model_and_cost() {
             env: HashMap::new(),
             sandbox: None,
             allow_fallback: false,
-            created_at: now,
-            updated_at: now,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
         .expect("seed fake Claude executor");
 
@@ -1939,8 +1939,8 @@ base_branch = "main"
             env: HashMap::new(),
             sandbox: None,
             allow_fallback: false,
-            created_at: now,
-            updated_at: now,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
         .expect("seed fake claude executor");
 

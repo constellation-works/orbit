@@ -9,8 +9,8 @@ pub(super) fn policy_json(def: &PolicyDef) -> Result<Value, OrbitError> {
         "deny_read": def.deny_read,
         "deny_modify": def.deny_modify,
         "fs_profiles": effective_profiles_json(def)?,
-        "created_at": def.created_at.to_rfc3339(),
-        "updated_at": def.updated_at.to_rfc3339(),
+        "created_at": def.created_at.map(|t| t.to_rfc3339()),
+        "updated_at": def.updated_at.map(|t| t.to_rfc3339()),
     }))
 }
 
@@ -21,8 +21,12 @@ pub(super) fn policy_text(def: &PolicyDef) -> Result<String, OrbitError> {
     if let Some(desc) = &def.description {
         let _ = writeln!(out, "Description: {desc}");
     }
-    let _ = writeln!(out, "Created:     {}", def.created_at.to_rfc3339());
-    let _ = writeln!(out, "Updated:     {}", def.updated_at.to_rfc3339());
+    if let Some(created_at) = def.created_at {
+        let _ = writeln!(out, "Created:     {}", created_at.to_rfc3339());
+    }
+    if let Some(updated_at) = def.updated_at {
+        let _ = writeln!(out, "Updated:     {}", updated_at.to_rfc3339());
+    }
 
     let _ = writeln!(out, "\nGlobal Denies:");
     let _ = writeln!(out, "  denyRead:   {}", render_rule_list(&def.deny_read));

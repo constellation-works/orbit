@@ -42,8 +42,8 @@ fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
         env: Default::default(),
         sandbox: None,
         allow_fallback: false,
-        created_at: now,
-        updated_at: now,
+        created_at: Some(now),
+        updated_at: Some(now),
     }
 }
 

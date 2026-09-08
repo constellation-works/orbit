@@ -22,8 +22,8 @@ impl Execute for PolicyListArgs {
                     "name": d.name,
                     "description": d.description,
                     "fs_profiles": sorted_profile_names(d),
-                    "created_at": d.created_at.to_rfc3339(),
-                    "updated_at": d.updated_at.to_rfc3339(),
+                    "created_at": d.created_at.map(|t| t.to_rfc3339()),
+                    "updated_at": d.updated_at.map(|t| t.to_rfc3339()),
                 })
             })
             .collect();
@@ -42,7 +42,9 @@ impl Execute for PolicyListArgs {
                 def.name.clone(),
                 def.description.clone().unwrap_or_else(|| "-".to_string()),
                 sorted_profile_names(def).join(", "),
-                def.updated_at.format("%Y-%m-%d %H:%M").to_string(),
+                def.updated_at
+                    .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_else(|| "-".to_string()),
             ]);
         }
         Ok(Payload::list(values, table).into())

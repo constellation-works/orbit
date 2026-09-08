@@ -28,10 +28,10 @@ pub struct PolicyDef {
         skip_serializing_if = "HashMap::is_empty"
     )]
     pub fs_profiles: HashMap<String, FsProfile>,
-    #[serde(default = "chrono::Utc::now")]
-    pub created_at: DateTime<Utc>,
-    #[serde(default = "chrono::Utc::now")]
-    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -178,12 +178,8 @@ impl PolicyDef {
             deny_read,
             deny_modify,
             fs_profiles,
-            created_at: global.created_at,
-            updated_at: if workspace.updated_at > global.updated_at {
-                workspace.updated_at
-            } else {
-                global.updated_at
-            },
+            created_at: global.created_at.or(workspace.created_at),
+            updated_at: workspace.updated_at.max(global.updated_at),
         };
         merged.validate()?;
         Ok(merged)

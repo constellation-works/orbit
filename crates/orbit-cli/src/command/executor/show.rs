@@ -46,8 +46,12 @@ impl Execute for ExecutorShowArgs {
                 let _ = writeln!(out, "  {k}={v}");
             }
         }
-        let _ = writeln!(out, "Created:   {}", def.created_at);
-        let _ = writeln!(out, "Updated:   {}", def.updated_at);
+        if let Some(created_at) = def.created_at {
+            let _ = writeln!(out, "Created:   {created_at}");
+        }
+        if let Some(updated_at) = def.updated_at {
+            let _ = writeln!(out, "Updated:   {updated_at}");
+        }
         Ok(Payload::detail(doc, out).into())
     }
 }

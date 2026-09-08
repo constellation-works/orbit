@@ -41,8 +41,8 @@ fn engine(
         deny_read: deny_read.iter().map(|s| (*s).to_string()).collect(),
         deny_modify: deny_modify.iter().map(|s| (*s).to_string()).collect(),
         fs_profiles,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
+        created_at: Some(Utc::now()),
+        updated_at: Some(Utc::now()),
     };
     PolicyEngine::from_def(&def).expect("valid policy def")
 }
@@ -521,8 +521,8 @@ fn validation_rejection_matrix() {
             deny_read: deny_read.iter().map(|s| (*s).to_string()).collect(),
             deny_modify: deny_modify.iter().map(|s| (*s).to_string()).collect(),
             fs_profiles,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: Some(Utc::now()),
+            updated_at: Some(Utc::now()),
         }
     };
 

@@ -326,8 +326,8 @@ fn policy_with_profile(name: &str, read: Vec<String>) -> PolicyDef {
         deny_read: Vec::new(),
         deny_modify: Vec::new(),
         fs_profiles,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
+        created_at: Some(Utc::now()),
+        updated_at: Some(Utc::now()),
     }
 }
 

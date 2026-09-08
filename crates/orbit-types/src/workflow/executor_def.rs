@@ -167,8 +167,10 @@ pub struct ExecutorDef {
     /// degrade to bare exec? Default `false` (fail-closed).
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_fallback: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 /// Legacy override for an agent family's strong/weak `AgentModelPair`.
@@ -195,8 +197,8 @@ impl ExecutorDef {
     pub fn from_resource_spec(
         name: String,
         spec: ExecutorResourceSpec,
-        created_at: DateTime<Utc>,
-        updated_at: DateTime<Utc>,
+        created_at: Option<DateTime<Utc>>,
+        updated_at: Option<DateTime<Utc>>,
     ) -> Self {
         let ExecutorResourceSpec {
             executor_type,
@@ -209,8 +211,8 @@ impl ExecutorDef {
             env,
             sandbox,
             allow_fallback,
-            created_at: _,
-            updated_at: _,
+            created_at: spec_created_at,
+            updated_at: spec_updated_at,
         } = spec;
 
         Self {
@@ -225,8 +227,8 @@ impl ExecutorDef {
             env,
             sandbox,
             allow_fallback,
-            created_at,
-            updated_at,
+            created_at: created_at.or(spec_created_at),
+            updated_at: updated_at.or(spec_updated_at),
         }
     }
 
