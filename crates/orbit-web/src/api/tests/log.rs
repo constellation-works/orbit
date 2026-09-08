@@ -333,3 +333,117 @@ fn reconnect_with_last_event_id_replays_only_lines_after_offset() {
         "Last-Event-ID must not replay the line at that offset: {frames:?}"
     );
 }
+
+#[test]
+fn log_snapshot_skips_malformed_records_and_preserves_order() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    write_lines(
+        &path,
+        &[
+            log_line("keep-1"),
+            "not-json".to_string(),
+            "{".to_string(),
+            log_line("keep-2"),
+        ],
+    );
+
+    let snapshot = read_log_snapshot_from_path(
+        &path,
+        &LogQuery {
+            limit: Some(10),
+            ..LogQuery::default()
+        },
+    )
+    .expect("snapshot");
+
+    assert_eq!(snapshot.events.len(), 2);
+    assert!(snapshot.events[0].message_html.contains("keep-1"));
+    assert!(snapshot.events[1].message_html.contains("keep-2"));
+    assert_eq!(
+        snapshot.offset,
+        std::fs::metadata(&path).expect("metadata").len()
+    );
+}
+
+#[test]
+fn log_snapshot_includes_final_line_without_trailing_newline() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    let body = format!("{}\n{}", log_line("first"), log_line("last"));
+    std::fs::write(&path, body).expect("write");
+
+    let snapshot = read_log_snapshot_from_path(
+        &path,
+        &LogQuery {
+            limit: Some(10),
+            ..LogQuery::default()
+        },
+    )
+    .expect("snapshot");
+
+    assert_eq!(snapshot.events.len(), 2);
+    assert!(snapshot.events[0].message_html.contains("first"));
+    assert!(snapshot.events[1].message_html.contains("last"));
+}
+
+#[test]
+fn log_snapshot_zero_limit_returns_no_events() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    write_lines(&path, &[log_line("seed")]);
+
+    let snapshot = read_log_snapshot_from_path(
+        &path,
+        &LogQuery {
+            limit: Some(0),
+            ..LogQuery::default()
+        },
+    )
+    .expect("snapshot");
+
+    assert!(snapshot.events.is_empty());
+    assert_eq!(
+        snapshot.offset,
+        std::fs::metadata(&path).expect("metadata").len()
+    );
+}
+
+#[test]
+fn log_snapshot_missing_file_returns_empty_events() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("missing.jsonl");
+
+    let snapshot = read_log_snapshot_from_path(
+        &path,
+        &LogQuery {
+            limit: Some(10),
+            ..LogQuery::default()
+        },
+    )
+    .expect("snapshot");
+
+    assert!(snapshot.events.is_empty());
+    assert_eq!(snapshot.offset, 0);
+}
+
+#[tokio::test]
+async fn log_snapshot_scan_runs_through_blocking_boundary() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    write_lines(&path, &[log_line("blocked")]);
+    let query = LogQuery {
+        limit: Some(10),
+        ..LogQuery::default()
+    };
+
+    let snapshot = super::super::blocking("log snapshot", {
+        let path = path.clone();
+        move || read_log_snapshot_from_path(&path, &query)
+    })
+    .await
+    .unwrap_or_else(|_| panic!("blocking snapshot"));
+
+    assert_eq!(snapshot.events.len(), 1);
+    assert!(snapshot.events[0].message_html.contains("blocked"));
+}

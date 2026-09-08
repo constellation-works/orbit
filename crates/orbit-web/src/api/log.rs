@@ -95,9 +95,14 @@ pub(super) async fn get_log(Query(q): Query<LogQuery>) -> Response {
         Ok(path) => path,
         Err(e) => return map_runtime_error(e),
     };
-    match read_log_snapshot_from_path(&path, &q) {
+    // File scan is blocking IO; run it on the pool, not the request worker.
+    match super::blocking("log snapshot", move || {
+        read_log_snapshot_from_path(&path, &q)
+    })
+    .await
+    {
         Ok(snapshot) => Json(snapshot).into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
