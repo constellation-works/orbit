@@ -4,6 +4,16 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
+fast=false
+case "${1:-}" in
+  "") ;;
+  --fast) fast=true ;;
+  *)
+    echo "usage: ci-guardrails.sh [--fast]" >&2
+    exit 2
+    ;;
+esac
+
 # Several guardrail scripts shell out to ripgrep; a missing `rg` degrades
 # them silently (empty search results read as "clean" or, worse, as false
 # violations). Fail fast instead. [ORB-10021]
@@ -15,23 +25,26 @@ fi
 "$repo_root/scripts/check-ci-macos.sh"
 
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-if cargo nextest --version >/dev/null 2>&1; then
-  cargo nextest run --workspace --lib --bins --tests
-else
-  echo "cargo-nextest not found; falling back to cargo test" >&2
-  cargo test --workspace --lib --bins --tests
+if [[ "$fast" == false ]]; then
+  cargo clippy --workspace --all-targets -- -D warnings
+  if cargo nextest --version >/dev/null 2>&1; then
+    cargo nextest run --workspace --lib --bins --tests
+  else
+    echo "cargo-nextest not found; falling back to cargo test" >&2
+    cargo test --workspace --lib --bins --tests
+  fi
+  cargo test --workspace --doc
+  RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
+  # Supply-chain gate: dependency advisories + license allow-list (deny.toml).
+  # [ORB-00416] Soft-presence like nextest above — CI installs a pinned version;
+  # local runs without the tool warn instead of hard-failing.
+  if command -v cargo-deny >/dev/null 2>&1; then
+    cargo deny check
+  else
+    echo "cargo-deny not found; skipping supply-chain gate (install: cargo install cargo-deny --locked)" >&2
+  fi
 fi
-cargo test --workspace --doc
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
-# Supply-chain gate: dependency advisories + license allow-list (deny.toml).
-# [ORB-00416] Soft-presence like nextest above — CI installs a pinned version;
-# local runs without the tool warn instead of hard-failing.
-if command -v cargo-deny >/dev/null 2>&1; then
-  cargo deny check
-else
-  echo "cargo-deny not found; skipping supply-chain gate (install: cargo install cargo-deny --locked)" >&2
-fi
+
 "$repo_root/scripts/generate-doc-indexes.sh" --check
 "$repo_root/scripts/check-installer-pubkey.sh"
 "$repo_root/scripts/test-installer-security.sh"
@@ -47,8 +60,12 @@ fi
 "$repo_root/scripts/check-error-translation.sh"
 "$repo_root/scripts/check-orphan-modules.sh"
 "$repo_root/scripts/check-crate-agent-guides.sh"
+"$repo_root/scripts/check-embedded-asset-portability.py"
+"$repo_root/scripts/sync-activity-assets.sh" --check
 "$repo_root/scripts/sync-plugin-skills.sh" --check
 "$repo_root/scripts/test-validate-codex-plugin.sh"
 "$repo_root/scripts/test-validate-agent-plugin.sh"
 "$repo_root/scripts/test-cursor-marketplace-followup.sh"
 "$repo_root/scripts/smoke-plugin-install.sh"
+"$repo_root/scripts/test-build-budget.sh"
+"$repo_root/scripts/test-compiler-cache.sh"
