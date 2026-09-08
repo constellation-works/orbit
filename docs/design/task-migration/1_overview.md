@@ -129,7 +129,26 @@ Reindex treats the on-disk bundles as the source of truth: it registers any
 bundle missing from the index, drops stale bindings whose directory is gone,
 rebuilds the index/tag/relation rows, bumps the allocator past the highest
 on-disk id, and reprojects the symlinks. `allocator_state` is otherwise
-preserved.
+preserved. Unreadable or partial bundles retain their bytes and any registered
+binding/index; healthy neighbors are indexed, and reindex returns an error listing
+the unresolved task IDs rather than reporting full success.
+
+Full-bundle readers, writers, creation, deletion, and reindex coordinate through
+persistent `.<task-id>.bundle.lock` files beside the canonical bundles.
+These lock files must not be removed while Orbit processes run. Writers recheck
+the envelope after acquiring the lock, so a queued update cannot recreate a
+deleted bundle. Upgrades changing this lock location require restarting all
+writers together; older processes use the former in-bundle lock.
+
+Deletion atomically renames `<task-id>/` to `<task-id>.deleted/` and syncs its
+parent before removing registry and projection entries, then removes the
+tombstone and syncs again. A crash before rename leaves the live task intact.
+After rename, deletion retry or reindex rolls forward, including when registry
+removal has already succeeded or cleanup left partial contents. A registry
+failure retains the entire renamed bundle; a cleanup failure retains its
+remaining contents. If both canonical and tombstone paths exist, recovery
+reports a conflict and retains both for explicit repair. Tombstones are never
+registered as live tasks.
 
 ## Task References
 

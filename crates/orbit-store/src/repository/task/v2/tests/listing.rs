@@ -189,14 +189,12 @@ fn selected_corruption_is_not_replaced_and_in_flight_deletion_is_tolerated() {
             .query_task_rows(&TaskListFilter::default(), 1, None)
             .is_err()
     );
-    let sentinel = crate::driver::file::task_bundle::task_bundle_lock_sentinel_path(&path).unwrap();
+    let sentinel = path.with_file_name(format!(".{}.lock", selected.id));
     fs::write(sentinel, "").unwrap();
     assert!(
         store
             .query_task_rows(&TaskListFilter::default(), 1, None)
-            .unwrap()
-            .items
-            .is_empty()
+            .is_err()
     );
     fs::remove_dir_all(path).unwrap();
     assert_eq!(

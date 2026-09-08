@@ -290,7 +290,7 @@ fn artifact_update_writes_manifest_and_sorted_text_artifacts() {
 
 #[cfg(unix)]
 #[test]
-fn document_update_on_readonly_bundle_dir_names_lock_path_and_hints_sandbox() {
+fn document_update_on_readonly_bundle_dir_names_path_and_hints_sandbox() {
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     store
@@ -300,7 +300,6 @@ fn document_update_on_readonly_bundle_dir_names_lock_path_and_hints_sandbox() {
         .bundle_store
         .bundle_path("ORB-00000")
         .expect("bundle path");
-    let lock_path = bundle_dir.join(".task.yaml.lock");
     let _restore = make_readonly(&bundle_dir);
 
     let err = store
@@ -313,7 +312,7 @@ fn document_update_on_readonly_bundle_dir_names_lock_path_and_hints_sandbox() {
             },
         )
         .expect_err("update must fail on a read-only bundle dir");
-    assert_sandbox_write_io(&err, &lock_path.display().to_string());
+    assert_sandbox_write_io(&err, &bundle_dir.display().to_string());
 }
 
 /// [ORB-11305] `expected_status` is a compare-and-set: the write is applied

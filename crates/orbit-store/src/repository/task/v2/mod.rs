@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
-use orbit_common::fs::io::{atomic_write_bytes, with_exclusive_file_lock};
+use orbit_common::fs::io::atomic_write_bytes;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::OrbitId;
 use orbit_types::task::{
