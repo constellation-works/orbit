@@ -782,36 +782,52 @@ mod tests {
         assert_eq!(rehosted.refreshed, DEFAULT_ROUTINE_FILES.len());
     }
 
-    /// Rewrite the top-level `enabled:` line to a fixed marker so a workspace's
-    /// own opt-in decision does not read as template drift.
-    fn ignoring_enabled(routine: &str) -> String {
-        routine
-            .lines()
-            .map(|line| {
-                if line.starts_with("enabled:") {
-                    "enabled: <workspace decision>"
-                } else {
-                    line
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+    #[test]
+    fn fresh_routine_seeding_matches_rendered_canonical_templates() {
+        let root = tempdir().expect("create tempdir");
+        let routines_dir = root.path().join("routines");
+        seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+            .expect("seed canonical routines");
+
+        for (stem, template) in DEFAULT_ROUTINE_FILES {
+            let rendered = template
+                .replace(
+                    ROUTINE_NAME_PLACEHOLDER,
+                    &format!("{}-workspace", stem.replace('_', "-")),
+                )
+                .replace(HOST_ID_PLACEHOLDER, "host-a");
+            let seeded = std::fs::read_to_string(routines_dir.join(format!("{stem}.yaml")))
+                .expect("read seeded routine");
+            assert_eq!(
+                seeded, rendered,
+                "freshly seeded {stem} must match its rendered template"
+            );
+        }
     }
 
-    /// This workspace's own routine may differ from the template in exactly one
-    /// field. The asset documents flipping `enabled` as "an explicit, versioned
-    /// workspace decision", so comparing it too would fail the moment a
-    /// workspace does the thing the template invites. Everything else — cadence,
-    /// host pin, target, policy, the rationale comments — must stay aligned.
     #[test]
-    fn dogfood_task_pilot_routine_matches_the_rendered_default_template() {
-        let rendered = include_str!("../../assets/routines/task_pilot.yaml")
-            .replace(ROUTINE_NAME_PLACEHOLDER, "task-pilot-orbit")
-            .replace(HOST_ID_PLACEHOLDER, "dk-server-1");
+    fn task_pilot_reseeding_preserves_workspace_overrides() {
+        let root = tempdir().expect("create tempdir");
+        let routines_dir = root.path().join("routines");
+        seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+            .expect("seed canonical routines");
+        let path = routines_dir.join("task_pilot.yaml");
+        let edited = std::fs::read_to_string(&path)
+            .expect("read task-pilot routine")
+            .replace("enabled: false", "enabled: true")
+            .replace("host-a", "host-b")
+            .replace("*/40 * * * *", "*/15 * * * *");
+        let definition = parse_routine_yaml(&edited).expect("customized routine parses");
+        assert!(definition.enabled);
+        assert_eq!(definition.hosts, vec!["host-b".to_string()]);
+        assert_eq!(definition.trigger.cron, "*/15 * * * *");
+        std::fs::write(&path, &edited).expect("write operator overrides");
+
+        seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+            .expect("reseed without overwriting workspace choices");
         assert_eq!(
-            ignoring_enabled(&rendered),
-            ignoring_enabled(include_str!("../../../../.orbit/routines/task_pilot.yaml")),
-            "dogfood task-pilot routine must stay aligned with the seeded template outside `enabled`"
+            std::fs::read_to_string(&path).expect("read preserved routine"),
+            edited
         );
     }
 
