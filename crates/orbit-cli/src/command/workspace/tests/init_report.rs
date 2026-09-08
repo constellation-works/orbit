@@ -3,10 +3,16 @@ use std::path::Path;
 use serde_json::Value;
 use tempfile::tempdir;
 
-use crate::command::CommandOutput;
+use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_core::TaskComplexity;
+use orbit_core::application::task::TaskAddParams;
+
+use crate::InitCommand;
+use crate::command::{CommandOutput, Execute};
 use crate::tests::env_isolation::EnvGuard;
 
 use super::super::init::WorkspaceInitArgs;
+use super::super::show::WorkspaceShowArgs;
 
 struct IsolatedWorkspace {
     workspace: tempfile::TempDir,
@@ -171,6 +177,90 @@ fn requested_allocator_uses_the_host_task_prefix_and_records_unchanged_reseeds()
         second_text.contains("id_start:  allocator already at DANI-20000 (unchanged)"),
         "{second_text}"
     );
+}
+
+#[test]
+fn task_id_start_adopts_custom_prefix_before_a_runtime_opens() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    let global = home.path().join(".orbit");
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
+
+    InitCommand {
+        force: false,
+        non_interactive: true,
+        host_name: Some("prefix-host".to_string()),
+        task_prefix: Some("QASW".to_string()),
+    }
+    .execute_without_runtime(Some(&global))
+    .expect("initialize host identity");
+
+    let mut args = report_args();
+    args.task_id_start = Some(100);
+    args.execute_without_runtime(Some(&global))
+        .expect("initialize workspace and seed allocator");
+
+    let connection =
+        rusqlite::Connection::open(global.join("tasks/index.sqlite")).expect("open task registry");
+    let allocator: (String, u32) = connection
+        .query_row(
+            "SELECT task_prefix, next_number FROM allocator_state WHERE authority = 'local'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read allocator state");
+    assert_eq!(allocator, ("QASW".to_string(), 100));
+
+    let runtime = RegisteredRuntimeFactory::initialize_with_root_override(Some(&global))
+        .expect("open runtime for workspace show");
+    WorkspaceShowArgs {}
+        .execute(&runtime)
+        .expect("workspace show after seeded init");
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "seeded prefix task".to_string(),
+            complexity: TaskComplexity::Low,
+            ..TaskAddParams::default()
+        })
+        .expect("add task after seeded init");
+    assert_eq!(task.id, "QASW-00100");
+}
+
+#[test]
+fn custom_prefix_without_task_id_start_still_mints_tasks() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    let global = home.path().join(".orbit");
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
+
+    InitCommand {
+        force: false,
+        non_interactive: true,
+        host_name: Some("unseeded-prefix-host".to_string()),
+        task_prefix: Some("QASB".to_string()),
+    }
+    .execute_without_runtime(Some(&global))
+    .expect("initialize host identity");
+
+    report_args()
+        .execute_without_runtime(Some(&global))
+        .expect("initialize workspace without an allocator seed");
+
+    let runtime = RegisteredRuntimeFactory::initialize_with_root_override(Some(&global))
+        .expect("open runtime after unseeded init");
+    WorkspaceShowArgs {}
+        .execute(&runtime)
+        .expect("workspace show after unseeded init");
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "unseeded prefix task".to_string(),
+            complexity: TaskComplexity::Low,
+            ..TaskAddParams::default()
+        })
+        .expect("add task after unseeded init");
+    assert_eq!(task.id, "QASB-00000");
 }
 
 #[test]
