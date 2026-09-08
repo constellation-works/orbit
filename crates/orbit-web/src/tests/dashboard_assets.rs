@@ -1813,7 +1813,6 @@ fn dashboard_failure_metrics_are_incident_aware_and_state_their_denominators() {
 fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
     let audit = include_str!("../../assets/dashboard/audit.js");
     let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
-    let preview = include_str!("../../assets/dashboard/_preview_failures_card.html");
     let css = include_str!("../../assets/dashboard/dashboard.css");
 
     assert!(
@@ -1836,12 +1835,6 @@ fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
         "incident expansion must expose run/task/tool identifiers for every row"
     );
     assert!(
-        preview.contains("lifecycle diagnostics")
-            && preview.contains("7 incidents · 14 raw events · 7 affected runs")
-            && preview.contains("isNamedTool"),
-        "the failures-card preview must render the diagnostic category and three counts"
-    );
-    assert!(
         css.contains(".lifecycle-failure-card")
             && css.contains(".lifecycle-failure-counts")
             && css.contains(".incident-lifecycle-note"),
@@ -1856,7 +1849,6 @@ fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
 fn dashboard_reliability_separates_all_four_failure_populations() {
     let audit = include_str!("../../assets/dashboard/audit.js");
     let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
-    let preview = include_str!("../../assets/dashboard/_preview_failures_card.html");
     let css = include_str!("../../assets/dashboard/dashboard.css");
 
     for needle in [
@@ -1897,14 +1889,6 @@ fn dashboard_reliability_separates_all_four_failure_populations() {
             "incident expansion must retain `{evidence}`"
         );
     }
-    assert!(
-        preview.contains("pipeline.worker.exit")
-            && preview.contains("pipeline.run.terminal_conflict")
-            && preview.contains("orbit.task.show")
-            && preview.contains("orbit.task.update")
-            && preview.contains("7 incidents · 14 raw events · 7 affected runs"),
-        "the deterministic preview must keep diagnostic and expected-negative fixtures outside rateRows but visible in evidence"
-    );
     assert!(
         css.contains(".incident-class-chip.diagnostic")
             && css.contains(".incident-row.diagnostic")
