@@ -58,6 +58,8 @@ fn a_declared_tool_state_directory_is_granted_but_its_publish_token_is_not() {
     fs::write(cargo_home.join("credentials.toml"), "token").expect("write credentials");
 
     let grants = host_read_grants(&environment(&[("CARGO_HOME", &cargo_home)]));
+    // Grants use canonical paths, including when the queried child does not exist.
+    let cargo_home = cargo_home.canonicalize().expect("canonical cargo home");
 
     assert!(
         grants_read(&grants, &cargo_home.join("registry/index")),
@@ -140,6 +142,7 @@ fn every_documented_variable_actually_widens_the_grants() {
         let named = home.path().join(variable.to_lowercase());
         fs::create_dir_all(named.join("git")).expect("mkdir named directory");
         let grants = host_read_grants(&environment(&[("HOME", home.path()), (variable, &named)]));
+        let named = named.canonicalize().expect("canonical named directory");
 
         assert!(
             grants.iter().any(|grant| grant.path.starts_with(&named)),
