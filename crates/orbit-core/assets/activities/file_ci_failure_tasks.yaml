@@ -28,11 +28,19 @@ spec:
     material coverage assessment over untagged tasks. Coverage matches a
     generated workflow/job/step brief or a specific error together with the
     failing command or the same run and job identity; generic npx/cargo
-    wrappers, a shared workflow or file, or a closed historical task do not
-    suppress a current failure. A repeated sweep over a run that is still red,
+    wrappers, a shared workflow or file, or task completion alone do not
+    suppress a current failure. After open-owner lookup misses, a bounded
+    completed-owner assessment verifies structured task artifacts against the
+    exact source diagnostics, failing and passing command results, authoritative
+    delivery state and Git applicability. Proven pre-fix observations are
+    retained as task artifacts on the existing owner and are not pilot candidates.
+    Missing or contradictory proof is reported in repair_assessments as unresolved;
+    ordinary proposed filing and pilot checks remain available. A repeated sweep
+    over a run that is still red,
     or a root cause already owned by a manual task, therefore does not file
     the same work twice. Filing never mutates the covering task's tags or
-    prose. Skips name the covering task and bounded match evidence. The three
+    prose; completed coverage adds idempotent observation artifacts. Skips name
+    the covering task and bounded match evidence. The three
     endings stay distinct
     and none of them is a CI pass: a snapshot with `collected: false` reports
     `capability_unavailable` and files nothing, a snapshot with no current
@@ -161,9 +169,17 @@ spec:
               type: string
             match_kind:
               type: string
-              enum: [exact_key, material_coverage, confirmed_duplicate]
+              enum: [exact_key, material_coverage, confirmed_duplicate, covered_by_repair]
             match_evidence:
               type: object
+      repair_assessments:
+        type: array
+        description: >
+          Bounded completed-owner assessments: covered_by_repair with referenced
+          validation and source provenance, or unresolved with a reason. An
+          unresolved assessment does not certify coverage or admission.
+        items:
+          type: object
       skipped_over_cap:
         type: array
         items:
