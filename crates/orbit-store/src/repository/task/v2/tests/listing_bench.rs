@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use super::listing::reads;
+use super::listing::{probes, reads};
 use super::*;
 use crate::contracts::{RegisterWorkspaceParams, TaskListFilter, TaskRow};
 
@@ -56,7 +56,10 @@ fn baseline_row(store: &TaskV2Store, task: Task) -> TaskRow {
     }
 }
 
-fn seed(global: &Path, workspace: &str, count: usize) -> TaskV2Store {
+/// Generate `count` registered, indexed bundles for `workspace`. Shared with
+/// the envelope-cache tests, which need a corpus far larger than `create_task`
+/// can produce in test time.
+pub(super) fn seed(global: &Path, workspace: &str, count: usize) -> TaskV2Store {
     let registry = TaskRegistryStore::open(&task_registry_path(global)).unwrap();
     registry
         .register_workspace(RegisterWorkspaceParams {
@@ -181,6 +184,7 @@ fn seed(global: &Path, workspace: &str, count: usize) -> TaskV2Store {
         }
     }
     reads(&store);
+    probes(&store);
     store
 }
 
@@ -297,6 +301,7 @@ fn task_list_io_benchmark() {
         std::hint::black_box(operation(&stores, &mode, name, &detail_id));
         stores.iter().for_each(|store| {
             reads(store);
+            probes(store);
         });
         let mut latencies = Vec::new();
         let mut counts = Vec::new();
@@ -307,8 +312,11 @@ fn task_list_io_benchmark() {
             counts.push(
                 stores
                     .iter()
-                    .map(reads)
-                    .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1)),
+                    .map(|store| {
+                        let (bundles, envelopes) = reads(store);
+                        (bundles, envelopes, probes(store))
+                    })
+                    .fold((0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2)),
             );
         }
         latencies.sort_by(f64::total_cmp);
@@ -319,7 +327,8 @@ fn task_list_io_benchmark() {
             "{}",
             serde_json::json!({"mode": mode, "per_workspace": size, "workspaces": 3,
             "operation": name, "median_ms": latencies[5], "p95_ms": latencies[10],
-            "full_bundle_loads": counts[0].0, "envelope_only_reads": counts[0].1,
+            "full_bundle_loads": counts[0].0, "envelope_parses": counts[0].1,
+            "envelope_stat_calls": counts[0].2,
             "peak_rss_setup_inclusive": hwm, "samples": 11, "cache": "warm tmpfs; no cold-cache control"})
         );
     }
