@@ -1398,13 +1398,17 @@ fn epic_pipeline_local_mode_merges_once_into_the_workspace_base() {
     seed_default_catalogs(&global_root);
     stub_epic_finisher(&global_root);
     let host = ScriptedEpicHost::new(&runtime, vec!["ORB-CHILD-1".to_string()]).local_mode();
+    let run_id = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_default()
+        .to_string();
 
     let outcome = try_execute_full_epic_job(
         &runtime,
         &repo_root,
         &host,
         json!({ "epic_task_id": "ORB-EPIC" }),
-        "jrun-scripted-epic-local",
+        &run_id,
     )
     .expect("execute epic local delivery");
 
