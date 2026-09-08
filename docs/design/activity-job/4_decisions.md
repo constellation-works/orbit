@@ -3,8 +3,8 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-08-15
-last_validated: 2026-08-23
+last_updated: 2026-09-08
+last_validated: 2026-09-08
 status: Draft
 feature: activity-job
 doc_role: decisions
@@ -1545,8 +1545,30 @@ which is a broken install and the only artifact fault that escalates
   preserved copy under `.retired-managed/` to reconcile by hand — where
   previously the file would simply have stayed put and kept working.
 
+## Timeout recovery is not conflict or failure-handoff recovery
+
+**Recorded:** 2026-09-08 · [ORB-11606]
+
+### Context
+
+Host Git helpers shared a 30s deadline. A timeout during `worktree add` could leave a registered incomplete checkout that a retry then admitted, and a timeout during `git rebase` could leave rebase-merge without unmerged paths that a retry misclassified as an unexplained wedge. Ordinary conflict recovery (`RecoverableVcsConflict` / `pr_conflict_recovery`) and terminal failure-handoff (`pr_failure_handoff`) already preserve candidates; they must not be reused as a blanket reset/clean/abort.
+
+### Decision
+
+Give heavyweight Git children explicit finite budgets through `ExecRequest.timeout_ms`, with per-operation defaults and optional activity overlays (`git_timeout_ms` / `git_timeouts`). Reject 0, unknown keys, and values above 600s; never omit the deadline. Keep the secured Git environment and hook policy.
+
+On timeout, mutate only state this attempt owns. Remove a newly registered worktree only when ownership and lack of retained work are established; otherwise refuse with evidence and never admit an incomplete checkout. Abort an interrupted rebase only when provenance shows this attempt started it; leave pre-existing or foreign rebase state intact. Deleted tracked files, dirty files, and retained candidate commits are not completeness failures and must not be restored or deleted as a shortcut. Unexplained stale-branch provenance stays with [ORB-11639].
+
+### Consequences
+
+- A retry after an owned worktree-add timeout either recreates a complete checkout or refuses the leftover; it does not silently reuse a broken tree.
+- A retry after an owned rebase timeout is not permanently wedged: the leftover rebase is aborted and documented as timeout recovery.
+- Conflicted rebases still take the typed conflict path; failure-handoff still publishes the candidate.
+- Cost: operators who previously relied on `git clean -fd` during worktree reuse keep dirty files until they reconcile them; that is the intended preservation.
+
 ## Task References
 
+- **[ORB-11606]** — Bound heavyweight Git operations and recover only owned interrupted mutations ([Timeout recovery is not conflict or failure-handoff recovery](#timeout-recovery-is-not-conflict-or-failure-handoff-recovery)).
 - **[ORB-11456]** — Preserve terminal failure-activity evidence and admit only
   its exact Orbit-created candidate across resume
   ([Resumed shipment accepts only its durable Orbit preservation commit](#resumed-shipment-accepts-only-its-durable-orbit-preservation-commit)).

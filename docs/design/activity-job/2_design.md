@@ -3,8 +3,8 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-08
+last_validated: 2026-09-08
 status: Draft
 feature: activity-job
 doc_role: design
@@ -297,6 +297,10 @@ completion authorization remain owned by their existing Core and `pr_complete`
 gates; checkpoint refresh cannot grant either.
 
 The provider boundary now admits only worktree-file changes from an implementation provider. Any assigned HEAD or branch movement is a typed `worktree_content_conflict` regardless of commit count, message trailers, or changed paths; Orbit does not try to prove that provider history belongs to the task. `git_commit` stages the task worktree diff, creates exactly one workflow-owned commit, and returns that SHA. It never enumerates or adopts commits above the pinned base, parses `Agent-*` trailers, or validates a commit against `context_files`.
+
+Host Git children always carry a finite `ExecRequest.timeout_ms`. Light commands default to 30s; `fetch` 60s; `worktree add` and `rebase` 120s. Activity input may overlay those values with `git_timeout_ms` or `git_timeouts` (`default`, `fetch`, `worktree_add`, `rebase`); 0, non-integers, unknown keys, and values above 600s are rejected, and the request never uses an unbounded deadline. Hook disabling (`core.hooksPath=/dev/null`, `gc.auto=0`, `--no-verify` on commit/push) and the cleared VCS environment stay in force.
+
+Timeout recovery is not conflict recovery and not failure-handoff recovery. A `worktree add` that times out after this attempt registered the path is removed only when the checkout is owned and nothing unique is retained; otherwise the leftover is refused with path/HEAD/branch evidence and is never admitted incomplete. Deleted tracked files, dirty files, and extra commits are not completeness failures and are not restored or deleted as a shortcut. A rebase this attempt started is aborted on timeout when provenance matches (`orig-head` / `onto` / `head-name`); a pre-existing or foreign rebase is left intact and refused diagnostically. Unmerged paths still produce `RecoverableVcsConflict` for `pr_conflict_recovery`. `pr_failure_handoff` still preserves the candidate. Unexplained stale-branch reuse remains [ORB-11639].
 
 `pr_prepare` is the pre-rewrite authority boundary. It records the exact head SHA, base SHA, and observed remote task-branch SHA before `git_rebase` may rewrite history. `git_push` classifies the remote ref as missing, current, fast-forwardable, remote-ahead, or diverged. Missing and fast-forwardable refs use normal push; current refs are reused; remote-ahead refs fail closed. Divergence may use force-with-lease only when the persisted preparation SHA still exactly matches the observed remote SHA and `git_rebase` reports a performed or recovery-reused rewrite. The engine-private VCS operation emits a branch-scoped `--force-with-lease=refs/heads/<branch>:<expected-sha>`, so a concurrent remote update rejects the push instead of overwriting it. This is [PR handoff recovery follows job checkpoints and exact remote leases](./4_decisions.md#pr-handoff-recovery-follows-job-checkpoints-and-exact-remote-leases).
 
@@ -942,6 +946,7 @@ Read-only history does not need the same dependencies as live execution. [T20260
 
 ## Task References
 
+- **[ORB-11606]** — Bound heavyweight Git operations and recover only owned interrupted mutations ([Timeout recovery is not conflict or failure-handoff recovery](./4_decisions.md#timeout-recovery-is-not-conflict-or-failure-handoff-recovery)).
 - **[ORB-11281]** — Route only typed task-PR rebase conflicts to one system-crew leaf, retry the same checkpoint once, preserve stale-base races, and retain normal review or authorized verified-completion gates.
 - **[ORB-11488]** — Reuse that bounded pinned-rebase recovery when an already-published PR becomes `DIRTY` during authorized completion, with exact branch/PR leases and no protection or auth bypass.
 - **[ORB-11493]** — Refresh one authenticated stale `prepare_branch` checkpoint on preserved-candidate resume, retain source/descendant provenance, and reuse the bounded conflict-recovery and same-PR delivery tail.

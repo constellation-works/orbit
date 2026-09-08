@@ -7,9 +7,11 @@ use crate::context::RuntimeHost;
 use crate::executor::automation::input::{canonicalize_existing_dir, input_string_field};
 
 use super::super::git::{
-    BaseSyncMode, base_sync_mode_from_input, git_command_success, git_output, git_success,
+    BaseSyncMode, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
+    git_command_success, git_failure_error, git_output, git_run, git_success, git_timeout_error,
     resolve_worktree_start_point,
 };
+use super::super::handoff::rebase_in_progress;
 use super::resolve_shared_worktree_path;
 
 const DEFAULT_BASE: &str = "main";
@@ -19,6 +21,7 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
+    let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
     let run_id = super::require_run_id(input, "merge_batch_worktree_into_base")?;
     let repo_root_str = host.repo_root()?;
     let repo_root = canonicalize_existing_dir(&repo_root_str, "repo_root")?;
@@ -135,9 +138,43 @@ fn merge_with_rebase_retry(
         }
 
         let updated_base = resolve_worktree_start_point(repo_root, base, base_sync_mode)?;
-        if let Err(error) = git_success(workspace_path, &["rebase", &updated_base]) {
-            let _ = git_success(workspace_path, &["rebase", "--abort"]);
-            return Err(error);
+        let rebase_already = rebase_in_progress(workspace_path)?;
+        let rebase_outcome = git_run(workspace_path, &["rebase", &updated_base])?;
+        if rebase_outcome.timed_out || !rebase_outcome.success {
+            if !rebase_already {
+                let _ = git_success(workspace_path, &["rebase", "--abort"]);
+            }
+            if rebase_outcome.timed_out {
+                return Err(OrbitError::Execution(format!(
+                    "{}; merge_batch_worktree_into_base: Git rebase timed out. {} This is timeout recovery, not conflict or failure-handoff recovery.",
+                    git_timeout_error(
+                        workspace_path,
+                        &["rebase", &updated_base],
+                        rebase_outcome.timeout_ms,
+                        &rebase_outcome.stderr,
+                    ),
+                    if rebase_already {
+                        "Pre-existing rebase state was left intact."
+                    } else {
+                        "The rebase started by this attempt was aborted."
+                    }
+                )));
+            }
+            if rebase_already {
+                return Err(OrbitError::Execution(format!(
+                    "merge_batch_worktree_into_base: a pre-existing rebase is in progress; not aborting. {}",
+                    git_failure_error(
+                        workspace_path,
+                        &["rebase", &updated_base],
+                        &rebase_outcome.stderr,
+                    )
+                )));
+            }
+            return Err(git_failure_error(
+                workspace_path,
+                &["rebase", &updated_base],
+                &rebase_outcome.stderr,
+            ));
         }
         ensure_clean_checkout(workspace_path, "shared batch worktree")?;
     }
