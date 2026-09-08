@@ -162,7 +162,7 @@ impl Drop for PendingWriteGuard {
 /// Recover a leftover pending write under the bundle lock, then read.
 pub(crate) fn recover_pending_bundle_at(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
     with_exclusive_file_lock(
-        &bundle_dir.join(TASK_ENVELOPE_FILE_NAME),
+        &crate::driver::file::task_bundle::bundle_lock_target(bundle_dir),
         "task artifact v2",
         || {
             recover_pending_write(bundle_dir)?;

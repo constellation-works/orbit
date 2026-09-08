@@ -217,7 +217,7 @@ fn create_task_on_readonly_parent_dir_names_lock_path_and_hints_sandbox() {
         .bundle_path("ORB-00001")
         .expect("next bundle path");
     let parent = next_bundle.parent().expect("tasks dir").to_path_buf();
-    let lock_path = parent.join(".ORB-00001.lock");
+    let lock_path = parent.join(".ORB-00001.bundle.lock");
     let _restore = make_readonly(&parent);
 
     let err = store

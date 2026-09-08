@@ -1,5 +1,5 @@
 //! Pure task-bundle file persistence: codecs, atomic publication, and bundle
-//! lock-sentinel mechanics. Registry and checkout projection coordination live
+//! stable lock identity. Registry and checkout projection coordination live
 //! in the task repository.
 
 pub(crate) mod bundle_io;
@@ -15,5 +15,5 @@ pub(crate) use bundle_io::{
 
 #[cfg(test)]
 pub(crate) use bundle_io::{PENDING_WRITE_FILE_NAME, inject_bundle_write_faults};
-pub(crate) use lock::{remove_task_bundle_lock_sentinel, task_bundle_lock_sentinel_path};
+pub(crate) use lock::bundle_lock_target;
 pub(crate) use types::{TaskBundleV2, TaskDocumentV2};

@@ -23,7 +23,7 @@ enum CreateOutcome {
 }
 
 #[test]
-fn create_bundle_removes_lock_sentinel_after_success() {
+fn create_bundle_retains_the_stable_lock_after_success() {
     let temp = TempDir::new().expect("tempdir");
     let store = bundle_store(&temp);
     let bundle_dir = store.bundle_path("ORB-00000").expect("bundle path");
@@ -37,7 +37,7 @@ fn create_bundle_removes_lock_sentinel_after_success() {
     assert!(bundle_dir.is_dir());
     assert_eq!(
         lock_entries_for_task(tasks_dir, "ORB-00000"),
-        Vec::<String>::new()
+        vec![".ORB-00000.bundle.lock".to_string()]
     );
     assert!(!task_lock_path(&bundle_dir).exists());
     assert!(!legacy_double_dot_lock_path(&bundle_dir, "ORB-00000").exists());
@@ -97,7 +97,7 @@ fn create_bundle_serializes_concurrent_duplicate_creators() {
     assert!(bundle_dir.is_dir());
     assert_eq!(
         lock_entries_for_task(&tasks_dir, "ORB-00000"),
-        Vec::<String>::new()
+        vec![".ORB-00000.bundle.lock".to_string()]
     );
 }
 
@@ -258,7 +258,7 @@ fn rewrite_document_and_append_logs_are_durable() {
 }
 
 #[test]
-fn create_bundle_cleans_partial_directory_and_lock_on_validation_error() {
+fn create_bundle_cleans_partial_directory_but_retains_lock_on_validation_error() {
     let temp = TempDir::new().expect("tempdir");
     let store = bundle_store(&temp);
     let mut bundle = sample_bundle("ORB-00000");
@@ -270,7 +270,7 @@ fn create_bundle_cleans_partial_directory_and_lock_on_validation_error() {
     assert!(!bundle_path.exists());
     assert_eq!(
         lock_entries_for_task(&tasks_dir, "ORB-00000"),
-        Vec::<String>::new()
+        vec![".ORB-00000.bundle.lock".to_string()]
     );
     assert!(!task_lock_path(&bundle_path).exists());
     assert!(!legacy_double_dot_lock_path(&bundle_path, "ORB-00000").exists());
@@ -303,5 +303,194 @@ fn create_bundle_treats_projection_error_as_degraded_success() {
             .map(|bundle| bundle.envelope.id)
             .collect::<Vec<_>>(),
         vec!["ORB-00000"]
+    );
+}
+
+#[test]
+fn deletion_failures_recover_without_registering_partial_tombstones() {
+    use crate::workflow::task::reindex_workspace;
+
+    for fault in [
+        DeletionFault::Publication,
+        DeletionFault::PublicationSync,
+        DeletionFault::Registry,
+        DeletionFault::Cleanup,
+    ] {
+        for recover_by_reindex in [false, true] {
+            let temp = TempDir::new().unwrap();
+            let store = bundle_store(&temp);
+            store.create_bundle(&sample_bundle("ORB-00000")).unwrap();
+            store.create_bundle(&sample_bundle("ORB-00001")).unwrap();
+            let dir = store.bundle_path("ORB-00000").unwrap();
+            let tombstone = deletion_path(&dir);
+            inject_deletion_fault(fault);
+            assert!(store.delete_bundle("ORB-00000").is_err());
+            assert_eq!(dir.exists(), fault == DeletionFault::Publication);
+            assert_eq!(tombstone.exists(), fault != DeletionFault::Publication);
+            let registered = store
+                .registry
+                .tasks_for_workspace(&store.workspace_id)
+                .unwrap();
+            assert_eq!(
+                registered.len(),
+                if fault == DeletionFault::Cleanup {
+                    1
+                } else {
+                    2
+                }
+            );
+            if fault == DeletionFault::Registry {
+                // No destructive operation has run before registry removal.
+                assert_eq!(
+                    fs::read_to_string(tombstone.join("description.md")).unwrap(),
+                    "Description body"
+                );
+                assert!(store.create_bundle(&sample_bundle("ORB-00000")).is_err());
+            }
+            if fault == DeletionFault::Cleanup {
+                // Model a process dying partway through recursive removal.
+                fs::remove_file(tombstone.join("description.md")).unwrap();
+            }
+            if recover_by_reindex {
+                if fault != DeletionFault::Publication {
+                    // If the same boundary remains unavailable, report failure
+                    // while still indexing the healthy neighbor and retaining data.
+                    inject_deletion_fault(fault);
+                    let error = reindex_workspace(&store.registry, &store.workspace_id)
+                        .unwrap_err()
+                        .to_string();
+                    assert!(error.contains("indexed 1 healthy tasks"), "{error}");
+                    assert!(error.contains("ORB-00000"), "{error}");
+                    assert!(tombstone.exists());
+                    assert_eq!(
+                        store
+                            .registry
+                            .indexed_task_count_for_workspace(&store.workspace_id)
+                            .unwrap(),
+                        1
+                    );
+                }
+                let result = reindex_workspace(&store.registry, &store.workspace_id).unwrap();
+                assert_eq!(
+                    result.indexed,
+                    if fault == DeletionFault::Publication {
+                        2
+                    } else {
+                        1
+                    }
+                );
+                assert!(reindex_workspace(&store.registry, &store.workspace_id).is_ok());
+            } else {
+                assert!(store.delete_bundle("ORB-00000").unwrap());
+                assert!(!store.delete_bundle("ORB-00000").unwrap());
+                assert!(!dir.exists());
+            }
+            assert!(!tombstone.exists());
+            assert!(store.read_bundle("ORB-00001").is_ok());
+        }
+    }
+}
+
+#[test]
+fn reindex_retains_unresolved_data_and_repairs_healthy_neighbors() {
+    use crate::workflow::task::reindex_workspace;
+
+    let temp = TempDir::new().unwrap();
+    let store = bundle_store(&temp);
+    for id in ["ORB-00000", "ORB-00001", "ORB-00002"] {
+        let bundle = sample_bundle(id);
+        store.create_bundle(&bundle).unwrap();
+        store
+            .registry
+            .replace_task_index(&store.workspace_id, &bundle.envelope)
+            .unwrap();
+    }
+    let partial = store.bundle_path("ORB-00000").unwrap();
+    fs::remove_file(partial.join("description.md")).unwrap();
+    let conflict = store.bundle_path("ORB-00001").unwrap();
+    fs::create_dir(deletion_path(&conflict)).unwrap();
+    fs::write(deletion_path(&conflict).join("evidence"), "retain me").unwrap();
+    let orphan = store.bundle_path("ORB-00003").unwrap();
+    fs::create_dir(&orphan).unwrap();
+    fs::write(orphan.join("evidence"), "partial create").unwrap();
+    store
+        .registry
+        .unregister_task_bundle("ORB-00002", &store.workspace_id)
+        .unwrap();
+
+    for _ in 0..2 {
+        let error = reindex_workspace(&store.registry, &store.workspace_id)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("indexed 1 healthy tasks"), "{error}");
+        for id in ["ORB-00000", "ORB-00001", "ORB-00003"] {
+            assert!(error.contains(id), "{error}");
+        }
+        assert_eq!(
+            store
+                .registry
+                .tasks_for_workspace(&store.workspace_id)
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(
+            store.list_bundles().is_err(),
+            "registered corruption must still fail listing"
+        );
+        assert_eq!(
+            store
+                .registry
+                .indexed_task_count_for_workspace(&store.workspace_id)
+                .unwrap(),
+            3,
+            "keep unresolved registered index rows while repairing the healthy row"
+        );
+        assert!(partial.join("task.yaml").exists());
+        assert!(conflict.join("task.yaml").exists());
+        assert_eq!(
+            fs::read_to_string(deletion_path(&conflict).join("evidence")).unwrap(),
+            "retain me"
+        );
+        assert_eq!(
+            fs::read_to_string(orphan.join("evidence")).unwrap(),
+            "partial create"
+        );
+        assert!(store.registry.allocator_next_number().unwrap() >= 4);
+    }
+}
+
+#[test]
+fn reindex_registers_forward_relation_targets_before_indexing() {
+    use crate::workflow::task::reindex_workspace;
+    use orbit_types::task::{TaskRelation, TaskRelationType};
+
+    let temp = TempDir::new().unwrap();
+    let store = bundle_store(&temp);
+    let mut child = sample_bundle("ORB-00000");
+    child.envelope.relations.push(TaskRelation {
+        relation_type: TaskRelationType::ChildOf,
+        target: "ORB-00001".into(),
+    });
+    store.create_bundle(&child).unwrap();
+    store.create_bundle(&sample_bundle("ORB-00001")).unwrap();
+    for id in ["ORB-00000", "ORB-00001"] {
+        store
+            .registry
+            .unregister_task_bundle(id, &store.workspace_id)
+            .unwrap();
+    }
+    assert_eq!(
+        reindex_workspace(&store.registry, &store.workspace_id)
+            .unwrap()
+            .indexed,
+        2
+    );
+    assert_eq!(
+        store
+            .registry
+            .indexed_task_count_for_workspace(&store.workspace_id)
+            .unwrap(),
+        2
     );
 }

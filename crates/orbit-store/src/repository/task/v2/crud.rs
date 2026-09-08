@@ -235,9 +235,6 @@ impl TaskV2Store {
 
     pub(crate) fn delete_task(&self, id: &str) -> Result<bool, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
-        let lock_target = self.bundle_store.bundle_path(id)?;
-        with_exclusive_file_lock(&lock_target, "task artifact v2 delete", || {
-            self.bundle_store.delete_bundle(id)
-        })
+        self.bundle_store.delete_bundle(id)
     }
 }
