@@ -36,14 +36,26 @@ globalThis.fetch = async (path, options = {}) => {
   }
   if (url.pathname === '/api/auto-tasks') {
     if (readbackError) throw new Error('Fixture readback unavailable');
-    const payload = { workspace, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, may_create_open_duplicate: true, open_duplicate: true }] };
+    const payload = { workspace, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'backlog', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, pending: [], pending_commits: [], waived: [], excluded: [], unresolved: {} } } }] };
     if (delayGet) await new Promise(resolve => { releaseGet = resolve; });
     return response(payload);
   }
   if (url.pathname === '/api/routines') return response({
     host_id: 'fixture-host', controls_authorized: capabilities.routine_toggle.authorized, capabilities: { ...capabilities }, session_explanation: 'Session access: restart the dashboard server with explicit operator authority.',
-    routines: ['one', 'two'].map(source => ({ name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], pinned_to_host: source === 'one' })),
-    clock: { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy' },
+    routines: ['one', 'two'].map(source => ({ name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], pinned_to_host: source === 'one', cron: '30 14 * * *', description: 'Sweep landed deliveries.', next_evaluation: { state: enabled[source] ? 'scheduled' : 'disabled', at: '2026-09-07T21:30:00Z', hypothetical: !enabled[source] } })),
+    clock: { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true, last_tick_at: '2026-09-07T21:00:00Z', next_tick_at: '2026-09-07T21:01:00Z' },
+  });
+  if (url.pathname === '/api/workflows/auto/readiness') return response({
+    controls_authorized: true,
+    capacity: { active_leaf_runs: 1, max_active_leaf_runs: 4, free_slots: 3 },
+    tasks: [{ id: 'ORB-1', eligible: true }, { id: 'ORB-2', eligible: false }],
+  });
+  if (url.pathname === '/api/operation/explain') return response({
+    controls_authorized: true,
+    policy: { preset: { value: 'balanced', source: 'config' } },
+    authority: { grant_id: null, admission: 'none', rights: [], task_ids: [] },
+    delivery: { effective_completion: 'review' },
+    limiting_reasons: [],
   });
   return response({});
 };
@@ -169,4 +181,23 @@ assert(get('auto-tasks-body').textContent.includes('Select a workspace'), 'all-w
 
 // Leave a populated fixture for desktop/narrow rendered inspection.
 setWorkspace('one'); await fetchAndRenderOperations();
+const autoCard = descendants(get('auto-tasks-body')).find(node => String(node.className || '').includes('auto-task-card'));
+const autoKids = Array.from(autoCard?.children || []);
+const autoHead = autoKids.find(node => node.className === 'operation-row-head');
+const autoDetails = autoKids.find(node => node.className === 'operation-details');
+assert(autoHead, 'auto-task collapsed row is present');
+assert(autoDetails, 'auto-task details are present');
+assert(autoHead.textContent.includes('Chore one'), 'collapsed row shows the name');
+assert(autoHead.textContent.includes('Disable') || autoHead.textContent.includes('Enable'), 'collapsed row keeps the primary action');
+assert(!autoHead.textContent.includes('Manual mint ignores'), 'mint warning is not repeated on the collapsed row');
+assert(autoDetails.textContent.includes('Manual mint ignores'), 'mint explanation stays in details');
+assert(autoDetails.textContent.includes('Open duplicate'), 'duplicate explanation stays in details');
+assert(autoDetails.textContent.includes('Last scheduler evaluation'), 'scheduler cursor stays in details');
+assert(autoDetails.textContent.includes('Delivery coverage') || autoDetails.textContent.includes('covered'), 'delivery coverage stays in details');
+autoDetails.open = true;
+if (typeof Event === 'function') autoDetails.dispatchEvent(new Event('toggle'));
+else autoDetails.listeners?.toggle?.();
+await fetchAndRenderOperations();
+const restored = descendants(get('auto-tasks-body')).find(node => node.className === 'operation-details');
+assert(restored?.open, 'details stay open across rerender');
 globalThis.operationsTestsPassed = true;

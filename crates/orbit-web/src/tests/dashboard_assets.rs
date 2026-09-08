@@ -526,7 +526,68 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(css.contains(".operation-grid { grid-template-columns: 1fr; }"));
     assert!(css.contains("body.operations-active"));
     assert!(css.contains(".operation-mint-warning"));
+    assert!(css.contains(".operation-row-head"));
+    assert!(css.contains(".operation-details summary"));
+    assert!(operations.contains("operation-row-head"));
+    assert!(operations.contains(r#"el("details", { class: "operation-details" })"#));
+    assert!(operations.contains("expandedOperations"));
     assert!(router.contains(r#"classList.toggle("operations-active", top === "operations")"#));
+}
+
+/// ORB-11559: below 760px the 216px rail must give up the content column so
+/// Tasks can use the 520px two-row grid at phone widths, and every top-level
+/// tab plus diagnostics subtab stays in the (now horizontal) nav.
+#[test]
+fn dashboard_narrow_shell_collapses_rail_and_task_rows() {
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let index = include_str!("../../assets/dashboard/index.html");
+
+    let narrow = css
+        .split("@media (max-width: 760px)")
+        .skip(1)
+        .find(|block| {
+            block.contains(".shell {") && block.contains("grid-template-columns: minmax(0, 1fr);")
+        })
+        .expect("760px must collapse .shell to a single column");
+    assert!(
+        narrow.contains(".rail-group { display: contents; }"),
+        "rail groups must unwrap so tabs and diagnostics subtabs can reflow"
+    );
+    assert!(
+        narrow.contains("flex: 1 1 100%"),
+        "diagnostics subtabs must wrap onto a second row"
+    );
+    assert!(
+        narrow.contains(".kpi .k { display: none; }")
+            && narrow.contains(".kpi-spark { display: none; }"),
+        "KPI labels and the sparkline must collapse at the same width as the rail"
+    );
+    assert!(
+        css.contains(
+            "grid-template-areas:\n            \"id title\"\n            \"status crew\";"
+        ),
+        "the 520px task row must keep its two-row areas for phone widths"
+    );
+
+    for tab in ["tasks", "audit", "diagnostics", "operations", "knowledge"] {
+        assert!(
+            index.contains(&format!(r#"class="tab" data-tab="{tab}""#)),
+            "{tab} must remain a top-level tab"
+        );
+    }
+    for subtab in [
+        "runs",
+        "metrics",
+        "errors",
+        "incidents",
+        "reliability",
+        "scoreboard",
+    ] {
+        assert!(
+            index.contains(&format!(r#"data-subtab="{subtab}""#)),
+            "{subtab} must remain a reachable diagnostics subtab"
+        );
+    }
 }
 
 /// ORB-11558: disabled/paused rows must not look scheduled; clock cadence is a
