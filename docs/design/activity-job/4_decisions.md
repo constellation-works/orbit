@@ -1231,16 +1231,16 @@ Recognition is the entire change: no safety gate moved. Non-terminal run, `--old
 
 ## Provider launchers resolve at the shared CLI spawn boundary
 
-**Recorded:** 2026-08-01 19:17:24.893725Z · [ORB-10456], [ORB-10479]
+**Recorded:** 2026-08-01 19:17:24.893725Z · [ORB-10456], [ORB-10479], [ORB-11808]
 
-**Context.** Dashboard shipment reproduced the same provider-launcher ENOENT previously seen in routine sweeps: independent process entry points inherited different `PATH` values even though every `backend: cli` provider invocation converges on one engine spawn boundary. The alternatives were to keep pinning `PATH` in each service/entry point or resolve configured launcher names once at that shared boundary.
+**Context.** Dashboard shipment reproduced the same provider-launcher ENOENT previously seen in routine sweeps: independent process entry points inherited different `PATH` values even though every `backend: cli` provider invocation converges on one engine spawn boundary. The alternatives were to keep pinning `PATH` in each service/entry point or resolve configured launcher names once at that shared boundary. [ORB-11808] then showed the same seam still missed Apple Silicon Homebrew: launchd's default `PATH` is `/usr/bin:/bin:/usr/sbin:/sbin`, and the `$HOME` fallback list does not include `/opt/homebrew/bin`. Interactive MCP and login-shell pilot inherit that prefix; scheduled drain does not. Pinning Homebrew into the launchd unit would have been a scheduler change; hardcoding a user home would have broken isolation.
 
-**Decision.** Resolve every bare provider launcher at the orbit-engine CLI spawn boundary. Search the process `PATH` first, then portable per-user fallback directories derived from `HOME`; preserve explicitly pathed commands unchanged. Missing-launcher failures remain permanent and name the provider plus every searched path.
+**Decision.** Resolve every bare provider launcher at the orbit-engine CLI spawn boundary. Search the process `PATH` first, then portable per-user fallback directories derived from `HOME`, then portable supported system prefixes (`/opt/homebrew/bin`, `/usr/local/bin`). Preserve explicitly pathed commands unchanged. Searched candidates must be regular executable files; missing-launcher failures remain permanent and name the provider plus every searched path.
 
 **Consequences.**
 - Dashboard, routine, CLI ship, and direct job dispatch share one provider-launcher resolution mechanism rather than depending on each parent environment being curated.
-- Explicit command paths and `PATH` precedence remain authoritative, while common user-local installations work from scrubbed service environments.
-- Cost: Orbit now recognizes a small ordered set of conventional user-local bin directories outside `PATH`, so moving a launcher into a new convention requires extending and testing that list.
+- Explicit command paths and `PATH` precedence remain authoritative, while common user-local installations and Homebrew prefixes work from scrubbed service environments, including macOS launchd.
+- Cost: Orbit now recognizes a small ordered set of conventional user-local and supported-system bin directories outside `PATH`, so moving a launcher into a new convention requires extending and testing that list.
 
 ## Resume is a durable submission scoped by explicit retry lineage
 
@@ -1611,6 +1611,7 @@ Retrying setup while the stale leftover remains keeps refusing. Recovery is oper
 - **[ORB-10471]** — Scope the worktree boundary guard's primary dirt check to paths the run touched, so unrelated primary dirt no longer defeats a benign fast-forward ([Primary fast-forward acceptance is decided by interference with the run, not primary dirty-state byte-identity](#primary-fast-forward-acceptance-is-decided-by-interference-with-the-run-not-primary-dirty-state-byte-identity)).
 - **[ORB-10470]** — Make resume submit a detached run that starts at the failed checkpoint, and reconcile blocked/re-stamped tasks against the run's retry lineage ([Resume is a durable submission scoped by explicit retry lineage](#resume-is-a-durable-submission-scoped-by-explicit-retry-lineage)).
 - **[ORB-10456]** — Resolve provider launchers at the shared CLI spawn boundary and add provider-aware missing-launcher diagnostics ([Provider launchers resolve at the shared CLI spawn boundary](#provider-launchers-resolve-at-the-shared-cli-spawn-boundary)).
+- **[ORB-11808]** — Search `/opt/homebrew/bin` and `/usr/local/bin` after `PATH` and `$HOME` bins so launchd-minimal Mac drains resolve Homebrew provider CLIs at the same seam.
 - **[ORB-10454]** — Allocate [Step completion is a separate contract from response content](#step-completion-is-a-separate-contract-from-response-content) for the step-completion / response-content split and retire the IOU in [CLI response envelopes are optional for artifact-backed activities](#cli-response-envelopes-are-optional-for-artifact-backed-activities)'s amendment block.
 - **[ORB-10427]** — Share one worktree-path derivation between `setup_worktree` and gc; collect bundles only when every member has settled.
 - **[ORB-10393]** — Port planning-duel planner and arbiter legs to seeded v2
