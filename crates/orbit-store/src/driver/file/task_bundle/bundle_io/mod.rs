@@ -25,12 +25,12 @@ use crate::fs::yaml::{parse_yaml_with, write_yaml_durable_with};
 mod commit;
 
 pub(crate) use commit::{
-    BundleWriteFault, PendingWriteGuard, fail_if_injected, publish_envelope,
-    recover_pending_bundle_at,
+    BundleWriteFault, PENDING_WRITE_FILE_NAME, PendingWriteGuard, fail_if_injected,
+    publish_envelope, recover_pending_bundle_at,
 };
 
 #[cfg(test)]
-pub(crate) use commit::{PENDING_WRITE_FILE_NAME, inject_bundle_write_faults};
+pub(crate) use commit::inject_bundle_write_faults;
 
 static STAGING_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
