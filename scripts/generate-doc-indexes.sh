@@ -118,7 +118,7 @@ is_versioned() {
   local file="$1"
   local relative="${file#"$repo_root/"}"
 
-  git -C "$repo_root" ls-files --error-unmatch -- "$relative" >/dev/null 2>&1
+  git -C "$repo_root" ls-files --cached --others --exclude-standard --error-unmatch -- "$relative" >/dev/null 2>&1
 }
 
 design_entry_doc() {
