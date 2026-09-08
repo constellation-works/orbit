@@ -97,8 +97,9 @@ pub fn resolve_task_owner(
     let registry = workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
         global_root,
     ))?;
-    let owner = workspace_registry::local_workspaces(&registry).find(|(_, checkout)| {
+    let owner = workspace_registry::local_workspaces(&registry).find(|(workspace, checkout)| {
         checkout_identity(&checkout.orbit_dir).is_some_and(|identity| identity == partition)
+            || (checkout.orbit_dir == global_root && workspace.id == partition)
     });
     let Some((workspace, checkout)) = owner else {
         // The task registry keeps the partition's slug even when no checkout

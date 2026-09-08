@@ -69,16 +69,22 @@ pub(crate) fn build_context_from_roots(
         global_root.to_path_buf(),
     );
 
-    let task_backends = build_v2_task_backends(
-        global_root,
-        &paths,
-        binding.map(|binding| binding.workspace_id.as_str()),
-    )?;
+    let task_backends = build_v2_task_backends(global_root, &paths, binding)?;
     let configured = read_workspace_config_optional(&paths.orbit_dir)?;
-    let workspace_id = configured
-        .as_ref()
-        .map(|config| config.workspace_id.clone())
-        .unwrap_or_else(|| UNBOUND_DATA_DIR_WORKSPACE_ID.to_string());
+    let workspace_id = if is_explicit_data_dir(global_root, &paths.orbit_dir) {
+        binding
+            .map(|binding| binding.logical_workspace_id.clone())
+            .or_else(|| {
+                configured
+                    .as_ref()
+                    .map(|config| config.workspace_id.clone())
+            })
+    } else {
+        configured
+            .as_ref()
+            .map(|config| config.workspace_id.clone())
+    }
+    .unwrap_or_else(|| UNBOUND_DATA_DIR_WORKSPACE_ID.to_string());
     let import_report = if configured.is_none() {
         orbit_store::workflow::legacy_state::ImportReport::skipped()
     } else {
@@ -219,10 +225,25 @@ pub(crate) fn build_context_from_roots(
 fn build_v2_task_backends(
     global_root: &Path,
     paths: &WorkspacePaths,
-    workspace_id_hint: Option<&str>,
+    runtime_binding: Option<&WorkspaceRuntimeBinding>,
 ) -> Result<WorkspaceTaskBackends, OrbitError> {
     let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
     let config = read_workspace_config_optional(&paths.orbit_dir)?;
+    // Several registered repositories may intentionally share one explicit
+    // Orbit root. That root has only one compatibility config.yaml and cannot
+    // represent every selected workspace. Workspace init has already created
+    // each logical task-registry partition, so route directly by the selected
+    // registry identity and omit a checkout-local projection that would itself
+    // be shared by every repository.
+    if is_explicit_data_dir(global_root, &paths.orbit_dir)
+        && let Some(binding) = runtime_binding
+    {
+        return Ok(coordination_task_backends(
+            registry,
+            binding.logical_workspace_id.clone(),
+        ));
+    }
+    let workspace_id_hint = runtime_binding.map(|binding| binding.workspace_id.as_str());
     // An explicit `--root` data directory is not a checkout. Binding
     // `parent(data-dir)` as `repo_root` mints a synthetic workspace (e.g.
     // `tmp-XXXXXX` for `/tmp`) that later `workspace init --force` cannot
