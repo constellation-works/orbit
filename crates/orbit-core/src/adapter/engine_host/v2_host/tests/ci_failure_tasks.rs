@@ -17,10 +17,10 @@ use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_l
 use crate::application::task::TaskUpdateParams;
 
 const HEAD: &str = "1111111111111111111111111111111111111111";
-const CHECKOUT: &str = "3333333333333333333333333333333333333333";
+pub(super) const CHECKOUT: &str = "3333333333333333333333333333333333333333";
 const NEXT_HEAD: &str = "4444444444444444444444444444444444444444";
 
-fn file(runtime: &OrbitRuntime, input: Value) -> Value {
+pub(super) fn file(runtime: &OrbitRuntime, input: Value) -> Value {
     runtime
         .run_deterministic(
             "file_ci_failure_tasks",
@@ -31,7 +31,7 @@ fn file(runtime: &OrbitRuntime, input: Value) -> Value {
         .expect("file ci failure tasks")
 }
 
-fn file_error(runtime: &OrbitRuntime, input: Value) -> String {
+pub(super) fn file_error(runtime: &OrbitRuntime, input: Value) -> String {
     runtime
         .run_deterministic(
             "file_ci_failure_tasks",

@@ -242,7 +242,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
     let RunPartition {
         latest,
         mut current,
-        stale,
+        mut stale,
         in_flight,
         mixed_candidates,
         mut deferred,
@@ -317,11 +317,20 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             &mut retryable_errors,
         ));
     }
-    current = findings
-        .into_iter()
-        .filter(is_actionable_current_failure)
-        .collect();
+    let mut inconclusive = Vec::new();
+    let mut remaining = Vec::new();
+    for finding in findings {
+        if is_inconclusive_cancellation(&finding) {
+            inconclusive.push(finding);
+            continue;
+        }
+        if is_actionable_current_failure(&finding) {
+            remaining.push(finding);
+        }
+    }
+    current = supersede_older_when_cancelled_run_is_actionable(remaining, &mut stale);
     sort_current_failures(&mut current);
+    sort_current_failures(&mut inconclusive);
     let discovered = current.len();
     let investigated_ids = current
         .iter()
@@ -340,6 +349,22 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         .iter()
         .filter_map(|run| run.get("run_id").cloned())
         .collect::<Vec<_>>();
+    let inconclusive_ids = inconclusive
+        .iter()
+        .filter_map(|run| run.get("run_id").cloned())
+        .collect::<Vec<_>>();
+    let inconclusive_job_ids = inconclusive
+        .iter()
+        .filter_map(|run| run.get("job_id").cloned())
+        .filter(|value| !value.is_null())
+        .collect::<Vec<_>>();
+    let inconclusive_count = inconclusive.len();
+    if inconclusive_count > 0 {
+        notes.push(format!(
+            "{inconclusive_count} cancelled job(s) had no failed steps and were classified \
+             inconclusive; cancellation is not a pass, but there is no failed step to repair"
+        ));
+    }
     let investigated_count = investigated_ids.len();
     let retryable_error_count = retryable_errors.len();
     let unverified_refs = probes.unverified.keys().cloned().collect::<Vec<_>>();
@@ -362,6 +387,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         "stale_or_superseded": stale,
         "in_flight": in_flight,
         "deferred": deferred,
+        "inconclusive": inconclusive,
         "retryable_errors": retryable_errors,
         "summary": {
             "latest_runs_discovered": latest_ids.len(),
@@ -372,6 +398,9 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             "investigated_failure_run_ids": investigated_ids,
             "deferred_failures": deferred_ids.len(),
             "deferred_failure_run_ids": deferred_ids,
+            "inconclusive": inconclusive_count,
+            "inconclusive_run_ids": inconclusive_ids,
+            "inconclusive_job_ids": inconclusive_job_ids,
             "retryable_errors": retryable_error_count,
         },
         "truncation": json!({
@@ -386,6 +415,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             "current_failures_discovered": discovered,
             "current_failures_investigation_attempted": attempted,
             "current_failures_investigated": investigated_count,
+            "inconclusive": inconclusive_count,
             "log_max_bytes": bounds.log_max_bytes,
             "job_log_reads": job_log_reads,
             "max_job_log_reads": bounds.max_job_log_reads,
@@ -806,7 +836,13 @@ fn partition_runs(
                     continue;
                 }
                 out.current.push(run_summary(ref_for_run(refs, run), run));
-                seen_current = true;
+                // A cancelled run is still inspected, but job expansion has to
+                // decide whether it is actionable. Claiming the current slot
+                // here would hide an older real failure behind a zero-step
+                // cancellation that has nothing to repair.
+                if !run_is_cancelled(run) {
+                    seen_current = true;
+                }
             }
         }
     }
@@ -829,6 +865,34 @@ pub(super) fn run_is_completed(run: &Value) -> bool {
 
 fn run_is_unsuccessful(run: &Value) -> bool {
     unsuccessful_conclusion(run.get("conclusion").and_then(Value::as_str))
+}
+
+fn run_is_cancelled(run: &Value) -> bool {
+    run.get("conclusion").and_then(Value::as_str) == Some("cancelled")
+}
+
+/// A cancelled job with no failed step is not a repair target: GitHub often
+/// reports `steps: []` and 404s the job log. Cancellation is still not a pass.
+pub(super) fn job_is_cancelled_without_failed_steps(job: &Value) -> bool {
+    job.get("conclusion").and_then(Value::as_str) == Some("cancelled")
+        && job
+            .get("failed_steps")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+}
+
+pub(super) fn is_inconclusive_cancellation(failure: &Value) -> bool {
+    if failure.get("evidence_state").and_then(Value::as_str) == Some("inconclusive") {
+        return true;
+    }
+    match failure.get("failed_jobs").and_then(Value::as_array) {
+        Some(jobs) if !jobs.is_empty() => jobs.iter().all(job_is_cancelled_without_failed_steps),
+        Some(_) | None => {
+            // An unexpanded cancelled run might still hide failed steps.
+            run_is_cancelled(failure)
+                && failure.get("investigated").and_then(Value::as_bool) == Some(true)
+        }
+    }
 }
 
 fn has_failed_jobs(failure: &Value) -> bool {
@@ -856,6 +920,96 @@ fn retired_ref_entry(refs: &[ScannedRef], run: &Value) -> Value {
          branch's own runs are the current evidence — or abandoned",
         run_branch(run)
     ));
+    entry
+}
+
+/// After job expansion, a cancelled run that *does* have failed steps is the
+/// current evidence for that workflow/ref. Older unresolved findings of the
+/// same identity then become stale — the same rule partition already applies
+/// to ordinary failures, which a zero-step cancellation is not allowed to
+/// trigger on its own.
+fn supersede_older_when_cancelled_run_is_actionable(
+    findings: Vec<Value>,
+    stale: &mut Vec<Value>,
+) -> Vec<Value> {
+    let mut newest_cancelled: std::collections::BTreeMap<(String, String), (String, u64, Value)> =
+        std::collections::BTreeMap::new();
+    for finding in &findings {
+        if !run_is_cancelled(finding) {
+            continue;
+        }
+        let key = workflow_ref_key(finding);
+        let order = run_order(finding);
+        let replace = newest_cancelled
+            .get(&key)
+            .is_none_or(|(existing_time, existing_id, _)| {
+                order > (existing_time.clone(), *existing_id)
+            });
+        if replace {
+            newest_cancelled.insert(key, (order.0, order.1, finding.clone()));
+        }
+    }
+
+    let mut kept = Vec::new();
+    let mut superseded_runs = std::collections::BTreeSet::new();
+    for finding in findings {
+        let key = workflow_ref_key(&finding);
+        let Some((_, _, newer)) = newest_cancelled.get(&key) else {
+            kept.push(finding);
+            continue;
+        };
+        if run_order(&finding) < run_order(newer) {
+            let run_id = finding.get("run_id").and_then(Value::as_u64).unwrap_or(0);
+            if superseded_runs.insert((key.0.clone(), key.1.clone(), run_id)) {
+                stale.push(stale_from_findings(&finding, newer));
+            }
+            continue;
+        }
+        kept.push(finding);
+    }
+    kept
+}
+
+fn workflow_ref_key(failure: &Value) -> (String, String) {
+    (
+        failure
+            .get("workflow")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        run_branch(failure).to_string(),
+    )
+}
+
+fn stale_from_findings(older: &Value, newer: &Value) -> Value {
+    let mut entry = older.clone();
+    entry["reason"] = json!("superseded_by_newer_workflow_run");
+    entry["evidence"] = json!(format!(
+        "newer relevant run {} at {} is {} with conclusion {}",
+        newer
+            .get("run_id")
+            .and_then(Value::as_u64)
+            .map_or_else(|| "unknown".to_string(), |id| id.to_string()),
+        newer
+            .get("created_at")
+            .and_then(Value::as_str)
+            .unwrap_or("an unknown time"),
+        newer
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("in an unknown state"),
+        newer
+            .get("conclusion")
+            .and_then(Value::as_str)
+            .unwrap_or("not yet completed"),
+    ));
+    entry["superseded_by"] = json!({
+        "run_id": newer.get("run_id"),
+        "url": newer.get("url"),
+        "created_at": newer.get("created_at"),
+        "status": newer.get("status"),
+        "conclusion": newer.get("conclusion"),
+    });
     entry
 }
 

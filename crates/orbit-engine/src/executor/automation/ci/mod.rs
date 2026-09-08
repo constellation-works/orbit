@@ -50,7 +50,9 @@ pub(super) const OUTCOME_RETRYABLE_ERROR: &str = "retryable_error";
 ///
 /// `cancelled` and `timed_out` are in here deliberately: a run that never
 /// produced a verdict is not a green run, and treating it as one is exactly
-/// how a red pipeline gets reported as clean.
+/// how a red pipeline gets reported as clean. Job expansion later separates
+/// a cancelled job with no failed steps (inconclusive, nothing to repair)
+/// from a cancelled or mixed run that still has failed steps.
 pub(super) fn unsuccessful_conclusion(conclusion: Option<&str>) -> bool {
     matches!(
         conclusion,
