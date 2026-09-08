@@ -22,10 +22,10 @@ if ! command -v rg >/dev/null 2>&1; then
   exit 1
 fi
 
-"$repo_root/scripts/check-ci-macos.sh"
-
 cargo fmt --all -- --check
 if [[ "$fast" == false ]]; then
+  # Enumerating workflow tests compiles their targets; keep it out of ci-fast.
+  "$repo_root/scripts/check-ci-macos.sh"
   cargo clippy --workspace --all-targets -- -D warnings
   if cargo nextest --version >/dev/null 2>&1; then
     cargo nextest run --workspace --lib --bins --tests
@@ -49,6 +49,7 @@ fi
 "$repo_root/scripts/check-installer-pubkey.sh"
 "$repo_root/scripts/test-installer-security.sh"
 "$repo_root/scripts/check-dependency-direction.sh"
+"$repo_root/scripts/test-ci-fast-guards.py"
 "$repo_root/scripts/check-cli-imports.sh"
 "$repo_root/scripts/check-terminal-state-guard.sh"
 "$repo_root/scripts/check-history-note-size.sh"
