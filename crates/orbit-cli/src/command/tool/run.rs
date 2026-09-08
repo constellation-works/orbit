@@ -123,7 +123,7 @@ impl Execute for ToolRunArgs {
         let output = crate::command::task::show::attach_bound_workspace_identity(
             &self.name, &input, runtime, output,
         )?;
-        let output = shape_tool_output(&self.name, &input, output, self.full, &self.fields);
+        let output = shape_tool_output(&self.name, output, self.full, &self.fields);
 
         Ok(Payload::document(output).into())
     }
@@ -181,7 +181,6 @@ const MINIMAL_TASK_FIELDS: &[&str] = &[
 
 pub(super) fn shape_tool_output(
     tool_name: &str,
-    input: &Value,
     output: Value,
     full: bool,
     fields: &[String],
@@ -194,7 +193,7 @@ pub(super) fn shape_tool_output(
         return filter_top_level_fields(output, fields);
     }
 
-    if should_project_minimal_task_output(tool_name, input) {
+    if should_project_minimal_task_output(tool_name) {
         return filter_top_level_fields(
             output,
             &MINIMAL_TASK_FIELDS
@@ -207,21 +206,11 @@ pub(super) fn shape_tool_output(
     output
 }
 
-fn should_project_minimal_task_output(tool_name: &str, input: &Value) -> bool {
+fn should_project_minimal_task_output(tool_name: &str) -> bool {
     if !matches!(
         tool_name,
-        "orbit.task.list"
-            | "orbit.task.show"
-            | "orbit.task.add"
-            | "orbit.task.artifact.put"
-            | "orbit.task.update"
+        "orbit.task.list" | "orbit.task.add" | "orbit.task.artifact.put" | "orbit.task.update"
     ) {
-        return false;
-    }
-
-    if tool_name == "orbit.task.show"
-        && (input.get("field").is_some() || input.get("fields").is_some())
-    {
         return false;
     }
 
