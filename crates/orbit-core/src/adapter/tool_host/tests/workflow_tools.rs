@@ -349,6 +349,19 @@ fn ship_tool_parses_and_rejects_an_unknown_crew_allowlist_before_dispatch() {
     );
 }
 
+#[test]
+fn run_list_refuses_a_limit_above_200() {
+    let (_root, runtime, _repo_root) = test_runtime();
+
+    let error = run_tool_as_operator(&runtime, "orbit.workflow.run.list", json!({ "limit": 500 }))
+        .expect_err("run.list must reject an oversized limit");
+
+    let OrbitError::InvalidInput(message) = error else {
+        panic!("expected invalid input");
+    };
+    assert!(message.contains("200"), "{message}");
+}
+
 /// ORB-10540: the guard is narrow. Inside the same managed envelope that
 /// refuses ship and resume, the read-only verbs still answer — a blanket
 /// in-run denial would break run observation for every agent.

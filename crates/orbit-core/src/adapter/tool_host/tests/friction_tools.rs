@@ -47,6 +47,17 @@ fn add_without_a_title_falls_back_to_the_bodys_subject() {
 }
 
 #[test]
+fn add_refuses_a_non_string_task_id() {
+    let message = invalid_input_message(add(json!({
+        "body": SECTIONED_BODY,
+        "task_id": 123,
+        "model": TEST_CODEX_MODEL,
+    })));
+
+    assert!(message.contains("`task_id`"), "{message}");
+}
+
+#[test]
 fn add_refuses_a_title_too_long_to_read_in_a_list() {
     let message = invalid_input_message(add(json!({
         "body": SECTIONED_BODY,
