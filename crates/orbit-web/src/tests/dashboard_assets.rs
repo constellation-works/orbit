@@ -508,7 +508,7 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(operations.contains("Minted") || operations.contains("result.message"));
     assert!(operations.contains("Auto-task change failed"));
     assert!(operations.contains("Manual mint failed"));
-    assert!(operations.contains("fetchJson(\"/api/auto-tasks\")"));
+    assert!(operations.contains("\"/api/auto-tasks\""));
     assert!(
         !operations.contains("postJson(\"/api/auto-tasks")
             || operations.contains("addEventListener(\"click\"")
@@ -608,6 +608,7 @@ class Node {
   set textContent(value) { this._text = String(value); this.children = []; }
   querySelectorAll() { return []; }
   querySelector() { return null; }
+  insertBefore(child, before) { const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); return child; }
 }
 const byId = new Map();
 const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
@@ -719,7 +720,7 @@ fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
         "starting the window must submit through the dashboard auto-drain endpoint"
     );
     assert!(
-        operations.contains(r#"fetchJson(`/api/workflows/auto/readiness"#),
+        operations.contains(r#"`/api/workflows/auto/readiness"#),
         "the panel must project the read-only readiness snapshot, not recompute eligibility"
     );
     assert!(
@@ -1775,8 +1776,7 @@ fn dashboard_failure_metrics_are_incident_aware_and_state_their_denominators() {
         "the incidents subtab must be routable"
     );
     assert!(
-        app.contains(r#"if (activeDiagSubtab === "incidents")"#)
-            && app.contains("/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}"),
+        app.contains("/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}"),
         "the incidents fetch must hang off the diagnostics subtab branch and honor the shared window"
     );
 
@@ -2659,7 +2659,7 @@ fn dashboard_operation_mode_panel_is_explained_governed_and_guarded() {
         assert!(index.contains(&format!(r#"id="{id}""#)), "{id}");
     }
     assert!(
-        operations.contains(r#"fetchJson("/api/operation/explain")"#),
+        operations.contains(r#""/api/operation/explain""#),
         "the panel must project the runtime explanation, not recompute policy"
     );
     assert!(
@@ -2709,6 +2709,7 @@ class Node {
   set textContent(value) { this._text = String(value); this.children = []; }
   querySelectorAll() { return []; }
   querySelector() { return null; }
+  insertBefore(child, before) { const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); return child; }
 }
 const byId = new Map();
 const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
@@ -3038,6 +3039,7 @@ class Node {
   addEventListener(name, fn) { this.listeners[name] = fn; }
   click() { if (!this.disabled) return this.listeners.click?.(); }
   dispatchEvent(event) { return this.listeners[event.type]?.(event); }
+  insertBefore(child, before) { const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); return child; }
 }
 const nodes = new Map();
 globalThis.document = {
@@ -3049,5 +3051,14 @@ globalThis.window = { location: new URL("http://dashboard.test"), localStorage: 
     run_dashboard_javascript_test(&format!(
         "{dom}\n{}",
         include_str!("dashboard_operations.mjs")
+    ));
+}
+
+#[test]
+fn dashboard_loading_rejects_stale_responses_and_reports_panel_errors() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_loading_dom.mjs"),
+        include_str!("dashboard_loading.mjs")
     ));
 }

@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, statusPill, patchJson, postJson, syncNodes, isAggregateView, withWorkspace } from './common.js';
+import { onWorkspaceChange, panelCanRender, el, statusPill, patchJson, postJson, syncNodes, isAggregateView, withWorkspace } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 
 const $ = (id) => document.getElementById(id);
@@ -18,6 +18,14 @@ let pinnedExternalTask = null;
 let statusFeedback = new Map();
 let crewFeedback = new Map();
 const MUTATION_UNDO_WINDOW_MS = 8000;
+
+onWorkspaceChange(() => {
+  pinnedExternalTask = null;
+  expandedTaskIds.clear();
+  statusFeedback.clear();
+  crewFeedback.clear();
+});
+
 // ORB-10444: task ids whose Ship dispatch this page has already issued. Ship is
 // a write against a live pipeline, so a second click must not launch a second
 // run: the id stays here for the life of the page once a dispatch succeeds (the
@@ -1238,6 +1246,7 @@ function takeTaskActionNotice() {
 }
 
 export function renderTasks(tasks, context) {
+  if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
   if (!body) return;
 

@@ -1,6 +1,6 @@
 // Routine-definition, host sweep-clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson } from './common.js';
+import { requestPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson } from './common.js';
 import { navigateToRun } from './router.js';
 import { renderAutomation } from './automation.js';
 
@@ -26,9 +26,6 @@ export function initOperations(nextContext) {
   unsubscribeWorkspace?.();
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastOperations = lastAutoTasks = lastAutoDrain = lastOperationMode = null;
-    for (const id of ["routines-body", "clock-body", "auto-tasks-body", "auto-drain-body", "operation-mode-body"]) {
-      if ($(id)) $(id).textContent = "Loading selected workspace…";
-    }
     for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "operation-mode-operation-feedback"]) feedback(id, "", "");
   });
 }
@@ -567,11 +564,16 @@ function renderAutoTasks(payload) {
   if (count) count.textContent = workspace && !workspaceReason ? `${definitions.length} · ${workspace.name}` : "read-only";
 }
 
+function operationCountId(bodyId) {
+  return bodyId === "clock-body" ? "clock-host" : bodyId.replace("-body", "-count");
+}
+
+function loadOperationPanel(bodyId, path, render) {
+  return requestPanel(bodyId, path, () => fetchJson(path), render, operationCountId(bodyId));
+}
+
 function fetchAndRenderAutoTasks() {
-  const selection = selectionSnapshot();
-  return fetchJson("/api/auto-tasks").then((payload) => {
-    if (selection.current()) renderAutoTasks(payload);
-  });
+  return loadOperationPanel("auto-tasks-body", "/api/auto-tasks", renderAutoTasks);
 }
 
 // ORB-11250: bounded backlog auto-drain window ("orbit run auto --for
@@ -725,14 +727,12 @@ function renderAutoDrain(payload) {
 }
 
 function fetchAndRenderAutoDrain() {
-  const selection = selectionSnapshot();
   const workspace = selectedWorkspace();
   if (!workspace) {
-    renderAutoDrain({});
-    return Promise.resolve();
+    return requestPanel("auto-drain-body", "unselected", () => Promise.resolve({}), renderAutoDrain, "auto-drain-count");
   }
   const query = autoDrainConcurrency ? `?concurrency=${encodeURIComponent(autoDrainConcurrency)}` : "";
-  return fetchJson(`/api/workflows/auto/readiness${query}`).then((payload) => { if (selection.current()) renderAutoDrain(payload); });
+  return loadOperationPanel("auto-drain-body", `/api/workflows/auto/readiness${query}`, renderAutoDrain);
 }
 
 // ORB-11332: operation mode. The panel projects `orbit operation explain`
@@ -889,26 +889,22 @@ function renderOperationMode(payload) {
 }
 
 export function fetchAndRenderOperationMode() {
-  const selection = selectionSnapshot();
   if (!selectedWorkspace()) {
-    renderOperationMode({});
-    return Promise.resolve();
+    return requestPanel("operation-mode-body", "unselected", () => Promise.resolve({}), renderOperationMode, "operation-mode-count");
   }
-  return fetchJson("/api/operation/explain").then((payload) => { if (selection.current()) renderOperationMode(payload); });
+  return loadOperationPanel("operation-mode-body", "/api/operation/explain", renderOperationMode);
 }
 
-export function fetchAndRenderOperations() {
-  const selection = selectionSnapshot();
-  return Promise.all([
-    fetchJson("/api/routines").then((payload) => { if (selection.current()) renderOperations(payload); }),
-    fetchAndRenderAutoTasks().catch((error) => {
-      if (selection.current()) feedback("auto-task-operation-feedback", "error", `Failed to load auto-tasks: ${error.message}`);
-    }),
-    fetchAndRenderAutoDrain().catch((error) => {
-      if (selection.current()) feedback("auto-drain-operation-feedback", "error", `Failed to load auto-delivery readiness: ${error.message}`);
-    }),
-    fetchAndRenderOperationMode().catch((error) => {
-      if (selection.current()) feedback("operation-mode-operation-feedback", "error", `Failed to load operation mode: ${error.message}`);
-    }),
+export async function fetchAndRenderOperations() {
+  const routines = fetchJson("/api/routines");
+  const results = await Promise.allSettled([
+    requestPanel("routines-body", "routines", () => routines, renderOperations, "routines-count"),
+    requestPanel("clock-body", "clock", () => routines, renderClock, "clock-host"),
+    fetchAndRenderAutoTasks(),
+    fetchAndRenderAutoDrain(),
+    fetchAndRenderOperationMode(),
   ]);
+  const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
+  // Preserve transport classification even if a different panel also fails.
+  if (errors.length) throw errors.find(error => error.networkFailure) || errors[0];
 }

@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { el, stateCell, syncNodes, postJson } from './common.js';
+import { panelCanRender, el, stateCell, syncNodes, postJson } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -568,6 +568,7 @@ function runDurationCell(run) {
 }
 
 export function renderRuns(runs) {
+  if (!panelCanRender("runs-body")) return;
   const body = $("runs-body");
   const frag = document.createDocumentFragment();
   const unavailable = hasCtx("getRunSourcesUnavailable") ? _runsCtx.getRunSourcesUnavailable() : [];
