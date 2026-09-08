@@ -4,7 +4,8 @@ use super::*;
 
 use super::super::JobRunListParams;
 use crate::application::job::TERMINAL_OUTCOME_CONFLICT_CODE;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
+use orbit_store::V2AuditEventInsertParams;
 use orbit_types::workflow::JobRunState;
 
 #[test]
@@ -396,6 +397,68 @@ fn orphaned_run_finished_at_tracks_last_audit_activity_not_detection_time() {
         (295_000..=305_000).contains(&duration_ms),
         "duration must span started_at..last activity, got {duration_ms}ms"
     );
+}
+
+#[test]
+fn orphaned_run_finished_at_falls_back_to_now_for_out_of_range_audit_timestamps() {
+    let (_root, runtime) = test_runtime();
+
+    for (suffix, activity_at) in [
+        ("before-start", Utc::now() - Duration::hours(2)),
+        ("after-now", Utc::now() + Duration::hours(2)),
+    ] {
+        let run = insert_pending_run(&runtime, "qa_orphan_out_of_range_timing");
+        let started_at = Utc::now() - Duration::minutes(30);
+        runtime
+            .stores()
+            .jobs()
+            .mark_job_run_running(&run.run_id, started_at, 999_999)
+            .expect("mark running with impossible pid");
+        write_audit_activity(&runtime, &run.run_id, suffix, activity_at);
+
+        let before_fallback = Utc::now();
+        let shown = runtime
+            .show_job_run(&run.run_id)
+            .expect("show reconciled run");
+        let after_fallback = Utc::now();
+        let finished_at = shown.finished_at.expect("reconciled finished time");
+
+        assert!(
+            finished_at >= before_fallback && finished_at <= after_fallback,
+            "{suffix} activity must fall back to detection time"
+        );
+    }
+}
+
+fn write_audit_activity(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    suffix: &str,
+    activity_at: DateTime<Utc>,
+) {
+    let event = serde_json::json!({
+        "schemaVersion": 1,
+        "event_type": "test.activity",
+        "event_id": format!("evt-{run_id}-{suffix}"),
+        "ts": activity_at.to_rfc3339(),
+        "run_id": run_id,
+        "agent_identity": "system",
+    });
+    runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: runtime.workspace_id().expect("workspace id"),
+            event_id: event["event_id"].as_str().expect("event id").to_string(),
+            source: "v2_envelope".to_string(),
+            schema_version: 1,
+            event_type: "test.activity".to_string(),
+            ts: activity_at,
+            run_id: run_id.to_string(),
+            agent_identity: "system".to_string(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: event.to_string(),
+        })
+        .expect("insert audit activity");
 }
 
 #[cfg(unix)]

@@ -1,6 +1,7 @@
 //! Sibling tests for `run_audit.rs` (migrated per ORB-00246 / docs/design-patterns/test_layout.md).
 
 use crate::{OrbitRuntime, V2AuditEventInsertParams};
+use chrono::{DateTime, Utc};
 use orbit_common::process::identity::ProcessLiveness;
 use orbit_common::storage::blob_store::BlobStore;
 
@@ -66,6 +67,106 @@ fn seed_v2_audit_events(
             })
             .expect("insert v2 audit event");
     }
+}
+
+fn insert_v2_audit_payload(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    event_id: &str,
+    stored_at: DateTime<Utc>,
+    payload_json: String,
+) {
+    runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: runtime.workspace_id().expect("workspace id"),
+            event_id: event_id.to_string(),
+            source: "v2_envelope".to_string(),
+            schema_version: 1,
+            event_type: "test.event".to_string(),
+            ts: stored_at,
+            run_id: run_id.to_string(),
+            agent_identity: "codex".to_string(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json,
+        })
+        .expect("insert v2 audit payload");
+}
+
+#[test]
+fn latest_audit_timestamp_uses_valid_envelope_payloads_not_row_order() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = "jrun-timestamp-projection";
+    let earliest = "2026-04-26T07:01:00Z";
+    let latest = "2026-04-26T07:20:00Z";
+
+    // The store orders these rows by its `ts`, but the envelope timestamps are
+    // deliberately reversed. The timestamp projection must retain the old
+    // full-projection behavior and select the latest payload value instead.
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-row-newer",
+        DateTime::parse_from_rfc3339("2026-04-26T07:30:00Z")
+            .expect("parse stored timestamp")
+            .with_timezone(&Utc),
+        json!({"event_id": "evt-row-newer", "ts": earliest}).to_string(),
+    );
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-payload-newer",
+        DateTime::parse_from_rfc3339("2026-04-26T07:02:00Z")
+            .expect("parse stored timestamp")
+            .with_timezone(&Utc),
+        json!({"event_id": "evt-payload-newer", "ts": latest}).to_string(),
+    );
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-malformed",
+        Utc::now(),
+        "not json".to_string(),
+    );
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-missing-ts",
+        Utc::now(),
+        json!({"event_id": "evt-missing-ts"}).to_string(),
+    );
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-missing-event-id",
+        Utc::now(),
+        json!({"ts": "2026-04-26T08:00:00Z"}).to_string(),
+    );
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-invalid-ts",
+        Utc::now(),
+        json!({"event_id": "evt-invalid-ts", "ts": "not-a-timestamp"}).to_string(),
+    );
+
+    let timestamp = runtime
+        .latest_run_audit_timestamp(run_id)
+        .expect("read timestamp projection");
+    assert_eq!(
+        timestamp,
+        Some(
+            DateTime::parse_from_rfc3339(latest)
+                .expect("parse latest")
+                .with_timezone(&Utc)
+        )
+    );
+    assert_eq!(
+        runtime
+            .latest_run_audit_timestamp("jrun-empty-timestamp-projection")
+            .expect("read empty timestamp projection"),
+        None
+    );
 }
 
 #[test]
