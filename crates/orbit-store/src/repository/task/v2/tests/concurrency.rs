@@ -12,6 +12,10 @@ use std::time::Duration;
 
 use super::*;
 
+#[cfg(unix)]
+const TASK_LOCK_HOLDER_CHILD_TEST: &str =
+    "repository::task::v2::tests::concurrency::task_lock_holder_child";
+
 fn create_tasks(store: &TaskV2Store, count: usize) -> Vec<String> {
     (0..count)
         .map(|index| {
@@ -29,6 +33,112 @@ fn document_update(actor: &str, summary: &str) -> TaskDocumentUpdateParams {
         execution_summary: Some(summary.to_string()),
         ..Default::default()
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn task_update_times_out_with_live_process_holder_diagnostics_then_recovers() {
+    use std::os::unix::fs::MetadataExt;
+
+    use orbit_common::fs::io::{FileLockOptions, with_exclusive_file_lock_options};
+
+    use crate::driver::file::task_bundle::bundle_lock_target;
+
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let id = create_tasks(&store, 1).remove(0);
+    let bundle_dir = store.bundle_store.bundle_path(&id).expect("bundle path");
+    let lock_target = bundle_lock_target(&bundle_dir);
+    let lock_path = lock_target.with_file_name(format!(".{id}.bundle.lock"));
+    let ready_path = temp.path().join("holder-ready");
+
+    let exe = std::env::current_exe().expect("current test exe");
+    let mut child = std::process::Command::new(exe)
+        .args(["--exact", TASK_LOCK_HOLDER_CHILD_TEST, "--ignored"])
+        .env("ORBIT_TASK_LOCK_HOLDER_PATH", &lock_path)
+        .env("ORBIT_TASK_LOCK_HOLDER_READY", &ready_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn task-lock holder");
+    let child_pid = child.id();
+
+    let started = std::time::Instant::now();
+    while !ready_path.exists() {
+        if started.elapsed() > Duration::from_secs(20) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("child never acquired task lock");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let inode = std::fs::metadata(&lock_path).expect("lock metadata").ino();
+    let result = with_exclusive_file_lock_options(
+        &lock_target,
+        "competing task update",
+        FileLockOptions {
+            timeout: Duration::from_millis(150),
+            warn_after: Duration::from_secs(60),
+        },
+        || {
+            store
+                .update_task_document(&id, &document_update("codex", "after contention"))
+                .map(|_| ())
+        },
+    );
+
+    child.kill().expect("kill task-lock holder");
+    child.wait().expect("reap task-lock holder");
+
+    let error: OrbitError = result.expect_err("live holder must force the short deadline");
+    let timeout = error
+        .file_lock_timeout()
+        .expect("timeout must retain its structured type");
+    assert_eq!(timeout.lock_path, lock_path);
+    let holder = timeout.holder.as_ref().expect("holder metadata");
+    assert_eq!(holder.pid, child_pid);
+    assert_eq!(holder.label, "task update test holder");
+
+    let stale = crate::fs::lock::read_lock_holder(&lock_path)
+        .expect("killed holder metadata remains for doctor");
+    assert_eq!(stale.pid, child_pid);
+
+    store
+        .update_task_document(&id, &document_update("codex", "after contention"))
+        .expect("killing the holder releases the advisory lock");
+    assert_eq!(
+        std::fs::metadata(&lock_path).expect("lock retained").ino(),
+        inode,
+        "recovery must preserve the stable lock-file identity"
+    );
+    assert!(
+        crate::fs::lock::read_lock_holder(&lock_path).is_none(),
+        "the successful update must clear holder metadata on release"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "helper process for task_update_times_out_with_live_process_holder_diagnostics_then_recovers"]
+fn task_lock_holder_child() {
+    use orbit_common::fs::io::{FileLockOptions, acquire_exclusive_file_lock};
+
+    let (Ok(lock_path), Ok(ready_path)) = (
+        std::env::var("ORBIT_TASK_LOCK_HOLDER_PATH"),
+        std::env::var("ORBIT_TASK_LOCK_HOLDER_READY"),
+    ) else {
+        return;
+    };
+
+    let _guard = acquire_exclusive_file_lock(
+        std::path::Path::new(&lock_path),
+        "task update test holder",
+        FileLockOptions::default(),
+    )
+    .expect("child acquires task lock");
+    std::fs::write(ready_path, b"ready").expect("write ready sentinel");
+    std::thread::sleep(Duration::from_secs(60));
 }
 
 /// A bundle removed between the registry snapshot and the read — the window
