@@ -1,0 +1,19 @@
+ID: ORB-00002
+Workspace: output-goldens (ws_output-goldens)
+Title: Add pagination to the audit export command
+Status: proposed
+Priority: low
+Complexity: medium
+Type: feature
+Description: orbit audit export currently loads the entire event log into memory.
+Dependencies:
+  - ORB-00001 [proposed]
+Relations:
+  - blocked_by: ORB-00001 [proposed]
+Artifacts:
+  - evidence.txt (text/plain, 17 bytes)
+Created By: claude
+History:
+  [<TIMESTAMP>] claude: created
+Created: <TIMESTAMP>
+Updated: <TIMESTAMP>
