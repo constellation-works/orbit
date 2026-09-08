@@ -265,6 +265,15 @@ impl OrbitRuntime {
         open_invocation_store(self)?.insert_invocation_trace_record(params)
     }
 
+    /// Refreshes the read-side token scoreboard from persisted invocation telemetry.
+    pub(crate) fn refresh_token_scoreboard(&self) -> Result<(), OrbitError> {
+        let store = open_invocation_store(self)?;
+        orbit_store::token_scoreboard::write_token_scoreboard(
+            &self.context.paths().scoreboard_dir,
+            store.as_ref(),
+        )
+    }
+
     /// Aggregates managed invocation telemetry by canonical task orchestrator.
     ///
     /// The effective window is half-open (`since <= ts < until`). Missing
@@ -381,5 +390,5 @@ fn valid_cost(cost: f64) -> bool {
 fn open_invocation_store(
     runtime: &OrbitRuntime,
 ) -> Result<Arc<dyn InvocationStoreBackend>, OrbitError> {
-    orbit_store::compose::invocation_store(&runtime.context.persistence().audit_db)
+    Ok(Arc::clone(&runtime.context.stores().host.invocation))
 }

@@ -4,7 +4,7 @@ use orbit_core::{
     ExternalRef, OrbitRuntime, TaskComplexity, TaskCreateStatus, TaskPriority, TaskType,
 };
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::output::task_to_json_for_runtime;
 
@@ -46,9 +46,9 @@ pub struct TaskAddArgs {
     /// Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded.
     #[arg(long, action = ArgAction::Append, value_delimiter = ',')]
     pub context: Vec<String>,
-    /// Workspace path for the task
-    #[arg(long)]
-    pub workspace: Option<String>,
+    /// Workspace path for the task, relative to the selected workspace
+    #[arg(long = "workspace-path")]
+    pub workspace_path: Option<String>,
     /// Priority level
     #[arg(long, value_enum, default_value_t = TaskPriority::Medium)]
     pub priority: TaskPriority,
@@ -100,7 +100,7 @@ impl Execute for TaskAddArgs {
                 plan: self.plan,
                 comment: None,
                 context_files: self.context,
-                workspace_path: self.workspace,
+                workspace_path: self.workspace_path,
                 priority: self.priority,
                 complexity: self.complexity,
                 task_type: self.task_type,
@@ -119,11 +119,6 @@ impl Execute for TaskAddArgs {
             model,
         )?;
 
-        if self.json {
-            Ok(Payload::document(task_to_json_for_runtime(runtime, &task)?).into())
-        } else {
-            println!("{}", task.id);
-            Ok(CommandOutput::Silent)
-        }
+        Ok(Payload::detail(task_to_json_for_runtime(runtime, &task)?, task.id).into())
     }
 }

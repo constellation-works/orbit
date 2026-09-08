@@ -148,7 +148,10 @@ Three differences matter when triaging one:
   operating-system user as Orbit, admitted per invocation by an operator. A sandbox
   denial is never the explanation for one failing, and the admission is recorded as a
   `trusted_host.execution_admitted` audit event naming the authorizing operator, the
-  workspace, and the working directory.
+  workspace, and the working directory. Remote admissions also retain the
+  destination-resolved caller machine ID, invocation mode, and actual identity proof:
+  strict grants are `key-bound`; explicitly cooperative same-OS-account SSH grants are
+  `cooperative` and `self-asserted`.
 - **Cancel it the ordinary way.** `orbit run cancel <run_id>` signals the owner process
   (TERM then KILL) and terminates the process tree, exactly as for any other run.
 - **It cannot be resumed.** `orbit job resume` and `submit_resume_run` refuse a run that

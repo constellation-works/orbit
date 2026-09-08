@@ -4,12 +4,16 @@ use std::path::Path;
 
 #[cfg(unix)]
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tempfile::tempdir;
 
 use super::super::supervisor::{SpawnTraceContext, SpawnWithTimeoutRequest, spawn_with_timeout};
-use super::test_support::{assert_event, capture_events, capture_redacted_tracing_output, sh_args};
+use super::test_support::{
+    assert_event, capture_events, capture_events_live, capture_redacted_tracing_output, sh_args,
+};
 
 fn spawn_test_request<'a>(
     program: &'a str,
@@ -29,6 +33,10 @@ fn spawn_test_request<'a>(
         trace,
         output_capture_limit: None,
         on_spawn: None,
+        wait: None,
+        live_readers: None,
+        #[cfg(unix)]
+        cancel_pair: None,
     }
 }
 
@@ -150,6 +158,49 @@ fn spawn_with_timeout_reports_the_child_pid_while_the_child_is_still_running() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn spawn_with_timeout_cleans_process_group_when_wait_fails() {
+    use std::cell::Cell;
+    use std::io;
+
+    let args = sh_args("sleep 30");
+    let child_pid = Cell::new(0u32);
+    let on_spawn = |pid: u32| child_pid.set(pid);
+    let wait = |_child: &mut std::process::Child| Err(io::Error::other("injected wait failure"));
+    let mut request = spawn_test_request(
+        "/bin/sh",
+        &args,
+        None,
+        Duration::from_secs(5),
+        SpawnTraceContext {
+            provider: "codex",
+            job_run_id: "job-wait-error",
+            task_id: Some("TWAIT"),
+            cwd: None,
+        },
+    );
+    let live_readers = Arc::new(AtomicUsize::new(0));
+    request.on_spawn = Some(&on_spawn);
+    request.wait = Some(&wait);
+    request.live_readers = Some(Arc::clone(&live_readers));
+
+    let error = spawn_with_timeout(request).expect_err("injected wait failure");
+    assert!(!error.permanent);
+    assert!(error.message.contains("injected wait failure"));
+    assert_eq!(
+        live_readers.load(Ordering::SeqCst),
+        0,
+        "wait-error must join output readers before returning"
+    );
+
+    let pid = child_pid.get();
+    assert_ne!(pid, 0);
+    let result = unsafe { libc::killpg(pid as libc::pid_t, 0) };
+    assert_eq!(result, -1);
+    assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+}
+
 #[test]
 fn spawn_with_timeout_redacts_tracing_line_without_redacting_raw_stdout() {
     let args = sh_args("printf '%s\\n' 'Authorization: Bearer abc123'");
@@ -180,11 +231,42 @@ fn spawn_with_timeout_redacts_tracing_line_without_redacting_raw_stdout() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn spawn_with_timeout_captures_delayed_stdout_when_cancel_pair_creation_fails() {
+    use std::io;
+
+    let args = sh_args("sleep 0.1; printf '%s\\n' delayed-output");
+    let cancel_pair = || Err(io::Error::other("injected cancel pair failure"));
+    let mut request = spawn_test_request(
+        "/bin/sh",
+        &args,
+        None,
+        Duration::from_secs(5),
+        SpawnTraceContext {
+            provider: "codex",
+            job_run_id: "job-cancel-pair-failure",
+            task_id: Some("TCANCELPAIR"),
+            cwd: None,
+        },
+    );
+    request.cancel_pair = Some(&cancel_pair);
+
+    let (stdout, stderr, exit_code, _duration, timed_out) =
+        spawn_with_timeout(request).expect("spawn succeeds without a cancel pair");
+
+    assert_eq!(stdout.bytes(), b"delayed-output\n");
+    assert!(stderr.bytes().is_empty());
+    assert_eq!(exit_code, Some(0));
+    assert!(!timed_out);
+}
+
 #[test]
 fn spawn_with_timeout_kills_timed_out_process_and_keeps_partial_output() {
     let args = sh_args("printf '%s\\n' 'before timeout'; sleep 1; printf '%s\\n' after");
+    let live_readers = Arc::new(AtomicUsize::new(0));
     let (result, events) = capture_events(|| {
-        spawn_with_timeout(spawn_test_request(
+        let mut request = spawn_test_request(
             "/bin/sh",
             &args,
             None,
@@ -195,7 +277,9 @@ fn spawn_with_timeout_kills_timed_out_process_and_keeps_partial_output() {
                 task_id: Some("TTIME"),
                 cwd: None,
             },
-        ))
+        );
+        request.live_readers = Some(Arc::clone(&live_readers));
+        spawn_with_timeout(request)
     });
     let (stdout, stderr, exit_code, _duration, timed_out) = result.expect("spawn succeeds");
 
@@ -203,6 +287,11 @@ fn spawn_with_timeout_kills_timed_out_process_and_keeps_partial_output() {
     assert!(stderr.bytes().is_empty());
     assert_eq!(exit_code, None);
     assert!(timed_out);
+    assert_eq!(
+        live_readers.load(Ordering::SeqCst),
+        0,
+        "timeout must join output readers before returning"
+    );
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].field("stream"), Some("stdout"));
     assert_eq!(events[0].field("line"), Some("before timeout"));
@@ -292,7 +381,11 @@ fn spawn_with_timeout_kills_grandchild_holding_output_pipes() {
 
 /// A helper the agent detached into its own session outlives the child and
 /// the group kill, and keeps the stdout pipe open. The child exited normally,
-/// so the run must still finish promptly with the output it produced.
+/// so the run must still finish promptly with the output it produced, join
+/// its readers, and ignore later helper writes.
+///
+/// Cancellation uses Unix `poll` + a wakeup socketpair. Non-Unix platforms
+/// keep blocking reads and are not tested here.
 #[cfg(unix)]
 #[test]
 fn spawn_with_timeout_returns_after_a_normal_exit_despite_an_escaped_pipe_holder() {
@@ -307,22 +400,27 @@ fn spawn_with_timeout_returns_after_a_normal_exit_despite_an_escaped_pipe_holder
     let pid_dir = tempdir().expect("pid tempdir");
     let pid_file = pid_dir.path().join("escaped.pid");
     let ready_file = pid_dir.path().join("escaped.ready");
+    let write_now_file = pid_dir.path().join("escaped.write-now");
+    let wrote_file = pid_dir.path().join("escaped.wrote");
     let escaped_helper = EscapedProcessGuard::new(pid_file.clone());
     // The delayed helper establishes its detached session and records its PID
     // before telling the parent it may exit. That makes the parent wait for a
     // verified escaped pipe holder instead of racing the supervisor's group
-    // cleanup against helper startup.
+    // cleanup against helper startup. After the supervisor returns, the test
+    // signals the helper to write again so post-return emission can be checked.
     let script = format!(
-        "perl -MPOSIX -e 'select(undef, undef, undef, 0.2); POSIX::setsid(); open(my $pid, \">\", $ARGV[0]); print $pid $$; close $pid; open(my $ready, \">\", $ARGV[1]); print $ready \"ready\"; close $ready; exec \"sleep\", \"30\"' {} {} & while [ ! -s {} ]; do sleep 0.01; done; printf '%s\n' 'done'",
-        shell_quote(pid_file.to_string_lossy().as_ref()),
-        shell_quote(ready_file.to_string_lossy().as_ref()),
-        shell_quote(ready_file.to_string_lossy().as_ref()),
+        "perl -MPOSIX -e '$SIG{{PIPE}}=\"IGNORE\"; $| = 1; select(undef, undef, undef, 0.2); POSIX::setsid(); open(my $pid, \">\", $ARGV[0]); print $pid $$; close $pid; open(my $ready, \">\", $ARGV[1]); print $ready \"ready\"; close $ready; while (!-s $ARGV[2]) {{ select(undef, undef, undef, 0.05); }} print STDOUT \"after-return\\n\"; open(my $wrote, \">\", $ARGV[3]); print $wrote \"wrote\"; close $wrote; sleep 30' {pid} {ready} {write_now} {wrote} & while [ ! -s {ready} ]; do sleep 0.01; done; printf '%s\n' 'done'",
+        pid = shell_quote(pid_file.to_string_lossy().as_ref()),
+        ready = shell_quote(ready_file.to_string_lossy().as_ref()),
+        write_now = shell_quote(write_now_file.to_string_lossy().as_ref()),
+        wrote = shell_quote(wrote_file.to_string_lossy().as_ref()),
     );
     let args = sh_args(&script);
+    let live_readers = Arc::new(AtomicUsize::new(0));
 
     let started = std::time::Instant::now();
-    let (stdout, _stderr, exit_code, _duration, timed_out) =
-        spawn_with_timeout(spawn_test_request(
+    let (result, log) = capture_events_live(|| {
+        let mut request = spawn_test_request(
             "/bin/sh",
             &args,
             None,
@@ -333,13 +431,21 @@ fn spawn_with_timeout_returns_after_a_normal_exit_despite_an_escaped_pipe_holder
                 task_id: Some("TESC"),
                 cwd: None,
             },
-        ))
-        .expect("spawn succeeds");
+        );
+        request.live_readers = Some(Arc::clone(&live_readers));
+        spawn_with_timeout(request)
+    });
+    let (stdout, _stderr, exit_code, _duration, timed_out) = result.expect("spawn succeeds");
 
     let escaped_pid = read_pid(&pid_file);
     assert!(
         process_is_live(escaped_pid),
         "the escaped helper must remain live after the parent exits"
+    );
+    assert_eq!(
+        live_readers.load(Ordering::SeqCst),
+        0,
+        "escaped-pipe readers must join before the supervisor returns"
     );
 
     assert!(!timed_out);
@@ -349,6 +455,30 @@ fn spawn_with_timeout_returns_after_a_normal_exit_despite_an_escaped_pipe_holder
         started.elapsed() < Duration::from_secs(5),
         "a normal exit must not wait on the escaped pipe holder"
     );
+
+    let events = log.snapshot();
+    assert_event(&events, "stdout", "done");
+    assert!(
+        events
+            .iter()
+            .all(|event| event.field("line") != Some("after-return")),
+        "pre-return events must not include helper output written later; events={events:?}"
+    );
+
+    std::fs::write(&write_now_file, "now").expect("signal helper to write");
+    assert!(
+        wait_until(Duration::from_secs(2), || wrote_file.exists()),
+        "escaped helper should write after the supervisor returns"
+    );
+    let events_after = log.snapshot();
+    assert!(
+        events_after
+            .iter()
+            .all(|event| event.field("line") != Some("after-return")),
+        "escaped helper output after return must not be emitted; events={events_after:?}"
+    );
+    assert_eq!(events_after.len(), events.len());
+
     drop(escaped_helper);
     assert!(
         wait_until(Duration::from_secs(2), || !process_is_live(escaped_pid)),
@@ -382,6 +512,7 @@ impl Drop for EscapedProcessGuard {
             unsafe {
                 libc::kill(pid as libc::pid_t, libc::SIGKILL);
             }
+            let _ = wait_until(Duration::from_secs(2), || !process_is_live(pid));
         }
     }
 }

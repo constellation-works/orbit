@@ -4,7 +4,11 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod already_landed;
+mod ci_sweep;
 mod completion;
+mod epic_review_gate;
+mod review_gate;
 
 use chrono::Utc;
 use orbit_engine::{
@@ -39,7 +43,7 @@ pub(super) fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathB
     (root, runtime, repo_root, global_root)
 }
 
-fn test_runtime_with_workspace_config(
+pub(super) fn test_runtime_with_workspace_config(
     config: &str,
 ) -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathBuf) {
     let root = tempdir().expect("create tempdir");
@@ -91,7 +95,7 @@ pub(super) fn seed_gate_task(
         .id
 }
 
-fn resolved_job(
+pub(super) fn resolved_job(
     runtime: &OrbitRuntime,
     job_name: &str,
 ) -> orbit_types::workflow::activity_job::JobV2 {
@@ -225,7 +229,7 @@ spec:
     .expect("stub epic finisher activity");
 }
 
-fn git_in(path: &Path, args: &[&str]) {
+pub(super) fn git_in(path: &Path, args: &[&str]) {
     let output = Command::new("git")
         .current_dir(path)
         .args(args)
@@ -669,172 +673,6 @@ impl RuntimeHost for ScriptedGateHost<'_> {
     }
 }
 
-struct ScriptedCiSweepHost<'a> {
-    runtime: &'a OrbitRuntime,
-    empty: bool,
-    invoked_task_ids: Mutex<Vec<String>>,
-    applied_task_ids: Mutex<Vec<String>>,
-}
-
-impl<'a> ScriptedCiSweepHost<'a> {
-    fn new(runtime: &'a OrbitRuntime) -> Self {
-        Self {
-            runtime,
-            empty: false,
-            invoked_task_ids: Mutex::new(Vec::new()),
-            applied_task_ids: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn empty(mut self) -> Self {
-        self.empty = true;
-        self
-    }
-
-    fn invoked_task_ids(&self) -> Vec<String> {
-        self.invoked_task_ids
-            .lock()
-            .expect("invoked task ids")
-            .clone()
-    }
-
-    fn applied_task_ids(&self) -> Vec<String> {
-        self.applied_task_ids
-            .lock()
-            .expect("applied task ids")
-            .clone()
-    }
-}
-
-impl RuntimeHost for ScriptedCiSweepHost<'_> {
-    fn repo_root(&self) -> Result<String, orbit_common::OrbitError> {
-        Ok(self.runtime.paths().repo_root.display().to_string())
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        tool_context: ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "collect_ci_evidence" => Ok(json!({
-                "phase": "collected",
-                "ci_evidence": {
-                    "schema_version": 1,
-                    "collected": true,
-                    "capability": {},
-                    "current_failures": [],
-                }
-            })),
-            "file_ci_failure_tasks" => {
-                if self.empty {
-                    return Ok(json!({
-                        "outcome": "no_current_failure",
-                        "clusters": 0,
-                        "filed_count": 0,
-                        "filed": [],
-                        "pilot_candidate_count": 0,
-                        "pilot_candidates": [],
-                        "skipped_existing": [],
-                        "skipped_over_cap": [],
-                        "deferred": [],
-                        "audit": {},
-                    }));
-                }
-                let candidate = |task_id: &str| {
-                    json!({
-                        "task_id": task_id,
-                        "failure_key": format!("failure-{task_id}"),
-                        "cluster_key": format!("cluster-{task_id}"),
-                        "workflow": "CI",
-                        "job": "test",
-                        "step": "cargo test",
-                        "tested_commit": "1111111111111111111111111111111111111111",
-                        "run_ids": [1],
-                        "run_urls": ["https://example.test/run/1"],
-                        "ref_kinds": ["integration"],
-                        "head_branches": ["agent-main"],
-                    })
-                };
-                Ok(json!({
-                    "outcome": "current_failures",
-                    "clusters": 2,
-                    "filed_count": 2,
-                    "filed": [],
-                    "pilot_candidate_count": 2,
-                    "pilot_candidates": [
-                        candidate("ORB-STALE"),
-                        candidate("ORB-APPLIED"),
-                    ],
-                    "skipped_existing": [],
-                    "skipped_over_cap": [],
-                    "deferred": [],
-                    "audit": {},
-                }))
-            }
-            "invoke_and_wait" => {
-                let task_id = input["run_input"]["task_ids"][0]
-                    .as_str()
-                    .expect("pilot task id")
-                    .to_string();
-                self.invoked_task_ids
-                    .lock()
-                    .expect("invoked task ids")
-                    .push(task_id.clone());
-                if task_id == "ORB-STALE" {
-                    Ok(json!({
-                        "run_id": "jrun-pilot-stale",
-                        "status": "failed",
-                        "error": "pilot apply skipped stale task status",
-                    }))
-                } else {
-                    self.applied_task_ids
-                        .lock()
-                        .expect("applied task ids")
-                        .push(task_id);
-                    Ok(json!({
-                        "run_id": "jrun-pilot-applied",
-                        "status": "succeeded",
-                        "error": Value::Null,
-                    }))
-                }
-            }
-            "pipeline_success_guard" => <OrbitRuntime as RuntimeHost>::run_deterministic(
-                self.runtime,
-                action,
-                config,
-                input,
-                tool_context,
-            ),
-            other => Err(DispatchError::DeterministicActionNotRegistered(
-                other.to_string(),
-            )),
-        }
-    }
-
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        <OrbitRuntime as RuntimeHost>::resolve_cli_executor(self.runtime, provider)
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        run_id: Option<&str>,
-        fs_profile: Option<&str>,
-        fs_audit: Option<Arc<dyn FsAuditLogger>>,
-        proc_allowed_programs: Option<&[String]>,
-    ) -> ToolContext {
-        <OrbitRuntime as RuntimeHost>::tool_context_for_activity(
-            self.runtime,
-            run_id,
-            fs_profile,
-            fs_audit,
-            proc_allowed_programs,
-        )
-    }
-}
-
 struct ScriptedEpicHost<'a> {
     runtime: &'a OrbitRuntime,
     descendant_ids: Mutex<Vec<String>>,
@@ -918,14 +756,21 @@ impl RuntimeHost for ScriptedEpicHost<'_> {
                 "mode": self.ship_mode,
                 "base_branch": "agent-main",
             })),
-            "worktree_setup" => Ok(json!({
-                "job_run_id": "epic-ORB-EPIC",
-                "batch_id": "epic-ORB-EPIC",
-                "workspace_path": self.runtime.paths().repo_root,
-                "head_ref": "epic/ORB-EPIC",
-                "base_ref": "origin/agent-main",
-                "base_sha": "1111111111111111111111111111111111111111",
-            })),
+            "worktree_setup" => {
+                let job_run_id = input
+                    .get("job_run_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("epic-ORB-EPIC");
+                Ok(json!({
+                    "job_run_id": job_run_id,
+                    "batch_id": job_run_id,
+                    "workspace_path": self.runtime.paths().repo_root,
+                    "head_ref": "epic/ORB-EPIC",
+                    "base_ref": "origin/agent-main",
+                    "base_sha": "1111111111111111111111111111111111111111",
+                }))
+            }
             "list_epic_descendants" => {
                 let descendant_ids = self.current_descendants();
                 let empty = descendant_ids.is_empty();
@@ -1064,13 +909,17 @@ impl RuntimeHost for ScriptedEpicHost<'_> {
                 "task_id": input.get("task_id"),
                 "status": input.get("status"),
             })),
-            "pipeline_success_guard" => <OrbitRuntime as RuntimeHost>::run_deterministic(
-                self.runtime,
-                action,
-                config,
-                input,
-                tool_context,
-            ),
+            // [ORB-11333] The gate reads the run's captured review admission;
+            // these fixtures persist none, so it reports `applies: false`.
+            "pipeline_success_guard" | "review_gate_admit" | "review_gate_settle" => {
+                <OrbitRuntime as RuntimeHost>::run_deterministic(
+                    self.runtime,
+                    action,
+                    config,
+                    input,
+                    tool_context,
+                )
+            }
             other => Err(DispatchError::DeterministicActionNotRegistered(
                 other.to_string(),
             )),
@@ -1234,6 +1083,9 @@ fn task_gate_noops_done_task_and_releases_reservation() {
     seed_default_catalogs(&global_root);
     let task_id = seed_gate_task(&runtime, &repo_root, TaskStatus::Done);
 
+    // The production retry path uses the run ID as a jitter salt. Reuse the
+    // store-generated fixture task ID here so the test does not feed a
+    // hard-coded value into that cryptographic data flow.
     let outcome = execute_gate_job(
         &runtime,
         &repo_root,
@@ -1242,7 +1094,7 @@ fn task_gate_noops_done_task_and_releases_reservation() {
             "task_ids": [task_id.clone()],
             "mode": "pr",
         }),
-        "jrun-gate-done-stale",
+        task_id.as_str(),
     );
 
     assert!(outcome.success);
@@ -1276,6 +1128,10 @@ fn task_gate_dispatches_child_for_admissible_task() {
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedGateHost::new(&runtime, "succeeded");
+    let run_id = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_default()
+        .to_string();
 
     let outcome = execute_gate_job(
         &runtime,
@@ -1285,7 +1141,7 @@ fn task_gate_dispatches_child_for_admissible_task() {
             "task_ids": ["ORB-SCRIPTED"],
             "mode": "pr",
         }),
-        "jrun-gate-admissible",
+        &run_id,
     );
 
     assert!(outcome.success);
@@ -1304,6 +1160,10 @@ fn task_gate_child_failure_still_fails_success_guard() {
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedGateHost::new(&runtime, "failed");
+    let run_id = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_default()
+        .to_string();
 
     let err = try_execute_gate_job(
         &runtime,
@@ -1313,7 +1173,7 @@ fn task_gate_child_failure_still_fails_success_guard() {
             "task_ids": ["ORB-SCRIPTED"],
             "mode": "pr",
         }),
-        "jrun-gate-child-failed",
+        &run_id,
     )
     .expect_err("failed child should fail the gate");
 
@@ -1327,63 +1187,6 @@ fn task_gate_child_failure_still_fails_success_guard() {
     );
     assert!(message.contains("jrun-scripted-child"), "{message}");
     assert!(message.contains("status failed"), "{message}");
-}
-
-#[test]
-fn ci_sweep_parent_fails_for_stale_pilot_after_independent_pilot_applies() {
-    let (_root, runtime, repo_root, global_root) = test_runtime();
-    seed_default_catalogs(&global_root);
-    let host = ScriptedCiSweepHost::new(&runtime);
-
-    let error = try_execute_named_job(
-        &runtime,
-        &repo_root,
-        &host,
-        "ci_failure_sweep_pipeline",
-        json!({
-            "integration_branch": "agent-main",
-            "workspace_path": repo_root,
-        }),
-        "jrun-ci-sweep-partial-pilot",
-    )
-    .expect_err("a stale pilot child must fail the parent sweep");
-
-    let mut invoked = host.invoked_task_ids();
-    invoked.sort();
-    assert_eq!(invoked, ["ORB-APPLIED", "ORB-STALE"], "{error}");
-    assert_eq!(host.applied_task_ids(), ["ORB-APPLIED"]);
-    let message = error.to_string();
-    assert!(
-        message.contains("ci-failure sweep pilot child"),
-        "{message}"
-    );
-    assert!(message.contains("jrun-pilot-stale"), "{message}");
-    assert!(message.contains("status failed"), "{message}");
-}
-
-#[test]
-fn ci_sweep_parent_keeps_a_genuinely_empty_pilot_batch_as_a_successful_no_op() {
-    let (_root, runtime, repo_root, global_root) = test_runtime();
-    seed_default_catalogs(&global_root);
-    let host = ScriptedCiSweepHost::new(&runtime).empty();
-
-    let outcome = try_execute_named_job(
-        &runtime,
-        &repo_root,
-        &host,
-        "ci_failure_sweep_pipeline",
-        json!({
-            "integration_branch": "agent-main",
-            "workspace_path": repo_root,
-        }),
-        "jrun-ci-sweep-empty",
-    )
-    .expect("an empty candidate list is a successful no-op");
-
-    assert!(outcome.success);
-    assert!(host.invoked_task_ids().is_empty());
-    assert!(host.applied_task_ids().is_empty());
-    assert!(outcome.pipeline.get("require_pilot_success").is_none());
 }
 
 #[test]
@@ -1505,7 +1308,9 @@ fn epic_pipeline_reenters_drain_when_finisher_authors_a_child() {
     assert!(host.current_descendants().is_empty());
 }
 
-fn retarget_engine_actions_for_scripted_host(job: &mut orbit_types::workflow::activity_job::JobV2) {
+pub(super) fn retarget_engine_actions_for_scripted_host(
+    job: &mut orbit_types::workflow::activity_job::JobV2,
+) {
     fn walk(step: &mut JobV2Step) {
         match &mut step.body {
             JobV2StepBody::Target(target) => {
@@ -1593,13 +1398,17 @@ fn epic_pipeline_local_mode_merges_once_into_the_workspace_base() {
     seed_default_catalogs(&global_root);
     stub_epic_finisher(&global_root);
     let host = ScriptedEpicHost::new(&runtime, vec!["ORB-CHILD-1".to_string()]).local_mode();
+    let run_id = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_default()
+        .to_string();
 
     let outcome = try_execute_full_epic_job(
         &runtime,
         &repo_root,
         &host,
         json!({ "epic_task_id": "ORB-EPIC" }),
-        "jrun-scripted-epic-local",
+        &run_id,
     )
     .expect("execute epic local delivery");
 
@@ -1936,8 +1745,8 @@ fn v2_cli_agent_loop_persists_invocation_metrics() {
             env: HashMap::new(),
             sandbox: None,
             allow_fallback: false,
-            created_at: now,
-            updated_at: now,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
         .expect("seed fake codex executor");
 
@@ -2034,8 +1843,8 @@ fn v2_claude_fable_alias_persists_provider_reported_model_and_cost() {
             env: HashMap::new(),
             sandbox: None,
             allow_fallback: false,
-            created_at: now,
-            updated_at: now,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
         .expect("seed fake Claude executor");
 
@@ -2130,8 +1939,8 @@ base_branch = "main"
             env: HashMap::new(),
             sandbox: None,
             allow_fallback: false,
-            created_at: now,
-            updated_at: now,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
         .expect("seed fake claude executor");
 

@@ -115,7 +115,7 @@ impl Execute for TaskPublicationPublishArgs {
         let host = load_host_identity(&global_root)?;
         let registry_path = workspace_registry::registry_path_for(&global_root);
         let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-        let binding = workspace_registry::find_publication_binding(&registry, &workspace_id)
+        let binding = workspace_registry::find_publication_binding(&registry, &workspace_id)?
             .cloned()
             .ok_or_else(|| {
                 orbit_core::OrbitError::WorkspaceError(format!(
@@ -123,7 +123,7 @@ impl Execute for TaskPublicationPublishArgs {
                 ))
             })?;
         let checkout =
-            workspace_registry::find_checkout(&registry, &workspace_id).ok_or_else(|| {
+            workspace_registry::find_checkout(&registry, &workspace_id)?.ok_or_else(|| {
                 orbit_core::OrbitError::WorkspaceError(format!(
                     "workspace '{workspace_id}' has no local checkout"
                 ))
@@ -188,7 +188,7 @@ impl Execute for TaskPublicationStatusArgs {
         let registry = workspace_registry::load_registry_from(
             &workspace_registry::registry_path_for(&runtime.global_root()),
         )?;
-        let binding = workspace_registry::find_publication_binding(&registry, &workspace_id)
+        let binding = workspace_registry::find_publication_binding(&registry, &workspace_id)?
             .ok_or_else(|| {
                 orbit_core::OrbitError::WorkspaceError(format!(
                     "workspace '{workspace_id}' has no publication binding"
@@ -476,7 +476,7 @@ fn assert_restore_authority(
     let registry = workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
         &global_root,
     ))?;
-    let workspace = workspace_registry::find_workspace(&registry, &selected).ok_or_else(|| {
+    let workspace = workspace_registry::find_workspace(&registry, &selected)?.ok_or_else(|| {
         orbit_core::OrbitError::WorkspaceError(format!("workspace '{selected}' is not registered"))
     })?;
     if workspace.owner_machine_id.as_deref() != Some(local_machine_id.as_str()) {
@@ -484,7 +484,7 @@ fn assert_restore_authority(
             "workspace '{selected}' is not owned by local machine '{local_machine_id}'"
         )));
     }
-    let checkout = workspace_registry::find_checkout(&registry, &selected).ok_or_else(|| {
+    let checkout = workspace_registry::find_checkout(&registry, &selected)?.ok_or_else(|| {
         orbit_core::OrbitError::WorkspaceError(format!(
             "workspace '{selected}' has no local checkout"
         ))

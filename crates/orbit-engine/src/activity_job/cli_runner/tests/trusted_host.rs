@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_agent::loop_engine::audit::AuditSink;
+use orbit_types::tool::{CallerIdentityProof, RemoteAgentInvokeMode};
 use orbit_types::workflow::activity_job::{
     TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission, V2AuditEventKind,
 };
@@ -20,8 +21,11 @@ use super::test_support::{RecordingSink, TestHost, test_agent_loop_spec, write_e
 
 fn admission() -> TrustedHostAdmission {
     TrustedHostAdmission {
-        authorized_by: "human".to_string(),
-        authorizer_provenance: "interactive-terminal".to_string(),
+        authorized_by: "hm_mac".to_string(),
+        authorizer_provenance: "remote-grant".to_string(),
+        caller_machine_id: Some("hm_mac".to_string()),
+        caller_identity: Some(CallerIdentityProof::KeyBound),
+        agent_invoke_mode: Some(RemoteAgentInvokeMode::KeyBound),
         authorized_at: "2026-09-06T00:00:00Z".to_string(),
         workspace_path: "/checkout".to_string(),
         cwd: "/checkout".to_string(),
@@ -84,21 +88,30 @@ fn an_admitted_invocation_runs_without_a_sandbox_and_records_its_authorizer() {
                 activity_name,
                 authorized_by,
                 authorizer_provenance,
+                caller_machine_id,
+                caller_identity,
+                agent_invoke_mode,
                 cwd,
                 ..
             } => Some((
                 activity_name.clone(),
                 authorized_by.clone(),
                 authorizer_provenance.clone(),
+                caller_machine_id.clone(),
+                *caller_identity,
+                *agent_invoke_mode,
                 cwd.clone(),
             )),
             _ => None,
         })
         .expect("an unsandboxed invocation must announce itself in the run trail");
     assert_eq!(admitted.0, "agent_invoke");
-    assert_eq!(admitted.1, "human");
-    assert_eq!(admitted.2, "interactive-terminal");
-    assert_eq!(admitted.3, "/checkout");
+    assert_eq!(admitted.1, "hm_mac");
+    assert_eq!(admitted.2, "remote-grant");
+    assert_eq!(admitted.3.as_deref(), Some("hm_mac"));
+    assert_eq!(admitted.4, Some(CallerIdentityProof::KeyBound));
+    assert_eq!(admitted.5, Some(RemoteAgentInvokeMode::KeyBound));
+    assert_eq!(admitted.6, "/checkout");
 
     // The absence of a sandbox is stated, not left to be inferred from a
     // missing field, so a reader can tell it apart from an executor that never
@@ -119,6 +132,47 @@ fn an_admitted_invocation_runs_without_a_sandbox_and_records_its_authorizer() {
         backend.1.as_deref(),
         Some("write_unrestricted_trusted_host")
     );
+}
+
+#[test]
+fn a_cooperative_admission_is_audited_as_self_asserted_not_key_bound() {
+    let temp = tempdir().expect("tempdir");
+    let host = TestHost::with_command(echoing_provider(temp.path()));
+    let mut spec = test_agent_loop_spec(Duration::from_secs(10));
+    spec.trusted_host_execution = true;
+    let (audit, _sink) = writer("job-trusted-cooperative");
+    let mut input = admitted_input();
+    input[TRUSTED_HOST_ADMISSION_KEY]["caller_identity"] =
+        serde_json::json!(CallerIdentityProof::SelfAsserted);
+    input[TRUSTED_HOST_ADMISSION_KEY]["agent_invoke_mode"] =
+        serde_json::json!(RemoteAgentInvokeMode::Cooperative);
+
+    run_cli_backend(
+        &host,
+        &spec,
+        "agent_invoke",
+        "job-trusted-cooperative",
+        audit.clone(),
+        &input,
+        None,
+    )
+    .expect("cooperative admission runs");
+
+    let events = audit.events_snapshot().expect("events snapshot");
+    let (identity, mode) = events
+        .iter()
+        .find_map(|event| match &event.kind {
+            V2AuditEventKind::TrustedHostExecutionAdmitted {
+                caller_identity,
+                agent_invoke_mode,
+                ..
+            } => Some((*caller_identity, *agent_invoke_mode)),
+            _ => None,
+        })
+        .expect("trusted-host admission event");
+
+    assert_eq!(identity, Some(CallerIdentityProof::SelfAsserted));
+    assert_eq!(mode, Some(RemoteAgentInvokeMode::Cooperative));
 }
 
 /// The dangerous combination: the asset claims the mode, nothing admitted it.
@@ -306,4 +360,45 @@ fn an_ordinary_activity_ignores_a_requested_timeout() {
         })
         .expect("started event");
     assert_eq!(observed, 45_000);
+}
+
+/// Captured leftover review minutes may only shorten the activity ceiling.
+#[test]
+fn remaining_seconds_can_only_shorten_the_declared_bound() {
+    let temp = tempdir().expect("tempdir");
+    let host = TestHost::with_command(echoing_provider(temp.path()));
+    let spec = test_agent_loop_spec(Duration::from_secs(60));
+
+    for (remaining, expected_ms) in [(30_u64, 30_000_u64), (600, 60_000), (0, 1_000)] {
+        let (audit, _sink) = writer("job-review-remaining");
+        run_cli_backend(
+            &host,
+            &spec,
+            "agent_review_repair",
+            "job-review-remaining",
+            audit.clone(),
+            &serde_json::json!({
+                "prompt": "x",
+                "remaining_seconds": remaining
+            }),
+            None,
+        )
+        .expect("run");
+        let observed = audit
+            .events_snapshot()
+            .expect("events snapshot")
+            .iter()
+            .find_map(|event| match &event.kind {
+                V2AuditEventKind::CliInvocationStarted {
+                    wall_clock_timeout_ms,
+                    ..
+                } => Some(*wall_clock_timeout_ms),
+                _ => None,
+            })
+            .expect("started event");
+        assert_eq!(
+            observed, expected_ms,
+            "remaining {remaining}s against a 60s declared bound"
+        );
+    }
 }

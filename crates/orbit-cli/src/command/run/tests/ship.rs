@@ -1,4 +1,10 @@
+use chrono::Utc;
+use orbit_registry::workspace_registry::{registry_path_for, save_registry_to};
+use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
+use tempfile::tempdir;
+
 use crate::command::Execute;
+use crate::tests::env_isolation::EnvGuard;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
 use serde_json::json;
@@ -38,6 +44,70 @@ fn restricted_ship_args(
     }
 }
 
+#[test]
+fn ship_mode_uses_selected_root_registry_when_home_registry_is_empty() {
+    let fixture = tempdir().expect("fixture tempdir");
+    let selected_root = fixture.path().join("selected-root");
+    let workspace_root = fixture.path().join("workspace-orbit");
+    let repo_root = fixture.path().join("repo");
+    let home = fixture.path().join("empty-home");
+    let home_registry_root = home.join(".orbit");
+    for directory in [
+        &selected_root,
+        &workspace_root,
+        &repo_root,
+        &home_registry_root,
+    ] {
+        std::fs::create_dir_all(directory).expect("fixture directory");
+    }
+
+    let runtime = OrbitRuntime::from_roots(&selected_root, &workspace_root)
+        .expect("build selected-root runtime");
+    let workspace = Workspace {
+        id: "ws_ship_mode".to_string(),
+        name: "ship-mode-test".to_string(),
+        owner_machine_id: None,
+        git_remote: None,
+        ship_mode: Some("local".to_string()),
+        base_branch: "agent-main".to_string(),
+        status: WorkspaceStatus::Active,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let checkout =
+        WorkspaceCheckout::owner(workspace.id.clone(), repo_root, workspace_root.clone());
+    let mut registry = WorkspaceRegistry::default();
+    orbit_registry::workspace_registry::register_workspace(&mut registry, workspace)
+        .expect("register workspace");
+    orbit_registry::workspace_registry::register_checkout(&mut registry, checkout)
+        .expect("register checkout");
+    save_registry_to(&registry, &registry_path_for(&selected_root))
+        .expect("save selected-root registry");
+    save_registry_to(
+        &WorkspaceRegistry::default(),
+        &registry_path_for(&home_registry_root),
+    )
+    .expect("save empty home registry");
+
+    let _env = EnvGuard::acquire().home(&home);
+    assert_eq!(
+        resolve_ship_mode(
+            &ShipCommand {
+                task_ids: Vec::new(),
+                mode: None,
+                base: None,
+                complete: false,
+                allow_crew: Vec::new(),
+                json: false,
+                claim_token: None,
+            },
+            &runtime,
+        )
+        .expect("resolve ship mode"),
+        orbit_core::ShipMode::Local
+    );
+}
+
 /// Build a ship plan from test args, threading the args' explicit mode through
 /// the resolved-mode parameter (production resolves this from the registry).
 fn build_plan(args: &ShipCommand, config_base_branch: &str) -> Result<WorkflowRunPlan, OrbitError> {
@@ -70,6 +140,7 @@ fn ship_auto_mode_preserves_local_mode_and_base_override() {
         json!({
             "mode": "local",
             "base_branch": "main",
+            "base_sync": "local",
         })
     );
 }
@@ -107,6 +178,7 @@ fn explicit_ship_preserves_local_mode_and_base_override() {
         json!({
             "mode": "local",
             "base_branch": "main",
+            "base_sync": "local",
             "task_ids": ["T20260425-2010"],
         })
     );
@@ -190,7 +262,7 @@ fn ship_rejects_duplicate_task_ids() {
 }
 
 fn write_ship_job_asset(runtime: &OrbitRuntime) {
-    let jobs_dir = runtime.data_root().join("resources/jobs");
+    let jobs_dir = runtime.global_root().join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs directory");
     std::fs::write(
         jobs_dir.join("task_auto_pipeline.yaml"),
@@ -238,13 +310,24 @@ fn interactive_ship_inherits_the_shared_in_flight_guard() {
         .into_iter()
         .next()
         .expect("first CLI dispatch persists a run");
+    // [ORB-11333] Every delivery submission captures the effective review
+    // policy once; the caller-shaped input is otherwise unchanged.
+    let mut persisted = first_run.input.clone().expect("persisted run input");
+    let review = persisted
+        .as_object_mut()
+        .expect("run input object")
+        .remove("review")
+        .expect("captured review admission");
+    assert_eq!(review["timing"], "none");
+    assert_eq!(review["timing_source"], "built-in");
     assert_eq!(
-        first_run.input,
-        Some(json!({
+        persisted,
+        json!({
             "mode": "local",
             "base_branch": "main",
+            "base_sync": "local",
             "task_ids": [task_id],
-        }))
+        })
     );
     let audits = runtime
         .list_audit_events(None, None, None, None, 20)

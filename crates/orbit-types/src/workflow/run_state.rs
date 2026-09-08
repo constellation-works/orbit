@@ -131,6 +131,11 @@ pub struct PipelineState {
     /// candidate the failure activity preserved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_activity_checkpoint: Option<FailureActivityCheckpoint>,
+    /// Host-validated rebase completions keyed by failed step ID. These are
+    /// provenance, not successful step outputs; retries must still run the step.
+    /// Absent in older runs, whose rewritten heads remain unverified.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rebase_recovery_checkpoints: BTreeMap<String, Value>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -154,6 +159,7 @@ impl PipelineState {
             drain_worker_limit: None,
             drain_admissions_stop: None,
             failure_activity_checkpoint: None,
+            rebase_recovery_checkpoints: BTreeMap::new(),
             updated_at: Utc::now(),
         }
     }

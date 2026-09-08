@@ -10,11 +10,94 @@ use orbit_types::workspace::{
 
 use crate::tests::env_isolation::EnvGuard;
 
-use super::super::init::{ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id};
+use super::super::init::{
+    ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id, checked_out_branch,
+    onboarding_finalize_guidance, render_task_id_start,
+};
 use super::super::list::{format_workspace_list, workspace_list_json};
 use super::super::role::CliCheckoutRole;
 use super::super::show::format_workspace_show;
 use super::super::support::orbit_gitignore_block;
+
+#[test]
+fn task_id_start_uses_the_host_task_prefix() {
+    assert_eq!(render_task_id_start(Some("DANI"), 20_000), "DANI-20000");
+}
+
+#[test]
+fn workspace_init_uses_the_checked_out_branch_when_base_branch_is_omitted() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    let global = home.path().join(".orbit");
+    std::fs::create_dir_all(&global).expect("create global orbit");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_branch\"\nhost_id = \"branch-host\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("write host identity");
+
+    let git_init = std::process::Command::new("git")
+        .args(["init", "--quiet", "--initial-branch", "master"])
+        .arg(workspace.path())
+        .status()
+        .expect("run git init");
+    assert!(git_init.success(), "initialize master branch repository");
+    let git_commit = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.email=branch@example.test",
+            "-c",
+            "user.name=Branch Test",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "initial commit",
+        ])
+        .current_dir(workspace.path())
+        .status()
+        .expect("create initial commit");
+    assert!(git_commit.success(), "commit master branch fixture");
+
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
+    WorkspaceInitArgs {
+        name: Some("checked-out-branch".to_string()),
+        base_branch: None,
+        ship_mode: Some("local".to_string()),
+        role: None,
+        owner: None,
+        task_id_start: None,
+        mcp: false,
+        inject_agent_rules: false,
+        refresh_defaults: false,
+        force: false,
+    }
+    .execute_without_runtime(None)
+    .expect("workspace init");
+
+    let registry = workspace_registry::load_registry_from(&global.join("workspaces.json"))
+        .expect("load workspace registry");
+    let registered = registry.workspaces.first().expect("registered workspace");
+    assert_eq!(registered.base_branch, "master");
+    assert_eq!(registered.ship_mode.as_deref(), Some("local"));
+    assert!(
+        registered.git_remote.is_none(),
+        "fixture must have no remote"
+    );
+}
+
+#[test]
+fn checked_out_branch_keeps_main_as_the_default_for_main_checkouts() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let git_init = std::process::Command::new("git")
+        .args(["init", "--quiet", "--initial-branch", "main"])
+        .arg(workspace.path())
+        .status()
+        .expect("run git init");
+    assert!(git_init.success(), "initialize main branch repository");
+
+    assert_eq!(checked_out_branch(workspace.path()), "main");
+}
 
 #[test]
 fn workspace_reinit_requires_force_and_force_reconciles_matching_registration() {
@@ -1476,6 +1559,7 @@ fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
     .expect("serialize parent workspace registration");
     let parent_checkout_before = serde_json::to_vec(
         workspace_registry::find_checkout(&registry_before, &parent_id)
+            .expect("lookup parent checkout")
             .expect("parent checkout registration"),
     )
     .expect("serialize parent checkout registration");
@@ -1532,6 +1616,7 @@ fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
         .find(|workspace| workspace.id == child_id)
         .expect("child workspace registration");
     let child_checkout = workspace_registry::find_checkout(&registry_after, &child_id)
+        .expect("lookup child checkout")
         .expect("child checkout registration");
     assert_eq!(child_workspace.name, "independent-child");
     assert_eq!(
@@ -1550,6 +1635,7 @@ fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
     .expect("serialize preserved parent workspace registration");
     let parent_checkout_after = serde_json::to_vec(
         workspace_registry::find_checkout(&registry_after, &parent_id)
+            .expect("lookup parent checkout")
             .expect("preserved parent checkout registration"),
     )
     .expect("serialize preserved parent checkout registration");
@@ -1603,6 +1689,7 @@ fn workspace_init_with_root_override_uses_custom_registry() {
         .find(|workspace| workspace.name == "custom-root")
         .expect("registered workspace");
     let checkout = workspace_registry::find_checkout(&registry, &workspace_record.id)
+        .expect("lookup registered checkout")
         .expect("registered checkout");
     assert_eq!(
         std::fs::canonicalize(&checkout.repo_root).expect("canonical registered root"),
@@ -1714,6 +1801,20 @@ fn workspace_init_with_root_override_does_not_modify_repo_gitignore() {
         !gitignore.exists(),
         "`--root` outside the workspace must not create <workspace>/.gitignore",
     );
+
+    let guidance = onboarding_finalize_guidance(workspace.path(), &custom_root);
+    assert!(
+        !guidance.contains("review and commit"),
+        "relocated-root guidance must not tell operators to commit checkout files: {guidance}"
+    );
+    assert!(
+        !guidance.contains(".gitignore"),
+        "relocated-root guidance must not name a checkout .gitignore: {guidance}"
+    );
+    assert!(
+        !guidance.contains(".orbit/auto_tasks") && !guidance.contains(".orbit/routines"),
+        "relocated-root guidance must not name checkout-local definitions: {guidance}"
+    );
 }
 
 /// Regression (ORB-10293): a nameless workspace whose default name is derived
@@ -1814,6 +1915,11 @@ fn workspace_init_guidance_and_generated_onboarding_files_lifecycle() {
     assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".orbit/routines"));
     assert!(ONBOARDING_FINALIZE_GUIDANCE.contains("review and commit"));
     assert!(ONBOARDING_FINALIZE_GUIDANCE.contains("does not auto-commit or discard"));
+    assert_eq!(
+        onboarding_finalize_guidance(workspace.path(), &workspace.path().join(".orbit")),
+        ONBOARDING_FINALIZE_GUIDANCE,
+        "checkout-local initialization must retain the commit guidance"
+    );
 
     let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
     WorkspaceInitArgs {

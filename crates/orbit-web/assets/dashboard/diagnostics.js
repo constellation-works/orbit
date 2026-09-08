@@ -15,10 +15,10 @@
 // (preserving the ?step= query for run-detail pre-expansion) rather than
 // navigateToRun to ensure identical behavior to before the split.
 //
-// No behavior change. All original column shapes, truncation, click wiring,
-// and side-card rendering preserved exactly.
+// Main-table and side-card requests render independently so a side-card
+// completion cannot replace the main panel's loading or failure feedback.
 
-import { el, syncNodes, getWindow } from './common.js';
+import { panelCanRender, resetPanel, el, syncNodes, getWindow } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -44,11 +44,27 @@ function truncateValue(ctx, s, n = 220) {
   return hasCtx(ctx, "truncate") ? ctx.truncate(s, n) : String(s || "").slice(0, n);
 }
 
+// `actor_identity` is the persisted ActorIdentity enum: a flat label string,
+// or the tagged `{"human": "..."}` / `{"agent": {"model": "..."}}` shape used
+// for the labels a flat string cannot represent. Both render as one label.
+function actorIdentityLabel(v) {
+  if (v == null) return "";
+  if (typeof v !== "object") return String(v);
+  if (typeof v.human === "string") return v.human;
+  const agent = v.agent || {};
+  return agent.model || agent.name || "";
+}
+
 function getDiagMetricsColumns(ctx) {
   return [
     { key: "ts", label: "time", num: false, render: (v) => fmtRelativeValue(ctx, v) },
     { key: "step", label: "step", num: false },
-    { key: "actor_identity", label: "actor", num: false, render: (v) => v || "-" },
+    {
+      key: "actor_identity",
+      label: "actor",
+      num: false,
+      render: (v) => actorIdentityLabel(v) || "-",
+    },
     {
       key: "token_usage",
       label: "tokens",
@@ -66,10 +82,22 @@ function getDiagMetricsColumns(ctx) {
   ];
 }
 
+function errorRunLabel(row) {
+  if (row.job_run) return row.job_run;
+  if (row.affiliation === "unaffiliated") return "unaffiliated";
+  return "-";
+}
+
 function getDiagErrorsColumns(ctx) {
   return [
     { key: "ts", label: "time", num: false, render: (v) => fmtRelativeValue(ctx, v) },
     { key: "source", label: "source", num: false },
+    {
+      key: "job_run",
+      label: "run",
+      num: false,
+      render: (_v, row) => errorRunLabel(row),
+    },
     { key: "provider", label: "provider", num: false, render: (v) => v || "-" },
     { key: "step", label: "step", num: false, render: (v) => v || "-" },
     {
@@ -86,13 +114,13 @@ function getDiagErrorsColumns(ctx) {
   ];
 }
 
-function renderDiagnosticsTable(rows, columns, ctx) {
+function renderDiagnosticsTable(rows, columns, ctx, emptyText) {
   const body = $("diag-body");
   
   if (!rows || rows.length === 0) {
     syncNodes(body, [el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: "No entries this month." })
+      el("div", { class: "text", text: emptyText || "No entries this month." })
     ])]);
     return;
   }
@@ -130,8 +158,11 @@ function renderDiagnosticsTable(rows, columns, ctx) {
       td.textContent = text;
       tr.appendChild(td);
     }
-    tr.dataset.key = `diag-${row.ts || ''}-${row.step || i}-${row.command || row.actor_identity || ''}`;
+    tr.dataset.key = `diag-${row.ts || ''}-${row.job_run || row.affiliation || ''}-${row.step || i}-${row.command || actorIdentityLabel(row.actor_identity) || ''}`;
     tr.dataset.hash = JSON.stringify(row);
+    if (row.affiliation === "unaffiliated") {
+      tr.classList.add("unaffiliated");
+    }
     if (row.job_run) {
       tr.classList.add("clickable");
       tr.title = "Open owning run";
@@ -401,6 +432,12 @@ function renderDiagnostics(ctx = {}) {
   const sub = ctx.getActiveDiagSubtab ? ctx.getActiveDiagSubtab() : "metrics";
   const last = ctx.getLastDiagnostics ? ctx.getLastDiagnostics() : { metrics: [], errors: [], incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] };
 
+  if (!panelCanRender("diag-body")) return;
+  if (ctx.getLastDiagnostics && last[sub] == null) {
+    resetPanel("diag-body", "diag-count");
+    return;
+  }
+
   if (sub === "incidents") {
     const payload = last.incidents || {};
     // Both counts in the header: grouped incidents, and the raw failed events
@@ -408,12 +445,18 @@ function renderDiagnostics(ctx = {}) {
     $("diag-count").textContent =
       `${asCount(payload.failure_categories && payload.failure_categories.unexpected && payload.failure_categories.unexpected.incidents)} unexpected / ${asCount(payload.incident_count)} all incidents / ${asCount(payload.raw_failed_events)} failed events`;
     renderIncidents(payload, ctx);
-    renderDiagnosticsSideCard(last, ctx);
     return;
   }
 
   const rows = last[sub] || [];
-  $("diag-count").textContent = `${rows.length}`;
+  const count = $("diag-count");
+  if (sub === "errors") {
+    count.textContent = `${rows.length} error events this month`;
+    count.title = `Step and event failures for the current month, capped at the diag URL parameter (default 50). Distinct from header Failed runs (${getWindow()} Failed, Timeout, and Interrupted job runs) and Recent Runs' failed filter (durable Failed job runs, no window).`;
+  } else {
+    count.textContent = `${rows.length} metric entries this month`;
+    count.title = "Invocation metrics for the current month.";
+  }
   const columns =
     sub === "metrics"
       ? getDiagMetricsColumns(ctx)
@@ -422,25 +465,31 @@ function renderDiagnostics(ctx = {}) {
     rows,
     columns,
     ctx,
+    sub === "errors"
+      ? "No error events this month (step/event failures, not job-run states)."
+      : "No metric entries this month.",
   );
-
-  renderDiagnosticsSideCard(last, ctx);
 }
 
-function renderDiagnosticsSideCard(last, ctx) {
+// ORB-11655: keyed cards, so the 30 s refresh replaces only what moved.
+// Emptying this scroll box instead dropped the operator's scroll position on
+// every tick.
+export function renderDiagnosticsSideCard(last, ctx) {
   const container = $("diag-implement-one-body");
   if (!container) return;
-  container.innerHTML = "";
-  renderCompletionByComplexityCard(container, last.completion_by_complexity || [], ctx);
-  renderImplementOneCard(
-    container,
-    last.implement_one_by_complexity || [],
-    last.implement_one || [],
-    ctx,
-  );
+  syncNodes(container, [
+    completionByComplexityCard(last.completion_by_complexity || []),
+    ...implementOneCards(last.implement_one_by_complexity || [], last.implement_one || [], ctx),
+  ]);
 }
 
-function renderMetricsCard(container, title, rows, cols) {
+function keyed(node, key, source) {
+  node.dataset.key = key;
+  node.dataset.hash = JSON.stringify(source);
+  return node;
+}
+
+function metricsCard(title, rows, cols) {
   const card = el("div", { class: "audit-summary-card" });
   card.appendChild(el("div", { class: "card-title", text: title }));
   const body = el("div", { class: "card-body" });
@@ -464,7 +513,7 @@ function renderMetricsCard(container, title, rows, cols) {
   table.appendChild(tbody);
   body.appendChild(table);
   card.appendChild(body);
-  container.appendChild(card);
+  return card;
 }
 
 function formatCountRate(count, total) {
@@ -478,15 +527,14 @@ function complexityLabel(value) {
   return value === "unset" ? "unset (unlabeled)" : (value || "unset (unlabeled)");
 }
 
-function renderCompletionByComplexityCard(container, rows, _ctx = {}) {
+function completionByComplexityCard(rows) {
   if (!rows.length) {
     const card = el("div", { class: "audit-summary-card" });
     card.appendChild(el("div", { class: "card-title", text: "Task completion by complexity" }));
     const body = el("div", { class: "card-body" });
     body.appendChild(el("div", { class: "empty", text: "No tasks." }));
     card.appendChild(body);
-    container.appendChild(card);
-    return;
+    return keyed(card, "completion-by-complexity", []);
   }
   const statusCols = [
     { key: "complexity", label: "complexity" },
@@ -510,10 +558,14 @@ function renderCompletionByComplexityCard(container, rows, _ctx = {}) {
       archived: cell("archived"),
     };
   });
-  renderMetricsCard(container, "Task completion by complexity", tableRows, statusCols);
+  return keyed(
+    metricsCard("Task completion by complexity", tableRows, statusCols),
+    "completion-by-complexity",
+    tableRows,
+  );
 }
 
-function renderImplementOneCard(container, byComplexity, fallbackRows, ctx = {}) {
+function implementOneCards(byComplexity, fallbackRows, ctx = {}) {
   const durCols = [
     { key: "actor", label: "actor" },
     { key: "n", label: "n", num: true },
@@ -523,25 +575,28 @@ function renderImplementOneCard(container, byComplexity, fallbackRows, ctx = {})
   ];
   const bands = Array.isArray(byComplexity) ? byComplexity.filter((band) => (band.actors || []).length) : [];
   if (bands.length) {
-    for (const band of bands) {
+    return bands.map((band) => {
       const label = complexityLabel(band.complexity);
-      renderMetricsCard(
-        container,
-        `Average implement_one duration by actor (30d) · ${label} · n=${band.n || 0}`,
-        band.actors,
-        durCols,
+      return keyed(
+        metricsCard(
+          `Average implement_one duration by actor (30d) · ${label} · n=${band.n || 0}`,
+          band.actors,
+          durCols,
+        ),
+        `implement-one:${band.complexity}`,
+        [band.n || 0, band.actors],
       );
-    }
-    return;
+    });
   }
   if (!fallbackRows.length) {
-    container.appendChild(el("div", { class: "empty", text: "No implement_one runs in last 30d." }));
-    return;
+    const empty = el("div", { class: "empty", text: "No implement_one runs in last 30d." });
+    return [keyed(empty, "implement-one", [])];
   }
-  renderMetricsCard(container, "Average implement_one duration by actor (30d)", fallbackRows, durCols);
+  return [keyed(
+    metricsCard("Average implement_one duration by actor (30d)", fallbackRows, durCols),
+    "implement-one",
+    fallbackRows,
+  )];
 }
 
-export {
-  renderDiagnostics,
-  renderImplementOneCard,
-};
+export { renderDiagnostics };

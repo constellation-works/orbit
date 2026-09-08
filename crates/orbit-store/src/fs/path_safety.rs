@@ -12,6 +12,38 @@ pub(crate) fn validate_path_stem(stem: &str, kind: &str) -> Result<(), OrbitErro
     )))
 }
 
+/// Validate persisted logical and legacy workspace identifiers.
+pub(crate) fn validate_workspace_id(raw: &str) -> Result<String, OrbitError> {
+    let trimmed = raw.trim();
+    let logical = trimmed.strip_prefix("ws_").is_some_and(|name| {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_'))
+    });
+    let legacy = trimmed.rsplit_once('-').is_some_and(|(slug, suffix)| {
+        !slug.is_empty()
+            && !slug.starts_with('-')
+            && !slug.ends_with('-')
+            && !slug.contains("--")
+            && slug
+                .bytes()
+                .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+            && suffix.len() == 6
+            && suffix
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    });
+
+    if logical || legacy {
+        Ok(trimmed.to_string())
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "workspace_id '{trimmed}' must use canonical ws_<name> or legacy <slug>-<6char> form"
+        )))
+    }
+}
+
 fn is_safe_path_stem(stem: &str) -> bool {
     let mut components = Path::new(stem).components();
     matches!(

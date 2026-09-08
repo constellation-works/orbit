@@ -51,11 +51,12 @@
 //! orbit task reindex --workspace <ws-id>
 //! ```
 //!
-//! The manifest hashes are the source of truth — `orbit task reindex` reruns
-//! [`read_bundle_at`] on every bundle, which recomputes each blob's SHA-256 and
-//! surfaces any file whose bytes don't match the manifest. If the archive is
-//! gone, the bundle is unrecoverable from this side (regenerate the artifact
-//! upstream and paste it back at the recorded `blob` path with matching bytes).
+//! The manifest hashes are the source of truth — `orbit task reindex` reads
+//! every bundle (recovering an incomplete pending write), recomputes each
+//! blob's SHA-256, and surfaces any file whose bytes don't match the
+//! manifest. If the archive is gone, the bundle is unrecoverable from this
+//! side (regenerate the artifact upstream and paste it back at the recorded
+//! `blob` path with matching bytes).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

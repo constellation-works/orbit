@@ -37,6 +37,7 @@ use self::config::{
 };
 use self::migrate::migrate_docs;
 use self::search::{doc_embedding_sources, doc_search_source, related_docs_for_context, show_doc};
+use self::walk::walk_docs_with_bodies;
 
 // The original impl block (291-408) is preserved verbatim except for path adjustments
 // that are mechanical (use of super:: paths). All bodies delegate to submodules.
@@ -90,10 +91,14 @@ impl OrbitRuntime {
         }
         let limit = limit.unwrap_or(20);
         let query_lower = query.to_ascii_lowercase();
+
+        // One roots resolution and one walk for the whole search: every doc is
+        // scored from the body that its single read already produced.
+        let roots = self.docs_roots()?;
         let mut scored = Vec::new();
-        for record in self.list_docs(None, None)? {
-            let body = self.show_doc(&record.path)?.body;
-            if let Some(result) = score_doc_record(doc_search_source(record, body), &query_lower) {
+        for doc in walk_docs_with_bodies(&self.paths().repo_root, &roots)? {
+            let source = doc_search_source(doc.record, doc.body);
+            if let Some(result) = score_doc_record(source, &query_lower) {
                 scored.push(SearchResult::Doc(result));
             }
         }
@@ -124,7 +129,11 @@ impl OrbitRuntime {
     }
 
     pub fn add_docs_root(&self, path: &str) -> Result<DocAddOutcome, OrbitError> {
-        add_docs_root(&self.paths().repo_root, &self.config_path(), path)
+        add_docs_root(
+            &self.paths().repo_root,
+            &self.shared_root().join("config.toml"),
+            path,
+        )
     }
 
     pub fn index_docs(&self, params: DocIndexParams) -> Result<DocIndexResult, OrbitError> {

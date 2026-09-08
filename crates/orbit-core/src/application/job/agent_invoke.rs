@@ -141,21 +141,38 @@ impl OrbitRuntime {
         &self,
         request: AgentInvokeRequest<'_>,
     ) -> Result<AgentInvokeSubmission, OrbitError> {
-        let provenance = self.admit_agent_invoke(request.session_context)?;
+        let authorizer = self.admit_agent_invoke(request.session_context)?;
 
         let prompt = require_non_empty(request.prompt, "prompt")?;
         let cwd = self.resolve_invocation_cwd(request.cwd)?;
         let crew = self.canonical_crew_name(request.crew)?;
         let timeout_seconds = resolve_timeout(request.timeout_seconds)?;
-        let actor = request
+        let requested_actor = request
             .actor
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map_or_else(|| self.actor_label().to_string(), ToOwned::to_owned);
+        let actor = authorizer
+            .remote_caller
+            .as_ref()
+            .map(|grant| grant.caller_machine_id.clone())
+            .unwrap_or(requested_actor);
 
         let admission = TrustedHostAdmission {
             authorized_by: actor.clone(),
-            authorizer_provenance: provenance.to_string(),
+            authorizer_provenance: authorizer.provenance.to_string(),
+            caller_machine_id: authorizer
+                .remote_caller
+                .as_ref()
+                .map(|grant| grant.caller_machine_id.clone()),
+            caller_identity: authorizer
+                .remote_caller
+                .as_ref()
+                .map(|grant| grant.identity),
+            agent_invoke_mode: authorizer
+                .remote_caller
+                .as_ref()
+                .and_then(|grant| grant.agent_invoke_mode),
             authorized_at: Utc::now().to_rfc3339(),
             workspace_path: self.paths().repo_root.display().to_string(),
             cwd: cwd.display().to_string(),

@@ -52,10 +52,12 @@ fn reindex_report_shape_is_stable_across_runs() {
 
     let first: UpsertReport = vector
         .reindex_tasks(&tasks, &embedder, false)
-        .expect("first reindex");
+        .expect("first reindex")
+        .upsert;
     let second: UpsertReport = vector
         .reindex_tasks(&tasks, &embedder, false)
-        .expect("second reindex");
+        .expect("second reindex")
+        .upsert;
 
     // First run: every field embedded, none skipped.
     assert_eq!(first.skipped_fields, 0, "first run: nothing to skip");

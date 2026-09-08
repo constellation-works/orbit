@@ -281,7 +281,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         // run exists to stay inside. A run that could admit itself would be a
         // sandbox escape wearing an authorization.
         allowed: &[McpCapability::Operator],
-        rationale: "an agent invocation runs a provider subprocess on the host outside the executor sandbox, so only a present operator may admit one",
+        rationale: "an agent invocation runs a provider subprocess on the host outside the executor sandbox, so it requires a local operator or an explicitly scoped remote operator grant",
     },
     GovernedOperation {
         id: "orbit.command.exec",

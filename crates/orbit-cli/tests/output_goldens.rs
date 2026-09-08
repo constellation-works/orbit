@@ -353,6 +353,45 @@ fn plain_and_json_forms_match_their_goldens() {
     }
 }
 
+#[test]
+fn task_show_relations_and_artifacts_match_golden() {
+    let fixture = Fixture::new();
+    let listed = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
+    let task_id = listed[0]["id"].as_str().expect("task id");
+    let blocker_id = listed[1]["id"].as_str().expect("blocker id");
+    let update = serde_json::to_string(&json!({
+        "id": task_id,
+        "relations": [{"type": "blocked_by", "target": blocker_id}],
+    }))
+    .expect("serialize task update");
+
+    fixture.run(
+        &["tool", "run", "orbit.task.update", "--input", &update],
+        &[],
+    );
+    let artifact_source = fixture.work.join("evidence.txt");
+    std::fs::write(&artifact_source, "relation evidence").expect("write artifact source");
+    let artifact_source = artifact_source
+        .to_str()
+        .expect("artifact source path is UTF-8");
+    fixture.run(
+        &[
+            "task",
+            "artifact",
+            "put",
+            task_id,
+            artifact_source,
+            "--path",
+            "evidence.txt",
+        ],
+        &[],
+    );
+
+    let shown = fixture.run(&["task", "show", task_id], &[]);
+    let shown_stdout = fixture.redact(&String::from_utf8_lossy(&shown.stdout));
+    assert_golden("task_show_relations_artifacts.plain.txt", &shown_stdout);
+}
+
 /// table-rendering.md §4: "truncation never applies to json ... or the
 /// plain piped form." color-and-styling.md §4: json/ndjson/plain carry no
 /// escape sequences under any flag. Since this harness never gives the
@@ -388,4 +427,277 @@ fn no_ansi_escapes_under_any_color_configuration() {
             }
         }
     }
+}
+
+/// Inventory of record-output conversions in this change, and the remaining
+/// separately owned bypass that must not be treated as an omission here:
+/// `orbit doctor --fix-*` ([ORB-11597]). `orbit workspace init` now returns a
+/// payload through the renderer ([ORB-11622]).
+/// Converted families: task add/update/show `--fields`/artifact, tool run
+/// (including dry-run), config get, run job helpers, log tail, plus other
+/// json/Silent forks without a separate owner (config keys, skill link/unlink,
+/// auto_task, policy check, docs index, lint/export/import/archive/start/
+/// reindex/artifacts, locks list, semantic install/uninstall/index, audit
+/// stats, gc/sweep, run cancel/agent/auto/concurrency/sweep/ship/triage/
+/// trace/logs).
+fn parse_json_stdout(output: &std::process::Output, label: &str) -> Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "{label} stdout is not JSON ({error}):\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    })
+}
+
+fn parse_ndjson_stdout(output: &std::process::Output, label: &str) -> Vec<Value> {
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            serde_json::from_str(line)
+                .unwrap_or_else(|error| panic!("{label} ndjson line is not JSON ({error}): {line}"))
+        })
+        .collect()
+}
+
+fn first_listed_task(fixture: &Fixture) -> (String, String) {
+    let listed = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
+    let task = &listed[0];
+    (
+        task["id"].as_str().expect("task id").to_string(),
+        task["title"].as_str().expect("task title").to_string(),
+    )
+}
+
+#[test]
+fn converted_task_commands_honor_format_json_and_ndjson() {
+    let fixture = Fixture::new();
+    let (task_id, title) = first_listed_task(&fixture);
+
+    let shown = fixture.run(
+        &[
+            "task",
+            "show",
+            &task_id,
+            "--fields",
+            "title,status",
+            "--format",
+            "json",
+        ],
+        &[],
+    );
+    let shown_json = parse_json_stdout(&shown, "task show --fields --format json");
+    assert_eq!(shown_json["title"], title);
+    assert_eq!(shown_json["status"], "proposed");
+    let shown_text = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        !shown_text.contains("Field:"),
+        "human field headers leaked into --format json:\n{shown_text}"
+    );
+
+    let shown_ndjson = parse_ndjson_stdout(
+        &fixture.run(
+            &[
+                "task",
+                "show",
+                &task_id,
+                "--fields",
+                "title,status",
+                "--format",
+                "ndjson",
+            ],
+            &[],
+        ),
+        "task show --fields --format ndjson",
+    );
+    assert_eq!(shown_ndjson.len(), 1);
+    assert_eq!(shown_ndjson[0]["title"], title);
+
+    let added = parse_json_stdout(
+        &fixture.run(
+            &[
+                "task",
+                "add",
+                "--title",
+                "format-json add",
+                "--complexity",
+                "low",
+                "--format",
+                "json",
+            ],
+            &[],
+        ),
+        "task add --format json",
+    );
+    assert_eq!(added["title"], "format-json add");
+    assert!(added["id"].as_str().is_some_and(|id| !id.is_empty()));
+
+    let updated = parse_json_stdout(
+        &fixture.run(
+            &[
+                "task",
+                "update",
+                added["id"].as_str().expect("added id"),
+                "--comment",
+                "via format json",
+                "--format",
+                "json",
+            ],
+            &[],
+        ),
+        "task update --format json",
+    );
+    assert_eq!(updated["id"], added["id"]);
+
+    let source = fixture.work.join("artifact.txt");
+    std::fs::write(&source, "payload\n").expect("write artifact source");
+    let stored = parse_json_stdout(
+        &fixture.run(
+            &[
+                "task",
+                "artifact",
+                "put",
+                added["id"].as_str().expect("added id"),
+                source.to_str().expect("utf8 path"),
+                "--path",
+                "notes/artifact.txt",
+                "--format",
+                "json",
+            ],
+            &[],
+        ),
+        "task artifact put --format json",
+    );
+    assert_eq!(stored["id"], added["id"]);
+
+    let fetched = parse_json_stdout(
+        &fixture.run(
+            &[
+                "task",
+                "artifact",
+                "get",
+                added["id"].as_str().expect("added id"),
+                "notes/artifact.txt",
+                "--format",
+                "json",
+            ],
+            &[],
+        ),
+        "task artifact get --format json",
+    );
+    assert_eq!(fetched["path"], "notes/artifact.txt");
+    assert_eq!(fetched["size"], 8);
+
+    let human = fixture.run(&["task", "show", &task_id, "--fields", "title,status"], &[]);
+    let human_text = String::from_utf8_lossy(&human.stdout);
+    assert!(human_text.contains("Field:"), "{human_text}");
+    assert!(human_text.contains("title"), "{human_text}");
+}
+
+#[test]
+fn tool_run_honors_format_ndjson_and_dry_run_json() {
+    let fixture = Fixture::new();
+
+    let listed = parse_ndjson_stdout(
+        &fixture.run(
+            &["tool", "run", "orbit.task.list", "--format", "ndjson"],
+            &[],
+        ),
+        "tool run orbit.task.list --format ndjson",
+    );
+    assert_eq!(listed.len(), SEED_TASKS.len());
+    assert!(listed.iter().all(|row| row.get("id").is_some()));
+
+    let dry = parse_json_stdout(
+        &fixture.run(
+            &[
+                "tool",
+                "run",
+                "orbit.task.show",
+                "--dry-run",
+                "--format",
+                "json",
+            ],
+            &[],
+        ),
+        "tool run --dry-run --format json",
+    );
+    assert_eq!(dry["tool_name"], "orbit.task.show");
+    assert!(dry["policy_allowed"].is_boolean());
+    assert!(dry["missing_params"].is_array());
+    let dry_human = fixture.run(&["tool", "run", "orbit.task.show", "--dry-run"], &[]);
+    let dry_text = String::from_utf8_lossy(&dry_human.stdout);
+    assert!(dry_text.contains("Tool:"), "{dry_text}");
+}
+
+#[test]
+fn log_tail_format_ndjson_emits_three_event_lines() {
+    let fixture = Fixture::new();
+    let log_path = fixture.work.join("orbit.jsonl");
+    let events: Vec<String> = (0..3)
+        .map(|index| {
+            json!({
+                "timestamp": format!("2026-04-27T01:00:0{index}.000000000Z"),
+                "level": "INFO",
+                "target": "orbit.test",
+                "fields": { "message": format!("event {index}") }
+            })
+            .to_string()
+        })
+        .collect();
+    std::fs::write(&log_path, events.join("\n") + "\n").expect("write log");
+
+    let tailed = parse_ndjson_stdout(
+        &fixture.run(
+            &[
+                "log",
+                "tail",
+                "-n",
+                "3",
+                "--path",
+                log_path.to_str().expect("utf8 path"),
+                "--format",
+                "ndjson",
+            ],
+            &[],
+        ),
+        "log tail -n 3 --format ndjson",
+    );
+    assert_eq!(tailed.len(), 3);
+    assert_eq!(tailed[2]["fields"]["message"], "event 2");
+}
+
+#[test]
+fn global_format_controls_tool_run_output() {
+    let fixture = Fixture::new();
+    let (task_id, title) = first_listed_task(&fixture);
+
+    let table_over_json = fixture.run(
+        &[
+            "task", "show", &task_id, "--fields", "title", "--json", "--format", "table",
+        ],
+        &[],
+    );
+    let table_text = String::from_utf8_lossy(&table_over_json.stdout);
+    assert!(
+        serde_json::from_slice::<Value>(&table_over_json.stdout).is_err(),
+        "--format table must outrank --json:\n{table_text}"
+    );
+    assert!(table_text.contains(&title), "{table_text}");
+
+    let tool_output = parse_json_stdout(
+        &fixture.run(&["tool", "run", "orbit.task.list", "--format", "json"], &[]),
+        "tool run --format json",
+    );
+    assert!(tool_output.as_array().is_some());
+
+    let config = parse_json_stdout(
+        &fixture.run(
+            &["config", "get", "workflow.base_branch", "--format", "json"],
+            &[],
+        ),
+        "config get --format json",
+    );
+    assert_eq!(config["key"], "workflow.base_branch");
+    assert!(config.get("value").is_some(), "{config}");
 }

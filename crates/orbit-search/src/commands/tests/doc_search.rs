@@ -37,6 +37,14 @@ impl Embedder for KeywordEmbedder {
     fn token_count(&self, text: &str) -> Result<usize, OrbitError> {
         Ok(text.split_whitespace().count().max(1))
     }
+
+    fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError> {
+        Ok(text
+            .match_indices(char::is_whitespace)
+            .map(|(index, _)| index)
+            .chain(std::iter::once(text.len()))
+            .collect())
+    }
 }
 
 fn doc(path: &str, body: &str) -> DocEmbeddingSource {

@@ -11,12 +11,14 @@ use orbit_engine::{
     RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate, V2AuditWriter, V2DispatchInput,
 };
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{ExternalRef, Task, TaskStatus, push_external_ref_if_missing};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, DeterministicSpec};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskAddParams, TaskUpdateParams};
+use crate::application::task::{
+    SYSTEM_ACTOR_LABEL, TaskAddParams, TaskRecordUpdateParams, TaskUpdateParams,
+};
 use crate::application::workflow::ShipMode;
 use crate::runtime::WorkspaceRuntimeBinding;
 use crate::{ActorIdentity, OrbitRuntime};
@@ -465,7 +467,7 @@ fn withdrawn_task_fixtures(runtime: &OrbitRuntime) -> Vec<(&'static str, String)
 }
 
 #[test]
-fn direct_update_to_in_progress_still_requires_plan_for_unapproved_statuses() {
+fn direct_update_to_in_progress_is_classification_without_a_plan() {
     let (_root, runtime) = test_runtime();
     let task = runtime
         .add_task(TaskAddParams {
@@ -476,7 +478,7 @@ fn direct_update_to_in_progress_still_requires_plan_for_unapproved_statuses() {
         })
         .expect("create proposed task");
 
-    let err = runtime
+    let updated = runtime
         .update_task(
             &task.id,
             TaskUpdateParams {
@@ -484,12 +486,9 @@ fn direct_update_to_in_progress_still_requires_plan_for_unapproved_statuses() {
                 ..Default::default()
             },
         )
-        .expect_err("direct update should still require a plan");
-    assert!(
-        err.to_string()
-            .contains("requires a non-empty execution plan"),
-        "{err}"
-    );
+        .expect("direct status classification needs no plan");
+    assert_eq!(updated.status, TaskStatus::InProgress);
+    assert!(updated.plan.is_empty());
 }
 
 #[test]
@@ -714,7 +713,7 @@ fn v2_update_task_activity_preserves_existing_implemented_by() {
 }
 
 #[test]
-fn review_transition_still_requires_execution_summary() {
+fn direct_review_status_is_classification_without_execution_evidence() {
     let (_root, runtime) = test_runtime();
     let task = runtime
         .add_task(TaskAddParams {
@@ -729,7 +728,7 @@ fn review_transition_still_requires_execution_summary() {
         .start_task(&task.id, Some("start task".to_string()), None)
         .expect("start task");
 
-    let err = runtime
+    let updated = runtime
         .update_task(
             &task.id,
             TaskUpdateParams {
@@ -737,12 +736,10 @@ fn review_transition_still_requires_execution_summary() {
                 ..Default::default()
             },
         )
-        .expect_err("review without execution summary should fail");
-    assert!(
-        err.to_string()
-            .contains("requires non-empty execution_summary"),
-        "{err}"
-    );
+        .expect("direct review classification needs no execution summary");
+    assert_eq!(updated.status, TaskStatus::Review);
+    assert!(updated.execution_summary.is_empty());
+    assert_eq!(updated.implemented_by, None);
 }
 
 #[test]
@@ -763,6 +760,7 @@ fn activity_update_comment_records_comment_as_system() {
             &task.id,
             TaskActivityUpdate {
                 status: TaskStatus::InProgress,
+                expected_status: TaskStatus::Backlog,
                 execution_summary: None,
                 comment: Some("Automation left a note.".to_string()),
                 note: Some("automation start".to_string()),
@@ -963,6 +961,141 @@ fn generic_automation_status_update_uses_system_history_and_preserves_implemente
         .expect("review transition history");
     assert_eq!(status_entry.by, SYSTEM_ACTOR_LABEL);
     assert_eq!(updated.implemented_by.as_deref(), Some("gpt-test"));
+}
+
+#[test]
+fn apply_task_automation_update_keeps_external_refs_written_after_locked_read() {
+    let (_root, runtime) = test_runtime();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Concurrent refs".to_string(),
+            description: "Exercise automation external_ref merge under the task lock.".to_string(),
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("add task");
+    let concurrent_ref = ExternalRef::github_pr("200").expect("concurrent github-pr ref");
+    let automation_ref = ExternalRef::github_pr("100").expect("automation github-pr ref");
+    runtime.set_after_locked_state_read_hook(Arc::new({
+        let runtime = runtime.clone();
+        let task_id = task.id.clone();
+        let concurrent_ref = concurrent_ref.clone();
+        move |snapshot| {
+            if snapshot.id != task_id {
+                return;
+            }
+            let mut refs = snapshot.external_refs.clone();
+            push_external_ref_if_missing(&mut refs, concurrent_ref.clone());
+            runtime
+                .stores()
+                .task_records()
+                .update(
+                    &task_id,
+                    TaskRecordUpdateParams {
+                        actor: "concurrent-writer".to_string(),
+                        external_refs: Some(refs),
+                        ..Default::default()
+                    },
+                )
+                .expect("write concurrent ref under the re-entrant lock");
+        }
+    }));
+
+    runtime
+        .apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                external_refs: vec![automation_ref.clone()],
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("automation ref write");
+
+    let updated = runtime.get_task(&task.id).expect("reload task");
+    assert!(
+        updated
+            .external_refs
+            .iter()
+            .any(|reference| reference.has_key(&automation_ref.system, &automation_ref.id)),
+        "automation ref must survive: {:?}",
+        updated.external_refs
+    );
+    assert!(
+        updated
+            .external_refs
+            .iter()
+            .any(|reference| reference.has_key(&concurrent_ref.system, &concurrent_ref.id)),
+        "concurrent ref must survive: {:?}",
+        updated.external_refs
+    );
+}
+
+#[test]
+fn apply_task_automation_update_refuses_done_when_status_changes_after_locked_read() {
+    let (_root, runtime) = test_runtime();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Operator withdrawal".to_string(),
+            description: "Exercise automation expected_status compare-and-set.".to_string(),
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("add task");
+    let task = approve_for_execution(&runtime, &task);
+    runtime
+        .start_task(&task.id, Some("start task".to_string()), None)
+        .expect("start task");
+    runtime
+        .apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                execution_summary: Some("Ready for merge.".to_string()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("move to review");
+
+    runtime.set_after_locked_state_read_hook(Arc::new({
+        let runtime = runtime.clone();
+        let task_id = task.id.clone();
+        move |snapshot| {
+            if snapshot.id != task_id || snapshot.status != TaskStatus::Review {
+                return;
+            }
+            runtime
+                .update_task(
+                    &task_id,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                )
+                .expect("operator reclassifies to backlog");
+        }
+    }));
+
+    let error = runtime
+        .apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect_err("stale done write must lose to the operator");
+    let message = error.to_string();
+    assert!(
+        message.contains("status changed"),
+        "names the race: {message}"
+    );
+    assert!(
+        message.contains("backlog"),
+        "names the new status: {message}"
+    );
+
+    let current = runtime.get_task(&task.id).expect("reload task");
+    assert_eq!(current.status, TaskStatus::Backlog);
 }
 
 #[test]
@@ -1180,8 +1313,10 @@ fn orbit_workspace_selector_reports_the_logical_catalog_id() {
         WorkspaceRuntimeBinding {
             logical_workspace_id: "ws_orbit".to_string(),
             workspace_id: "daniel-e9c542".to_string(),
+            owner_machine_id: None,
             repo_root: repo,
             ship_mode: ShipMode::Local,
+            base_branch: None,
         },
     )
     .expect("bound runtime");
@@ -1193,5 +1328,68 @@ fn orbit_workspace_selector_reports_the_logical_catalog_id() {
         RuntimeHost::orbit_workspace_selector(&runtime).as_deref(),
         Some("daniel-e9c542"),
         "nested tool calls must carry the logical catalog ID, not the checkout identity"
+    );
+}
+
+#[test]
+fn recovered_rebase_checkpoint_survives_restart_without_completing_the_step() {
+    use orbit_types::workflow::{JobRunState, PipelineState};
+
+    let (root, runtime) = test_runtime();
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    let mut state = PipelineState::new(
+        run.run_id.clone(),
+        run.job_id.clone(),
+        json!({"task_ids": ["T-recovery"]}),
+    );
+    state.record_step(
+        3,
+        JobRunState::Success,
+        Some(json!({"head_sha": "before"})),
+        None,
+    );
+    runtime
+        .stores()
+        .jobs()
+        .write_run_state(&run.run_id, &state)
+        .unwrap();
+    let output = json!({
+        "run_id": run.run_id,
+        "head_sha_before": "before",
+        "head_sha": "after",
+        "base_sha": "target",
+        "remote_sha_before": "remote",
+    });
+    runtime
+        .checkpoint_rebase_recovery(&run.run_id, "sync_base", &output)
+        .unwrap();
+    drop(runtime);
+
+    let reopened = OrbitRuntime::from_roots(
+        &root.path().join("global"),
+        &root.path().join("repo/.orbit"),
+    )
+    .unwrap();
+    let durable = RuntimeHost::read_run_state(&reopened, &run.run_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(durable.rebase_recovery_checkpoints["sync_base"], output);
+    assert_eq!(durable.step_outputs, state.step_outputs);
+    assert_eq!(durable.step_states, state.step_states);
+    assert_eq!(durable.next_step_index, 4);
+    assert!(durable.failure_activity_checkpoint.is_none());
+    assert!(
+        reopened
+            .checkpoint_rebase_recovery("missing-run", "sync_base", &output)
+            .is_err()
     );
 }

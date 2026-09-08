@@ -19,7 +19,15 @@ use super::paths::{
     canonicalize_context_files_for_read, context_files_pruned_history_entry,
     context_workspace_root, normalize_context_files_for_write,
 };
-use super::transitions::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
+
+#[derive(Default)]
+struct TaskUpdateContext {
+    status_note: Option<String>,
+    agent: Option<String>,
+    model: Option<String>,
+    artifact_owner: Option<String>,
+    expected_status: Option<TaskStatus>,
+}
 
 impl OrbitRuntime {
     pub fn update_task(&self, id: &str, params: TaskUpdateParams) -> Result<Task, OrbitError> {
@@ -34,7 +42,15 @@ impl OrbitRuntime {
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.update_task_with_status_note_and_identity(id, params, None, agent, model, None)
+        self.update_task_with_context(
+            id,
+            params,
+            TaskUpdateContext {
+                agent,
+                model,
+                ..Default::default()
+            },
+        )
     }
 
     pub(crate) fn update_task_with_owner(
@@ -46,7 +62,16 @@ impl OrbitRuntime {
         owner: Option<String>,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.update_task_with_status_note_and_identity(id, params, None, agent, model, owner)
+        self.update_task_with_context(
+            id,
+            params,
+            TaskUpdateContext {
+                agent,
+                model,
+                artifact_owner: owner,
+                ..Default::default()
+            },
+        )
     }
 
     pub fn update_task_from_activity(
@@ -56,13 +81,14 @@ impl OrbitRuntime {
     ) -> Result<Task, OrbitError> {
         let TaskActivityUpdate {
             status,
+            expected_status,
             execution_summary,
             comment,
             note,
             agent,
             model,
         } = update;
-        self.update_task_with_status_note_and_identity(
+        self.update_task_with_context(
             id,
             TaskUpdateParams {
                 execution_summary,
@@ -70,10 +96,13 @@ impl OrbitRuntime {
                 status: Some(status),
                 ..Default::default()
             },
-            note,
-            agent.or_else(|| model.is_none().then(|| SYSTEM_ACTOR_LABEL.to_string())),
-            model,
-            None,
+            TaskUpdateContext {
+                status_note: note,
+                agent: agent.or_else(|| model.is_none().then(|| SYSTEM_ACTOR_LABEL.to_string())),
+                model,
+                expected_status: Some(expected_status),
+                ..Default::default()
+            },
         )
     }
 
@@ -87,26 +116,22 @@ impl OrbitRuntime {
     /// pre-state and the later write silently discarded the earlier one. The
     /// lock is re-entrant per thread, so the store's own per-write locking
     /// still holds underneath this one.
-    fn update_task_with_status_note_and_identity(
+    fn update_task_with_context(
         &self,
         id: &str,
         params: TaskUpdateParams,
-        status_note: Option<String>,
-        agent: Option<String>,
-        model: Option<String>,
-        owner: Option<String>,
+        context: TaskUpdateContext,
     ) -> Result<Task, OrbitError> {
         // The lock hook takes `FnMut` because it is a trait object, but the
         // body must run exactly once and consumes its inputs; `take()` makes
         // both facts explicit rather than forcing the params to be cloneable.
-        let mut inputs = Some((params, status_note, agent, model, owner));
+        let mut inputs = Some((params, context));
         let mut updated: Option<Task> = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
-            let (params, status_note, agent, model, owner) = inputs.take().ok_or_else(|| {
+            let (params, context) = inputs.take().ok_or_else(|| {
                 OrbitError::Execution("task update body was invoked more than once".to_string())
             })?;
-            updated =
-                Some(self.update_task_locked(id, params, status_note, agent, model, owner)?);
+            updated = Some(self.update_task_locked(id, params, context)?);
             Ok(())
         })?;
         let updated = updated.ok_or_else(|| {
@@ -125,14 +150,26 @@ impl OrbitRuntime {
         &self,
         id: &str,
         mut params: TaskUpdateParams,
-        status_note: Option<String>,
-        agent: Option<String>,
-        model: Option<String>,
-        owner: Option<String>,
+        context: TaskUpdateContext,
     ) -> Result<Task, OrbitError> {
+        let TaskUpdateContext {
+            status_note,
+            agent,
+            model,
+            artifact_owner,
+            expected_status,
+        } = context;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
         let task = self.get_task(id)?;
+        if let Some(expected_status) = expected_status
+            && task.status != expected_status
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "task '{id}' status changed to '{}' before this activity write; expected '{expected_status}'",
+                task.status
+            )));
+        }
         let prune_root = context_workspace_root(&self.paths().repo_root, None);
 
         let dropped_context_files: Vec<String> = if let Some(candidates) =
@@ -172,60 +209,12 @@ impl OrbitRuntime {
                 )));
             }
         }
-        // Archived tasks accept exactly one mutation: the guarded restore to
-        // backlog (formerly `orbit task unarchive`). Everything else requires
-        // restoring the task first.
-        let unarchiving =
-            task.status == TaskStatus::Archived && params.status == Some(TaskStatus::Backlog);
-        if params.has_any_mutation() && task.status == TaskStatus::Archived && !unarchiving {
-            return Err(OrbitError::InvalidInput(format!(
-                "task {id} is {} and cannot be modified; restore it with `orbit task update {id} --status backlog` first",
-                task.status
-            )));
-        }
-        if params.has_non_comment_mutation() && task.status == TaskStatus::Done {
-            return Err(OrbitError::InvalidInput(format!(
-                "task {id} is {} and cannot be modified; done is terminal",
-                task.status
-            )));
-        }
-
-        if let Some(target_status) = params.status {
-            if target_status == TaskStatus::Archived {
-                return Err(OrbitError::InvalidInput(
-                    "use `orbit task archive <id>` instead of setting status to archived"
-                        .to_string(),
-                ));
+        if params.status == Some(TaskStatus::Done) && task.status != TaskStatus::Done {
+            let mut preview = task.clone();
+            if let Some(relations) = &params.relations {
+                preview.relations = relations.clone();
             }
-            task.status
-                .validate_transition(target_status)
-                .map_err(OrbitError::TaskStatusTransition)?;
-            if target_status == TaskStatus::InProgress
-                && task.status != TaskStatus::InProgress
-                && in_progress_transition_requires_plan(task.status)
-            {
-                let effective_plan = params.plan.as_deref().unwrap_or(task.plan.as_str());
-                ensure_task_has_execution_plan(id, effective_plan)?;
-            }
-            if target_status == TaskStatus::Done && task.status != TaskStatus::Done {
-                let mut preview = task.clone();
-                if let Some(relations) = &params.relations {
-                    preview.relations = relations.clone();
-                }
-                self.ensure_resolves_are_workspace_local(&preview)?;
-            }
-        }
-
-        if task.status == TaskStatus::InProgress && params.status == Some(TaskStatus::Review) {
-            let effective_execution_summary = params
-                .execution_summary
-                .as_deref()
-                .unwrap_or(task.execution_summary.as_str());
-            if effective_execution_summary.trim().is_empty() {
-                return Err(OrbitError::InvalidInput(format!(
-                    "task '{id}' requires non-empty execution_summary before transitioning in-progress -> review"
-                )));
-            }
+            self.ensure_resolves_are_workspace_local(&preview)?;
         }
 
         let actor = self.actor().clone();
@@ -238,7 +227,13 @@ impl OrbitRuntime {
                 model: canonical_model.as_deref(),
                 runtime_model_identity: None,
                 plan_changed: params.plan.is_some(),
-                target_status: params.status,
+                // A classification edit alone is not implementation evidence.
+                // Activity writes carry an expected status and therefore come
+                // from an execution boundary; ordinary edits must include a
+                // summary before implementation attribution is inferred.
+                target_status: (expected_status.is_some() || params.execution_summary.is_some())
+                    .then_some(params.status)
+                    .flatten(),
                 explicit_planned_by: params.planned_by.as_ref(),
                 explicit_implemented_by: params.implemented_by.as_ref(),
             },
@@ -267,18 +262,6 @@ impl OrbitRuntime {
                 &dropped_context_files,
             )]
         };
-        // An explicit block is current intent even when the failure already
-        // parked the task. Triage must not mistake this for its old coupling.
-        if task.status == TaskStatus::Blocked && params.status == Some(TaskStatus::Blocked) {
-            append_history.push(TaskHistoryEntry {
-                at: chrono::Utc::now(),
-                by: effective_label.clone(),
-                event: "block_confirmed".into(),
-                note: params.comment.clone(),
-                from_status: Some(TaskStatus::Blocked),
-                to_status: Some(TaskStatus::Blocked),
-            });
-        }
         if let Some(replacement) = source_task_id_replacement {
             // ORB-10311: record the explicit previous and replacement source
             // ids (with a clear marker for the unset case) so the change is
@@ -296,26 +279,34 @@ impl OrbitRuntime {
                 to_status: None,
             });
         }
+        let previous_status = task.status;
         let updated = self.with_mutation(|| {
-            let task = self.stores().task_records().update(
+            let updated = self.stores().task_records().update(
                 id,
                 TaskRecordUpdateParams {
-                    artifact_owner_run_id: owner.clone(),
+                    artifact_owner_run_id: artifact_owner.clone(),
                     actor: effective_label.clone(),
                     planned_by: attribution.planned_by.clone(),
                     implemented_by: attribution.implemented_by.clone(),
                     status_note,
                     append_comments: append_comments.clone(),
                     append_history: append_history.clone(),
+                    expected_status: expected_status.map(|status| vec![status]),
                     ..TaskRecordUpdateParams::from(params)
                 },
             )?;
-            let event = if unarchiving {
+            let event = if previous_status == TaskStatus::Archived
+                && updated.status != TaskStatus::Archived
+            {
                 OrbitEvent::TaskUnarchived { id: id.to_string() }
+            } else if previous_status != TaskStatus::Archived
+                && updated.status == TaskStatus::Archived
+            {
+                OrbitEvent::TaskArchived { id: id.to_string() }
             } else {
                 OrbitEvent::TaskUpdated { id: id.to_string() }
             };
-            Ok((task.clone(), event))
+            Ok((updated.clone(), event))
         })?;
 
         Ok(updated)

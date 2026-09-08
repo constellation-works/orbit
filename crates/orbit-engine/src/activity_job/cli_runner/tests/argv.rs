@@ -121,8 +121,8 @@ fn task_pilot_reviewer_profile_starts_direct_linux_invocation_with_env_denies() 
         deny_read: resource.spec.deny_read,
         deny_modify: resource.spec.deny_modify,
         fs_profiles: resource.spec.fs_profiles,
-        created_at: now,
-        updated_at: now,
+        created_at: Some(now),
+        updated_at: Some(now),
     };
     assert!(
         policy
@@ -257,8 +257,8 @@ fn triage_reviewer_profile_starts_direct_linux_invocation_and_protects_env_paths
         deny_read: resource.spec.deny_read,
         deny_modify: resource.spec.deny_modify,
         fs_profiles: resource.spec.fs_profiles,
-        created_at: now,
-        updated_at: now,
+        created_at: Some(now),
+        updated_at: Some(now),
     };
 
     let temp = tempfile::tempdir().expect("tempdir");

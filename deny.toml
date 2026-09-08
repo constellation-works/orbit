@@ -26,10 +26,10 @@ ignore = [
     # tokenizers -> fastembed (embeddings). No maintained drop-in; low risk.
     # Re-review by 2027-01-04.
     { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; transitive via fastembed/tokenizers; no vuln. Re-review 2027-01-04." },
-    # rsa Marvin timing sidechannel. No constant-time release yet. Reachable
-    # only via local embedding/search paths where request timing is not
-    # network-observable. Re-review by 2027-01-04.
-    { id = "RUSTSEC-2023-0071", reason = "rsa Marvin timing sidechannel; no fixed release; local non-network-observable use. Re-review 2027-01-04." },
+    # rsa Marvin timing sidechannel. No constant-time release yet. Orbit uses
+    # rsa only for public-key release verification; Marvin concerns private-key
+    # decryption/signing, which the binary never performs. Re-review by 2027-01-04.
+    { id = "RUSTSEC-2023-0071", reason = "rsa used only for PKCS#1 v1.5 public-key verification of release checksums (orbit-common::security::release); Marvin concerns private-key decryption/signing, which the binary never performs. Re-review 2027-01-04." },
 ]
 
 [licenses]

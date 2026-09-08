@@ -1,14 +1,14 @@
 use clap::Args;
 use orbit_cmd::task_owner::{WorkspaceIdentity, bound_workspace_identity};
 use orbit_core::{OrbitError, OrbitRuntime, TaskRelatedDoc};
-use orbit_types::task::is_task_show_projection_field;
+use orbit_types::task::{TaskRelationType, is_task_show_projection_field};
 use serde_json::{Value, json};
 
-use crate::command::{Block, CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{Block, CommandOut, Execute, Payload};
 
 use super::output::{
-    is_human_visible_history_event, print_task_fields, task_fields_to_json,
-    task_to_json_for_runtime,
+    format_task_fields, is_human_visible_history_event, task_fields_to_json,
+    task_to_json_with_sidecars,
 };
 
 #[derive(Args)]
@@ -51,19 +51,9 @@ impl Execute for TaskShowArgs {
                     "`--with-context` cannot be combined with `--fields`".to_string(),
                 ));
             }
-            if self.json {
-                return Ok(Payload::document(task_fields_to_json(
-                    runtime,
-                    &task,
-                    &fields,
-                    Some(&status_by_id),
-                )?)
-                .into());
-            }
-            return {
-                print_task_fields(runtime, &task, &fields, Some(&status_by_id))?;
-                Ok(CommandOutput::Silent)
-            };
+            let doc = task_fields_to_json(runtime, &task, &fields, Some(&status_by_id))?;
+            let text = format_task_fields(runtime, &task, &fields, Some(&status_by_id))?;
+            return Ok(Payload::detail(doc, text).into());
         }
 
         let related_docs = if self.with_context {
@@ -74,7 +64,8 @@ impl Execute for TaskShowArgs {
         // The task may have been reached through the global registry rather
         // than the cwd, so every full projection names where it was read from.
         let owner = bound_workspace_identity(runtime);
-        let mut doc = task_to_json_for_runtime(runtime, &task)?;
+        let projection = task_to_json_with_sidecars(runtime, &task, &status_by_id)?;
+        let mut doc = projection.doc;
         if let Some(owner) = &owner {
             insert_workspace_identity(&mut doc, owner)?;
         }
@@ -127,6 +118,36 @@ impl Execute for TaskShowArgs {
                     let _ = writeln!(out, "  - {}", dependency.label());
                 }
             }
+            let relations = orbit_core::resolve_task_relations(&task, &status_by_id);
+            if !relations.is_empty() {
+                let _ = writeln!(out, "{}", bold("Relations:"));
+                for relation in relations {
+                    let status = relation
+                        .verification
+                        .or_else(|| status_by_id.get(&relation.target).map(ToString::to_string))
+                        .unwrap_or_else(|| "missing".to_string());
+                    let _ = writeln!(
+                        out,
+                        "  - {}: {} [{}]",
+                        relation_type_label(relation.relation_type),
+                        relation.target,
+                        status
+                    );
+                }
+            }
+            let artifacts = runtime.get_task_artifacts(&task.id)?;
+            if !artifacts.is_empty() {
+                let _ = writeln!(out, "{}", bold("Artifacts:"));
+                for artifact in artifacts {
+                    let _ = writeln!(
+                        out,
+                        "  - {} ({}, {} bytes)",
+                        artifact.path,
+                        artifact.media_type,
+                        artifact.content.len()
+                    );
+                }
+            }
             if !task.tags.is_empty() {
                 let _ = writeln!(out, "{} {}", bold("Tags:"), task.tags.join(", "));
             }
@@ -163,10 +184,9 @@ impl Execute for TaskShowArgs {
                     task.execution_summary
                 );
             }
-            let comments = runtime.get_task_comments(&task.id)?;
-            if !comments.is_empty() {
+            if !projection.comments.is_empty() {
                 let _ = writeln!(out, "{}", bold("Comments:"));
-                for comment in &comments {
+                for comment in &projection.comments {
                     let _ = writeln!(
                         out,
                         "  {} {}: {}",
@@ -203,8 +223,8 @@ impl Execute for TaskShowArgs {
             if let Some(ref orchestrator) = task.orchestrator {
                 let _ = writeln!(out, "{} {}", bold("Orchestrator:"), orchestrator);
             }
-            let history = runtime.get_task_history(&task.id)?;
-            let visible_history: Vec<_> = history
+            let visible_history: Vec<_> = projection
+                .history
                 .iter()
                 .filter(|entry| is_human_visible_history_event(&entry.event))
                 .collect();
@@ -234,6 +254,9 @@ impl Execute for TaskShowArgs {
             if let Some(ref pr_status) = task.pr_status {
                 let _ = writeln!(out, "{} {}", bold("PR Status:"), pr_status);
             }
+            if let Some(review) = doc.get("review") {
+                let _ = writeln!(out, "{} {}", bold("Review:"), review);
+            }
             if let Some(source_task_id) = task.source_task_id() {
                 let _ = writeln!(out, "{} {}", bold("Source Task:"), source_task_id);
             }
@@ -255,6 +278,19 @@ impl Execute for TaskShowArgs {
     }
 }
 
+fn relation_type_label(relation_type: TaskRelationType) -> &'static str {
+    match relation_type {
+        TaskRelationType::BlockedBy => "blocked_by",
+        TaskRelationType::ChildOf => "child_of",
+        TaskRelationType::SpawnedFrom => "spawned_from",
+        TaskRelationType::RegressionFrom => "regression_from",
+        TaskRelationType::Supersedes => "supersedes",
+        TaskRelationType::RelatedTo => "related_to",
+        TaskRelationType::Produces => "produces",
+        TaskRelationType::Resolves => "resolves",
+    }
+}
+
 /// Name the owning workspace on an unprojected `orbit.task.show` result.
 ///
 /// Human `orbit task show`, `orbit tool run orbit.task.show`, and MCP
@@ -263,7 +299,7 @@ impl Execute for TaskShowArgs {
 pub(crate) fn attach_bound_workspace_identity(
     tool_name: &str,
     input: &Value,
-    runtime: &OrbitRuntime,
+    owner: Option<&WorkspaceIdentity>,
     mut output: Value,
 ) -> Result<Value, OrbitError> {
     if tool_name != "orbit.task.show" {
@@ -272,8 +308,8 @@ pub(crate) fn attach_bound_workspace_identity(
     if input.get("field").is_some() || input.get("fields").is_some() {
         return Ok(output);
     }
-    if let Some(owner) = bound_workspace_identity(runtime) {
-        insert_workspace_identity(&mut output, &owner)?;
+    if let Some(owner) = owner {
+        insert_workspace_identity(&mut output, owner)?;
     }
     Ok(output)
 }

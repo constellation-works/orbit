@@ -11,7 +11,10 @@ use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
 use super::*;
-use crate::driver::file::task_bundle::task_bundle_lock_sentinel_path;
+
+#[cfg(unix)]
+const TASK_LOCK_HOLDER_CHILD_TEST: &str =
+    "repository::task::v2::tests::concurrency::task_lock_holder_child";
 
 fn create_tasks(store: &TaskV2Store, count: usize) -> Vec<String> {
     (0..count)
@@ -30,6 +33,112 @@ fn document_update(actor: &str, summary: &str) -> TaskDocumentUpdateParams {
         execution_summary: Some(summary.to_string()),
         ..Default::default()
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn task_update_times_out_with_live_process_holder_diagnostics_then_recovers() {
+    use std::os::unix::fs::MetadataExt;
+
+    use orbit_common::fs::io::{FileLockOptions, with_exclusive_file_lock_options};
+
+    use crate::driver::file::task_bundle::bundle_lock_target;
+
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let id = create_tasks(&store, 1).remove(0);
+    let bundle_dir = store.bundle_store.bundle_path(&id).expect("bundle path");
+    let lock_target = bundle_lock_target(&bundle_dir);
+    let lock_path = lock_target.with_file_name(format!(".{id}.bundle.lock"));
+    let ready_path = temp.path().join("holder-ready");
+
+    let exe = std::env::current_exe().expect("current test exe");
+    let mut child = std::process::Command::new(exe)
+        .args(["--exact", TASK_LOCK_HOLDER_CHILD_TEST, "--ignored"])
+        .env("ORBIT_TASK_LOCK_HOLDER_PATH", &lock_path)
+        .env("ORBIT_TASK_LOCK_HOLDER_READY", &ready_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn task-lock holder");
+    let child_pid = child.id();
+
+    let started = std::time::Instant::now();
+    while !ready_path.exists() {
+        if started.elapsed() > Duration::from_secs(20) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("child never acquired task lock");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let inode = std::fs::metadata(&lock_path).expect("lock metadata").ino();
+    let result = with_exclusive_file_lock_options(
+        &lock_target,
+        "competing task update",
+        FileLockOptions {
+            timeout: Duration::from_millis(150),
+            warn_after: Duration::from_secs(60),
+        },
+        || {
+            store
+                .update_task_document(&id, &document_update("codex", "after contention"))
+                .map(|_| ())
+        },
+    );
+
+    child.kill().expect("kill task-lock holder");
+    child.wait().expect("reap task-lock holder");
+
+    let error: OrbitError = result.expect_err("live holder must force the short deadline");
+    let timeout = error
+        .file_lock_timeout()
+        .expect("timeout must retain its structured type");
+    assert_eq!(timeout.lock_path, lock_path);
+    let holder = timeout.holder.as_ref().expect("holder metadata");
+    assert_eq!(holder.pid, child_pid);
+    assert_eq!(holder.label, "task update test holder");
+
+    let stale = crate::fs::lock::read_lock_holder(&lock_path)
+        .expect("killed holder metadata remains for doctor");
+    assert_eq!(stale.pid, child_pid);
+
+    store
+        .update_task_document(&id, &document_update("codex", "after contention"))
+        .expect("killing the holder releases the advisory lock");
+    assert_eq!(
+        std::fs::metadata(&lock_path).expect("lock retained").ino(),
+        inode,
+        "recovery must preserve the stable lock-file identity"
+    );
+    assert!(
+        crate::fs::lock::read_lock_holder(&lock_path).is_none(),
+        "the successful update must clear holder metadata on release"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "helper process for task_update_times_out_with_live_process_holder_diagnostics_then_recovers"]
+fn task_lock_holder_child() {
+    use orbit_common::fs::io::{FileLockOptions, acquire_exclusive_file_lock};
+
+    let (Ok(lock_path), Ok(ready_path)) = (
+        std::env::var("ORBIT_TASK_LOCK_HOLDER_PATH"),
+        std::env::var("ORBIT_TASK_LOCK_HOLDER_READY"),
+    ) else {
+        return;
+    };
+
+    let _guard = acquire_exclusive_file_lock(
+        std::path::Path::new(&lock_path),
+        "task update test holder",
+        FileLockOptions::default(),
+    )
+    .expect("child acquires task lock");
+    std::fs::write(ready_path, b"ready").expect("write ready sentinel");
+    std::thread::sleep(Duration::from_secs(60));
 }
 
 /// A bundle removed between the registry snapshot and the read — the window
@@ -67,29 +176,20 @@ fn listing_survives_a_bundle_removed_under_a_live_registry_binding() {
     );
 }
 
-/// An incomplete bundle whose create/delete lock sentinel is present is a
-/// writer's work in progress, not damage: skip it and serve every other task.
+/// A stale sentinel from the retired lock protocol cannot hide corruption.
 #[test]
-fn listing_skips_an_incomplete_bundle_held_by_the_lock_sentinel() {
+fn listing_reports_an_incomplete_bundle_despite_a_stale_lock_sentinel() {
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let ids = create_tasks(&store, 2);
-
-    let in_flight = store
-        .bundle_store
-        .bundle_path(&ids[0])
-        .expect("bundle path");
-    let sentinel = task_bundle_lock_sentinel_path(&in_flight).expect("sentinel path");
-    std::fs::write(&sentinel, b"").expect("hold the sentinel");
-    std::fs::remove_file(in_flight.join("description.md")).expect("truncate publication");
-
-    let listed: Vec<String> = store
-        .list_tasks()
-        .expect("an in-flight bundle must not fail the listing")
-        .into_iter()
-        .map(|task| task.id)
-        .collect();
-    assert_eq!(listed, vec![ids[1].clone()]);
+    let path = store.bundle_store.bundle_path(&ids[0]).unwrap();
+    let sentinel = path.with_file_name(format!(".{}.lock", ids[0]));
+    std::fs::write(sentinel, b"").unwrap();
+    std::fs::remove_file(path.join("description.md")).unwrap();
+    assert!(matches!(
+        store.list_tasks(),
+        Err(OrbitError::TaskBundleCorrupt { .. })
+    ));
 }
 
 /// The tolerance is narrow on purpose: a bundle that is neither held by a
@@ -294,8 +394,9 @@ fn a_reader_never_observes_a_transition_between_its_event_and_its_envelope() {
     });
 }
 
-/// The tolerance stays narrow: once no writer holds the bundle, an event log
-/// that disagrees with the envelope is real damage and must still surface.
+/// The tolerance stays narrow: once no writer holds the bundle and no pending
+/// write record exists, an event log that disagrees with the envelope is real
+/// damage and must still surface.
 #[test]
 fn a_settled_event_and_envelope_mismatch_is_still_corruption() {
     let temp = TempDir::new().expect("tempdir");
@@ -472,4 +573,125 @@ where
         let _ = sender.send(op());
     });
     receiver.recv_timeout(budget).ok()
+}
+
+#[test]
+fn deletion_waits_for_a_transition_and_leaves_no_partial_bundle() {
+    let temp = TempDir::new().unwrap();
+    let store = store(&temp);
+    let id = create_tasks(&store, 1).remove(0);
+    let holding = Barrier::new(2);
+    let release = Barrier::new(2);
+    let (sent, received) = std::sync::mpsc::sync_channel(1);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            store
+                .with_task_lock(&id, || {
+                    holding.wait();
+                    release.wait();
+                    store.update_task_history(
+                        &id,
+                        &TaskHistoryUpdateParams {
+                            actor: "codex".into(),
+                            status: Some(TaskStatus::InProgress),
+                            ..Default::default()
+                        },
+                    )?;
+                    Ok(())
+                })
+                .unwrap()
+        });
+        holding.wait();
+        scope.spawn(|| {
+            sent.send(store.delete_task(&id)).unwrap();
+        });
+        let early = received.recv_timeout(Duration::from_millis(100));
+        release.wait();
+        assert!(early.is_err(), "deletion must wait for the transition");
+        assert!(
+            received
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .unwrap()
+        );
+    });
+    assert!(!store.bundle_store.bundle_path(&id).unwrap().exists());
+    assert!(store.get_task(&id).unwrap().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_writer_opened_before_deletion_keeps_the_same_lock_inode() {
+    use crate::driver::file::task_bundle::bundle_lock_target;
+    use fs2::FileExt;
+    use std::os::unix::fs::MetadataExt;
+
+    let temp = TempDir::new().unwrap();
+    let store = store(&temp);
+    for _ in 0..20 {
+        let id = create_tasks(&store, 1).remove(0);
+        let dir = store.bundle_store.bundle_path(&id).unwrap();
+        let target = bundle_lock_target(&dir);
+        let lock_path = target.with_file_name(format!(".{id}.bundle.lock"));
+        let holding = Barrier::new(2);
+        let opened = Barrier::new(2);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                store
+                    .with_task_lock(&id, || {
+                        holding.wait();
+                        opened.wait();
+                        store.delete_task(&id)?;
+                        Ok(())
+                    })
+                    .unwrap()
+            });
+            holding.wait();
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&lock_path)
+                .unwrap();
+            let before = file.metadata().unwrap().ino();
+            // Descriptor opened before deletion, acquisition after deletion:
+            // this is the obsolete-inode window, without scheduler assumptions.
+            opened.wait();
+            file.lock_exclusive().unwrap();
+            assert_eq!(before, std::fs::metadata(&lock_path).unwrap().ino());
+            FileExt::unlock(&file).unwrap();
+        });
+        let error = store
+            .update_task_document(&id, &document_update("codex", "late write"))
+            .unwrap_err();
+        assert!(matches!(error, OrbitError::NotFound { .. }), "{error}");
+        assert!(!dir.exists());
+    }
+}
+
+#[test]
+fn queued_document_updates_cannot_recreate_deleted_bundles() {
+    let temp = TempDir::new().unwrap();
+    let store = store(&temp);
+    for _ in 0..20 {
+        let id = create_tasks(&store, 1).remove(0);
+        let queued = Barrier::new(2);
+        std::thread::scope(|scope| {
+            let writer = store
+                .with_task_lock(&id, || {
+                    let writer = scope.spawn(|| {
+                        queued.wait();
+                        store.update_task_document(&id, &document_update("codex", "queued"))
+                    });
+                    queued.wait();
+                    assert!(store.delete_task(&id)?);
+                    Ok(writer)
+                })
+                .unwrap();
+            assert!(matches!(
+                writer.join().unwrap(),
+                Err(OrbitError::NotFound { .. })
+            ));
+        });
+        assert!(!store.bundle_store.bundle_path(&id).unwrap().exists());
+    }
 }

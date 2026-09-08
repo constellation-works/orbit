@@ -32,6 +32,7 @@ struct Assessment<'a> {
     disposition: &'a str,
     duplicate_of: Value,
     already_landed: Value,
+    release_action_required: Value,
     warnings: Vec<&'a str>,
     authorized: bool,
 }
@@ -43,6 +44,7 @@ impl<'a> Assessment<'a> {
             disposition: "selectors",
             duplicate_of: Value::Null,
             already_landed: Value::Null,
+            release_action_required: Value::Null,
             warnings: Vec::new(),
             authorized,
         }
@@ -54,6 +56,7 @@ impl<'a> Assessment<'a> {
             disposition: "verified_no_diff",
             duplicate_of: Value::Null,
             already_landed: json!({"evidence": evidence}),
+            release_action_required: Value::Null,
             warnings: Vec::new(),
             authorized: true,
         }
@@ -68,6 +71,7 @@ impl<'a> Assessment<'a> {
                 "evidence": "an open task already owns the same current repair",
             }),
             already_landed: Value::Null,
+            release_action_required: Value::Null,
             warnings: vec!["duplicate task must be inspected before reconsideration"],
             authorized: true,
         }
@@ -79,6 +83,31 @@ impl<'a> Assessment<'a> {
             disposition: "verified_no_diff",
             duplicate_of: Value::Null,
             already_landed: Value::Null,
+            release_action_required: Value::Null,
+            warnings: Vec::new(),
+            authorized: true,
+        }
+    }
+
+    /// The incident shape: a job resolves a version this repository records
+    /// but nobody published, and the pilot reports the publication as the
+    /// required action. Passing selectors reproduces the pilot that proposed
+    /// editing the version-lockstep files anyway; passing none reproduces the
+    /// contract the activity now asks for.
+    fn pending_publication(selectors: Vec<&'a str>) -> Self {
+        Self {
+            disposition: if selectors.is_empty() {
+                "verified_no_diff"
+            } else {
+                "selectors"
+            },
+            selectors,
+            duplicate_of: Value::Null,
+            already_landed: Value::Null,
+            release_action_required: json!({
+                "action": "publish the recorded release version, or withdraw the recorded bump, as a release operation",
+                "evidence": "the smoke job resolves the version this repository already records, and the registry has no such published version",
+            }),
             warnings: Vec::new(),
             authorized: true,
         }
@@ -126,6 +155,7 @@ fn apply_pilot(
                         "blocked_by": [],
                         "duplicate_of": assessment.duplicate_of,
                         "already_landed": assessment.already_landed,
+                        "release_action_required": assessment.release_action_required,
                         "adr_conflicts": [],
                         "utility_warnings": assessment.warnings,
                         "surface_warnings": [],
@@ -311,6 +341,135 @@ fn already_landed_release_stays_proposed_but_distinct_current_regression_advance
         runtime
             .get_task(current_filing["task_id"].as_str().expect("current id"))
             .expect("current task")
+            .status,
+        TaskStatus::Backlog
+    );
+}
+
+#[test]
+fn pending_release_publication_withholds_promotion_and_names_the_operator_action() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "release/version.json");
+    write_workspace_file(&repo_root, "packaging/package.json");
+    write_workspace_file(&repo_root, "Cargo.toml");
+    let unpublished_version = concat!(
+        "smoke\tnpm install\tnpm error code ETARGET\n",
+        "smoke\tnpm install\tnpm error notarget No matching version found for @acme/cli@9.9.9.\n",
+    );
+    let filed = file(
+        &runtime,
+        vec![failure(
+            20,
+            "smoke-npm-install",
+            "smoke",
+            "npm install",
+            unpublished_version,
+            CHECKOUT,
+        )],
+    );
+    let filing = &filed["filed"][0];
+    let task_id = filing["task_id"].as_str().expect("task id");
+
+    let proposed_version_edits = apply_pilot(
+        &runtime,
+        &repo_root,
+        filing,
+        Assessment::pending_publication(vec![
+            "file:release/version.json",
+            "file:packaging/package.json",
+        ]),
+    )
+    .expect("apply a pilot that proposed release metadata edits");
+
+    let admission = &proposed_version_edits["ci_sweep_admission"][0];
+    assert_eq!(admission["decision"], "withhold");
+    assert_eq!(
+        admission["classification"],
+        "release_publication_or_operator_action_needed"
+    );
+    assert_eq!(admission["evidence"]["automatic_action"], "none");
+    assert!(
+        admission["evidence"]["required_action"]
+            .as_str()
+            .is_some_and(|required| required.contains("publish")),
+        "{admission}"
+    );
+    assert_eq!(
+        admission["evidence"]["withheld_selectors"],
+        json!(["file:release/version.json", "file:packaging/package.json"])
+    );
+    assert_eq!(
+        admission["evidence"]["red_failure"]["tested_commit"],
+        CHECKOUT
+    );
+    assert_eq!(admission["source"]["workflow"], "smoke-npm-install");
+    assert_eq!(
+        runtime.get_task(task_id).expect("task").status,
+        TaskStatus::Proposed
+    );
+    assert!(!backlog_task_ids(&runtime).contains(&task_id.to_string()));
+
+    // The contract shape the activity now asks for reaches the same owner
+    // instead of the unproven-no-diff disposition.
+    let reported_without_selectors = apply_pilot(
+        &runtime,
+        &repo_root,
+        filing,
+        Assessment::pending_publication(Vec::new()),
+    )
+    .expect("apply a pilot that returned no repository work");
+    assert_eq!(
+        reported_without_selectors["ci_sweep_admission"][0]["classification"],
+        "release_publication_or_operator_action_needed"
+    );
+
+    // Repeated unchanged evidence keeps one owner with the preserved failure
+    // and is re-piloted; it is never reported as a clean sweep.
+    let repeated = file(
+        &runtime,
+        vec![failure(
+            21,
+            "smoke-npm-install",
+            "smoke",
+            "npm install",
+            unpublished_version,
+            NEXT_HEAD,
+        )],
+    );
+    assert_eq!(repeated["outcome"], "current_failures");
+    assert_eq!(repeated["filed_count"], json!(0));
+    assert_eq!(repeated["pilot_candidate_count"], json!(1));
+    assert_eq!(repeated["pilot_candidates"][0]["task_id"], task_id);
+
+    // No filename denylist: a repository-owned dependency contract defect in
+    // the same kind of manifest stays eligible once a pilot establishes it.
+    let owned = file(
+        &runtime,
+        vec![failure(
+            22,
+            "ci",
+            "build",
+            "cargo build",
+            "ci\tbuild\terror: failed to select a version for the requirement\n",
+            CHECKOUT,
+        )],
+    );
+    let owned_filing = &owned["filed"][0];
+    let admitted = apply_pilot(
+        &runtime,
+        &repo_root,
+        owned_filing,
+        Assessment::actionable("file:Cargo.toml", true),
+    )
+    .expect("admit a repository-owned dependency repair");
+    assert_eq!(
+        admitted["ci_sweep_admission"][0]["classification"],
+        "current_actionable_regression"
+    );
+    assert_eq!(
+        runtime
+            .get_task(owned_filing["task_id"].as_str().expect("owned task id"))
+            .expect("owned task")
             .status,
         TaskStatus::Backlog
     );

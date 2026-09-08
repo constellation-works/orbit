@@ -1,8 +1,8 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-09-07
+last_validated: 2026-09-07
 status: Accepted
 feature: routines
 doc_role: design
@@ -46,7 +46,17 @@ the supported platforms; there is no resident Orbit daemon ([Host-local sweep cl
 
 The dashboard Operations view projects the same typed status and control functions
 [ORB-10875]. Routine definitions remain workspace-scoped and show their versioned
-`enabled` value; the host clock remains one independent host-scoped card. A routine
+`enabled` value; the host clock remains one independent host-scoped card.
+Next evaluation uses schedule display state (`scheduled`, `disabled`, `paused`,
+`waiting`, `never_observed`, `unavailable`) so a disabled or paused routine
+does not look armed; a theoretical next slot is labeled hypothetical. The time
+itself is `due::next_occurrence` — the cron's next scheduled occurrence,
+strictly ahead of now and pinned to its minute — not the sweep's catch-up
+eligibility. A routine holding a missed slot under `catch_up_once` is due for
+that earlier slot while the row still points forward, which is correct.
+Clock last/next tick are wall-clock times; systemd `NextElapseUSecMonotonic`
+is used only for schedulability, never as a displayed next tick. Cadence is a
+duration. A routine
 toggle resolves its file from a freshly loaded `LoadedRoutine`, validates the displayed
 workspace, host, target, and expected prior state, changes only the top-level `enabled`
 field, reparses the document, and uses an atomic rename. Clock requests are a closed
@@ -173,6 +183,19 @@ reported as `covering_proof_missing` and remains proposed for a later bounded pi
 of being treated as already landed. The routine is a scheduling surface only: an
 operator-triggered run of the job behaves identically to a scheduled fire.
 
+Publication shares that release boundary. A job can fail because the repository already
+records a version, tag, or artifact its operator has not published or promoted yet; the
+only correct repair is that release action, which this sweep never performs. The pilot
+states that intent explicitly by returning `release_action_required` with the action and
+its evidence, and admission then reports
+`release_publication_or_operator_action_needed` — carrying the red run, the pilot's
+finding, and any selectors it withheld — while the deduped task stays in proposed
+quarantine and keeps owning the preserved failure evidence. Admission never infers this
+from which files a proposed repair would touch, so a defect the repository does own — a
+wrong dependency requirement, a broken manifest, a packaging script bug — remains eligible
+for ordinary promotion. The same finding also clears the state automation's readiness flag,
+so neither promotion path can turn a pending publication into automatic version edits.
+
 The seeded `ship_sweep` targets `job:workspace_ship_pipeline` with `missed_run: skip` and
 `overlap: forbid`. The wrapper resolves the source runtime's ship mode and configured base
 branch, invokes and waits for `task_auto_pipeline` without explicit task IDs, and guards
@@ -258,8 +281,11 @@ Per pass:
    (last slot, else the first-observation baseline — a routine never fires for slots that
    predate its registration on this host; the first sweep records the baseline and fires
    nothing). Due-ness is O(1) via previous-occurrence lookup, never a walk over every
-   missed slot; `missed_run` policy decides gaps. A slot is "natural" within a 120s grace
-   of its scheduled time.
+   missed slot; `missed_run` policy decides gaps. A slot is "natural" for two configured
+   clock-cadence intervals after its scheduled time: the default 60s clock therefore keeps
+   the existing 120s grace, while a configured 300s clock keeps a slot natural for 600s.
+   This admits one delayed or missed poll without turning genuine downtime into a `skip`
+   fire.
 7. For each due routine: check `overlap` against in-flight fires, record the fire intent
    (idempotency key: routine name + scheduled slot + attempt, transactionally with the
    cursor advance), then dispatch the target via `submit_pipeline_run` in the routine's
@@ -308,7 +334,7 @@ shows all three columns plus computed next-due, so "why didn't this fire?" is on
 The OS owns the wake-up; Orbit owns everything else. `orbit routine init --install-clock`
 renders and installs the platform unit:
 
-- **macOS** — a launchd agent (`com.orbit.sweep`) with `StartInterval` 60s. launchd also
+- **macOS** — a launchd agent (`com.orbit.sweep`) with `StartInterval=<cadence>`. launchd also
   fires on wake, which pairs with `missed_run: catch_up_once` for laptop sleep gaps.
 - **Linux** — `orbit-sweep.timer` combines `OnActiveSec=<cadence>` with
   `OnUnitActiveSec=<cadence>` plus a oneshot service. Every timer activation (fresh install,
@@ -321,6 +347,10 @@ renders and installs the platform unit:
   triggers deliberately do not replay timer events missed while the manager or host was
   down. The first sweep after restart evaluates each routine's cursor, so `catch_up_once`
   collapses missed cron slots to one fire and `skip` waits for the next natural slot.
+  Every sweep loads the same `clock.toml` cadence used to render the native timer, so
+  changing the clock from 60s to 300s changes its natural-slot grace from 120s to 600s.
+  The configured wake-up cost, routine enable/pause state, and host pinning are otherwise
+  unchanged.
 
 There is no resident Orbit daemon. Sub-minute triggers and event triggers are explicitly
 out of v1 scope for this reason.

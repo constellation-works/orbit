@@ -2,7 +2,6 @@ use orbit_common::OrbitError;
 use orbit_types::telemetry::InvocationTrace;
 use orbit_types::tool::ExecutionResult;
 use orbit_types::workflow::{AgentResponseEnvelope, AgentRunError};
-use serde::Deserialize;
 use serde_json::{Deserializer, Value};
 
 use super::protocol_schema::{RESPONSE_ENVELOPE_SCHEMA_VERSION, RESPONSE_ENVELOPE_STATUSES};
@@ -18,12 +17,13 @@ pub struct DeclaredResponseFailure {
 pub fn parse_and_validate_response(exec_result: &ExecutionResult) -> ResponseParseResult {
     match parse_json_envelope(exec_result) {
         Ok(parsed) => Ok(parsed),
+        Err(err) if is_discovery_limit_error(&err) => Err(err),
         Err(err) => synthesize_response(exec_result).ok_or(err),
     }
 }
 
 pub fn is_timeout(exec_result: &ExecutionResult) -> bool {
-    !exec_result.success && exec_result.stderr.contains("process timed out")
+    exec_result.timed_out
 }
 
 /// Best-effort lookup of an embedded Orbit response envelope's `status` field
@@ -35,16 +35,19 @@ pub fn is_timeout(exec_result: &ExecutionResult) -> bool {
 /// returns `Err` in that case because exit alignment fails, which threw away
 /// the signal the dispatcher needs to classify the outcome.
 ///
-/// Returns `None` when stdout cannot be parsed or carries no recognizable
-/// envelope, so callers can fall through to other classification rather than
-/// regressing legacy provider shapes.
+/// Returns `None` when stdout cannot be parsed, carries no recognizable
+/// envelope, or discovery exhausts its work bound. Validating APIs fail that
+/// last case closed instead of treating it as absent.
 pub fn peek_response_status(stdout: &str) -> Option<String> {
     let documents = parse_json_documents(stdout).ok()?;
-    let envelope = documents
-        .iter()
-        .rev()
-        .find_map(find_agent_response_envelope)?;
-    Some(envelope.status)
+    match discover_in_values(
+        documents.iter().rev(),
+        &mut Budget::production(),
+        deserialize_envelope,
+    ) {
+        Ok(Some(envelope)) => Some(envelope.status),
+        Ok(None) | Err(_) => None,
+    }
 }
 
 /// Best-effort lookup of a terminal failure declaration in provider stdout.
@@ -56,10 +59,12 @@ pub fn peek_response_status(stdout: &str) -> Option<String> {
 /// non-empty strings.
 pub fn peek_declared_response_failure(stdout: &str) -> Option<DeclaredResponseFailure> {
     let documents = parse_json_documents(stdout).ok()?;
-    documents
-        .iter()
-        .rev()
-        .find_map(find_declared_response_failure)
+    discover_in_values(
+        documents.iter().rev(),
+        &mut Budget::production(),
+        declared_response_failure,
+    )
+    .unwrap_or_default()
 }
 
 /// Content-blind check that a provider's stdout *terminated with* a well-formed
@@ -88,11 +93,12 @@ pub fn response_envelope_protocol_check(stdout: &str) -> Result<(), OrbitError> 
     // a completed step over stray stdout would be a worse defect than the one
     // this check exists to catch.
     let envelope = match parse_json_documents(stdout) {
-        Ok(documents) => documents
-            .iter()
-            .rev()
-            .find_map(find_agent_response_envelope),
-        Err(_) => find_agent_response_envelope_in_string(stdout),
+        Ok(documents) => discover_in_values(
+            documents.iter().rev(),
+            &mut Budget::production(),
+            deserialize_envelope,
+        )?,
+        Err(_) => discover_in_string(stdout, &mut Budget::production(), deserialize_envelope)?,
     };
     let envelope = envelope
         .ok_or_else(|| OrbitError::AgentProtocolViolation(missing_envelope_message(stdout)))?;
@@ -182,13 +188,14 @@ fn validate_exit_alignment(
 
 fn parse_json_envelope(exec_result: &ExecutionResult) -> ResponseParseResult {
     let documents = parse_json_documents(&exec_result.stdout)?;
-    let envelope = documents
-        .iter()
-        .rev()
-        .find_map(find_agent_response_envelope)
-        .ok_or_else(|| {
-            OrbitError::AgentProtocolViolation(missing_envelope_message(&exec_result.stdout))
-        })?;
+    let envelope = discover_in_values(
+        documents.iter().rev(),
+        &mut Budget::production(),
+        deserialize_envelope,
+    )?
+    .ok_or_else(|| {
+        OrbitError::AgentProtocolViolation(missing_envelope_message(&exec_result.stdout))
+    })?;
     let trace = extract_invocation_trace(&documents, exec_result.duration_ms);
 
     if envelope.schema_version != RESPONSE_ENVELOPE_SCHEMA_VERSION {
@@ -309,11 +316,13 @@ fn exit_zero_terminal_failure(exec_result: &ExecutionResult) -> Option<String> {
         return None;
     }
     let documents = parse_json_documents(&exec_result.stdout).ok()?;
-    if documents
-        .iter()
-        .any(|document| find_agent_response_envelope(document).is_some())
-    {
-        return None;
+    match discover_in_values(
+        documents.iter(),
+        &mut Budget::production(),
+        deserialize_envelope,
+    ) {
+        Ok(None) => {}
+        Ok(Some(_)) | Err(_) => return None,
     }
     wrapper_signals(&documents).terminal_ending_diagnostic()
 }
@@ -347,87 +356,267 @@ fn synthetic_error_message(exec_result: &ExecutionResult) -> String {
     "agent execution failed".to_string()
 }
 
-fn find_agent_response_envelope(value: &Value) -> Option<AgentResponseEnvelope> {
-    if let Some(envelope) = deserialize_envelope(value) {
-        return Some(envelope);
+/// Suffix JSON parses allowed while searching: the whole-string attempt plus
+/// each `{` candidate that is actually deserialized.
+pub(in crate::types) const ENVELOPE_DISCOVERY_MAX_PARSE_ATTEMPTS: u32 = 4_096;
+
+/// JSON nodes visited while searching for an envelope or declared failure.
+pub(in crate::types) const ENVELOPE_DISCOVERY_MAX_NODES: u32 = 65_536;
+
+const DISCOVERY_LIMIT_PREFIX: &str = "response envelope discovery exceeded a work limit";
+
+// [ORB-10746] `structured_output` first: with `--json-schema` in play it is
+// the schema-validated object the provider committed to, and Claude duplicates
+// it into `result` only as a JSON-encoded string. `result` is null on several
+// terminal paths where `structured_output` still holds the envelope, so probing
+// it first is the difference between reading the authoritative field and
+// parsing a copy by luck.
+const PREFERRED_OBJECT_KEYS: [&str; 9] = [
+    "structured_output",
+    "result",
+    "response",
+    "message",
+    "messages",
+    "content",
+    "final",
+    "final_message",
+    "output",
+];
+
+/// Caps for one envelope or declared-failure search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::types) struct EnvelopeDiscoveryBudget {
+    pub max_parse_attempts: u32,
+    pub max_nodes: u32,
+}
+
+impl EnvelopeDiscoveryBudget {
+    pub const fn production() -> Self {
+        Self {
+            max_parse_attempts: ENVELOPE_DISCOVERY_MAX_PARSE_ATTEMPTS,
+            max_nodes: ENVELOPE_DISCOVERY_MAX_NODES,
+        }
     }
 
-    match value {
-        Value::String(raw) => find_agent_response_envelope_in_string(raw),
-        Value::Array(items) => items.iter().rev().find_map(find_agent_response_envelope),
-        Value::Object(map) => {
-            for key in [
-                // [ORB-10746] `structured_output` first: with `--json-schema`
-                // in play it is the schema-validated object the provider
-                // committed to, and Claude duplicates it into `result` only as
-                // a JSON-encoded string. `result` is null on several terminal
-                // paths where `structured_output` still holds the envelope, so
-                // probing it first is the difference between reading the
-                // authoritative field and parsing a copy by luck.
-                "structured_output",
-                "result",
-                "response",
-                "message",
-                "messages",
-                "content",
-                "final",
-                "final_message",
-                "output",
-            ] {
-                if let Some(found) = map.get(key).and_then(find_agent_response_envelope) {
-                    return Some(found);
-                }
-            }
-
-            map.values().find_map(find_agent_response_envelope)
+    #[cfg(test)]
+    pub const fn new(max_parse_attempts: u32, max_nodes: u32) -> Self {
+        Self {
+            max_parse_attempts,
+            max_nodes,
         }
-        _ => None,
     }
 }
 
-fn find_declared_response_failure(value: &Value) -> Option<DeclaredResponseFailure> {
-    if let Some(failure) = declared_response_failure(value) {
-        return Some(failure);
+/// Parse/traversal accounting for one search. Sibling tests use this to pin
+/// the documented work bound and the skip-already-visited preferred-key rule.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(in crate::types) struct EnvelopeDiscoveryStats {
+    pub parse_attempts: u32,
+    pub nodes_visited: u32,
+}
+
+struct Budget {
+    max_parse_attempts: u32,
+    max_nodes: u32,
+    stats: EnvelopeDiscoveryStats,
+}
+
+impl Budget {
+    fn new(limits: EnvelopeDiscoveryBudget) -> Self {
+        Self {
+            max_parse_attempts: limits.max_parse_attempts,
+            max_nodes: limits.max_nodes,
+            stats: EnvelopeDiscoveryStats::default(),
+        }
     }
 
-    match value {
-        Value::String(raw) => find_declared_response_failure_in_string(raw),
-        Value::Array(items) => items.iter().rev().find_map(find_declared_response_failure),
-        Value::Object(map) => {
-            for key in [
-                "structured_output",
-                "result",
-                "response",
-                "message",
-                "messages",
-                "content",
-                "final",
-                "final_message",
-                "output",
-            ] {
-                if let Some(found) = map.get(key).and_then(find_declared_response_failure) {
-                    return Some(found);
-                }
-            }
+    fn production() -> Self {
+        Self::new(EnvelopeDiscoveryBudget::production())
+    }
 
-            map.values().find_map(find_declared_response_failure)
+    fn visit(&mut self) -> Result<(), OrbitError> {
+        self.stats.nodes_visited = self.stats.nodes_visited.saturating_add(1);
+        if self.stats.nodes_visited > self.max_nodes {
+            Err(discovery_limit_error(
+                "traversed nodes",
+                self.stats.nodes_visited,
+                self.max_nodes,
+            ))
+        } else {
+            Ok(())
         }
-        _ => None,
+    }
+
+    fn parse(&mut self) -> Result<(), OrbitError> {
+        self.stats.parse_attempts = self.stats.parse_attempts.saturating_add(1);
+        if self.stats.parse_attempts > self.max_parse_attempts {
+            Err(discovery_limit_error(
+                "parse attempts",
+                self.stats.parse_attempts,
+                self.max_parse_attempts,
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
-fn find_declared_response_failure_in_string(raw: &str) -> Option<DeclaredResponseFailure> {
-    if let Ok(nested) = serde_json::from_str::<Value>(raw)
-        && let Some(failure) = find_declared_response_failure(&nested)
-    {
-        return Some(failure);
+fn discovery_limit_error(what: &str, actual: u32, max: u32) -> OrbitError {
+    OrbitError::AgentProtocolViolation(format!(
+        "{DISCOVERY_LIMIT_PREFIX}: {what} {actual} > max {max}"
+    ))
+}
+
+fn is_discovery_limit_error(err: &OrbitError) -> bool {
+    match err {
+        OrbitError::AgentProtocolViolation(message) => message.starts_with(DISCOVERY_LIMIT_PREFIX),
+        _ => false,
+    }
+}
+
+/// Protocol-check search: JSON documents when the stream parses, otherwise a
+/// bounded suffix scan of mixed stdout. Visible to sibling tests.
+#[cfg(test)]
+pub(in crate::types) fn discover_agent_response_envelope_with_stats(
+    stdout: &str,
+    budget: EnvelopeDiscoveryBudget,
+) -> Result<(Option<AgentResponseEnvelope>, EnvelopeDiscoveryStats), OrbitError> {
+    let mut budget = Budget::new(budget);
+    let found = match parse_json_documents(stdout) {
+        Ok(documents) => {
+            discover_in_values(documents.iter().rev(), &mut budget, deserialize_envelope)?
+        }
+        Err(_) => discover_in_string(stdout, &mut budget, deserialize_envelope)?,
+    };
+    Ok((found, budget.stats))
+}
+
+/// Declared-failure search with the same walk and bounds as envelope
+/// discovery, including the mixed-stdout suffix scan used inside string
+/// fields. Visible to sibling tests.
+#[cfg(test)]
+pub(in crate::types) fn discover_declared_response_failure_with_stats(
+    stdout: &str,
+    budget: EnvelopeDiscoveryBudget,
+) -> Result<(Option<DeclaredResponseFailure>, EnvelopeDiscoveryStats), OrbitError> {
+    let mut budget = Budget::new(budget);
+    let found = match parse_json_documents(stdout) {
+        Ok(documents) => discover_in_values(
+            documents.iter().rev(),
+            &mut budget,
+            declared_response_failure,
+        )?,
+        Err(_) => discover_in_string(stdout, &mut budget, declared_response_failure)?,
+    };
+    Ok((found, budget.stats))
+}
+
+fn discover_in_values<'a, T, I, F>(
+    values: I,
+    budget: &mut Budget,
+    inspect: F,
+) -> Result<Option<T>, OrbitError>
+where
+    I: IntoIterator<Item = &'a Value>,
+    F: Fn(&Value) -> Option<T>,
+{
+    for value in values {
+        if let Some(found) = walk(value, budget, &inspect)? {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
+}
+
+fn discover_in_string<T, F>(
+    raw: &str,
+    budget: &mut Budget,
+    inspect: F,
+) -> Result<Option<T>, OrbitError>
+where
+    F: Fn(&Value) -> Option<T>,
+{
+    walk_string(raw, budget, &inspect)
+}
+
+fn walk<T, F>(value: &Value, budget: &mut Budget, inspect: &F) -> Result<Option<T>, OrbitError>
+where
+    F: Fn(&Value) -> Option<T>,
+{
+    budget.visit()?;
+    if let Some(found) = inspect(value) {
+        return Ok(Some(found));
+    }
+    match value {
+        Value::String(raw) => walk_string(raw, budget, inspect),
+        Value::Array(items) => {
+            for item in items.iter().rev() {
+                if let Some(found) = walk(item, budget, inspect)? {
+                    return Ok(Some(found));
+                }
+            }
+            Ok(None)
+        }
+        Value::Object(map) => walk_object(map, budget, inspect),
+        _ => Ok(None),
+    }
+}
+
+fn walk_object<T, F>(
+    map: &serde_json::Map<String, Value>,
+    budget: &mut Budget,
+    inspect: &F,
+) -> Result<Option<T>, OrbitError>
+where
+    F: Fn(&Value) -> Option<T>,
+{
+    for key in PREFERRED_OBJECT_KEYS {
+        if let Some(child) = map.get(key)
+            && let Some(found) = walk(child, budget, inspect)?
+        {
+            return Ok(Some(found));
+        }
     }
 
-    raw.match_indices('{').find_map(|(start, _)| {
-        let mut deserializer = Deserializer::from_str(&raw[start..]);
-        let nested = Value::deserialize(&mut deserializer).ok()?;
-        find_declared_response_failure(&nested)
-    })
+    for (key, child) in map {
+        if PREFERRED_OBJECT_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        if let Some(found) = walk(child, budget, inspect)? {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
+}
+
+fn walk_string<T, F>(raw: &str, budget: &mut Budget, inspect: &F) -> Result<Option<T>, OrbitError>
+where
+    F: Fn(&Value) -> Option<T>,
+{
+    budget.parse()?;
+    if let Ok(nested) = serde_json::from_str::<Value>(raw) {
+        return walk(&nested, budget, inspect);
+    }
+
+    let mut search_from = 0;
+    while let Some(rel) = raw[search_from..].find('{') {
+        let start = search_from + rel;
+        budget.parse()?;
+        let mut stream = Deserializer::from_str(&raw[start..]).into_iter::<Value>();
+        match stream.next() {
+            Some(Ok(nested)) => {
+                let consumed = stream.byte_offset().max(1);
+                if let Some(found) = walk(&nested, budget, inspect)? {
+                    return Ok(Some(found));
+                }
+                search_from = start + consumed;
+            }
+            Some(Err(_)) | None => {
+                search_from = start + 1;
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn declared_response_failure(value: &Value) -> Option<DeclaredResponseFailure> {
@@ -458,20 +647,6 @@ fn declared_response_failure(value: &Value) -> Option<DeclaredResponseFailure> {
     Some(DeclaredResponseFailure {
         status: status.to_string(),
         error,
-    })
-}
-
-fn find_agent_response_envelope_in_string(raw: &str) -> Option<AgentResponseEnvelope> {
-    if let Ok(nested) = serde_json::from_str::<Value>(raw)
-        && let Some(envelope) = find_agent_response_envelope(&nested)
-    {
-        return Some(envelope);
-    }
-
-    raw.match_indices('{').find_map(|(start, _)| {
-        let mut deserializer = Deserializer::from_str(&raw[start..]);
-        let nested = Value::deserialize(&mut deserializer).ok()?;
-        find_agent_response_envelope(&nested)
     })
 }
 

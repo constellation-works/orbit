@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Owner:** Orbit contributors
-**Last updated:** 2026-07-26
+**Last updated:** 2026-09-07
 
 ---
 
@@ -28,9 +28,10 @@ The Orbit website is a **documentation site**, not a marketing site. It exists t
 1. **Reference-heavy, search-first.** Users land via `⌘K` or Google. Every page must be findable and self-contained.
 2. **Minimalism as a feature.** Restraint is the aesthetic. One accent color, one type family per role, no decorative motion in docs content.
 3. **Legibility over personality.** The orbit metaphor shows up structurally (logo, section glyphs) — never at the cost of reading comfort.
-4. **Static and fast.** Zero JS by default; the homepage's copy controls are the one
-   scripted exception, and every other interaction is CSS. Hundreds of pages should
-   feel identical in performance to ten.
+4. **Static and fast.** Zero JS by default. The homepage's copy controls and its
+   narrow-viewport Menu (Escape and breakpoint close) are the scripted exceptions;
+   every other interaction is CSS. Hundreds of pages should feel identical in
+   performance to ten.
 5. **Dark-default, light-available.** Theme toggle persists per user; neither mode is an afterthought.
 
 ---
@@ -86,7 +87,9 @@ Three-column, fixed:
 - Left nav: collapsible sections. Active page marked with a 2px accent bar on the left edge.
 - Content column: max-width ~720px, measure 65–75ch for prose.
 - Right rail: sticky "On this page" TOC. Muted until the corresponding section is in view.
-- Top bar: logo, search, theme toggle. Nothing else.
+- Top bar: logo, section links (from 50rem), search, theme toggle. Below 50rem the
+  splash header keeps search and exposes section links plus theme through a Menu
+  disclosure; documentation pages keep Starlight's sidebar Menu.
 
 ### 3.5 Landing page
 
@@ -97,21 +100,30 @@ The homepage uses an in-content hero in place of Starlight's auto-rendered title
 - **Lede + install bar + primary/secondary CTAs.** Install bar carries a `$` prompt and a Copy action.
 - **Provider strip** — mono uppercase list of the shipped CLI executors, with the
   legacy Gemini executor named in a footnote rather than implied current.
-- **Transcript** — a `figure` of the task → ship → inspect → commit loop, with a
-  `figcaption` naming it illustrative. Real commands, placeholder identifiers.
+- **Dashboard preview** — a `figure` of the operator Tasks view after that
+  default ship: the walkthrough task in `review`, pull request open and
+  unmerged, `approve` available, `ship` absent. `role="img"` plus a
+  `figcaption` mark it as an illustration of current chrome, not a screenshot
+  or a live host. Identifiers are placeholders; no measured counts or
+  durations.
 
 Below the hero, in order:
 
-1. **Start here** — a 3-card grid, each card carrying a mono numbered tag
-   `01`–`03` and the command it runs.
-2. **Choose a delivery mode** — a four-mode explorer over `orbit run ship`,
+1. **One task, one pull request** — a 4-card grid for create → ship → inspect
+   → review. Each card carries a mono numbered tag `01`–`04` and the command
+   it runs. New tasks start in `proposed` until approved into the backlog.
+   The default path stops in `review` with the PR unmerged; approving the
+   task does not merge the pull request. A sentence under the grid points at
+   Install and First Task.
+2. **Other delivery modes** — a four-mode explorer over `orbit run ship`,
    `--mode local`, `orbit run auto` and `orbit run ship-sweep`. Each panel
    states the command, where the run stops, and that `--complete` is a separate
    explicit authorization. Built as a native radio group switched by CSS
    `:has()`, so pointer, keyboard and screen-reader support are the platform's
-   and the selected panel still renders without JavaScript.
+   and the selected panel still renders without JavaScript. This section stays
+   after the walkthrough so the default path is read first.
 3. **Why Orbit** — a 4-card value-prop strip. Each card carries a thin SVG glyph;
-   these and the Start here tags are the only glyphs in content.
+   these and the walkthrough tags are the only glyphs in content.
 4. **Go further** — a 4-card grid routing to continuous delivery, recurring work,
    publication and recovery, and the CLI reference.
 5. **Explore the docs** — a flat index of the sidebar groups.
@@ -120,9 +132,10 @@ Commands shown on this page must match current CLI behaviour, and illustrative
 output must say that it is illustrative. The page advertises no unlanded feature
 and publishes no live metric.
 
-The only script on the site is a small inline handler for the copy controls.
-Those buttons are served `hidden` and unhidden by that script, so a page without
-JavaScript shows the command text and no dead control; a clipboard that is
+Scripts are limited to the copy controls and the homepage Menu's Escape /
+breakpoint close. Copy buttons are served `hidden` and unhidden by that script,
+so a page without JavaScript shows the command text and no dead control; a
+clipboard that is
 unavailable or refuses the write reports failure rather than a false success.
 
 Other pages keep Starlight's default chrome (auto title, sidebar, TOC) unchanged.
@@ -154,7 +167,9 @@ Each section has an index page that lists its children with one-line description
   path directly uploads to the existing Pages project identified by the protected
   production environment, and publishes only from the release/production `main`
   branch. The `orbit-cli.com` DNS remains externally managed; publication neither
-  provisions hosting nor edits DNS. See ORB-11379.
+  provisions hosting nor edits DNS. Cloudflare Pages applies the repository-owned
+  `public/_headers` policy to HTTPS responses; the externally managed Cloudflare
+  zone owns HTTP-to-HTTPS redirection. See ORB-11379.
 - **Repo layout:** new top-level `website/` directory, independent of the Rust workspace
 
 ### 5.1 Why Starlight over Nextra

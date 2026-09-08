@@ -25,6 +25,12 @@ spec:
       base_sha:
         type: string
         description: Full commit id pinned by worktree_setup; HEAD must still equal it when this step begins.
+      verify_already_landed:
+        type: boolean
+        description: >
+          Allow a clean pinned HEAD to return verified_already_landed only
+          after checking the task's structured landing and validation artifacts.
+          Callers must recheck that evidence at promotion and completion.
   output_schema_json:
     type: object
     properties:

@@ -357,3 +357,137 @@ fn submission_returns_while_its_worker_is_still_running() {
         "submission must not block on the worker it started"
     );
 }
+
+#[test]
+fn auto_complexity_pool_is_captured_at_submission_and_retained_by_real_resume() {
+    use crate::application::job::pipeline::{ChildPipelineAdmission, ChildSubmission};
+    use crate::application::task::TaskAddParams;
+    use orbit_config::ComplexityCrewPools;
+    use orbit_types::task::TaskComplexity;
+    use serde_json::json;
+
+    let (_root, runtime) = test_runtime();
+    for job in [
+        "workspace_auto_pipeline",
+        "task_auto_pipeline",
+        "task_gate_pipeline",
+    ] {
+        write_job_file(
+            &runtime.paths().global_dir.join("resources/jobs"),
+            job,
+            &job_yaml(job, 10),
+        );
+    }
+    let _worker = WorkerOverride::shell("sleep 5");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Automatic crew persistence".into(),
+            description: "Admission and resume preserve crew evidence".into(),
+            plan: "Validate persisted input".into(),
+            complexity: TaskComplexity::Medium,
+            status: Some(orbit_types::task::TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("task");
+    let parent = runtime
+        .submit_workspace_auto_run(
+            None,
+            None,
+            crate::CompletionPolicy::Review,
+            &[],
+            &ComplexityCrewPools {
+                medium: Some(vec!["grok".into(), "terra".into()]),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect("submit coordinator");
+    let parent_run = runtime
+        .get_job_run_backend(&parent.run_id)
+        .expect("read coordinator")
+        .expect("coordinator");
+    assert_eq!(
+        parent_run.input.as_ref().expect("input")["auto_crew_pools"]["medium"]["source"],
+        "run_input.medium_complexity_crews"
+    );
+    let child = runtime
+        .submit_child_pipeline_run(
+            "task_auto_pipeline",
+            json!({"task_ids": [task.id]}),
+            None,
+            None,
+            &ChildPipelineAdmission {
+                parent_run_id: parent.run_id,
+                parent_step_id: Some("ship_leaves".into()),
+                action: "invoke_detached".into(),
+                blocking: false,
+            },
+        )
+        .expect("admit child");
+    let ChildSubmission::Submitted(child) = child else {
+        panic!("child admitted");
+    };
+    let run = runtime
+        .get_job_run_backend(&child.run_id)
+        .expect("read child")
+        .expect("child");
+    let input = run.input.expect("child input");
+    assert!(["grok", "terra"].contains(&input["crew"].as_str().expect("crew")));
+    assert_eq!(
+        input["crew_selection"]["source"],
+        "run_input.medium_complexity_crews"
+    );
+    assert!(input.get("allowed_crews").is_none());
+    let nested = runtime
+        .submit_child_pipeline_run(
+            "task_gate_pipeline",
+            json!({"task_ids": [task.id]}),
+            None,
+            None,
+            &ChildPipelineAdmission {
+                parent_run_id: child.run_id.clone(),
+                parent_step_id: Some("gate".into()),
+                action: "invoke_and_wait".into(),
+                blocking: true,
+            },
+        )
+        .expect("admit same-task pipeline");
+    let ChildSubmission::Submitted(nested) = nested else {
+        panic!("nested admitted");
+    };
+    let nested_input = runtime
+        .get_job_run_backend(&nested.run_id)
+        .expect("read nested")
+        .expect("nested")
+        .input
+        .expect("input");
+    assert_eq!(nested_input["crew_selection"], input["crew_selection"]);
+    for run_id in [&nested.run_id, &child.run_id] {
+        runtime
+            .stores()
+            .jobs()
+            .mark_job_run_running(run_id, Utc::now(), std::process::id())
+            .expect("start fixture before recording failure");
+        runtime
+            .finalize_job_run_with_reservation_cleanup(
+                run_id,
+                JobRunState::Failed,
+                Utc::now(),
+                Some(1),
+                orbit_store::contracts::TaskReservationReleaseReason::RunTerminal,
+            )
+            .expect("finish fixture run");
+    }
+    let resumed = runtime
+        .submit_resume_run(&child.run_id, None, None)
+        .expect("resume child");
+    let resumed_input = runtime
+        .get_job_run_backend(&resumed.run_id)
+        .expect("read resume")
+        .expect("resumed")
+        .input
+        .expect("input");
+    assert_eq!(resumed_input["crew"], input["crew"]);
+    assert_eq!(resumed_input["crew_selection"], input["crew_selection"]);
+}

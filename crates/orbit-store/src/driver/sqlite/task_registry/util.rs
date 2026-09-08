@@ -1,25 +1,7 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{TaskRelationType, TaskStatus};
-
-pub(super) fn normalize_path(path: &Path) -> PathBuf {
-    if let Ok(canonical) = path.canonicalize() {
-        return canonical;
-    }
-
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
-}
 
 pub(super) fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()

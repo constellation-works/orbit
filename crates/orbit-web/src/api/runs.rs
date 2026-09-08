@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use super::routines::{authorization_denied, authorized_caller};
 use super::{
-    HISTORY_DEFAULT_LIMIT, LimitQuery, RunEventsQuery, bad_request, bounded_limit,
+    HISTORY_DEFAULT_LIMIT, LimitQuery, RunEventsQuery, bad_request, blocking, bounded_limit,
     map_runtime_error, validate_id,
 };
 
@@ -74,18 +74,22 @@ pub(super) async fn ship_workflow_action(
         },
         None => workspace_default_ship_mode(&runtime),
     };
-    match runtime.submit_ship_run(
-        mode,
-        body.base.as_deref(),
-        &body.task_ids,
-        // [ORB-11187] Completion authority is granted per invocation at the CLI
-        // (`orbit run ship --complete`); the dashboard does not offer it, so
-        // this endpoint always ends successful work at `review`.
-        orbit_core::CompletionPolicy::Review,
-        &[],
-        Some("dashboard"),
-        body.claim_token.as_deref(),
-    ) {
+    match blocking("ship workflow", move || {
+        runtime.submit_ship_run(
+            mode,
+            body.base.as_deref(),
+            &body.task_ids,
+            // [ORB-11187] Completion authority is granted per invocation at the CLI
+            // (`orbit run ship --complete`); the dashboard does not offer it, so
+            // this endpoint always ends successful work at `review`.
+            orbit_core::CompletionPolicy::Review,
+            &[],
+            Some("dashboard"),
+            body.claim_token.as_deref(),
+        )
+    })
+    .await
+    {
         Ok(invoke) => Json(json!({
             "workflow": "ship",
             "job_id": invoke.job_name,
@@ -94,8 +98,7 @@ pub(super) async fn ship_workflow_action(
             "submitted_at": invoke.submitted_at,
         }))
         .into_response(),
-        Err(orbit_core::OrbitError::InvalidInput(msg)) => bad_request(msg),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
@@ -203,16 +206,21 @@ pub(super) async fn auto_drain_workflow_action(
     } else {
         orbit_core::CompletionPolicy::Review
     };
-    match runtime.submit_workspace_auto_run(
-        Some(for_seconds),
-        body.concurrency,
-        completion,
-        // [ORB-11242] The dashboard launch form does not offer a crew
-        // restriction, so it submits the unrestricted window it always has.
-        &[],
-        Some("dashboard"),
-        body.claim_token.as_deref(),
-    ) {
+    match blocking("auto-drain workflow", move || {
+        runtime.submit_workspace_auto_run(
+            Some(for_seconds),
+            body.concurrency,
+            completion,
+            // [ORB-11242] The dashboard launch form does not offer a crew
+            // restriction, so it submits the unrestricted window it always has.
+            &[],
+            &Default::default(),
+            Some("dashboard"),
+            body.claim_token.as_deref(),
+        )
+    })
+    .await
+    {
         Ok(invoke) => Json(json!({
             "workflow": "auto",
             "job_id": invoke.job_name,
@@ -222,8 +230,7 @@ pub(super) async fn auto_drain_workflow_action(
             "completion": completion.as_input_value(),
         }))
         .into_response(),
-        Err(orbit_core::OrbitError::InvalidInput(msg)) => bad_request(msg),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
@@ -261,22 +268,31 @@ pub(super) async fn auto_drain_readiness(
 
 pub(super) async fn get_run(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
     let id = match validate_id(&id) {
-        Ok(id) => id,
+        Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    match runtime.show_job_run(id) {
-        Ok(run) => Json(job_run_detail_to_json(&runtime, &run)).into_response(),
-        Err(e) => map_runtime_error(e),
+    match blocking("get run", move || {
+        let run = runtime.show_job_run(&id)?;
+        Ok(job_run_detail_to_json(&runtime, &run))
+    })
+    .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => *response,
     }
 }
 
 pub(super) async fn cancel_run_action(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
     let id = match validate_id(&id) {
-        Ok(id) => id,
+        Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    match runtime.cancel_job_run_with_context(id, "dashboard", "web") {
-        Ok(result) => Json(json!({
+    match blocking("cancel run", move || {
+        Ok(runtime.cancel_job_run_with_context(&id, "dashboard", "web"))
+    })
+    .await
+    {
+        Ok(Ok(result)) => Json(json!({
             "run_id": result.run_id,
             "outcome": result.outcome,
             "previous_state": result.previous_state,
@@ -287,22 +303,23 @@ pub(super) async fn cancel_run_action(Ws(runtime): Ws, Path(id): Path<String>) -
             "signal_outcome": result.signal_outcome,
         }))
         .into_response(),
-        Err(orbit_core::OrbitError::JobValidation(msg))
-        | Err(orbit_core::OrbitError::JobRunStateTransition(msg)) => {
+        Ok(Err(orbit_core::OrbitError::JobValidation(msg)))
+        | Ok(Err(orbit_core::OrbitError::JobRunStateTransition(msg))) => {
             (StatusCode::CONFLICT, Json(json!({ "error": msg }))).into_response()
         }
-        Err(e) => map_runtime_error(e),
+        Ok(Err(e)) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
 pub(super) async fn replay_run_action(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
     let id = match validate_id(&id) {
-        Ok(id) => id,
+        Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    match runtime.replay_job_run(id) {
+    match blocking("replay run", move || runtime.replay_job_run(&id)).await {
         Ok(result) => Json(json!({ "run_id": result.run_id })).into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
@@ -448,59 +465,61 @@ pub(super) async fn list_run_events(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    let rows = match runtime.list_v2_audit_events(V2AuditEventFilter {
-        workspace_id: String::new(),
-        run_id: Some(run_id.to_string()),
-        source: Some("v2_envelope".to_string()),
-        limit: Some(RUN_EVENTS_MAX_SCAN_LINES + 1),
-        ..Default::default()
-    }) {
-        Ok(rows) => rows,
-        Err(e) => return map_runtime_error(e),
-    };
-    let mut page: Vec<Value> = Vec::with_capacity(limit.min(64));
-    let mut matched: usize = 0;
-    let mut lines_scanned: usize = 0;
-    let mut budget_exceeded = false;
+    let run_id = run_id.to_string();
+    match blocking("run events", move || {
+        let rows = runtime.list_v2_audit_events(V2AuditEventFilter {
+            workspace_id: String::new(),
+            run_id: Some(run_id),
+            source: Some("v2_envelope".to_string()),
+            limit: Some(RUN_EVENTS_MAX_SCAN_LINES + 1),
+            ..Default::default()
+        })?;
+        let mut page: Vec<Value> = Vec::with_capacity(limit.min(64));
+        let mut matched: usize = 0;
+        let mut lines_scanned: usize = 0;
+        let mut budget_exceeded = false;
 
-    for row in rows.into_iter().rev() {
-        lines_scanned = lines_scanned.saturating_add(1);
-        if lines_scanned > RUN_EVENTS_MAX_SCAN_LINES {
-            budget_exceeded = true;
-            break;
-        }
-        let value: Value = match serde_json::from_str(&row.payload_json) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if let Some(ref needle) = kind {
-            let body_kind = value.get("body_kind").and_then(Value::as_str).unwrap_or("");
-            if body_kind != needle {
+        for row in rows.into_iter().rev() {
+            lines_scanned = lines_scanned.saturating_add(1);
+            if lines_scanned > RUN_EVENTS_MAX_SCAN_LINES {
+                budget_exceeded = true;
+                break;
+            }
+            let value: Value = match serde_json::from_str(&row.payload_json) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if let Some(ref needle) = kind {
+                let body_kind = value.get("body_kind").and_then(Value::as_str).unwrap_or("");
+                if body_kind != needle {
+                    continue;
+                }
+            }
+            if matched < offset {
+                matched = matched.saturating_add(1);
                 continue;
             }
-        }
-        if matched < offset {
+            page.push(value);
             matched = matched.saturating_add(1);
-            continue;
+            if page.len() >= limit {
+                break;
+            }
         }
-        page.push(value);
-        matched = matched.saturating_add(1);
-        if page.len() >= limit {
-            break;
-        }
-    }
 
-    if budget_exceeded && page.len() < limit {
-        return (
+        Ok((page, budget_exceeded))
+    })
+    .await
+    {
+        Ok((page, budget_exceeded)) if budget_exceeded && page.len() < limit => (
             StatusCode::PAYLOAD_TOO_LARGE,
             Json(json!({
                 "error": "run-events audit rows exceed bounded scan budget; narrow the kind filter or reduce offset"
             })),
         )
-            .into_response();
+            .into_response(),
+        Ok((page, _)) => Json(Value::Array(page)).into_response(),
+        Err(response) => *response,
     }
-
-    Json(Value::Array(page)).into_response()
 }
 
 pub(super) async fn list_run_logs(
@@ -513,7 +532,12 @@ pub(super) async fn list_run_logs(
         Err(message) => return bad_request(message),
     };
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
-    match runtime.collect_run_cli_invocations(run_id) {
+    let run_id = run_id.to_string();
+    match blocking("run logs", move || {
+        runtime.collect_run_cli_invocations(&run_id)
+    })
+    .await
+    {
         Ok(records) => Json(Value::Array(
             records
                 .into_iter()
@@ -522,7 +546,7 @@ pub(super) async fn list_run_logs(
                 .collect(),
         ))
         .into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 

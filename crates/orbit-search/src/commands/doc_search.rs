@@ -78,6 +78,7 @@ pub(crate) fn run_with_embedder(
         &model_id,
         retriever_limit,
         Some(SOURCE_KIND_DOC),
+        None,
     )?;
     let hits = rollup_doc_hits(vector_store, cosine, limit)?;
 

@@ -1,8 +1,12 @@
+use std::time::{Duration, Instant};
+
 use chrono::{DateTime, TimeZone, Utc};
-use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType};
+use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType, PipelineState};
+use serde_json::json;
 
 use crate::Store;
-use crate::contracts::{JobRunOrder, JobRunQuery};
+use crate::contracts::{JobRunOrder, JobRunQuery, JobRunStoreBackend};
+use crate::driver::sqlite::job_run_store::SqliteJobRunStore;
 
 fn at(minute: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 5, 1, 0, minute, 0)
@@ -87,6 +91,78 @@ fn listing_hydrates_every_runs_steps_across_id_chunks() {
             assert_eq!(step.target_id, format!("step-{position}"), "{}", run.run_id);
         }
     }
+}
+
+/// [ORB-11625] A list page loads pipeline state in one query per id chunk.
+/// Missing runs stay absent; unreadable JSON degrades to `None` rather than
+/// failing the page.
+#[test]
+fn reading_run_states_hydrates_a_page_and_isolates_unreadable_rows() {
+    let store = Store::open_in_memory().expect("open store");
+    let mut expected = Vec::new();
+    for index in 0..4_u32 {
+        let run_id = format!("jrun-state-{index}");
+        let run = run_with_steps(&run_id, JobRunState::Running, at(index), 0);
+        let mut state = PipelineState::new(run_id.clone(), run.job_id.clone(), json!({}));
+        state.record_child_dispatch(
+            orbit_types::workflow::ChildDispatch::submitted(
+                format!("jrun-child-{index}"),
+                "task_auto_pipeline".to_string(),
+                "invoke_and_wait".to_string(),
+                true,
+                false,
+                at(index),
+            )
+            .with_parent_step_id(Some("ship_leaves".to_string())),
+        );
+        store
+            .upsert_job_run_for_workspace("ws", &run, Some(&state))
+            .expect("insert run with state");
+        expected.push(run_id);
+    }
+    let unreadable = run_with_steps("jrun-bad-json", JobRunState::Pending, at(8), 0);
+    store
+        .upsert_job_run_for_workspace("ws", &unreadable, None)
+        .expect("insert run without state");
+    store
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE job_runs SET pipeline_state_json = '{not-json' \
+                     WHERE workspace_id = ?1 AND run_id = ?2",
+                    rusqlite::params!["ws", "jrun-bad-json"],
+                )
+                .map_err(|e| orbit_common::OrbitError::Store(e.to_string()))?;
+            Ok(())
+        })
+        .expect("seed unreadable state");
+
+    let mut ids = expected.clone();
+    ids.push("jrun-bad-json".to_string());
+    ids.push("jrun-missing".to_string());
+    let states = store
+        .read_job_run_states_for_workspace("ws", &ids)
+        .expect("batch read");
+
+    assert_eq!(states.len(), 5);
+    for (index, run_id) in expected.iter().enumerate() {
+        let state = states
+            .get(run_id)
+            .expect("run present")
+            .as_ref()
+            .expect("readable state");
+        assert_eq!(
+            state.child_dispatches[0].child_run_id,
+            format!("jrun-child-{index}")
+        );
+    }
+    assert!(
+        states
+            .get("jrun-bad-json")
+            .expect("unreadable row is present")
+            .is_none()
+    );
+    assert!(!states.contains_key("jrun-missing"));
 }
 
 /// Counting and duration reads apply the list filter but ignore its limit.
@@ -193,6 +269,328 @@ fn recency_order_truncates_by_finish_time_not_creation_time() {
         top_by_recency[0].run_id, "jrun-old-long-running",
         "recency ordering must select the most-recently-finished run before LIMIT applies"
     );
+}
+
+fn insert_named_run(
+    store: &Store,
+    workspace_id: &str,
+    run_id: &str,
+    job_id: &str,
+    state: JobRunState,
+    created: DateTime<Utc>,
+    steps: u32,
+) {
+    let mut run = run_with_steps(run_id, state, created, steps);
+    run.job_id = job_id.to_string();
+    for step in &mut run.steps {
+        step.target_id = format!("{run_id}-{}", step.step_index);
+        if state.is_terminal() {
+            step.agent_response_json = Some(json!({ "payload": "x".repeat(256) }));
+        }
+    }
+    insert_run_with_steps(store, workspace_id, &run);
+}
+
+fn process_cpu_ms() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let after_comm = text.rsplit_once(')')?.1;
+    let mut fields = after_comm.split_whitespace();
+    for _ in 0..11 {
+        fields.next()?;
+    }
+    let utime: u64 = fields.next()?.parse().ok()?;
+    let stime: u64 = fields.next()?.parse().ok()?;
+    Some((utime.saturating_add(stime)) * 10)
+}
+
+fn elapsed_of(op: impl FnOnce()) -> (Duration, Option<u64>) {
+    let cpu_before = process_cpu_ms();
+    let started = Instant::now();
+    op();
+    let wall = started.elapsed();
+    let cpu = match (cpu_before, process_cpu_ms()) {
+        (Some(before), Some(after)) => Some(after.saturating_sub(before)),
+        _ => None,
+    };
+    (wall, cpu)
+}
+
+fn hydrated_work(runs: &[JobRun]) -> (usize, usize) {
+    (
+        runs.len(),
+        runs.iter().map(|run| run.steps.len()).sum::<usize>(),
+    )
+}
+
+/// [ORB-11762] `list_job_runs_for_workspace` hydrates steps only for the SQL
+/// result set. `active_only` is applied in SQL, so a long terminal history is
+/// never selected and therefore never hydrated. The job-scoped and
+/// workspace-scoped admission helpers must return that same filtered page.
+#[test]
+fn active_only_list_skips_terminal_history_before_hydration() {
+    let store = Store::open_in_memory().expect("open store");
+    let job_id = "task_auto_pipeline";
+    let historical = 800_u32;
+    for index in 0..historical {
+        insert_named_run(
+            &store,
+            "ws",
+            &format!("jrun-term-{index:04}"),
+            job_id,
+            JobRunState::Success,
+            at(index % 50),
+            4,
+        );
+    }
+    insert_named_run(
+        &store,
+        "ws",
+        "jrun-active-running",
+        job_id,
+        JobRunState::Running,
+        at(50),
+        1,
+    );
+    insert_named_run(
+        &store,
+        "ws",
+        "jrun-active-pending-b",
+        job_id,
+        JobRunState::Pending,
+        at(40),
+        1,
+    );
+    insert_named_run(
+        &store,
+        "ws",
+        "jrun-active-pending-a",
+        job_id,
+        JobRunState::Pending,
+        at(40),
+        1,
+    );
+    insert_named_run(
+        &store,
+        "ws",
+        "jrun-skipped",
+        job_id,
+        JobRunState::Skipped,
+        at(45),
+        1,
+    );
+    insert_named_run(
+        &store,
+        "ws",
+        "jrun-retrying",
+        job_id,
+        JobRunState::Retrying,
+        at(46),
+        1,
+    );
+    insert_named_run(
+        &store,
+        "ws",
+        "jrun-other-job",
+        "other_pipeline",
+        JobRunState::Pending,
+        at(51),
+        1,
+    );
+    insert_named_run(
+        &store,
+        "other-ws",
+        "jrun-other-ws",
+        job_id,
+        JobRunState::Pending,
+        at(52),
+        1,
+    );
+
+    let active_query = JobRunQuery {
+        job_id: Some(job_id.to_string()),
+        active_only: true,
+        ..JobRunQuery::default()
+    };
+    let page = store
+        .list_job_runs_for_workspace("ws", &active_query)
+        .expect("active-only page");
+    let ids = page
+        .iter()
+        .map(|run| run.run_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        [
+            "jrun-active-running",
+            "jrun-active-pending-a",
+            "jrun-active-pending-b",
+        ],
+        "SQL must return pending/running for this job in created_at DESC, run_id ASC"
+    );
+    assert!(
+        page.iter().all(|run| {
+            matches!(run.state, JobRunState::Pending | JobRunState::Running)
+                && run.job_id == job_id
+                && run.steps.len() == 1
+                && run.steps[0].target_id.starts_with(&run.run_id)
+        }),
+        "hydrated steps must belong only to the active rows SQL returned"
+    );
+    assert_eq!(
+        page.iter().map(|run| run.steps.len()).sum::<usize>(),
+        3,
+        "terminal history steps must not be hydrated onto the active page"
+    );
+
+    let backend = SqliteJobRunStore::new(store.clone(), "ws");
+    let job_scoped = backend
+        .list_pending_or_running_job_runs(job_id)
+        .expect("job-scoped active list");
+    assert_eq!(
+        job_scoped
+            .iter()
+            .map(|run| run.run_id.as_str())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    let workspace_scoped = backend
+        .list_all_pending_or_running_runs()
+        .expect("workspace-scoped active list");
+    assert_eq!(
+        workspace_scoped
+            .iter()
+            .map(|run| run.run_id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "jrun-other-job",
+            "jrun-active-running",
+            "jrun-active-pending-a",
+            "jrun-active-pending-b",
+        ]
+    );
+}
+
+/// [ORB-11762] Isolated-store before/after of the queued-worker admission
+/// scan: unfiltered list-then-retain versus SQL `active_only`. Records the
+/// historical/active/queued-worker counts plus CPU and hydration work.
+#[test]
+fn active_lookup_benchmark_records_queued_worker_hydration_cost() {
+    let store = Store::open_in_memory().expect("open store");
+    let job_id = "task_auto_pipeline";
+    let historical = 400_usize;
+    let active = 3_usize;
+    let queued_workers = 8_usize;
+    for index in 0..historical {
+        insert_named_run(
+            &store,
+            "ws",
+            &format!("jrun-hist-{index:04}"),
+            job_id,
+            JobRunState::Failed,
+            at((index % 50) as u32),
+            4,
+        );
+    }
+    for index in 0..active {
+        insert_named_run(
+            &store,
+            "ws",
+            &format!("jrun-live-{index}"),
+            job_id,
+            if index == 0 {
+                JobRunState::Running
+            } else {
+                JobRunState::Pending
+            },
+            at(50 + index as u32),
+            1,
+        );
+    }
+
+    let unfiltered = JobRunQuery {
+        job_id: Some(job_id.to_string()),
+        ..JobRunQuery::default()
+    };
+
+    let mut before_page = Vec::new();
+    let (before_wall, before_cpu_ms) = elapsed_of(|| {
+        before_page = store
+            .list_job_runs_for_workspace("ws", &unfiltered)
+            .expect("unfiltered list");
+    });
+    let (before_rows, before_steps) = hydrated_work(&before_page);
+    before_page.retain(|run| matches!(run.state, JobRunState::Pending | JobRunState::Running));
+
+    let backend = SqliteJobRunStore::new(store.clone(), "ws");
+    let mut after_runs = Vec::new();
+    let (after_wall, after_cpu_ms) = elapsed_of(|| {
+        after_runs = backend
+            .list_pending_or_running_job_runs(job_id)
+            .expect("active list");
+    });
+    let (after_rows, after_steps) = hydrated_work(&after_runs);
+
+    let mut queued_last = Vec::new();
+    let (queued_wall, queued_cpu_ms) = elapsed_of(|| {
+        for _ in 0..queued_workers {
+            queued_last = backend
+                .list_pending_or_running_job_runs(job_id)
+                .expect("queued worker scan");
+        }
+    });
+
+    assert_eq!(after_runs.len(), active);
+    assert_eq!(after_rows, active);
+    assert_eq!(after_steps, active);
+    assert_eq!(queued_last.len(), active);
+    assert_eq!(before_page.len(), active);
+    assert_eq!(before_rows, historical + active);
+    assert_eq!(before_steps, historical * 4 + active);
+    assert!(
+        after_rows < before_rows,
+        "active-only SQL must hydrate fewer run rows than list-then-retain ({after_rows} < {before_rows})"
+    );
+    assert!(
+        after_steps < before_steps,
+        "active-only SQL must hydrate fewer steps than list-then-retain ({after_steps} < {before_steps})"
+    );
+
+    let record = json!({
+        "schema_version": 1,
+        "task_id": "ORB-11762",
+        "historical_row_count": historical,
+        "active_count": active,
+        "queued_worker_count": queued_workers,
+        "before": {
+            "algorithm": "list_job_runs_for_workspace unfiltered then retain pending/running",
+            "rows_read": before_rows,
+            "steps_hydrated": before_steps,
+            "wall_ms": before_wall.as_secs_f64() * 1000.0,
+            "cpu_ms": before_cpu_ms,
+        },
+        "after": {
+            "algorithm": "JobRunQuery.active_only SQL filter before hydration",
+            "rows_read": after_rows,
+            "steps_hydrated": after_steps,
+            "wall_ms": after_wall.as_secs_f64() * 1000.0,
+            "cpu_ms": after_cpu_ms,
+        },
+        "queued_workers": {
+            "scans": queued_workers,
+            "wall_ms": queued_wall.as_secs_f64() * 1000.0,
+            "cpu_ms": queued_cpu_ms,
+        },
+    });
+    if let Ok(path) = std::env::var("ORB_11762_BENCH_PATH") {
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&record).expect("bench json"),
+        )
+        .expect("write bench record");
+    }
+    assert_eq!(record["historical_row_count"], json!(historical));
+    assert_eq!(record["active_count"], json!(active));
+    assert_eq!(record["queued_worker_count"], json!(queued_workers));
 }
 
 /// [ORB-11253] The transactional run-control seam: the run's own state, the

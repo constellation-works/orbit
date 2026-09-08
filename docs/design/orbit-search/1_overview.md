@@ -43,7 +43,7 @@ Users opt into semantic search by running `orbit semantic install [--model bge-s
 
 ### 2.2 Vector store
 
-A new SQLite table `embeddings` is stored in the workspace-local semantic database alongside the `corpus_fts` virtual table. Each row holds `(source_kind, source_id, field, chunk_idx, content_hash, model_id, dim, embedding BLOB)`. `source_kind` currently distinguishes task and doc rows; ADRs are indexed through the docs corpus. The forward migration in [ORB-10736] removes rows from the retired native learning corpus.
+A new SQLite table `embeddings` is stored in the workspace-local semantic database alongside the `chunks` table and the `corpus_fts` virtual table indexing it. Each row holds `(source_kind, source_id, field, chunk_idx, content_hash, model_id, dim, embedding BLOB)`. `source_kind` currently distinguishes task and doc rows; ADRs are indexed through the docs corpus. The forward migration in [ORB-10736] removes rows from the retired native learning corpus.
 
 The implementation uses **brute-force cosine similarity** in Rust over the BLOBs. At the current corpus scale (low thousands of artifacts × a small number of fields per source = tens of thousands of vectors at 384d), brute force is sub-millisecond per query and adds zero new dependencies. The on-disk format remains forward-compatible with `sqlite-vec` should future local corpus growth push past brute-force scaling limits ([Brute-force cosine over SQLite BLOBs; `sqlite-vec` reserved as phase-2 upgrade](./4_decisions.md#brute-force-cosine-over-sqlite-blobs-sqlite-vec-reserved-as-phase-2-upgrade)).
 

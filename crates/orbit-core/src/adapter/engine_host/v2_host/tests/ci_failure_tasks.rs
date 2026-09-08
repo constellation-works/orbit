@@ -17,10 +17,10 @@ use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_l
 use crate::application::task::TaskUpdateParams;
 
 const HEAD: &str = "1111111111111111111111111111111111111111";
-const CHECKOUT: &str = "3333333333333333333333333333333333333333";
+pub(super) const CHECKOUT: &str = "3333333333333333333333333333333333333333";
 const NEXT_HEAD: &str = "4444444444444444444444444444444444444444";
 
-fn file(runtime: &OrbitRuntime, input: Value) -> Value {
+pub(super) fn file(runtime: &OrbitRuntime, input: Value) -> Value {
     runtime
         .run_deterministic(
             "file_ci_failure_tasks",
@@ -31,7 +31,7 @@ fn file(runtime: &OrbitRuntime, input: Value) -> Value {
         .expect("file ci failure tasks")
 }
 
-fn file_error(runtime: &OrbitRuntime, input: Value) -> String {
+pub(super) fn file_error(runtime: &OrbitRuntime, input: Value) -> String {
     runtime
         .run_deterministic(
             "file_ci_failure_tasks",
@@ -54,6 +54,9 @@ pub(super) fn failure(
 ) -> Value {
     json!({
         "run_id": run_id,
+        "job_id": 900 + run_id,
+        "log_job_id": 900 + run_id,
+        "checkout_identity": {"state": "observed", "provenance": {"job_id": 900 + run_id, "complete": true}},
         "workflow": workflow,
         "title": format!("{workflow} on {HEAD}"),
         "status": "completed",
@@ -86,7 +89,7 @@ pub(super) fn failure(
 pub(super) fn snapshot(current: Vec<Value>) -> Value {
     let latest = current.clone();
     json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "collected": true,
         "outcome_hint": if current.is_empty() { "no_current_failure" } else { "current_failures" },
         "capability": {
@@ -148,7 +151,7 @@ fn a_snapshot_that_could_not_look_reports_capability_unavailable_and_files_nothi
     let output = file(
         &runtime,
         json!({"ci_evidence": {
-            "schema_version": 1,
+            "schema_version": 2,
             "collected": false,
             "outcome_hint": "capability_unavailable",
             "capability": {
@@ -415,7 +418,7 @@ fn a_filed_task_is_a_proposed_bug_carrying_usable_evidence() {
 }
 
 #[test]
-fn an_excerpt_recovered_from_a_job_log_is_labelled_as_the_whole_job_log() {
+fn an_excerpt_recovered_from_a_job_log_names_the_supplying_job() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let mut recovered = failure(
         10,
@@ -428,6 +431,10 @@ fn an_excerpt_recovered_from_a_job_log_is_labelled_as_the_whole_job_log() {
     );
     // Collection could not read the run-scoped failed-step log and recovered
     // the excerpt from the failed job's own log instead.
+    recovered["job_id"] = json!(101_560_010_340_u64);
+    recovered["log_job_id"] = recovered["job_id"].clone();
+    recovered["failed_jobs"][0]["job_id"] = recovered["job_id"].clone();
+    recovered["checkout_identity"]["provenance"]["job_id"] = recovered["job_id"].clone();
     recovered["log_source"] = json!("job_api_log");
     recovered["log_source_jobs"] = json!([{
         "job_id": 101_560_010_340_u64,
@@ -449,7 +456,7 @@ fn an_excerpt_recovered_from_a_job_log_is_labelled_as_the_whole_job_log() {
         "the recovered diagnostic must reach the filed task:\n{description}"
     );
     assert!(
-        description.contains("whole log of job `docs` (id `101560010340`)")
+        description.contains("evidence from job `docs` (id `101560010340`)")
             && description.contains("job log API"),
         "a whole-job log must not be presented as a failed-step excerpt:\n{description}"
     );
@@ -477,6 +484,9 @@ fn live_run_fixture_files_once_with_complete_actionable_evidence() {
         ),
         SHA,
     );
+    live["job_id"] = json!(JOB_ID);
+    live["log_job_id"] = json!(JOB_ID);
+    live["checkout_identity"]["provenance"]["job_id"] = json!(JOB_ID);
     live["url"] = json!(RUN_URL);
     live["event_reported_head_sha"] = json!(SHA);
     live["current_ref_head_sha"] = json!(SHA);
@@ -1269,6 +1279,514 @@ fn distinct_rust_panics_with_the_same_passing_preamble_keep_distinct_keys() {
     );
 }
 
+fn ansi_bold_red(text: &str) -> String {
+    format!("\u{1b}[31;1m{text}\u{1b}[0m")
+}
+
+fn github_line(job: &str, step: &str, payload: &str) -> String {
+    format!("{job}\t{step}\t2026-09-07T07:24:42.8592482Z {payload}\n")
+}
+
+/// ORB-11509: nextest cancellation and summary wrap a FAIL line. ANSI styling
+/// must not become the signature, and colored/uncolored logs must match.
+///
+/// `elapsed` is the per-test duration nextest prints in the FAIL line; it
+/// differs on every rerun of the same regression.
+fn orb_11509_style_nextest_log(colored: bool, failing: &str, elapsed: &str) -> String {
+    let job = "Check / Clippy / Test";
+    let step = "Run CI guardrails";
+    let paint = |text: &str, color: bool| {
+        if color {
+            ansi_bold_red(text)
+        } else {
+            text.to_string()
+        }
+    };
+    let mut out = String::new();
+    out.push_str(&github_line(job, step, "##[group]Run cargo nextest run"));
+    out.push_str(&github_line(
+        job,
+        step,
+        "test mcp_serve_error_paths_return_tool_errors_and_keep_serving ... ok",
+    ));
+    out.push_str(&github_line(
+        job,
+        step,
+        &format!(
+            "{} due to {}: ",
+            paint("  Cancelling", colored),
+            paint("test failure", colored)
+        ),
+    ));
+    out.push_str(&github_line(job, step, "────────────"));
+    out.push_str(&github_line(
+        job,
+        step,
+        &format!(
+            "{} [ 177.529s] 2786/4410 tests run: 2785 passed (2 slow), 1 failed, 10 skipped",
+            paint("     Summary", colored)
+        ),
+    ));
+    out.push_str(&github_line(
+        job,
+        step,
+        &format!(
+            "{} [   {elapsed}] (2786/4410) {} {}",
+            paint("        FAIL", colored),
+            paint("orbit-cli::output_goldens", colored),
+            paint(failing, colored)
+        ),
+    ));
+    out.push_str(&github_line(
+        job,
+        step,
+        "warning: 1624/4410 tests were not run due to test failure (run with --no-fail-fast to run all tests)",
+    ));
+    out.push_str(&github_line(
+        job,
+        step,
+        &format!("{}: test run failed", paint("error", colored)),
+    ));
+    out.push_str(&github_line(
+        job,
+        step,
+        "##[error]Process completed with exit code 100.",
+    ));
+    out
+}
+
+/// ORB-11470 / ORB-11467: cargo's colored `error: test failed, to rerun pass`
+/// trailer can appear before the panic when the excerpt is a recovered job log.
+fn orb_11470_style_macos_log(failing: &str, cargo_before_panic: bool) -> String {
+    let job = "macOS Sandbox";
+    let step = "Run orbit-exec sandbox tests (real sandbox-exec)";
+    let prefix = |payload: &str| github_line(job, step, payload);
+    let cargo = format!(
+        "{}: test failed, to rerun pass `-p orbit-exec --lib`",
+        ansi_bold_red("error")
+    );
+    let header = format!("---- {failing} stdout ----");
+    let panic = format!(
+        "thread '{failing}' (14083) panicked at crates/orbit-exec/src/macos_sandbox/tests/compile.rs:454:5:"
+    );
+    let mut out = String::new();
+    out.push_str(&prefix("##[group]Run cargo test -p orbit-exec --locked"));
+    out.push_str(&prefix(
+        "test macos_sandbox::tests::spawn::spawn_under_macos_sandbox_runs_program_in_provided_cwd ... ok",
+    ));
+    out.push_str(&prefix("failures:"));
+    out.push_str(&prefix(&header));
+    if cargo_before_panic {
+        out.push_str(&prefix(&cargo));
+        out.push_str(&prefix(&panic));
+    } else {
+        out.push_str(&prefix(&panic));
+        out.push_str(&prefix(&cargo));
+    }
+    out.push_str(&prefix(
+        "an explicit denyRead must still outrank the public CA default",
+    ));
+    out.push_str(&prefix("failures:"));
+    out.push_str(&prefix(&format!("    {failing}")));
+    out.push_str(&prefix(
+        "test result: FAILED. 67 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s",
+    ));
+    out.push_str(&prefix("##[error]Process completed with exit code 101."));
+    out
+}
+
+/// ORB-11498 / ORB-11502: golden assertion payload quotes github.run.logs help
+/// text containing `failed steps`. The failing test name is in the libtest
+/// summary list; the panic line is omitted as in a head/tail truncated excerpt.
+fn orb_11498_style_golden_log(failing: &str) -> String {
+    let job = "Coverage (informational)";
+    let step = "Collect workspace coverage";
+    let prefix = |payload: &str| github_line(job, step, payload);
+    let mut out = String::new();
+    out.push_str(&prefix(
+        "##[group]Run cargo llvm-cov --workspace --locked --no-report",
+    ));
+    out.push_str(&prefix(
+        "test no_ansi_escapes_under_any_color_configuration ... ok",
+    ));
+    out.push_str(&prefix(
+        r#"        "description": "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is drained incrementally; checkout extraction stops after 8 MiB.""#,
+    ));
+    out.push_str(&prefix(
+        r#"  right: "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence.""#,
+    ));
+    out.push_str(&prefix("failures:"));
+    out.push_str(&prefix(&format!("    {failing}")));
+    out.push_str(&prefix(
+        "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.64s",
+    ));
+    out.push_str(&prefix(
+        "error: test failed, to rerun pass `-p orbit-cli --test output_goldens`",
+    ));
+    out.push_str(&prefix(
+        "error: process didn't exit successfully: `/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo test --tests` (exit status: 101)",
+    ));
+    out.push_str(&prefix("##[error]Process completed with exit code 101."));
+    out
+}
+
+/// ORB-11513: Wrangler colored `[ERROR]` plus the missing-field diagnostic,
+/// then GitHub's generic `The process 'npx' failed with exit code`.
+pub(super) fn orb_11513_style_wrangler_log(title: &str, detail: &str) -> String {
+    let job = "Publish to Cloudflare Pages";
+    let step = "Deploy static site";
+    let prefix = |payload: &str| github_line(job, step, payload);
+    let wrangler_error = format!(
+        "\u{1b}[31m✘ \u{1b}[41;31m[\u{1b}[41;97mERROR\u{1b}[41;31m]\u{1b}[0m \u{1b}[1m{title}:\u{1b}[0m"
+    );
+    let mut out = String::new();
+    out.push_str(&prefix(
+        "##[group]Run cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0",
+    ));
+    out.push_str(&prefix("[command]/usr/local/bin/npm i wrangler@4.129.0"));
+    out.push_str(&prefix(
+        "[command]/usr/local/bin/npx --no-install wrangler --version",
+    ));
+    out.push_str(&prefix(
+        "[command]/usr/local/bin/npx wrangler pages deploy dist --project-name=orbit-website --branch=main --commit-hash=a93caa13890764380e184d996fa709b1bcbe278c",
+    ));
+    out.push_str(&prefix(&wrangler_error));
+    out.push_str(&prefix(&format!("    - {detail}")));
+    out.push_str(&prefix(
+        "##[error]The process '/usr/local/bin/npx' failed with exit code 1",
+    ));
+    out.push_str(&prefix("##[error]🚨 Action failed"));
+    out
+}
+
+#[test]
+fn colored_and_uncolored_nextest_cancellation_share_the_fail_identity() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    const FAILING: &str = "plain_and_json_forms_match_their_goldens";
+    let colored = orb_11509_style_nextest_log(true, FAILING, "1.399s");
+    let plain = orb_11509_style_nextest_log(false, FAILING, "1.399s");
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10, "CI", "Check / Clippy / Test", "Run CI guardrails", &colored, CHECKOUT,
+        )])}),
+    );
+    assert_eq!(first["filed_count"], json!(1));
+    let task_id = filed_task_ids(&first).remove(0);
+    let signature = signature_line(
+        &runtime
+            .get_task(&task_id)
+            .expect("read filed task")
+            .description,
+    )
+    .to_ascii_lowercase();
+    assert!(
+        signature.contains(FAILING) && signature.contains("fail"),
+        "nextest FAIL line must be the signature: {signature}"
+    );
+    assert!(
+        !signature.contains("cancelling")
+            && !signature.contains("process completed")
+            && !signature.contains("test run failed")
+            && !signature.contains('\u{1b}'),
+        "cancellation, cargo trailer, and ANSI must not be the signature: {signature}"
+    );
+    assert!(
+        runtime
+            .get_task(&task_id)
+            .expect("read filed task")
+            .description
+            .contains("Cancelling"),
+        "raw colored excerpt must remain in the description"
+    );
+
+    let repeated = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            11, "CI", "Check / Clippy / Test", "Run CI guardrails", &plain, NEXT_HEAD,
+        )])}),
+    );
+    assert_eq!(repeated["filed_count"], json!(0));
+    assert_eq!(
+        repeated["skipped_existing"][0]["failure_key"], first["filed"][0]["failure_key"],
+        "colored and uncolored nextest FAIL logs must share a failure key"
+    );
+}
+
+/// A colored log can reach the sweep with an escape sequence cut short — the
+/// stripper must not split the multi-byte character that follows it.
+#[test]
+fn a_truncated_escape_before_a_multibyte_character_still_files() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let log = format!(
+        "{}{}{}",
+        github_line("build", "cargo test", "##[group]Run cargo nextest run"),
+        github_line("build", "cargo test", "\u{1b}────────────"),
+        github_line(
+            "build",
+            "cargo test",
+            "    FAIL [   1.399s] orbit-core truncated_escape_case",
+        ),
+    );
+
+    let (_output, description) = filed_description(&runtime, &log);
+    let signature = signature_line(&description).to_ascii_lowercase();
+    assert!(
+        signature.contains("truncated_escape_case"),
+        "the FAIL identity must survive a truncated escape: {signature}"
+    );
+}
+
+#[test]
+fn nextest_fail_durations_do_not_fragment_one_regression() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    const FAILING: &str = "plain_and_json_forms_match_their_goldens";
+    let first_run = orb_11509_style_nextest_log(true, FAILING, "1.399s");
+    let rerun = orb_11509_style_nextest_log(true, FAILING, "2.004s");
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10, "CI", "Check / Clippy / Test", "Run CI guardrails", &first_run, CHECKOUT,
+        )])}),
+    );
+    assert_eq!(first["filed_count"], json!(1));
+
+    let repeated = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            11, "CI", "Check / Clippy / Test", "Run CI guardrails", &rerun, NEXT_HEAD,
+        )])}),
+    );
+    assert_eq!(
+        repeated["filed_count"],
+        json!(0),
+        "a rerun of the same test must not file a second task"
+    );
+    assert_eq!(
+        repeated["skipped_existing"][0]["failure_key"], first["filed"][0]["failure_key"],
+        "the per-test duration must not change the failure key"
+    );
+}
+
+#[test]
+fn distinct_nextest_fail_lines_in_the_same_job_keep_distinct_keys() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let foo =
+        orb_11509_style_nextest_log(true, "plain_and_json_forms_match_their_goldens", "1.399s");
+    let bar = orb_11509_style_nextest_log(false, "another_golden_does_not_match", "2.004s");
+
+    let output = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![
+            failure(10, "CI", "Check / Clippy / Test", "Run CI guardrails", &foo, CHECKOUT),
+            failure(11, "CI", "Check / Clippy / Test", "Run CI guardrails", &bar, CHECKOUT),
+        ])}),
+    );
+    assert_eq!(output["filed_count"], json!(2));
+    let filed = output["filed"].as_array().expect("filed");
+    assert_ne!(filed[0]["failure_key"], filed[1]["failure_key"]);
+}
+
+#[test]
+fn cargo_test_failed_trailer_does_not_outrank_the_panic() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    const FAILING: &str = "macos_sandbox::tests::compile::compiled_codex_profile_reads_public_ca_material_but_not_private_credentials";
+    let trailer_first = orb_11470_style_macos_log(FAILING, true);
+    let panic_first = orb_11470_style_macos_log(FAILING, false);
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10,
+            "macOS Platform",
+            "macOS Sandbox",
+            "Run orbit-exec sandbox tests (real sandbox-exec)",
+            &trailer_first,
+            CHECKOUT,
+        )])}),
+    );
+    assert_eq!(first["filed_count"], json!(1));
+    let signature = signature_line(
+        &runtime
+            .get_task(&filed_task_ids(&first)[0])
+            .expect("read filed task")
+            .description,
+    )
+    .to_ascii_lowercase();
+    assert!(
+        signature.contains(FAILING) && signature.contains("panicked"),
+        "panic must outrank the cargo trailer: {signature}"
+    );
+    assert!(
+        !signature.contains("to rerun pass") && !signature.contains("process completed"),
+        "cargo/github wrappers must not be the signature: {signature}"
+    );
+
+    let repeated = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            11,
+            "macOS Platform",
+            "macOS Sandbox",
+            "Run orbit-exec sandbox tests (real sandbox-exec)",
+            &panic_first,
+            NEXT_HEAD,
+        )])}),
+    );
+    assert_eq!(repeated["filed_count"], json!(0));
+    assert_eq!(
+        repeated["skipped_existing"][0]["failure_key"],
+        first["filed"][0]["failure_key"]
+    );
+}
+
+#[test]
+fn golden_assertion_help_text_does_not_outrank_the_failing_test_name() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    const FAILING: &str = "plain_and_json_forms_match_their_goldens";
+    let log = orb_11498_style_golden_log(FAILING);
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10,
+            "CI",
+            "Coverage (informational)",
+            "Collect workspace coverage",
+            &log,
+            CHECKOUT,
+        )])}),
+    );
+    assert_eq!(first["filed_count"], json!(1));
+    let task_id = filed_task_ids(&first).remove(0);
+    let description = runtime
+        .get_task(&task_id)
+        .expect("read filed task")
+        .description;
+    let signature = signature_line(&description).to_ascii_lowercase();
+    assert!(
+        signature.contains(FAILING),
+        "listed golden test name must be the signature: {signature}"
+    );
+    assert!(
+        !signature.contains("failed steps")
+            && !signature.contains("bounded excerpt")
+            && !signature.contains("to rerun pass"),
+        "assertion payload and cargo trailer must not be the signature: {signature}"
+    );
+    assert!(
+        description.contains("failed steps by default"),
+        "raw assertion payload must remain in the excerpt"
+    );
+
+    let repeated = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            11,
+            "CI",
+            "Coverage (informational)",
+            "Collect workspace coverage",
+            &log,
+            NEXT_HEAD,
+        )])}),
+    );
+    assert_eq!(repeated["filed_count"], json!(0));
+}
+
+#[test]
+fn wrangler_error_outranks_generic_npx_process_failed() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let missing_name = orb_11513_style_wrangler_log(
+        "Running configuration file validation for Pages",
+        "Missing top-level field \"name\" in configuration file.",
+    );
+    let missing_pages = orb_11513_style_wrangler_log(
+        "Failed to publish your Function",
+        "Pages build output directory is missing.",
+    );
+
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10,
+            "Website",
+            "Publish to Cloudflare Pages",
+            "Deploy static site",
+            &missing_name,
+            CHECKOUT,
+        )])}),
+    );
+    assert_eq!(first["filed_count"], json!(1));
+    let signature = signature_line(
+        &runtime
+            .get_task(&filed_task_ids(&first)[0])
+            .expect("read filed task")
+            .description,
+    )
+    .to_ascii_lowercase();
+    assert!(
+        signature.contains("configuration file validation")
+            || signature.contains("missing top-level field"),
+        "wrangler diagnostic must outrank npx process-failed: {signature}"
+    );
+    assert!(
+        !signature.contains("usr/local/bin/npx") && !signature.contains("action failed"),
+        "generic process/action trailers must not be the signature: {signature}"
+    );
+
+    let second = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![
+            failure(
+                11,
+                "Website",
+                "Publish to Cloudflare Pages",
+                "Deploy static site",
+                &missing_pages,
+                CHECKOUT,
+            ),
+        ])}),
+    );
+    assert_eq!(second["filed_count"], json!(1));
+    assert_ne!(
+        first["filed"][0]["failure_key"], second["filed"][0]["failure_key"],
+        "distinct wrangler diagnostics in the same job must not collapse"
+    );
+}
+
+#[test]
+fn generic_only_truncated_excerpt_labels_step_name_fallback() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let log = format!(
+        "{}{}{}",
+        github_line("build", "cargo test", "##[group]Run cargo test"),
+        github_line(
+            "build",
+            "cargo test",
+            "error: test failed, to rerun pass `-p orbit-exec --lib`",
+        ),
+        github_line(
+            "build",
+            "cargo test",
+            "##[error]Process completed with exit code 101.",
+        ),
+    );
+
+    let (_output, description) = filed_description(&runtime, &log);
+    let signature = signature_line(&description);
+    assert!(
+        signature.contains("step-name fallback"),
+        "generic-only excerpt must label fallback uncertainty: {signature}"
+    );
+    assert!(
+        description.contains("test failed, to rerun pass")
+            && description.contains("Process completed with exit code 101."),
+        "raw generic trailers must remain in the excerpt:\n{description}"
+    );
+}
+
 #[test]
 fn query_error_prevents_filing_and_remains_retryable() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
@@ -1505,4 +2023,539 @@ fn a_finding_whose_own_run_failed_a_query_is_deferred_not_filed_from_partial_evi
         deferred[0]["reasons"][0]["operation"],
         json!("checkout_evidence")
     );
+}
+
+fn two_job_findings() -> Vec<Value> {
+    let first = failure(
+        10,
+        "CI",
+        "Clippy",
+        "Run guardrails",
+        "error: unused import",
+        CHECKOUT,
+    );
+    let mut second = failure(
+        10,
+        "CI",
+        "Coverage",
+        "Collect coverage",
+        "test output_goldens FAILED",
+        NEXT_HEAD,
+    );
+    second["job_id"] = json!(920);
+    second["log_job_id"] = json!(920);
+    second["failed_jobs"][0]["job_id"] = json!(920);
+    second["checkout_identity"]["provenance"]["job_id"] = json!(920);
+    vec![first, second]
+}
+
+#[test]
+fn two_failed_jobs_file_distinct_correct_findings_regardless_of_order() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let findings = two_job_findings();
+    let first = file(&runtime, json!({"ci_evidence": snapshot(findings.clone())}));
+    assert_eq!(first["filed_count"], 2);
+    let ids = filed_task_ids(&first);
+    let clippy = runtime.get_task(&ids[0]).expect("clippy task");
+    let coverage = runtime.get_task(&ids[1]).expect("coverage task");
+    assert!(clippy.title.contains("Clippy"));
+    assert!(clippy.description.contains("unused import"));
+    assert!(!clippy.description.contains("output_goldens"));
+    assert!(coverage.title.contains("Coverage"));
+    assert!(coverage.description.contains("output_goldens"));
+    assert!(!coverage.description.contains("unused import"));
+    assert_ne!(
+        first["filed"][0]["failure_key"],
+        first["filed"][1]["failure_key"]
+    );
+    assert_eq!(first["filed"][0]["tested_commit"], CHECKOUT);
+    assert_eq!(first["filed"][1]["tested_commit"], NEXT_HEAD);
+    let mut reversed = findings;
+    reversed.reverse();
+    let second = file(&runtime, json!({"ci_evidence": snapshot(reversed)}));
+    assert_eq!(second["filed_count"], 0);
+    assert_eq!(
+        second["skipped_existing"].as_array().expect("skips").len(),
+        2
+    );
+}
+
+#[test]
+fn one_jobs_retryable_error_defers_only_that_job() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut findings = two_job_findings();
+    findings[0]["investigated"] = json!(false);
+    let mut evidence = snapshot(findings);
+    evidence["retryable_errors"] = json!([{
+        "run_id": 10, "job_id": 910, "operation": "run_logs", "message": "job log unavailable",
+    }]);
+    let output = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(output["filed_count"], 1);
+    assert_eq!(output["filed"][0]["job"], "Coverage");
+    assert_eq!(output["deferred"][0]["job_id"], 910);
+    assert_eq!(output["deferred"][0]["reasons"][0]["job_id"], 910);
+    assert_eq!(output["deferred"].as_array().expect("deferred").len(), 1);
+}
+
+#[test]
+fn unbound_legacy_and_incomplete_job_snapshots_require_recollection() {
+    for defect in [
+        "legacy",
+        "fallback",
+        "checkout",
+        "truncated",
+        "missing",
+        "steps",
+    ] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let mut findings = two_job_findings();
+        findings.truncate(1);
+        let mut evidence = snapshot(findings);
+        let finding = &mut evidence["current_failures"][0];
+        match defect {
+            "fallback" => {
+                finding["log_source"] = json!("job_api_log");
+                finding["log_source_jobs"] = json!([{"job_id": 920}]);
+            }
+            "checkout" => finding["checkout_identity"]["provenance"]["job_id"] = json!(920),
+            "truncated" => finding["log_truncated"] = json!(true),
+            "missing" => finding["log_excerpt"] = json!(""),
+            "steps" => {
+                finding["failed_jobs"][0]["failed_steps"] = json!([{"name": "A"}, {"name": "B"}])
+            }
+            _ => evidence["schema_version"] = json!(1),
+        }
+        let error = file_error(&runtime, json!({"ci_evidence": evidence}));
+        assert!(error.contains("job_evidence_identity"), "{defect}: {error}");
+        assert!(
+            runtime
+                .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+                .expect("tasks")
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn legacy_multi_job_snapshot_cannot_label_coverage_log_as_clippy() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let findings = two_job_findings();
+    let mut combined = findings[0].clone();
+    combined["failed_jobs"] =
+        json!([findings[0]["failed_jobs"][0], findings[1]["failed_jobs"][0],]);
+    combined["log_excerpt"] = json!("Coverage\tCollect coverage\ttest output_goldens FAILED\n");
+    let mut evidence = snapshot(vec![combined]);
+    evidence["schema_version"] = json!(1);
+    let error = file_error(&runtime, json!({"ci_evidence": evidence}));
+    assert!(error.contains("legacy run-scoped evidence"), "{error}");
+    assert!(
+        runtime
+            .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+            .expect("tasks")
+            .is_empty()
+    );
+}
+
+#[test]
+fn complete_units_from_long_logs_file_and_dedupe_without_using_display_noise() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut findings = two_job_findings();
+    for finding in &mut findings {
+        let text = finding["log_excerpt"]
+            .as_str()
+            .expect("diagnostic")
+            .to_string();
+        finding["diagnostic_unit"] = json!({"kind": "runner_command", "complete": true,
+            "job_id": finding["job_id"], "step": finding["failed_jobs"][0]["failed_steps"][0]["name"],
+            "text": text});
+        finding["log_excerpt"] = json!("setup error: unrelated_setup\n[... omitted ...]\ncleanup");
+        finding["log_truncated"] = json!(true);
+        finding["log_source_complete"] = json!(true);
+    }
+    let first = file(&runtime, json!({"ci_evidence": snapshot(findings.clone())}));
+    assert_eq!(first["filed_count"], 2);
+    let ids = filed_task_ids(&first);
+    for (id, expected) in ids.iter().zip(["unused import", "output_goldens"]) {
+        let task = runtime.get_task(id).expect("task");
+        assert!(task.description.contains(expected));
+        assert!(
+            task.description
+                .contains("collection display was truncated")
+        );
+        assert!(!task.description.contains("unrelated_setup"));
+    }
+    findings.reverse();
+    let second = file(&runtime, json!({"ci_evidence": snapshot(findings)}));
+    assert_eq!(second["filed_count"], 0);
+    assert_eq!(
+        second["skipped_existing"]
+            .as_array()
+            .expect("deduped")
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn incomplete_or_foreign_units_cannot_override_truncated_display() {
+    for fault in ["job", "step", "incomplete", "source", "generic", "oversize"] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let mut findings = two_job_findings();
+        findings.truncate(1);
+        let finding = &mut findings[0];
+        finding["log_truncated"] = json!(true);
+        finding["diagnostic_unit"] = json!({"kind": "runner_command", "complete": true,
+            "job_id": finding["job_id"], "step": finding["failed_jobs"][0]["failed_steps"][0]["name"],
+            "text": "error: concrete diagnostic"});
+        match fault {
+            "job" => finding["diagnostic_unit"]["job_id"] = json!(999),
+            "step" => finding["diagnostic_unit"]["step"] = json!("Other step"),
+            "incomplete" => finding["diagnostic_unit"]["complete"] = json!(false),
+            "source" => finding["log_source_complete"] = json!(false),
+            "generic" => {
+                finding["diagnostic_unit"]["text"] =
+                    json!("##[error]Process completed with exit code 101.")
+            }
+            _ => finding["diagnostic_unit"]["text"] = json!("x".repeat(262_145)),
+        }
+        let error = file_error(&runtime, json!({"ci_evidence": snapshot(findings)}));
+        assert!(error.contains("job_evidence_identity"), "{fault}: {error}");
+    }
+}
+
+fn compiler_findings() -> Vec<Value> {
+    ["macOS", "Clippy", "Coverage"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, job)| {
+            let log = format!(
+                concat!(
+                    "##[group]Run cargo check\n",
+                    "    Compiling thiserror v2.0.17\n",
+                    "    Checking error_stack v1.0.0\n",
+                    "error: process didn't exit successfully: `rustc {}` (exit status: 1)\n",
+                    "\x1b[1;31merror[E0062]\x1b[0m: field `owner_machine_id` specified more than once\n",
+                    "  --> crates/orbit-core/src/ci_sweep.rs:275:13\n",
+                    "   |\n275 | owner_machine_id: None,\n",
+                    "   | ^^^^^^^^^^^^^^^^ used more than once\n",
+                    "error: could not compile `orbit-core` due to 1 previous error\n",
+                    "##[error]Process completed with exit code 101.\n",
+                ),
+                "--extern error_helper=/tmp/build/é ".repeat(1500)
+            );
+            let mut finding = failure(70 + index as u64, "CI", job, job, &log, CHECKOUT);
+            finding["diagnostic_unit"] = json!({"kind": "runner_command", "complete": true,
+                "job_id": finding["job_id"], "step": job, "text": log});
+            finding["log_source_complete"] = json!(true);
+            finding["log_truncated"] = json!(true);
+            finding["log_excerpt"] = json!("setup error: unrelated display noise");
+            finding
+        })
+        .collect()
+}
+
+#[test]
+fn compiler_cause_consolidates_jobs_and_keeps_actionable_excerpt() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut findings = compiler_findings();
+    let output = file(&runtime, json!({"ci_evidence": snapshot(findings.clone())}));
+    assert_eq!(output["filed_count"], 1, "{output}");
+    assert_eq!(output["clusters"], 1);
+    let id = filed_task_ids(&output).remove(0);
+    let task = runtime.get_task(&id).expect("compiler owner");
+    let signature = signature_line(&task.description);
+    assert!(
+        signature.contains("error[e0062]: field `owner_machine_id`"),
+        "{signature}"
+    );
+    assert!(!signature.contains('\x1b'));
+    let excerpt = excerpt_block(&task.description);
+    assert!(excerpt.contains("error[E0062]"));
+    assert!(excerpt.contains("ci_sweep.rs:275:13"));
+    assert!(excerpt.len() < 4_300, "{}", excerpt.len());
+    for finding in &findings {
+        assert!(
+            task.description
+                .contains(finding["failed_jobs"][0]["name"].as_str().expect("name"))
+        );
+        assert!(task.description.contains(&finding["job_id"].to_string()));
+        assert!(task.description.contains(&finding["run_id"].to_string()));
+    }
+    assert!(task.description.contains(CHECKOUT));
+    findings.reverse();
+    let repeated = file(&runtime, json!({"ci_evidence": snapshot(findings)}));
+    assert_eq!(repeated["filed_count"], 0);
+    assert_eq!(repeated["skipped_existing"][0]["task_id"], id);
+}
+
+#[test]
+fn compiler_causes_with_shared_command_and_location_remain_separate() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut findings = compiler_findings();
+    for (index, finding) in findings.iter_mut().enumerate() {
+        let text = finding["diagnostic_unit"]["text"].as_str().expect("log");
+        finding["diagnostic_unit"]["text"] =
+            json!(text.replace("owner_machine_id", &format!("field_{index}")));
+    }
+    let first = file(&runtime, json!({"ci_evidence": snapshot(findings.clone())}));
+    assert_eq!(first["filed_count"], 3);
+    findings.reverse();
+    let repeated = file(&runtime, json!({"ci_evidence": snapshot(findings)}));
+    assert_eq!(repeated["filed_count"], 0);
+    let owners: std::collections::BTreeSet<_> = repeated["skipped_existing"]
+        .as_array()
+        .expect("skips")
+        .iter()
+        .map(|entry| entry["task_id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(owners.len(), 3);
+}
+
+#[test]
+fn compiler_legacy_keys_follow_rejected_owners_only_for_the_original_source() {
+    use crate::application::task::TaskAddParams;
+
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let findings = compiler_findings();
+    let owner = runtime
+        .add_task(TaskAddParams {
+            title: "Repair the compiler initializer".to_string(),
+            description: "Canonical repair explicitly named by the rejected observations."
+                .to_string(),
+            ..TaskAddParams::default()
+        })
+        .expect("owner");
+    // Shipped workflow/job/step/first-marker digests for these exact logs.
+    let keys = ["2c5df683bc1b014d", "c9f31b827d835692", "14ccd1ad54c810ec"];
+    for (finding, key) in findings.iter().zip(keys) {
+        let source = runtime
+            .add_task(TaskAddParams {
+                title: "Legacy compiler observation".to_string(),
+                description: format!(
+                    "run `{}`\nfailed job (id `{}`)\ncommit actually checked out: `{CHECKOUT}`",
+                    finding["run_id"], finding["job_id"]
+                ),
+                tags: vec![format!("ci-failure:{key}")],
+                ..TaskAddParams::default()
+            })
+            .expect("legacy observation");
+        runtime
+            .update_task(
+                &source.id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::Rejected),
+                    comment: Some(format!("Duplicate of {}", owner.id)),
+                    ..TaskUpdateParams::default()
+                },
+            )
+            .expect("rejected duplicate");
+    }
+    for finding in &findings {
+        let output = file(
+            &runtime,
+            json!({"ci_evidence": snapshot(vec![finding.clone()])}),
+        );
+        assert_eq!(output["filed_count"], 0, "{output}");
+        assert_eq!(output["skipped_existing"][0]["task_id"], owner.id);
+        assert_eq!(
+            output["skipped_existing"][0]["match_kind"],
+            "confirmed_duplicate"
+        );
+    }
+    let mut reversed = findings.clone();
+    reversed.reverse();
+    for current in [findings.clone(), reversed] {
+        let output = file(&runtime, json!({"ci_evidence": snapshot(current)}));
+        assert_eq!(output["filed_count"], 0);
+        assert_eq!(output["skipped_existing"][0]["task_id"], owner.id);
+        assert_eq!(
+            output["skipped_existing"][0]["sources"]
+                .as_array()
+                .expect("sources")
+                .len(),
+            3
+        );
+    }
+    // The old chatter key recurs, but a new run is not the original evidence.
+    let mut later = findings[0].clone();
+    later["run_id"] = json!(99);
+    let output = file(&runtime, json!({"ci_evidence": snapshot(vec![later])}));
+    assert_eq!(output["filed_count"], 1);
+}
+
+#[test]
+fn compiler_proof_preserves_case_coordinates_checkout_and_secondary_errors() {
+    for difference in [
+        "case",
+        "location",
+        "checkout",
+        "secondary",
+        "missing_location",
+    ] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let mut findings = compiler_findings();
+        findings.truncate(2);
+        let text = findings[1]["diagnostic_unit"]["text"]
+            .as_str()
+            .expect("log");
+        let changed = match difference {
+            "case" => text.replace("owner_machine_id", "Owner_machine_id"),
+            "location" => text.replace(":275:13", ":276:13"),
+            "checkout" => text.to_string(),
+            "secondary" => format!(
+                "{text}\nerror[E0308]: mismatched types\n --> crates/orbit-core/src/ci_sweep.rs:275:13\n"
+            ),
+            _ => text.replace("  --> crates/orbit-core/src/ci_sweep.rs:275:13\n", ""),
+        };
+        findings[1]["diagnostic_unit"]["text"] = json!(changed);
+        if difference == "checkout" {
+            findings[1]["actual_checkout_shas"] = json!([NEXT_HEAD]);
+        }
+        let output = file(&runtime, json!({"ci_evidence": snapshot(findings)}));
+        assert_eq!(output["filed_count"], 2, "{difference}: {output}");
+    }
+}
+
+fn region_finding() -> Value {
+    let raw = format!(
+        "##[group]Run cargo nextest run\n{}\
+         thread 'first_failure' panicked at tests/golden.rs:12:5:\n\
+         assertion failed: tool_list.plain.txt golden drift\nleft: {}\nright: expected\n\
+         thread 'second_failure' panicked at tests/other.rs:20:7:\n\
+         assertion failed: second condition\n\
+         ##[error]Process completed with exit code 100.\n",
+        "PASS ordinary_test\n".repeat(20_000),
+        "large assertion ".repeat(10_000)
+    );
+    let mut collector = orbit_tools::github_cli::StreamedLogCollector::new(128, 40);
+    for chunk in raw.as_bytes().chunks(4096) {
+        collector.push(chunk);
+    }
+    let log = collector.finish();
+    let mut finding = failure(10, "CI", "Check", "Run tests", &log.text, CHECKOUT);
+    let mut unit = log.failure_regions.expect("selected regions");
+    unit["job_id"] = finding["job_id"].clone();
+    unit["step"] = json!("Run tests");
+    finding["diagnostic_unit"] = unit;
+    finding["log_source_complete"] = json!(log.source_complete);
+    finding["log_truncated"] = json!(log.truncated);
+    finding
+}
+
+#[test]
+fn oversized_regions_file_all_failures_and_explicit_omissions_then_dedupe() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let evidence = snapshot(vec![region_finding()]);
+    let first = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(first["filed_count"], 1);
+    let id = filed_task_ids(&first).remove(0);
+    let task = runtime.get_task(&id).expect("task");
+    for expected in [
+        "first_failure",
+        "second_failure",
+        "golden.rs:12:5",
+        "other.rs:20:7",
+        "golden drift",
+        "full command was not retained",
+        "assertion payload bytes",
+        "right: expected",
+    ] {
+        assert!(
+            task.description.contains(expected),
+            "missing {expected}: {}",
+            task.description
+        );
+    }
+    assert!(task.required_tools.is_empty());
+    let second = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(second["filed_count"], 0);
+    assert_eq!(second["skipped_existing"][0]["task_id"], id);
+}
+
+#[test]
+fn failure_regions_reject_false_completeness_missing_accounting_and_foreign_identity() {
+    for fault in [
+        "complete",
+        "command",
+        "selection",
+        "source",
+        "job",
+        "untruncated_foreign",
+        "checkout",
+        "step",
+        "accounting",
+        "assertions",
+        "size",
+    ] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let mut finding = region_finding();
+        match fault {
+            "complete" => finding["diagnostic_unit"]["complete"] = json!(true),
+            "command" => finding["diagnostic_unit"]["command_complete"] = json!(false),
+            "selection" => finding["diagnostic_unit"]["selection_complete"] = json!(false),
+            "source" => finding["log_source_complete"] = json!(false),
+            "job" => finding["diagnostic_unit"]["job_id"] = json!(920),
+            "untruncated_foreign" => {
+                finding["diagnostic_unit"]["job_id"] = json!(920);
+                finding["log_truncated"] = json!(false);
+            }
+            "checkout" => finding["checkout_identity"]["provenance"]["job_id"] = json!(920),
+            "step" => finding["diagnostic_unit"]["step"] = json!("Other"),
+            "accounting" => finding["diagnostic_unit"]["omitted_bytes"] = json!(0),
+            "assertions" => {
+                finding["diagnostic_unit"]["assertion_payload_omitted_bytes"] = Value::Null
+            }
+            _ => finding["diagnostic_unit"]["returned_bytes"] = json!(1),
+        }
+        let error = file_error(&runtime, json!({"ci_evidence": snapshot(vec![finding])}));
+        assert!(error.contains("job_evidence_identity"), "{fault}: {error}");
+    }
+}
+
+/// Consumes the exact production snapshot exported by the engine replay.
+/// Both filings use only this disposable runtime's registry and task store.
+#[test]
+#[ignore = "requires ORBIT_CI_REPLAY_OUTPUT and ORBIT_CI_REPLAY_REPORT"]
+fn replay_exact_guardrail_snapshot_through_disposable_filing() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let path = std::env::var("ORBIT_CI_REPLAY_OUTPUT").expect("collection snapshot path");
+    let evidence: Value =
+        serde_json::from_slice(&std::fs::read(path).expect("snapshot")).expect("JSON");
+    let first = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(first["filed_count"], 1, "{first}");
+    let id = filed_task_ids(&first).remove(0);
+    let task = runtime.get_task(&id).expect("repair task");
+    for expected in [
+        "101876457414",
+        "34165795036",
+        "Check / Clippy / Test",
+        "Run CI guardrails",
+        "3ffa0fd3aaa535867c9e060c7ec600a33d7f2be6",
+        "plain_and_json_forms_match_their_goldens",
+        "output_goldens.rs:321:5",
+        "tool_list.plain.txt",
+        "full command was not retained",
+        "assertion payload bytes",
+    ] {
+        assert!(
+            task.description.contains(expected),
+            "missing {expected}: {}",
+            task.description
+        );
+    }
+    assert!(
+        !task
+            .description
+            .contains("eb26940c037ce255b6c28c0378c9276ab38cc75e")
+    );
+    assert!(task.required_tools.is_empty());
+    let second = file(&runtime, json!({"ci_evidence": evidence}));
+    assert_eq!(second["filed_count"], 0);
+    assert_eq!(second["skipped_existing"][0]["task_id"], id);
+    let report = json!({"first_filing": first, "repeat_filing": second, "offline_task_description": task.description, "required_tools": task.required_tools});
+    std::fs::write(
+        std::env::var("ORBIT_CI_REPLAY_REPORT").expect("report path"),
+        serde_json::to_vec_pretty(&report).expect("report JSON"),
+    )
+    .expect("write replay report");
 }

@@ -4,6 +4,7 @@
 //! The `artifacts` module owns task artifact reads, manifests, and upserts.
 //! The `sidecars` module owns comments and history row reads.
 //! The `index` module owns generated index reads, rebuilds, bundle translation, and task locking helpers.
+//! The `envelope_cache` module owns freshness-stamped reuse of parsed envelopes.
 //! The `query` module owns in-memory, sidecar, and artifact query matching.
 //! The `relations` module owns relation construction and replacement helpers.
 //! The `sequencing` module owns monotonic event and comment sequence calculations.
@@ -15,7 +16,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
-use orbit_common::fs::io::{atomic_write_bytes, with_exclusive_file_lock};
+use orbit_common::fs::io::atomic_write_bytes;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::OrbitId;
 use orbit_types::task::{
@@ -37,6 +38,7 @@ mod acceptance;
 mod artifact_paths;
 mod artifacts;
 mod crud;
+mod envelope_cache;
 mod index;
 mod listing;
 mod query;
@@ -50,6 +52,7 @@ mod tests;
 
 use acceptance::{parse_acceptance, render_acceptance};
 use artifact_paths::{normalize_v2_artifact_path, resolve_v2_artifact_file_path};
+use envelope_cache::EnvelopeCache;
 use relations::{relations_from_create_params, replace_relations};
 use sequencing::{next_event_id, next_sequence};
 
@@ -57,6 +60,8 @@ pub(crate) struct TaskV2Store {
     registry: TaskRegistryStore,
     bundle_store: TaskBundleStoreV2,
     workspace_id: String,
+    /// Envelope parses reused across listings; see [`envelope_cache`].
+    envelope_cache: EnvelopeCache,
 }
 
 impl TaskV2Store {
@@ -75,6 +80,7 @@ impl TaskV2Store {
             ),
             registry,
             workspace_id,
+            envelope_cache: EnvelopeCache::default(),
         }
     }
 
@@ -86,6 +92,7 @@ impl TaskV2Store {
             ),
             registry,
             workspace_id,
+            envelope_cache: EnvelopeCache::default(),
         }
     }
 }

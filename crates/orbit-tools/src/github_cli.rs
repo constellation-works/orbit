@@ -44,5 +44,5 @@ pub use crate::builtin::github::run_view::{
 };
 pub use crate::builtin::github::{
     BoundedLog, CheckoutEvidence, StreamedLog, StreamedLogCollector, bound_log_text, parse_gh_json,
-    scan_checkout_evidence,
+    scan_checkout_evidence, strip_ansi_sequences,
 };

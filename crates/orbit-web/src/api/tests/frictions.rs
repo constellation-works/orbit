@@ -35,7 +35,9 @@ async fn request(
 ) -> axum::response::Response {
     let mut builder = Request::builder().method(method).uri(uri);
     if let Some(origin) = origin {
-        builder = builder.header(header::ORIGIN, origin);
+        builder = builder
+            .header(header::ORIGIN, origin)
+            .header(header::HOST, "localhost:7878");
     }
     let request = if let Some(body) = body {
         builder
@@ -354,6 +356,35 @@ async fn stats_shape_exposes_triage_counts() {
             "{key} should be a u64 in {payload}"
         );
     }
+}
+
+#[tokio::test]
+async fn list_forwards_empty_multi_word_query_notes() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    seed_friction(
+        &runtime,
+        "workspace_init lost the parallel env snapshot while EnvGuard was armed.",
+        &["tooling"],
+    );
+
+    let response = request(
+        runtime,
+        Method::GET,
+        "/frictions?status=open&q=EnvGuard%20workspace_init".to_string(),
+        None,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    let items = payload["items"].as_array().expect("items array");
+    assert!(items.is_empty(), "non-contiguous terms are one needle");
+    let notes = payload["notes"].as_array().expect("notes array");
+    assert_eq!(notes.len(), 1);
+    let note = notes[0].as_str().expect("note text");
+    assert!(note.contains("single case-insensitive substring"), "{note}");
+    assert!(note.contains("not proof the corpus is empty"), "{note}");
 }
 
 /// ADR-0209 bearing 1 [ORB-10358]: the dashboard's friction field names come

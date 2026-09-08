@@ -1,0 +1,61 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: review_gate_admit
+spec:
+  type: deterministic
+  description: >
+    Admit a fresh before-PR reviewer for the committed, base-synchronized
+    candidate when the run's captured review policy is `before-pr`. Reserves a
+    reviewer start against the candidate lineage budget, pins base and head
+    commits and trees, resolves the separately configured review crew inside
+    the run's persisted crew allowlist, and writes the immutable reviewer manifest as a
+    task artifact. Reports `applies: false` for `none`, `after-landing`, and
+    checked no-diff exemptions.
+  input_schema_json:
+    type: object
+    required: [job_run_id, completed_task_ids, workspace_path]
+    properties:
+      job_run_id:
+        type: string
+      completed_task_ids:
+        type: array
+        items:
+          type: string
+      workspace_path:
+        type: string
+      base:
+        type: string
+      base_sync:
+        type: string
+        enum: [remote, local]
+      mode:
+        type: string
+        description: The delivery route; `local` refuses a before-pr admission.
+      base_sha:
+        type: string
+        description: >
+          Optional explicit pin. When absent the merge base of HEAD and the
+          synchronized base ref is used.
+      skipped_no_diff_expected:
+        type: boolean
+  output_schema_json:
+    type: object
+    required: [applies]
+    properties:
+      applies:
+        type: boolean
+      reason:
+        type: string
+      decision:
+        type: string
+      attempt_id:
+        type: string
+      reviewer:
+        type: object
+      head_sha:
+        type: string
+      base_sha:
+        type: string
+  action: review_gate_admit
+  config: {}

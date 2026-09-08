@@ -28,8 +28,8 @@ pub(crate) fn seed_executor(
             env: HashMap::new(),
             sandbox,
             allow_fallback: false,
-            created_at: now,
-            updated_at: now,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
         .expect("seed executor");
 }

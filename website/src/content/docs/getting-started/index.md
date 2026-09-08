@@ -22,6 +22,10 @@ Use this section when you are setting up Orbit for the first time.
     <h3>Delivery Workflows</h3>
     <p>The <code>orbit run</code> surface: shipping, backlog drains, and run inspection.</p>
   </a>
+  <a class="orbit-card" href="../how-to/dashboard/">
+    <h3>Use the Dashboard</h3>
+    <p>Open the operator dashboard locally or over SSH to inspect tasks, runs, and Operations.</p>
+  </a>
 </div>
 
 ## Prerequisites
@@ -37,6 +41,7 @@ Orbit itself can be installed without Rust. You only need a Rust toolchain if yo
 Once one task ships end to end, the next steps are running a whole backlog and
 letting Orbit schedule its own work:
 
+- [Use the Dashboard](../how-to/dashboard/)
 - [Run a Continuous Delivery Window](../how-to/continuous-delivery/)
 - [Schedule Recurring Work](../how-to/recurring-work/)
 - [Publish and Restore Tasks](../how-to/task-publication/)

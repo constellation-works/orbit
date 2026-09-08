@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::fs::path_safety::validate_path_stem;
 use crate::fs::yaml::parse_yaml_with;
 
 const PURPOSE_SECTION: &str = "Purpose";
@@ -129,7 +130,7 @@ impl SkillCatalog {
         ids.sort();
         let mut rows = Vec::new();
         for id in ids {
-            let path = self.candidate_path(&id);
+            let path = self.candidate_path(&id)?;
             match self.load(&id) {
                 Ok(_) => rows.push(SkillCatalogDoctorRow {
                     skill_id: id,
@@ -156,11 +157,7 @@ impl SkillCatalog {
     }
 
     pub fn load(&self, skill_id: &str) -> Result<LoadedSkill, OrbitError> {
-        if skill_id.trim().is_empty() {
-            return Err(OrbitError::SkillValidation(
-                "skill id must not be empty".to_string(),
-            ));
-        }
+        validate_skill_id(skill_id)?;
 
         // Skills use MergeByKey semantics: workspace wins for the named key,
         // otherwise fall through to the global default.
@@ -192,14 +189,16 @@ impl SkillCatalog {
         Ok(ids)
     }
 
-    fn candidate_path(&self, skill_id: &str) -> PathBuf {
+    fn candidate_path(&self, skill_id: &str) -> Result<PathBuf, OrbitError> {
+        validate_skill_id(skill_id)?;
         let workspace = self.root.join(skill_id);
         if workspace.exists() {
-            workspace
+            Ok(workspace)
         } else {
-            self.global_root
+            Ok(self
+                .global_root
                 .as_ref()
-                .map_or(workspace, |global| global.join(skill_id))
+                .map_or(workspace, |global| global.join(skill_id)))
         }
     }
 }
@@ -212,6 +211,7 @@ impl ScopedStore<LoadedSkill> for SkillCatalog {
     }
 
     fn get_workspace(&self, key: &str) -> Result<Option<LoadedSkill>, OrbitError> {
+        validate_skill_id(key)?;
         let dir = self.root.join(key);
         if dir.exists() {
             load_skill_from_dir(key, &dir).map(Some)
@@ -221,6 +221,7 @@ impl ScopedStore<LoadedSkill> for SkillCatalog {
     }
 
     fn get_global(&self, key: &str) -> Result<Option<LoadedSkill>, OrbitError> {
+        validate_skill_id(key)?;
         let Some(ref global) = self.global_root else {
             return Ok(None);
         };
@@ -231,6 +232,15 @@ impl ScopedStore<LoadedSkill> for SkillCatalog {
             Ok(None)
         }
     }
+}
+
+fn validate_skill_id(skill_id: &str) -> Result<(), OrbitError> {
+    if skill_id.trim().is_empty() {
+        return Err(OrbitError::SkillValidation(
+            "skill id must not be empty".to_string(),
+        ));
+    }
+    validate_path_stem(skill_id, "skill")
 }
 
 /// Load a skill from a specific directory on disk.

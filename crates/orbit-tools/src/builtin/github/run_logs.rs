@@ -18,7 +18,7 @@ impl crate::Tool for GithubRunLogsTool {
     fn schema(&self) -> orbit_types::tool::ToolSchema {
         super::gh_schema(
             "github.run.logs",
-            "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is drained incrementally; checkout extraction stops after 8 MiB and reports incomplete evidence rather than retaining an unbounded log. When the run-scoped read succeeds with no output at all, the excerpt is recovered from the log API of a job the run itself reported failed, and `source` says so.",
+            "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is read incrementally with an 8 MiB stdout limit and process timeout. A separate diagnostic_unit retains a unique complete failing runner command up to 256 KiB; display truncation does not imply missing command evidence. Source-limit exhaustion is retryable. When the run-scoped read succeeds with no output at all, the excerpt is recovered from the log API of a job the run itself reported failed, and `source` says so.",
             vec![
                 super::tool_param("run", "Numeric workflow-run ID", "string", true),
                 super::tool_param(
@@ -35,7 +35,7 @@ impl crate::Tool for GithubRunLogsTool {
                 ),
                 super::tool_param(
                     "max_bytes",
-                    "Maximum log bytes to return (default 16384, capped at 262144). The excerpt keeps the head and the tail and marks the omitted gap.",
+                    "Maximum display excerpt bytes (default 16384, capped at 262144), plus an omission marker. The separate complete diagnostic_unit is capped at 262144 bytes.",
                     "integer",
                     false,
                 ),
@@ -62,6 +62,9 @@ impl crate::Tool for GithubRunLogsTool {
             "run_id": input.get("run"),
             "scope": scope.as_str(),
             "log": log.text,
+            "diagnostic_unit": log.diagnostic,
+            "failure_regions": log.failure_regions,
+            "source_complete": log.source_complete,
             "truncated": log.truncated,
             "returned_bytes": log.returned_bytes,
             "total_bytes": log.total_bytes,

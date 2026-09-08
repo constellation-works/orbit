@@ -17,6 +17,12 @@ let logFollowTail = true;
 let logRows = []; // Keep track to enforce max 200 after 250 limit
 let activeLogFilters = new Set(["all"]);
 let logPanelResizeWired = false;
+const LOG_STREAM_RETRY_MIN_MS = 1000;
+const LOG_STREAM_RETRY_MAX_MS = 15000;
+const LOG_STREAM_UNAVAILABLE = "log stream unavailable, retrying";
+let logStreamOffset = 0;
+let logStreamRetryTimer = null;
+let logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
 
 // ORB-10972: the log lives in the Tasks tab's right dock, which has two modes
 // — Status (in-flight runs, locked files, sweep clock) and Log (the tail at
@@ -172,11 +178,20 @@ function renderLogEvent(ev, isFresh) {
 export function initLogTail() {
   wireLogPanelResize();
   fitLogPanelToViewport();
-  fetchJson("/api/log?limit=50").then((events) => {
+  fetchJson("/api/log?limit=50").then((payload) => {
     const inner = $("logInner");
     if (!inner) return;
     inner.innerHTML = "";
     logRows = [];
+    const events = payload && Array.isArray(payload.events) ? payload.events : [];
+    if (
+      payload &&
+      typeof payload.offset === "number" &&
+      Number.isFinite(payload.offset) &&
+      payload.offset >= 0
+    ) {
+      logStreamOffset = payload.offset;
+    }
     events.slice().reverse().forEach(ev => {
       const row = renderLogEvent(ev, false);
       inner.appendChild(row);
@@ -189,9 +204,10 @@ export function initLogTail() {
   
   const followBtn = $("log-follow-tail");
   if (followBtn) {
-    followBtn.addEventListener("click", (e) => {
+    followBtn.addEventListener("click", () => {
       logFollowTail = !logFollowTail;
-      e.currentTarget.classList.toggle("on", logFollowTail);
+      followBtn.classList.toggle("on", logFollowTail);
+      followBtn.setAttribute("aria-pressed", String(logFollowTail));
       if (logFollowTail) {
         flushBufferedLogs();
       }
@@ -206,8 +222,8 @@ export function initLogTail() {
   }
 
   document.querySelectorAll("#side-dock .filter-pill").forEach(pill => {
-    pill.addEventListener("click", (e) => {
-      const filter = e.currentTarget.dataset.filter;
+    pill.addEventListener("click", () => {
+      const filter = pill.dataset.filter;
       if (filter === "all") {
         activeLogFilters.clear();
         activeLogFilters.add("all");
@@ -222,10 +238,8 @@ export function initLogTail() {
           activeLogFilters.add(filter);
         }
       }
-      
-      document.querySelectorAll("#side-dock .filter-pill").forEach(p => {
-        p.classList.toggle("on", activeLogFilters.has(p.dataset.filter));
-      });
+
+      syncLogFilterPills();
       applyLogFilters();
     });
   });
@@ -257,6 +271,17 @@ function enforceLogBounds() {
   }
 }
 
+// The pills are toggle buttons: `on` carries the visual state and `aria-pressed`
+// carries the same fact for assistive tech, so both are written from the one
+// active-filter set rather than from the click target.
+function syncLogFilterPills() {
+  for (const pill of document.querySelectorAll("#side-dock .filter-pill")) {
+    const on = activeLogFilters.has(pill.dataset.filter);
+    pill.classList.toggle("on", on);
+    pill.setAttribute("aria-pressed", String(on));
+  }
+}
+
 function applyLogFilters() {
   let visibleCount = 0;
   for (const row of logRows) {
@@ -280,10 +305,42 @@ function applyLogFilters() {
   if (cnt) cnt.textContent = `${visibleCount}`;
 }
 
+function rememberStreamOffset(lastEventId) {
+  if (!lastEventId) return;
+  const parsed = Number.parseInt(lastEventId, 10);
+  if (Number.isFinite(parsed) && parsed >= 0) logStreamOffset = parsed;
+}
+
+function setLogStreamConnected(connected) {
+  const bar = $("log-statusbar");
+  const dock = $("side-dock");
+  if (bar) {
+    bar.classList.toggle("disconnected", !connected);
+    const label = bar.querySelector(".sb-label");
+    if (label) label.textContent = connected ? "orbit.log" : LOG_STREAM_UNAVAILABLE;
+    bar.setAttribute("aria-label", connected ? "Latest log line" : LOG_STREAM_UNAVAILABLE);
+  }
+  if (dock) dock.classList.toggle("disconnected", !connected);
+}
+
 function connectLogStream() {
-  if (logStream) logStream.close();
-  logStream = new EventSource("/api/log/stream");
+  if (logStreamRetryTimer !== null) {
+    clearTimeout(logStreamRetryTimer);
+    logStreamRetryTimer = null;
+  }
+  if (logStream) {
+    logStream.close();
+    logStream = null;
+  }
+  logStream = new EventSource(`/api/log/stream?from=${encodeURIComponent(String(logStreamOffset))}`);
+  logStream.onopen = () => {
+    logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
+    setLogStreamConnected(true);
+  };
   logStream.onmessage = (e) => {
+    logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
+    setLogStreamConnected(true);
+    rememberStreamOffset(e.lastEventId);
     try {
       const ev = JSON.parse(e.data);
       updateLogStatusBar(ev);
@@ -306,5 +363,17 @@ function connectLogStream() {
     } catch (err) {
       console.error("Failed to parse SSE event", err);
     }
+  };
+  logStream.onerror = () => {
+    setLogStreamConnected(false);
+    if (!logStream || logStream.readyState !== EventSource.CLOSED) return;
+    logStream.close();
+    logStream = null;
+    const delay = logStreamRetryMs;
+    logStreamRetryMs = Math.min(logStreamRetryMs * 2, LOG_STREAM_RETRY_MAX_MS);
+    logStreamRetryTimer = setTimeout(() => {
+      logStreamRetryTimer = null;
+      connectLogStream();
+    }, delay);
   };
 }

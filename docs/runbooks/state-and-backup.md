@@ -52,7 +52,7 @@ precedence). Path layout is defined in
 | `tasks/workspaces/<ws-id>/<task-id>/` | canonical task bundles (survive repo moves) | **authoritative** |
 | `frictions/workspaces/<ws-id>/` | live tag taxonomy plus the published legacy record tree used for one-time import/rollback | mixed: taxonomy is authoritative configuration; record files are legacy evidence after SQLite import |
 | `resources/activities/`, `resources/jobs/` | managed defaults plus operator-authored activity/job YAML; hidden manifests retain managed content provenance | mixed: current defaults are regenerable, but untracked YAML and `resources/.retired-managed/` backups are **authoritative until reviewed** |
-| other `resources/`, `skills/` | default executor/policy defs and skills | regenerable (`orbit init` reseeds) |
+| other `resources/`, `skills/` | default executor/policy defs and skills; `resources/.orbit-global-defaults.json` records which embedded default set was last reconciled here | regenerable (`orbit init` reseeds) |
 | `state/logs/orbit.jsonl` (+ rotated archives) | unified JSONL log sink for all Orbit processes | disposable |
 | `state/task-publication/` | private Git object/work-tree caches plus pending-push reconciliation records | regenerable after a cleanly recorded success; retain during push-success/local-record recovery |
 | `embed/` | semantic-search companion binary + models | regenerable (`orbit semantic install`) |
@@ -89,6 +89,11 @@ precedence). Path layout is defined in
 > with no manifest, non-matching YAML stays in place and init names it in a
 > warning. Move or delete only the named stale file after confirming it came
 > from an older release, then rerun `orbit init` and the affected list command.
+> A runtime open reconciles the managed catalogs only when the root does not
+> already carry the running binary's `resources/.orbit-global-defaults.json` stamp — a
+> fresh root, an upgrade, or a different Orbit build. Restoring a managed file
+> removed or corrupted by hand is therefore an explicit `orbit init` /
+> `orbit workspace sync` step rather than a side effect of the next command.
 
 ### Retired graph state and task selectors
 

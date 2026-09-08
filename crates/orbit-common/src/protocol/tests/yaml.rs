@@ -1,4 +1,5 @@
-use crate::protocol::yaml::{parse_local_routine_yaml, parse_routine_yaml};
+use crate::OrbitError;
+use crate::protocol::yaml::{parse_auto_task_yaml, parse_local_routine_yaml, parse_routine_yaml};
 use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy, RoutineTarget};
 
 const VALID_ROUTINE: &str = r#"
@@ -16,6 +17,70 @@ policy:
   retries: { max: 2, backoff_minutes: 2 }
   overlap: forbid
 "#;
+
+const AUTO_TASK_PREFIX: &str = r#"
+schemaVersion: 1
+name: schedule-test
+schedule:
+"#;
+
+const AUTO_TASK_TEMPLATE: &str = r#"
+template:
+  title: Schedule test
+"#;
+
+#[test]
+fn auto_task_schedule_rejects_unknown_keys_with_accepted_forms() {
+    let error = parse_auto_task_yaml(&format!(
+        "{AUTO_TASK_PREFIX}  every_minute: 5\n{AUTO_TASK_TEMPLATE}"
+    ))
+    .expect_err("unknown schedule key must fail");
+    let message = error.to_string();
+
+    for expected in ["every_minute", "cron", "every_minutes", "deliveries_landed"] {
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
+#[test]
+fn auto_task_schedule_rejects_multiple_forms_with_readable_error() {
+    let error = parse_auto_task_yaml(&format!(
+        "{AUTO_TASK_PREFIX}  cron: \"* * * * *\"\n  every_minutes: 5\n{AUTO_TASK_TEMPLATE}"
+    ))
+    .expect_err("multiple schedule forms must fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("exactly one of cron, every_minutes, deliveries_landed"),
+        "{error}"
+    );
+}
+
+#[test]
+fn auto_task_schedule_forms_round_trip_through_yaml() {
+    let schedules = [
+        "  cron: \"* * * * *\"\n",
+        "  every_minutes: 5\n",
+        concat!(
+            "  deliveries_landed:\n",
+            "    branch: agent-main\n",
+            "    threshold: 1\n",
+            "    max_wait_minutes: 60\n",
+            "    coverage: landed_code_review_v1\n"
+        ),
+    ];
+
+    for schedule in schedules {
+        let definition =
+            parse_auto_task_yaml(&format!("{AUTO_TASK_PREFIX}{schedule}{AUTO_TASK_TEMPLATE}"))
+                .expect("schedule form must parse");
+        let serialized = serde_yaml::to_string(&definition).expect("serialize schedule form");
+        let reparsed = parse_auto_task_yaml(&serialized).expect("reparse schedule form");
+
+        assert_eq!(reparsed, definition);
+    }
+}
 
 #[test]
 fn parses_the_design_doc_example() {
@@ -70,6 +135,32 @@ target: job:docs_reindex
     )
     .expect_err("unknown trigger field must fail");
     assert!(error.to_string().contains("jitter_seconds"), "{error}");
+}
+
+#[test]
+fn rejects_duration_values_above_one_week() {
+    for (field, policy) in [
+        ("timeout_minutes", "timeout_minutes: 1000000000000000"),
+        (
+            "backoff_minutes",
+            "retries: { max: 1, backoff_minutes: 1000000000000000 }",
+        ),
+    ] {
+        let error = parse_routine_yaml(&format!(
+            "schemaVersion: 1\n\
+             name: reindex\n\
+             hosts: [dk-server-1]\n\
+             trigger:\n  cron: \"*/30 * * * *\"\n\
+             target: job:docs_reindex\n\
+             policy:\n  {policy}\n"
+        ))
+        .expect_err("duration above one week must fail");
+
+        assert!(
+            matches!(error, OrbitError::InvalidInput(ref message) if message.contains(field)),
+            "{error}"
+        );
+    }
 }
 
 #[test]

@@ -35,7 +35,7 @@ pub struct V2JobRunResult {
     pub success: bool,
     pub pipeline: Value,
     pub message: Option<String>,
-    pub events_emitted: usize,
+    pub events_emitted: u64,
 }
 
 /// Path-specific durable records retained while finalizing a v2 run.
@@ -308,10 +308,7 @@ impl OrbitRuntime {
             state: outcome_str.to_string(),
         })?;
 
-        let events_count = writer
-            .events_snapshot()
-            .map(|s| s.len())
-            .unwrap_or_default();
+        let events_count = writer.emitted_event_count();
 
         match outcome_res {
             Ok(o) => Ok(V2JobRunResult {

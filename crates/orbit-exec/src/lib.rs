@@ -31,11 +31,14 @@
 //! - [`ExecutionResult`] — captured stdout/stderr, exit code, and duration
 //! - [`Sandbox`] / [`NoSandbox`] — sandbox strategy trait and strategy that
 //!   adds no additional Orbit sandbox
+//! - [`spawn_under_linux_landlock`] — Linux read confinement applied to the
+//!   child itself, used by activity-scoped `proc.spawn`
 //! - [`EnvironmentMode`], [`StdinMode`] — environment and stdin control
 //!
 //! # Dependency direction
 //! `orbit-types` → `orbit-exec` → orbit-tools
 
+pub mod linux_landlock;
 pub mod linux_sandbox;
 pub mod macos_sandbox;
 pub mod process;
@@ -44,6 +47,11 @@ pub mod runner;
 pub mod sandbox;
 mod supervision;
 
+pub use linux_landlock::{
+    HOST_READ_ENV_VARS, LandlockGrant, LandlockPathGrant, LandlockProbeOutcome,
+    MINIMUM_LANDLOCK_ABI, grants_read, landlock_unavailable_message, linux_landlock_grants,
+    probe_landlock, spawn_under_linux_landlock,
+};
 pub use linux_sandbox::{
     BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapPlan,
     LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, PreparedWriteGrants, UnsatisfiedWriteGrant,

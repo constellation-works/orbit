@@ -42,7 +42,7 @@ impl Execute for JobRunArgs {
         // `--wait`, so the two outcomes never share an exit path.
         let invoke = runtime.submit_job_run(&self.job_id, input, None)?;
         if !self.wait {
-            return render_submission(&invoke, self.json);
+            return render_submission(&invoke);
         }
 
         let timeout_seconds = OrbitRuntime::normalize_pipeline_wait_timeout(None)?;
@@ -63,66 +63,42 @@ impl Execute for JobRunArgs {
                     invoke.run_id
                 ))
             })?;
-        render_wait(&invoke, &entry, self.json)
+        render_wait(&invoke, &entry)
     }
 }
 
-pub(super) fn render_submission(invoke: &PipelineInvokeResult, json_output: bool) -> CommandOut {
+pub(super) fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
     let state = submission_state(invoke);
-    if json_output {
-        return Ok(Payload::document(json!({
-            "job_id": invoke.job_name,
-            "run_id": invoke.run_id,
-            "state": state,
-            "queued": invoke.queued,
-            "submitted_at": invoke.submitted_at,
-            "waited": false,
-        }))
-        .into());
-    }
-    for line in submission_lines(invoke, state) {
-        println!("{line}");
-    }
-    Ok(CommandOutput::Silent)
+    let doc = json!({
+        "job_id": invoke.job_name,
+        "run_id": invoke.run_id,
+        "state": state,
+        "queued": invoke.queued,
+        "submitted_at": invoke.submitted_at,
+        "waited": false,
+    });
+    Ok(Payload::detail(doc, submission_lines(invoke, state).join("\n")).into())
 }
 
 /// Render a completed `--wait`, then fail the command for a non-success
 /// terminal state so a caller can branch on the exit status alone.
-pub(super) fn render_wait(
-    invoke: &PipelineInvokeResult,
-    entry: &PipelineWaitEntry,
-    json_output: bool,
-) -> CommandOut {
-    if json_output {
-        crate::output::json::print_pretty(&json!({
-            "job_id": invoke.job_name,
-            "run_id": invoke.run_id,
-            "state": entry.status,
-            "queued": invoke.queued,
-            "submitted_at": invoke.submitted_at,
-            "waited": true,
-            "finished_at": entry.finished_at,
-            "error": entry.error,
-            "pipeline": entry.pipeline,
-        }))?;
-    } else {
-        for line in wait_lines(invoke, entry) {
-            println!("{line}");
-        }
-    }
-
+pub(super) fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> CommandOut {
+    let doc = json!({
+        "job_id": invoke.job_name,
+        "run_id": invoke.run_id,
+        "state": entry.status,
+        "queued": invoke.queued,
+        "submitted_at": invoke.submitted_at,
+        "waited": true,
+        "finished_at": entry.finished_at,
+        "error": entry.error,
+        "pipeline": entry.pipeline,
+    });
+    let payload = Payload::detail(doc, wait_lines(invoke, entry).join("\n"));
     if FAILED_WAIT_STATUSES.contains(&entry.status.as_str()) {
-        let detail = entry
-            .error
-            .as_deref()
-            .map(|error| format!(": {}", single_line(error)))
-            .unwrap_or_default();
-        return Err(OrbitError::Execution(format!(
-            "job run '{}' finished in state '{}'{detail}",
-            invoke.run_id, entry.status
-        )));
+        return Ok(payload.with_exit_code(1).into());
     }
-    Ok(CommandOutput::Silent)
+    Ok(payload.into())
 }
 
 pub(super) fn submission_state(invoke: &PipelineInvokeResult) -> &'static str {
@@ -179,30 +155,27 @@ impl Execute for JobReplayArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let source_run_id = self.run_id;
         let result = runtime.replay_job_run(&source_run_id)?;
-        if self.json {
-            return Ok(Payload::document(json!({
-                "run_id": result.run_id,
-                "source_run_id": source_run_id,
-                "job_name": result.job_name,
-                "success": result.success,
-                "message": result.message,
-                "pipeline": result.pipeline,
-                "events_emitted": result.events_emitted,
-            }))
-            .into());
-        }
-        println!(
+        let doc = json!({
+            "run_id": result.run_id,
+            "source_run_id": source_run_id,
+            "job_name": result.job_name,
+            "success": result.success,
+            "message": result.message,
+            "pipeline": result.pipeline,
+            "events_emitted": result.events_emitted,
+        });
+        let mut lines = vec![format!(
             "run_id={};replayed_from={};job={};success={};events={}",
             result.run_id, source_run_id, result.job_name, result.success, result.events_emitted,
-        );
+        )];
         if let Some(msg) = &result.message {
-            println!("message: {msg}");
+            lines.push(format!("message: {msg}"));
         }
-        println!(
+        lines.push(format!(
             "pipeline: {}",
             serde_json::to_string_pretty(&result.pipeline).unwrap_or_default()
-        );
-        Ok(CommandOutput::Silent)
+        ));
+        Ok(Payload::detail(doc, lines.join("\n")).into())
     }
 }
 
@@ -222,30 +195,27 @@ impl Execute for JobResumeArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let source_run_id = self.run_id;
         let result = runtime.resume_job_run(&source_run_id)?;
-        if self.json {
-            return Ok(Payload::document(json!({
-                "run_id": result.run_id,
-                "resumed_from": source_run_id,
-                "job_name": result.job_name,
-                "success": result.success,
-                "message": result.message,
-                "pipeline": result.pipeline,
-                "events_emitted": result.events_emitted,
-            }))
-            .into());
-        }
-        println!(
+        let doc = json!({
+            "run_id": result.run_id,
+            "resumed_from": source_run_id,
+            "job_name": result.job_name,
+            "success": result.success,
+            "message": result.message,
+            "pipeline": result.pipeline,
+            "events_emitted": result.events_emitted,
+        });
+        let mut lines = vec![format!(
             "run_id={};resumed_from={};job={};success={};events={}",
             result.run_id, source_run_id, result.job_name, result.success, result.events_emitted,
-        );
+        )];
         if let Some(msg) = &result.message {
-            println!("message: {msg}");
+            lines.push(format!("message: {msg}"));
         }
-        println!(
+        lines.push(format!(
             "pipeline: {}",
             serde_json::to_string_pretty(&result.pipeline).unwrap_or_default()
-        );
-        Ok(CommandOutput::Silent)
+        ));
+        Ok(Payload::detail(doc, lines.join("\n")).into())
     }
 }
 

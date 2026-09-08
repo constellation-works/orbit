@@ -15,7 +15,7 @@
 // No behavior change: identical rendering, expand/collapse, tooltips, routing, subtab
 // activation, and scroll-to-step.
 
-import { el, syncNodes, stateCell, positiveIntParam } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -25,6 +25,7 @@ const RUN_EVENTS_LIMIT = positiveIntParam("events", 100);  // re-export for app 
 let activeRunId = null;
 let activeRunDetail = null;
 let activeRunEvents = [];
+let activeRunEventsError = null;
 let activeRunLogs = [];
 let activeRunSubtab = "steps";
 let expandedStepIndices = new Set();
@@ -99,7 +100,12 @@ export function getActiveRunDetail() { return activeRunDetail; }
 export function setActiveRunDetail(v) { activeRunDetail = v; }
 
 export function getActiveRunEvents() { return activeRunEvents; }
-export function setActiveRunEvents(v) { activeRunEvents = v || []; }
+export function setActiveRunEvents(v) {
+  activeRunEvents = v || [];
+  activeRunEventsError = null;
+}
+
+export function setActiveRunEventsError(v) { activeRunEventsError = v || null; }
 
 export function getActiveRunLogs() { return activeRunLogs; }
 export function setActiveRunLogs(v) { activeRunLogs = v || []; }
@@ -256,12 +262,18 @@ export function renderRunSteps() {
       el("span", { class: exitClass, text: exit == null ? "-" : String(exit) }),
     ]);
     row.dataset.key = `step-${step.step_index}`;
-    row.dataset.hash = `${step.step_index}-${step.state}-${exit}`;
+    // Expansion is part of the row's identity: without it the keyed diff reuses
+    // the collapsed node and drops the `expanded` class and `aria-expanded`
+    // the toggle just set.
+    row.dataset.hash = `${step.step_index}-${step.state}-${exit}-${expandedStepIndices.has(step.step_index)}`;
     if (expandedStepIndices.has(step.step_index)) row.classList.add("expanded");
-    row.addEventListener("click", () => {
-      if (expandedStepIndices.has(step.step_index)) expandedStepIndices.delete(step.step_index);
-      else expandedStepIndices.add(step.step_index);
-      renderRunSteps();
+    makeToggleRow(row, {
+      expanded: expandedStepIndices.has(step.step_index),
+      onToggle: () => {
+        if (expandedStepIndices.has(step.step_index)) expandedStepIndices.delete(step.step_index);
+        else expandedStepIndices.add(step.step_index);
+        renderRunSteps();
+      },
     });
     frag.appendChild(row);
     if (expandedStepIndices.has(step.step_index)) {
@@ -572,6 +584,14 @@ const RUN_EVENT_COLUMNS = [
 export function renderRunEvents() {
   const body = $("run-events-body");
   if (!body) return;
+  if (activeRunEventsError) {
+    syncNodes(body, [el("div", { class: "empty-state" }, [
+      el("div", { class: "icon", text: "!" }),
+      el("div", { class: "text", text: activeRunEventsError }),
+      el("div", { class: "text", text: "Try narrowing the kind filter to reduce the scan." }),
+    ])]);
+    return;
+  }
   const events = activeRunEvents || [];
   if (events.length === 0) {
     syncNodes(body, [el("div", { class: "empty-state" }, [
@@ -635,4 +655,3 @@ function summarizeEvent(ev) {
   const text = parts.join(" ");
   return { text: truncate(text, 200), title: text };
 }
-

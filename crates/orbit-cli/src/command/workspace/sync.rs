@@ -42,7 +42,7 @@ impl WorkspaceSyncArgs {
             })
             .max_by_key(|checkout| checkout.repo_root.components().count())
             .ok_or_else(workspace_init_required)?;
-        if workspace_registry::find_workspace(&registry, &checkout.workspace_id).is_none() {
+        if workspace_registry::find_workspace_by_id(&registry, &checkout.workspace_id).is_none() {
             return Err(workspace_init_required());
         }
         let host_id = match inspect_host_identity(&global_root)? {

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use clap::Args;
-use orbit_cmd::agent_rules::{InjectionAction, inject_agent_rules};
+use orbit_cmd::agent_rules::{InjectionAction, InjectionOutcome, inject_agent_rules};
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::fs::io::{atomic_write_bytes, atomic_write_text};
 use orbit_core::OrbitError;
@@ -14,20 +14,24 @@ use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::command::init::agent_detect::{RealAgentEnvProbe, detect};
 use crate::command::init::config_seed_from_detection;
 
 use super::role::CliCheckoutRole;
-use super::support::{detect_git_remote, dir_name_or_fallback, ensure_orbit_gitignore_entry};
-use crate::command::{CommandOut, CommandOutput};
+use super::support::{
+    detect_git_remote, dir_name_or_fallback, ensure_orbit_gitignore_entry,
+    manages_checkout_local_orbit_files,
+};
+use crate::command::{CommandOut, Payload};
 
 #[derive(Args)]
 pub struct WorkspaceInitArgs {
     /// Workspace name (defaults to directory name)
     #[arg(long)]
     pub name: Option<String>,
-    /// Base branch for this workspace (default: main)
+    /// Base branch for this workspace (default: the checked-out branch, or main)
     ///
     /// Kept optional so re-initializing an existing workspace can distinguish
     /// an omitted value from an explicit request to reset it to `main`.
@@ -72,6 +76,18 @@ pub struct WorkspaceInitArgs {
 }
 
 pub(crate) const ONBOARDING_FINALIZE_GUIDANCE: &str = "review and commit generated definitions (.gitignore, .orbit/auto_tasks, .orbit/routines) before local workflows (Orbit does not auto-commit or discard operator changes)";
+const RELOCATED_ROOT_ONBOARDING_GUIDANCE: &str = "review generated Orbit definitions in the configured Orbit root before local workflows (Orbit does not auto-commit or discard operator changes)";
+
+pub(crate) fn onboarding_finalize_guidance(
+    workspace_root: &Path,
+    orbit_dir: &Path,
+) -> &'static str {
+    if manages_checkout_local_orbit_files(workspace_root, orbit_dir) {
+        ONBOARDING_FINALIZE_GUIDANCE
+    } else {
+        RELOCATED_ROOT_ONBOARDING_GUIDANCE
+    }
+}
 
 impl WorkspaceInitArgs {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
@@ -83,63 +99,12 @@ impl WorkspaceInitArgs {
         let mcp = self.mcp;
         let inject_rules = self.inject_agent_rules;
         let task_id_start = self.task_id_start;
+
         let init_result = self.execute_at_path(&cwd, &orbit_dir, &global_root, &registry_path)?;
+        let report =
+            collect_init_report(init_result, &global_root, task_id_start, mcp, inject_rules)?;
 
-        println!("workspace '{}' initialized", init_result.name);
-        println!("  id:        {}", init_result.id);
-        println!("  root:      {}", init_result.root.display());
-        println!("  orbit_dir: {}", init_result.orbit_dir.display());
-        println!("  onboarding: {ONBOARDING_FINALIZE_GUIDANCE}");
-
-        if let Some(start) = task_id_start {
-            let outcome =
-                orbit_core::bootstrap::task_migration::seed_task_id_start(&global_root, start)?;
-            if outcome.changed {
-                println!("  id_start:  allocator seeded to ORB-{:05}", outcome.next);
-            } else {
-                println!(
-                    "  id_start:  allocator already at ORB-{:05} (unchanged)",
-                    outcome.next
-                );
-            }
-        }
-
-        if mcp {
-            let providers = crate::command::mcp::init_auto_for_workspace(
-                &init_result.root,
-                &init_result.orbit_dir,
-                &init_result.id,
-            )?;
-            if providers.is_empty() {
-                println!("  mcp:       no providers auto-detected");
-            } else {
-                println!(
-                    "  mcp:       {} (operator-authorized: orbit.workflow.ship, run observe/resume, orbit.command.exec)",
-                    providers.join(", ")
-                );
-            }
-        } else {
-            println!("  mcp:       skipped (pass --mcp to set up integrations)");
-        }
-
-        if inject_rules {
-            let outcome = inject_agent_rules(&init_result.root)?;
-            for entry in &outcome.outcomes {
-                let label = entry
-                    .path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| entry.path.display().to_string());
-                let verb = match entry.action {
-                    InjectionAction::Created => "created with Orbit rules block",
-                    InjectionAction::AppendedBlock => "Orbit rules block appended",
-                    InjectionAction::ReplacedBlock => "Orbit rules block refreshed",
-                };
-                println!("  rules:     {label}: {verb}");
-            }
-        }
-
-        Ok(CommandOutput::Silent)
+        Ok(Payload::detail(workspace_init_json(&report), format_workspace_init(&report)).into())
     }
 
     fn execute_at_path(
@@ -154,12 +119,15 @@ impl WorkspaceInitArgs {
         if let Some(mode) = self.ship_mode.as_deref() {
             orbit_core::ShipMode::parse(mode)?;
         }
-        let (local_machine_id, local_host_id) = match inspect_host_identity(global_root)? {
-            HostIdentityState::Present(identity) => {
-                (Some(identity.machine_id), Some(identity.host_id))
-            }
-            HostIdentityState::Legacy { .. } | HostIdentityState::Absent => (None, None),
-        };
+        let (local_machine_id, local_host_id, task_prefix) =
+            match inspect_host_identity(global_root)? {
+                HostIdentityState::Present(identity) => (
+                    Some(identity.machine_id),
+                    Some(identity.host_id),
+                    Some(identity.task_prefix),
+                ),
+                HostIdentityState::Legacy { .. } | HostIdentityState::Absent => (None, None, None),
+            };
         let explicit_role = self.role.map(WorkspaceCheckoutRole::from);
         match (explicit_role, self.owner.as_deref()) {
             (None, Some(_)) => {
@@ -191,6 +159,7 @@ impl WorkspaceInitArgs {
         let name = self.name.unwrap_or_else(|| dir_name_or_fallback(cwd));
         let id = canonical_workspace_id(&name);
         let git_remote = detect_git_remote(cwd);
+        let default_base_branch = checked_out_branch(cwd);
         // Every read of the registry below feeds the write at the end; the lock
         // keeps a concurrent sweep or init from saving over this registration.
         let (reconciling_existing, registered_shared_root) =
@@ -308,7 +277,7 @@ impl WorkspaceInitArgs {
                         owner_machine_id: None,
                         git_remote,
                         ship_mode: self.ship_mode,
-                        base_branch: self.base_branch.unwrap_or_else(|| "main".to_string()),
+                        base_branch: self.base_branch.unwrap_or(default_base_branch),
                         status: WorkspaceStatus::Active,
                         created_at: now,
                         updated_at: now,
@@ -394,7 +363,34 @@ impl WorkspaceInitArgs {
             name,
             root: cwd.to_path_buf(),
             orbit_dir: orbit_dir.to_path_buf(),
+            task_prefix,
         })
+    }
+}
+
+/// Returns the current local branch for a newly registered checkout.
+///
+/// An explicit `--base-branch` always wins. Repositories without a checked-out
+/// branch retain the long-standing `main` fallback.
+pub(crate) fn checked_out_branch(cwd: &Path) -> String {
+    let output = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(cwd)
+        .output();
+
+    output
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|branch| branch.trim().to_string())
+        .filter(|branch| !branch.is_empty())
+        .unwrap_or_else(|| "main".to_string())
+}
+
+pub(super) fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> String {
+    match task_prefix {
+        Some(task_prefix) => format!("{task_prefix}-{next:05}"),
+        None => format!("{next:05}"),
     }
 }
 
@@ -596,4 +592,230 @@ struct WorkspaceInitResult {
     name: String,
     root: PathBuf,
     orbit_dir: PathBuf,
+    task_prefix: Option<String>,
+}
+
+struct WorkspaceInitReport {
+    id: String,
+    name: String,
+    root: PathBuf,
+    orbit_dir: PathBuf,
+    onboarding: &'static str,
+    allocator: AllocatorOutcome,
+    mcp: McpOutcome,
+    rules: RulesOutcome,
+}
+
+enum AllocatorOutcome {
+    Skipped,
+    Ran { next: String, changed: bool },
+}
+
+enum McpOutcome {
+    Skipped,
+    NoneDetected,
+    Configured(Vec<String>),
+}
+
+enum RulesOutcome {
+    Skipped,
+    Injected(Vec<RuleFileOutcome>),
+}
+
+struct RuleFileOutcome {
+    label: String,
+    action: InjectionAction,
+}
+
+fn collect_init_report(
+    init_result: WorkspaceInitResult,
+    global_root: &Path,
+    task_id_start: Option<u32>,
+    mcp: bool,
+    inject_rules: bool,
+) -> Result<WorkspaceInitReport, OrbitError> {
+    let onboarding = onboarding_finalize_guidance(&init_result.root, &init_result.orbit_dir);
+
+    let allocator = match task_id_start {
+        Some(start) => {
+            let outcome = orbit_core::bootstrap::task_migration::seed_task_id_start(
+                global_root,
+                init_result.task_prefix.as_deref(),
+                start,
+            )?;
+            AllocatorOutcome::Ran {
+                next: render_task_id_start(init_result.task_prefix.as_deref(), outcome.next),
+                changed: outcome.changed,
+            }
+        }
+        None => AllocatorOutcome::Skipped,
+    };
+
+    let mcp_outcome = if mcp {
+        let providers = crate::command::mcp::init_auto_for_workspace(
+            &init_result.root,
+            &init_result.orbit_dir,
+            &init_result.id,
+        )?;
+        if providers.is_empty() {
+            McpOutcome::NoneDetected
+        } else {
+            McpOutcome::Configured(providers)
+        }
+    } else {
+        McpOutcome::Skipped
+    };
+
+    let rules_outcome = if inject_rules {
+        let outcome = inject_agent_rules(&init_result.root)?;
+        RulesOutcome::Injected(
+            outcome
+                .outcomes
+                .into_iter()
+                .map(rule_file_outcome)
+                .collect(),
+        )
+    } else {
+        RulesOutcome::Skipped
+    };
+
+    Ok(WorkspaceInitReport {
+        id: init_result.id,
+        name: init_result.name,
+        root: init_result.root,
+        orbit_dir: init_result.orbit_dir,
+        onboarding,
+        allocator,
+        mcp: mcp_outcome,
+        rules: rules_outcome,
+    })
+}
+
+fn rule_file_outcome(entry: InjectionOutcome) -> RuleFileOutcome {
+    RuleFileOutcome {
+        label: entry
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| entry.path.display().to_string()),
+        action: entry.action,
+    }
+}
+
+fn workspace_init_json(report: &WorkspaceInitReport) -> Value {
+    json!({
+        "id": report.id,
+        "name": report.name,
+        "root": report.root.to_string_lossy(),
+        "orbit_dir": report.orbit_dir.to_string_lossy(),
+        "onboarding": report.onboarding,
+        "allocator": allocator_json(&report.allocator),
+        "mcp": mcp_json(&report.mcp),
+        "rules": rules_json(&report.rules),
+    })
+}
+
+fn allocator_json(outcome: &AllocatorOutcome) -> Value {
+    match outcome {
+        AllocatorOutcome::Skipped => json!({
+            "status": "skipped",
+            "next": null,
+            "changed": null,
+        }),
+        AllocatorOutcome::Ran { next, changed } => json!({
+            "status": if *changed { "seeded" } else { "unchanged" },
+            "next": next,
+            "changed": changed,
+        }),
+    }
+}
+
+fn mcp_json(outcome: &McpOutcome) -> Value {
+    match outcome {
+        McpOutcome::Skipped => json!({
+            "status": "skipped",
+            "providers": null,
+        }),
+        McpOutcome::NoneDetected => json!({
+            "status": "none_detected",
+            "providers": [],
+        }),
+        McpOutcome::Configured(providers) => json!({
+            "status": "configured",
+            "providers": providers,
+        }),
+    }
+}
+
+fn rules_json(outcome: &RulesOutcome) -> Value {
+    match outcome {
+        RulesOutcome::Skipped => json!({
+            "status": "skipped",
+            "outcomes": null,
+        }),
+        RulesOutcome::Injected(entries) => json!({
+            "status": "injected",
+            "outcomes": entries
+                .iter()
+                .map(|entry| json!({
+                    "file": entry.label,
+                    "action": injection_action_token(&entry.action),
+                }))
+                .collect::<Vec<_>>(),
+        }),
+    }
+}
+
+fn injection_action_token(action: &InjectionAction) -> &'static str {
+    match action {
+        InjectionAction::Created => "created",
+        InjectionAction::AppendedBlock => "appended",
+        InjectionAction::ReplacedBlock => "replaced",
+    }
+}
+
+fn format_workspace_init(report: &WorkspaceInitReport) -> String {
+    let mut lines = vec![
+        format!("workspace '{}' initialized", report.name),
+        format!("  id:        {}", report.id),
+        format!("  root:      {}", report.root.display()),
+        format!("  orbit_dir: {}", report.orbit_dir.display()),
+        format!("  onboarding: {}", report.onboarding),
+    ];
+    match &report.allocator {
+        AllocatorOutcome::Skipped => {}
+        AllocatorOutcome::Ran {
+            next,
+            changed: true,
+        } => lines.push(format!("  id_start:  allocator seeded to {next}")),
+        AllocatorOutcome::Ran {
+            next,
+            changed: false,
+        } => lines.push(format!(
+            "  id_start:  allocator already at {next} (unchanged)"
+        )),
+    }
+    match &report.mcp {
+        McpOutcome::Skipped => {
+            lines.push("  mcp:       skipped (pass --mcp to set up integrations)".to_string());
+        }
+        McpOutcome::NoneDetected => {
+            lines.push("  mcp:       no providers auto-detected".to_string());
+        }
+        McpOutcome::Configured(providers) => lines.push(format!(
+            "  mcp:       {} (operator-authorized: orbit.workflow.ship, run observe/resume, orbit.command.exec)",
+            providers.join(", ")
+        )),
+    }
+    if let RulesOutcome::Injected(entries) = &report.rules {
+        for entry in entries {
+            let verb = match entry.action {
+                InjectionAction::Created => "created with Orbit rules block",
+                InjectionAction::AppendedBlock => "Orbit rules block appended",
+                InjectionAction::ReplacedBlock => "Orbit rules block refreshed",
+            };
+            lines.push(format!("  rules:     {}: {verb}", entry.label));
+        }
+    }
+    lines.join("\n")
 }

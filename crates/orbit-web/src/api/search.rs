@@ -8,16 +8,16 @@ use orbit_core::{GlobalSearchKind, GlobalSearchParams};
 
 use crate::state::Ws;
 
-use super::{bad_request, map_runtime_error, non_empty_string};
+use super::{bad_request, blocking, non_empty_string};
 
 pub(super) async fn search(Ws(runtime): Ws, RawQuery(raw): RawQuery) -> Response {
     let params = match parse_search_query(raw.as_deref()) {
         Ok(params) => params,
         Err(message) => return bad_request(message),
     };
-    match runtime.global_search(params) {
+    match blocking("search", move || runtime.global_search(params)).await {
         Ok(response) => Json(response).into_response(),
-        Err(error) => map_runtime_error(error),
+        Err(response) => *response,
     }
 }
 

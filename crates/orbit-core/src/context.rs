@@ -4,10 +4,13 @@ use std::sync::Arc;
 use orbit_engine::PrConfig;
 use orbit_policy::PolicyEngine;
 use orbit_search::{EmbedWorker, VectorStore};
+use orbit_store::Store;
 use orbit_store::contracts::{
-    AuditEventStoreBackend, ExecutorDefStoreBackend, JobRunStoreBackend, PolicyDefStoreBackend,
-    TaskArtifactStoreBackend, TaskDocumentStoreBackend, TaskHistoryStoreBackend,
-    TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
+    AuditEventStoreBackend, AutomationStoreBackend, ExecutorDefStoreBackend,
+    InvocationStoreBackend, JobRunStoreBackend, OperationStoreBackend, PolicyDefStoreBackend,
+    ReviewStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
+    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
+    V2AuditStoreBackend,
 };
 use orbit_tools::ToolRegistry;
 use orbit_types::identity::{Crew, normalize_agent_family_for_model};
@@ -92,6 +95,20 @@ pub struct OrbitContext {
     runtime: OrbitRuntimeSettings,
 }
 
+/// Host SQLite handle plus the feature backends composed from it.
+///
+/// These wrap the same writer connection the runtime opened at construction.
+/// Accessors clone the handles; they must not call `Store::open` again.
+#[derive(Clone)]
+pub(crate) struct OrbitHostStore {
+    pub(crate) sqlite: Store,
+    pub(crate) automation: Arc<dyn AutomationStoreBackend>,
+    pub(crate) review: Arc<dyn ReviewStoreBackend>,
+    pub(crate) operation: Arc<dyn OperationStoreBackend>,
+    pub(crate) v2_audit: Arc<dyn V2AuditStoreBackend>,
+    pub(crate) invocation: Arc<dyn InvocationStoreBackend>,
+}
+
 #[derive(Clone)]
 pub(crate) struct OrbitStores {
     pub(crate) task: Arc<dyn TaskStoreBackend>,
@@ -106,6 +123,7 @@ pub(crate) struct OrbitStores {
     pub(crate) audit_event: Arc<dyn AuditEventStoreBackend>,
     pub(crate) executor_def: Arc<dyn ExecutorDefStoreBackend>,
     pub(crate) policy_def: Arc<dyn PolicyDefStoreBackend>,
+    pub(crate) host: OrbitHostStore,
 }
 
 impl OrbitStores {
@@ -123,6 +141,7 @@ impl OrbitStores {
         audit_event: Arc<dyn AuditEventStoreBackend>,
         executor_def: Arc<dyn ExecutorDefStoreBackend>,
         policy_def: Arc<dyn PolicyDefStoreBackend>,
+        host: OrbitHostStore,
     ) -> Self {
         Self {
             task,
@@ -137,6 +156,7 @@ impl OrbitStores {
             audit_event,
             executor_def,
             policy_def,
+            host,
         }
     }
 
@@ -242,6 +262,7 @@ pub(crate) struct OrbitRuntimeSettings {
     routines_source: bool,
     crews: std::collections::BTreeMap<String, Crew>,
     default_crew: Option<String>,
+    complexity_crews: orbit_config::ComplexityCrewPools,
     system_crew: String,
     /// Resolved operation-mode preferences with provenance (`[operation]`).
     /// Preferences only; authority is a separate durable grant [ORB-11332].
@@ -260,6 +281,7 @@ impl OrbitRuntimeSettings {
         routines_source: bool,
         crews: std::collections::BTreeMap<String, Crew>,
         default_crew: Option<String>,
+        complexity_crews: orbit_config::ComplexityCrewPools,
         system_crew: String,
         operation: orbit_config::OperationPolicy,
     ) -> Self {
@@ -273,6 +295,7 @@ impl OrbitRuntimeSettings {
             routines_source,
             crews,
             default_crew,
+            complexity_crews,
             system_crew,
             operation,
         }
@@ -300,6 +323,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn crews(&self) -> &std::collections::BTreeMap<String, Crew> {
         &self.crews
+    }
+
+    pub(crate) fn complexity_crews(&self) -> &orbit_config::ComplexityCrewPools {
+        &self.complexity_crews
     }
 
     pub(crate) fn default_crew(&self) -> Option<&str> {
@@ -385,6 +412,16 @@ impl OrbitContext {
 
     pub(crate) fn set_actor(&mut self, actor: ActorIdentity) {
         self.runtime.actor = actor;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_task_store_for_test(&mut self, task: Arc<dyn TaskStoreBackend>) {
+        self.stores.task = task;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn task_store_for_test(&self) -> Arc<dyn TaskStoreBackend> {
+        Arc::clone(&self.stores.task)
     }
 
     pub(crate) fn scoring_enabled(&self) -> bool {

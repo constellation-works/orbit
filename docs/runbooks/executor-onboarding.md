@@ -1,6 +1,7 @@
 ---
 type: runbook
 summary: Add and validate a CLI-agent or deterministic local-shell executor without changing existing users' routing or state.
+last_validated: 2026-09-07
 tags: [contributors, executors, providers, testing]
 paths: ["crates/orbit-agent/**", "crates/orbit-core/assets/executors/**", "crates/orbit-core/src/application/executor.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/cli_executor.rs", "crates/orbit-engine/src/activity_job/**"]
 related_features: [activity-job, policy-sandbox]

@@ -61,8 +61,12 @@ assuming a value.
 | `scoring.enabled` | Record scoreboard metrics for task runs. |
 | `pr.task_url_template` | URL template linking a task ID in PR descriptions. |
 
-Use `orbit config keys` to distinguish keys supported by `config set` from
-settings authored as TOML. Set workspace ship mode with
+Use `orbit config keys` to distinguish fixed keys supported by `config set`
+from settings authored as TOML. Named crew fields are also settable as
+`crews.<name>.<field>` (for example `orbit config set crews.sol.effort high`)
+even though those keys are not listed by `orbit config keys`. Creating a crew
+still requires a `[crews.<name>]` table with `model` and `provider`. Set
+workspace ship mode with
 `orbit workspace init --ship-mode pr|local`; verify the registered workspace
 with `orbit workspace show`. Base branch and ship mode govern source delivery,
 not task snapshot publication.

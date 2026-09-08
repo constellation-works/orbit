@@ -8,6 +8,8 @@ use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+use orbit_engine::fetch_remote_base;
+
 use super::super::task_pilot::{apply, prepare};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
@@ -505,6 +507,100 @@ fn concurrent_prepare_calls_against_the_same_primary_both_succeed() {
     );
 }
 
+/// Pilot prepare and delivery `fetch_remote_base` share one git-common-dir
+/// lock, so concurrent origin fetches pin the same source identity instead
+/// of failing ref-CAS.
+#[test]
+fn concurrent_prepare_and_delivery_fetch_share_the_common_dir_lock() {
+    let fixture = remote_landing_fixture();
+    fs::write(fixture.repo.join("src/existing.rs"), "user dirty bytes\n").unwrap();
+    fs::write(
+        fixture.repo.join("src/user-only.rs"),
+        "untracked user file\n",
+    )
+    .unwrap();
+    let linked = fixture
+        .repo
+        .parent()
+        .expect("fixture parent")
+        .join("linked");
+    git(
+        &fixture.repo,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            linked.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+
+    let (prepares, fetches) = std::thread::scope(|scope| {
+        let prepare_handles: Vec<_> = (0..3)
+            .map(|_| scope.spawn(|| prepare_landing(&fixture)))
+            .collect();
+        let fetch_paths = [&fixture.repo, &linked];
+        let fetch_handles: Vec<_> = fetch_paths
+            .into_iter()
+            .flat_map(|path| {
+                (0..2).map(|_| {
+                    let path = path.clone();
+                    scope
+                        .spawn(move || fetch_remote_base(&path, LANDING).map_err(|e| e.to_string()))
+                })
+            })
+            .collect();
+        let prepares: Vec<_> = prepare_handles
+            .into_iter()
+            .map(|handle| handle.join().expect("prepare thread joined"))
+            .collect();
+        let fetches: Vec<_> = fetch_handles
+            .into_iter()
+            .map(|handle| handle.join().expect("fetch thread joined"))
+            .collect();
+        (prepares, fetches)
+    });
+
+    for (index, result) in prepares.iter().enumerate() {
+        let prepared = result
+            .as_ref()
+            .unwrap_or_else(|error| panic!("concurrent prepare {index} failed: {error}"));
+        assert_eq!(prepared["source"]["source_revision"], fixture.current_sha);
+        assert_eq!(
+            prepared["source"]["source_ref"],
+            format!("origin/{LANDING}")
+        );
+    }
+    for (index, result) in fetches.iter().enumerate() {
+        result
+            .as_ref()
+            .unwrap_or_else(|error| panic!("concurrent delivery fetch {index} failed: {error}"));
+    }
+
+    assert_eq!(
+        git(&fixture.repo, &["rev-parse", &format!("origin/{LANDING}")]),
+        fixture.current_sha
+    );
+    assert_eq!(
+        git(&linked, &["rev-parse", &format!("origin/{LANDING}")]),
+        fixture.current_sha
+    );
+    assert_eq!(
+        git(&fixture.repo, &["rev-parse", "HEAD"]),
+        fixture.stale_sha
+    );
+    assert_eq!(git(&linked, &["rev-parse", "HEAD"]), fixture.stale_sha);
+    assert_eq!(
+        fs::read_to_string(fixture.repo.join("src/existing.rs")).unwrap(),
+        "user dirty bytes\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.repo.join("src/user-only.rs")).unwrap(),
+        "untracked user file\n"
+    );
+    assert!(!fixture.repo.join("src/merged.rs").exists());
+}
+
 #[test]
 fn non_git_workspace_still_uses_filesystem_existence() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
@@ -651,6 +747,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         pending_commits: vec![],
         pending: vec![],
         waived: vec![],
+        excluded: vec![],
         unresolved: Default::default(),
         associations: Default::default(),
         active: None,

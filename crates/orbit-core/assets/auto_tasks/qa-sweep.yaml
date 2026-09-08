@@ -18,6 +18,21 @@ template:
     writable temporary location rather than the machine's real home directory
     or the product's live data root.
 
+    In agent-executor sandboxes and linked job-run worktrees, the repository's
+    managed `.git` mount is read-only by design and must not be worked around by
+    chmod or host-side gitdir writes. Because `.git` is read-only, commands that
+    attempt write access to `.git` fail (such as `git worktree add` or `git checkout --`).
+    Instead:
+    - To build an arbitrary baseline revision without writing `.git` or creating
+      `.git/worktrees/*`, extract an archive to a writable scratch directory:
+      `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base`,
+      then build there using a dedicated build cache/target directory.
+    - To revert a modified tracked file when `git checkout -- <path>` fails
+      because it cannot acquire `index.lock`, restore it from the commit tree:
+      `git show HEAD:<path> > <path>`.
+    - Read-only inspection commands such as `git status --short` succeed with
+      `GIT_OPTIONAL_LOCKS=0`.
+
     Before reporting anything, search the workspace's configured task or issue surface
     for open work covering the same problem. For each real issue that is not already
     filed, create a durable record on that surface. Give it severity-appropriate

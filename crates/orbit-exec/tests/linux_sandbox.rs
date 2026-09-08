@@ -5,6 +5,7 @@
 
 use std::process::Stdio;
 
+use orbit_common::OrbitError;
 use orbit_exec::{
     LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapPostRunGuard,
     LinuxBwrapSpawnRequest, WriteAnchorKind, bwrap_path, bwrap_program_for_audit,
@@ -473,6 +474,14 @@ fn managed_worktree_argv_binds_stable_workspace_and_build_mounts() {
         )),
         "missing build bind in {joined}"
     );
+    assert!(
+        joined.contains(&format!("--chdir {}", cwd.display())),
+        "provider agent cwd must stay on the worktree, not the stable alias: {joined}"
+    );
+    assert!(
+        !joined.contains(&format!("--chdir {LINUX_STABLE_WORKSPACE_MOUNT}")),
+        "do not remap provider agent cwd onto the stable workspace mount: {joined}"
+    );
 }
 
 #[test]
@@ -657,6 +666,108 @@ fn managed_worktree_guard_rejects_new_forbidden_match() {
     assert!(error.to_string().contains("before commit"));
 }
 
+#[test]
+fn absent_subtree_deny_is_enforced_when_child_creates_the_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let created = workspace.join("secrets/x");
+    assert!(!workspace.join("secrets").exists());
+    assert_absent_deny_enforced(
+        &workspace,
+        vec![
+            format!("{}/**", workspace.display()),
+            format!("!{}/secrets/**", workspace.display()),
+        ],
+        "mkdir -p secrets && touch secrets/x",
+        &created,
+    );
+}
+
+#[test]
+fn absent_exact_file_deny_is_enforced_when_child_creates_the_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let created = workspace.join("Cargo.lock");
+    assert!(!created.exists());
+    assert_absent_deny_enforced(
+        &workspace,
+        vec![
+            format!("{}/**", workspace.display()),
+            format!("!{}", created.display()),
+        ],
+        "touch Cargo.lock",
+        &created,
+    );
+}
+
+fn assert_absent_deny_enforced(
+    workspace: &std::path::Path,
+    modify: Vec<String>,
+    script: &str,
+    created: &std::path::Path,
+) {
+    let resolved = profile(modify);
+    let guard = LinuxBwrapPostRunGuard::capture(&resolved).expect("capture");
+
+    let probe = probe_bwrap();
+    if probe.available {
+        let plan = compile_linux_bwrap_argv(
+            &resolved,
+            "/bin/sh",
+            &["-c".to_string(), script.to_string()],
+            Some(workspace),
+            true,
+        )
+        .expect("compile");
+        let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+            plan: &plan,
+            env: &[],
+            cwd: Some(workspace),
+            stdin: Stdio::null(),
+            stdout: Stdio::null(),
+            stderr: Stdio::null(),
+        })
+        .expect("spawn");
+        let _ = child.wait().expect("wait");
+    } else {
+        println!(
+            "bwrap unavailable ({}); applying the child script on the host",
+            probe.detail
+        );
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", script])
+            .current_dir(workspace)
+            .status()
+            .expect("host script");
+        assert!(status.success(), "host script failed: {status}");
+    }
+
+    let write_blocked = !created.exists();
+    match guard {
+        Some(guard) => match guard.verify() {
+            Ok(()) => assert!(
+                write_blocked,
+                "child created {} and the post-run guard accepted it",
+                created.display()
+            ),
+            Err(OrbitError::PolicyDenied(message)) => {
+                assert!(
+                    message.contains("before commit"),
+                    "PolicyDenied must name the post-run check: {message}"
+                );
+            }
+            Err(other) => panic!("expected PolicyDenied, got {other}"),
+        },
+        None => assert!(
+            write_blocked,
+            "no post-run guard and the child created {}",
+            created.display()
+        ),
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn kernel_enforces_allowed_outside_and_subtree_writes_when_available() {
@@ -830,4 +941,166 @@ fn kernel_enforces_versioned_orbit_exceptions_and_protected_stores_when_availabl
             "before"
         );
     }
+}
+
+/// Explicit host gate: unlike opportunistic kernel tests, namespace denial is
+/// a failure here. Run with `--ignored --exact` on the admitted Linux host.
+#[test]
+#[ignore = "requires a Linux host with working Bubblewrap user/mount namespaces"]
+fn kernel_git_metadata_integrity_through_original_and_build_aliases() {
+    use std::fs;
+    use std::process::Command;
+
+    let probe = probe_bwrap();
+    assert!(
+        probe.available,
+        "live boundary unvalidated: {}",
+        probe.detail
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let primary = root.join("primary");
+    let workspace = root.join("workspace");
+    fs::create_dir(&primary).unwrap();
+    let git = |cwd: &std::path::Path, args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(cwd)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    git(&primary, &["init"]);
+    git(
+        &primary,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+    );
+    git(
+        &primary,
+        &["worktree", "add", "-b", "leaf", workspace.to_str().unwrap()],
+    );
+    let common = primary.join(".git");
+    let git_dir = std::path::PathBuf::from(git(&workspace, &["rev-parse", "--absolute-git-dir"]));
+    let recovery = common.join("orbit/worktree-recovery/run");
+    fs::create_dir_all(&recovery).unwrap();
+    fs::write(recovery.join("manifest.json"), "host-owned").unwrap();
+    // A configured build alias can point straight into real Git metadata.
+    // The alias root itself must then become read-only.
+    std::os::unix::fs::symlink(&common, workspace.join("target")).unwrap();
+    std::os::unix::fs::symlink(&git_dir, workspace.join("metadata-link")).unwrap();
+    let pointer = workspace.join(".git");
+    let before = fs::read(&pointer).unwrap();
+    let resolved = profile(vec![
+        format!("{}/**", root.display()),
+        format!("!{}", pointer.display()),
+        format!("!{}/**", common.display()),
+        format!("!{}/**", git_dir.display()),
+    ]);
+    let script = r#"
+set -eu
+deny() { if "$@"; then echo "unexpected write: $*" >&2; exit 91; fi; }
+for pointer in "$WORKSPACE/.git" "$ALIAS/.git"; do
+    deny sh -c 'printf poisoned > "$1"' sh "$pointer"
+    deny cp "$WORKSPACE/source.txt" "$pointer"
+    deny unlink "$pointer"
+    deny mv "$pointer" "$pointer.old"
+    deny ln -sf "$WORKSPACE/copy-git" "$pointer"
+done
+for metadata in "$COMMON" "$GITDIR" "$WORKSPACE/metadata-link" "$ALIAS/metadata-link" "$BUILD"; do
+    deny sh -c 'printf poisoned > "$1/HEAD"' sh "$metadata"
+    deny cp "$WORKSPACE/source.txt" "$metadata/HEAD"
+    deny unlink "$metadata/HEAD"
+    deny mv "$metadata/HEAD" "$metadata/HEAD.old"
+    deny ln -sf "$WORKSPACE/source.txt" "$metadata/HEAD"
+done
+for directory in "$COMMON" "$GITDIR" "$BUILD"; do
+    deny mv "$directory" "$directory.old"
+done
+for tips in "$COMMON/orbit/worktree-recovery" "$BUILD/orbit/worktree-recovery"; do
+    deny sh -c 'printf poisoned > "$1/run/manifest.json"' sh "$tips"
+    deny mv "$tips" "$tips.old"
+done
+deny mv "$PRIMARY" "$PRIMARY.old"
+git -C "$WORKSPACE" status --short
+git -C "$ALIAS" rev-parse HEAD
+cp -a "$GITDIR" "$WORKSPACE/copy-git"
+printf 'source edit\n' > "$ALIAS/source.txt"
+"#;
+    fs::write(workspace.join("source.txt"), "before\n").unwrap();
+    let plan = compile_linux_bwrap_argv(
+        &resolved,
+        "/bin/sh",
+        &["-c".to_string(), script.to_string()],
+        Some(&workspace),
+        true,
+    )
+    .unwrap();
+    let env = [
+        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ("GIT_OPTIONAL_LOCKS".to_string(), "0".to_string()),
+        ("WORKSPACE".to_string(), workspace.display().to_string()),
+        ("PRIMARY".to_string(), primary.display().to_string()),
+        ("COMMON".to_string(), common.display().to_string()),
+        ("GITDIR".to_string(), git_dir.display().to_string()),
+        (
+            "ALIAS".to_string(),
+            LINUX_STABLE_WORKSPACE_MOUNT.to_string(),
+        ),
+        ("BUILD".to_string(), LINUX_STABLE_BUILD_MOUNT.to_string()),
+    ];
+    let output = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+        plan: &plan,
+        env: &env,
+        cwd: Some(&workspace),
+        stdin: Stdio::null(),
+        stdout: Stdio::piped(),
+        stderr: Stdio::piped(),
+    })
+    .unwrap()
+    .wait_with_output()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read(&pointer).unwrap(), before);
+    assert_eq!(
+        fs::read_to_string(recovery.join("manifest.json")).unwrap(),
+        "host-owned"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("source.txt")).unwrap(),
+        "source edit\n"
+    );
+    // The namespace restriction does not change host permissions or ownership.
+    git(&workspace, &["add", "source.txt"]);
+    git(
+        &workspace,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.com",
+            "commit",
+            "-m",
+            "host stages",
+        ],
+    );
+    fs::write(recovery.join("manifest.json"), "host-updated").unwrap();
 }

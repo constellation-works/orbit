@@ -1,0 +1,182 @@
+---
+import { Icon } from '@astrojs/starlight/components';
+import ThemeSelect from './ThemeSelect.astro';
+
+const links = [
+  { href: '/getting-started/', label: 'Getting started' },
+  { href: '/concepts/', label: 'Concepts' },
+  { href: '/how-to/', label: 'How-to guides' },
+  { href: '/reference/', label: 'Reference' },
+];
+
+const pathname = Astro.url.pathname;
+const menuLabel = Astro.locals.t('menuButton.accessibleLabel');
+
+// Splash pages have no Starlight sidebar, so they never get MobileMenuToggle.
+// This disclosure is the homepage stand-in: native open/close, no focus trap.
+---
+
+<details class="orbit-home-menu print:hidden">
+  <summary
+    class="orbit-home-menu-toggle"
+    aria-expanded="false"
+    aria-controls="orbit-home-menu-panel"
+    aria-label={menuLabel}
+  >
+    <Icon name="bars" class="open-menu" />
+    <Icon name="close" class="close-menu" />
+  </summary>
+  <div id="orbit-home-menu-panel" class="orbit-home-menu-panel">
+    <nav class="orbit-home-menu-nav" aria-label="Documentation sections">
+      {
+        links.map(({ href, label }) => (
+          <a href={href} aria-current={pathname.startsWith(href) ? 'true' : undefined}>
+            {label}
+          </a>
+        ))
+      }
+    </nav>
+    <div class="orbit-home-menu-theme">
+      <ThemeSelect />
+    </div>
+  </div>
+</details>
+
+<style>
+  .orbit-home-menu-toggle {
+    align-items: center;
+    background-color: var(--sl-color-white);
+    border: 0;
+    border-radius: 50%;
+    box-shadow: var(--sl-shadow-md);
+    color: var(--sl-color-black);
+    cursor: pointer;
+    display: flex;
+    height: var(--sl-menu-button-size);
+    inset-inline-end: var(--sl-nav-pad-x);
+    justify-content: center;
+    list-style: none;
+    padding: 0.5rem;
+    position: fixed;
+    top: calc((var(--sl-nav-height) - var(--sl-menu-button-size)) / 2);
+    width: var(--sl-menu-button-size);
+    z-index: var(--sl-z-index-navbar);
+  }
+
+  .orbit-home-menu-toggle::-webkit-details-marker,
+  .orbit-home-menu-toggle::marker {
+    display: none;
+  }
+
+  .orbit-home-menu-toggle:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+
+  .orbit-home-menu[open] .orbit-home-menu-toggle {
+    background-color: var(--sl-color-gray-2);
+    box-shadow: none;
+  }
+
+  .orbit-home-menu[open] .open-menu,
+  .orbit-home-menu:not([open]) .close-menu {
+    display: none;
+  }
+
+  :global([data-theme='light']) .orbit-home-menu-toggle {
+    background-color: var(--sl-color-black);
+    color: var(--sl-color-white);
+  }
+
+  :global([data-theme='light']) .orbit-home-menu[open] .orbit-home-menu-toggle {
+    background-color: var(--sl-color-gray-5);
+  }
+
+  .orbit-home-menu-panel {
+    background-color: var(--sl-color-bg-nav);
+    border-bottom: 1px solid var(--sl-color-hairline);
+    inset-inline: 0;
+    max-height: calc(100dvh - var(--sl-nav-height));
+    overflow: auto;
+    padding: 0.75rem var(--sl-nav-pad-x) 1rem;
+    position: fixed;
+    top: var(--sl-nav-height);
+    z-index: var(--sl-z-index-menu);
+  }
+
+  .orbit-home-menu-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .orbit-home-menu-nav a {
+    border-radius: 6px;
+    color: var(--sl-color-gray-2);
+    font-size: 0.95rem;
+    min-height: 2.75rem;
+    padding: 0.65rem 0.5rem;
+    text-decoration: none;
+  }
+
+  .orbit-home-menu-nav a:hover,
+  .orbit-home-menu-nav a:focus-visible,
+  .orbit-home-menu-nav a[aria-current='true'] {
+    color: var(--sl-color-text-accent);
+  }
+
+  .orbit-home-menu-nav a:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+
+  .orbit-home-menu-theme {
+    align-items: center;
+    border-top: 1px solid var(--sl-color-hairline);
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.5rem;
+    padding-top: 0.75rem;
+  }
+
+  @media (min-width: 50rem) {
+    .orbit-home-menu {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  const desktopNav = matchMedia('(min-width: 50rem)');
+
+  const closeMenu = (menu: HTMLDetailsElement, restoreFocus: boolean) => {
+    if (!menu.open) return;
+    menu.open = false;
+    if (restoreFocus) {
+      menu.querySelector('summary')?.focus();
+    }
+  };
+
+  const syncExpanded = (menu: HTMLDetailsElement) => {
+    menu.querySelector('summary')?.setAttribute('aria-expanded', String(menu.open));
+  };
+
+  for (const menu of document.querySelectorAll<HTMLDetailsElement>('.orbit-home-menu')) {
+    syncExpanded(menu);
+    menu.addEventListener('toggle', () => syncExpanded(menu));
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closeMenu(menu, true);
+    });
+
+    document.addEventListener('pointerdown', (event) => {
+      const target = event.target;
+      if (!(target instanceof Node) || menu.contains(target)) return;
+      closeMenu(menu, false);
+    });
+
+    desktopNav.addEventListener('change', () => {
+      if (desktopNav.matches) closeMenu(menu, false);
+    });
+  }
+</script>

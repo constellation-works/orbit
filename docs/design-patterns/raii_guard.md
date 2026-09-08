@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "RAII Guard Pattern"
-last_validated: 2026-08-23
+last_validated: 2026-09-07
 ---
 # RAII Guard Pattern
 
@@ -89,54 +89,37 @@ Patterns to copy:
 
 ## Reference: `SignalHandlerGuard` — restore global state
 
-From `crates/orbit-exec/src/supervision/signal.rs:9`:
+From `crates/orbit-exec/src/supervision/signal.rs`:
 
 ```rust
 pub(super) struct SignalHandlerGuard {
-    previous_sigint: libc::sigaction,
-    previous_sigterm: libc::sigaction,
-    read_fd: i32,
-    write_fd: i32,
-    _lock: MutexGuard<'static, ()>,   // serialize installs across the process
+    start_gen: u64,          // signals observed after this wait started
+    slot: Option<usize>,     // lock-free live-pgid table index
 }
 
 impl SignalHandlerGuard {
-    pub(super) fn install() -> Result<Self, OrbitError> {
-        let lock = SIGNAL_HANDLER_LOCK.get_or_init(|| Mutex::new(())).lock()?;
-        let (read_fd, write_fd) = create_signal_pipe()?;
-        SIGNAL_PIPE_WRITE_FD.store(write_fd, Ordering::SeqCst);
-        let previous_sigint = install_signal_handler(libc::SIGINT)?;
-        let previous_sigterm = match install_signal_handler(libc::SIGTERM) {
-            Ok(prev) => prev,
-            Err(err) => {
-                // hand-rollback: SIGINT installed but SIGTERM failed, and Drop
-                // never runs on a value that never returned from this function
-                SIGNAL_PIPE_WRITE_FD.store(-1, Ordering::SeqCst);
-                close_fd(read_fd); close_fd(write_fd);
-                restore_signal_handler(libc::SIGINT, &previous_sigint);
-                return Err(err);
-            }
-        };
-        Ok(Self { previous_sigint, previous_sigterm, read_fd, write_fd, _lock: lock })
+    pub(super) fn install(pgid: u32) -> Result<Self, OrbitError> {
+        let start_gen = acquire_handlers()?;   // refcount++; first waiter installs
+        Ok(Self { start_gen, slot: register_pgid(pgid) })
     }
 }
 
 impl Drop for SignalHandlerGuard {
     fn drop(&mut self) {
-        SIGNAL_PIPE_WRITE_FD.store(-1, Ordering::SeqCst);
-        restore_signal_handler(libc::SIGINT, &self.previous_sigint);
-        restore_signal_handler(libc::SIGTERM, &self.previous_sigterm);
-        close_fd(self.read_fd);
-        close_fd(self.write_fd);
+        unregister_pgid(self.slot);
+        release_handlers();                    // last waiter restores prior sigaction
     }
 }
 ```
 
+`acquire_handlers` takes a process-wide `Mutex` only for the refcount/`sigaction` critical section. The first waiter snapshots the previous SIGINT/SIGTERM dispositions and installs a handler that stores a generation counter, records a pending forward, and `killpg`s every registered child; the last drop restores those dispositions and re-raises a captured signal (except `SIG_IGN`) with the mutex released. Concurrent waits overlap.
+
 Patterns to copy:
 
-- **Capture prior state in the guard's fields.** `previous_sigint` isn't recomputed in `Drop` — it's snapshotted at install time.
-- **Hold a `'static` mutex as a field.** `_lock: MutexGuard<'static, ()>` makes "one guard at a time, process-wide" structurally impossible to violate.
-- **Hand-rollback on partial install.** `Drop` only runs on values that successfully return; mid-construction failures must unwind their own work before returning `Err`.
+- **Refcount a process-global side effect.** The guard's job is "this wait is live", not "I own the handler exclusively". Last `Drop` restores prior state.
+- **Keep the mutex off the long path.** Holding `MutexGuard` as a field would serialize every supervised child for its entire lifetime.
+- **Hand-rollback on partial first install.** `Drop` only runs on values that successfully return; if SIGINT is installed and SIGTERM fails, restore SIGINT before returning `Err`, and do not bump the refcount.
+- **Capture prior state next to the refcount, not on every guard.** Previous `sigaction` structs live in the shared install record because only the first/last waiter should swap them.
 
 ## Reference: `FileLockGuard` — resource held until `Drop`
 

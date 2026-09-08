@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::{
-    OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint, WorkspaceRuntimeBinding,
-    managed_workspace_selector_from_env,
+    HostLifetime, OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint,
+    WorkspaceRuntimeBinding, managed_workspace_selector_from_env,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::workspace::{
@@ -231,16 +231,34 @@ impl RegisteredRuntimeFactory {
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
     ) -> Result<OrbitRuntime, OrbitError> {
+        Self::open_registered_checkout_for(
+            global_root,
+            workspace,
+            checkout,
+            HostLifetime::ShortLived,
+        )
+    }
+
+    pub fn open_registered_checkout_for(
+        global_root: &Path,
+        workspace: &Workspace,
+        checkout: &WorkspaceCheckout,
+        host_lifetime: HostLifetime,
+    ) -> Result<OrbitRuntime, OrbitError> {
         sync_task_prefix(global_root)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
-        OrbitRuntime::from_roots_with_binding(global_root, &checkout.orbit_dir, binding).map(
-            |runtime| {
-                attach_registry_context(
-                    runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
-                    global_root,
-                )
-            },
+        OrbitRuntime::from_roots_with_binding_for(
+            global_root,
+            &checkout.orbit_dir,
+            binding,
+            host_lifetime,
         )
+        .map(|runtime| {
+            attach_registry_context(
+                runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
+                global_root,
+            )
+        })
     }
 
     fn open_registered_checkout_read_only(
@@ -270,12 +288,29 @@ impl RegisteredRuntimeFactory {
         local_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<OrbitRuntime, OrbitError> {
-        sync_task_prefix(global_root)?;
-        OrbitRuntime::from_resolved_roots_with_binding(
+        Self::open_resolved_checkout_for(
             global_root,
             shared_root,
             local_root,
             binding,
+            HostLifetime::ShortLived,
+        )
+    }
+
+    pub fn open_resolved_checkout_for(
+        global_root: &Path,
+        shared_root: &Path,
+        local_root: &Path,
+        binding: WorkspaceRuntimeBinding,
+        host_lifetime: HostLifetime,
+    ) -> Result<OrbitRuntime, OrbitError> {
+        sync_task_prefix(global_root)?;
+        OrbitRuntime::from_resolved_roots_with_binding_for(
+            global_root,
+            shared_root,
+            local_root,
+            binding,
+            host_lifetime,
         )
         .map(|runtime| attach_registry_context(runtime, global_root))
     }
@@ -440,7 +475,7 @@ fn resolve_cli_workspace_path<'a>(
     if let Some(checkout) = find_checkout_for_canonical_path(registry, &canonical)
         .or_else(|| find_checkout_for_git_common_dir(registry, &canonical))
     {
-        let workspace = workspace_registry::find_workspace(registry, &checkout.workspace_id)
+        let workspace = workspace_registry::find_workspace_by_id(registry, &checkout.workspace_id)
             .ok_or_else(|| unsupported_cli_workspace(selector))?;
         return Ok(CliWorkspaceTarget::Checkout {
             workspace,
@@ -642,7 +677,7 @@ pub(crate) fn select_workspace_for_cwd_and_roots(
     if let Some(checkout) = workspace_registry::find_checkout_by_path(&registry, cwd)
         && canonical_or_original(&checkout.orbit_dir) == shared
         && let Some(workspace) =
-            workspace_registry::find_workspace(&registry, &checkout.workspace_id)
+            workspace_registry::find_workspace_by_id(&registry, &checkout.workspace_id)
     {
         return Ok(Some(ResolvedWorkspaceSelection {
             workspace: workspace.clone(),

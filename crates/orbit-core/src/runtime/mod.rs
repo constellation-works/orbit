@@ -11,6 +11,7 @@
 //! [`OrbitRuntime`]. The `engine`, `audit`, `mutation`, and `tool_exec` sub-modules
 //! provide the high-level operations exposed to command handlers.
 
+pub(crate) mod assets;
 pub mod audit;
 mod authorization;
 pub mod builder;
@@ -19,6 +20,8 @@ mod coordination_audit;
 pub mod engine;
 pub mod event_bus;
 pub(crate) mod friction;
+#[cfg(target_os = "linux")]
+pub(crate) mod git_sandbox;
 pub mod mutation;
 mod resolve;
 pub mod run_audit;
@@ -34,6 +37,8 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -44,10 +49,10 @@ use orbit_types::record::{Audit, OrbitEvent};
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspacePaths};
 use serde_json::Value;
 
-use crate::bootstrap::activity::DEFAULT_ACTIVITY_FILES;
 use crate::context::ActorIdentity;
 use crate::context::OrbitContext;
 use crate::context::OrbitStores;
+use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 use orbit_types::workflow::{ShipMode, resolved_ship_mode};
 
 pub(crate) use resolve::{resolve_bootstrap_roots, resolve_initialize_roots};
@@ -62,6 +67,9 @@ pub use resolve::{
 pub use resolve::{is_global_orbit_root, resolve_global_root, try_resolve_initialized_roots};
 pub use run_input::managed_workspace_selector_from_env;
 pub(crate) use task::{failed_run_error_context, is_workflow_failure_state};
+
+#[cfg(test)]
+pub(crate) type AfterLockedStateReadHook = Arc<dyn Fn(&orbit_types::task::Task) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct OrbitRuntime {
@@ -82,6 +90,12 @@ pub struct OrbitRuntime {
     /// current). Surfaced by `orbit migrate`.
     layout_report: Arc<orbit_store::workflow::layout::LayoutUpgradeReport>,
     _temp_dir: Option<Arc<builder::TempDir>>,
+    /// Test-only seam for `apply_task_automation_update`: fired after the
+    /// authoritative locked `get_task`, before the derived write. The lock is
+    /// re-entrant, so a hook may mutate the same task and observe whether the
+    /// automation write merges or refuses.
+    #[cfg(test)]
+    after_locked_state_read: Arc<Mutex<Option<AfterLockedStateReadHook>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +103,18 @@ pub struct OrbitRuntimeRoots {
     pub global_root: PathBuf,
     pub shared_root: PathBuf,
     pub local_root: PathBuf,
+}
+
+/// Whether the constructing process retains this runtime past a single command.
+///
+/// Short-lived CLI mutations must not spawn a detached embed worker: process
+/// exit can interrupt queued indexing, and a missing companion must not add
+/// startup or retry work. Long-lived hosts (MCP serve, the dashboard) keep
+/// incremental indexing on [`orbit_search::EmbedWorker`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostLifetime {
+    ShortLived,
+    LongLived,
 }
 
 /// Registry-neutral metadata supplied by a higher-level workspace catalog.
@@ -105,8 +131,15 @@ pub struct WorkspaceRuntimeBinding {
     /// Checkout identity from `.orbit/config.yaml`, which the task registry
     /// partitions by (L-0098: it may differ from `logical_workspace_id`).
     pub workspace_id: String,
+    /// Registered owner of the logical workspace. Automation resolves the
+    /// default owner of a delivery definition from it, so an unambiguously
+    /// owned workspace needs no redundant per-definition configuration.
+    /// Absent on standalone registries that predate host identity.
+    pub owner_machine_id: Option<String>,
     pub repo_root: PathBuf,
     pub ship_mode: ShipMode,
+    /// Registered integration branch; absent for standalone runtimes.
+    pub base_branch: Option<String>,
 }
 
 /// Build the neutral Core binding for one registered local checkout.
@@ -117,8 +150,10 @@ pub fn workspace_runtime_binding(
     Ok(WorkspaceRuntimeBinding {
         logical_workspace_id: workspace.id.clone(),
         workspace_id: workspace_id_for_orbit_dir(&checkout.orbit_dir)?,
+        owner_machine_id: workspace.owner_machine_id.clone(),
         repo_root: checkout.repo_root.clone(),
         ship_mode: resolved_ship_mode(workspace),
+        base_branch: Some(workspace.base_branch.clone()),
     })
 }
 
@@ -130,6 +165,7 @@ impl OrbitRuntime {
         binding: Option<WorkspaceRuntimeBinding>,
         runtime_config: &orbit_config::ResolvedConfig,
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        host_lifetime: HostLifetime,
     ) -> Result<Self, OrbitError> {
         let context = builder::build_context_from_roots(
             global_root,
@@ -137,6 +173,7 @@ impl OrbitRuntime {
             local_root,
             binding.as_ref(),
             runtime_config,
+            host_lifetime,
         )?;
         Ok(Self {
             context,
@@ -147,29 +184,35 @@ impl OrbitRuntime {
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(layout_report),
             _temp_dir: None,
+            #[cfg(test)]
+            after_locked_state_read: Arc::new(Mutex::new(None)),
         })
     }
 
     pub(crate) fn build_in_memory_from_resolved_config(
         data_root: &Path,
+        workspace_root: &Path,
         runtime_config: &orbit_config::ResolvedConfig,
         temp_dir: builder::TempDir,
     ) -> Result<Self, OrbitError> {
-        // Flattened in-memory roots look like an explicit `--root` data dir.
-        // Supply a checkout binding so task APIs still have a partition;
-        // without it the data-dir skip would refuse to mint parent(tempdir).
+        // Use a distinct checkout root so the normal workspace builder creates
+        // its identity and task partition. A shared explicit data root assumes
+        // those were already initialized by workspace init.
         let binding = WorkspaceRuntimeBinding {
             logical_workspace_id: "ws_memory".to_string(),
             workspace_id: "ws_memory".to_string(),
+            owner_machine_id: None,
             repo_root: data_root.to_path_buf(),
             ship_mode: ShipMode::Local,
+            base_branch: None,
         };
         let context = builder::build_context_from_roots(
             data_root,
-            data_root,
-            data_root,
+            workspace_root,
+            workspace_root,
             Some(&binding),
             runtime_config,
+            HostLifetime::ShortLived,
         )?;
         Ok(Self {
             context,
@@ -180,6 +223,8 @@ impl OrbitRuntime {
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(orbit_store::workflow::layout::LayoutUpgradeReport::default()),
             _temp_dir: Some(Arc::new(temp_dir)),
+            #[cfg(test)]
+            after_locked_state_read: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -194,6 +239,26 @@ impl OrbitRuntime {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_after_locked_state_read_hook(&self, hook: AfterLockedStateReadHook) {
+        *self
+            .after_locked_state_read
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn invoke_after_locked_state_read(&self, task: &orbit_types::task::Task) {
+        let hook = self
+            .after_locked_state_read
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(hook) = hook {
+            hook(task);
+        }
+    }
+
     /// Registry-owning composition supplies stable machine identity; Core never discovers it.
     pub fn with_automation_machine_identity(mut self, machine_id: Option<String>) -> Self {
         self.automation_machine_identity = machine_id.map(Arc::from);
@@ -202,6 +267,15 @@ impl OrbitRuntime {
 
     pub fn automation_machine_identity(&self) -> Option<&str> {
         self.automation_machine_identity.as_deref()
+    }
+
+    /// Registered owner of the bound workspace, when composition supplied a
+    /// binding that names one. Delivery automation resolves its default owner
+    /// from this rather than from cwd or the running executor.
+    pub(crate) fn workspace_owner_machine_id(&self) -> Option<&str> {
+        self.workspace_binding
+            .as_ref()
+            .and_then(|binding| binding.owner_machine_id.as_deref())
     }
 
     /// Attach the declared remote owner for a replica checkout. This is set by
@@ -245,6 +319,24 @@ impl OrbitRuntime {
 
     pub(crate) fn coordination_task_reads_visible(&self) -> bool {
         self.coordination_write_owner.is_none()
+    }
+
+    /// The remote owner declared for a replica checkout, if this is one.
+    pub(crate) fn coordination_write_owner(&self) -> Option<&str> {
+        self.coordination_write_owner.as_deref()
+    }
+
+    /// Test seam: restate the registered workspace owner that registry
+    /// composition supplies in production, so ownership resolution can be
+    /// exercised on an in-memory runtime.
+    #[cfg(test)]
+    pub(crate) fn with_workspace_owner_machine_id(mut self, owner: Option<&str>) -> Self {
+        if let Some(binding) = self.workspace_binding.as_ref() {
+            let mut rebound = (**binding).clone();
+            rebound.owner_machine_id = owner.map(ToOwned::to_owned);
+            self.workspace_binding = Some(Arc::new(rebound));
+        }
+        self
     }
 
     /// Returns in-process events recorded during this session only. Not persisted across process
@@ -302,24 +394,44 @@ impl OrbitRuntime {
     pub fn automation_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::AutomationStoreBackend>, OrbitError> {
-        orbit_store::compose::automation_store(Store::open(&self.context.persistence().audit_db)?)
+        Ok(Arc::clone(&self.context.stores().host.automation))
+    }
+
+    /// Before-PR review ledgers, certificates, and landings [ORB-11333].
+    pub fn review_store(
+        &self,
+    ) -> Result<Arc<dyn orbit_store::contracts::ReviewStoreBackend>, OrbitError> {
+        Ok(Arc::clone(&self.context.stores().host.review))
     }
 
     /// Operation-mode grants and recovery ledgers in the host store [ORB-11332].
     pub fn operation_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::OperationStoreBackend>, OrbitError> {
-        orbit_store::compose::operation_store(Store::open(&self.context.persistence().audit_db)?)
+        Ok(Arc::clone(&self.context.stores().host.operation))
     }
 
     pub fn sqlite_store(&self) -> Result<Store, OrbitError> {
-        Store::open(&self.context.persistence().audit_db)
+        Ok(self.context.stores().host.sqlite.clone())
+    }
+
+    /// Probe the configured database path independently of cached runtime
+    /// handles. Diagnostics must observe missing or replaced files and must
+    /// not repair or migrate them as a side effect.
+    pub fn sqlite_store_for_diagnostics(&self) -> Result<Store, OrbitError> {
+        Store::open_read_only(&self.context.persistence().audit_db)
+    }
+
+    /// Check write readiness at the configured path without recreating or
+    /// migrating the database, independently of cached runtime connections.
+    pub fn check_sqlite_store_writable(&self) -> Result<(), OrbitError> {
+        Store::check_path_writable(&self.context.persistence().audit_db)
     }
 
     pub fn v2_audit_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::V2AuditStoreBackend>, OrbitError> {
-        orbit_store::compose::v2_audit_store(&self.context.persistence().audit_db)
+        Ok(Arc::clone(&self.context.stores().host.v2_audit))
     }
 
     pub fn ensure_persistence_ready(&self) -> Result<(), OrbitError> {

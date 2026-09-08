@@ -207,6 +207,11 @@ pub(crate) fn task_row_to_json(
         object.insert("resolved_crew".to_string(), Value::String(projection.name));
         object.insert("crew_model".to_string(), Value::String(projection.model));
     }
+    if let Some(review) =
+        orbit_core::application::review::task_review_projection(runtime, task, &row.artifacts)?
+    {
+        object.insert("review".to_string(), review);
+    }
     Ok(value)
 }
 
@@ -289,11 +294,15 @@ pub(crate) fn task_locks_json(runtime: &OrbitRuntime) -> Result<Value, OrbitErro
 }
 
 fn task_locks(runtime: &OrbitRuntime) -> Result<(Vec<Task>, BTreeSet<String>), OrbitError> {
-    let mut tasks: Vec<_> = runtime
-        .list_tasks()?
-        .into_iter()
-        .filter(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::Review))
-        .collect();
+    let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
+        filter: orbit_core::application::task::TaskListFilter {
+            statuses: Some(vec![TaskStatus::InProgress, TaskStatus::Review]),
+            ..Default::default()
+        },
+        limit: 10_000,
+        ..Default::default()
+    })?;
+    let mut tasks: Vec<_> = page.items.into_iter().map(|row| row.task).collect();
 
     tasks.sort_by_key(|task| {
         (

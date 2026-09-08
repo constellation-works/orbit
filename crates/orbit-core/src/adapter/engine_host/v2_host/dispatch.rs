@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
@@ -7,7 +7,8 @@ use orbit_engine::DispatchError;
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
 use orbit_types::task::{
-    UnsatisfiableTaskDependency, unmet_task_dependencies, unsatisfiable_task_dependencies,
+    TaskReferenceIndex, UnsatisfiableTaskDependency, unmet_task_dependencies_with_index,
+    unsatisfiable_task_dependencies_with_index,
 };
 use orbit_types::tool::McpCapability;
 use orbit_types::workflow::{CoreDeterministicAction, DeterministicAction};
@@ -16,8 +17,8 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::runtime::task::locks::{
     TaskLockIndex, emit_expired_reservation_events, merge_task_lock_conflicts, parse_task_ids,
-    requested_task_files_indexed, task_lock_conflicts_indexed, workspace_orbit_dir,
-    workspace_task_reservation_id,
+    requested_task_files_indexed, reserve_with_index, task_lock_conflicts_indexed,
+    workspace_orbit_dir, workspace_task_reservation_id,
 };
 
 use super::{
@@ -310,6 +311,16 @@ pub(crate) fn run_deterministic(
         // Validate all agent proposals before writing, then replace only the
         // exact prepared tasks' context_files fields.
         CoreDeterministicAction::ApplyTaskPilotResults => task_pilot::apply(runtime, action, input),
+        // [ORB-11333] Reserve a fresh reviewer start for the committed,
+        // base-synchronized candidate and hand it a pinned manifest; then
+        // settle the reviewer's report into an honest verdict, reviewer-
+        // attributed repair commits, and a certificate the PR steps recheck.
+        CoreDeterministicAction::ReviewGateAdmit => {
+            crate::application::review::review_gate_admit(runtime, action, input)
+        }
+        CoreDeterministicAction::ReviewGateSettle => {
+            crate::application::review::review_gate_settle(runtime, action, input)
+        }
         // Guard the auto-dispatch bundle output before fan_out.
         // Rejects duplicated task_ids, unknown ids, and oversize
         // bundles with a structured error so a misgrouped backlog
@@ -368,17 +379,24 @@ pub(crate) fn run_deterministic(
                 }));
             }
 
-            let mut output = runtime
-                .run_tool_with_context_and_role(
-                    "orbit.task.locks.reserve",
-                    input.clone(),
-                    Role::Admin,
-                    tool_context,
-                )
-                .map_err(|err| DispatchError::DeterministicActionFailed {
+            let lock_index = TaskLockIndex::load(runtime).map_err(|err| {
+                DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: format!("{err}"),
-                })?;
+                }
+            })?;
+            let mut output = reserve_with_index(
+                runtime,
+                input.clone(),
+                tool_context.agent_name.clone(),
+                tool_context.model_name.clone(),
+                tool_context.reservation_owner.clone(),
+                &lock_index,
+            )
+            .map_err(|err| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: format!("{err}"),
+            })?;
             // Always publish `waiting_on_deps` (empty here) so the gate
             // pipeline can reference `steps.reserve.output.waiting_on_deps`
             // unconditionally, whichever branch produced the output.
@@ -516,24 +534,20 @@ fn dependency_admission_for_input(
         return Ok(BundleDependencyAdmission::default());
     };
     let task_ids = parse_task_ids(&serde_json::json!({ "task_ids": raw_task_ids }))?;
-    let tasks = runtime.stores().tasks().list_tasks()?;
     let status_by_id = runtime.task_status_index()?;
-    let task_by_id = tasks
-        .into_iter()
-        .map(|task| (task.id.clone(), task))
-        .collect::<BTreeMap<_, _>>();
+    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let mut waiting_on = BTreeSet::new();
     let mut unsatisfiable = Vec::new();
     for task_id in task_ids {
-        let task = task_by_id
-            .get(&task_id)
-            .ok_or_else(|| OrbitError::not_found(crate::NotFoundKind::Task, task_id.clone()))?;
-        let dead_ends = unsatisfiable_task_dependencies(task, &status_by_id);
+        let task = runtime.get_task(&task_id)?;
+        let dead_ends =
+            unsatisfiable_task_dependencies_with_index(&task, &status_by_id, &reference_index);
         let dead_end_ids = dead_ends
             .iter()
             .map(|dependency| dependency.dependency_id.clone())
             .collect::<BTreeSet<_>>();
-        for dependency in unmet_task_dependencies(task, &status_by_id) {
+        for dependency in unmet_task_dependencies_with_index(&task, &status_by_id, &reference_index)
+        {
             if !dead_end_ids.contains(&dependency.id) {
                 waiting_on.insert(dependency.id);
             }
@@ -565,7 +579,11 @@ pub(super) fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
         .collect()
 }
 
-fn update_run_waiting_reasons(
+// `pub(super)` (not private): the sibling `tests/dispatch.rs` unit-tests this
+// writer directly for no-op, error, lock, and lost-update coverage rather
+// than only through a full `reserve_locks` setup — see
+// docs/design-patterns/test_layout.md migration recipe step 6.
+pub(super) fn update_run_waiting_reasons(
     runtime: &OrbitRuntime,
     input: &Value,
     waiting_on_deps: Option<Vec<String>>,
@@ -575,23 +593,23 @@ fn update_run_waiting_reasons(
     let Some(run_id) = input.get("run_id").and_then(Value::as_str) else {
         return Ok(());
     };
-    let Some(mut state) =
-        runtime
-            .read_run_state(run_id)
-            .map_err(|err| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("{err}"),
-            })?
-    else {
-        return Ok(());
-    };
-    state.set_waiting_reasons(waiting_on_deps, waiting_on_locks);
-    runtime.write_run_state(run_id, &state).map_err(|err| {
-        DispatchError::DeterministicActionFailed {
+    // Same transactional primitive as checkpoints and child dispatch: a
+    // separate read then whole-document write would discard a concurrent
+    // admissions-stop or worker-limit that landed in between.
+    let mut waiting_on_deps = waiting_on_deps;
+    let mut waiting_on_locks = waiting_on_locks;
+    runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            state.set_waiting_reasons(waiting_on_deps.take(), waiting_on_locks.take());
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|err| DispatchError::DeterministicActionFailed {
             action: action.to_string(),
             message: format!("{err}"),
-        }
-    })
+        })
 }
 
 fn non_empty(values: Vec<String>) -> Option<Vec<String>> {

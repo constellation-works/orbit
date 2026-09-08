@@ -110,18 +110,37 @@ pub(super) fn assess(
         .get("head_branches")
         .cloned()
         .unwrap_or_else(|| json!([]));
+    let red_failure = json!({
+        "head_branches": head_branches,
+        "tested_commit": tested_commit,
+        "run_urls": run_urls,
+    });
+    let release_action = release_action_required(action, task_id, assessment)?;
 
-    let (decision, classification, evidence) = if !already_landed.is_null() && release_head_failure
-    {
+    // Both release-scoped outcomes are withheld by the same owner: this sweep
+    // performs no release operation, so a failure whose correct repair is
+    // promotion, a tag, or a publication is reported as that operator action
+    // instead of being converted into automatic repository edits.
+    let (decision, classification, evidence) = if let Some(finding) = release_action {
+        (
+            "withhold",
+            "release_publication_or_operator_action_needed",
+            json!({
+                "red_failure": red_failure,
+                "pilot_finding": finding,
+                "required_action": finding["action"],
+                "automatic_action": "none",
+                // Carried verbatim: a proposed repair the pilot itself ruled
+                // out is evidence of what was refused, not admitted work.
+                "withheld_selectors": selectors,
+            }),
+        )
+    } else if !already_landed.is_null() && release_head_failure {
         (
             "withhold",
             "release_promotion_or_hotfix_needed",
             json!({
-                "red_release": {
-                    "head_branches": head_branches,
-                    "tested_commit": tested_commit,
-                    "run_urls": run_urls,
-                },
+                "red_release": red_failure,
                 "covering_repair": already_landed,
                 "required_action": "promote the verified integration repair to the release branch or prepare an authorized hotfix",
                 "automatic_action": "none",
@@ -183,6 +202,40 @@ pub(super) fn assess(
         },
         "evidence": evidence,
     }))
+}
+
+/// The pilot's explicit finding that a failure's only correct repair is an
+/// operator-reserved release action — publishing or tagging a version this
+/// repository already records, for example — rather than a change the
+/// repository owns. Admission never infers this from which files a proposed
+/// repair would touch: an ordinary packaging or dependency defect that a
+/// repository edit does fix stays eligible for promotion [ORB-11517].
+fn release_action_required<'a>(
+    action: &str,
+    task_id: &str,
+    assessment: &'a Value,
+) -> Result<Option<&'a Value>, DispatchError> {
+    let Some(finding) = assessment
+        .get("release_action_required")
+        .filter(|finding| !finding.is_null())
+    else {
+        return Ok(None);
+    };
+    if !recommendation_has_evidence(finding) {
+        return Err(action_failed(
+            action,
+            format!("task {task_id} release_action_required must include concrete evidence"),
+        ));
+    }
+    if required_string(finding, "action", action).is_err() {
+        return Err(action_failed(
+            action,
+            format!(
+                "task {task_id} release_action_required must name the required operator action"
+            ),
+        ));
+    }
+    Ok(Some(finding))
 }
 
 fn recommendation_has_evidence(value: &Value) -> bool {

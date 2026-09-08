@@ -21,7 +21,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.19.2"
+version = "0.20.0"
 edition = "2024"
 license = "MIT"
 # MSRV [ORB-10010]: edition 2024 requires >= 1.85; the highest `rust-version`
@@ -48,6 +48,7 @@ assert_cmd = "2"
 base64 = "0.22"
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio"] }
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 clap = { version = "4.5", features = ["derive"] }
 croner = "3"
 flate2 = "1"

@@ -6,7 +6,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_types::task::{ArtifactPresentation, artifact_presentation};
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::output::task_to_json_for_runtime;
 
@@ -64,7 +64,7 @@ impl Execute for TaskArtifactPutArgs {
             source_path,
             artifact_path,
             model,
-            json,
+            json: _,
         } = self;
         let (agent, model) = super::mutation_identity(model);
         let artifact = task_artifact_from_source_file(&source_path, artifact_path.as_deref())?;
@@ -79,12 +79,11 @@ impl Execute for TaskArtifactPutArgs {
             model,
         )?;
 
-        if json {
-            Ok(Payload::document(task_to_json_for_runtime(runtime, &task)?).into())
-        } else {
-            println!("Stored artifact '{artifact_path}' on task '{}'", task.id);
-            Ok(CommandOutput::Silent)
-        }
+        Ok(Payload::detail(
+            task_to_json_for_runtime(runtime, &task)?,
+            format!("Stored artifact '{artifact_path}' on task '{}'", task.id),
+        )
+        .into())
     }
 }
 
@@ -109,7 +108,7 @@ impl Execute for TaskArtifactGetArgs {
             id,
             path,
             out,
-            json,
+            json: _,
         } = self;
         // Resolve the owning task first so an unknown id fails as a task
         // not-found rather than as a missing artifact.
@@ -125,37 +124,35 @@ impl Execute for TaskArtifactGetArgs {
             })?;
         }
 
-        if json {
-            return Ok(Payload::document(serde_json::json!({
-                "id": task.id,
-                "path": artifact.path,
-                "media_type": artifact.media_type,
-                "size": artifact.content.len(),
-                "presentation": presentation.as_str(),
-                "written_to": out.as_ref().map(|out| out.display().to_string()),
-            }))
-            .into());
-        }
+        let doc = serde_json::json!({
+            "id": task.id,
+            "path": artifact.path,
+            "media_type": artifact.media_type,
+            "size": artifact.content.len(),
+            "presentation": presentation.as_str(),
+            "written_to": out.as_ref().map(|out| out.display().to_string()),
+        });
 
         if let Some(out) = out {
-            println!(
-                "Wrote {} bytes of '{}' ({}) to {}",
-                artifact.content.len(),
-                artifact.path,
-                artifact.media_type,
-                out.display()
-            );
-            return Ok(CommandOutput::Silent);
+            return Ok(Payload::detail(
+                doc,
+                format!(
+                    "Wrote {} bytes of '{}' ({}) to {}",
+                    artifact.content.len(),
+                    artifact.path,
+                    artifact.media_type,
+                    out.display()
+                ),
+            )
+            .into());
         }
 
         // Only UTF-8 text is safe to write to a terminal. Anything else needs a
         // destination file rather than a screenful of raw bytes.
         match presentation {
             ArtifactPresentation::Text => {
-                if let Some(content) = artifact.text_content() {
-                    println!("{content}");
-                }
-                Ok(CommandOutput::Silent)
+                let text = artifact.text_content().unwrap_or_default().to_string();
+                Ok(Payload::detail(doc, text).into())
             }
             ArtifactPresentation::Image | ArtifactPresentation::Opaque => {
                 Err(OrbitError::InvalidInput(format!(

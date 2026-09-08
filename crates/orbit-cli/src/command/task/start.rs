@@ -12,7 +12,7 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::output::task_to_json_for_runtime;
 
@@ -55,11 +55,10 @@ impl Execute for TaskStartArgs {
             model,
             self.crew,
         )?;
-        if self.json {
-            Ok(Payload::document(task_to_json_for_runtime(runtime, &task)?).into())
-        } else {
-            println!("Started task '{}'", task.id);
-            Ok(CommandOutput::Silent)
-        }
+        Ok(Payload::detail(
+            task_to_json_for_runtime(runtime, &task)?,
+            format!("Started task '{}'", task.id),
+        )
+        .into())
     }
 }

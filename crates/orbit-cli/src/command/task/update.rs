@@ -3,7 +3,7 @@ use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_types::task::TaskArtifact;
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::output::task_to_json_for_runtime;
 
@@ -17,12 +17,12 @@ pub struct TaskUpdateArgs {
     /// New description (empty string clears)
     #[arg(long)]
     pub description: Option<String>,
-    /// Acceptance criteria. Repeat the flag for multiple criteria.
+    /// Replacement acceptance criteria. Repeat the flag for multiple criteria.
     #[arg(long = "acceptance-criteria")]
     pub acceptance_criteria: Vec<String>,
-    /// Comma-separated dependency task IDs (empty string clears)
-    #[arg(long, alias = "dependency")]
-    pub dependencies: Option<String>,
+    /// Replacement dependency task IDs. Repeat or comma-separate for multiple dependencies (empty string clears).
+    #[arg(long, alias = "dependency", action = ArgAction::Append, value_delimiter = ',')]
+    pub dependencies: Vec<String>,
     /// Replacement task tags. Repeat or comma-separate for multiple tags.
     #[arg(long = "tag", action = ArgAction::Append, value_delimiter = ',')]
     pub tags: Vec<String>,
@@ -62,10 +62,10 @@ pub struct TaskUpdateArgs {
     /// Named crew responsible for orchestration attribution (empty string clears)
     #[arg(long)]
     pub orchestrator: Option<String>,
-    /// Comma-separated task context selectors (empty string clears). Prefer
-    /// `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded.
-    #[arg(long = "context", alias = "context-files")]
-    pub context_files: Option<String>,
+    /// Replacement task context selectors. Repeat or comma-separate for multiple selectors (empty string clears).
+    /// Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded.
+    #[arg(long = "context", alias = "context-files", action = ArgAction::Append, value_delimiter = ',')]
+    pub context_files: Vec<String>,
     /// Task artifact write in `path=content` form. Repeat for multiple artifacts.
     #[arg(long = "artifact")]
     pub artifacts: Vec<String>,
@@ -138,18 +138,17 @@ impl Execute for TaskUpdateArgs {
             model,
             approve,
             note,
-            json,
+            json: _,
         } = self;
 
         if approve {
             let (agent, model) = super::mutation_identity(model);
             let task = runtime.approve_task_with_identity(&id, note, comment, agent, model)?;
-            return if json {
-                Ok(Payload::document(task_to_json_for_runtime(runtime, &task)?).into())
-            } else {
-                println!("Approved task '{}' -> {}", task.id, task.status);
-                Ok(CommandOutput::Silent)
-            };
+            return Ok(Payload::detail(
+                task_to_json_for_runtime(runtime, &task)?,
+                format!("Approved task '{}' -> {}", task.id, task.status),
+            )
+            .into());
         }
 
         let pr_status = pr_status.map(|value| {
@@ -195,7 +194,7 @@ impl Execute for TaskUpdateArgs {
             }
         });
         let acceptance_criteria = (!acceptance_criteria.is_empty()).then_some(acceptance_criteria);
-        let dependencies = dependencies.map(|value| crate::parse::csv_to_vec(&value));
+        let dependencies = parse_replacement_list(dependencies);
         let tags = (!tags.is_empty()).then_some(tags);
         let upsert_artifacts = parse_artifact_args(&artifacts)?;
         let (agent, model) = super::mutation_identity(model);
@@ -220,7 +219,7 @@ impl Execute for TaskUpdateArgs {
                 job_run_id,
                 crew,
                 orchestrator,
-                context_files: context_files.map(|c| crate::parse::csv_to_vec(&c)),
+                context_files: parse_replacement_list(context_files),
                 upsert_artifacts,
                 ..Default::default()
             },
@@ -228,13 +227,21 @@ impl Execute for TaskUpdateArgs {
             model,
         )?;
 
-        if json {
-            Ok(Payload::document(task_to_json_for_runtime(runtime, &task)?).into())
-        } else {
-            println!("Updated task '{}'", task.id);
-            Ok(CommandOutput::Silent)
-        }
+        Ok(Payload::detail(
+            task_to_json_for_runtime(runtime, &task)?,
+            format!("Updated task '{}'", task.id),
+        )
+        .into())
     }
+}
+
+fn parse_replacement_list(values: Vec<String>) -> Option<Vec<String>> {
+    (!values.is_empty()).then(|| {
+        values
+            .into_iter()
+            .flat_map(|value| crate::parse::csv_to_vec(&value))
+            .collect()
+    })
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -247,6 +254,7 @@ pub enum TaskUpdateStatusArg {
     Review,
     Done,
     Blocked,
+    Archived,
     Rejected,
 }
 
@@ -260,6 +268,7 @@ impl From<TaskUpdateStatusArg> for TaskStatus {
             TaskUpdateStatusArg::Review => TaskStatus::Review,
             TaskUpdateStatusArg::Done => TaskStatus::Done,
             TaskUpdateStatusArg::Blocked => TaskStatus::Blocked,
+            TaskUpdateStatusArg::Archived => TaskStatus::Archived,
             TaskUpdateStatusArg::Rejected => TaskStatus::Rejected,
         }
     }

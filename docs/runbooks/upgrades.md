@@ -4,8 +4,8 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344]
-last_validated: 2026-09-06
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753]
+last_validated: 2026-09-08
 ---
 
 # Upgrade Orbit Safely
@@ -67,8 +67,8 @@ includes that root explicitly, so retrying from a different checkout does not si
 workspace being repaired.
 
 The outgoing executable stays at `<orbit>.previous`. Restore it only if `.orbit/` state was not
-migrated: once a migration has been applied, an older binary refuses to open the workspace by
-design. See [Respect the downgrade guard](#respect-the-downgrade-guard).
+migrated to a format it cannot read: an older binary refuses unsupported compatibility
+versions. Additive storage can remain compatible, as described below. See [Respect the downgrade guard](#respect-the-downgrade-guard).
 
 Without a root override, `orbit update` converges **the workspace you run it from**. `ORBIT_ROOT`
 selects an environment-only override, while an explicit `--root` takes precedence over it. Run
@@ -102,6 +102,71 @@ Two ledgers guard `.orbit/` state and auto-apply on workspace open:
 - **Store schema:** the `schema_meta` ledger table inside `orbit.db`, backed by
   `crates/orbit-store/src/driver/sqlite/migration/`. Each migration and its ledger row commit in one
   transaction.
+
+The host task registry has a separate reader-compatibility marker:
+`PRAGMA user_version` in `~/.orbit/tasks/index.sqlite` (or the configured global
+root). Its v5 task/allocator format also supports the additive `task_action_keys`
+table. The repaired executable ensures that table when opening a writable v5
+registry, without raising the reader-compatibility floor. A complete v5 registry
+can still open read-only; missing additive storage requires a writable open.
+
+### Recover a task registry marked version 6
+
+A previous build marked this additive table as registry v6, causing v5 readers
+to fail even on ordinary workspace/task access. A build containing the repair
+recognizes the shipped compatible v6 columns, keys, indexes, and allocation
+constraints, then restores the v5 marker in a transaction. Existing task data,
+allocator state, and permanent action reservations remain intact. Repeated or
+concurrent recovery is safe. Unknown schema versions or unrecognized v6 shapes
+remain refused; recovery never means discarding tables or task data.
+
+Executable upgrade and database recovery are separate steps. An already-installed
+old executable does not learn a future migration. Install a build containing this
+repair through its owning install channel, then invoke **that exact executable**
+to open the registry. No manual SQL or registry reset is needed. `orbit migrate`
+reports workspace layout and store-schema migrations; its dry-run report is not
+an inventory of task-registry additive setup.
+
+For mixed macOS installations, inspect the paths before rollout:
+
+```sh
+type -a orbit
+command -v orbit
+ls -l /opt/homebrew/bin/orbit
+/opt/homebrew/bin/orbit --version
+~/.cargo/bin/orbit --version
+```
+
+For example, `/opt/homebrew/bin/orbit` may still point to
+`Cellar/orbit/0.19.0` while `~/.cargo/bin/orbit` is a different checkout build.
+Building the latter does not upgrade Homebrew or change shell command selection.
+A version string alone may not distinguish two checkout builds; confirm the
+selected executable was built from a revision containing the repair. Upgrade
+Homebrew through Homebrew when a release containing the fix is available, or use
+an explicitly selected, validated repaired build under the rollout owner's direction.
+
+Quiesce the build that writes v6 and take a consistent backup of the registry
+and canonical bundles using [the state inventory](./state-and-backup.md). Then
+open through the repaired build on that host, for example:
+
+```sh
+/path/to/repaired/orbit workspace list
+/path/to/repaired/orbit tool run orbit.task.show --input '{"id":"<real-task-id>","model":"codex"}'
+```
+
+After this supported open has recovered a compatible v6 registry, a v5 reader
+can again read its existing workspaces and tasks. Before that open, an old v5
+executable still refuses v6. Do not keep the defective v6 writer running: it can
+raise the marker again. Align `PATH`, any explicit `ORBIT_BIN`, MCP/service
+launch paths, and restarted workers with the intended executable. Other host
+store/layout/host-config compatibility guards still apply; registry recovery is
+not a guarantee that every older release can read every other store.
+
+If recovery is refused, use the reported database and executable paths to check
+which installation is running. Upgrade the selected executable or escalate the
+unrecognized format to the rollout owner; never lower `user_version` manually.
+This repair's automated fixtures run on Linux. macOS Homebrew/PATH behavior and
+live host rollout require verification on the affected Mac by the rollout owner.
 
 ## Back up before a major upgrade
 
@@ -154,6 +219,57 @@ than the newest version this orbit binary supports (1); upgrade orbit to open th
 The schema ledger has the same guard:
 `store database schema version N is newer than the newest version this orbit binary supports`.
 Upgrade the binary. Never hand-edit `layout.version` to force the workspace open.
+
+## Mixed binaries and the workspace semantic index
+
+`.orbit/state/semantic.db` is a **forward-only** layout, independent of the workspace-layout and store-schema ledgers above. A current Orbit binary migrates `corpus_fts` from inline metadata columns (`source_kind`, `source_id`, `field`) to an external-content FTS5 table over `chunks`. The migration is in place: it does not rewrite task or doc source records, and it does not rebuild embeddings.
+
+Older binaries still run the pre-migration BM25 projection:
+
+```sql
+SELECT source_kind, source_id, field, rowid, bm25(corpus_fts)
+FROM corpus_fts
+WHERE corpus_fts MATCH ?1 AND source_kind=?2
+```
+
+Against a migrated index that query fails with `no such column: source_kind`. Hybrid search on that older process then falls back to lexical ranking. Plain lexical task and doc lookup does not use `semantic.db` and is not broken.
+
+This mismatch is not a dual-read contract. Restoring the old FTS columns would let an older writer insert into `corpus_fts` without writing `chunks`, desynchronizing the index. Do not delete `semantic.db` to make the older binary work, and do not downgrade the schema.
+
+### Which process to upgrade or restart
+
+The binary that **already migrated** the file is current. Restart or upgrade every **other** Orbit process that still has the file open — typically a Homebrew or MCP install that is older than the cargo/`~/.orbit/bin` build:
+
+```sh
+type -a orbit
+/opt/homebrew/bin/orbit --version
+~/.cargo/bin/orbit --version
+~/.orbit/bin/orbit --version
+```
+
+On macOS, `lsof` on `.orbit/state/semantic.db` shows which process holds the migrated index. Align `PATH`, any explicit `ORBIT_BIN`, MCP client command paths, and long-lived dashboard/pipeline workers with the current binary, then restart those processes so they reopen the file. Building or running a newer cargo `orbit` does not upgrade Homebrew or change which executable an already-started MCP server is using.
+
+`orbit update` is the install-channel upgrade for Orbit-owned binaries; Homebrew packages upgrade through Homebrew. This runbook does not authorize replacing a global executable, restarting a host service, or rebuilding the live index as part of diagnosing the mismatch.
+
+### Distinguish lexical fallback from full hybrid success
+
+Ask the **same executable** the MCP client or agent is using, not a different `orbit` on `PATH`:
+
+```sh
+/path/to/suspect/orbit tool run orbit.search --input '{"query":"<term>","kind":"task","hybrid":true,"limit":2,"model":"codex"}'
+```
+
+Read `mode` and `notes` together:
+
+| Observation | Meaning |
+| --- | --- |
+| `mode` is `hybrid` and `notes` is empty | Full hybrid success on a current runtime. |
+| `mode` is `lexical` and a note contains `falling back to lexical` plus `semantic index layout is incompatible` | The answering process cannot read this `semantic.db` layout. Upgrade/restart **that** process. Lexical hits are not hybrid ranking. |
+| `mode` is `lexical` and a note contains `no such column` / `source_kind` | Same mismatch, reported by an older binary that does not yet translate the SQL error. Same remedy: upgrade/restart that process. |
+| `mode` is `lexical` with a companion/embeddings fallback note, no layout diagnostic | Hybrid was skipped for an unrelated reason (missing companion, empty embeddings). Layout is fine. |
+| Hybrid unset / `hybrid: false` | Lexical-only by request. Success here does not prove hybrid works. |
+
+A current binary on the same workspace answering `mode: hybrid` with empty notes, while an older MCP process on the same `semantic.db` falls back, is the mixed-runtime case — not a corrupt index.
 
 ## Verify the upgrade
 

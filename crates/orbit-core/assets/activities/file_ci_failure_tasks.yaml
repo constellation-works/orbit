@@ -10,7 +10,11 @@ spec:
     (workflow, failing job, failing step, normalized error signature, and the
     commit the runner actually tested) so one regression repeated across a push
     run and a pull-request run of the same commit becomes one task rather than
-    several. Current failures may include already-failed jobs from an
+    several. The normalized signature prefers a concrete test/panic diagnostic
+    over ANSI styling, generic cancellation/process/cargo trailers, and
+    assertion payload help text; the filed description still carries the raw
+    excerpt. With no concrete line the step name is used and labelled as a
+    fallback. Current failures may include already-failed jobs from an
     in-flight workflow when that evidence is complete; a pending check is
     never present in the snapshot as a current failure and must not be filed. Each surviving cluster is filed at `status: proposed` with the
     collected evidence rendered inline in the description, so the implementing
@@ -19,21 +23,43 @@ spec:
     task-pilot validation and explicit CI-sweep admission. Filing itself never
     promotes or dispatches implementation. It is deduped
     against still-open tasks first by a commit-independent failure key carried
-    as a `ci-failure:<key>` tag, then by a shared high-confidence material
-    coverage assessment over untagged tasks. A repeated sweep over a run that
-    is still red, or a root cause already owned by a manual task, therefore
-    does not file the same work twice. Skips name the covering task and bounded
-    match evidence; closed historical tasks and superficial similarities do
-    not suppress a current failure. The three endings stay distinct
+    as a `ci-failure:<key>` tag, then by rejected exact-key tasks whose comments
+    name one still-open covering owner, then by a shared high-confidence
+    material coverage assessment over untagged tasks. Coverage matches a
+    generated workflow/job/step brief or a specific error together with the
+    failing command or the same run and job identity; generic npx/cargo
+    wrappers, a shared workflow or file, or task completion alone do not
+    suppress a current failure. After open-owner lookup misses, a bounded
+    completed-owner assessment verifies structured task artifacts against the
+    exact source diagnostics, failing and passing command results, authoritative
+    delivery state and Git applicability. Proven pre-fix observations are
+    retained as task artifacts on the existing owner and are not pilot candidates.
+    Missing or contradictory proof is reported in repair_assessments as unresolved;
+    ordinary proposed filing and pilot checks remain available. A repeated sweep
+    over a run that is still red,
+    or a root cause already owned by a manual task, therefore does not file
+    the same work twice. Filing never mutates the covering task's tags or
+    prose; completed coverage adds idempotent observation artifacts. Skips name
+    the covering task and bounded match evidence. The three
+    endings stay distinct
     and none of them is a CI pass: a snapshot with `collected: false` reports
     `capability_unavailable` and files nothing, a snapshot with no current
     failure reports `no_current_failure` and files nothing, and anything else
     reports `current_failures` with what it filed, skipped as already open,
     left unfiled at the `max_tasks` cap, or deferred for incomplete evidence.
-    Retryable failures are separated by blast radius. One that names a run —
-    an exhausted investigation budget, an unreadable log, incomplete checkout
-    identity — defers only that finding: it appears in `deferred` with its
-    reasons, is excluded from clustering, and is left for a later sweep, while
+    Schema version 2 requires one job per failure row, matching diagnostic
+    and checkout job identities, one known failed step, and complete
+    diagnostic evidence. A complete bounded diagnostic_unit with matching job
+    and step can replace a truncated display for signature calculation. Raw
+    selected evidence remains in the snapshot; descriptions separately cap
+    display at 4000 bytes and disclose collection display truncation. Legacy
+    version-1 run-scoped snapshots remain readable
+    for audit but their failures are deferred for recollection; no job ordering
+    inference or event/PR head substitution is allowed. Retryable failures are
+    separated by blast radius. One that names a job defers only that job.
+    One that names only a run, such as an exhausted run investigation budget
+    or unreadable job metadata, defers that run's findings. Each appears in
+    `deferred` with its reasons and is excluded from clustering, while
     every complete finding in the same snapshot still files and dedupes. One
     that names no run — a repository, run-listing, or pull-request-listing
     read, a registration, dedupe-lookup, or task-creation failure — leaves the
@@ -143,9 +169,17 @@ spec:
               type: string
             match_kind:
               type: string
-              enum: [exact_key, material_coverage]
+              enum: [exact_key, material_coverage, confirmed_duplicate, covered_by_repair]
             match_evidence:
               type: object
+      repair_assessments:
+        type: array
+        description: >
+          Bounded completed-owner assessments: covered_by_repair with referenced
+          validation and source provenance, or unresolved with a reason. An
+          unresolved assessment does not certify coverage or admission.
+        items:
+          type: object
       skipped_over_cap:
         type: array
         items:
@@ -166,13 +200,15 @@ spec:
         type: array
         description: >
           Current failures left unfiled because their own evidence is
-          incomplete. Each entry carries the run it is about and the bounded
+          incomplete. Each entry carries the run and job it is about and bounded
           retryable reasons, so the gap stays visible and a later sweep can
           finish it.
         items:
           type: object
           required: [run_id, reasons]
           properties:
+            job_id:
+              type: [number, "null"]
             run_id:
               oneOf:
                 - type: number

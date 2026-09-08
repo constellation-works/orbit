@@ -9,6 +9,7 @@ mod checkpoint;
 pub mod delivery;
 mod error;
 pub mod members;
+pub mod review;
 pub mod routines;
 
 pub use error::{AutomationError, automation_error_to_orbit};

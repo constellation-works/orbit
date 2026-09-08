@@ -1,11 +1,16 @@
 //! Invocation-owned source checkouts for read-only inspection [ORB-11256].
 //!
-//! Slots are private scratch space under the source repository's common Git
-//! directory. A kernel lease lasts through provider exit and RAII cleanup.
-//! After a crash the next holder removes the abandoned checkout before reuse.
-//! The fixed slot count bounds leftovers even when no retry follows a crash.
-//! These are standalone repositories: no shared index, alternates, registered
-//! worktree, branch, or global worktree-prune operation is involved.
+//! Slots are private scratch space in the source repository's Orbit state
+//! directory, beside the managed worktrees. A slot holds ordinary tracked
+//! content, which legitimately includes symlinks, so it stays outside the Git
+//! metadata tree — host protection refuses every symlink and hard link there
+//! [ORB-11756].
+//!
+//! A kernel lease lasts through provider exit and RAII cleanup. After a crash
+//! the next holder removes the abandoned checkout before reuse. The fixed slot
+//! count bounds leftovers even when no retry follows a crash. These are
+//! standalone repositories: no shared index, alternates, registered worktree,
+//! branch, or global worktree-prune operation is involved.
 
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
@@ -17,6 +22,8 @@ use serde_json::Value;
 use super::super::dispatcher::DispatchError;
 
 const SLOT_COUNT: usize = 16;
+const POOL_DIR: &str = "source-inspections-v1";
+const LEGACY_POOL_DIR: &str = "orbit-source-inspections-v1";
 const OWNER: &str = "orbit-source-inspection-v1\n";
 
 pub(super) struct SourceInspection {
@@ -78,9 +85,12 @@ impl SourceInspection {
             source,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         )?;
+        let common = common.trim();
         let format = git(source, &["rev-parse", "--show-object-format"])?;
-        let pool = Path::new(common.trim()).join("orbit-source-inspections-v1");
-        directory(&pool).map_err(io_failure)?;
+        if let Err(error) = retire_legacy_pool(Path::new(common)) {
+            tracing::warn!(%error, "retiring the in-metadata inspection pool needs operator attention");
+        }
+        let pool = prepare_pool(Path::new(common))?;
         for index in 0..SLOT_COUNT {
             let slot = pool.join(index.to_string());
             directory(&slot).map_err(io_failure)?;
@@ -137,7 +147,7 @@ impl SourceInspection {
                     "fetch",
                     "--quiet",
                     "--no-tags",
-                    common.trim(),
+                    common,
                     revision,
                 ],
             )?;
@@ -188,6 +198,71 @@ impl Drop for SourceInspection {
             tracing::warn!(path = %self.root.display(), %error, "inspection cleanup deferred to next lease holder");
         }
     }
+}
+
+/// Create or adopt this repository's inspection pool and return its path.
+///
+/// The pool is derived from the common Git directory so that every linked
+/// worktree of a repository leases from one bounded set of slots, but it is
+/// placed next to it rather than inside it: a slot is Orbit scratch holding a
+/// working tree, not authoritative Git metadata. The policy's `.orbit/**`
+/// write deny already covers the pool for any concurrent activity that can
+/// write the repository root.
+fn prepare_pool(common: &Path) -> Result<PathBuf, DispatchError> {
+    let repo_root = common
+        .parent()
+        .ok_or_else(|| failure("source repository has no directory containing its Git metadata"))?;
+    let mut pool = repo_root.to_path_buf();
+    for component in [".orbit", "state", POOL_DIR] {
+        pool.push(component);
+        directory(&pool).map_err(io_failure)?;
+    }
+    Ok(pool)
+}
+
+/// Retire the pool this module used to keep inside the common Git directory.
+///
+/// A checkout abandoned there by a crash is no longer reclaimed by the current
+/// pool, and would sit under authoritative Git metadata forever — where host
+/// protection refuses its tracked symlinks and so blocks every sandboxed
+/// activity in the repository. Only slots still carrying this module's owner
+/// marker are removed; anything else is left for an operator to inspect.
+fn retire_legacy_pool(common: &Path) -> io::Result<()> {
+    let legacy = common.join(LEGACY_POOL_DIR);
+    reject_symlink(&legacy)?;
+    if !legacy.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(&legacy)? {
+        let slot = entry?.path();
+        reject_symlink(&slot)?;
+        let marker = slot.join("owner");
+        reject_symlink(&marker)?;
+        if fs::read_to_string(&marker).unwrap_or_default() != OWNER {
+            return Err(io::Error::other(format!(
+                "unowned entry in the retired inspection pool: {}",
+                slot.display()
+            )));
+        }
+        // A slot an older build still leases is cleaning up after itself.
+        let lock_path = slot.join("lease");
+        reject_symlink(&lock_path)?;
+        let lease = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        match lease.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Ok(()),
+            Err(TryLockError::Error(error)) => return Err(error),
+        }
+
+        remove_checkout(&slot.join("checkout"))?;
+        fs::remove_dir_all(&slot)?;
+    }
+    fs::remove_dir(&legacy)
 }
 
 fn remove_checkout(root: &Path) -> io::Result<()> {

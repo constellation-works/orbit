@@ -24,6 +24,7 @@ CLI behavior, state layout, or recovery semantics change.
 | Runbook | Purpose |
 | --- | --- |
 | [Inspect the Audit Trail](./runbooks/audit-trail.md) | Query and interpret Orbit invocation, run, step, and activity audit history. |
+| [Bound Concurrent Orbit Repository Builds](./runbooks/build-budget.md) | Run Cargo builds within Orbit's host-wide cross-worktree admission and compiler-job budget. |
 | [Share Rust dependency compilation across worker worktrees](./runbooks/compiler-cache.md) | Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees. |
 | [Recover a Corrupted Database](./runbooks/database-recovery.md) | Recover a corrupted Orbit SQLite database from backup, salvage, or regeneration. |
 | [Onboard an Executor](./runbooks/executor-onboarding.md) | Add and validate a CLI-agent or deterministic local-shell executor without changing existing users' routing or state. |
@@ -72,7 +73,7 @@ a conservative title/status fallback.
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Accepted | codex |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Draft | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Accepted | codex |
-| [Operation Mode](./design/operation-mode/1_overview.md) | Operation-mode presets, scoped grants and bounded recovery (shipped in ORB-11332) plus the still-proposed review timing, scoped repair, and delivery coverage. | Accepted | codex |
+| [Operation Mode](./design/operation-mode/1_overview.md) | Operation-mode presets, scoped grants and bounded recovery (shipped in ORB-11332) plus the before-PR review gate, reviewer repairs, lineage budgets and exact-tree delivery coverage (shipped in ORB-11333). | Accepted | codex |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of four hand-copied layers. | Accepted | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional application, runtime, adapter, bootstrap, and composition boundaries inside orbit-core. | Accepted | codex |
 | [Orbit Docs](./design/orbit-docs/1_overview.md) | Orbit Docs — the human-authored workspace corpus and how operators and agents retrieve from it. | Draft | claude |

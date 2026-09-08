@@ -7,6 +7,7 @@ mod error;
 mod executor_def;
 mod job;
 pub mod operation;
+mod review;
 mod routine;
 mod run_state;
 mod ship;
@@ -34,7 +35,8 @@ pub use activity_job::{
 };
 pub use auto_task::{
     AUTO_TASK_SCHEMA_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskDefinition, AutoTaskSchedule,
-    AutoTaskTemplate, DedupePolicy, auto_task_tag, is_valid_auto_task_name,
+    AutoTaskTemplate, DedupePolicy, MAX_AUTO_TASK_INTERVAL_MINUTES, auto_task_tag,
+    is_valid_auto_task_name,
 };
 pub use child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
@@ -53,6 +55,15 @@ pub use operation::{
     MAX_GRANT_WINDOW_SECONDS, OPERATION_ADMISSION_KEY, OperationAdmission, OperationGrant,
     RecoveryEpisode, RecoveryEpisodeKind, RecoveryLedger, RecoveryReservation,
 };
+pub use review::{
+    CommitIdentity, DEFAULT_REVIEW_MINUTES, DEFAULT_REVIEW_REPAIR_CYCLES,
+    DEFAULT_REVIEW_REVIEWER_STARTS, FindingDisposition, LandingTransformation,
+    REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
+    REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewAssurance, ReviewAttempt, ReviewAttemptState,
+    ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewFinding, ReviewInvalidation,
+    ReviewLanding, ReviewLedger, ReviewManifest, ReviewReport, ReviewReservation, ReviewTiming,
+    ReviewValidation, ReviewVerdict, ReviewerIdentity, ValidationOutcome, ValidationRole,
+};
 pub use routine::{
     MissedRunPolicy, OverlapPolicy, ROUTINE_SCHEMA_VERSION, RoutineDefinition, RoutinePolicy,
     RoutineRetries, RoutineTarget, RoutineTrigger,
@@ -64,6 +75,6 @@ pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;
 
 mod auto_task_cursor;
-pub use auto_task_cursor::{AutoTaskCursor, AutoTaskCursorState};
+pub use auto_task_cursor::{AutoTaskCursor, AutoTaskCursorState, AutoTaskPendingClaim};
 
 pub mod automation;

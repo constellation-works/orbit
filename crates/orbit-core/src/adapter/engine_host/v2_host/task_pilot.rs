@@ -491,6 +491,32 @@ fn validate_after_selectors(
     Ok(())
 }
 
+/// Whether a validated assessment leaves the task ready for the state
+/// automation to promote it on its own. Actionable selectors are necessary but
+/// not sufficient: any finding that names other work, or an action outside
+/// what this repository owns — a duplicate, a repair that already landed, or
+/// an operator-reserved release action — keeps that decision with a human
+/// [ORB-11517].
+pub(super) fn member_ready(assessment: &Value) -> bool {
+    assessment["disposition"] == "selectors"
+        && [
+            "blocked_by",
+            "adr_conflicts",
+            "utility_warnings",
+            "surface_warnings",
+        ]
+        .iter()
+        .all(|field| {
+            assessment
+                .get(field)
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+        })
+        && ["duplicate_of", "already_landed", "release_action_required"]
+            .iter()
+            .all(|field| assessment.get(field).is_none_or(Value::is_null))
+}
+
 fn validate_recommendations(
     action: &str,
     task_id: &str,

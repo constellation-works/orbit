@@ -5,8 +5,10 @@ use tempfile::tempdir;
 use crate::OrbitRuntime;
 use crate::application::activity_catalog_health::remove_spec_backend_key;
 use crate::application::artifact_health::{
-    ArtifactCondition, ArtifactHealth, ArtifactKind, FIX_RETIRED_ACTIVITY_BACKENDS_CMD,
+    ArtifactCondition, ArtifactHealth, ArtifactKind, ArtifactProvenance,
+    FIX_RETIRED_ACTIVITY_BACKENDS_CMD,
 };
+use crate::runtime::OrbitRuntimeRoots;
 
 fn workspace_runtime(root: &Path) -> (OrbitRuntime, PathBuf, PathBuf) {
     let global_root = root.join("global");
@@ -30,6 +32,21 @@ fn health_of(report: &[ArtifactHealth], kind: ArtifactKind) -> &ArtifactHealth {
         .iter()
         .find(|health| health.kind == kind)
         .unwrap_or_else(|| panic!("missing artifact health for {kind:?}"))
+}
+
+fn seeded_runtime(root: &Path) -> (OrbitRuntime, PathBuf, PathBuf) {
+    let global_root = root.join("global");
+    let workspace_root = root.join("repo/.orbit");
+    let runtime = OrbitRuntime::initialize_from_resolved_roots(
+        OrbitRuntimeRoots {
+            global_root: global_root.clone(),
+            shared_root: workspace_root.clone(),
+            local_root: workspace_root.clone(),
+        },
+        None,
+    )
+    .expect("initialize runtime with defaults");
+    (runtime, global_root, workspace_root)
 }
 
 #[test]
@@ -248,5 +265,109 @@ fn remove_spec_backend_key_refuses_flow_style() {
     assert!(
         error.contains("flow-style") || error.contains("block-style"),
         "{error}"
+    );
+}
+
+#[test]
+fn missing_shipped_activity_is_reported_and_not_restored_by_the_fix_flag() {
+    let root = tempdir().expect("tempdir");
+    let (runtime, global_root, _workspace) = seeded_runtime(root.path());
+    let path = global_root.join("resources/activities/git_merge.yaml");
+    assert!(path.is_file(), "seeded catalog must include git_merge");
+    std::fs::remove_file(&path).expect("delete shipped default");
+
+    let report = runtime
+        .inspect_definition_artifacts()
+        .expect("inspect artifacts");
+    let finding = health_of(&report, ArtifactKind::Activity)
+        .findings
+        .iter()
+        .find(|finding| finding.name == "git_merge")
+        .expect("missing shipped activity must be reported");
+    assert_eq!(finding.condition, ArtifactCondition::Missing);
+    assert_eq!(finding.provenance, ArtifactProvenance::OrbitWritten);
+    assert_eq!(finding.path, path);
+    assert!(finding.is_unloadable_shipped_default());
+    assert!(
+        finding.remediation.contains("orbit init"),
+        "{}",
+        finding.remediation
+    );
+
+    assert_eq!(
+        runtime
+            .remove_stale_definition_artifacts()
+            .expect("fix flag retires deprecated artifacts only"),
+        0
+    );
+    assert!(
+        !path.exists(),
+        "missing defaults are restored by init/sync, not --fix-stale-artifacts"
+    );
+}
+
+#[test]
+fn locally_modified_shipped_activity_is_not_reported_missing() {
+    let root = tempdir().expect("tempdir");
+    let (runtime, global_root, _workspace) = seeded_runtime(root.path());
+    let path = global_root.join("resources/activities/git_merge.yaml");
+    let current = std::fs::read_to_string(&path).expect("read shipped activity");
+    std::fs::write(&path, format!("{current}# operator edit\n")).expect("keep a custom override");
+
+    let report = runtime
+        .inspect_definition_artifacts()
+        .expect("inspect artifacts");
+    assert!(
+        health_of(&report, ArtifactKind::Activity)
+            .findings
+            .iter()
+            .all(|finding| finding.name != "git_merge"),
+        "an on-disk custom override must not look missing: {:?}",
+        health_of(&report, ArtifactKind::Activity).findings
+    );
+}
+
+#[test]
+fn missing_shipped_job_is_reported() {
+    let root = tempdir().expect("tempdir");
+    let (runtime, global_root, _workspace) = seeded_runtime(root.path());
+    let path = global_root.join("resources/jobs/task_gate_pipeline.yaml");
+    std::fs::remove_file(&path).expect("delete shipped job");
+
+    let report = runtime
+        .inspect_definition_artifacts()
+        .expect("inspect artifacts");
+    let finding = health_of(&report, ArtifactKind::Job)
+        .findings
+        .iter()
+        .find(|finding| finding.name == "task_gate_pipeline")
+        .expect("missing shipped job must be reported");
+    assert_eq!(finding.condition, ArtifactCondition::Missing);
+    assert!(finding.is_unloadable_shipped_default());
+}
+
+#[test]
+fn catalog_without_a_managed_manifest_does_not_report_missing_shipped_defaults() {
+    let root = tempdir().expect("tempdir");
+    let (runtime, _workspace, activities) = workspace_runtime(root.path());
+    std::fs::write(
+        activities.join("custom_loop.yaml"),
+        agent_loop_yaml("custom_loop", ""),
+    )
+    .expect("write workspace-only activity");
+
+    let report = runtime
+        .inspect_definition_artifacts()
+        .expect("inspect artifacts");
+    let missing = health_of(&report, ArtifactKind::Activity)
+        .findings
+        .iter()
+        .filter(|finding| finding.condition == ArtifactCondition::Missing)
+        .count();
+    assert_eq!(
+        missing,
+        0,
+        "custom catalogs without a managed manifest are not missing shipped defaults: {:?}",
+        health_of(&report, ArtifactKind::Activity).findings
     );
 }

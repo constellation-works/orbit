@@ -1,10 +1,12 @@
 use std::env;
 
 use orbit_common::OrbitError;
-use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
+use orbit_common::security::child_env::allowlisted_child_env;
+use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode, run_process};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
+use crate::builtin::proc::spawn::{ActivityFsSandbox, enforce_program_allowlist};
 use crate::{TIMEOUT_DEFAULT_MS, Tool, ToolContext};
 
 const EXTERNAL_TOOL_TIMEOUT_OVERRIDE_ENV: &str = "ORBIT_EXTERNAL_TOOL_TIMEOUT_MS";
@@ -43,6 +45,7 @@ impl Tool for ExternalTool {
             ))
         })?;
         let timeout_ms = external_tool_timeout_ms()?;
+        enforce_program_allowlist(ctx, "external tool", &self.path)?;
         let environment_mode =
             EnvironmentMode::ClearAndSet(runtime_environment(ctx, &self.name, &cwd));
 
@@ -56,7 +59,7 @@ impl Tool for ExternalTool {
                 environment_mode,
                 debug: false,
             },
-            &NoSandbox,
+            &ActivityFsSandbox::new(ctx)?,
         )?;
 
         if !output.success {
@@ -106,7 +109,10 @@ fn external_tool_timeout_ms() -> Result<u64, OrbitError> {
 }
 
 fn runtime_environment(ctx: &ToolContext, tool_name: &str, cwd: &str) -> Vec<(String, String)> {
-    let mut env_pairs: Vec<(String, String)> = env::vars().collect();
+    let mut env_pairs = ctx
+        .proc_spawn_environment
+        .clone()
+        .unwrap_or_else(|| allowlisted_child_env(&[], &[]));
     upsert_env(&mut env_pairs, ORBIT_TOOL_NAME_ENV, tool_name.to_string());
     upsert_env(&mut env_pairs, ORBIT_TOOL_CWD_ENV, cwd.to_string());
     if let Some(workspace_root) = ctx.workspace_root.as_ref() {

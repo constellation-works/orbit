@@ -12,9 +12,23 @@ spec:
     rather than assuming branch names; separates the event-reported SHA, the
     ref's current head, and the commit the runner actually checked out; and
     reports every bound it hit in `truncation` rather than silently returning
-    less. Checkout identity is extracted while the full runner-log stream is
-    drained, before the human excerpt is truncated; extraction scans at most
-    8 MiB per log and records incomplete evidence rather than guessing.
+    less. Schema version 2 emits one current-failure row per failed job, with
+    job_id and log_job_id binding the diagnostic and checkout provenance to
+    that job. Both failed-step and checkout reads explicitly select the job;
+    a fallback may only supply that same job. The global max_job_log_reads
+    budget defaults to 6 (maximum 25), with stable job ordering and a rotating
+    overflow slot. Each read retains the existing timeout, excerpt/scan bounds
+    and one-job fallback. A separate diagnostic_unit keeps a complete runner
+    command from its Run group through nonzero process completion (256 KiB cap),
+    bound to the unique failed step. A truncated head/tail display alone does
+    not defer a job with this complete unit. Missing/ambiguous command boundaries,
+    source truncation and exhausted job/checkout budgets remain retryable;
+    complete sibling jobs still progress. Checkout identity is extracted while
+    the full runner-log stream is drained, before the human excerpt is truncated;
+    extraction scans at most
+    8 MiB per log. Process stdout reads stop beyond 8 MiB with at most one
+    4 KiB lookahead chunk and a retryable error; command line buffers are capped
+    at 16 KiB. No additional query or retry is used for command selection.
     Workflow runs are listed repository-wide in one query. `latest_runs`
     records the newest run of each workflow for audit, ordered by creation
     time then run ID. Current failures are selected by relevant identity
@@ -23,9 +37,9 @@ spec:
     unrelated pull-request run cannot erase a landing-branch failure, and a
     genuinely newer completed non-unsuccessful check of the same identity
     (or a landing-branch success, for non-landing noise) does suppress it.
-    Already-failed jobs inside an in-flight workflow become current once
-    their evidence is complete; a pending check alone is never a repair
-    task. Incomplete mixed-state logs stay in `retryable_errors` until a
+    Already-failed jobs inside an in-flight workflow remain visible as current;
+    only complete job evidence may be filed. A pending check alone is never a
+    repair task. Incomplete mixed-state logs stay in `retryable_errors` until a
     later sweep can finish them. A red run on a branch that is neither a
     scanned head nor present on origin is reported as
     `ref_no_longer_exists` rather than current: its pull request merged or
@@ -41,7 +55,8 @@ spec:
     the overflow by `investigation_cursor`, so a candidate below the cap is
     investigated within one rotation instead of never. Discovery or investigation failures are
     bounded, redacted, and emitted in `retryable_errors`; the filing step
-    rejects such a snapshot so it cannot be mistaken for a clean result.
+    defers affected jobs (or rejects discovery-wide gaps) so missing evidence
+    cannot be mistaken for a clean result.
     When no GitHub client is available or authenticated the snapshot carries
     `collected: false` and gathers nothing further, so a caller can never
     mistake it for a clean CI result.
@@ -83,8 +98,16 @@ spec:
           sweep; pin it to make a sweep's selection reproducible.
       log_max_bytes:
         type: number
+      max_job_log_reads:
+        type: number
+        description: >
+          Global cap on failed-job log reads, default 6, maximum 25. Overflow
+          jobs remain deferred; investigation_cursor rotates the last slot.
       max_checkout_log_reads:
         type: number
+        description: >
+          Global cap on additional checkout reads, each narrowed to the same
+          failed job. Default 3, maximum 25.
   output_schema_json:
     type: object
     required: [phase, ci_evidence]

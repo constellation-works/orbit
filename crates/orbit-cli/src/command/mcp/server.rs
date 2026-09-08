@@ -10,12 +10,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, ResolvedWorkspaceSelection};
-use orbit_cmd::task_owner;
+use orbit_cmd::task_owner::{self, WorkspaceIdentity};
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{ToolEntryPoint, execute_global_in_process_tool_dispatch};
-use orbit_core::runtime::resolve_global_root;
+use orbit_core::runtime::{HostLifetime, resolve_global_root};
 use orbit_mcp::federated;
 use orbit_mcp::{
     ListenerExposure, McpHost, McpListener, McpSessionAuthority, SessionCapabilityPolicy,
@@ -324,10 +324,11 @@ impl ServerMcpHost {
         context: &ToolSessionContext,
     ) -> Result<(OrbitRuntime, ResolvedWorkspaceSelection), OrbitError> {
         let selected = self.workspace_selection(name, input, context)?;
-        let runtime = RegisteredRuntimeFactory::open_registered_checkout(
+        let runtime = RegisteredRuntimeFactory::open_registered_checkout_for(
             &self.global_root,
             &selected.workspace,
             &selected.checkout,
+            HostLifetime::LongLived,
         )?;
         Ok((runtime, selected))
     }
@@ -444,7 +445,11 @@ impl ServerMcpHost {
                 .map(|outcome| outcome.value);
         }
 
-        execute_core_tool(&runtime, name, input, context)
+        let owner = WorkspaceIdentity {
+            id: selected.workspace.id.clone(),
+            name: selected.workspace.name.clone(),
+        };
+        execute_core_tool(&runtime, name, input, context, Some(&owner))
     }
 }
 
@@ -489,6 +494,7 @@ fn execute_core_tool(
     name: &str,
     input: Value,
     context: ToolSessionContext,
+    owner: Option<&WorkspaceIdentity>,
 ) -> Result<Value, OrbitError> {
     let output = runtime
         .execute_tool_command_dispatch_with_session_context(
@@ -500,5 +506,5 @@ fn execute_core_tool(
             context,
         )?
         .value;
-    crate::command::task::show::attach_bound_workspace_identity(name, &input, runtime, output)
+    crate::command::task::show::attach_bound_workspace_identity(name, &input, owner, output)
 }

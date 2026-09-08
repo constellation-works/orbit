@@ -19,7 +19,7 @@ metadata:
 spec:
   state: enabled
   kind: workflow
-  max_active_runs: 10
+  max_active_runs: 15
   # Preserve recoverable work after terminal failures while keeping the
   # original error authoritative. Completion-stage failures retain the
   # already-published PR instead of fabricating a conflict handoff.
@@ -78,6 +78,8 @@ spec:
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         scope: all
+        # This pipeline rechecks accepted landing evidence at both handoffs.
+        verify_already_landed: true
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_ref: "{{ steps.worktree.output.base_ref }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
@@ -113,6 +115,47 @@ spec:
         commits_behind: "{{ steps.prepare_branch.output.commits_behind }}"
         sync_required: "{{ steps.prepare_branch.output.sync_required }}"
 
+    # ORB-11333: the before-PR review gate sits after the final planned base
+    # synchronization and before push/PR creation. `review_gate_admit` and
+    # `review_gate_settle` always run so later steps can read their output;
+    # they report `applies: false` under `none`, `after-landing`, and a
+    # checked no-diff exemption. A non-pass verdict fails `review_gate_settle`
+    # and the failure handoff preserves the candidate without opening a PR.
+    - id: review_gate_admit
+      target: activity:review_gate_admit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        mode: pr
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+
+    - id: review
+      when: "{{ steps.review_gate_admit.output.applies }} == true"
+      target: activity:agent_review_repair
+      default_input:
+        task_id: "{{ steps.review_gate_admit.output.first_task_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        repo_root: "{{ steps.worktree.output.workspace_path }}"
+        attempt_id: "{{ steps.review_gate_admit.output.attempt_id }}"
+        manifest_artifact: "{{ steps.review_gate_admit.output.manifest_artifact }}"
+        report_artifact: "{{ steps.review_gate_admit.output.report_artifact }}"
+        crew: "{{ steps.review_gate_admit.output.reviewer.crew }}"
+        remaining_seconds: "{{ steps.review_gate_admit.output.remaining.seconds }}"
+
+    - id: review_gate_settle
+      target: activity:review_gate_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        admission: "{{ steps.review_gate_admit.output }}"
+
     - id: push
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
@@ -142,6 +185,8 @@ spec:
         base_sync: "{{ input.base_sync }}"
         landing_branch: "{{ input.landing_branch }}"
         head: "{{ steps.sync_base.output.head }}"
+        reviewed_head_sha: "{{ steps.review_gate_settle.output.reviewed_head_sha }}"
+        reviewed_base_sha: "{{ steps.review_gate_settle.output.reviewed_base_sha }}"
         body: "{{ input.body }}"
         title: "{{ input.title }}"
 
@@ -171,19 +216,31 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         no_diff_expected: true
+        already_landed_checkpoint: "{{ steps.commit.output }}"
 
     - id: complete_pr
       when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true"
-      recovery_activity: step_failure_recovery
+      # A DIRTY PR is repaired only after pr_complete reuses git_rebase to
+      # prove real unmerged entries. Protection, review, check, auth, stale
+      # ownership, and lease failures remain ineligible for agent recovery.
+      recovery_activity: pr_conflict_recovery
       target: activity:pr_complete
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
+        completion: "{{ input.completion }}"
+        head: "{{ steps.sync_base.output.head }}"
+        published_head_sha: "{{ steps.push.output.local_sha }}"
+        reviewed_head_sha: "{{ steps.review_gate_settle.output.reviewed_head_sha }}"
+        base: "{{ steps.sync_base.output.base }}"
+        base_sync: "{{ input.base_sync }}"
 
     # A no-diff bundle delivered nothing to merge; its validation is the
-    # delivery, so completion needs no PR.
+    # delivery, so completion needs no PR. Verified already-landed retries
+    # take this route with their full evidence checkpoint; they create no
+    # new code delivery and do not acquire the side-effect-only task tag.
     - id: complete_no_diff
       when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} == true"
       recovery_activity: step_failure_recovery
@@ -193,3 +250,4 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         no_diff_expected: true
+        already_landed_checkpoint: "{{ steps.commit.output }}"

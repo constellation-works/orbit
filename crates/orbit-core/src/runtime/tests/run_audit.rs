@@ -1,6 +1,7 @@
 //! Sibling tests for `run_audit.rs` (migrated per ORB-00246 / docs/design-patterns/test_layout.md).
 
 use crate::{OrbitRuntime, V2AuditEventInsertParams};
+use chrono::{DateTime, Utc};
 use orbit_common::process::identity::ProcessLiveness;
 use orbit_common::storage::blob_store::BlobStore;
 
@@ -66,6 +67,106 @@ fn seed_v2_audit_events(
             })
             .expect("insert v2 audit event");
     }
+}
+
+fn insert_v2_audit_payload(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    event_id: &str,
+    stored_at: DateTime<Utc>,
+    payload_json: String,
+) {
+    runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: runtime.workspace_id().expect("workspace id"),
+            event_id: event_id.to_string(),
+            source: "v2_envelope".to_string(),
+            schema_version: 1,
+            event_type: "test.event".to_string(),
+            ts: stored_at,
+            run_id: run_id.to_string(),
+            agent_identity: "codex".to_string(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json,
+        })
+        .expect("insert v2 audit payload");
+}
+
+#[test]
+fn latest_audit_timestamp_uses_valid_envelope_payloads_not_row_order() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = "jrun-timestamp-projection";
+    let earliest = "2026-04-26T07:01:00Z";
+    let latest = "2026-04-26T07:20:00Z";
+
+    // The store orders these rows by its `ts`, but the envelope timestamps are
+    // deliberately reversed. The timestamp projection must retain the old
+    // full-projection behavior and select the latest payload value instead.
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-row-newer",
+        DateTime::parse_from_rfc3339("2026-04-26T07:30:00Z")
+            .expect("parse stored timestamp")
+            .with_timezone(&Utc),
+        json!({"event_id": "evt-row-newer", "ts": earliest}).to_string(),
+    );
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-payload-newer",
+        DateTime::parse_from_rfc3339("2026-04-26T07:02:00Z")
+            .expect("parse stored timestamp")
+            .with_timezone(&Utc),
+        json!({"event_id": "evt-payload-newer", "ts": latest}).to_string(),
+    );
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-malformed",
+        Utc::now(),
+        "not json".to_string(),
+    );
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-missing-ts",
+        Utc::now(),
+        json!({"event_id": "evt-missing-ts"}).to_string(),
+    );
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-missing-event-id",
+        Utc::now(),
+        json!({"ts": "2026-04-26T08:00:00Z"}).to_string(),
+    );
+    insert_v2_audit_payload(
+        &runtime,
+        run_id,
+        "evt-invalid-ts",
+        Utc::now(),
+        json!({"event_id": "evt-invalid-ts", "ts": "not-a-timestamp"}).to_string(),
+    );
+
+    let timestamp = runtime
+        .latest_run_audit_timestamp(run_id)
+        .expect("read timestamp projection");
+    assert_eq!(
+        timestamp,
+        Some(
+            DateTime::parse_from_rfc3339(latest)
+                .expect("parse latest")
+                .with_timezone(&Utc)
+        )
+    );
+    assert_eq!(
+        runtime
+            .latest_run_audit_timestamp("jrun-empty-timestamp-projection")
+            .expect("read empty timestamp projection"),
+        None
+    );
 }
 
 #[test]
@@ -253,6 +354,224 @@ fn collect_run_audit_steps_reads_step_finished_error_message_and_tolerates_absen
     assert_eq!(steps[1].step_id, "review");
     assert_eq!(steps[1].outcome.as_deref(), Some("success"));
     assert_eq!(steps[1].error_message, None);
+}
+
+#[test]
+fn recovery_attempt_projection_distinguishes_outcomes_and_redacts_diagnostics() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = "jrun-recovery-outcomes";
+    let secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
+    seed_v2_audit_events(
+        &runtime,
+        run_id,
+        [
+            json!({
+                "event_id": "evt-run",
+                "body_kind": "run_started"
+            }),
+            json!({
+                "event_id": "evt-preparation",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+                "failure_phase": "preparation",
+                "error_message": format!("fixture preparation rejected {secret}")
+            }),
+            json!({
+                "event_id": "evt-dispatch",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+                "failure_phase": "dispatch",
+                "error_message": "launcher refused recovery"
+            }),
+            json!({
+                "event_id": "evt-activity",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+                "failure_phase": "activity",
+                "error_message": "recovery activity returned failure"
+            }),
+            json!({
+                "event_id": "evt-denied",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+                "failure_phase": "authorization",
+                "error_message": "recovery admission denied"
+            }),
+            json!({
+                "event_id": "evt-success",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": true
+            }),
+        ],
+    );
+
+    let attempts = runtime
+        .collect_run_recovery_attempts(run_id)
+        .expect("collect recovery attempts");
+
+    assert_eq!(attempts.state, "recorded");
+    assert_eq!(attempts.limit, 8);
+    assert!(!attempts.truncated);
+    assert_eq!(attempts.attempts.len(), 5);
+    assert_eq!(attempts.attempts[0].run_id, run_id);
+    assert_eq!(attempts.attempts[0].event_id, "evt-preparation");
+    assert_eq!(attempts.attempts[0].failed_step_id, "sync_base");
+    assert_eq!(
+        attempts.attempts[0].failure_phase.as_deref(),
+        Some("preparation")
+    );
+    assert!(
+        !attempts.attempts[0]
+            .diagnostic
+            .as_deref()
+            .unwrap_or_default()
+            .contains(secret)
+    );
+    assert_eq!(
+        attempts.attempts[1].failure_phase.as_deref(),
+        Some("dispatch")
+    );
+    assert_eq!(
+        attempts.attempts[2].failure_phase.as_deref(),
+        Some("activity")
+    );
+    assert_eq!(
+        attempts.attempts[3].failure_phase.as_deref(),
+        Some("authorization")
+    );
+    assert_eq!(attempts.attempts[4].outcome, "succeeded");
+    assert_eq!(attempts.attempts[4].failure_phase, None);
+    assert_eq!(attempts.attempts[4].diagnostic, None);
+}
+
+#[test]
+fn recovery_attempt_projection_bounds_history_and_marks_legacy_absence() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = "jrun-recovery-bounded";
+    let events = (0..9)
+        .map(|index| {
+            json!({
+                "event_id": format!("evt-recovery-{index}"),
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+                "failure_phase": "dispatch",
+                "error_message": "x".repeat(1100)
+            })
+        })
+        .collect::<Vec<_>>();
+    seed_v2_audit_events(&runtime, run_id, events);
+
+    let bounded = runtime
+        .collect_run_recovery_attempts(run_id)
+        .expect("collect bounded attempts");
+    assert_eq!(bounded.attempts.len(), 8);
+    assert!(bounded.truncated);
+    assert_eq!(bounded.attempts[0].event_id, "evt-recovery-1");
+    assert!(bounded.attempts[0].diagnostic_truncated);
+    assert_eq!(
+        bounded.attempts[0]
+            .diagnostic
+            .as_deref()
+            .unwrap_or_default()
+            .chars()
+            .count(),
+        1025
+    );
+
+    let legacy = runtime
+        .collect_run_recovery_attempts("jrun-legacy")
+        .expect("collect legacy absence");
+    assert_eq!(legacy.state, "unavailable");
+    assert!(legacy.attempts.is_empty());
+
+    seed_v2_audit_events(
+        &runtime,
+        "jrun-no-recovery",
+        [json!({"event_id": "evt-run", "body_kind": "run_started"})],
+    );
+    let not_attempted = runtime
+        .collect_run_recovery_attempts("jrun-no-recovery")
+        .expect("collect no recovery attempt");
+    assert_eq!(not_attempted.state, "not_attempted");
+    assert!(not_attempted.attempts.is_empty());
+}
+
+/// [ORB-11625] A page loads recovery evidence in two bounded queries and
+/// keeps per-run attribution when histories are uneven.
+#[test]
+fn recovery_attempts_for_runs_are_partitioned_and_counted_once() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let busy = "jrun-busy";
+    let quiet = "jrun-quiet";
+    let empty = "jrun-empty";
+    seed_v2_audit_events(
+        &runtime,
+        busy,
+        (0..20).map(|index| {
+            json!({
+                "event_id": format!("evt-busy-{index}"),
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": false,
+            })
+        }),
+    );
+    seed_v2_audit_events(
+        &runtime,
+        quiet,
+        [
+            json!({"event_id": "evt-quiet-start", "body_kind": "step_started", "step_id": "sync_base"}),
+            json!({
+                "event_id": "evt-quiet-recovery",
+                "body_kind": "step_recovery_attempted",
+                "step_id": "sync_base",
+                "recovery_activity": "step_failure_recovery",
+                "recovery_succeeded": true,
+            }),
+        ],
+    );
+
+    let page = runtime
+        .collect_run_recovery_attempts_for_runs(&[
+            busy.to_string(),
+            quiet.to_string(),
+            empty.to_string(),
+        ])
+        .expect("batch collect");
+
+    assert_eq!(page.event_queries, 1);
+    assert_eq!(page.presence_queries, 1);
+    assert_eq!(page.per_run_fetch_limit, 9);
+    assert!(page.by_run_id[busy].truncated);
+    assert_eq!(page.by_run_id[busy].attempts.len(), 8);
+    assert_eq!(page.by_run_id[busy].attempts[0].event_id, "evt-busy-12");
+    assert!(
+        page.by_run_id[busy]
+            .attempts
+            .iter()
+            .all(|attempt| attempt.run_id == busy)
+    );
+    assert_eq!(page.by_run_id[quiet].state, "recorded");
+    assert!(!page.by_run_id[quiet].truncated);
+    assert_eq!(
+        page.by_run_id[quiet].attempts[0].event_id,
+        "evt-quiet-recovery"
+    );
+    assert_eq!(page.by_run_id[empty].state, "unavailable");
+    assert!(page.by_run_id[empty].attempts.is_empty());
 }
 
 #[test]

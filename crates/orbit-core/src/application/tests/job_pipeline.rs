@@ -18,7 +18,7 @@ use crate::application::job::JobRunListParams;
 use crate::application::job::pipeline::{
     configure_pipeline_worker_command, configure_pipeline_worker_stdio, pipeline_worker_log_path,
     pipeline_worker_profile_file, pipeline_worker_root_override,
-    resolve_pipeline_worker_executable, worker_command_override,
+    resolve_pipeline_worker_executable, worker_command_override, worker_observer_read_counter,
 };
 use crate::application::task::TaskAddParams;
 use crate::application::workflow::{CompletionPolicy, ShipMode};
@@ -317,6 +317,87 @@ fn routine_style_detached_worker_is_claimed_within_ownership_window() {
         .and_then(|step| step.error_message.as_deref())
         .expect("claimed exit diagnostic");
     assert!(message.contains("after claiming"), "{message}");
+    assert_child_reaped(worker_pid);
+}
+
+#[test]
+fn observer_read_counts_isolate_identical_run_ids_in_independent_stores() {
+    let (_first_root, first) = test_runtime();
+    let (_second_root, second) = test_runtime();
+    let run = first
+        .stores()
+        .jobs()
+        .insert_job_run("task_gate_pipeline", 1, Utc::now(), None, None)
+        .expect("insert fixture run");
+    // Deliberately use the same ID for both stores, independent of allocator
+    // timing, to reproduce cross-test counter collisions deterministically.
+    let first_count = worker_observer_read_counter::track(&first, &run.run_id);
+    let second_count = worker_observer_read_counter::track(&second, &run.run_id);
+
+    worker_observer_read_counter::record(&first.clone(), &run.run_id);
+    assert_eq!(first_count.reads(), 1, "runtime clones share the counter");
+    assert_eq!(second_count.reads(), 0, "another database is isolated");
+
+    worker_observer_read_counter::record(&second, &run.run_id);
+    assert_eq!(first_count.reads(), 1);
+    assert_eq!(second_count.reads(), 1);
+    drop(first_count);
+    worker_observer_read_counter::record(&second, &run.run_id);
+    assert_eq!(
+        second_count.reads(),
+        2,
+        "dropping another store keeps this counter"
+    );
+}
+
+/// Once a worker has claimed the run, the startup observer waits for its exit
+/// instead of polling the run row for the rest of the worker lifetime.
+#[cfg(unix)]
+#[test]
+fn claimed_sleeping_worker_does_not_keep_polling_the_run_store() {
+    let (_root, runtime) = test_runtime();
+    let _worker = WorkerOverride::shell("sleep 3");
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_gate_pipeline", 1, Utc::now(), None, None)
+        .expect("insert pending run");
+    let observer_reads = worker_observer_read_counter::track(&runtime, &run.run_id);
+    let command = worker_command_override::command(&runtime.paths().repo_root, &run.run_id)
+        .expect("build sleeping worker command");
+    let log_path = pipeline_worker_log_path(&runtime.paths().logs_dir, &run.run_id);
+
+    let worker_pid = runtime
+        .spawn_pipeline_worker_process(&run.run_id, Some("test"), command, log_path)
+        .expect("spawn detached sleeping worker");
+    runtime
+        .stores()
+        .jobs()
+        .claim_pending_job_run_owner(&run.run_id, worker_pid)
+        .expect("claim sleeping worker");
+
+    wait_for_pipeline_audit_event(&runtime, None, "claimed-worker audit", |audit| {
+        audit.tool_name.as_deref() == Some("pipeline.worker.claimed")
+            && audit.target_id.as_deref() == Some(run.run_id.as_str())
+    });
+    let reads_after_claim = observer_reads.reads();
+
+    // The worker remains alive for three seconds. Its terminal diagnostic
+    // proves the observer reaped it, while this ownership interval retains the
+    // old 25ms poll long enough to make a bounded-read regression observable.
+    thread::sleep(Duration::from_millis(250));
+    assert!(
+        observer_reads.reads() <= reads_after_claim + 1,
+        "claimed worker added {} run-store reads after startup ownership settled",
+        observer_reads.reads() - reads_after_claim
+    );
+    let stored = runtime.show_job_run(&run.run_id).expect("show claimed run");
+    assert_eq!(stored.pid, Some(worker_pid));
+    assert_eq!(stored.state, JobRunState::Pending);
+
+    thread::sleep(Duration::from_secs(3));
+    let terminal = wait_for_worker_terminal(&runtime, &run.run_id);
+    assert_eq!(terminal.state, JobRunState::Interrupted);
     assert_child_reaped(worker_pid);
 }
 

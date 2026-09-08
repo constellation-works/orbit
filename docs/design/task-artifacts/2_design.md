@@ -3,8 +3,8 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-08-09
-last_validated: 2026-08-16
+last_updated: 2026-09-07
+last_validated: 2026-09-07
 status: Draft
 feature: task-artifacts
 doc_role: design
@@ -192,9 +192,9 @@ To avoid spending the payload twice, the JSON text mirror is replaced with a one
 
 ### `source_path` is caller-local, and paths do not travel
 
-`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd. It is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
+`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd, then confined to that machine's workspace checkout after symlink resolution. Absolute paths and in-workspace symlinks that escape the checkout are rejected as `invalid_input`. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
 
-The consequence is the lesson from ORB-11364: **an operator-host path is not a portable worker reference.** An image uploaded from an operator's `/tmp` is stored successfully and confirmed by `task_show`, and a worker on another host still gets `ENOENT` for that `/tmp` path — the worker never had it. A worker should discover and retrieve an authorized artifact by **owning workspace, task ID, and artifact path**, through `orbit.task.artifact.get`, rather than by assuming operator filesystem visibility. That is the whole point of the read surface, and it removes the need for ad hoc `scp` between hosts wherever the configured connector supports the workspace.
+The consequence is the lesson from ORB-11364: **an operator-host path is not a portable worker reference.** An image attached from the operator checkout is stored successfully and confirmed by `task_show`, and a worker on another host still cannot open the original local path — the worker never had it. A worker should discover and retrieve an authorized artifact by **owning workspace, task ID, and artifact path**, through `orbit.task.artifact.get`, rather than by assuming operator filesystem visibility. That is the whole point of the read surface, and it removes the need for ad hoc `scp` between hosts wherever the configured connector supports the workspace.
 
 Retrieval routes to the authoritative workspace explicitly. `orbit.task.artifact.get` classifies as `control_plane`, so a federated call is delivered to the workspace's owning host using the host-qualified selector the caller copied from federated `orbit.workspace.list`. An unknown selector is refused, never guessed; workspace scoping stays fail-closed and no implicit cross-workspace access is introduced.
 
@@ -245,16 +245,18 @@ The bundle remains canonical. The registry maintains generated projections from 
 
 Task mutations rewrite the generated rows after the envelope write. The index row `updated_at` is a version stamp for the canonical envelope. V2 list and filter paths may use the index only when every registered task has an index row and every indexed `updated_at` matches the bundle envelope. Count or version mismatches trigger a lazy rebuild from registered bundles; if rebuild fails, queries fall back to reading bundles directly. Full-text search still scans task content until the Phase 5 lexical/semantic indexes land.
 
+That comparison also supplies the metadata candidate selection filters and orders by, so it runs against every registered envelope. To keep it from re-parsing unchanged files, each process holds the parsed envelopes in memory and re-proves one against its file's stamp — filesystem identity, length, and modification time — before reusing it; anything the stamp cannot vouch for is read and parsed again. A stamp is evidence that a file was not rewritten rather than proof that its bytes are unchanged, so it never stands alone: the `updated_at` comparison above still runs on every reused envelope, and explicit reindex re-reads and re-validates every bundle from disk.
+
 ## 8. Crash Consistency
 
 The v2 bundle is local and file-backed, so multi-file mutations are not fully transactional. The implementation keeps the envelope canonical and makes generated data rebuildable, but the following interrupted states are expected repair cases:
 
 - Document updates may write Markdown sidecars before `task.yaml`; readers return the sidecar content and the previous envelope metadata until the next successful mutation.
 - History updates may append `events.jsonl` before `task.yaml`; readers reject bundles when the last status event does not match the envelope status.
-- Artifact updates may write files before `manifest.yaml`; unreferenced files under `artifacts/files/` are ignored, while manifest entries with missing files, size drift, or hash drift are corruption and fail loudly.
+- Artifact updates may write files before `manifest.yaml`; unreferenced files under `artifacts/files/` are ignored. Manifest entries with missing files, size drift, or hash drift are corruption on the canonical full-read used by get, reindex, import, publication restore, and artifact retrieval. Listing and search materialization parse the manifest but defer those payload-byte checks.
 - Generated index writes may fail after the envelope changes; `updated_at` validation detects the stale row and rebuilds from bundles before indexed reads.
 
-Malformed registered bundles produce a typed `task_bundle_corrupt` diagnostic naming the affected task and canonical path. Direct reads and task creation do not scan unrelated bundles, while list and search retain their fail-loud behavior. Diagnosis never deletes, moves, or repairs the malformed directory; operators can inspect or quarantine it explicitly. Legacy `review-threads/` sidecars were retired in [ORB-10332], so either their presence or absence is ignored non-destructively.
+Malformed registered bundles produce a typed `task_bundle_corrupt` diagnostic naming the affected task and canonical path. Direct reads and task creation do not scan unrelated bundles. List and search remain fail-loud for envelope, body, and event-log damage, including a settled event/envelope status mismatch; they do not hash artifact payloads on the lightweight materialization path. Diagnosis never deletes, moves, or repairs the malformed directory; operators can inspect or quarantine it explicitly. Legacy `review-threads/` sidecars were retired in [ORB-10332], so either their presence or absence is ignored non-destructively.
 
 Task lock reservations in v2 mode require `.orbit/config.yaml` to provide the workspace binding. If that file disappears while a runtime is active, lock writes fail instead of silently creating legacy `NULL`-workspace reservations.
 

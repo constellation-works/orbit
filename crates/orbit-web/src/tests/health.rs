@@ -87,6 +87,26 @@ async fn detailed_healthz_fails_when_store_db_is_broken() {
 }
 
 #[tokio::test]
+async fn detailed_healthz_does_not_recreate_a_missing_store_db() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let db_path = runtime.global_root().join("orbit.db");
+    std::fs::remove_file(&db_path).expect("remove store db");
+    let state = DashboardState::single(Arc::new(runtime));
+    let log_dir = tempfile::tempdir().expect("tempdir");
+
+    let response = detailed_response(&state, Ok(log_dir.path().join("orbit.jsonl"))).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        check(&body_json(response).await, "sqlite_writable")["status"],
+        "fail"
+    );
+    assert!(
+        !db_path.exists(),
+        "readiness must not recreate the database"
+    );
+}
+
+#[tokio::test]
 async fn detailed_healthz_fails_when_log_sink_is_unwritable() {
     let state = single_state();
     // A path whose parent is a regular file can never accept appends.

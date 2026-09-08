@@ -67,8 +67,10 @@ pub(super) fn workspace_entry(
     let binding = active.then(|| WorkspaceRuntimeBinding {
         logical_workspace_id: format!("ws_{id}"),
         workspace_id: format!("ws_{id}"),
+        owner_machine_id: None,
         repo_root: repo_root.clone(),
         ship_mode: ShipMode::Local,
+        base_branch: None,
     });
     WsEntry {
         id: id.to_string(),
@@ -118,7 +120,7 @@ async fn tasks_all_in_single_mode_tags_default_workspace() {
         .await
         .expect("response");
     let body = body_json(response).await;
-    let tasks = body.as_array().expect("array");
+    let tasks = body["items"].as_array().expect("items");
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0]["workspace_id"], json!("default"));
     assert_eq!(tasks[0]["workspace_name"], json!("default"));
@@ -153,7 +155,7 @@ async fn tasks_all_aggregates_active_workspaces_and_skips_inactive() {
         .await
         .expect("response");
     let body = body_json(response).await;
-    let tasks = body.as_array().expect("array");
+    let tasks = body["items"].as_array().expect("items");
     assert_eq!(tasks.len(), 2);
     let ws_ids: HashSet<&str> = tasks
         .iter()
@@ -167,6 +169,9 @@ async fn tasks_all_aggregates_active_workspaces_and_skips_inactive() {
             .as_str()
             .is_some_and(|root| root.ends_with(t["workspace_name"].as_str().expect("name")))
     }));
+    assert_eq!(body["total"], json!(2));
+    assert_eq!(body["limit"], json!(orbit_core::DEFAULT_TASK_LIST_LIMIT));
+    assert_eq!(body["truncated"], json!(false));
 
     // Workspace listing: all three, with status + default flag.
     let response = router()
@@ -199,6 +204,48 @@ async fn tasks_all_aggregates_active_workspaces_and_skips_inactive() {
             .as_str()
             .is_some_and(|dir| dir.ends_with(".orbit"))
     );
+}
+
+#[tokio::test]
+async fn tasks_all_reports_aggregate_total_when_global_limit_truncates() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+
+    let mut entries = Vec::new();
+    for name in ["alpha", "beta", "gamma"] {
+        let (orbit_dir, repo_root) = seed_workspace(&global_root, tmp.path(), name);
+        let runtime = OrbitRuntime::from_roots(&global_root, &orbit_dir)
+            .expect("build runtime")
+            .with_actor(ActorIdentity::human("human"));
+        for index in 1..30 {
+            runtime
+                .add_task(TaskAddParams {
+                    title: format!("{name} task {index}"),
+                    description: "seed".to_string(),
+                    workspace_path: Some(".".to_string()),
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                })
+                .expect("add task");
+        }
+        entries.push(workspace_entry(name, repo_root, orbit_dir, true));
+    }
+
+    let response = router()
+        .with_state(DashboardState::global(
+            global_root,
+            entries,
+            Some("alpha".to_string()),
+        ))
+        .oneshot(get("/tasks/all"))
+        .await
+        .expect("response");
+    let body = body_json(response).await;
+
+    assert_eq!(body["total"], json!(90));
+    assert_eq!(body["truncated"], json!(true));
+    assert_eq!(body["items"].as_array().expect("items").len(), 50);
 }
 
 #[tokio::test]
@@ -564,7 +611,8 @@ async fn cross_workspace_dependency_resolves_global_status_not_missing() {
         .expect("aggregate response");
     let body = body_json(aggregate).await;
     let alpha_row = body
-        .as_array()
+        .get("items")
+        .and_then(serde_json::Value::as_array)
         .expect("aggregate rows")
         .iter()
         .find(|row| row["id"] == alpha_task.id)
@@ -607,6 +655,7 @@ fn post_json(uri: &str, body: serde_json::Value) -> Request<Body> {
         .method(Method::POST)
         .uri(uri)
         .header(header::ORIGIN, "http://localhost:7878")
+        .header(header::HOST, "localhost:7878")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
         .expect("request")

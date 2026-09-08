@@ -46,11 +46,6 @@ download() {
 # The numeric suffix is a generation counter, not a date — IDs survive rotation
 # so a key that has been the "successor" for a year is still readable by ID.
 #
-# orbit-release-key-4 is a PLACEHOLDER pre-staged for the next rotation. The
-# PEM below was generated locally and the matching private key is NOT held by
-# release infrastructure — no production signature will ever verify against
-# it. Replace with a real keypair (generated on the signing host) before
-# rotating off key-3.
 write_release_key_orbit_release_key_3() {
   destination="$1"
 
@@ -65,24 +60,6 @@ Orec31AAFCIIX69YAd21D3MBc4S89/LoYZCq3neDscZ09Y+e6Jg2HpoBstvqSnq/
 npMLlbzNaVfFT7p3IPTxsoEI0SB3ZtO7/XhzuOvOpklYcqjW2DGw/yzr2epAqHE/
 y4rLO3hkxWhxfgF5KPSR2iftc3LMONRGWELK6jpD5KB7No5vwIvjpVPUc5xA45Xw
 tT/bo0mm4TvrumxYr1xyEHrdum+ej/WYz/0BZQlwDOtXAgMBAAE=
------END PUBLIC KEY-----
-EOF
-}
-
-write_release_key_orbit_release_key_4() {
-  destination="$1"
-
-  cat > "$destination" <<'EOF'
------BEGIN PUBLIC KEY-----
-MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAiEVVbwQYDnbPg86xYrI8
-Ddm6qpkEJ6GSJOW9NfR/eLpqwwaeWb3EPR9H/U39Rrt8ABPAGObLG9vuvSzg8YqU
-Rz6NjtrSKQ4k9xO/up+qQ/zRsHkOyISEx+6MnIrw5hY/IfkrZ+3+jm8IfXJ+VAjS
-VepR+o58u73ycrnLG1eXWIHtjED3SQSPffJjxSvVDEb3ogiJAsWClCMWNLnEjsQc
-IHYrNdS5N0m5tfcIb9LiV2cDVXgdwdRUU41Ks9sWvBQIHrNup721UWyMdJoK1hTI
-rc4PST3WTHQwFcQvVaAqod9MDPkQYlgD7IjiPkSGLHyIs52kNgFXY55E5DlU4O4e
-9QDbyQTGzZI0XlnoqAuCIXbcNXjMZuEn9UjVN35NeObsj6F/yL07YUhvORnxozjL
-41ouRFtFTWFHNenthtZnH9SUV4+O2cKDmtJpPJd68ZJ/NBqJHM4a6cteT72HJzLb
-t6yto3B43nTeXtp9ozRjetznPnPD7gmI6Zq1P2ce8v49AgMBAAE=
 -----END PUBLIC KEY-----
 EOF
 }
@@ -105,12 +82,9 @@ write_builtin_trusted_key_records() {
   mkdir -p "$key_dir"
 
   current_key_path="${key_dir}/orbit-release-key-3.pub"
-  successor_key_path="${key_dir}/orbit-release-key-4.pub"
   write_release_key_orbit_release_key_3 "$current_key_path"
-  write_release_key_orbit_release_key_4 "$successor_key_path"
 
   printf 'orbit-release-key-3|2029-12-31||%s\n' "$current_key_path"
-  printf 'orbit-release-key-4|2030-12-31||%s\n' "$successor_key_path"
 }
 
 trusted_key_records() {

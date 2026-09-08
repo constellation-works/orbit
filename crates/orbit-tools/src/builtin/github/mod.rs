@@ -112,6 +112,8 @@ pub(super) use gh_tool;
 
 pub mod auth;
 pub mod dependabot_alerts;
+mod diagnostic;
+pub use diagnostic::strip_ansi_sequences;
 pub mod logs;
 pub mod pr_checkout;
 pub mod pr_checks;
@@ -378,13 +380,20 @@ pub struct CheckoutEvidence {
 }
 
 /// A bounded excerpt and checkout evidence collected while a log is drained.
-/// No complete copy of the source log is retained.
+/// No unbounded copy of the source log is retained.
 pub struct StreamedLog {
     pub text: String,
     pub truncated: bool,
     pub total_bytes: usize,
     pub returned_bytes: usize,
     pub checkout_evidence: CheckoutEvidence,
+    /// Complete runner command evidence, independent of display truncation.
+    pub diagnostic: Option<String>,
+    /// Selected failure regions when the complete command exceeds its bound.
+    pub failure_regions: Option<Value>,
+    /// False when a source limit, invalid line, or explicit truncation notice
+    /// prevents complete diagnostic collection; independent of display size.
+    pub source_complete: bool,
 }
 
 /// Incrementally retain the head/tail excerpt and checkout evidence from a
@@ -398,6 +407,7 @@ pub struct StreamedLogCollector {
     tail: Vec<u8>,
     total_bytes: usize,
     evidence: CheckoutEvidenceCollector,
+    diagnostic: diagnostic::DiagnosticCollector,
 }
 
 impl StreamedLogCollector {
@@ -425,6 +435,7 @@ impl StreamedLogCollector {
             head: Vec::with_capacity(head_bytes),
             tail: Vec::with_capacity(max_bytes.saturating_sub(head_bytes)),
             total_bytes: 0,
+            diagnostic: diagnostic::DiagnosticCollector::default(),
             evidence: CheckoutEvidenceCollector::new(
                 max_evidence_lines,
                 MAX_CHECKOUT_LOG_SCAN_BYTES,
@@ -435,6 +446,7 @@ impl StreamedLogCollector {
     pub fn push(&mut self, chunk: &[u8]) {
         self.total_bytes = self.total_bytes.saturating_add(chunk.len());
         self.evidence.push(chunk);
+        self.diagnostic.push(chunk);
 
         let head_limit = self.head_bytes;
         let head_take = head_limit.saturating_sub(self.head.len()).min(chunk.len());
@@ -464,12 +476,17 @@ impl StreamedLogCollector {
             self.head.extend_from_slice(&self.tail);
             redact_all(&String::from_utf8_lossy(&self.head))
         };
+        let source_complete = self.diagnostic.source_complete();
+        let (diagnostic, failure_regions) = self.diagnostic.finish();
         StreamedLog {
             returned_bytes: text.len(),
             text,
             truncated,
             total_bytes: self.total_bytes,
             checkout_evidence: evidence,
+            source_complete,
+            diagnostic,
+            failure_regions,
         }
     }
 }

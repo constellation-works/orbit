@@ -56,6 +56,30 @@ impl Embedder for NoopEmbedder {
     fn token_count(&self, text: &str) -> Result<usize, OrbitError> {
         Ok(text.split_whitespace().count().max(1))
     }
+
+    fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError> {
+        Ok(word_ends(text))
+    }
+}
+
+fn word_ends(text: &str) -> Vec<usize> {
+    let mut ends = Vec::new();
+    let mut in_word = false;
+
+    for (index, character) in text.char_indices() {
+        if character.is_whitespace() {
+            if in_word {
+                ends.push(index);
+                in_word = false;
+            }
+        } else {
+            in_word = true;
+        }
+    }
+    if in_word {
+        ends.push(text.len());
+    }
+    ends
 }
 
 fn noop_vector(text: &str, dim: usize) -> Vec<f32> {

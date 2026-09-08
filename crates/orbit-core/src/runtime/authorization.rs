@@ -1,4 +1,4 @@
-//! The runtime half of the capability chokepoint [ADR-0260, ORB-10453].
+//! The runtime half of the capability chokepoint.
 //!
 //! `orbit-common::authorization` owns the registry and the decision; this
 //! module owns the two things a decision needs a runtime for — reading the
@@ -25,7 +25,10 @@ use orbit_common::governance::authorization::{
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::contracts::AuditEventInsertParams;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::{
+    CallerIdentityProof, McpCapability, RemoteAgentInvokeMode, RemoteCallerGrant,
+    ToolSessionContext,
+};
 
 use crate::OrbitRuntime;
 use crate::runtime::tool_exec::CapabilityEnforcement;
@@ -33,6 +36,13 @@ use crate::runtime::tool_exec::CapabilityEnforcement;
 /// Canonical tool name of the trusted-host agent invocation, named once so the
 /// admission and the governed-operation registry cannot drift apart.
 pub(crate) const AGENT_INVOKE_OPERATION_ID: &str = "orbit.agent.invoke";
+
+/// Identity facts retained after trusted-host admission.
+#[derive(Debug)]
+pub(crate) struct AgentInvokeAuthorizer {
+    pub(crate) provenance: CallerProvenance,
+    pub(crate) remote_caller: Option<RemoteCallerGrant>,
+}
 
 impl OrbitRuntime {
     /// Authorize a governed tool call, then require destination-granted remote
@@ -133,46 +143,84 @@ impl OrbitRuntime {
     ///   agent shelling out to the CLI look like nothing at all. Resolving the
     ///   process envelope here means a managed run's `ORBIT_MANAGED_RUN_CONTEXT`
     ///   resolves as `agent`, and an agent is refused.
-    /// * **Remote callers are refused outright.** A destination-side grant may
-    ///   legitimately carry `operator` for ordinary operator work, but "an
-    ///   operator is present on this machine" is exactly what admitting an
-    ///   unsandboxed local subprocess requires, and a federated grant cannot
-    ///   assert it. This is narrower than [`authorize`] on purpose.
+    /// * **Remote callers need an operation-specific, workspace-scoped grant.**
+    ///   `operator` alone remains insufficient. The caller must have a
+    ///   matched callers-file row must explicitly enable `agent_invoke` for the
+    ///   resolved workspace. The default mode still requires a
+    ///   destination-issued key-bound identity; only an explicit cooperative
+    ///   mode accepts the self-asserted identity of the existing same-account
+    ///   SSH operator channel.
     pub(crate) fn admit_agent_invoke(
         &self,
         session_context: &ToolSessionContext,
-    ) -> Result<CallerProvenance, OrbitError> {
+    ) -> Result<AgentInvokeAuthorizer, OrbitError> {
         let operation = governed_tool(AGENT_INVOKE_OPERATION_ID).ok_or_else(|| {
             OrbitError::Execution(format!(
                 "'{AGENT_INVOKE_OPERATION_ID}' is missing from the governed operation registry"
             ))
         })?;
-        let caller =
-            CallerCapabilities::resolve(&CallerEnvelope::from_process_env(session_context));
+        let envelope = CallerEnvelope::from_process_env(session_context);
+        let caller = CallerCapabilities::resolve(&envelope);
+        self.decide_with_envelope(operation, envelope)?;
+
         if let Some(grant) = caller.remote_caller_grant() {
-            let message = format!(
-                "operation '{AGENT_INVOKE_OPERATION_ID}' admits an unsandboxed host process and \
-                 is available only to an operator on the machine that would run it; caller '{}' \
-                 was resolved through {}",
-                grant.caller_machine_id, grant.source,
-            );
-            tracing::warn!(
-                target: "orbit.authorization",
-                operation = AGENT_INVOKE_OPERATION_ID,
-                provenance = %caller.provenance(),
-                caller_machine_id = grant.caller_machine_id,
-                "trusted host admission denied to a federated caller"
-            );
-            self.record_authorization_event(
-                AGENT_INVOKE_OPERATION_ID,
-                &caller,
-                AuditEventStatus::Denied,
-                Some(message.clone()),
-            );
-            return Err(OrbitError::CapabilityDenied(message));
+            if !grant.agent_invoke {
+                return self.deny_remote_agent_invoke(
+                    &caller,
+                    grant,
+                    "the matched destination policy does not enable `agent_invoke` for this \
+                     workspace",
+                );
+            }
+            let mode = grant.agent_invoke_mode.unwrap_or_default();
+            if mode == RemoteAgentInvokeMode::KeyBound
+                && grant.identity != CallerIdentityProof::KeyBound
+            {
+                return self.deny_remote_agent_invoke(
+                    &caller,
+                    grant,
+                    "the caller identity is self-asserted and the grant's default key-bound mode \
+                     requires the destination-issued SSH acceptance path; the destination owner \
+                     may instead select `agent_invoke_mode = \"cooperative\"` for a trusted \
+                     same-OS-account operator channel",
+                );
+            }
         }
-        self.decide_with_envelope(operation, CallerEnvelope::from_process_env(session_context))?;
-        Ok(caller.provenance())
+
+        Ok(AgentInvokeAuthorizer {
+            provenance: caller.provenance(),
+            remote_caller: caller.remote_caller_grant().cloned(),
+        })
+    }
+
+    fn deny_remote_agent_invoke(
+        &self,
+        caller: &CallerCapabilities,
+        grant: &RemoteCallerGrant,
+        reason: &str,
+    ) -> Result<AgentInvokeAuthorizer, OrbitError> {
+        let message = format!(
+            "operation '{AGENT_INVOKE_OPERATION_ID}' admits an unsandboxed host process; remote \
+             caller '{}' was denied because {reason}. The destination controls this grant in {}",
+            grant.caller_machine_id, grant.source,
+        );
+        tracing::warn!(
+            target: "orbit.authorization",
+            operation = AGENT_INVOKE_OPERATION_ID,
+            provenance = %caller.provenance(),
+            caller_machine_id = grant.caller_machine_id,
+            caller_identity = %grant.identity,
+            agent_invoke = grant.agent_invoke,
+            agent_invoke_mode = grant.agent_invoke_mode.map(|mode| mode.to_string()),
+            "trusted host admission denied to a remote caller"
+        );
+        self.record_authorization_event(
+            AGENT_INVOKE_OPERATION_ID,
+            caller,
+            AuditEventStatus::Denied,
+            Some(message.clone()),
+        );
+        Err(OrbitError::CapabilityDenied(message))
     }
 
     /// Authorize a governed CLI command, or pass an ungoverned one through.
@@ -297,6 +345,8 @@ impl OrbitRuntime {
                     // only the grant would leave a reader to assume whether
                     // the caller had to hold a key to select it [ORB-11053].
                     "caller_identity": grant.identity,
+                    "agent_invoke": grant.agent_invoke,
+                    "agent_invoke_mode": grant.agent_invoke_mode,
                 })
                 .to_string()
             }),

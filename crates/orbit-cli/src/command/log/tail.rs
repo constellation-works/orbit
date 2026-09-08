@@ -19,6 +19,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
+use crate::output::sink::OutputMode;
 
 use super::format::{
     Filters, LevelFilter, build_filters as build_shared_filters, format_event_line,
@@ -77,7 +78,12 @@ impl Execute for TailArgs {
         Ok(Payload::stream(
             doc,
             Box::new(move |sink, writer| {
-                match run_tail(&path, &self, &filters, sink.color_allowed(), writer) {
+                // Line shape follows the resolved sink, not the command-local
+                // `--json` flag: `--format json|ndjson` must emit JSONL even
+                // when that flag is absent.
+                let mut args = self;
+                args.json = matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
+                match run_tail(&path, &args, &filters, sink.color_allowed(), writer) {
                     Ok(()) => Ok(()),
                     // The reader closing the pipe is how `orbit log tail -f |
                     // head` ends, not a failure to report (spec §5).

@@ -32,7 +32,7 @@ records in a second store merely to get past a connection error.
 |---|---|---|
 | Workspace discovery | `orbit_workspace_list` | `orbit workspace list/show` |
 | Task create/read/update/start/approve | `orbit_task_add/list/show/update/start/approve` | Registered `orbit.task.*` tools preserve agent attribution |
-| Task attachments | `orbit_task_artifact_put` | Task artifact commands; source path is on the executing host |
+| Task attachments | `orbit_task_artifact_put` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
 | Retrieval | `orbit_search` | `orbit search`; semantic install/index is separate |
 | Friction | `orbit_friction_add/list/update` | Additional show/stats/tags/resolve commands |
 | Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` |
@@ -72,9 +72,13 @@ What it is not:
 
 - It is **not** a task, and it performs no task transition. It does not commit,
   push, open or merge a pull request, or dispatch further work.
-- It is **not** available to a managed run or to a federated caller. Each
-  invocation is admitted separately by an operator present on the machine that
-  will run it, and the admission covers that invocation only.
+- It is **not** available to a managed run. A local operator may admit one
+  directly. A remote operator also needs a callers-file row that explicitly
+  enables `agent_invoke` for the resolved workspace. The omitted mode requires
+  a destination-issued key-bound SSH identity; an explicit `cooperative` mode
+  instead trusts the existing same-OS-account SSH operator channel and records
+  its machine ID as self-asserted. Ordinary remote `operator` capability is not
+  enough. Each admission covers one invocation only.
 - It is **not** resumable. A resumed run would carry an admission nobody granted
   now; submit a new invocation instead.
 
@@ -91,8 +95,11 @@ without terminating its envelope stopped mid-turn: the run records `failed`, and
 the exit code alone is never evidence the investigation succeeded.
 
 Remote sessions are additionally capped by the destination's caller policy.
-See [remote-access.md](setup/remote-access.md). Do not relaunch a server with
-more privileges to work around a denied call.
+The durable admission and `trusted_host.execution_admitted` event retain the
+destination-resolved caller machine ID, the invocation mode, the actual
+identity proof (`key-bound` or `self-asserted`), the workspace checkout, and
+cwd. See [remote-access.md](setup/remote-access.md). Do not relaunch a server
+with more privileges to work around a denied call.
 
 ## Common MCP arguments
 

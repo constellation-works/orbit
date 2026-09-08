@@ -12,6 +12,10 @@ sidebar:
     <h3>Run a Task Lifecycle</h3>
     <p>Create, inspect, ship, and review a task.</p>
   </a>
+  <a class="orbit-card" href="./dashboard/">
+    <h3>Use the Dashboard</h3>
+    <p>Open the operator dashboard locally or over SSH, inspect tasks and runs, and use Operations controls.</p>
+  </a>
   <a class="orbit-card" href="./continuous-delivery/">
     <h3>Run Continuous Delivery</h3>
     <p>Prepare tasks, authorize a bounded delivery window, retune it, and recover safely.</p>

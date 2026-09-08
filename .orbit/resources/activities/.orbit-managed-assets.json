@@ -15,7 +15,8 @@
     "list_backlog_tasks": "cb15bef9a5c91879f3120614afafd322b2daacacf3d96ac5ca9ac7ee84146ee8",
     "list_triage_candidates": "60f57fb9a4ba2d9bc98e1a1ec09cb705f9510457118bab2e0279337860a17014",
     "pipeline_success_guard": "67e8ee792ef815a9cf5d5b352a4bf5776ad24cd770e47cc1202b2d9b80cf1a1d",
-    "pr_conflict_recovery": "70b36ea510a38d83d7eabdfabc085a1c408de03fe76a1bc22bb418954f361fcd",
+    "pr_complete": "e781a352370279a206accf784da8fc542163549b6d78d9b64ab0b81a4da23bbb",
+    "pr_conflict_recovery": "c10631bf400868a97b480cdc8e8ede542961a98d8efa23b56869b6afea2422a0",
     "pr_failure_handoff": "e61af5b5fd2e67c478649ad0ac1ecf56dbca30cb4867282eaa51676928aa50d9",
     "pr_open": "bdf78aab3b274842bc41be9fdd41c0d68b273bae3cc0734088d84427a2250a2f",
     "pr_prepare": "61d50662aa90e7abaa8138979ca6d806ed7b39091cf71c81a7d8e09449ec94ff",
@@ -32,6 +33,9 @@
     "update_task": "3cdfc00f960d8d1afdfd8004a0145a25c201bf739b78c02329ecfd8b8e58b241",
     "validate_bundles": "500cb456371e8914543bbdb493c00b957cd73e431366fdf6f5b2e459937c30d7",
     "worktree_gc": "bdddfba88580aa16e8cc5984f0d9aaf48b67d56592f1bf4e21e86ff03f0d6f0b",
-    "worktree_setup": "0ab58ca92ca483c041c95aa7753322b237e235f5a3c16ac0d50c983fc8d75adc"
+    "worktree_setup": "0ab58ca92ca483c041c95aa7753322b237e235f5a3c16ac0d50c983fc8d75adc",
+    "review_gate_admit": "24e4a0e2adf2aa8e21d16f0bbd60e2c10105b93702770ccb73c10df09372f767",
+    "review_gate_settle": "a0d8adf5a2ece63ed4874b462f472a4465e42319660a88ea8c06ea27193a8508",
+    "agent_review_repair": "4150cbe0b0bb46ee82d7d4857ee517aadf545d69a9c6f8cec6f951088da67582"
   }
 }

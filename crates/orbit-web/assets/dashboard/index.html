@@ -5,9 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>orbit</title>
     <link rel="icon" href="data:,">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="/static/marked.umd.js"></script>
     <script src="/static/purify.min.js"></script>
     <link rel="stylesheet" href="/static/dashboard.css">  </head>
@@ -73,13 +70,13 @@
           <div class="kpis" id="health-strip" aria-label="Audit health summary">
             <span class="kpi" id="tile-events"><span class="k">Events 24h</span><span class="v" id="tile-events-value">-</span></span>
             <span class="kpi" id="tile-denials"><span class="k">Denials</span><span class="v" id="tile-denials-value">-</span></span>
-            <span class="kpi" id="tile-failed"><span class="k">Failed runs</span><span class="v" id="tile-failed-value">-</span></span>
+            <span class="kpi" id="tile-failed" title="Failed, timeout, and interrupted job runs in the selected window. Distinct from Recent Runs' failed filter (durable Failed state, no window) and Errors (step/event failures this month)."><span class="k">Failed runs</span><span class="v" id="tile-failed-value">-</span></span>
             <span class="kpi" id="tile-active"><span class="k">Long</span><span class="v" id="tile-active-value">-</span></span>
             <svg class="kpi-spark" id="tile-events-sparkline" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true"></svg>
           </div>
           <span class="topbar-spacer"></span>
           <div class="global-id-wrap">
-            <input type="search" id="global-task-id" placeholder="Jump to ORB-NNNNN" autocomplete="off" spellcheck="false" />
+            <input type="search" id="global-task-id" placeholder="Jump to task id" autocomplete="off" spellcheck="false" />
             <span id="global-task-id-error" class="global-id-error"></span>
           </div>
           <button id="refresh-btn" class="refresh-btn" type="button">Refresh</button>
@@ -96,7 +93,7 @@
             </div>
             <div class="filter-summary" id="task-filter-summary" role="status" aria-live="polite"></div>
             <div class="body" id="tasks-body">
-              <div class="skeleton-state">
+              <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
                 <div class="skeleton skeleton-row" style="width: 90%"></div>
@@ -127,12 +124,12 @@
           <div class="dock-pane" data-pane="log">
             <section class="panel" id="log-panel">
               <div class="log-foot log-filters">
-                <span class="filter-pill on" data-filter="all">all</span>
-                <span class="filter-pill" data-filter="err">err</span>
-                <span class="filter-pill" data-filter="deny">deny</span>
-                <span class="filter-pill" data-filter="warn">warn</span>
-                <span class="seg right on" id="log-follow-tail" title="Follow the tail"><b>&#8595;</b> follow</span>
-                <span class="count" id="log-buffered-count" style="display: none;">0 buffered</span>
+                <button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">all</button>
+                <button type="button" class="filter-pill" data-filter="err" aria-pressed="false">err</button>
+                <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">deny</button>
+                <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">warn</button>
+                <button type="button" class="seg right on" id="log-follow-tail" title="Follow the tail" aria-pressed="true"><b>&#8595;</b> follow</button>
+                <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
               </div>
               <div class="log-stream">
                 <div class="inner" id="logInner"></div>
@@ -157,14 +154,14 @@
               <div id="audit-filter"></div>
             </div>
             <div class="body scoreboard-table-wrap" id="audit-body">
-              <div class="skeleton-state">
+              <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
                 <div class="skeleton skeleton-row" style="width: 70%"></div>
               </div>
             </div>
             <div class="body" id="audit-policy-body" style="display: none;">
-              <div class="skeleton-state">
+              <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
               </div>
@@ -188,7 +185,7 @@
             <span class="count" id="run-detail-count">-</span>
           </header>
           <div class="body" id="run-detail-meta">
-            <div class="skeleton-state">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
               <div class="skeleton skeleton-row"></div>
               <div class="skeleton skeleton-row" style="width: 70%"></div>
             </div>
@@ -213,13 +210,13 @@
               <span class="count" id="diag-count">-</span>
             </header>
             <div class="body scoreboard-table-wrap" id="diag-body" style="display: none;">
-              <div class="skeleton-state">
+              <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 75%"></div>
               </div>
             </div>
             <div class="body" id="runs-body" style="display: none;">
-              <div class="skeleton-state">
+              <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
               </div>
@@ -306,7 +303,7 @@
           <div id="scoreboard-agent-strip" class="scoreboard-agent-strip"></div>
           <section id="scoreboard-highlights" class="scoreboard-highlights-host" aria-label="Notable completions"></section>
           <div class="body scoreboard-table-wrap" id="scoreboard-body">
-            <div class="skeleton-state">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
               <div class="skeleton skeleton-row"></div>
               <div class="skeleton skeleton-row" style="width: 70%"></div>
             </div>
@@ -331,6 +328,7 @@
       </main>
     </section>
     <section class="tab-pane" data-tab="operations">
+      <p id="operations-session" class="operations-readonly-note" role="status"></p>
       <nav class="subtabs" id="operations-subtabs">
         <button class="subtab active" data-subtab="routines" type="button">Routines</button>
         <button class="subtab" data-subtab="auto-tasks" type="button">Auto-tasks</button>
@@ -344,14 +342,14 @@
           </header>
           <div class="operation-feedback" id="routine-operation-feedback" role="status" aria-live="polite"></div>
           <div class="body" id="routines-body">
-            <div class="skeleton-state"><div class="skeleton skeleton-row"></div></div>
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
           </div>
         </section>
         <section class="panel" id="clock-panel">
           <header><span>Host Sweep Clock</span><span class="count" id="clock-host">-</span></header>
           <div class="operation-feedback" id="clock-operation-feedback" role="status" aria-live="polite"></div>
           <div class="body" id="clock-body">
-            <div class="skeleton-state"><div class="skeleton skeleton-row"></div></div>
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
           </div>
         </section>
       </main>
@@ -363,7 +361,7 @@
           </header>
           <div class="operation-feedback" id="auto-task-operation-feedback" role="status" aria-live="polite"></div>
           <div class="body" id="auto-tasks-body">
-            <div class="skeleton-state"><div class="skeleton skeleton-row"></div></div>
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
           </div>
         </section>
       </main>
@@ -375,7 +373,7 @@
           </header>
           <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
           <div class="body" id="auto-drain-body">
-            <div class="skeleton-state"><div class="skeleton skeleton-row"></div></div>
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
           </div>
         </section>
         <section class="panel" id="operation-mode-panel">
@@ -385,7 +383,7 @@
           </header>
           <div class="operation-feedback" id="operation-mode-operation-feedback" role="status" aria-live="polite"></div>
           <div class="body" id="operation-mode-body">
-            <div class="skeleton-state"><div class="skeleton skeleton-row"></div></div>
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
           </div>
         </section>
       </main>
@@ -428,7 +426,7 @@
             </label>
           </div>
           <div class="body scoreboard-table-wrap" id="frictions-body">
-            <div class="skeleton-state">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
               <div class="skeleton skeleton-row"></div>
               <div class="skeleton skeleton-row" style="width: 80%"></div>
               <div class="skeleton skeleton-row" style="width: 70%"></div>

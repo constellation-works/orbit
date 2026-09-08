@@ -798,11 +798,11 @@ fn investigation_failure_keeps_the_current_run_visible_and_retryable() {
     );
     assert_eq!(evidence["summary"]["current_failures"], json!(1));
     assert_eq!(evidence["summary"]["investigated_failures"], json!(0));
-    assert!(
-        evidence["summary"]["retryable_errors"]
-            .as_u64()
-            .is_some_and(|count| count >= 3)
-    );
+    // Without verified job metadata, no diagnostic or checkout read is safe.
+    assert_eq!(evidence["summary"]["retryable_errors"], 1);
+    assert_eq!(evidence["retryable_errors"][0]["operation"], "run_view");
+    assert_eq!(evidence["truncation"]["job_log_reads"], 0);
+    assert_eq!(evidence["truncation"]["checkout_log_reads"], 0);
 }
 
 /// ORB-11248: a matrix workflow with enough jobs pushes the checkout-evidence
@@ -1204,9 +1204,14 @@ fn incomplete_mixed_state_evidence_stays_retryable_until_logs_are_available() {
 
     assert_eq!(
         current_ids(&evidence),
-        Vec::<u64>::new(),
-        "incomplete mixed-state evidence must not become a repair task: {evidence}"
+        vec![40],
+        "the already-failed job remains visible with a deferred evidence state: {evidence}"
     );
+    assert_eq!(
+        evidence["current_failures"][0]["evidence_state"],
+        "deferred"
+    );
+    assert_eq!(evidence["current_failures"][0]["investigated"], false);
     assert_eq!(in_flight_ids(&evidence), [40]);
     assert_eq!(evidence["outcome_hint"], json!("retryable_error"));
     let errors = evidence["retryable_errors"]

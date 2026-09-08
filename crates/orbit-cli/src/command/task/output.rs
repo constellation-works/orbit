@@ -7,8 +7,8 @@ use orbit_core::{
     resolve_task_relations,
 };
 use orbit_types::task::{
-    ArtifactManifestFileV2, TaskArtifact, task_show_record_field_json,
-    unknown_task_show_field_message,
+    ArtifactManifestFileV2, TaskArtifact, TaskComment, TaskHistoryEntry,
+    task_show_record_field_json, unknown_task_show_field_message,
 };
 use serde_json::{Value, json};
 
@@ -74,32 +74,46 @@ pub(crate) fn task_to_json_for_runtime(
     task: &orbit_core::Task,
 ) -> Result<Value, OrbitError> {
     let status_by_id = runtime.task_status_index()?;
-    task_to_json_with_sidecars(runtime, task, &status_by_id)
+    Ok(task_to_json_with_sidecars(runtime, task, &status_by_id)?.doc)
+}
+
+pub(crate) struct TaskJsonWithSidecars {
+    pub(crate) doc: Value,
+    pub(crate) comments: Vec<TaskComment>,
+    pub(crate) history: Vec<TaskHistoryEntry>,
 }
 
 pub(crate) fn task_to_json_with_sidecars(
     runtime: &OrbitRuntime,
     task: &orbit_core::Task,
     status_by_id: &BTreeMap<String, TaskStatus>,
-) -> Result<Value, OrbitError> {
+) -> Result<TaskJsonWithSidecars, OrbitError> {
     let mut value = task_to_json(task, status_by_id);
     let object = value.as_object_mut().ok_or_else(|| {
         OrbitError::Execution("task JSON projection did not produce an object".to_string())
     })?;
+    let comments = runtime.get_task_comments(&task.id)?;
+    let history = runtime.get_task_history(&task.id)?;
     object.insert(
         "comments".to_string(),
-        serde_json::to_value(runtime.get_task_comments(&task.id)?)
-            .map_err(|e| OrbitError::Io(e.to_string()))?,
+        serde_json::to_value(&comments).map_err(|e| OrbitError::Io(e.to_string()))?,
     );
     object.insert(
         "history".to_string(),
-        serde_json::to_value(runtime.get_task_history(&task.id)?)
-            .map_err(|e| OrbitError::Io(e.to_string()))?,
+        serde_json::to_value(&history).map_err(|e| OrbitError::Io(e.to_string()))?,
     );
+    let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
     object.insert(
         "artifacts".to_string(),
-        task_artifact_manifest_to_json(&runtime.get_task_artifact_manifest(&task.id)?),
+        task_artifact_manifest_to_json(&artifacts),
     );
+    // [ORB-11333] The settled before-PR review gate, when one exists, is
+    // durable evidence and travels with the record like the artifacts.
+    if let Some(review) =
+        orbit_core::application::review::task_review_projection(runtime, task, &artifacts)?
+    {
+        object.insert("review".to_string(), review);
+    }
     // `resolved_crew` enriches the record; it does not define it. A task may
     // name a crew this workspace has no `[crews.*]` entry for — a config gap,
     // not a corrupt task — and the fields are simply absent then.
@@ -125,7 +139,11 @@ pub(crate) fn task_to_json_with_sidecars(
             );
         }
     }
-    Ok(value)
+    Ok(TaskJsonWithSidecars {
+        doc: value,
+        comments,
+        history,
+    })
 }
 
 /// Which columns the caller filtered on, and so must keep even when the filter
@@ -336,38 +354,42 @@ pub(super) fn task_fields_to_json(
     Ok(Value::Object(object))
 }
 
-pub(super) fn print_task_fields(
+pub(super) fn format_task_fields(
     runtime: &OrbitRuntime,
     task: &orbit_core::Task,
     fields: &[String],
     status_by_id: Option<&BTreeMap<String, TaskStatus>>,
-) -> Result<(), OrbitError> {
+) -> Result<String, OrbitError> {
+    let mut text = String::new();
     if fields.len() == 1 {
-        return print_single_task_field(runtime, task, &fields[0], status_by_id);
+        write_single_task_field(runtime, task, &fields[0], status_by_id, &mut text)?;
+        return Ok(text);
     }
 
     use crate::output::color::bold;
     for (index, field) in fields.iter().enumerate() {
         if index > 0 {
-            println!();
+            text.push('\n');
         }
-        println!("{} {}", bold("Field:"), field);
-        print_single_task_field(runtime, task, field, status_by_id)?;
+        let _ = writeln!(text, "{} {}", bold("Field:"), field);
+        write_single_task_field(runtime, task, field, status_by_id, &mut text)?;
     }
-    Ok(())
+    Ok(text)
 }
 
-pub(super) fn print_single_task_field(
+fn write_single_task_field(
     runtime: &OrbitRuntime,
     task: &orbit_core::Task,
     field: &str,
     status_by_id: Option<&BTreeMap<String, TaskStatus>>,
+    text: &mut String,
 ) -> Result<(), OrbitError> {
     match field {
         "comments" => {
             use crate::output::color::dimmed;
             for comment in runtime.get_task_comments(&task.id)? {
-                println!(
+                let _ = writeln!(
+                    text,
                     "{} {}: {}",
                     dimmed(&format!("[{}]", comment.at.to_rfc3339())),
                     comment.by,
@@ -377,38 +399,38 @@ pub(super) fn print_single_task_field(
             Ok(())
         }
         "plan" => {
-            print!("{}", task.plan);
+            text.push_str(&task.plan);
             Ok(())
         }
         "execution_summary" => {
-            print!("{}", task.execution_summary);
+            text.push_str(&task.execution_summary);
             Ok(())
         }
         "description" => {
-            print!("{}", task.description);
+            text.push_str(&task.description);
             Ok(())
         }
         "acceptance_criteria" => {
             for criterion in &task.acceptance_criteria {
-                println!("- {}", criterion);
+                let _ = writeln!(text, "- {}", criterion);
             }
             Ok(())
         }
         "dependencies" => {
             for dependency in task.dependencies() {
-                println!("{}", dependency);
+                let _ = writeln!(text, "{}", dependency);
             }
             Ok(())
         }
         "tags" => {
             for tag in &task.tags {
-                println!("{}", tag);
+                let _ = writeln!(text, "{}", tag);
             }
             Ok(())
         }
         "required_tools" => {
             for tool in &task.required_tools {
-                println!("{}", tool);
+                let _ = writeln!(text, "{}", tool);
             }
             Ok(())
         }
@@ -421,7 +443,7 @@ pub(super) fn print_single_task_field(
                     )
                 })?,
             ) {
-                println!("{}", dependency);
+                let _ = writeln!(text, "{}", dependency);
             }
             Ok(())
         }
@@ -432,7 +454,8 @@ pub(super) fn print_single_task_field(
                     OrbitError::Execution("missing task status index for relations".to_string())
                 })?,
             ) {
-                println!(
+                let _ = writeln!(
+                    text,
                     "{}",
                     serde_json::to_string(&relation).map_err(|e| OrbitError::Io(e.to_string()))?
                 );
@@ -446,7 +469,8 @@ pub(super) fn print_single_task_field(
                     continue;
                 }
                 if let Some(note) = &entry.note {
-                    println!(
+                    let _ = writeln!(
+                        text,
                         "{} {}: {} ({})",
                         dimmed(&format!("[{}]", entry.at.to_rfc3339())),
                         entry.by,
@@ -454,7 +478,8 @@ pub(super) fn print_single_task_field(
                         note
                     );
                 } else {
-                    println!(
+                    let _ = writeln!(
+                        text,
                         "{} {}: {}",
                         dimmed(&format!("[{}]", entry.at.to_rfc3339())),
                         entry.by,
@@ -466,16 +491,16 @@ pub(super) fn print_single_task_field(
         }
         "context_files" => {
             for path in &task.context_files {
-                println!("{}", path);
+                let _ = writeln!(text, "{}", path);
             }
             Ok(())
         }
         "crew" => {
-            print!("{}", task.crew.as_deref().unwrap_or_default());
+            text.push_str(task.crew.as_deref().unwrap_or_default());
             Ok(())
         }
         "orchestrator" => {
-            print!("{}", task.orchestrator.as_deref().unwrap_or_default());
+            text.push_str(task.orchestrator.as_deref().unwrap_or_default());
             Ok(())
         }
         "artifacts" => {
@@ -483,9 +508,10 @@ pub(super) fn print_single_task_field(
             let artifacts = runtime.get_task_artifacts(&task.id)?;
             for (index, artifact) in artifacts.iter().enumerate() {
                 if index > 0 {
-                    println!();
+                    text.push('\n');
                 }
-                println!(
+                let _ = writeln!(
+                    text,
                     "{} {} ({}, {} bytes)",
                     bold("Artifact:"),
                     artifact.path,
@@ -493,21 +519,21 @@ pub(super) fn print_single_task_field(
                     artifact.content.len()
                 );
                 if let Some(content) = artifact.text_content() {
-                    print!("{content}");
+                    text.push_str(content);
                 } else {
-                    println!("[binary content omitted]");
+                    let _ = writeln!(text, "[binary content omitted]");
                 }
             }
             Ok(())
         }
         other => match task_show_record_field_json(task, other) {
-            Some(Value::String(text)) => {
-                print!("{text}");
+            Some(Value::String(value)) => {
+                text.push_str(&value);
                 Ok(())
             }
             Some(Value::Null) => Ok(()),
             Some(value) => {
-                print!("{value}");
+                let _ = write!(text, "{value}");
                 Ok(())
             }
             None => Err(OrbitError::InvalidInput(unknown_task_show_field_message(

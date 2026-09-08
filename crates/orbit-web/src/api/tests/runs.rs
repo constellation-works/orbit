@@ -24,7 +24,9 @@ async fn request_cancel(runtime: OrbitRuntime, run_id: &str, origin: Option<&str
         .method(Method::POST)
         .uri(format!("/runs/{run_id}/cancel"));
     if let Some(origin) = origin {
-        builder = builder.header(header::ORIGIN, origin);
+        builder = builder
+            .header(header::ORIGIN, origin)
+            .header(header::HOST, "localhost:3000");
     }
     router()
         .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
@@ -38,7 +40,9 @@ async fn request_resume(runtime: OrbitRuntime, run_id: &str, origin: Option<&str
         .method(Method::POST)
         .uri(format!("/job-runs/{run_id}/resume"));
     if let Some(origin) = origin {
-        builder = builder.header(header::ORIGIN, origin);
+        builder = builder
+            .header(header::ORIGIN, origin)
+            .header(header::HOST, "localhost:3000");
     }
     router()
         .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
@@ -686,7 +690,8 @@ async fn request_ship(runtime: OrbitRuntime, body: Option<Value>) -> Response {
     let mut builder = Request::builder()
         .method(Method::POST)
         .uri("/workflows/ship")
-        .header(header::ORIGIN, "http://localhost:3000");
+        .header(header::ORIGIN, "http://localhost:3000")
+        .header(header::HOST, "localhost:3000");
     let body = match body {
         Some(json) => {
             builder = builder.header(header::CONTENT_TYPE, "application/json");
@@ -728,6 +733,7 @@ async fn request_ship_global(
                 .method(Method::POST)
                 .uri(uri)
                 .header(header::ORIGIN, "http://localhost:7878")
+                .header(header::HOST, "localhost:7878")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body.to_string()))
                 .expect("request"),
@@ -982,7 +988,8 @@ mod auto_drain {
         let mut builder = Request::builder()
             .method(Method::POST)
             .uri("/workflows/auto")
-            .header(header::ORIGIN, "http://localhost:3000");
+            .header(header::ORIGIN, "http://localhost:3000")
+            .header(header::HOST, "localhost:3000");
         let body = match body {
             Some(json) => {
                 builder = builder.header(header::CONTENT_TYPE, "application/json");
@@ -1195,6 +1202,7 @@ mod auto_drain {
                     .method(Method::POST)
                     .uri("/workflows/auto?workspace=ghost")
                     .header(header::ORIGIN, "http://localhost:7878")
+                    .header(header::HOST, "localhost:7878")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(json!({ "for_duration": "30m" }).to_string()))
                     .expect("request"),
@@ -1222,5 +1230,138 @@ mod auto_drain {
         assert_eq!(payload["snapshot"]["read_only"], true);
         assert!(payload["capacity"]["free_slots"].is_number());
         assert!(payload["controls_authorized"].is_boolean());
+    }
+}
+
+fn find_bundle_lock(root: &std::path::Path, task_id: &str) -> Option<std::path::PathBuf> {
+    let name = format!(".{task_id}.bundle.lock");
+    fn walk(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        for entry in std::fs::read_dir(dir).ok()? {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.file_name().and_then(|n| n.to_str()) == Some(name) {
+                return Some(path);
+            }
+            if path.is_dir()
+                && let Some(found) = walk(&path, name)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(root, &name)
+}
+
+#[cfg(unix)]
+fn hold_exclusive_bundle_lock(path: &std::path::Path) -> std::fs::File {
+    use std::os::unix::io::AsRawFd;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("open bundle lock");
+    // SAFETY: `file` is open for the lifetime of this binding; `LOCK_EX` is a
+    // valid flock operation on that descriptor.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    assert_eq!(rc, 0, "exclusive flock on {}", path.display());
+    file
+}
+
+async fn raw_http(
+    addr: std::net::SocketAddr,
+    request: &str,
+) -> Result<(u16, Vec<u8>), std::io::Error> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(addr).await?;
+    stream.write_all(request.as_bytes()).await?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await?;
+    let header_end = buf
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .unwrap_or(buf.len());
+    let header = std::str::from_utf8(&buf[..header_end]).unwrap_or("");
+    let status = header
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    Ok((status, buf[header_end..].to_vec()))
+}
+
+/// Holding the task-bundle flock parks `submit_ship_run` (it `get_task`s under
+/// that lock). Sixteen concurrent ships must not starve `/healthz`.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn healthz_answers_within_one_second_while_sixteen_ships_wait_on_bundle_lock() {
+    use std::time::Duration;
+
+    use axum::routing::get;
+
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let task_id = runtime
+        .add_task(TaskAddParams {
+            title: "ship lock fixture".to_string(),
+            description: "held under exclusive bundle flock during concurrent ship".to_string(),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .expect("seed task")
+        .id;
+    let lock_path = find_bundle_lock(&runtime.data_root(), &task_id)
+        .or_else(|| find_bundle_lock(&runtime.shared_root(), &task_id))
+        .unwrap_or_else(|| {
+            panic!(
+                "missing .{task_id}.bundle.lock under {} or {}",
+                runtime.data_root().display(),
+                runtime.shared_root().display()
+            )
+        });
+    let _guard = hold_exclusive_bundle_lock(&lock_path);
+
+    let state = crate::state::DashboardState::single(Arc::new(runtime));
+    let app = axum::Router::new()
+        .route("/healthz", get(crate::health::healthz))
+        .nest("/api", router())
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve dashboard");
+    });
+
+    let ship_body = json!({ "task_ids": [task_id], "mode": "local" }).to_string();
+    let ship_request = format!(
+        "POST /api/workflows/ship HTTP/1.1\r\nHost: localhost\r\nOrigin: http://localhost:3000\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        ship_body.len(),
+        ship_body
+    );
+    let mut ships = Vec::new();
+    for _ in 0..16 {
+        let request = ship_request.clone();
+        ships.push(tokio::spawn(async move { raw_http(addr, &request).await }));
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let health = tokio::time::timeout(
+        Duration::from_secs(1),
+        raw_http(
+            addr,
+            "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        ),
+    )
+    .await
+    .expect("healthz timed out")
+    .expect("healthz request");
+    assert_eq!(health.0, 200, "healthz status");
+    assert_eq!(health.1, b"ok", "healthz body");
+
+    drop(_guard);
+    for ship in ships {
+        let _ = tokio::time::timeout(Duration::from_secs(5), ship).await;
     }
 }

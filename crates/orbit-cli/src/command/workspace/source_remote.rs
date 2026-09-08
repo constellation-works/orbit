@@ -50,8 +50,8 @@ impl Execute for WorkspaceSourceRemoteShowArgs {
         let registry = workspace_registry::load_registry_from(
             &workspace_registry::registry_path_for(&runtime.global_root()),
         )?;
-        let workspace =
-            workspace_registry::find_workspace(&registry, &workspace_id).ok_or_else(|| {
+        let workspace = workspace_registry::find_workspace_by_id(&registry, &workspace_id)
+            .ok_or_else(|| {
                 OrbitError::WorkspaceError(format!("unknown workspace '{workspace_id}'"))
             })?;
 

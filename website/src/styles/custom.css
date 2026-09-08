@@ -182,7 +182,7 @@ body {
    src/components/SiteTitle.astro. */
 .orbit-topnav {
   align-items: center;
-  display: flex;
+  display: none;
   gap: 1.5rem;
   white-space: nowrap;
 }
@@ -206,9 +206,31 @@ body {
   overflow: visible;
 }
 
-@media (max-width: 72rem) {
+/* Reserve space for the splash Menu button (same inset as Starlight's
+   sidebar toggle). Docs already get this from `[data-has-sidebar]`. */
+html:not([data-has-sidebar]) header.header {
+  overflow: visible;
+  padding-inline-end: calc(
+    var(--sl-nav-gap) + var(--sl-nav-pad-x) + var(--sl-menu-button-size)
+  );
+}
+
+/* Match Starlight's `md` breakpoint: below 50rem the splash page uses
+   HomeMenu instead of the inline section links. Documentation pages keep
+   Starlight's sidebar Menu. */
+@media (min-width: 50rem) {
   .orbit-topnav {
-    display: none;
+    display: flex;
+  }
+
+  html:not([data-has-sidebar]) header.header {
+    padding-inline-end: var(--sl-nav-pad-x);
+  }
+}
+
+@media (min-width: 50rem) and (max-width: 72rem) {
+  .orbit-topnav {
+    gap: 1rem;
   }
 }
 
@@ -268,7 +290,7 @@ body {
 }
 
 .orbit-hero-install-prompt {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   flex: 0 0 auto;
 }
 
@@ -376,7 +398,7 @@ body {
 /* The mono strip under the hero CTAs naming the provider CLIs Orbit drives. */
 .orbit-hero-providers {
   align-items: center;
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   display: flex;
   flex-wrap: wrap;
   font-family: var(--sl-font-mono);
@@ -413,8 +435,10 @@ body {
   text-decoration: underline;
 }
 
-/* Hero terminal: a transcript of the task -> ship -> inspect -> commit loop. */
-.orbit-terminal {
+/* Hero dashboard: an illustration of the operator Tasks view after the
+   default ship in the walkthrough. Not a screenshot and not live data. */
+.orbit-dash {
+  --orbit-dash-review: #d946ef;
   background: var(--sl-color-bg-inline-code);
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 8px;
@@ -423,57 +447,265 @@ body {
   overflow: hidden;
 }
 
-.orbit-terminal-bar {
-  align-items: center;
-  border-bottom: 1px solid var(--sl-color-hairline-light);
-  color: var(--sl-color-gray-4);
-  display: flex;
-  font-family: var(--sl-font-mono);
-  font-size: 0.72rem;
-  gap: 1rem;
-  height: 2.125rem;
-  justify-content: space-between;
-  padding: 0 0.875rem;
+.orbit-dash-frame {
+  display: grid;
+  grid-template-columns: 7.25rem minmax(0, 1fr);
+  min-height: 22.5rem;
 }
 
-/* Flex column, not block: with `white-space: pre` the newlines between the
-   line elements would otherwise render as blank lines of their own. */
-.orbit-terminal-body {
+.orbit-dash-rail {
+  background: color-mix(in srgb, var(--sl-color-bg) 70%, var(--sl-color-bg-inline-code));
+  border-right: 1px solid var(--sl-color-hairline-light);
   color: var(--sl-color-gray-3);
   display: flex;
   flex-direction: column;
-  font-family: var(--sl-font-mono);
-  font-size: 0.78rem;
-  line-height: 1.85;
-  overflow-x: auto;
-  padding: 1.125rem 1.25rem;
-  white-space: pre;
+  font-size: 0.72rem;
+  min-width: 0;
+  padding: 0.75rem 0.55rem 0.65rem;
 }
 
-.orbit-terminal-prompt {
-  color: var(--sl-color-gray-4);
-}
-
-.orbit-terminal-cmd {
+.orbit-dash-brand {
+  align-items: center;
   color: var(--sl-color-text);
+  display: flex;
+  font-size: 0.78rem;
+  font-weight: 650;
+  gap: 0.4rem;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.85rem;
+  padding: 0 0.3rem;
 }
 
-.orbit-terminal-id {
+.orbit-dash-brand svg {
+  flex: 0 0 auto;
+}
+
+.orbit-dash-mark {
+  fill: var(--sl-color-accent);
+}
+
+.orbit-dash-rail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.7rem;
+}
+
+.orbit-dash-rail-label {
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  padding: 0.15rem 0.35rem 0.25rem;
+  text-transform: uppercase;
+}
+
+.orbit-dash-rail-item {
+  border-radius: 4px;
+  padding: 0.28rem 0.4rem;
+}
+
+.orbit-dash-rail-item.is-active {
+  background: color-mix(in srgb, var(--sl-color-accent) 14%, transparent);
+  color: var(--sl-color-text);
+  font-weight: 600;
+}
+
+.orbit-dash-rail-foot {
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font-mono);
+  font-size: 0.62rem;
+  margin-top: auto;
+  overflow: hidden;
+  padding: 0.45rem 0.35rem 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orbit-dash-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.orbit-dash-topbar {
+  align-items: center;
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+  color: var(--sl-color-gray-3);
+  display: flex;
+  font-size: 0.72rem;
+  gap: 0.5rem;
+  min-height: 2.125rem;
+  padding: 0 0.75rem;
+}
+
+.orbit-dash-crumb {
+  color: var(--sl-color-text);
+  font-weight: 600;
+}
+
+.orbit-dash-jump {
+  background: var(--sl-color-bg);
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 4px;
+  color: var(--sl-color-gray-3);
+  flex: 1 1 auto;
+  font-family: var(--sl-font-mono);
+  font-size: 0.62rem;
+  margin-left: auto;
+  max-width: 11rem;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0.2rem 0.45rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orbit-dash-refresh {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 4px;
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  padding: 0.2rem 0.4rem;
+}
+
+.orbit-dash-body {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr) 7.5rem;
+  min-height: 0;
+}
+
+.orbit-dash-panel,
+.orbit-dash-dock {
+  min-width: 0;
+}
+
+.orbit-dash-dock {
+  border-left: 1px solid var(--sl-color-hairline-light);
+  color: var(--sl-color-gray-3);
+  display: flex;
+  flex-direction: column;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  padding: 0.7rem 0.65rem;
+}
+
+.orbit-dash-dock p {
+  margin: 0.55rem 0 0;
+}
+
+.orbit-dash-panel-head,
+.orbit-dash-dock-head {
+  align-items: center;
+  color: var(--sl-color-gray-3);
+  display: flex;
+  font-size: 0.72rem;
+  font-weight: 600;
+  gap: 0.45rem;
+  justify-content: space-between;
+}
+
+.orbit-dash-panel-head {
+  padding: 0.7rem 0.75rem 0.35rem;
+}
+
+.orbit-dash-count {
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font-mono);
+  font-size: 0.62rem;
+  font-weight: 500;
+}
+
+.orbit-dash-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.2rem 0.75rem 0.55rem;
+}
+
+.orbit-dash-filters span,
+.orbit-dash-dock-head span,
+.orbit-dash-actions span {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 4px;
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
+  padding: 0.12rem 0.35rem;
+  text-transform: uppercase;
+}
+
+.orbit-dash-filters .is-on,
+.orbit-dash-dock-head .is-on {
+  background: color-mix(in srgb, var(--orbit-dash-review) 16%, transparent);
+  border-color: color-mix(in srgb, var(--orbit-dash-review) 45%, var(--sl-color-hairline-light));
+  color: var(--orbit-dash-review);
+}
+
+.orbit-dash-row {
+  align-items: center;
+  border-top: 1px solid var(--sl-color-hairline-light);
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 0.55rem 0.75rem;
+}
+
+.orbit-dash-row.is-open {
+  background: color-mix(in srgb, var(--sl-color-accent) 8%, transparent);
+}
+
+.orbit-dash-id {
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font-mono);
+  font-size: 0.62rem;
+}
+
+.orbit-dash-title {
+  color: var(--sl-color-text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orbit-dash-status {
+  border-left: 2px solid var(--orbit-dash-review);
+  color: var(--orbit-dash-review);
+  font-family: var(--sl-font-mono);
+  font-size: 0.62rem;
+  padding-left: 0.35rem;
+}
+
+.orbit-dash-detail {
+  border-top: 1px solid var(--sl-color-hairline-light);
+  padding: 0.65rem 0.75rem 0.8rem;
+}
+
+.orbit-dash-detail p {
+  color: var(--sl-color-gray-3);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  margin: 0 0 0.55rem;
+}
+
+.orbit-dash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.orbit-dash-actions .is-primary {
+  background: color-mix(in srgb, var(--sl-color-accent) 16%, transparent);
+  border-color: var(--sl-color-accent);
   color: var(--sl-color-text-accent);
 }
 
-.orbit-terminal-head {
-  color: var(--sl-color-gray-4);
-}
-
-.orbit-terminal-gap {
-  flex: 0 0 auto;
-  height: 1.85em;
-}
-
-/* Names the transcript as illustrative. The commands above are real; the
-   identifiers and durations are placeholders, and saying so is the point. */
-.orbit-terminal-caption {
+.orbit-dash-caption {
   border-top: 1px solid var(--sl-color-hairline-light);
   color: var(--sl-color-gray-3);
   font-size: 0.75rem;
@@ -482,9 +714,26 @@ body {
   padding: 0.75rem 1.25rem;
 }
 
+.orbit-landing .orbit-walk-next {
+  color: var(--sl-color-gray-3);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  margin: -0.5rem 0 0;
+}
+
+.orbit-walk-next a {
+  color: var(--sl-color-text-accent);
+  font-weight: 600;
+}
+
+.orbit-walk-next a:hover,
+.orbit-walk-next a:focus-visible {
+  text-decoration: underline;
+}
+
 .orbit-section-title {
   align-items: center;
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   display: flex;
   font-size: 0.78rem;
   font-weight: 600;
@@ -529,7 +778,17 @@ body {
 .orbit-flow-tabs > *,
 .orbit-flow-panels > *,
 .orbit-flow-panel > *,
-.orbit-flow-facts > * {
+.orbit-flow-facts > *,
+.orbit-dash-frame > *,
+.orbit-dash-rail > *,
+.orbit-dash-main > *,
+.orbit-dash-body > *,
+.orbit-dash-panel > *,
+.orbit-dash-dock > *,
+.orbit-dash-row > *,
+.orbit-dash-detail > *,
+.orbit-dash-filters > *,
+.orbit-dash-actions > * {
   margin-top: 0;
 }
 
@@ -657,7 +916,7 @@ body {
 }
 
 .orbit-flow-cmd-prompt {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   flex: 0 0 auto;
 }
 
@@ -725,6 +984,7 @@ body {
   border-radius: 6px;
   color: var(--sl-color-text);
   display: block;
+  min-width: 0;
   padding: 1.25rem;
   position: relative;
   text-decoration: none;
@@ -795,10 +1055,6 @@ body {
   margin-top: 0;
 }
 
-.orbit-card-grid-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
 .orbit-card-grid-4 {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -826,6 +1082,7 @@ body {
 
 .orbit-landing .orbit-section-title {
   margin: 4.75rem 0 1.25rem;
+  padding-top: 0;
 }
 
 /* A flat index of the sidebar, so the landing page is a way into the corpus
@@ -845,10 +1102,11 @@ body {
 
 .orbit-docs-group-title {
   border-bottom: 1px solid var(--sl-color-hairline-light);
-  color: var(--sl-color-gray-4);
+  color: var(--sl-color-gray-3);
   font-family: var(--sl-font-mono);
   font-size: 0.72rem;
   letter-spacing: 0.08em;
+  margin: 0;
   padding-bottom: 0.375rem;
   text-transform: uppercase;
 }
@@ -906,6 +1164,15 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .orbit-dash-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .orbit-dash-dock {
+    border-left: 0;
+    border-top: 1px solid var(--sl-color-hairline-light);
+  }
+
   .orbit-docs-index {
     gap: 1.25rem 2rem;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -946,10 +1213,39 @@ body {
   /* The hero has already stacked by here, but a tablet still has room for two
      cards per row; one column this early wastes half the viewport. */
   .orbit-card-grid,
-  .orbit-card-grid-3,
   .orbit-card-grid-4,
   .orbit-docs-index {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .orbit-dash-frame {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .orbit-dash-rail {
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--sl-color-hairline-light);
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.7rem;
+    padding: 0.55rem 0.75rem;
+  }
+
+  .orbit-dash-brand {
+    margin: 0 0.5rem 0 0;
+  }
+
+  .orbit-dash-rail-group {
+    flex-direction: row;
+    gap: 0.35rem;
+    margin: 0;
+  }
+
+  .orbit-dash-rail-label,
+  .orbit-dash-rail-foot {
+    display: none;
   }
 
   .orbit-flow-panel,
@@ -981,7 +1277,6 @@ body {
    step above kept side by side. */
 @media (max-width: 34rem) {
   .orbit-card-grid,
-  .orbit-card-grid-3,
   .orbit-card-grid-4,
   .orbit-docs-index,
   .orbit-flow-tabs {
@@ -990,6 +1285,18 @@ body {
 
   .orbit-flow-tab {
     border-right: 0;
+  }
+
+  .orbit-dash-jump {
+    display: none;
+  }
+
+  .orbit-dash-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .orbit-dash-id {
+    display: none;
   }
 }
 

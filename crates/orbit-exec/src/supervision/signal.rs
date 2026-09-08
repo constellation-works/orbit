@@ -1,74 +1,67 @@
-use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::io::{self, Write};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use orbit_common::OrbitError;
 
-static SIGNAL_HANDLER_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-static SIGNAL_PIPE_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
+/// Slots for live child process groups. The signal handler walks this table
+/// and therefore cannot take a mutex; empty is `0` (never a valid pgid here,
+/// because children are spawned as their own group leaders).
+const MAX_LIVE_PROCESS_GROUPS: usize = 256;
 
+static HANDLER_INSTALL: OnceLock<Mutex<HandlerInstall>> = OnceLock::new();
+static LAST_SIGNAL: AtomicI32 = AtomicI32::new(0);
+static SIGNAL_GEN: AtomicU64 = AtomicU64::new(0);
+/// Signal to re-raise after the last waiter restores the previous disposition.
+/// Written only from the async-signal-safe handler; swapped to `0` on last drop.
+static PENDING_FORWARD: AtomicI32 = AtomicI32::new(0);
+static LIVE_PGIDS: [AtomicU32; MAX_LIVE_PROCESS_GROUPS] =
+    [const { AtomicU32::new(0) }; MAX_LIVE_PROCESS_GROUPS];
+
+struct HandlerInstall {
+    refcount: usize,
+    previous: Option<PreviousHandlers>,
+}
+
+struct PreviousHandlers {
+    sigint: libc::sigaction,
+    sigterm: libc::sigaction,
+}
+
+/// Process-wide SIGINT/SIGTERM intercept for the duration of one supervised
+/// wait. Install is refcounted: the first live guard swaps in the handlers,
+/// and the last drop restores the previous dispositions and re-raises the
+/// captured signal so a long-running server's original handler (tokio
+/// `ctrl_c` / SIGTERM, or SIG_DFL) still runs. The install mutex is held
+/// only for that refcount/sigaction critical section — never across the
+/// child's lifetime or across `raise` — so concurrent supervisors overlap.
 pub(super) struct SignalHandlerGuard {
-    previous_sigint: libc::sigaction,
-    previous_sigterm: libc::sigaction,
-    read_fd: i32,
-    write_fd: i32,
-    _lock: MutexGuard<'static, ()>,
+    start_gen: u64,
+    slot: Option<usize>,
 }
 
 impl SignalHandlerGuard {
-    pub(super) fn install() -> Result<Self, OrbitError> {
-        let lock = SIGNAL_HANDLER_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .map_err(|_| OrbitError::Execution("signal handler lock poisoned".to_string()))?;
-
-        let (read_fd, write_fd) = create_signal_pipe()?;
-        SIGNAL_PIPE_WRITE_FD.store(write_fd, Ordering::SeqCst);
-        let previous_sigint = install_signal_handler(libc::SIGINT)?;
-        let previous_sigterm = match install_signal_handler(libc::SIGTERM) {
-            Ok(previous) => previous,
-            Err(err) => {
-                SIGNAL_PIPE_WRITE_FD.store(-1, Ordering::SeqCst);
-                close_fd(read_fd);
-                close_fd(write_fd);
-                restore_signal_handler(libc::SIGINT, &previous_sigint);
-                return Err(err);
-            }
-        };
-
+    pub(super) fn install(pgid: u32) -> Result<Self, OrbitError> {
+        let start_gen = acquire_handlers()?;
         Ok(Self {
-            previous_sigint,
-            previous_sigterm,
-            read_fd,
-            write_fd,
-            _lock: lock,
+            start_gen,
+            slot: register_pgid(pgid),
         })
     }
 
     pub(super) fn take_signal(&self) -> Option<i32> {
-        let mut signal = [0_u8; 1];
-        // Safety: the read end is non-blocking and owned by this guard.
-        let result = unsafe { libc::read(self.read_fd, signal.as_mut_ptr().cast(), signal.len()) };
-        if result > 0 {
-            return Some(signal[0] as i32);
-        }
-        if result == 0 {
+        if SIGNAL_GEN.load(Ordering::SeqCst) == self.start_gen {
             return None;
         }
-
-        match std::io::Error::last_os_error().raw_os_error() {
-            Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK => None,
-            _ => None,
-        }
+        let signal = LAST_SIGNAL.load(Ordering::SeqCst);
+        (signal != 0).then_some(signal)
     }
 }
 
 impl Drop for SignalHandlerGuard {
     fn drop(&mut self) {
-        SIGNAL_PIPE_WRITE_FD.store(-1, Ordering::SeqCst);
-        restore_signal_handler(libc::SIGINT, &self.previous_sigint);
-        restore_signal_handler(libc::SIGTERM, &self.previous_sigterm);
-        close_fd(self.read_fd);
-        close_fd(self.write_fd);
+        unregister_pgid(self.slot);
+        release_handlers();
     }
 }
 
@@ -85,28 +78,168 @@ fn signal_name(signal: i32) -> &'static str {
     }
 }
 
-unsafe extern "C" fn termination_signal_handler(signal: libc::c_int) {
-    let fd = SIGNAL_PIPE_WRITE_FD.load(Ordering::Relaxed);
-    if fd < 0 {
-        return;
+fn acquire_handlers() -> Result<u64, OrbitError> {
+    let mut state = handler_install()
+        .lock()
+        .map_err(|_| OrbitError::Execution("signal handler lock poisoned".to_string()))?;
+
+    // Snapshot before this waiter is live so a signal that arrives during
+    // first-install still looks newer than `start_gen` on the first poll.
+    let start_gen = SIGNAL_GEN.load(Ordering::SeqCst);
+    if state.refcount == 0 {
+        let sigint = install_signal_handler(libc::SIGINT)?;
+        let sigterm = match install_signal_handler(libc::SIGTERM) {
+            Ok(previous) => previous,
+            Err(err) => {
+                restore_signal_handler(libc::SIGINT, &sigint);
+                return Err(err);
+            }
+        };
+        state.previous = Some(PreviousHandlers { sigint, sigterm });
     }
 
-    let byte = signal as u8;
-    // Safety: `write` is async-signal-safe and writes a single byte to the
-    // non-blocking pipe owned by the active guard.
-    unsafe {
-        libc::write(fd, (&byte as *const u8).cast(), 1);
+    state.refcount = state
+        .refcount
+        .checked_add(1)
+        .ok_or_else(|| OrbitError::Execution("signal handler refcount overflow".to_string()))?;
+    Ok(start_gen)
+}
+
+fn release_handlers() {
+    let pending_raise = {
+        let Ok(mut state) = handler_install().lock() else {
+            return;
+        };
+        if state.refcount == 0 {
+            return;
+        }
+        state.refcount -= 1;
+        if state.refcount > 0 {
+            return;
+        }
+        let Some(previous) = state.previous.take() else {
+            return;
+        };
+        restore_signal_handler(libc::SIGINT, &previous.sigint);
+        restore_signal_handler(libc::SIGTERM, &previous.sigterm);
+        let pending = PENDING_FORWARD.swap(0, Ordering::SeqCst);
+        pending_forward_action(&previous, pending)
+    };
+
+    // Raise with the install mutex released: the previous handler (tokio's
+    // pipe write, or SIG_DFL terminate) must not re-enter this lock.
+    if let Some((signal, announce)) = pending_raise {
+        if announce {
+            announce_default_termination(signal);
+        }
+        // Safety: previous disposition is restored; `raise` delivers `signal`
+        // to this process so the original handler or default action runs.
+        let _ = unsafe { libc::raise(signal) };
+    }
+}
+
+enum PreviousDisposition {
+    Default,
+    Ignore,
+    Custom,
+}
+
+fn previous_disposition(action: &libc::sigaction) -> PreviousDisposition {
+    if action.sa_flags & libc::SA_SIGINFO != 0 {
+        return PreviousDisposition::Custom;
+    }
+    if action.sa_sigaction == libc::SIG_IGN {
+        PreviousDisposition::Ignore
+    } else if action.sa_sigaction == libc::SIG_DFL {
+        PreviousDisposition::Default
+    } else {
+        PreviousDisposition::Custom
+    }
+}
+
+fn pending_forward_action(previous: &PreviousHandlers, pending: i32) -> Option<(i32, bool)> {
+    if pending == 0 {
+        return None;
+    }
+    let action = match pending {
+        libc::SIGINT => &previous.sigint,
+        libc::SIGTERM => &previous.sigterm,
+        _ => return None,
+    };
+    match previous_disposition(action) {
+        PreviousDisposition::Ignore => None,
+        PreviousDisposition::Default => Some((pending, true)),
+        PreviousDisposition::Custom => Some((pending, false)),
+    }
+}
+
+fn announce_default_termination(signal: i32) {
+    // SIG_DFL terminates this process, so the wait-result stderr annotation
+    // never reaches the CLI. Write the same text to the process stderr first.
+    let message = signal_message(signal);
+    let mut stderr = io::stderr();
+    let _ = stderr.write_all(message.as_bytes());
+    let _ = stderr.write_all(b"\n");
+    let _ = stderr.flush();
+}
+
+fn handler_install() -> &'static Mutex<HandlerInstall> {
+    HANDLER_INSTALL.get_or_init(|| {
+        Mutex::new(HandlerInstall {
+            refcount: 0,
+            previous: None,
+        })
+    })
+}
+
+fn register_pgid(pgid: u32) -> Option<usize> {
+    if pgid == 0 {
+        return None;
+    }
+    for (index, slot) in LIVE_PGIDS.iter().enumerate() {
+        if slot
+            .compare_exchange(0, pgid, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn unregister_pgid(slot: Option<usize>) {
+    if let Some(index) = slot {
+        LIVE_PGIDS[index].store(0, Ordering::SeqCst);
+    }
+}
+
+unsafe extern "C" fn termination_signal_handler(signal: libc::c_int) {
+    LAST_SIGNAL.store(signal, Ordering::SeqCst);
+    SIGNAL_GEN.fetch_add(1, Ordering::SeqCst);
+    PENDING_FORWARD.store(signal, Ordering::SeqCst);
+    for slot in &LIVE_PGIDS {
+        let pgid = slot.load(Ordering::Relaxed);
+        if pgid != 0 {
+            // Safety: `killpg` is async-signal-safe. `pgid` is a live child's
+            // process-group id stored by a supervisor, or a stale id of a
+            // group that already exited (`ESRCH` is ignored).
+            unsafe {
+                libc::killpg(pgid as libc::pid_t, signal);
+            }
+        }
     }
 }
 
 fn install_signal_handler(signal: libc::c_int) -> Result<libc::sigaction, OrbitError> {
-    // Safety: sigaction initializes/installs a process signal handler. The
-    // handler only performs an atomic store, so it is safe for SIGINT/SIGTERM.
+    // Safety: sigaction installs a process signal handler. The handler only
+    // stores atomics and calls `killpg`, both async-signal-safe.
     unsafe {
         let mut new_action: libc::sigaction = std::mem::zeroed();
         new_action.sa_sigaction = termination_signal_handler as *const () as usize;
         new_action.sa_flags = 0;
         libc::sigemptyset(&mut new_action.sa_mask);
+        libc::sigaddset(&mut new_action.sa_mask, libc::SIGINT);
+        libc::sigaddset(&mut new_action.sa_mask, libc::SIGTERM);
 
         let mut old_action: libc::sigaction = std::mem::zeroed();
         if libc::sigaction(signal, &new_action, &mut old_action) != 0 {
@@ -125,55 +258,5 @@ fn restore_signal_handler(signal: libc::c_int, previous: &libc::sigaction) {
     // Safety: restores the exact handler previously returned by sigaction.
     unsafe {
         libc::sigaction(signal, previous, std::ptr::null_mut());
-    }
-}
-
-fn create_signal_pipe() -> Result<(i32, i32), OrbitError> {
-    let mut fds = [0_i32; 2];
-    // Safety: `pipe` initializes the two file descriptors when it returns 0.
-    let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if rc != 0 {
-        return Err(OrbitError::Execution(format!(
-            "failed to create signal pipe: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-
-    if let Err(err) = set_nonblocking(fds[0]) {
-        close_fd(fds[0]);
-        close_fd(fds[1]);
-        return Err(err);
-    }
-
-    Ok((fds[0], fds[1]))
-}
-
-fn set_nonblocking(fd: i32) -> Result<(), OrbitError> {
-    // Safety: `fcntl` queries and updates flags for this valid file descriptor.
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFL);
-        if flags < 0 {
-            return Err(OrbitError::Execution(format!(
-                "failed to inspect signal pipe flags: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) != 0 {
-            return Err(OrbitError::Execution(format!(
-                "failed to set signal pipe non-blocking mode: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn close_fd(fd: i32) {
-    if fd >= 0 {
-        // Safety: closing an owned file descriptor is safe; errors are ignored
-        // during cleanup because the process is already tearing the guard down.
-        unsafe {
-            libc::close(fd);
-        }
     }
 }

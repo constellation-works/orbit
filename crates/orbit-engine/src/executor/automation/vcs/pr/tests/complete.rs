@@ -2,9 +2,12 @@
 //!
 //! Every case drives the real `pr_complete` / `task_complete` code against the
 //! shared fake host with a scripted sequence of `pr.status` answers, so the
-//! merge-state machine is exercised without GitHub and without a wall clock:
-//! `poll_interval_seconds: 0` makes the poll loop iterate immediately.
+//! merge-state machine is exercised without GitHub.
 
+use std::fs;
+use std::process::Command;
+
+use orbit_common::OrbitError;
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, TaskStatus};
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -12,8 +15,8 @@ use tempfile::tempdir;
 use super::super::super::super::task_update::task_complete;
 use super::super::complete::pr_complete;
 use super::test_support::{
-    PR_MERGE_CAPABILITIES_OPERATION, PR_MERGE_OPERATION, PR_STATUS_OPERATION, PrOpenTestHost,
-    review_batch_task,
+    PR_MERGE_CAPABILITIES_OPERATION, PR_MERGE_OPERATION, PR_STATUS_OPERATION, PUSH_OPERATION,
+    PrOpenTestHost, git, rebase_conflict_pr_workspace, review_batch_task,
 };
 
 fn host(tasks: Vec<orbit_types::task::Task>) -> (tempfile::TempDir, PrOpenTestHost) {
@@ -32,7 +35,7 @@ fn pending_checks_with_auto_merge_disabled_wait_for_an_ordinary_merge() {
     host.queue_merge_capabilities_with_auto_merge(true, true, true, true, false);
 
     let mut input = complete_input(root.path(), &["T1"]);
-    input["max_wait_seconds"] = json!(1);
+    input["max_wait_seconds"] = json!(10);
     let output = pr_complete(&host, &input).expect("complete after checks settle");
 
     assert_eq!(output["merge"]["merged"], true);
@@ -61,6 +64,41 @@ fn pending_checks_with_auto_merge_disabled_time_out_in_review() {
     assert_eq!(host.task_status("T1"), TaskStatus::Review);
 }
 
+#[test]
+fn zero_poll_interval_is_clamped_and_does_not_hammer_pr_status() {
+    let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+    host.queue_pr_status([state("PENDING")]);
+    host.queue_merge_capabilities_with_auto_merge(true, true, true, true, false);
+
+    let mut input = complete_input(root.path(), &["T1"]);
+    input["poll_interval_seconds"] = json!(0);
+    input["max_wait_seconds"] = json!(5);
+    let error = pr_complete(&host, &input).expect_err("pending checks must time out");
+
+    assert!(error.to_string().contains("timed out"), "{error}");
+    let status_reads = host
+        .vcs_calls()
+        .iter()
+        .filter(|call| call.operation == PR_STATUS_OPERATION)
+        .count();
+    assert!(
+        status_reads <= 1,
+        "a zero input interval must be clamped before polling"
+    );
+}
+
+#[test]
+fn excessive_wait_budget_is_reported_as_the_clamped_ceiling() {
+    let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+    host.queue_pr_status([merged_state()]);
+
+    let mut input = complete_input(root.path(), &["T1"]);
+    input["max_wait_seconds"] = json!(10_000_000);
+    let output = pr_complete(&host, &input).expect("an already merged PR completes");
+
+    assert_eq!(output["merge"]["max_wait_seconds"], json!(6 * 60 * 60));
+}
+
 fn complete_input(workspace_path: &std::path::Path, task_ids: &[&str]) -> Value {
     json!({
         "job_run_id": "batch-1",
@@ -77,7 +115,14 @@ fn merged_state() -> Value {
 }
 
 fn state(merge_state_status: &str) -> Value {
-    json!({ "number": 42, "state": "OPEN", "mergedAt": Value::Null, "mergeStateStatus": merge_state_status })
+    json!({
+        "number": 42,
+        "state": "OPEN",
+        "mergedAt": Value::Null,
+        "mergeStateStatus": merge_state_status,
+        "headRefName": "orbit/test-batch",
+        "baseRefName": "agent-main",
+    })
 }
 
 fn merge_calls(host: &PrOpenTestHost) -> Vec<Value> {
@@ -162,7 +207,7 @@ fn squash_disabled_repository_uses_rebase_for_direct_and_auto_merge() {
         host.queue_pr_status([state(initial), merged_state()]);
         host.queue_merge_capabilities(false, true, true, true);
         let mut input = complete_input(root.path(), &["T1"]);
-        input["max_wait_seconds"] = json!(1);
+        input["max_wait_seconds"] = json!(10);
 
         let output = pr_complete(&host, &input).expect("rebase completion");
 
@@ -292,6 +337,195 @@ fn protected_branch_states_fail_the_run_with_the_task_left_in_review() {
             "{merge_state} must not be forced through"
         );
     }
+}
+
+/// The completion race that motivated ORB-11488: the candidate was already
+/// published, then the target base changed on the same path before merge.
+/// The first completion attempt must leave a proven, stopped rebase; after the
+/// bounded recovery leaf resolves it, retrying completion reuses that rewrite,
+/// lease-pushes the same branch, and merges the same PR.
+#[test]
+fn published_pr_conflict_reuses_pinned_rebase_branch_and_pr_on_completion_retry() {
+    let workspace = rebase_conflict_pr_workspace();
+    let published_head_sha = git(&workspace.repo, &["rev-parse", "orbit/test-batch"]);
+    let host = PrOpenTestHost::new(
+        vec![review_batch_task("T1", None, None)],
+        workspace.repo.clone(),
+    );
+    host.queue_pr_status([state("DIRTY")]);
+    let mut input = complete_input(&workspace.repo, &["T1"]);
+    input["completion"] = json!("done");
+    input["head"] = json!("orbit/test-batch");
+    input["published_head_sha"] = json!(published_head_sha);
+    input["base"] = json!("agent-main");
+    input["base_sync"] = json!("remote");
+
+    let error = pr_complete(&host, &input).expect_err("advanced base must conflict");
+    let OrbitError::RecoverableVcsConflict(conflict) = error else {
+        panic!("completion conflict must stay typed: {error}");
+    };
+    assert_eq!(conflict.operation, "git_rebase");
+    assert_eq!(conflict.conflicting_paths, vec!["src/lib.rs"]);
+    assert_eq!(host.task_status("T1"), TaskStatus::Review);
+
+    fs::write(
+        workspace.repo.join("src/lib.rs"),
+        "pub fn diverged() {}\npub fn branch() {}\n",
+    )
+    .expect("resolve both sides of the completion conflict");
+    git(&workspace.repo, &["add", "src/lib.rs"]);
+    let continued = Command::new("git")
+        .args(["-c", "core.editor=true", "rebase", "--continue"])
+        .current_dir(&workspace.repo)
+        .output()
+        .expect("continue completion rebase");
+    assert!(
+        continued.status.success(),
+        "rebase continue failed: {}",
+        String::from_utf8_lossy(&continued.stderr)
+    );
+
+    let run_id = input["job_run_id"].as_str().unwrap();
+    crate::context::RuntimeHost::checkpoint_rebase_recovery(
+        &host,
+        run_id,
+        "complete_pr",
+        &json!({
+            "run_id": run_id,
+            "step_id": "complete_pr",
+            "workspace_path": workspace.repo,
+            "task_ids": ["T1"],
+            "head": input["head"],
+            "head_sha_before": published_head_sha,
+            "original_base_sha": conflict.original_base_sha,
+            "base_ref": "refs/remotes/origin/agent-main",
+            "base_sha": conflict.target_base_sha,
+            "remote_sha_before": published_head_sha,
+            "head_sha": git(&workspace.repo, &["rev-parse", "HEAD"]),
+            "rewritten": true,
+        }),
+    )
+    .unwrap();
+
+    host.queue_pr_status([state("DIRTY"), state("CLEAN"), merged_state()]);
+    let output = pr_complete(&host, &input).expect("retry merges recovered published PR");
+
+    assert_eq!(output["merge"]["pr_number"], "42");
+    assert_eq!(host.task_status("T1"), TaskStatus::Done);
+    assert_eq!(
+        fs::read_to_string(workspace.repo.join("src/lib.rs")).expect("recovered file"),
+        "pub fn diverged() {}\npub fn branch() {}\n"
+    );
+    let pushes = host
+        .vcs_calls()
+        .into_iter()
+        .filter(|call| call.operation == PUSH_OPERATION)
+        .collect::<Vec<_>>();
+    assert_eq!(pushes.len(), 1, "recovery retry pushes exactly once");
+    assert_eq!(pushes[0].input["branch"], "orbit/test-batch");
+    assert_eq!(pushes[0].input["force_with_lease"], true);
+    assert_eq!(merge_calls(&host).len(), 1, "the existing PR merges once");
+}
+
+#[test]
+fn completion_conflict_refuses_a_concurrently_updated_published_branch() {
+    let workspace = rebase_conflict_pr_workspace();
+    let published_head_sha = git(&workspace.repo, &["rev-parse", "orbit/test-batch"]);
+    fs::write(workspace.repo.join("candidate-extra.txt"), "concurrent\n")
+        .expect("write concurrent candidate update");
+    git(&workspace.repo, &["add", "candidate-extra.txt"]);
+    git(
+        &workspace.repo,
+        &["commit", "-m", "concurrent candidate update"],
+    );
+    git(&workspace.repo, &["push", "origin", "orbit/test-batch"]);
+    let host = PrOpenTestHost::new(
+        vec![review_batch_task("T1", None, None)],
+        workspace.repo.clone(),
+    );
+    host.queue_pr_status([state("DIRTY")]);
+    let mut input = complete_input(&workspace.repo, &["T1"]);
+    input["completion"] = json!("done");
+    input["head"] = json!("orbit/test-batch");
+    input["published_head_sha"] = json!(published_head_sha);
+    input["base"] = json!("agent-main");
+    input["base_sync"] = json!("remote");
+
+    let error = pr_complete(&host, &input).expect_err("stale branch ownership must fail closed");
+
+    assert!(
+        error
+            .to_string()
+            .contains("moved away from completion checkpoint"),
+        "{error}"
+    );
+    assert!(!matches!(error, OrbitError::RecoverableVcsConflict(_)));
+    assert_eq!(host.task_status("T1"), TaskStatus::Review);
+    assert!(
+        host.vcs_calls()
+            .iter()
+            .all(|call| call.operation != PUSH_OPERATION),
+        "a stale owner must not push"
+    );
+}
+
+#[test]
+fn second_base_advance_after_recovery_does_not_start_another_rebase() {
+    let workspace = rebase_conflict_pr_workspace();
+    let published_head_sha = git(&workspace.repo, &["rev-parse", "orbit/test-batch"]);
+    let host = PrOpenTestHost::new(
+        vec![review_batch_task("T1", None, None)],
+        workspace.repo.clone(),
+    );
+    host.queue_pr_status([state("DIRTY")]);
+    let mut input = complete_input(&workspace.repo, &["T1"]);
+    input["completion"] = json!("done");
+    input["head"] = json!("orbit/test-batch");
+    input["published_head_sha"] = json!(published_head_sha);
+    input["base"] = json!("agent-main");
+    input["base_sync"] = json!("remote");
+
+    let first = pr_complete(&host, &input).expect_err("first base advance conflicts");
+    assert!(matches!(first, OrbitError::RecoverableVcsConflict(_)));
+    fs::write(
+        workspace.repo.join("src/lib.rs"),
+        "pub fn diverged() {}\npub fn branch() {}\n",
+    )
+    .expect("resolve first conflict");
+    git(&workspace.repo, &["add", "src/lib.rs"]);
+    git(
+        &workspace.repo,
+        &["-c", "core.editor=true", "rebase", "--continue"],
+    );
+
+    git(&workspace.repo, &["checkout", "agent-main"]);
+    fs::write(
+        workspace.repo.join("src/lib.rs"),
+        "pub fn advanced_again() {}\n",
+    )
+    .expect("advance base again");
+    git(&workspace.repo, &["add", "src/lib.rs"]);
+    git(&workspace.repo, &["commit", "-m", "second base advance"]);
+    git(&workspace.repo, &["push", "origin", "agent-main"]);
+    git(&workspace.repo, &["checkout", "orbit/test-batch"]);
+    host.queue_pr_status([state("DIRTY")]);
+
+    let second = pr_complete(&host, &input).expect_err("moving target must fail closed");
+
+    assert!(
+        second
+            .to_string()
+            .contains("branch state no longer matches the durable pre-rewrite checkpoint"),
+        "{second}"
+    );
+    assert!(!matches!(second, OrbitError::RecoverableVcsConflict(_)));
+    assert_eq!(host.task_status("T1"), TaskStatus::Review);
+    assert!(
+        host.vcs_calls()
+            .iter()
+            .all(|call| call.operation != PUSH_OPERATION),
+        "a second base advance must not push"
+    );
 }
 
 /// A closed-without-merge PR is an actionable failure, not a silent success.

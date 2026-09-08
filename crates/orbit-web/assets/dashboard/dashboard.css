@@ -1,3 +1,19 @@
+      @font-face {
+        font-family: "Inter";
+        font-style: normal;
+        font-weight: 400 600;
+        font-display: swap;
+        src: url("/static/fonts/inter-latin.woff2") format("woff2");
+      }
+
+      @font-face {
+        font-family: "JetBrains Mono";
+        font-style: normal;
+        font-weight: 400 500;
+        font-display: swap;
+        src: url("/static/fonts/jetbrains-mono-latin.woff2") format("woff2");
+      }
+
       :root {
         --font-sans: Inter, "Geist Sans", ui-sans-serif, system-ui, sans-serif;
         --font-mono: "Geist Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
@@ -93,6 +109,7 @@
         grid-template-columns: 216px minmax(0, 1fr);
         flex: 1 1 auto;
         min-height: 0;
+        min-width: 0;
       }
 
       .rail {
@@ -101,6 +118,7 @@
         display: flex;
         flex-direction: column;
         min-height: 0;
+        min-width: 0;
         overflow-y: auto;
       }
 
@@ -293,6 +311,84 @@
         opacity: 0.55;
       }
 
+      /* ORB-11559: below ~760px the 216px rail steals the content column.
+         Stack the shell, scroll tabs horizontally, and put diagnostics
+         subtabs on a second row so every destination stays reachable.
+         This block follows the base `.topbar` / `.kpi` rules so height and
+         label hiding win the cascade. */
+      @media (max-width: 760px) {
+        .shell {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: auto minmax(0, 1fr);
+        }
+        .rail {
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+          overflow-x: auto;
+          overflow-y: visible;
+        }
+        .rail-brand { display: none; }
+        .rail .tabs {
+          flex-direction: row;
+          flex-wrap: wrap;
+          overflow-x: auto;
+          min-width: 0;
+          padding: 6px 8px 0;
+          gap: 2px;
+        }
+        .rail-group { display: contents; }
+        .rail-group-label { display: none; }
+        .rail .tab {
+          width: auto;
+          flex: 0 0 auto;
+          white-space: nowrap;
+        }
+        .rail-label { flex: 0 1 auto; }
+        .rail-subtabs {
+          flex: 1 1 100%;
+          flex-direction: row;
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          padding: 2px 0 6px;
+          gap: 2px;
+        }
+        .rail-subtabs .subtab {
+          padding: 5px 8px;
+          white-space: nowrap;
+          flex: 0 0 auto;
+        }
+        .rail-foot {
+          margin-top: 0;
+          flex-direction: row;
+          flex-wrap: wrap;
+          align-items: center;
+          border-top: 1px solid var(--hair);
+          padding: 8px 10px;
+        }
+        .rail-workspace { flex: 1 1 12rem; min-width: 0; }
+        .topbar {
+          height: auto;
+          min-height: 52px;
+          flex-wrap: wrap;
+          row-gap: 8px;
+          padding: 8px 12px;
+        }
+        .kpi .k { display: none; }
+        .kpi-spark { display: none; }
+        .global-id-error {
+          white-space: normal;
+          max-width: min(100vw - 24px, 280px);
+          overflow-wrap: anywhere;
+        }
+        .tab-pane[data-tab="operations"] .subtabs,
+        #operations-subtabs {
+          overflow-x: auto;
+          flex-wrap: nowrap;
+        }
+        .subtab { white-space: nowrap; }
+        .log-statusbar { overflow: hidden; }
+      }
+
       /* ORB-00030 multi-workspace: header selector + per-task workspace badge */
       .workspace-select {
         height: 30px;
@@ -418,6 +514,7 @@
       #global-task-id.error { border-color: #f66; }
       .global-id-error { position: absolute; top: 28px; left: 0; font-size: 10px; color: #f66; white-space: nowrap; background: var(--bg-elev); border: 1px solid var(--border); padding: 1px 4px; border-radius: 2px; z-index: 150; display: none; }
       .global-id-wrap.error .global-id-error { display: block; }
+      .global-id-wrap.pending .global-id-error { display: block; color: var(--fg-dim); }
       .pinned-task-wrap { margin-bottom: 6px; border: 1px solid var(--accent); border-radius: 2px; background: var(--bg-elev); }
       .pinned-task-wrap .row.pinned-external { background: var(--bg-elev); }
 
@@ -872,9 +969,29 @@
       .chip:focus-visible,
       .mutation-undo:focus-visible,
       .rail .tab:focus-visible,
-      .dock-seg:focus-visible {
+      .rail-subtabs .subtab:focus-visible,
+      .dock-seg:focus-visible,
+      .subtab:focus-visible,
+      .operation-button:focus-visible,
+      .operation-cadence:focus-visible,
+      .operation-details summary:focus-visible,
+      .operation-action-unavailable:focus-visible {
         outline: 2px solid var(--accent-hover);
         outline-offset: 2px;
+      }
+
+      /* ORB-11658: expandable rows and the collapsible field headers are
+         keyboard-operable (role="button" plus Enter/Space), so focus has to be
+         visible on them as well. The ring is inset because an outward one on a
+         full-bleed row is clipped by the panel's scroll container. */
+      .row:focus-visible,
+      .artifact-row:focus-visible,
+      .audit-row:focus-visible,
+      .step-row:focus-visible,
+      .runs-row:focus-visible,
+      .field-block.collapsible h4:focus-visible {
+        outline: 2px solid var(--accent-hover);
+        outline-offset: -2px;
       }
 
       .filter-summary {
@@ -1526,6 +1643,18 @@
         font-family: var(--font-mono);
         font-size: 11px;
       }
+      .runs-scope-note,
+      .runs-limit-note {
+        padding: 8px 16px;
+        border-bottom: 1px solid var(--border);
+        color: var(--fg-dim);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .runs-limit-note {
+        color: var(--accent);
+      }
       
       .runs-row:last-child {
         border-bottom: none;
@@ -1621,7 +1750,9 @@
         .runs-row { min-width: 790px; }
         .runs-row.workspace-attributed { min-width: 900px; }
         .runs-filter,
-        .runs-source-warning {
+        .runs-source-warning,
+        .runs-scope-note,
+        .runs-limit-note {
           min-width: max-content;
           position: sticky;
           left: 0;
@@ -3044,6 +3175,15 @@
       .log-statusbar .sb-m[data-level="deny"] { color: var(--status-review); }
       .log-statusbar .sb-m[data-level="warn"] { color: var(--status-proposed); }
       .log-statusbar.empty .sb-label { opacity: 0.6; }
+      #side-dock.disconnected .live-dot,
+      .log-statusbar.disconnected .live-dot {
+        background: var(--fg-mute);
+        box-shadow: none;
+        animation: none;
+      }
+      .log-statusbar.disconnected .sb-label {
+        color: var(--status-blocked);
+      }
 
       /* Policy view (Audit sub-tab) */
       .policy-grid {
@@ -3925,6 +4065,13 @@
         font-size: 12px;
         font-style: italic;
       }
+      [data-panel-status] {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: var(--bg);
+        flex-shrink: 0;
+      }
       .lock-task-group {
         padding: 8px 12px 9px;
         border-bottom: 1px solid rgba(255, 255, 255, 0.04);
@@ -4083,6 +4230,16 @@
         display: flex; align-items: center; gap: 12px;
         font-family: var(--font-mono); font-size: 11px; color: var(--fg-dim);
       }
+      /* ORB-11658: the log-foot controls are real <button>s so they are
+         focusable and announced as toggles; strip the user-agent chrome the
+         <span>s they replaced never carried. */
+      .log-foot button { font: inherit; background: none; border: none; color: inherit; padding: 0; }
+      .log-foot .filter-pill:focus-visible,
+      .log-foot .seg.right:focus-visible,
+      .log-foot .count:focus-visible {
+        outline: 2px solid var(--accent-hover);
+        outline-offset: 2px;
+      }
       .log-foot .seg { display: inline-flex; align-items: center; gap: 6px; }
       .log-foot .seg b { color: var(--fg); font-weight: 500; }
       .log-foot .filter-pill {
@@ -4200,7 +4357,7 @@
       .tab-pane[data-tab="operations"] .subtabs { border-bottom: 1px solid var(--border); }
       .operation-feedback {
         min-height: 30px; padding: 7px 14px; border-bottom: 1px solid var(--border);
-        color: var(--fg-dim); font: 11px/1.4 var(--font-mono);
+        color: var(--fg-dim); font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere;
       }
       .operation-feedback:empty { display: none; }
       .operation-feedback.pending { color: var(--priority-medium); }
@@ -4208,16 +4365,40 @@
       .operation-feedback.error { color: var(--state-failed); }
       #routines-body, #clock-body, #auto-tasks-body, #auto-drain-body { padding: 12px; background: var(--bg); }
       .operation-card {
-        padding: 12px; margin-bottom: 10px; border: 1px solid var(--border);
+        padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--border);
         border-radius: 4px; background: var(--bg-elev);
       }
       .operation-card:last-child { margin-bottom: 0; }
       .operation-card-title, .operation-clock-summary, .operation-clock-actions, .operation-card-actions {
         display: flex; align-items: center; justify-content: space-between; gap: 10px;
       }
-      .operation-card-actions { justify-content: flex-end; flex-wrap: wrap; }
+      .operation-card-actions { justify-content: flex-end; flex-wrap: wrap; min-width: 0; }
       .operation-card-title > div, .operation-clock-summary { display: flex; align-items: center; gap: 8px; min-width: 0; }
-      .operation-card-title strong { overflow-wrap: anywhere; }
+      .operation-card-title strong, .operation-identity strong { overflow-wrap: anywhere; }
+      .operation-row-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr) auto;
+        gap: 8px 12px;
+        align-items: start;
+      }
+      .operation-identity {
+        display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap;
+      }
+      .operation-row-facts { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      .operation-fact { display: flex; gap: 8px; min-width: 0; }
+      .operation-fact-label {
+        flex: 0 0 auto; color: var(--fg-dim); font: 9px var(--font-sans);
+        text-transform: uppercase; letter-spacing: .08em;
+      }
+      .operation-fact-value {
+        min-width: 0; color: var(--fg); font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere;
+      }
+      .operation-details { margin-top: 8px; min-width: 0; }
+      .operation-details summary {
+        cursor: pointer; color: var(--fg-dim); font: 11px var(--font-sans);
+      }
+      .operation-details[open] summary { margin-bottom: 8px; }
+      .operation-action-unavailable { display: inline-flex; min-width: 0; }
       .operation-state {
         padding: 2px 6px; border: 1px solid var(--border); border-radius: 999px;
         color: var(--fg-dim); font: 10px var(--font-mono); text-transform: uppercase;
@@ -4251,7 +4432,8 @@
       .operation-button:disabled, .operation-cadence:disabled { opacity: .5; cursor: not-allowed; }
       .operation-button.disable { color: var(--state-failed); }
       .operation-button.enable { color: var(--state-success); }
-      .operation-clock-summary { justify-content: flex-start; margin-bottom: 14px; }
+      .operation-clock-summary { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 14px; overflow-wrap: anywhere; }
+      .operation-cadence { min-width: 0; max-width: 100%; }
       .operation-clock-actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 14px; }
 
       @media (max-width: 900px) {
@@ -4259,7 +4441,8 @@
       }
       @media (max-width: 720px) {
         .operation-grid { grid-template-columns: 1fr; }
-        .operation-card-title { align-items: flex-start; flex-wrap: wrap; }
+        .operation-card-title, .operation-row-head { align-items: flex-start; flex-wrap: wrap; }
+        .operation-row-head { grid-template-columns: minmax(0, 1fr); }
         .operation-card-actions { width: 100%; }
         .operation-mint-warning { overflow-wrap: anywhere; }
       }
@@ -4268,7 +4451,7 @@
         .operations-layout .panel { margin-bottom: 8px; }
         .operation-grid { grid-template-columns: 1fr; }
         .operation-card-title { align-items: flex-start; }
-        .operation-card-title > div { align-items: flex-start; flex-direction: column; }
+        .operation-card-title > div, .operation-identity { align-items: flex-start; flex-direction: column; }
         .operation-clock-actions, .operation-card-actions { align-items: stretch; }
         .operation-clock-actions > *, .operation-card-actions > * { flex: 1 1 100%; }
       }

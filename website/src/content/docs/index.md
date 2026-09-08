@@ -40,56 +40,109 @@ next: false
     <p class="orbit-hero-providers-note">Gemini CLI ships as a legacy executor for enterprise Gemini Code Assist and API-key accounts. <a href="/concepts/agents/">How agents are invoked →</a></p>
   </div>
 
-  <figure class="orbit-terminal">
-    <div class="orbit-terminal-bar">
-      <span>~/repo</span>
-      <span>one task, end to end</span>
+  <figure class="orbit-dash">
+    <div class="orbit-dash-frame" role="img" aria-label="Illustrative operator dashboard. Tasks is selected in the left rail. Placeholder task Document fsProfile resolution is in review, with the pull request open and unmerged. Approve is available; ship is not.">
+      <div class="orbit-dash-rail" aria-hidden="true">
+        <div class="orbit-dash-brand">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"></circle>
+            <circle class="orbit-dash-mark" cx="18.5" cy="6.5" r="2.5"></circle>
+          </svg>
+          <span>orbit</span>
+        </div>
+        <div class="orbit-dash-rail-group">
+          <div class="orbit-dash-rail-label">Work</div>
+          <div class="orbit-dash-rail-item is-active">Tasks</div>
+        </div>
+        <div class="orbit-dash-rail-group">
+          <div class="orbit-dash-rail-label">Observe</div>
+          <div class="orbit-dash-rail-item">Audit</div>
+          <div class="orbit-dash-rail-item">Diagnostics</div>
+        </div>
+        <div class="orbit-dash-rail-group">
+          <div class="orbit-dash-rail-label">Manage</div>
+          <div class="orbit-dash-rail-item">Operations</div>
+          <div class="orbit-dash-rail-item">Knowledge</div>
+        </div>
+        <div class="orbit-dash-rail-foot">example-repo</div>
+      </div>
+      <div class="orbit-dash-main" aria-hidden="true">
+        <div class="orbit-dash-topbar">
+          <span class="orbit-dash-crumb">Tasks</span>
+          <span class="orbit-dash-jump">Jump to [TASK_ID]</span>
+          <span class="orbit-dash-refresh">Refresh</span>
+        </div>
+        <div class="orbit-dash-body">
+          <div class="orbit-dash-panel">
+            <div class="orbit-dash-panel-head">
+              <span>Tasks</span>
+              <span class="orbit-dash-count">1</span>
+            </div>
+            <div class="orbit-dash-filters">
+              <span>All</span>
+              <span class="is-on">Review</span>
+              <span>Backlog</span>
+            </div>
+            <div class="orbit-dash-row is-open">
+              <span class="orbit-dash-id">[TASK_ID]</span>
+              <span class="orbit-dash-title">Document fsProfile resolution</span>
+              <span class="orbit-dash-status">review</span>
+            </div>
+            <div class="orbit-dash-detail">
+              <p>Default ship stopped here. Pull request open, unmerged.</p>
+              <div class="orbit-dash-actions">
+                <span>comment</span>
+                <span class="is-primary">approve</span>
+                <span>reject</span>
+              </div>
+            </div>
+          </div>
+          <div class="orbit-dash-dock">
+            <div class="orbit-dash-dock-head">
+              <span class="is-on">Status</span>
+              <span>Log</span>
+            </div>
+            <p>Locked files · 0 files / 0 tasks</p>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="orbit-terminal-body">
-      <div><span class="orbit-terminal-prompt">$ </span><span class="orbit-terminal-cmd">orbit task add --title "Document fsProfile resolution" \</span></div>
-      <div><span class="orbit-terminal-cmd">    --acceptance-criteria "..." --complexity medium</span></div>
-      <div><span class="orbit-terminal-id">[TASK_ID]</span></div>
-      <div class="orbit-terminal-gap"></div>
-      <div><span class="orbit-terminal-prompt">$ </span><span class="orbit-terminal-cmd">orbit run ship "$TASK_ID"</span></div>
-      <div>submitted · run <span class="orbit-terminal-id">[RUN_ID]</span></div>
-      <div class="orbit-terminal-gap"></div>
-      <div><span class="orbit-terminal-prompt">$ </span><span class="orbit-terminal-cmd">orbit run show</span></div>
-      <div class="orbit-terminal-head">step   scope             status   duration</div>
-      <div>plan   worktree: iso     <span class="orbit-terminal-id">ok</span>       00:12</div>
-      <div>edit   fsProfile: docs   <span class="orbit-terminal-id">ok</span>       01:47</div>
-      <div>test   fsProfile: docs   <span class="orbit-terminal-id">ok</span>       02:03</div>
-      <div>pr     github            <span class="orbit-terminal-id">ok</span>       00:09</div>
-      <div class="orbit-terminal-gap"></div>
-      <div><span class="orbit-terminal-prompt">$ </span><span class="orbit-terminal-cmd">git log -1 --grep "$TASK_ID" --oneline</span></div>
-      <div><span class="orbit-terminal-id">[SHA]</span> docs: document fsProfile resolution</div>
-    </div>
-    <figcaption class="orbit-terminal-caption">Illustrative transcript. The commands are real; identifiers, step rows and durations are placeholders, not measured results.</figcaption>
+    <figcaption class="orbit-dash-caption">Illustration of the operator dashboard (<code>orbit web serve</code>), not a screenshot. Chrome follows the current Tasks view: left rail, task list, Status dock. The selected row is the walkthrough example after a default PR ship. Identifiers are placeholders, not captured from a live host.</figcaption>
   </figure>
 </section>
 
-<div class="orbit-section-title">Start here</div>
+<h2 class="orbit-section-title">One task, one pull request</h2>
 
-<div class="orbit-card-grid orbit-card-grid-3">
-  <a class="orbit-card" data-tag="01" href="/getting-started/install/">
-    <h3>Install</h3>
-    <p>One binary, no Rust toolchain. Then <code>orbit init</code> sets up your global root, and <code>orbit workspace init</code> registers the repository.</p>
-    <div class="orbit-card-cmd">orbit init</div>
+<p class="orbit-section-lede">The default path, with one example. Create the work, run an agent, inspect the result, then review the pull request. The task stops in <code>review</code> with the PR unmerged. Approving the task does not merge the pull request.</p>
+
+<div class="orbit-card-grid orbit-card-grid-4">
+  <a class="orbit-card" data-tag="01" href="/getting-started/first-task/">
+    <h3>Create a task</h3>
+    <p>Acceptance criteria are the finish line — agents self-evaluate against them. A new task starts in <code>proposed</code> until you approve it into the backlog.</p>
+    <div class="orbit-card-cmd">orbit task add --title "Document fsProfile resolution"</div>
   </a>
-  <a class="orbit-card" data-tag="02" href="/getting-started/first-task/">
-    <h3>Write a task</h3>
-    <p>Acceptance criteria are required — agents self-evaluate against them. Context selectors declare the file scope the run may touch.</p>
-    <div class="orbit-card-cmd">orbit task add --title "…"</div>
-  </a>
-  <a class="orbit-card" data-tag="03" href="/how-to/task-lifecycle/">
+  <a class="orbit-card" data-tag="02" href="/how-to/task-lifecycle/">
     <h3>Ship it</h3>
-    <p>The gated pipeline runs the agent, then opens a pull request. The task stops in <code>review</code> for you.</p>
+    <p>Orbit reserves those files, runs an agent in an isolated worktree, and opens a pull request. The command returns a run ID immediately.</p>
     <div class="orbit-card-cmd">orbit run ship "$TASK_ID"</div>
+  </a>
+  <a class="orbit-card" data-tag="03" href="/how-to/dashboard/">
+    <h3>Inspect the result</h3>
+    <p>Follow the run until the steps settle. The same task and run show up in the operator dashboard.</p>
+    <div class="orbit-card-cmd">orbit run show</div>
+  </a>
+  <a class="orbit-card" data-tag="04" href="/how-to/task-lifecycle/">
+    <h3>Review the pull request</h3>
+    <p>Look at the diff, CI, and execution summary. Approving moves the task from <code>review</code> to <code>done</code> — it does not merge the PR by itself.</p>
+    <div class="orbit-card-cmd">orbit task update "$TASK_ID" --approve</div>
   </a>
 </div>
 
-<div class="orbit-section-title">Choose a delivery mode</div>
+<p class="orbit-walk-next">Next: <a href="/getting-started/install/">install Orbit</a>, then <a href="/getting-started/first-task/">write your first task</a>.</p>
 
-<p class="orbit-section-lede">Every <code>orbit run</code> command is asynchronous: it prints a durable run ID and returns without knowing the outcome. Follow up with <code>orbit run show</code>. Pick the shape of delivery you want — the differences are where the run stops and who authorizes the last step.</p>
+<h2 class="orbit-section-title">Other delivery modes</h2>
+
+<p class="orbit-section-lede">The walkthrough above is <code>orbit run ship</code>. These other shapes change where the run stops and who authorizes the last step. Every <code>orbit run</code> command is asynchronous: it prints a durable run ID and returns without knowing the outcome. Follow up with <code>orbit run show</code>.</p>
 
 <div class="orbit-flow">
   <div class="orbit-flow-tabs" role="radiogroup" aria-label="Delivery mode">
@@ -231,7 +284,7 @@ next: false
   </div>
 </div>
 
-<div class="orbit-section-title">Why Orbit</div>
+<h2 class="orbit-section-title">Why Orbit</h2>
 
 <div class="orbit-card-grid orbit-card-grid-4">
   <div class="orbit-card">
@@ -256,7 +309,7 @@ next: false
   </div>
 </div>
 
-<div class="orbit-section-title">Go further</div>
+<h2 class="orbit-section-title">Go further</h2>
 
 <div class="orbit-card-grid orbit-card-grid-4">
   <a class="orbit-card" href="/how-to/continuous-delivery/">
@@ -281,25 +334,26 @@ next: false
   </a>
 </div>
 
-<div class="orbit-section-title">Explore the docs</div>
+<h2 class="orbit-section-title">Explore the docs</h2>
 
 <div class="orbit-docs-index">
   <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">Getting Started</div>
+    <h3 class="orbit-docs-group-title">Getting Started</h3>
     <a href="/getting-started/install/">Install Orbit</a>
     <a href="/getting-started/first-task/">First Task</a>
     <a href="/getting-started/workflows/">Delivery Workflows</a>
   </div>
   <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">Concepts</div>
+    <h3 class="orbit-docs-group-title">Concepts</h3>
     <a href="/concepts/tasks/">Tasks</a>
     <a href="/concepts/activities-jobs/">Activities and Jobs</a>
     <a href="/concepts/policies/">Policies</a>
     <a href="/concepts/agents/">Agents</a>
   </div>
   <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">How-to Guides</div>
+    <h3 class="orbit-docs-group-title">How-to Guides</h3>
     <a href="/how-to/task-lifecycle/">Run a Task Lifecycle</a>
+    <a href="/how-to/dashboard/">Use the Dashboard</a>
     <a href="/how-to/continuous-delivery/">Run Continuous Delivery</a>
     <a href="/how-to/recurring-work/">Schedule Recurring Work</a>
     <a href="/how-to/task-publication/">Publish and Restore Tasks</a>
@@ -308,7 +362,7 @@ next: false
     <a href="/how-to/mcp-integration/">Set Up MCP</a>
   </div>
   <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">Reference</div>
+    <h3 class="orbit-docs-group-title">Reference</h3>
     <a href="/reference/cli/">CLI Commands</a>
     <a href="/reference/activity-job-yaml/">Activity and Job YAML</a>
     <a href="/reference/policy-format/">Policy Format</a>
@@ -316,7 +370,7 @@ next: false
     <a href="/reference/scoping/">Scoping Rules</a>
   </div>
   <div class="orbit-docs-group">
-    <div class="orbit-docs-group-title">Contributing</div>
+    <h3 class="orbit-docs-group-title">Contributing</h3>
     <a href="/contributing/local-dev/">Local Development</a>
     <a href="/contributing/crate-layout/">Crate Layout</a>
     <a href="/contributing/pr-workflow/">PR Workflow</a>

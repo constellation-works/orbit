@@ -26,6 +26,19 @@ pub(crate) fn resolve_executor_sandbox(
         return Ok(None);
     };
     match kind {
+        // Carry explicit off through preparation so the runner can suppress
+        // provider-inner sandboxing and audit the choice without probing an OS
+        // wrapper or resolving filesystem grants that will not be enforced.
+        ExecutorSandboxKind::Off => Ok(Some(ResolvedSandbox {
+            kind,
+            fs_profile: ResolvedFsProfile {
+                name: UNRESTRICTED_FS_PROFILE.to_string(),
+                read: Vec::new(),
+                modify: Vec::new(),
+            },
+            allow_fallback: false,
+            managed_worktree: false,
+        })),
         ExecutorSandboxKind::MacosSandboxExec => {
             #[cfg(not(target_os = "macos"))]
             {
@@ -98,6 +111,19 @@ pub(crate) fn resolve_executor_sandbox(
                     &mut resolved,
                 )?;
                 append_linux_provider_state_roots(provider, &mut resolved)?;
+                // Host Git state is never a provider convenience grant. Append
+                // these last so even a side root inside metadata stays denied.
+                crate::runtime::git_sandbox::append_linux_git_denies(
+                    &runtime.paths().repo_root,
+                    &mut resolved,
+                )
+                .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+                if let Some(cwd) = subprocess_cwd {
+                    crate::runtime::git_sandbox::append_linux_git_denies(cwd, &mut resolved)
+                        .map_err(|error| {
+                            DispatchError::CliInvocationPermanent(error.to_string())
+                        })?;
+                }
                 let managed_worktree = subprocess_cwd
                     .and_then(|cwd| active_worktree_subpath(runtime, cwd))
                     .is_some();

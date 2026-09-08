@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use clap::Args;
+use orbit_core::OrbitRuntime;
 use orbit_core::runtime::run_audit::RunAuditEvent;
-use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::events::summarize_audit_event;
 use super::steps::resolve_run;
@@ -25,46 +25,39 @@ pub struct RunTraceArgs {
 
 impl Execute for RunTraceArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        {
-            print_run_trace(runtime, self.run_id.as_deref(), self.json)?;
-            Ok(CommandOutput::Silent)
-        }
+        run_trace_payload(runtime, self.run_id.as_deref())
     }
 }
 
-fn print_run_trace(
-    runtime: &OrbitRuntime,
-    run_id: Option<&str>,
-    json_output: bool,
-) -> Result<(), OrbitError> {
+fn run_trace_payload(runtime: &OrbitRuntime, run_id: Option<&str>) -> CommandOut {
     let run = resolve_run(runtime, run_id)?;
     let events = runtime.collect_run_audit_events(&run.run_id)?;
     let tree = build_trace_tree(&events);
-
-    if json_output {
-        return crate::output::json::print_pretty(&json!({
-            "run_id": run.run_id,
-            "job_id": run.job_id,
-            "roots": tree.roots.iter().map(trace_node_to_json).collect::<Vec<_>>(),
-            "orphans": tree.orphans.iter().map(trace_node_to_json).collect::<Vec<_>>(),
-        }));
-    }
+    let doc = json!({
+        "run_id": run.run_id,
+        "job_id": run.job_id,
+        "roots": tree.roots.iter().map(trace_node_to_json).collect::<Vec<_>>(),
+        "orphans": tree.orphans.iter().map(trace_node_to_json).collect::<Vec<_>>(),
+    });
 
     if tree.roots.is_empty() && tree.orphans.is_empty() {
-        println!("No audit events recorded.");
-        return Ok(());
+        return Ok(Payload::detail(doc, "No audit events recorded.").into());
     }
 
+    let mut text = String::new();
     for node in &tree.roots {
-        print_trace_node(node, 0);
+        write_trace_node(&mut text, node, 0);
     }
     if !tree.orphans.is_empty() {
-        println!("Orphans:");
+        text.push_str("Orphans:\n");
         for node in &tree.orphans {
-            print_trace_node(node, 1);
+            write_trace_node(&mut text, node, 1);
         }
     }
-    Ok(())
+    if text.ends_with('\n') {
+        text.pop();
+    }
+    Ok(Payload::detail(doc, text).into())
 }
 
 #[derive(Clone, Debug)]
@@ -143,15 +136,15 @@ fn trace_node_to_json(node: &TraceNode) -> Value {
     })
 }
 
-fn print_trace_node(node: &TraceNode, depth: usize) {
+fn write_trace_node(text: &mut String, node: &TraceNode, depth: usize) {
     let indent = "  ".repeat(depth);
     let prefix = if depth == 0 { "" } else { "- " };
-    println!(
-        "{indent}{prefix}{} {}",
+    text.push_str(&format!(
+        "{indent}{prefix}{} {}\n",
         node.event.event_type.as_deref().unwrap_or("-"),
         summarize_audit_event(&node.event)
-    );
+    ));
     for child in &node.children {
-        print_trace_node(child, depth + 1);
+        write_trace_node(text, child, depth + 1);
     }
 }

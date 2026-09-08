@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value as JsonValue;
-use toml_edit::{DocumentMut, Item, Table};
+use toml_edit::{DocumentMut, Item, Table, TableLike};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
@@ -133,21 +133,25 @@ impl ConfigStore {
     /// show` and `orbit config get` so they report identical values for the
     /// same scope.
     pub fn snapshot(&self) -> Result<ConfigSnapshot, OrbitError> {
-        // Persistence paths are derived from the two data roots, not from
-        // the config document, and are irrelevant to key validation here;
-        // this is discarded by every caller of `snapshot()`.
-        let persistence =
-            PersistenceConfig::default_for_data_root(self.path.parent().unwrap_or(&self.path));
-        let raw = self.doc.to_string();
-        let resolved = ResolvedConfig::from_raw_str(&raw, &self.path, persistence)?;
-        Ok(resolved.snapshot)
+        Ok(self.resolved()?.snapshot)
     }
 
-    /// Look up the effective value of a single registry key.
+    fn resolved(&self) -> Result<ResolvedConfig, OrbitError> {
+        // Persistence paths are derived from the two data roots, not from
+        // the config document, and are irrelevant to key validation here.
+        let persistence =
+            PersistenceConfig::default_for_data_root(self.path.parent().unwrap_or(&self.path));
+        ResolvedConfig::from_raw_str(&self.doc.to_string(), &self.path, persistence)
+    }
+
+    /// Look up the effective value of a single admitted key.
     pub fn effective_value(&self, key: &str) -> Result<JsonValue, OrbitError> {
-        require_known_key(key)?;
-        let snapshot = self.snapshot()?;
-        Ok(snapshot.value_for(key).unwrap_or(JsonValue::Null))
+        registry::admit_config_key(key)?;
+        let resolved = self.resolved()?;
+        if let Some(value) = resolved.snapshot.value_for(key) {
+            return Ok(value);
+        }
+        Ok(crew_field_value(&resolved, key)?.unwrap_or(JsonValue::Null))
     }
 
     /// Set `key` to the TOML-literal-or-string parse of `raw_value`,
@@ -155,23 +159,38 @@ impl ConfigStore {
     /// [`Self::validate`] and then [`Self::save`] afterward — `set_value`
     /// never touches disk.
     pub fn set_value(&mut self, key: &str, raw_value: &str) -> Result<(), OrbitError> {
-        require_known_key(key)?;
+        registry::admit_config_key(key)?;
+        self.set_document_value(key, raw_value)
+    }
+
+    /// Set a value in a configuration section that is parsed by a subsystem
+    /// outside the runtime-key registry.
+    ///
+    /// The registry intentionally admits only runtime-owned keys, while the
+    /// same `config.toml` also contains independently owned sections such as
+    /// `[docs]`. Those owners still use this method so their edits preserve
+    /// comments and share [`Self::save`]'s atomic persistence.
+    pub fn set_document_value(&mut self, key: &str, raw_value: &str) -> Result<(), OrbitError> {
+        if key.split('.').any(str::is_empty) {
+            return Err(OrbitError::InvalidInput(
+                "config key must contain non-empty dot-separated segments".to_string(),
+            ));
+        }
         let value = parse_value_literal(raw_value);
         let segments: Vec<&str> = key.split('.').collect();
-        // `require_known_key` above already rejects `key` unless it matches
-        // a non-empty registry entry, so `split_last` is always `Some` here;
-        // handled as an error rather than `expect()` since this is
+        // The non-empty segment check above makes `split_last` always `Some`;
+        // still handle it as an error rather than `expect()` because this is
         // reachable from user input, not a purely local invariant.
         let (last, ancestors) = segments.split_last().ok_or_else(|| {
             OrbitError::InvalidInput(format!("config key '{key}' must not be empty"))
         })?;
 
-        let mut table: &mut Table = self.doc.as_table_mut();
+        let mut table: &mut dyn TableLike = self.doc.as_table_mut();
         for segment in ancestors {
             let item = table
                 .entry(segment)
                 .or_insert_with(|| Item::Table(Table::new()));
-            table = item.as_table_mut().ok_or_else(|| {
+            table = item.as_table_like_mut().ok_or_else(|| {
                 OrbitError::InvalidInput(format!(
                     "cannot set '{key}': '{segment}' along its path is already a non-table value \
                      in '{}'",
@@ -214,15 +233,21 @@ impl ConfigStore {
     }
 }
 
-fn require_known_key(key: &str) -> Result<(), OrbitError> {
-    if registry::describe(key).is_some() {
-        Ok(())
-    } else {
-        Err(OrbitError::invalid_input_with_suggestions(
-            format!("unknown config key '{key}'"),
-            registry::all_key_names(),
-        ))
-    }
+fn crew_field_value(resolved: &ResolvedConfig, key: &str) -> Result<Option<JsonValue>, OrbitError> {
+    let Some(parsed) = registry::parse_crew_field_key(key)? else {
+        return Ok(None);
+    };
+    let Some(crew) = resolved.crews.get(parsed.name) else {
+        return Ok(Some(JsonValue::Null));
+    };
+    Ok(Some(match parsed.field {
+        "model" => serde_json::json!(crew.assignment.model),
+        "provider" => serde_json::json!(crew.assignment.provider),
+        "effort" => serde_json::json!(crew.assignment.effort),
+        "description" => serde_json::json!(crew.description),
+        "tags" => serde_json::json!(crew.tags),
+        _ => JsonValue::Null,
+    }))
 }
 
 fn read_optional(path: &Path) -> Result<String, OrbitError> {

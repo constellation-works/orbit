@@ -872,3 +872,70 @@ fn built_in_defaults_are_reachable_without_any_config_file() {
         ConfigSnapshot::default().execution_env_pass
     );
 }
+
+#[test]
+fn complexity_crew_pools_are_validated_deduplicated_and_projected() {
+    let config = load_config(
+        r#"
+[workflow]
+low_complexity_crews = ["luna"]
+medium_complexity_crews = ["terra", " grok ", "terra"]
+hard_complexity_crews = ["astra"]
+"#,
+    )
+    .expect("valid pools");
+    assert_eq!(
+        config.complexity_crews.medium,
+        Some(vec!["grok".into(), "terra".into()])
+    );
+    for (key, expected) in [
+        ("workflow.low_complexity_crews", serde_json::json!(["luna"])),
+        (
+            "workflow.medium_complexity_crews",
+            serde_json::json!(["grok", "terra"]),
+        ),
+        (
+            "workflow.hard_complexity_crews",
+            serde_json::json!(["astra"]),
+        ),
+    ] {
+        assert_eq!(config.snapshot.value_for(key), Some(expected));
+    }
+    for invalid in [
+        r#"["missing"]"#,
+        r#"[" "]"#,
+        r#"["grok", ""]"#,
+        "[1]",
+        "false",
+    ] {
+        let error = load_config(&format!(
+            "[workflow]\nmedium_complexity_crews = {invalid}\n"
+        ))
+        .expect_err("bad pools must fail config admission");
+        assert!(
+            error.to_string().contains("medium_complexity_crews"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn complexity_crew_pools_layer_by_replacement_and_empty_disables() {
+    let global = tempdir().expect("global");
+    let workspace = tempdir().expect("workspace");
+    write_config(
+        global.path(),
+        "[workflow]\nlow_complexity_crews = [\"luna\"]\nmedium_complexity_crews = [\"grok\"]\nhard_complexity_crews = [\"astra\"]\n",
+    );
+    write_config(
+        workspace.path(),
+        "[workflow]\nmedium_complexity_crews = [\"terra\"]\nhard_complexity_crews = []\n",
+    );
+    let config =
+        ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("layered pools");
+    assert_eq!(config.complexity_crews.low, Some(vec!["luna".into()]));
+    assert_eq!(config.complexity_crews.medium, Some(vec!["terra".into()]));
+    assert_eq!(config.complexity_crews.hard, Some(vec![]));
+    let defaults = load_config("").expect("defaults");
+    assert_eq!(defaults.complexity_crews.medium, Some(vec![]));
+}

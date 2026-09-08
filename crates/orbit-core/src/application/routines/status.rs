@@ -11,12 +11,48 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::{parse_local_routine_yaml, parse_routine_yaml};
 use orbit_store::contracts::RoutineFireRecord;
 
-use super::due::{parse_cron, truncate_to_minute};
+use super::due::{next_occurrence, parse_cron};
 use super::loader::{LoadedRoutine, RoutineLoadError, RoutineWorkspaceProvider, collect_routines};
 use super::validation::{
     RoutinePinValidation, RoutinePlacementProjection, RoutinePlacementProvider,
     RoutineRegistryStatus, validate_routine_pins,
 };
+
+/// Operator-facing schedule readiness. Theoretical next-slot math may still be
+/// present; this state says whether that time is armed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleDisplayState {
+    /// Enabled, eligible, and a next slot is a real scheduled evaluation.
+    Scheduled,
+    /// Definition `enabled` is false. A next slot, if present, is hypothetical.
+    Disabled,
+    /// Host-local pause. A next slot, if present, is hypothetical.
+    Paused,
+    /// Enabled delivery- or state-triggered work is waiting on that trigger.
+    Waiting,
+    /// The scheduler has never recorded a cursor for this definition.
+    NeverObserved,
+    /// Pin, source, or trigger state cannot be shown as a next evaluation.
+    Unavailable,
+}
+
+impl ScheduleDisplayState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Scheduled => "scheduled",
+            Self::Disabled => "disabled",
+            Self::Paused => "paused",
+            Self::Waiting => "waiting",
+            Self::NeverObserved => "never_observed",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
+    /// Disabled and paused rows may still carry a theoretical next slot.
+    pub fn is_hypothetical(self) -> bool {
+        matches!(self, Self::Disabled | Self::Paused)
+    }
+}
 
 /// Full effective state of one routine on this host.
 #[derive(Debug, Clone)]
@@ -46,6 +82,41 @@ impl RoutineStatus {
     pub fn effective(&self) -> bool {
         self.routine.definition.enabled && self.pinned_to_host && self.paused_at.is_none()
     }
+
+    /// How Operations (and other projections) should label the next slot.
+    pub fn schedule_display_state(&self) -> ScheduleDisplayState {
+        if !self.routine.definition.enabled {
+            return ScheduleDisplayState::Disabled;
+        }
+        if self.paused_at.is_some() {
+            return ScheduleDisplayState::Paused;
+        }
+        if !self.pinned_to_host {
+            return ScheduleDisplayState::Unavailable;
+        }
+        if automation_unavailable(self.automation.as_ref()) {
+            return ScheduleDisplayState::Unavailable;
+        }
+        if self.routine.definition.trigger.deliveries_landed.is_some()
+            || self.routine.definition.trigger.state.is_some()
+        {
+            return ScheduleDisplayState::Waiting;
+        }
+        if self.next_due.is_some() {
+            return ScheduleDisplayState::Scheduled;
+        }
+        if self.first_observed_at.is_none() {
+            return ScheduleDisplayState::NeverObserved;
+        }
+        ScheduleDisplayState::Unavailable
+    }
+}
+
+fn automation_unavailable(automation: Option<&serde_json::Value>) -> bool {
+    automation
+        .and_then(|value| value.get("reason"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|reason| reason == "source_unavailable" || reason == "state_unavailable")
 }
 
 /// Everything `orbit routine list` renders.
@@ -88,11 +159,7 @@ pub fn routine_statuses_with_providers(
 
     let mut statuses = Vec::with_capacity(collection.routines.len());
     for routine in collection.routines {
-        let next_due = parse_cron(&routine.definition.trigger.cron)
-            .ok()
-            .and_then(|cron| cron.find_next_occurrence(&now, false).ok())
-            .and_then(|slot| truncate_to_minute(slot).ok())
-            .map(|slot| slot.to_rfc3339());
+        let next_due = next_scheduled_occurrence(&routine.definition.trigger.cron, &now);
         let last_fire = store.routine_latest_fire(&routine.definition.name)?;
         let cursor = store.routine_cursor(&routine.definition.name)?;
         let paused_at = pauses
@@ -128,6 +195,21 @@ pub fn routine_statuses_with_providers(
         statuses,
         load_errors,
     })
+}
+
+/// The routine's next scheduled occurrence, rendered host-local.
+///
+/// This is the schedule coming around again, not the sweep's catch-up
+/// eligibility: a routine holding a missed slot under `catch_up_once` is due
+/// for that earlier slot while this still points forward. The projection comes
+/// from the shared cron owner so routine status and auto-task status pin slots
+/// to the minute identically. An unparseable cron projects nothing; the display
+/// state reports why.
+pub(crate) fn next_scheduled_occurrence(cron: &str, now: &DateTime<Local>) -> Option<String> {
+    parse_cron(cron)
+        .and_then(|cron| next_occurrence(&cron, now))
+        .ok()
+        .map(|slot| slot.to_rfc3339())
 }
 
 /// Optimistic outcome for a versioned routine-definition toggle.

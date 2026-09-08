@@ -10,7 +10,7 @@ use orbit_core::{AgentInvokeRequest, OrbitRuntime};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::json;
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
 #[command(
@@ -94,30 +94,27 @@ impl Execute for RunAgentArgs {
             session_context: &session_context,
         })?;
 
-        if self.json {
-            return Ok(Payload::document(json!({
-                "run_id": submission.run_id,
-                "job_id": submission.job_id,
-                "submitted_at": submission.submitted_at,
-                "state": if submission.queued { "queued" } else { "submitted" },
-                "deduplicated": submission.deduplicated,
-                "timeout_seconds": submission.timeout_seconds,
-                "authorized_by": submission.admission.authorized_by,
-                "authorizer_provenance": submission.admission.authorizer_provenance,
-                "workspace_path": submission.admission.workspace_path,
-                "cwd": submission.admission.cwd,
-                "sandboxed": false,
-            }))
-            .into());
-        }
-
+        let doc = json!({
+            "run_id": submission.run_id,
+            "job_id": submission.job_id,
+            "submitted_at": submission.submitted_at,
+            "state": if submission.queued { "queued" } else { "submitted" },
+            "deduplicated": submission.deduplicated,
+            "timeout_seconds": submission.timeout_seconds,
+            "authorized_by": submission.admission.authorized_by,
+            "authorizer_provenance": submission.admission.authorizer_provenance,
+            "workspace_path": submission.admission.workspace_path,
+            "cwd": submission.admission.cwd,
+            "sandboxed": false,
+        });
+        let mut lines = Vec::new();
         if submission.deduplicated {
-            println!(
+            lines.push(format!(
                 "resolved existing agent run {} for idempotency key (no new agent started)",
                 submission.run_id
-            );
+            ));
         } else {
-            println!(
+            lines.push(format!(
                 "submitted agent run {} ({}) in {}",
                 submission.run_id,
                 if submission.queued {
@@ -126,18 +123,18 @@ impl Execute for RunAgentArgs {
                     "running"
                 },
                 submission.admission.cwd
-            );
-            println!(
+            ));
+            lines.push(format!(
                 "running outside the executor sandbox, bounded at {}s, authorized by {} ({})",
                 submission.timeout_seconds,
                 submission.admission.authorized_by,
                 submission.admission.authorizer_provenance
-            );
+            ));
         }
-        println!(
+        lines.push(format!(
             "track it: orbit run show {run_id}  |  orbit run logs {run_id}  |  orbit run cancel {run_id}",
             run_id = submission.run_id
-        );
-        Ok(CommandOutput::Silent)
+        ));
+        Ok(Payload::detail(doc, lines.join("\n")).into())
     }
 }

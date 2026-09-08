@@ -12,7 +12,6 @@ use orbit_store::contracts::{
     InvocationInsertParams, InvocationQuery, InvocationRecord, JobRunStepParams,
     TaskReservationReleaseReason,
 };
-use orbit_store::token_scoreboard;
 use orbit_tools::{FsAuditLogger, ReservationOwnerContext, ToolContext};
 use orbit_types::identity::AgentModelPair;
 use orbit_types::policy::{Role, UNRESTRICTED_FS_PROFILE};
@@ -198,6 +197,22 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::settle_step_recovery(self, run_id, step_id, elapsed_seconds)
     }
 
+    fn validate_step_recovery_mutation(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        task_ids: &[String],
+        workspace_path: &std::path::Path,
+    ) -> Result<(), OrbitError> {
+        OrbitRuntime::validate_step_recovery_mutation(
+            self,
+            run_id,
+            step_id,
+            task_ids,
+            workspace_path,
+        )
+    }
+
     fn authorize_task_completion(
         &self,
         run_id: &str,
@@ -206,81 +221,19 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::authorize_task_completion(self, run_id, task_ids)
     }
 
+    fn record_review_landing(
+        &self,
+        request: &orbit_engine::ReviewLandingRequest,
+    ) -> Result<(), OrbitError> {
+        crate::application::review::record_review_landing(self, request)
+    }
+
     fn apply_task_automation_update(
         &self,
         task_id: &str,
         update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
-        let existing_task = self.get_task(task_id)?;
-        if update.status == Some(TaskStatus::InProgress)
-            && crate::application::task::in_progress_transition_requires_plan(existing_task.status)
-        {
-            crate::application::task::ensure_task_has_execution_plan(
-                task_id,
-                existing_task.plan.as_str(),
-            )?;
-        }
-        if update.status == Some(TaskStatus::Done) && existing_task.status != TaskStatus::Done {
-            self.ensure_resolves_are_workspace_local(&existing_task)?;
-        }
-        let (agent, model) = self
-            .try_canonical_agent_model_identity(update.agent.as_deref(), update.model.as_deref())?;
-        let runtime_model_identity = <Self as RuntimeHost>::actor_model_identity(self);
-        let attribution = assemble_task_attribution(
-            &existing_task,
-            TaskAttributionInput {
-                default_actor_label: SYSTEM_ACTOR_LABEL,
-                actor_override: Some(SYSTEM_ACTOR_LABEL),
-                agent: agent.as_deref(),
-                model: model.as_deref(),
-                runtime_model_identity: runtime_model_identity.as_deref(),
-                plan_changed: update.plan.is_some(),
-                target_status: update.status,
-                explicit_planned_by: None,
-                explicit_implemented_by: None,
-            },
-        );
-        let task = self.with_mutation(|| {
-            let external_refs = if update.external_refs.is_empty() {
-                None
-            } else {
-                let mut refs = existing_task.external_refs.clone();
-                for external_ref in update.external_refs.clone() {
-                    push_external_ref_if_missing(&mut refs, external_ref);
-                }
-                Some(refs)
-            };
-            let task = self.stores().task_records().update(
-                task_id,
-                StoreTaskUpdateParams {
-                    actor: attribution.actor.clone(),
-                    planned_by: attribution.planned_by.clone(),
-                    implemented_by: attribution.implemented_by.clone(),
-                    external_refs,
-                    status_event: update.status_event.clone(),
-                    status_note: update.status_note.clone(),
-                    append_comments: update.append_comments.clone(),
-                    ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                        execution_summary: update.execution_summary.clone(),
-                        plan: update.plan.clone(),
-                        context_files: update.context_files.clone(),
-                        status: update.status,
-                        job_run_id: update.job_run_id.clone().map(Some),
-                        ..Default::default()
-                    })
-                },
-            )?;
-            Ok((
-                task.clone(),
-                OrbitEvent::TaskUpdated {
-                    id: task_id.to_string(),
-                },
-            ))
-        })?;
-        if task.status == TaskStatus::Done {
-            self.record_resolves_side_effects(&task)?;
-        }
-        Ok(())
+        apply_locked_task_automation_update(self, task_id, update)
     }
 
     fn agent_provider_config(&self) -> std::collections::HashMap<String, String> {
@@ -642,6 +595,42 @@ impl RuntimeHost for OrbitRuntime {
             })
     }
 
+    fn checkpoint_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        self.stores()
+            .jobs()
+            .update_run_state(run_id, &mut |run_state, state| {
+                if run_state != orbit_types::workflow::JobRunState::Running {
+                    return Err(orbit_common::OrbitError::Execution(
+                        "rebase recovery run is no longer running".to_string(),
+                    ));
+                }
+                state
+                    .rebase_recovery_checkpoints
+                    .insert(step_id.to_string(), output.clone());
+                state.updated_at = Utc::now();
+                Ok(())
+            })
+            .and_then(|updated| {
+                if matches!(updated, orbit_types::workflow::RunStateUpdate::Updated) {
+                    Ok(())
+                } else {
+                    Err(orbit_common::OrbitError::Execution(
+                        "rebase recovery has no durable run state".to_string(),
+                    ))
+                }
+            })
+            .map_err(|error| {
+                DispatchError::JobExecution(format!(
+                    "persist rebase recovery checkpoint (run {run_id}, step `{step_id}`): {error}"
+                ))
+            })
+    }
+
     fn tool_context_for_activity(
         &self,
         run_id: Option<&str>,
@@ -718,32 +707,17 @@ impl RuntimeHost for OrbitRuntime {
             job_run_id,
             activity_id,
         );
-        let store = orbit_store::compose::invocation_store(&self.context.persistence().audit_db)
-            .map_err(|error| {
-                DispatchError::JobExecution(format!("open invocation store: {error}"))
-            })?;
-        store
-            .insert_invocation_trace_record(&InvocationInsertParams {
-                job_run_id: job_run_id.to_string(),
-                activity_id: activity_id.to_string(),
-                agent: agent.unwrap_or_else(|| provider.to_ascii_lowercase()),
-                model,
-                task_ids: task_context::associated_task_ids(input),
-                trace: trace.clone(),
-            })
-            .map_err(|error| {
-                DispatchError::JobExecution(format!("persist invocation trace: {error}"))
-            })?;
-
-        if let Err(error) =
-            token_scoreboard::write_token_scoreboard(&self.paths().scoreboard_dir, store.as_ref())
-        {
-            tracing::warn!(
-                target: "orbit.core.scoreboard",
-                error = %error,
-                "failed to refresh tokens scoreboard",
-            );
-        }
+        self.insert_invocation_trace_record(&InvocationInsertParams {
+            job_run_id: job_run_id.to_string(),
+            activity_id: activity_id.to_string(),
+            agent: agent.unwrap_or_else(|| provider.to_ascii_lowercase()),
+            model,
+            task_ids: task_context::associated_task_ids(input),
+            trace: trace.clone(),
+        })
+        .map_err(|error| {
+            DispatchError::JobExecution(format!("persist invocation trace: {error}"))
+        })?;
 
         let existing = self
             .get_job_run_backend(job_run_id)
@@ -833,4 +807,125 @@ impl RuntimeHost for OrbitRuntime {
             ),
         ))
     }
+}
+
+/// Apply an automation update while holding the task write lock across the
+/// whole read-modify-write.
+///
+/// ORB-11623: delivery automation previously read the task, derived
+/// attribution and a replacement `external_refs` vector, then wrote through
+/// `task_records().update` with no lock and `expected_status: None`. The
+/// store locks each write, not the read that decided it, so an operator
+/// transition or another ref writer in that gap was overwritten. The lock
+/// is re-entrant per thread, so the store's own per-write locking still
+/// holds underneath.
+fn apply_locked_task_automation_update(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    update: TaskAutomationUpdate,
+) -> Result<(), OrbitError> {
+    let mut update = Some(update);
+    let mut updated: Option<Task> = None;
+    runtime
+        .stores()
+        .tasks()
+        .with_task_write_lock(task_id, &mut || {
+            let update = update.take().ok_or_else(|| {
+                OrbitError::Execution(
+                    "task automation update body was invoked more than once".to_string(),
+                )
+            })?;
+            updated = Some(apply_task_automation_update_under_lock(
+                runtime, task_id, update,
+            )?);
+            Ok(())
+        })?;
+    let task = updated.ok_or_else(|| {
+        OrbitError::Execution(
+            "task automation update body did not run under the task lock".to_string(),
+        )
+    })?;
+    if task.status == TaskStatus::Done {
+        runtime.record_resolves_side_effects(&task)?;
+    }
+    Ok(())
+}
+
+fn apply_task_automation_update_under_lock(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    update: TaskAutomationUpdate,
+) -> Result<Task, OrbitError> {
+    let existing_task = runtime.get_task(task_id)?;
+    #[cfg(test)]
+    runtime.invoke_after_locked_state_read(&existing_task);
+    if update.status == Some(TaskStatus::InProgress)
+        && crate::application::task::in_progress_transition_requires_plan(existing_task.status)
+    {
+        crate::application::task::ensure_task_has_execution_plan(
+            task_id,
+            existing_task.plan.as_str(),
+        )?;
+    }
+    if update.status == Some(TaskStatus::Done) && existing_task.status != TaskStatus::Done {
+        runtime.ensure_resolves_are_workspace_local(&existing_task)?;
+    }
+    let (agent, model) = runtime
+        .try_canonical_agent_model_identity(update.agent.as_deref(), update.model.as_deref())?;
+    let runtime_model_identity = <OrbitRuntime as RuntimeHost>::actor_model_identity(runtime);
+    let attribution = assemble_task_attribution(
+        &existing_task,
+        TaskAttributionInput {
+            default_actor_label: SYSTEM_ACTOR_LABEL,
+            actor_override: Some(SYSTEM_ACTOR_LABEL),
+            agent: agent.as_deref(),
+            model: model.as_deref(),
+            runtime_model_identity: runtime_model_identity.as_deref(),
+            plan_changed: update.plan.is_some(),
+            target_status: update.status,
+            explicit_planned_by: None,
+            explicit_implemented_by: None,
+        },
+    );
+    runtime.with_mutation(|| {
+        let external_refs = if update.external_refs.is_empty() {
+            None
+        } else {
+            // Merge against the latest locked state. `external_refs` is a
+            // wholesale replacement in the store, so a re-entrant writer that
+            // landed a ref after the decision snapshot would otherwise be lost.
+            let mut refs = runtime.get_task(task_id)?.external_refs;
+            for external_ref in update.external_refs.clone() {
+                push_external_ref_if_missing(&mut refs, external_ref);
+            }
+            Some(refs)
+        };
+        let task = runtime.stores().task_records().update(
+            task_id,
+            StoreTaskUpdateParams {
+                actor: attribution.actor.clone(),
+                planned_by: attribution.planned_by.clone(),
+                implemented_by: attribution.implemented_by.clone(),
+                external_refs,
+                status_event: update.status_event.clone(),
+                status_note: update.status_note.clone(),
+                append_comments: update.append_comments.clone(),
+                expected_status: Some(vec![existing_task.status]),
+                ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                    execution_summary: update.execution_summary.clone(),
+                    plan: update.plan.clone(),
+                    context_files: update.context_files.clone(),
+                    status: update.status,
+                    job_run_id: update.job_run_id.clone().map(Some),
+                    ..Default::default()
+                })
+            },
+        )?;
+        Ok((
+            task.clone(),
+            OrbitEvent::TaskUpdated {
+                id: task_id.to_string(),
+            },
+        ))
+    })
 }

@@ -5,6 +5,24 @@ use crate::command::{Cli, Commands};
 use super::super::TaskSubcommand;
 
 #[test]
+fn task_update_accepts_every_existing_status() {
+    for status in [
+        "proposed",
+        "backlog",
+        "in-progress",
+        "review",
+        "done",
+        "blocked",
+        "archived",
+        "rejected",
+        "someday",
+    ] {
+        Cli::try_parse_from(["orbit", "task", "update", "ORB-00001", "--status", status])
+            .unwrap_or_else(|error| panic!("status {status} must parse: {error}"));
+    }
+}
+
+#[test]
 fn task_update_accepts_context_files_alias() {
     let cli = Cli::try_parse_from([
         "orbit",
@@ -25,11 +43,63 @@ fn task_update_accepts_context_files_alias() {
     };
 
     assert_eq!(args.id, "ORB-00001");
-    assert_eq!(
-        args.context_files.as_deref(),
-        Some("file:src/lib.rs,dir:tests")
-    );
+    assert_eq!(args.context_files, ["file:src/lib.rs", "dir:tests"]);
     assert!(args.json);
+}
+
+#[test]
+fn task_update_parses_repeat_and_comma_delimited_lists() {
+    let cli = Cli::parse_from([
+        "orbit",
+        "task",
+        "update",
+        "ORB-00001",
+        "--dependencies",
+        "ORB-00002,ORB-00003",
+        "--dependency",
+        "ORB-00004",
+        "--context",
+        "file:src/lib.rs,dir:tests",
+        "--context-files",
+        "symbol:Task",
+    ]);
+
+    let Commands::Task(task) = cli.command else {
+        panic!("expected task command");
+    };
+    let TaskSubcommand::Update(args) = task.command else {
+        panic!("expected task update command");
+    };
+
+    assert_eq!(args.dependencies, ["ORB-00002", "ORB-00003", "ORB-00004"]);
+    assert_eq!(
+        args.context_files,
+        ["file:src/lib.rs", "dir:tests", "symbol:Task"]
+    );
+}
+
+#[test]
+fn task_update_preserves_explicit_empty_list_values_for_clearing() {
+    let cli = Cli::parse_from([
+        "orbit",
+        "task",
+        "update",
+        "ORB-00001",
+        "--dependencies",
+        "",
+        "--context",
+        "",
+    ]);
+
+    let Commands::Task(task) = cli.command else {
+        panic!("expected task command");
+    };
+    let TaskSubcommand::Update(args) = task.command else {
+        panic!("expected task update command");
+    };
+
+    assert_eq!(args.dependencies, [""]);
+    assert_eq!(args.context_files, [""]);
 }
 
 #[test]

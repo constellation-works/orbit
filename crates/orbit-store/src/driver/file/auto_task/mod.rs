@@ -5,39 +5,75 @@
 //! gitignored runtime state.
 //! The git-versioned definition YAML is never rewritten by a scheduler fire,
 //! so the store stays churn-free and a definition edit never races the
-//! scheduler. Updates take an exclusive file lock and re-read under the lock,
-//! so a manual run racing the routine merges instead of clobbering.
+//! scheduler.
+//!
+//! Slot admission and persistence share one stable sidecar lock
+//! (`.auto-tasks.json.lock`). The data file is replaced by rename, so the
+//! lock is not the inode being replaced and readers never observe truncated
+//! JSON. Missing state is an empty map (first-observation baseline). An
+//! existing unreadable or malformed file is an explicit error and is left
+//! unchanged for investigation.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs;
 use std::path::{Path, PathBuf};
 
-use fs2::FileExt;
 use orbit_common::OrbitError;
+use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 use orbit_types::workflow::{AutoTaskCursor, AutoTaskCursorState};
+
+#[cfg(test)]
+use std::cell::RefCell;
 
 /// Path of the cursor state file under a workspace state dir.
 pub fn cursor_state_path(state_dir: &Path) -> PathBuf {
     state_dir.join("auto-tasks.json")
 }
 
-/// Read the current cursor state (missing or unparsable file → empty state;
-/// every definition is then treated as never-observed, which only re-baselines
-/// it — safe in both directions).
-pub fn load_cursor_state(path: &Path) -> AutoTaskCursorState {
-    fs::read_to_string(path)
-        .ok()
-        .map(|raw| parse_state(&raw))
-        .unwrap_or_default()
+/// Stable sidecar lock for [`cursor_state_path`]. Matches
+/// `orbit_common::fs::io::with_exclusive_file_lock` so atomic replacement of
+/// the data file cannot drop exclusion.
+pub fn cursor_lock_path(state_path: &Path) -> PathBuf {
+    let file_name = state_path.file_name().map_or_else(
+        || "auto-tasks.json".to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    state_path.with_file_name(format!(".{file_name}.lock"))
 }
 
-pub(crate) fn parse_state(raw: &str) -> AutoTaskCursorState {
-    serde_json::from_str(raw.trim()).unwrap_or_default()
+/// Read the current cursor state.
+///
+/// A missing file is empty state. An existing file that cannot be read or
+/// parsed is an error; callers must not treat that as a baseline or rewrite it.
+pub fn load_cursor_state(path: &Path) -> Result<AutoTaskCursorState, OrbitError> {
+    match fs::read_to_string(path) {
+        Ok(raw) => parse_state(&raw, path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(AutoTaskCursorState::default())
+        }
+        Err(error) => Err(OrbitError::Io(format!(
+            "unreadable auto-task cursor state {}: {error}; file left unchanged for investigation",
+            path.display()
+        ))),
+    }
 }
 
-/// Upsert one definition's cursor under an exclusive file lock,
-/// read-modify-writing the file so other definitions' cursors survive.
-pub fn upsert_cursor(path: &Path, name: &str, cursor: AutoTaskCursor) -> Result<(), OrbitError> {
+fn parse_state(raw: &str, path: &Path) -> Result<AutoTaskCursorState, OrbitError> {
+    serde_json::from_str(raw.trim()).map_err(|error| {
+        OrbitError::Store(format!(
+            "malformed auto-task cursor state {}: {error}; file left unchanged for investigation",
+            path.display()
+        ))
+    })
+}
+
+/// Hold the sidecar lock, load current state, and run `op`.
+///
+/// `op` may [`CursorSession::save`] more than once (claim, then checkpoint).
+/// A successful `op` does not implicitly write; callers persist explicitly.
+pub fn with_cursor_lock<T, F>(path: &Path, op: F) -> Result<T, OrbitError>
+where
+    F: FnOnce(&mut CursorSession) -> Result<T, OrbitError>,
+{
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             OrbitError::Io(format!(
@@ -47,51 +83,75 @@ pub fn upsert_cursor(path: &Path, name: &str, cursor: AutoTaskCursor) -> Result<
         })?;
     }
 
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .map_err(|error| {
-            OrbitError::Io(format!(
-                "open auto-tasks state file {}: {error}",
-                path.display()
-            ))
-        })?;
-    file.lock_exclusive().map_err(|error| {
-        OrbitError::Io(format!(
-            "lock auto-tasks state file {}: {error}",
-            path.display()
-        ))
-    })?;
-
-    let result = write_locked(&mut file, path, name, cursor);
-    let unlock = fs2::FileExt::unlock(&file).map_err(|error| {
-        OrbitError::Io(format!(
-            "unlock auto-tasks state file {}: {error}",
-            path.display()
-        ))
-    });
-    result.and(unlock)
+    with_exclusive_file_lock(path, "auto-task cursor", || {
+        let state = load_cursor_state(path)?;
+        let mut session = CursorSession {
+            path: path.to_path_buf(),
+            state,
+        };
+        op(&mut session)
+    })
 }
 
-fn write_locked(
-    file: &mut File,
-    path: &Path,
-    name: &str,
-    cursor: AutoTaskCursor,
-) -> Result<(), OrbitError> {
-    let mut raw = String::new();
-    file.read_to_string(&mut raw)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
-    let mut state = parse_state(&raw);
-    state.definitions.insert(name.to_string(), cursor);
-
-    let encoded = serde_json::to_string_pretty(&state)
-        .map_err(|error| OrbitError::Io(format!("encode auto-tasks state: {error}")))?;
-    file.seek(SeekFrom::Start(0))
-        .and_then(|_| file.set_len(0))
-        .and_then(|_| file.write_all(encoded.as_bytes()))
-        .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))
+/// Locked cursor file session. Mutations are local until [`Self::save`].
+pub struct CursorSession {
+    path: PathBuf,
+    /// Current in-memory cursor map, including other definitions' rows.
+    pub state: AutoTaskCursorState,
 }
+
+impl CursorSession {
+    /// Atomically replace the state file with `self.state`.
+    ///
+    /// The sidecar lock, not this inode, maintains exclusion. A write failure
+    /// leaves the previous complete JSON in place.
+    pub fn save(&self) -> Result<(), OrbitError> {
+        fail_if_injected_save()?;
+        let encoded = serde_json::to_string_pretty(&self.state)
+            .map_err(|error| OrbitError::Io(format!("encode auto-tasks state: {error}")))?;
+        atomic_write_text(&self.path, &encoded)
+            .map_err(|error| OrbitError::from_write_io(&self.path, error))
+    }
+}
+
+/// Upsert one definition's cursor under the sidecar lock,
+/// read-modify-writing so other definitions' cursors survive.
+pub fn upsert_cursor(path: &Path, name: &str, cursor: AutoTaskCursor) -> Result<(), OrbitError> {
+    with_cursor_lock(path, |session| {
+        session.state.definitions.insert(name.to_string(), cursor);
+        session.save()
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static INJECTED_SAVE_FAULTS: RefCell<usize> = const { RefCell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn inject_cursor_save_failures(count: usize) {
+    INJECTED_SAVE_FAULTS.with(|cell| *cell.borrow_mut() = count);
+}
+
+fn fail_if_injected_save() -> Result<(), OrbitError> {
+    #[cfg(test)]
+    {
+        let hit = INJECTED_SAVE_FAULTS.with(|cell| {
+            let mut remaining = cell.borrow_mut();
+            if *remaining == 0 {
+                return false;
+            }
+            *remaining -= 1;
+            true
+        });
+        if hit {
+            return Err(OrbitError::Store(
+                "injected auto-task cursor save failure".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

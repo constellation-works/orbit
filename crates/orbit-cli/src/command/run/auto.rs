@@ -6,10 +6,10 @@ use orbit_core::{
 };
 use serde_json::json;
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 use crate::parse::parse_duration_seconds;
 
-use super::support::{WorkflowDispatchResult, print_workflow_dispatch_results};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload};
 
 pub(super) const AUTO_WORKFLOW: &str = "auto";
 
@@ -17,7 +17,7 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
 #[command(
     about = "Drain the workspace backlog for a window (loose leaves, plus one epic)",
     override_usage = "orbit run auto [OPTIONS]",
-    after_help = "Examples:\n  orbit run auto\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --stop\n\n\
+    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,terra\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --stop\n\n\
                   The drain re-lists the whole backlog every pass and keeps `--concurrency`\n\
                   tasks in flight, starting a replacement as each one finishes rather than\n\
                   waiting for the batch. An epic root runs alongside the leaves, one at a time.\n\n\
@@ -25,6 +25,11 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   admits for the whole window, including work that reaches the backlog after\n\
                   the run starts. The drain is asynchronous, so this prints the durable run ID\n\
                   and returns without knowing the eventual outcome.\n\n\
+                  Complexity pools select only for tasks without an explicit crew.\n\
+                  Each CLI pool replaces its matching workflow pool for this drain.\n\
+                  Empty pools and unset complexity use the existing default crew chain.\n\
+                  Selections are recorded at admission and retained on retries/resume.\n\
+                  Pools do not restrict manual crew choices.\n\n\
                   `--allow-crew` restricts this one run to the named crews, for its window\n\
                   only. It edits no configuration and reassigns nothing: a backlog task whose\n\
                   crew is excluded is simply not started, and `orbit run readiness --allow-crew`\n\
@@ -70,6 +75,18 @@ pub struct AutoCommand {
     /// invocation is already running is cancelled.
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
+    /// Random crew pool for unassigned low-complexity tasks. Overrides the
+    /// matching workflow pool; pass the flag with no names to disable it.
+    #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
+    pub low_complexity_crews: Option<Vec<String>>,
+    /// Random crew pool for unassigned medium-complexity tasks. Overrides the
+    /// matching workflow pool; pass the flag with no names to disable it.
+    #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
+    pub medium_complexity_crews: Option<Vec<String>>,
+    /// Random crew pool for unassigned hard-complexity tasks. Overrides the
+    /// matching workflow pool; pass the flag with no names to disable it.
+    #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
+    pub hard_complexity_crews: Option<Vec<String>>,
     /// Bind this drain to an operation-mode grant (see `orbit operation`).
     /// Completion, scope, and limits come from the grant; `--complete` is
     /// not accepted alongside it.
@@ -87,7 +104,7 @@ pub struct AutoCommand {
     /// start a drain.
     #[arg(
         long,
-        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "grant"]
+        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "grant", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews"]
     )]
     pub stop: bool,
 }
@@ -95,8 +112,13 @@ pub struct AutoCommand {
 impl Execute for AutoCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.stop {
-            return execute_stop(runtime, self.json, self.claim_token.as_deref());
+            return execute_stop(runtime, self.claim_token.as_deref());
         }
+        let complexity_crews = orbit_config::ComplexityCrewPools {
+            low: self.low_complexity_crews,
+            medium: self.medium_complexity_crews,
+            hard: self.hard_complexity_crews,
+        };
         let for_seconds = self
             .for_duration
             .as_deref()
@@ -109,8 +131,8 @@ impl Execute for AutoCommand {
                 for_seconds,
                 self.concurrency,
                 &self.allow_crew,
+                &complexity_crews,
                 self.claim_token.as_deref(),
-                self.json,
             );
         }
         let completion = if self.complete {
@@ -123,6 +145,7 @@ impl Execute for AutoCommand {
             self.concurrency,
             completion,
             &self.allow_crew,
+            &complexity_crews,
             None,
             self.claim_token.as_deref(),
         )?;
@@ -139,31 +162,32 @@ impl Execute for AutoCommand {
             error_code: None,
             error_message: None,
         };
-        print_workflow_dispatch_results(AUTO_WORKFLOW, &[run], self.json)?;
-        Ok(CommandOutput::Silent)
+        workflow_dispatch_payload(AUTO_WORKFLOW, &[run])
     }
 }
 
 /// [ORB-11332] A drain whose every admission is bound to a grant.
+#[allow(clippy::too_many_arguments)]
 fn execute_grant_bound(
     runtime: &OrbitRuntime,
     grant_id: &str,
     for_seconds: Option<u64>,
     concurrency: Option<u32>,
     allow_crew: &[String],
+    complexity_crews: &orbit_config::ComplexityCrewPools,
     claim_token: Option<&str>,
-    json: bool,
 ) -> CommandOut {
     let result = runtime.submit_operation_drain(OperationDrainRequest {
         grant_id: Some(grant_id),
         for_seconds,
         max_active_leaf_runs: concurrency,
         allowed_crews: allow_crew,
+        complexity_crews,
         actor: None,
         claim_token,
     })?;
-    if json {
-        return Ok(Payload::document(json!({
+    Ok(Payload::detail(
+        json!({
             "workflow": AUTO_WORKFLOW,
             "job_id": result.invoke.job_name,
             "run_id": result.invoke.run_id,
@@ -174,79 +198,80 @@ fn execute_grant_bound(
             "window_seconds": result.window_seconds,
             "leaf_ceiling": result.leaf_ceiling,
             "expires_at": result.admission.expires_at.to_rfc3339(),
-        }))
-        .into());
-    }
-    println!(
-        "Submitted auto run {} under grant {} (completion: {}, window: {}s, leaf ceiling: {}).",
-        result.invoke.run_id,
-        result.admission.grant_id,
-        result.admission.completion,
-        result.window_seconds,
-        result.leaf_ceiling
-    );
-    Ok(CommandOutput::Silent)
+        }),
+        format!(
+            "Submitted auto run {} under grant {} (completion: {}, window: {}s, leaf ceiling: {}).",
+            result.invoke.run_id,
+            result.admission.grant_id,
+            result.admission.completion,
+            result.window_seconds,
+            result.leaf_ceiling
+        ),
+    )
+    .into())
 }
 
-fn execute_stop(runtime: &OrbitRuntime, json: bool, claim_token: Option<&str>) -> CommandOut {
+fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut {
     let result = runtime.stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
         actor: "cli",
         source: "run_auto_stop",
         reason: None,
         claim_token,
     })?;
-    if json {
-        return Ok(Payload::document(json!({
-            "outcome": result.outcome,
-            "coordinators": result.coordinators.iter().map(|change| json!({
-                "run_id": change.run_id,
-                "job_id": change.job_id,
-                "outcome": change.outcome,
-                "remaining_children": change.remaining_children.iter().map(|child| json!({
-                    "run_id": child.run_id,
-                    "job_name": child.job_name,
-                    "phase": child.phase,
-                    "child_status": child.child_status,
-                })).collect::<Vec<_>>(),
+    let doc = json!({
+        "outcome": result.outcome,
+        "coordinators": result.coordinators.iter().map(|change| json!({
+            "run_id": change.run_id,
+            "job_id": change.job_id,
+            "outcome": change.outcome,
+            "remaining_children": change.remaining_children.iter().map(|child| json!({
+                "run_id": child.run_id,
+                "job_name": child.job_name,
+                "phase": child.phase,
+                "child_status": child.child_status,
             })).collect::<Vec<_>>(),
-        }))
-        .into());
-    }
+        })).collect::<Vec<_>>(),
+    });
     if result.coordinators.is_empty() {
-        println!("No active auto coordinator in this workspace.");
-        return Ok(CommandOutput::Silent);
+        return Ok(Payload::detail(doc, "No active auto coordinator in this workspace.").into());
     }
+    let mut lines = Vec::new();
     for change in &result.coordinators {
         match change.outcome {
-            "cancelled_queued" => println!(
+            "cancelled_queued" => lines.push(format!(
                 "Cancelled queued auto run {} before it started; it had not admitted any work.",
                 change.run_id
-            ),
-            "unchanged" => println!("job run {} already has admissions stopped.", change.run_id),
-            _ => println!(
+            )),
+            "unchanged" => lines.push(format!(
+                "job run {} already has admissions stopped.",
+                change.run_id
+            )),
+            _ => lines.push(format!(
                 "Stopped admissions for job run {} ({}).",
                 change.run_id, change.job_id
-            ),
+            )),
         }
         if change.remaining_children.is_empty() {
             if change.outcome != "cancelled_queued" {
-                println!("No remaining children.");
+                lines.push("No remaining children.".to_string());
             }
         } else {
-            println!(
+            lines.push(
                 "Remaining children (still running under their existing completion authority):"
+                    .to_string(),
             );
             for child in &change.remaining_children {
                 let status = child.child_status.as_deref().unwrap_or("-");
-                println!(
+                lines.push(format!(
                     "  {} job={} phase={} status={}",
                     child.run_id, child.job_name, child.phase, status
-                );
+                ));
             }
-            println!(
+            lines.push(
                 "To cancel already-running workers, use `orbit run cancel <run_id> --confirm` on each child."
+                    .to_string(),
             );
         }
     }
-    Ok(CommandOutput::Silent)
+    Ok(Payload::detail(doc, lines.join("\n")).into())
 }

@@ -1,3 +1,3 @@
-mod glob;
+mod git;
 mod io;
 mod selector;

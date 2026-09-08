@@ -1,4 +1,6 @@
-use clap::{Args, ValueEnum};
+use std::sync::OnceLock;
+
+use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_cmd::task_owner::bound_workspace_identity;
 use orbit_common::observability::audit_id::audit_execution_id;
@@ -7,14 +9,7 @@ use orbit_registry::{HostIdentityState, inspect_host_identity};
 use orbit_types::tool::{McpTransport, ToolSessionContext};
 use serde_json::{Map, Value};
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
-
-#[derive(Clone, ValueEnum, Default)]
-pub enum OutputFormat {
-    #[default]
-    Json,
-    Text,
-}
+use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
 pub struct ToolRunArgs {
@@ -32,9 +27,6 @@ pub struct ToolRunArgs {
     /// Exact agent model for provenance attribution (overrides ORBIT_AGENT_MODEL)
     #[arg(long)]
     pub model: Option<String>,
-    /// Execution timeout (e.g. "30s", "5000ms")
-    #[arg(long)]
-    pub timeout: Option<String>,
     /// Validate without executing
     #[arg(long)]
     pub dry_run: bool,
@@ -44,15 +36,38 @@ pub struct ToolRunArgs {
     /// Return the tool's full unfiltered JSON output
     #[arg(long)]
     pub full: bool,
-    /// Pretty-print JSON output for human debugging
-    #[arg(long)]
+    /// Compatibility alias for pretty-printing JSON error output
+    #[arg(long, hide = true)]
     pub pretty: bool,
-    /// Output format
-    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
-    pub output: OutputFormat,
+    #[arg(skip)]
+    pub(crate) parsed_input: OnceLock<Result<Value, String>>,
 }
 
 impl ToolRunArgs {
+    /// Read and parse tool input once for all pre-dispatch and execution paths
+    /// in this invocation. An unreadable `--input-file` must not be silently
+    /// retried by task-owner bootstrap or audit metadata.
+    pub(crate) fn parsed_input(&self) -> Result<Value, OrbitError> {
+        self.parsed_input
+            .get_or_init(|| self.load_input())
+            .clone()
+            .map_err(OrbitError::InvalidInput)
+    }
+
+    fn load_input(&self) -> Result<Value, String> {
+        if let Some(path) = &self.input_file {
+            let raw = std::fs::read_to_string(path)
+                .map_err(|error| format!("cannot read input file '{path}': {error}"))?;
+            serde_json::from_str(&raw).map_err(|error| format!("invalid JSON in '{path}': {error}"))
+        } else {
+            match &self.input {
+                Some(raw) => serde_json::from_str(raw)
+                    .map_err(|error| format!("invalid JSON input: {error}")),
+                None => Ok(Value::Object(Default::default())),
+            }
+        }
+    }
+
     /// Globally unique task ID from `orbit tool run orbit.task.show` input.
     ///
     /// The CLI bootstraps that one tool through the host task registry rather
@@ -62,12 +77,7 @@ impl ToolRunArgs {
         if self.name != "orbit.task.show" {
             return None;
         }
-        let raw = if let Some(path) = &self.input_file {
-            std::fs::read_to_string(path).ok()?
-        } else {
-            self.input.clone()?
-        };
-        let value: Value = serde_json::from_str(&raw).ok()?;
+        let value = self.parsed_input().ok()?;
         value
             .get("id")
             .and_then(Value::as_str)
@@ -79,19 +89,7 @@ impl ToolRunArgs {
 
 impl Execute for ToolRunArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let mut input: Value = if let Some(path) = &self.input_file {
-            let raw = std::fs::read_to_string(path).map_err(|e| {
-                OrbitError::InvalidInput(format!("cannot read input file '{path}': {e}"))
-            })?;
-            serde_json::from_str(&raw)
-                .map_err(|e| OrbitError::InvalidInput(format!("invalid JSON in '{path}': {e}")))?
-        } else {
-            match &self.input {
-                Some(raw) => serde_json::from_str(raw)
-                    .map_err(|e| OrbitError::InvalidInput(format!("invalid JSON input: {e}")))?,
-                None => Value::Object(Default::default()),
-            }
-        };
+        let mut input = self.parsed_input()?;
 
         // Resolve `workspace` once above local CLI tools, then bind or fail
         // closed. MCP uses its own server-side selector resolution.
@@ -103,24 +101,30 @@ impl Execute for ToolRunArgs {
 
         if self.dry_run {
             let result = runtime.run_tool_dry_run(&self.name, &input)?;
-            println!("Tool:           {}", result.tool_name);
-            println!(
-                "Policy:         {}",
-                if result.policy_allowed {
-                    "allowed"
-                } else {
-                    "denied"
-                }
-            );
-            if result.missing_params.is_empty() {
-                println!("Missing params: (none)");
+            let policy = if result.policy_allowed {
+                "allowed"
             } else {
-                println!("Missing params: {}", result.missing_params.join(", "));
-            }
-            return Ok(CommandOutput::Silent);
+                "denied"
+            };
+            let missing = if result.missing_params.is_empty() {
+                "(none)".to_string()
+            } else {
+                result.missing_params.join(", ")
+            };
+            let doc = serde_json::json!({
+                "tool_name": result.tool_name,
+                "policy_allowed": result.policy_allowed,
+                "missing_params": result.missing_params,
+            });
+            let text = format!(
+                "Tool:           {}\nPolicy:         {policy}\nMissing params: {missing}",
+                result.tool_name
+            );
+            return Ok(Payload::detail(doc, text).into());
         }
 
-        let session_context = local_tool_session_context(runtime)?;
+        let owner = bound_workspace_identity(runtime);
+        let session_context = local_tool_session_context(runtime, owner.as_ref())?;
         let output = runtime.execute_tool_command_with_session_context(
             &self.name,
             input.clone(),
@@ -129,26 +133,14 @@ impl Execute for ToolRunArgs {
             session_context,
         )?;
         let output = crate::command::task::show::attach_bound_workspace_identity(
-            &self.name, &input, runtime, output,
+            &self.name,
+            &input,
+            owner.as_ref(),
+            output,
         )?;
-        let output = shape_tool_output(&self.name, &input, output, self.full, &self.fields);
+        let output = shape_tool_output(&self.name, output, self.full, &self.fields);
 
-        match self.output {
-            OutputFormat::Json => {
-                if self.pretty {
-                    Ok(Payload::document(output).into())
-                } else {
-                    {
-                        crate::output::json::print(&output)?;
-                        Ok(CommandOutput::Silent)
-                    }
-                }
-            }
-            OutputFormat::Text => {
-                println!("{}", output);
-                Ok(CommandOutput::Silent)
-            }
-        }
+        Ok(Payload::document(output).into())
     }
 }
 
@@ -156,11 +148,12 @@ pub(super) const LOCAL_MACHINE_ID_FALLBACK: &str = "host/local";
 
 pub(super) fn local_tool_session_context(
     runtime: &OrbitRuntime,
+    owner: Option<&orbit_cmd::task_owner::WorkspaceIdentity>,
 ) -> Result<ToolSessionContext, OrbitError> {
     let (machine_id, host_id) = local_machine_identity(&runtime.global_root())?;
     Ok(ToolSessionContext {
-        workspace_id: bound_workspace_identity(runtime)
-            .map(|owner| owner.id)
+        workspace_id: owner
+            .map(|owner| owner.id.clone())
             .or_else(|| runtime.workspace_id().ok()),
         caller_machine_id: Some(machine_id.clone()),
         caller_host_id: host_id.clone(),
@@ -204,7 +197,6 @@ const MINIMAL_TASK_FIELDS: &[&str] = &[
 
 pub(super) fn shape_tool_output(
     tool_name: &str,
-    input: &Value,
     output: Value,
     full: bool,
     fields: &[String],
@@ -217,7 +209,7 @@ pub(super) fn shape_tool_output(
         return filter_top_level_fields(output, fields);
     }
 
-    if should_project_minimal_task_output(tool_name, input) {
+    if should_project_minimal_task_output(tool_name) {
         return filter_top_level_fields(
             output,
             &MINIMAL_TASK_FIELDS
@@ -230,21 +222,11 @@ pub(super) fn shape_tool_output(
     output
 }
 
-fn should_project_minimal_task_output(tool_name: &str, input: &Value) -> bool {
+fn should_project_minimal_task_output(tool_name: &str) -> bool {
     if !matches!(
         tool_name,
-        "orbit.task.list"
-            | "orbit.task.show"
-            | "orbit.task.add"
-            | "orbit.task.artifact.put"
-            | "orbit.task.update"
+        "orbit.task.list" | "orbit.task.add" | "orbit.task.artifact.put" | "orbit.task.update"
     ) {
-        return false;
-    }
-
-    if tool_name == "orbit.task.show"
-        && (input.get("field").is_some() || input.get("fields").is_some())
-    {
         return false;
     }
 

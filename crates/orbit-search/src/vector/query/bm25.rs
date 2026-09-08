@@ -8,6 +8,8 @@ pub struct Bm25Hit {
     pub source_kind: String,
     pub source_id: String,
     pub field: String,
+    /// `chunks.id`, which is also the matching `corpus_fts` rowid — the direct
+    /// address a snippet lookup uses instead of re-deriving the chunk.
     pub rowid: i64,
     pub rank: usize,
 }
@@ -16,6 +18,7 @@ pub fn bm25_top_k(
     store: &VectorStore,
     query: &str,
     kind: Option<&str>,
+    field: Option<&str>,
     limit: usize,
 ) -> Result<Vec<Bm25Hit>, OrbitError> {
     if query.trim().is_empty() || limit == 0 {
@@ -27,40 +30,32 @@ pub fn bm25_top_k(
     let conn = conn
         .lock()
         .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
+    let fts_err =
+        |error| crate::vector::store::schema::translate_corpus_fts_sql_error(&conn, error);
     let mut hits = Vec::new();
-    if let Some(kind) = kind {
-        let mut stmt = conn
-            .prepare(
-                r#"
-                    SELECT source_kind, source_id, field, rowid, bm25(corpus_fts) AS rank
-                    FROM corpus_fts
-                    WHERE corpus_fts MATCH ?1 AND source_kind = ?2
-                    ORDER BY rank
-                    LIMIT ?3
-                "#,
-            )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        let mut rows = stmt
-            .query(params![match_query, kind, limit as i64])
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        collect_hits(&mut rows, &mut hits)?;
-    } else {
-        let mut stmt = conn
-            .prepare(
-                r#"
-                    SELECT source_kind, source_id, field, rowid, bm25(corpus_fts) AS rank
-                    FROM corpus_fts
-                    WHERE corpus_fts MATCH ?1
-                    ORDER BY rank
-                    LIMIT ?2
-                "#,
-            )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        let mut rows = stmt
-            .query(params![match_query, limit as i64])
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        collect_hits(&mut rows, &mut hits)?;
-    }
+    let mut stmt = conn
+        .prepare(
+            r#"
+                SELECT
+                    chunks.source_kind,
+                    chunks.source_id,
+                    chunks.field,
+                    chunks.id,
+                    bm25(corpus_fts) AS rank
+                FROM corpus_fts
+                JOIN chunks ON chunks.id = corpus_fts.rowid
+                WHERE corpus_fts MATCH ?1
+                    AND (?2 IS NULL OR chunks.source_kind = ?2)
+                    AND (?3 IS NULL OR chunks.field = ?3)
+                ORDER BY rank
+                LIMIT ?4
+            "#,
+        )
+        .map_err(fts_err)?;
+    let mut rows = stmt
+        .query(params![match_query, kind, field, limit as i64])
+        .map_err(fts_err)?;
+    collect_hits(&mut rows, &mut hits)?;
     Ok(hits)
 }
 
@@ -111,14 +106,14 @@ fn snippet_by_rowid(store: &VectorStore, rowid: i64) -> Result<Option<String>, O
         .lock()
         .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
     conn.query_row(
-        "SELECT content FROM corpus_fts WHERE rowid = ?1",
+        "SELECT content FROM chunks WHERE id = ?1",
         params![rowid],
         |row| row.get::<_, String>(0),
     )
     .map(Some)
     .or_else(|error| match error {
         rusqlite::Error::QueryReturnedNoRows => Ok(None),
-        other => Err(OrbitError::Store(other.to_string())),
+        other => Err(crate::vector::store::schema::translate_corpus_fts_sql_error(&conn, other)),
     })
 }
 
@@ -136,10 +131,8 @@ fn snippet_by_chunk_idx(
     conn.query_row(
         r#"
             SELECT content
-            FROM corpus_fts
-            WHERE source_kind = ?1 AND source_id = ?2 AND field = ?3
-            ORDER BY rowid
-            LIMIT 1 OFFSET ?4
+            FROM chunks
+            WHERE source_kind = ?1 AND source_id = ?2 AND field = ?3 AND chunk_idx = ?4
         "#,
         params![source_kind, source_id, field, chunk_idx as i64],
         |row| row.get::<_, String>(0),
@@ -147,7 +140,7 @@ fn snippet_by_chunk_idx(
     .map(Some)
     .or_else(|error| match error {
         rusqlite::Error::QueryReturnedNoRows => Ok(None),
-        other => Err(OrbitError::Store(other.to_string())),
+        other => Err(crate::vector::store::schema::translate_corpus_fts_sql_error(&conn, other)),
     })
 }
 

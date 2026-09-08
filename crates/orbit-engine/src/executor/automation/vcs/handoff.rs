@@ -126,6 +126,8 @@ pub(super) enum FailedHandoffPhase {
     Promote,
     EmptyBranch,
     ObsoleteBase,
+    /// The head or base no longer matches the reviewed candidate [ORB-11333].
+    StaleReviewGate,
 }
 
 impl FailedHandoffPhase {
@@ -140,6 +142,7 @@ impl FailedHandoffPhase {
             Self::Promote => "promote",
             Self::EmptyBranch => "empty-branch",
             Self::ObsoleteBase => "obsolete-base",
+            Self::StaleReviewGate => "stale-review-gate",
         }
     }
 }
@@ -163,10 +166,17 @@ pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
     let base_ref = input_string_field(input, "base_ref")
         .map(|value| format!("Base checkpoint: {value}\n"))
         .unwrap_or_default();
+    let timed_out = error.to_string().contains("timed out");
     let recovery = if matches!(phase, FailedHandoffPhase::Rebase)
         && rebase_in_progress(&context.workspace_path).unwrap_or(false)
     {
-        "Worktree state: rebase stopped with unresolved conflicts.\n\nRecovery:\n  Resolve the conflicting paths in this worktree, stage them, run `git rebase --continue`, then resume the same job step. Later handoff phases have not been replayed."
+        if timed_out {
+            "Worktree state: rebase interrupted by a Git timeout.\n\nRecovery:\n  Timeout recovery is not conflict repair. If this attempt started the rebase, Orbit aborts it and a retry can start clean. A pre-existing or foreign rebase is left intact — inspect rebase-merge/rebase-apply before retrying. Ordinary conflict recovery remains pr_conflict_recovery; failure-handoff remains pr_failure_handoff."
+        } else {
+            "Worktree state: rebase stopped with unresolved conflicts.\n\nRecovery:\n  Resolve the conflicting paths in this worktree, stage them, run `git rebase --continue`, then resume the same job step. Later handoff phases have not been replayed. This is conflict recovery, not timeout recovery."
+        }
+    } else if timed_out {
+        "Recovery:\n  This failure is a Git operation timeout, not a merge conflict and not a failure-handoff. Inspect the named checkout, then retry the same job step after timeout recovery has cleaned only owned incomplete state."
     } else {
         "Recovery:\n  Reconcile the recorded phase in this worktree, then resume the same job step. Later handoff phases have not been replayed."
     };

@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_store::Store;
 use orbit_tools::ToolExecutionKind;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
@@ -49,6 +50,36 @@ fn dispatch_records_success_audit_with_mcp_subcommand_and_clamped_duration() {
         row.duration_ms >= 1,
         "duration_ms clamped to >= 1 (got {})",
         row.duration_ms
+    );
+}
+
+#[test]
+fn runtime_dispatch_reuses_the_open_audit_store() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    let audit_db = runtime.context.persistence().audit_db.clone();
+    let opened = Store::thread_file_open_count_for(&audit_db);
+
+    let outcome = runtime
+        .execute_tool_command_dispatch(
+            "orbit.search",
+            json!({ "query": "reuse", "model": orbit_common::test_fixtures::TEST_CODEX_MODEL }),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+        )
+        .expect("dispatch ok");
+    assert!(outcome.audit_recorded);
+
+    let events = runtime
+        .list_audit_events(None, Some("orbit.search".to_string()), None, None, 16)
+        .expect("list audit events");
+    assert_eq!(events.len(), 1, "exactly one audit row");
+    assert_eq!(events[0].status, AuditEventStatus::Success);
+    assert_eq!(
+        Store::thread_file_open_count_for(&audit_db),
+        opened,
+        "runtime-backed dispatch must not reopen the audit database"
     );
 }
 

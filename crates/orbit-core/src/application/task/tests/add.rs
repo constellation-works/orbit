@@ -32,6 +32,64 @@ fn task_add_enters_proposed_and_requires_approval_before_backlog() {
 }
 
 #[test]
+fn task_start_event_records_when_start_approves_a_proposal() {
+    let (_root, runtime) = test_runtime();
+
+    let proposed = runtime
+        .add_task(TaskAddParams {
+            title: "Start a proposed task".to_string(),
+            description: "Exercise the approval-start audit event.".to_string(),
+            plan: "Start the task.".to_string(),
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("create proposed task");
+    runtime
+        .start_task(&proposed.id, None, None)
+        .expect("proposed task starts");
+
+    let backlog = runtime
+        .add_task(TaskAddParams {
+            title: "Start a backlog task".to_string(),
+            description: "Exercise the ordinary start audit event.".to_string(),
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("create backlog task");
+    runtime
+        .approve_task(&backlog.id, None, None)
+        .expect("proposed task enters backlog");
+    runtime
+        .start_task(&backlog.id, None, None)
+        .expect("backlog task starts");
+
+    let events = runtime
+        .list_session_events(10)
+        .expect("list session events");
+    let started_from_proposed = events
+        .iter()
+        .find(|event| {
+            event.event_type == "TaskStarted" && event.payload["data"]["id"] == proposed.id
+        })
+        .expect("proposed start event");
+    let started_from_backlog = events
+        .iter()
+        .find(|event| {
+            event.event_type == "TaskStarted" && event.payload["data"]["id"] == backlog.id
+        })
+        .expect("backlog start event");
+
+    assert_eq!(
+        started_from_proposed.payload["data"]["approved_from_proposed"],
+        true
+    );
+    assert_eq!(
+        started_from_backlog.payload["data"]["approved_from_proposed"],
+        false
+    );
+}
+
+#[test]
 fn task_add_does_not_scan_unrelated_corrupt_bundles() {
     let (root, runtime) = test_runtime();
     let task_a = runtime

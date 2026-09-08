@@ -6,12 +6,14 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_types::task::is_valid_orb_task_id;
 
-use crate::driver::file::task_bundle::read_bundle_at;
+use crate::driver::file::task_bundle::{bundle_lock_target, recover_pending_bundle_at};
 use crate::driver::sqlite::task_registry::{
     ProjectionRebuildResult, TaskRegistryStore, parse_orb_task_number,
 };
+use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 
 /// Result of [`reindex_workspace`].
 #[derive(Debug, Clone)]
@@ -41,43 +43,79 @@ pub fn reindex_workspace(
         })?;
     let workspace_id = binding.workspace_id.clone();
 
-    // Enumerate the bundles physically present on disk.
     let workspace_dir = registry.workspaces_dir().join(&workspace_id);
-    let on_disk = on_disk_task_ids(&workspace_dir)?;
-
-    // Drop registry bindings whose bundle directory is gone — bundle dirs are the
-    // source of truth, and replace_workspace_task_indexes requires the registered
-    // set to equal the envelope set.
-    let mut removed_stale = 0usize;
+    let mut candidates = on_disk_task_ids(&workspace_dir)?;
+    let max_number = candidates
+        .iter()
+        .filter_map(|id| parse_orb_task_number(id))
+        .max();
     for existing in registry.tasks_for_workspace(&workspace_id)? {
-        if !on_disk.contains(&existing.task_id)
-            && registry.unregister_task_bundle(&existing.task_id, &workspace_id)?
-        {
-            removed_stale += 1;
-        }
+        candidates.insert(existing.task_id);
     }
-
-    // Register every on-disk bundle (idempotent upsert) and collect envelopes.
-    let mut envelopes = Vec::with_capacity(on_disk.len());
-    let mut max_number: Option<u32> = None;
-    for task_id in &on_disk {
+    let checkout = registry.find_workspace_checkout(&workspace_id)?;
+    let store = match &checkout {
+        Some(checkout) => TaskBundleStoreV2::new(
+            registry.clone(),
+            workspace_id.clone(),
+            checkout.orbit_dir.clone(),
+        ),
+        None => TaskBundleStoreV2::new_checkoutless(registry.clone(), workspace_id.clone()),
+    };
+    let mut removed_stale = 0;
+    let mut indexed = 0;
+    let mut readable = Vec::new();
+    let mut failures = Vec::new();
+    for task_id in &candidates {
         let dir = registry.canonical_task_bundle_path(&workspace_id, task_id)?;
-        let bundle = read_bundle_at(&dir)?;
-        registry.register_task_bundle(task_id, &workspace_id, &dir)?;
-        if let Some(number) = parse_orb_task_number(task_id) {
-            max_number = Some(max_number.map_or(number, |current| current.max(number)));
+        let result = with_exclusive_file_lock(&bundle_lock_target(&dir), "task reindex", || {
+            if store.recover_deletion(task_id)? {
+                removed_stale += 1;
+                return Ok(());
+            }
+            if !dir.try_exists()? {
+                if registry.unregister_task_bundle(task_id, &workspace_id)? {
+                    removed_stale += 1;
+                }
+                return Ok(());
+            }
+            recover_pending_bundle_at(&dir)?;
+            registry.register_task_bundle(task_id, &workspace_id, &dir)?;
+            readable.push(task_id);
+            Ok::<(), OrbitError>(())
+        });
+        if let Err(error) = result {
+            // Keep unresolved bytes AND any authoritative binding/index. A
+            // healthy neighbor still gets repaired, but this run cannot succeed.
+            failures.push(format!("{task_id}: {error}"));
         }
-        envelopes.push(bundle.envelope);
     }
 
-    registry.replace_workspace_task_indexes(&workspace_id, &envelopes)?;
+    // Register the readable set before validating relations: imported tasks
+    // may refer to another bundle later in directory order. Re-read under the
+    // lock so an intervening update/deletion cannot publish a stale index.
+    for task_id in readable {
+        let dir = registry.canonical_task_bundle_path(&workspace_id, task_id)?;
+        let result = with_exclusive_file_lock(&bundle_lock_target(&dir), "task reindex", || {
+            if store.recover_deletion(task_id)? || !dir.try_exists()? {
+                return Ok(());
+            }
+            let bundle = recover_pending_bundle_at(&dir)?;
+            registry.replace_task_index(&workspace_id, &bundle.envelope)?;
+            indexed += 1;
+            Ok::<(), OrbitError>(())
+        });
+        if let Err(error) = result {
+            failures.push(format!("{task_id}: {error}"));
+        }
+    }
 
-    // Never let the allocator hand out an id that already exists on disk.
+    // Include unresolved IDs so allocator recovery cannot collide with data
+    // retained for repair. Never replace the entire index with a partial set.
     if let Some(max) = max_number {
-        registry.bump_allocator_to_at_least(max + 1)?;
+        registry.bump_allocator_to_at_least(max.saturating_add(1))?;
     }
 
-    let projection = if let Some(checkout) = registry.find_workspace_checkout(&workspace_id)? {
+    let projection = if let Some(checkout) = checkout {
         crate::repository::checkout_projection::rebuild_projection(
             registry,
             &checkout.orbit_dir,
@@ -91,15 +129,23 @@ pub fn reindex_workspace(
         }
     };
 
+    if !failures.is_empty() {
+        return Err(OrbitError::Store(format!(
+            "reindex incomplete: indexed {indexed} healthy tasks; unresolved bundles retained: {}",
+            failures.join("; ")
+        )));
+    }
+
     Ok(ReindexOutcome {
         workspace_id,
-        indexed: on_disk.len(),
+        indexed,
         removed_stale,
         projection,
     })
 }
 
-/// Canonical task ids that have a bundle directory on disk under `workspace_dir`.
+/// Candidate IDs include tombstones and malformed non-directory entries, so
+/// reindex reports unresolved data rather than treating it as an absent bundle.
 fn on_disk_task_ids(workspace_dir: &std::path::Path) -> Result<BTreeSet<String>, OrbitError> {
     let mut ids = BTreeSet::new();
     let entries = match std::fs::read_dir(workspace_dir) {
@@ -109,17 +155,11 @@ fn on_disk_task_ids(workspace_dir: &std::path::Path) -> Result<BTreeSet<String>,
     };
     for entry in entries {
         let entry = entry.map_err(|e| OrbitError::Io(e.to_string()))?;
-        if !entry
-            .file_type()
-            .map_err(|e| OrbitError::Io(e.to_string()))?
-            .is_dir()
-        {
-            continue;
-        }
-        if let Some(name) = entry.file_name().to_str()
-            && is_valid_orb_task_id(name)
-        {
-            ids.insert(name.to_string());
+        if let Some(name) = entry.file_name().to_str() {
+            let id = name.strip_suffix(".deleted").unwrap_or(name);
+            if is_valid_orb_task_id(id) {
+                ids.insert(id.to_string());
+            }
         }
     }
     Ok(ids)

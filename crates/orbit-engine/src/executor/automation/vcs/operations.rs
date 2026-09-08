@@ -53,14 +53,20 @@ fn push(input: &Value) -> Result<Value, OrbitError> {
         ));
     }
 
-    let mut args = vec!["-C".to_string(), repo_root.to_string(), "push".to_string()];
+    let mut args = vec!["push".to_string()];
     if let Some(expected_remote_sha) = force_with_lease.then_some(expected_remote_sha).flatten() {
         args.push(format!(
             "--force-with-lease=refs/heads/{branch}:{expected_remote_sha}"
         ));
     }
     args.extend(["--".to_string(), "origin".to_string(), branch.to_string()]);
-    let result = execute("git", args, None, LONG_TIMEOUT_MS, "push")?;
+    let result = execute(
+        "git",
+        args,
+        Some(Path::new(repo_root)),
+        LONG_TIMEOUT_MS,
+        "push",
+    )?;
     Ok(json!({
         "stdout": result.stdout,
         "stderr": result.stderr,
@@ -181,6 +187,14 @@ fn pr_merge(input: &Value) -> Result<Value, OrbitError> {
     // required check and branch protection. There is deliberately no
     // administrative bypass (`--admin`) in this surface.
     let auto = input.get("auto").and_then(Value::as_bool).unwrap_or(false);
+    if let Some(reviewed_head) = optional_string(input, "reviewed_head_sha") {
+        if auto {
+            return Err(OrbitError::InvalidInput(
+                "review_gate_stale: deferred auto-merge cannot guarantee the reviewed head; wait for checks and request a synchronous merge".to_string(),
+            ));
+        }
+        return pr_merge_reviewed(selector, workspace_path, strategy, reviewed_head);
+    }
     let mut args = vec![
         "pr".to_string(),
         "merge".to_string(),
@@ -200,6 +214,60 @@ fn pr_merge(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({
         "stdout": result.stdout,
         "stderr": result.stderr,
+    }))
+}
+
+/// Use the synchronous REST mutation: `sha` is checked by GitHub when it
+/// merges, and this endpoint never enables auto-merge or enters a merge queue.
+/// `gh pr merge --match-head-commit` alone is insufficient because the CLI
+/// can choose deferred semantics for a queue-required branch.
+fn pr_merge_reviewed(
+    selector: &str,
+    workspace_path: &str,
+    strategy: &str,
+    reviewed_head: &str,
+) -> Result<Value, OrbitError> {
+    // Managed completion supplies a number in the current repository. Refuse
+    // other selectors here rather than resolving a URL into a different repo.
+    if selector.is_empty() || !selector.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(OrbitError::InvalidInput(
+            "reviewed PR merge requires a pull request number in the workspace repository".into(),
+        ));
+    }
+    if !valid_expected_remote_sha(Some(reviewed_head)) {
+        return Err(OrbitError::InvalidInput(
+            "reviewed PR merge requires an exact 40- or 64-character reviewed_head_sha".into(),
+        ));
+    }
+    let result = execute(
+        "gh",
+        vec![
+            "api".to_string(),
+            format!("repos/{{owner}}/{{repo}}/pulls/{selector}/merge"),
+            "--method".to_string(),
+            "PUT".to_string(),
+            "-f".to_string(),
+            format!("sha={reviewed_head}"),
+            "-f".to_string(),
+            format!("merge_method={strategy}"),
+        ],
+        Some(Path::new(workspace_path)),
+        SLOW_TIMEOUT_MS,
+        "reviewed PR merge",
+    )?;
+    let response: Value = serde_json::from_str(&result.stdout).map_err(|error| {
+        OrbitError::Execution(format!("reviewed PR merge returned invalid JSON: {error}"))
+    })?;
+    if response.get("merged").and_then(Value::as_bool) != Some(true) {
+        return Err(OrbitError::Execution(
+            "reviewed PR merge did not confirm a synchronous merge; deferred merges are unsupported".into(),
+        ));
+    }
+    let landed_commit = required_string(&response, "sha")?;
+    Ok(json!({
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "landed_commit": landed_commit,
     }))
 }
 
@@ -374,7 +442,7 @@ fn pr_status(input: &Value) -> Result<Value, OrbitError> {
         "view".to_string(),
         selector.to_string(),
         "--json".to_string(),
-        "number,state,mergedAt,mergeable,mergeStateStatus,url".to_string(),
+        "number,state,mergedAt,mergeable,mergeStateStatus,headRefName,headRefOid,baseRefName,mergeCommit,url".to_string(),
     ];
     let result = execute(
         "gh",
@@ -398,18 +466,32 @@ fn execute(
     timeout_ms: u64,
     operation: &str,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
-    let result = run_process(
-        &ExecRequest {
+    let request = if program == "git" {
+        let root = current_dir.ok_or_else(|| {
+            OrbitError::InvalidInput("Git operation requires a working directory".to_string())
+        })?;
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        super::git::git_request(root, &args, timeout_ms)
+    } else {
+        ExecRequest {
             program: program.to_string(),
             args,
             current_dir: current_dir.map(|path| path.to_string_lossy().into_owned()),
             timeout_ms: Some(timeout_ms),
             stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::Inherit,
+            environment_mode: EnvironmentMode::ClearAndSet(super::git::vcs_environment(&[
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "GH_ENTERPRISE_TOKEN",
+                "GITHUB_ENTERPRISE_TOKEN",
+                "GH_HOST",
+                "GH_CONFIG_DIR",
+                "XDG_CONFIG_HOME",
+            ])),
             debug: false,
-        },
-        &NoSandbox,
-    )?;
+        }
+    };
+    let result = run_process(&request, &NoSandbox)?;
     if !result.success {
         return Err(OrbitError::Execution(format!(
             "private automation VCS {operation} failed: {}",

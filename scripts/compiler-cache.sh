@@ -102,6 +102,9 @@ cmd_status() {
   printf '  SCCACHE_DIR:        %s\n' "${SCCACHE_DIR:-<unset, wrapper default $dir>}"
   printf '  SCCACHE_CACHE_SIZE: %s\n' "${SCCACHE_CACHE_SIZE:-<unset, wrapper default $DEFAULT_SIZE>}"
   printf '  ORBIT_COMPILER_CACHE=%s\n' "${ORBIT_COMPILER_CACHE:-<unset>}"
+  printf '  SCCACHE_CLIENT_SIDE:  %s\n' "${SCCACHE_CLIENT_SIDE:-<unset, wrapper default 1>}"
+  printf '  SCCACHE_SERVER_UDS:   %s\n' "${SCCACHE_SERVER_UDS:-<unset, wrapper default /tmp/orbit-sccache.sock>}"
+  printf '  SCCACHE_SERVER_PORT:  %s\n' "${SCCACHE_SERVER_PORT:-<unset>}"
   if cache_bin="$(resolve_sccache)"; then
     printf '  sccache:            %s\n' "$cache_bin"
     printf '  sccache_version:    %s\n' "$("$cache_bin" --version 2>/dev/null || echo unknown)"

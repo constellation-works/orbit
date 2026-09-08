@@ -6,8 +6,8 @@ mod publication;
 
 pub use catalog::{
     WorkspaceRegistryHostContext, WorkspaceSourceRemoteRebind, assign_checkout_role, find_checkout,
-    find_checkout_by_path, find_workspace, find_workspace_by_path, local_workspaces,
-    parse_workspace_registry, rebind_workspace_source_remote, register_checkout,
+    find_checkout_by_path, find_workspace, find_workspace_by_id, find_workspace_by_path,
+    local_workspaces, parse_workspace_registry, rebind_workspace_source_remote, register_checkout,
     register_workspace, remove_workspace, rename_local_owner_host_id, resolve_logical_workspace,
     set_path_override, validate_workspace_registry, validate_workspaces,
 };

@@ -44,6 +44,16 @@ use super::dispatcher::{
 };
 use crate::context::RuntimeHost;
 
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
+}
+
 mod audit;
 mod concurrency;
 mod exec_ctx;
@@ -147,11 +157,13 @@ pub fn execute_job_with_resume(
     };
 
     let pipeline = seed_pipeline_from_resume(job, resume);
-    if let Some(resume) = resume {
+    let preparation_refresh = if let Some(resume) = resume {
         crate::executor::automation::vcs::reconcile_resumed_failure_handoff(
             host, job, run_id, resume, &pipeline,
-        )?;
-    }
+        )?
+    } else {
+        None
+    };
 
     let ctx = ExecCtx {
         run_id: run_id.to_string(),
@@ -169,7 +181,10 @@ pub fn execute_job_with_resume(
     let mut overall_message = None;
     for (index, step) in job.steps.iter().enumerate() {
         let step_index = index as u32;
-        if step_completed_in_resume(resume, step_index) {
+        let refreshes_preparation = preparation_refresh
+            .as_ref()
+            .is_some_and(|refresh| refresh.step_index == step_index);
+        if step_completed_in_resume(resume, step_index) && !refreshes_preparation {
             emit_job_event_lossy(
                 &ctx.audit,
                 ctx.task_id(),
@@ -182,7 +197,7 @@ pub fn execute_job_with_resume(
             );
             continue;
         }
-        let outcome = match run_step(step, &ctx) {
+        let mut outcome = match run_step(step, &ctx) {
             Ok(outcome) => outcome,
             Err(error) => {
                 attempt_failure_activity(step, &ctx, &error);
@@ -203,6 +218,10 @@ pub fn execute_job_with_resume(
             );
             attempt_failure_activity(step, &ctx, &error);
             break;
+        }
+        if refreshes_preparation && let Some(refresh) = preparation_refresh.as_ref() {
+            refresh.annotate_output(&mut outcome.output)?;
+            record_pipeline(&ctx, &step.id, outcome.output.clone());
         }
         checkpoint_completed_step(&ctx, step_index, &step.id, &outcome.output);
     }

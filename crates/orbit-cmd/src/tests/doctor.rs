@@ -283,6 +283,27 @@ fn unopenable_store_database_fails_the_database_check() {
     );
 }
 
+#[test]
+fn missing_store_database_is_reported_without_recreating_it() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let db_path = temp.path().join("global").join("orbit.db");
+    fs::remove_file(&db_path).expect("remove store db");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let database = status_of(&results, "database");
+    assert_eq!(
+        database.status,
+        WorkspaceDoctorStatus::Error,
+        "{database:?}"
+    );
+    assert!(database.message.contains("cannot open store database"));
+    assert!(
+        !db_path.exists(),
+        "doctor must not recreate a missing database"
+    );
+}
+
 #[cfg(unix)]
 fn reaped_child_pid() -> u32 {
     let mut child = std::process::Command::new("true")
@@ -808,4 +829,35 @@ fn stale_shipped_activity_default_names_the_refresh_remediation() {
     assert!(row.message.contains("stale"), "{}", row.message);
     assert!(row.message.contains("older release"), "{}", row.message);
     assert_eq!(row.remediation.as_deref(), Some("Run `orbit init`."));
+}
+
+#[test]
+fn missing_shipped_activity_default_is_an_error_not_healthy() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let workspace_root = temp.path().join("repo/.orbit");
+    let runtime = OrbitRuntime::initialize_from_resolved_roots(
+        OrbitRuntimeRoots {
+            global_root: global_root.clone(),
+            shared_root: workspace_root.clone(),
+            local_root: workspace_root,
+        },
+        None,
+    )
+    .expect("initialize runtime with defaults");
+    let path = global_root.join("resources/activities/git_merge.yaml");
+    std::fs::remove_file(&path).expect("delete shipped default");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "artifacts-activities");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Error, "{row:?}");
+    assert!(row.message.contains("missing"), "{}", row.message);
+    assert!(row.message.contains("git_merge"), "{}", row.message);
+    assert_eq!(row.remediation.as_deref(), Some("Run `orbit init`."));
+    assert!(
+        results
+            .iter()
+            .any(|row| row.status == WorkspaceDoctorStatus::Error),
+        "a missing shipped default must not leave the workspace looking healthy: {results:?}"
+    );
 }

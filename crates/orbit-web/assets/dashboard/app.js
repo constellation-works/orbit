@@ -1,16 +1,16 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow } from './common.js';
+import { requestPanel, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './audit.js';
 import { renderScoreboard } from './scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './reliability.js';
 import { initLogTail, fitLogPanelToViewport } from './log-tail.js';
-import { renderDiagnostics } from './diagnostics.js';
+import { renderDiagnosticsSideCard, renderDiagnostics } from './diagnostics.js';
 import { renderMarkdown } from './markdown.js';
 import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './router.js';
-import { initRuns, getRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
+import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
 import { fetchAndRenderOperations, initOperations } from './operations.js';
 import {
   renderRunDetailEmpty,
@@ -26,6 +26,7 @@ import {
   setActiveRunDetail,
   getActiveRunEvents,
   setActiveRunEvents,
+  setActiveRunEventsError,
   getActiveRunLogs,
   setActiveRunLogs,
   getActiveRunSubtab,
@@ -44,12 +45,13 @@ const STATUS_ORDER = [
   "proposed",
   "backlog",
   "someday",
+  "done",
+  "rejected",
+  "archived",
 ];
 
-const DEFAULT_INACTIVE_STATUSES = new Set(["someday"]);
-const STATUS_UPDATE_TARGETS = STATUS_ORDER
-  .filter((status) => !["rejected", "archived"].includes(status))
-  .concat(["done"]);
+const DEFAULT_INACTIVE_STATUSES = new Set(["someday", "done", "rejected", "archived"]);
+const STATUS_UPDATE_TARGETS = STATUS_ORDER;
 // ORB-10874: the statuses shown when no `status` filter is represented in the
 // URL — a single source both the initial in-memory state and the hash-parsing
 // default (applyTasksHashQuery) read from, so they cannot drift apart.
@@ -69,21 +71,20 @@ const $ = (id) => document.getElementById(id);
 let searchQuery = "";
 let activeStatuses = new Set(DEFAULT_ACTIVE_STATUSES);
 let lastTasks = [];
-// ORB-10874: paging metadata from the single-workspace `/api/tasks` envelope
-// (`{ items, total, limit, truncated }`) so the count can state a shown/total/
-// server-limit fact instead of an ambiguous `N/50`. Null for the aggregate
-// `/api/tasks/all` view, which answers a bare array with no such metadata.
+// ORB-10874: paging metadata from task-list envelopes so the count can state a
+// shown/total/server-limit fact instead of an ambiguous `N/50`.
 let lastTasksMeta = null;
 let lastRuns = [];
 let lastRunsMeta = null;
+let lastRunsLoading = true;
 let lastRunSourcesUnavailable = [];
-let lastDiagnostics = { metrics: [], errors: [], incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] };
+let lastDiagnostics = { metrics: null, errors: null, incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] };
 let lastFrictionPayload = { stats: {}, tags: [], items: [] };
 let activeTab = "tasks";
 let activeDiagSubtab = "runs";
 let activeKnowledgeSubtab = "frictions";
 let activeOperationsSubtab = "routines";
-let isRefreshing = false;
+let refreshSequence = 0;
 let activeFrictionId = null;
 let frictionSearchQuery = "";
 let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
@@ -208,10 +209,16 @@ function runsContext() {
     getActiveRunId,
     getLastRuns: () => lastRuns,
     getRunsMeta: () => lastRunsMeta,
+    getRunsLoading: () => lastRunsLoading,
+    markRunsLoading,
     getRunSourcesUnavailable: () => lastRunSourcesUnavailable,
     fmtTimestamp,
     fmtDuration,
   };
+}
+
+function markRunsLoading() {
+  lastRunsLoading = true;
 }
 
 function runDetailContext() {
@@ -749,81 +756,228 @@ function wireFrictionResponsiveDetail() {
   });
 }
 
-/* Global task ID resolver (ORB-00211).
-   - Only fires on exact ^ORB-\d{5}$ (case-insens) after trim/upper.
-   - 250ms debounce to avoid hammering dashboard_status_index full scan.
-   - On success: switch tab, clear per-tab search, freshen lastTasks, openVisible (active status)
-     or setPinnedExternalTask + render (for done/rejected/archived bypassing filter).
-   - Error: inline .error + span msg with ID, cleared on any next input.
-   - Works from any tab because header input + sAT('tasks').
+/* Global task ID resolver (ORB-00211 / ORB-11560).
+   GET /api/tasks/:id is workspace-scoped. A raw fetch without ?workspace=
+   hits the server default (often not the selected workspace) and reports an
+   existing task as not found — the Diagnostics jump failure on ws_orbit.
+   - Only fires on a task id shaped like ^[A-Z]{2,5}-\d+$ (case-insens)
+     after trim/upper.
+   - 250ms debounce; Enter looks up immediately.
+   - Lookup uses the selected workspace first when one is selected; aggregate
+     mode probes active workspaces and adopts the owner.
+   - Stale replies after a workspace change or a newer lookup are ignored.
+   - Not-found is reserved for a confirmed miss; loading / 403 / 5xx / network
+     have distinct copy.
 */
 function wireGlobalTaskResolver() {
   const input = $("global-task-id");
   if (!input) return;
   let debounce = null;
-  const ID_RE = /^ORB-\d{5}$/i;
+  let lookupSeq = 0;
+  const ID_RE = /^[A-Z]{2,5}-\d+$/i;
 
-  function clearError() {
+  function lookupWrap() {
+    return input.parentNode;
+  }
+
+  function clearLookupStatus() {
     input.classList.remove("error");
-    const wrap = input.parentNode;
-    if (wrap && wrap.classList) wrap.classList.remove("error");
+    const wrap = lookupWrap();
+    if (wrap && wrap.classList) {
+      wrap.classList.remove("error");
+      wrap.classList.remove("pending");
+    }
     const err = $("global-task-id-error");
     if (err) err.textContent = "";
   }
 
-  input.addEventListener("input", () => {
-    clearError();
-    if (debounce) clearTimeout(debounce);
-    const raw = (input.value || "").trim();
-    if (!raw) return;
-    const candidate = raw.toUpperCase();
-    if (!ID_RE.test(candidate)) {
-      // partial input: explicitly do not fetch (per AC and CPU guard)
-      return;
+  function showLookupStatus(kind, msg) {
+    const wrap = lookupWrap();
+    input.classList.toggle("error", kind === "error");
+    if (wrap && wrap.classList) {
+      wrap.classList.toggle("error", kind === "error");
+      wrap.classList.toggle("pending", kind === "pending");
     }
-    // full match: debounce then fetch exactly once
-    debounce = setTimeout(() => {
-      const id = candidate;
-      fetch(`/api/tasks/${encodeURIComponent(id)}`, { headers: { accept: "application/json" } })
-        .then(async (res) => {
-          if (res.ok) {
-            const task = await res.json();
-            sAT("tasks");
-            searchQuery = "";
-            const ts = $("task-search");
-            if (ts) ts.value = "";
-            // freshen cache so open sees latest (incl sidecars)
-            const idx = lastTasks.findIndex((t) => t && t.id === task.id);
-            if (idx >= 0) lastTasks[idx] = task;
-            else lastTasks.push(task);
-            const ctx = taskContext();
-            if (activeStatuses.has(task.status)) {
-              openVisibleTask(task.id, ctx);
-            } else {
-              setPinnedExternalTask(task, ctx);
-              renderTasks(lastTasks, ctx);
-            }
-            // success: clear the jump input for next use
-            input.value = "";
-          } else if (res.status === 404) {
-            showGlobalIdError(id, `${id} not found`);
-          } else {
-            showGlobalIdError(id, `Error ${res.status} resolving ${id}`);
-          }
-        })
-        .catch(() => {
-          showGlobalIdError(id, `Network error resolving ${id}`);
-        });
-    }, 250);
-  });
-
-  function showGlobalIdError(id, msg) {
-    input.classList.add("error");
-    const wrap = input.parentNode;
-    if (wrap && wrap.classList) wrap.classList.add("error");
     const err = $("global-task-id-error");
     if (err) err.textContent = msg;
   }
+
+  function taskDetailPath(id, workspaceId) {
+    const base = `/api/tasks/${encodeURIComponent(id)}`;
+    if (workspaceId) {
+      return `${base}?workspace=${encodeURIComponent(workspaceId)}`;
+    }
+    return withWorkspace(base);
+  }
+
+  async function readJson(res) {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  function classifyLookupFailure(res, body, id) {
+    const status = res && res.status;
+    const errorText = body && body.error ? String(body.error) : "";
+    if (status === 401 || status === 403) {
+      return { kind: "denied", message: `Lookup denied for ${id}` };
+    }
+    if (status >= 500) {
+      return { kind: "server", message: `Server error resolving ${id}` };
+    }
+    if (status === 404 && /unknown workspace/i.test(errorText)) {
+      return { kind: "server", message: `Workspace error resolving ${id}` };
+    }
+    if (status === 404) {
+      return { kind: "missing", message: `${id} not found` };
+    }
+    if (status === 400) {
+      return { kind: "server", message: errorText || `Error ${status} resolving ${id}` };
+    }
+    return { kind: "server", message: `Error ${status} resolving ${id}` };
+  }
+
+  async function fetchTaskInWorkspace(id, workspaceId) {
+    const res = await fetch(taskDetailPath(id, workspaceId), {
+      headers: { accept: "application/json" },
+    });
+    const body = await readJson(res);
+    return { res, body, workspaceId };
+  }
+
+  function adoptWorkspace(workspaceId) {
+    if (!workspaceId || workspaceId === getWorkspace()) return;
+    setWorkspace(workspaceId);
+    persistScopeToUrl();
+    const selector = $("workspace-select");
+    if (selector) selector.value = workspaceId;
+  }
+
+  function openLookedUpTask(task, workspaceId) {
+    adoptWorkspace(workspaceId);
+    sAT("tasks", { refresh: false });
+    searchQuery = "";
+    const ts = $("task-search");
+    if (ts) ts.value = "";
+    const ctx = taskContext();
+    setPinnedExternalTask(task, ctx);
+    const listedAt = lastTasks.findIndex((t) => t && t.id === task.id);
+    if (listedAt >= 0) {
+      lastTasks[listedAt] = task;
+      openVisibleTask(task.id, ctx);
+    } else {
+      renderTasks(lastTasks, ctx);
+    }
+    input.value = "";
+    clearLookupStatus();
+  }
+
+  function otherActiveWorkspaces(exceptId) {
+    return dashboardWorkspaces.filter((ws) => (
+      ws
+      && ws.status === "active"
+      && ws.id
+      && ws.id !== exceptId
+    ));
+  }
+
+  async function lookupTask(id) {
+    const seq = ++lookupSeq;
+    const workspaceAtStart = getWorkspace();
+    const stillCurrent = () => seq === lookupSeq && getWorkspace() === workspaceAtStart;
+    const discardIfStale = () => {
+      if (stillCurrent()) return false;
+      if (seq === lookupSeq) clearLookupStatus();
+      return true;
+    };
+
+    showLookupStatus("pending", `Looking up ${id}\u2026`);
+    if (workspaceAtStart) {
+      let primary;
+      try {
+        primary = await fetchTaskInWorkspace(id, workspaceAtStart);
+      } catch {
+        if (discardIfStale()) return;
+        showLookupStatus("error", `Network error resolving ${id}`);
+        return;
+      }
+      if (discardIfStale()) return;
+      if (primary.res.ok && primary.body && primary.body.id) {
+        openLookedUpTask(primary.body, primary.workspaceId);
+        return;
+      }
+
+      const classified = classifyLookupFailure(primary.res, primary.body, id);
+      if (classified.kind !== "missing") {
+        showLookupStatus("error", classified.message);
+        return;
+      }
+    }
+
+    const others = otherActiveWorkspaces(workspaceAtStart);
+    if (others.length === 0) {
+      showLookupStatus("error", `${id} not found`);
+      return;
+    }
+
+    const probed = await Promise.all(others.map(async (ws) => {
+      try {
+        return await fetchTaskInWorkspace(id, ws.id);
+      } catch (error) {
+        return { network: true, workspaceId: ws.id, error };
+      }
+    }));
+    if (discardIfStale()) return;
+
+    const hit = probed.find((result) => result && result.res && result.res.ok && result.body && result.body.id);
+    if (hit) {
+      openLookedUpTask(hit.body, hit.workspaceId);
+      return;
+    }
+    if (probed.some((result) => result && result.network)) {
+      showLookupStatus("error", `Network error resolving ${id}`);
+      return;
+    }
+    const probeFailure = probed
+      .map((result) => result && result.res ? classifyLookupFailure(result.res, result.body, id) : null)
+      .find((result) => result && result.kind !== "missing");
+    if (probeFailure) {
+      showLookupStatus("error", probeFailure.message);
+      return;
+    }
+    showLookupStatus("error", `${id} not found`);
+  }
+
+  function scheduleLookup() {
+    if (debounce) clearTimeout(debounce);
+    const raw = (input.value || "").trim();
+    if (!raw) {
+      lookupSeq += 1;
+      clearLookupStatus();
+      return;
+    }
+    const candidate = raw.toUpperCase();
+    if (!ID_RE.test(candidate)) {
+      lookupSeq += 1;
+      return;
+    }
+    debounce = setTimeout(() => lookupTask(candidate), 250);
+  }
+
+  input.addEventListener("input", () => {
+    clearLookupStatus();
+    scheduleLookup();
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    const candidate = (input.value || "").trim().toUpperCase();
+    if (!ID_RE.test(candidate)) return;
+    if (event.preventDefault) event.preventDefault();
+    if (debounce) clearTimeout(debounce);
+    lookupTask(candidate);
+  });
 }
 
 function fmtRelative(iso) {
@@ -898,12 +1052,6 @@ function resetHealthStrip() {
   renderSparkline([]);
 }
 
-function fetchAndCacheCrews() {
-  return fetchJson("/api/crews").then((payload) => {
-    return cacheCrewPayload(payload);
-  });
-}
-
 // ORB-10874: the single-workspace list endpoint filters server-side, so the
 // active status chips are sent as `?status=a,b` instead of over-fetching every
 // status and filtering client-side. That keeps the `total`/`limit`/`truncated`
@@ -933,20 +1081,19 @@ function fetchAndRenderTasks() {
   // previously-selected concrete workspace so the fallback is consistent (a
   // stale, still-enabled crew <select> would PATCH with no workspace).
   if (aggregate) cacheCrewPayload({ crews: [] });
-  const crews = aggregate ? Promise.resolve() : fetchAndCacheCrews();
-  return Promise.all([
+  return requestPanel("tasks-body", path, () => Promise.all([
     fetchJson(path),
-    crews,
-  ]).then(([payload]) => {
-    // /api/tasks answers `{ items, total, limit, truncated }` (ORB-10400);
-    // /api/tasks/all a bare array with no paging metadata.
+    aggregate ? Promise.resolve({ crews: [] }) : fetchJson("/api/crews"),
+  ]), ([payload, crews]) => {
+    cacheCrewPayload(crews);
+    // Both task-list endpoints answer `{ items, total, limit, truncated }`.
     const tasks = listItems(payload);
     lastTasks = tasks;
-    lastTasksMeta = !aggregate && payload && !Array.isArray(payload)
+    lastTasksMeta = payload && !Array.isArray(payload)
       ? { total: payload.total, limit: payload.limit, truncated: payload.truncated }
       : null;
     renderTasks(tasks, taskContext());
-  });
+  }, "tasks-count");
 }
 
 // ORB-00030: discover servable workspaces and, in global mode, install a
@@ -1005,12 +1152,6 @@ function buildWorkspaceSelector() {
   select.addEventListener("change", () => {
     setWorkspace(select.value);
     persistScopeToUrl();
-    // Clear the prior scope synchronously. A slower request from that scope is
-    // also discarded in fetchAndRenderRuns, so it cannot repaint stale rows.
-    lastRuns = [];
-    lastRunsMeta = null;
-    lastRunSourcesUnavailable = [];
-    renderRuns(lastRuns);
     refreshDashboard();
   });
 
@@ -1142,99 +1283,57 @@ function activeRefreshJobs() {
     }
     if (activeDiagSubtab === "runs") {
       jobs.push(fetchAndRenderRuns());
-    } else if (activeDiagSubtab === "metrics") {
-      jobs.push(
-        fetchJson(`/api/diagnostics/metrics?limit=${DIAG_LIMIT}`).then((rows) => {
-          lastDiagnostics.metrics = rows;
-          renderDiagnostics(diagnosticsContext());
-        })
-      );
-    } else if (activeDiagSubtab === "errors") {
-      jobs.push(
-        fetchJson(`/api/diagnostics/errors?limit=${DIAG_LIMIT}`).then((rows) => {
-          lastDiagnostics.errors = rows;
-          renderDiagnostics(diagnosticsContext());
-        })
-      );
-    } else if (activeDiagSubtab === "incidents") {
-      // ORB-10871: grouped failure incidents. Scoped to the shared dashboard
-      // window so the incident count and the raw failed-event count it states
-      // its denominator against are read off the same cutoff.
+    } else {
+      const subtab = activeDiagSubtab;
       const selectedWindow = getWindow();
-      jobs.push(
-        fetchJson(`/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`).then((payload) => {
-          lastDiagnostics.incidents = payload;
-          renderDiagnostics(diagnosticsContext());
-        })
-      );
+      const path = subtab === "incidents"
+        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`
+        : `/api/diagnostics/${subtab}?limit=${DIAG_LIMIT}`;
+      jobs.push(requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
+        lastDiagnostics[subtab] = payload;
+        if (activeDiagSubtab === subtab && getWindow() === selectedWindow) renderDiagnostics(diagnosticsContext());
+      }, "diag-count"));
     }
 
     jobs.push(
-      Promise.all([
+      requestPanel("diag-implement-one-body", "implement-one", () => Promise.all([
         fetchJson(`/api/diagnostics/implement_one`),
-        fetchJson(`/api/tasks/completion-by-complexity`).catch((e) => {
-          console.error("Failed to fetch completion-by-complexity", e);
-          return { by_complexity: [] };
-        }),
-      ])
-        .then(([implOne, completion]) => {
-          lastDiagnostics.implement_one = implOne.implement_one_by_actor || [];
-          lastDiagnostics.implement_one_by_complexity = implOne.implement_one_by_complexity || [];
-          lastDiagnostics.completion_by_complexity = completion.by_complexity || [];
-          if ($("diagnostics-side-panel")) {
-            renderDiagnostics(diagnosticsContext());
-          }
-        })
-        .catch(e => console.error("Failed to fetch implement_one metrics", e))
+        fetchJson(`/api/tasks/completion-by-complexity`),
+      ]), ([implOne, completion]) => {
+        lastDiagnostics.implement_one = implOne.implement_one_by_actor || [];
+        lastDiagnostics.implement_one_by_complexity = implOne.implement_one_by_complexity || [];
+        lastDiagnostics.completion_by_complexity = completion.by_complexity || [];
+        renderDiagnosticsSideCard(lastDiagnostics, diagnosticsContext());
+      })
     );
   }
   return jobs;
 }
 
 function fetchAndRenderRuns() {
-  const requestedWorkspace = getWorkspace();
   const requestedAggregate = isAggregateView();
   const runFilter = getRunFilter();
-  const scopeIsCurrent = () =>
-    requestedWorkspace === getWorkspace() &&
-    requestedAggregate === isAggregateView() &&
-    runFilter === getRunFilter();
-  const request = requestedAggregate
+  return requestPanel("runs-body", runFilter, () => requestedAggregate
     ? fetchJson(`/api/job-runs/all?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`).then((payload) => ({
-        runs: listItems(payload),
-        frictionRows: [],
-        meta: payload,
+        runs: listItems(payload), frictionRows: [], meta: payload,
         unavailable: Array.isArray(payload && payload.unavailable) ? payload.unavailable : [],
       }))
     : Promise.all([
-        fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}`),
+        fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`),
         fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`),
-      ]).then(([runs, frictionRows]) => ({ runs, frictionRows, meta: null, unavailable: [] }));
-
-  return request.then(({ runs, frictionRows, meta, unavailable }) => {
-    if (!scopeIsCurrent()) return;
+      ]).then(([payload, frictionRows]) => ({
+        runs: listItems(payload), frictionRows, meta: payload, unavailable: [],
+      })), ({ runs, frictionRows, meta, unavailable }) => {
     lastRuns = mergeRunsWithFriction(runs, frictionRows);
     lastRunsMeta = meta;
+    lastRunsLoading = false;
     lastRunSourcesUnavailable = unavailable;
     renderRuns(lastRuns);
-  }).catch((error) => {
-    if (scopeIsCurrent()) {
-      const workspace = dashboardWorkspaces.find((entry) => entry.id === requestedWorkspace);
-      lastRuns = [];
-      lastRunsMeta = null;
-      lastRunSourcesUnavailable = [{
-        workspace_id: requestedWorkspace,
-        workspace_name: requestedAggregate ? "All workspaces" : (workspace && workspace.name) || requestedWorkspace || "workspace",
-        error: error.message || "run query failed",
-      }];
-      renderRuns(lastRuns);
-    }
-    throw error;
-  });
+  }, "diag-count");
 }
 
 function fetchAndRenderTaskLocks() {
-  return fetchJson("/api/tasks/locks").then(renderLocksPanel);
+  return requestPanel("locks-body", "locks", () => fetchJson("/api/tasks/locks"), renderLocksPanel, "locks-count");
 }
 
 function fetchAndRenderRunDetail() {
@@ -1257,9 +1356,10 @@ function fetchAndRenderRunEvents() {
     setActiveRunEvents(events);
     renderRunEvents();
     renderRunGantt();
-  }).catch(() => {
-    // Missing v2 events file is non-fatal — run detail still renders.
+  }).catch((error) => {
     setActiveRunEvents([]);
+    if (error.status !== 404) setActiveRunEventsError(error.message);
+    renderRunEvents();
     renderRunGantt();
   });
 }
@@ -1276,7 +1376,7 @@ function fetchAndRenderRunLogs() {
 }
 
 function fetchAndRenderSummary() {
-  return fetchJson(`/api/audit/summary?since=24h`).then((data) => {
+  return requestPanel("audit-summary-body", "summary", () => fetchJson(`/api/audit/summary?since=24h`), (data) => {
     lastSummary = data;
     renderHealthStrip(data);
     renderAuditSummary(data, auditContext());
@@ -1300,10 +1400,10 @@ function fetchAndRenderFrictions() {
     if (frictionSearchQuery) sp.set("q", frictionSearchQuery);
     return fetchJson(`/api/frictions?${sp.toString()}`);
   });
-  return Promise.all([
+  return requestPanel("frictions-body", `${frictionStatusFilter}:${frictionSearchQuery}`, () => Promise.all([
     Promise.all(listRequests),
     fetchJson("/api/frictions/stats"),
-  ]).then(([payloads, stats]) => {
+  ]), ([payloads, stats]) => {
     const items = payloads
       .flatMap((payload) => Array.isArray(payload && payload.items) ? payload.items : [])
       .sort((a, b) => {
@@ -1344,8 +1444,20 @@ function renderHealthStrip(data) {
   } else {
     tile.classList.remove("tile-alert");
   }
+  const windowLabel = data.window || getWindow();
   const failed = $("tile-failed");
-  if (failed) failed.classList.toggle("tile-alert", (data.failed_runs || 0) > 0);
+  if (failed) {
+    failed.classList.toggle("tile-alert", (data.failed_runs || 0) > 0);
+    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Distinct from Recent Runs' failed filter (durable Failed state, no window, most recent page) and Errors (step/event failures this month). Click to open failed runs.`;
+    failed.style.cursor = "pointer";
+    if (!failed.dataset.failedNavBound) {
+      failed.dataset.failedNavBound = "1";
+      failed.addEventListener("click", () => {
+        setRunFilter("failed");
+        sAT("diagnostics/runs");
+      });
+    }
+  }
 
   setRailCount("rail-count-audit", data.events);
   setRailCount("rail-count-diagnostics", data.failed_runs, true);
@@ -1396,36 +1508,42 @@ function refreshLabel() {
 
 
 async function refreshDashboard() {
-  if (isRefreshing) return;
-  isRefreshing = true;
-  const now = new Date();
-  $("meta-text").textContent = `fetching...`;
+  const sequence = ++refreshSequence;
+  const revision = getWorkspaceRevision();
+  $("meta-text").textContent = "fetching…";
   $("conn-status").className = "status-dot orange";
-  const btn = $("refresh-btn");
-  if (btn) btn.disabled = true;
-  
-  let hasErrors = false;
-  
-  await Promise.all(
-    activeRefreshJobs().map((job) =>
-      job.catch((e) => {
-        hasErrors = true;
-        console.error(e);
-      }),
-    ),
-  );
-  
-  if (hasErrors) {
-    $("conn-status").className = "status-dot red";
-    $("meta-text").textContent = `offline · ${now.toLocaleTimeString()}`;
-  } else {
-    $("conn-status").className = "status-dot green";
-    $("meta-text").textContent = `refreshed ${refreshLabel()} · ${now.toLocaleTimeString()}`;
-  }
-  if (btn) btn.disabled = false;
-  isRefreshing = false;
+  // Refresh stays available so a slow request never locks navigation or retry.
+  const results = await Promise.allSettled(activeRefreshJobs());
+  if (sequence !== refreshSequence || revision !== getWorkspaceRevision()) return null;
+  const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
+  const offline = errors.some(error => error.networkFailure);
+  for (const error of errors) console.error(error);
+  $("conn-status").className = `status-dot ${offline ? "red" : "green"}`;
+  const label = offline ? "offline" : errors.length ? "panel update failed" : `refreshed ${refreshLabel()}`;
+  $("meta-text").textContent = `${label} · ${new Date().toLocaleTimeString()}`;
   if (activeTab === "tasks") fitLogPanelToViewport();
+  return errors.length === 0;
 }
+
+// Invalidate caches at the scope boundary, including programmatic selections.
+// Panel state is reset synchronously by common.js before another frame paints.
+onWorkspaceChange(() => {
+  lastTasks = [];
+  lastTasksMeta = null;
+  cacheCrewPayload({ crews: [] });
+  lastRuns = [];
+  lastRunsMeta = null;
+  lastRunsLoading = true;
+  lastRunSourcesUnavailable = [];
+  lastDiagnostics = { metrics: null, errors: null, incidents: null };
+  for (const id of ["tasks-count", "diag-count", "task-filter-summary"]) {
+    if ($(id)) $(id).textContent = "—";
+  }
+  resetHealthStrip();
+});
+resetPanel("tasks-body", "tasks-count");
+resetPanel("runs-body", "diag-count");
+resetPanel("diag-body", "diag-count");
 
 const tasksContext = taskContext();
 buildChips(tasksContext);

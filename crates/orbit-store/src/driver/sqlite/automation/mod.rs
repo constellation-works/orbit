@@ -318,21 +318,44 @@ fn validate_transition(
             return Err(invalid());
         }
 
+        let retained_exclusions = previous
+            .excluded
+            .iter()
+            .filter(|excluded| {
+                !excluded
+                    .delivery
+                    .commits
+                    .iter()
+                    .all(|sha| active.batch.commits.contains(sha))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if next.excluded != retained_exclusions {
+            return Err(invalid());
+        }
+
         if !previous.pending_commits.starts_with(&active.batch.commits)
             || next.pending_commits != previous.pending_commits[active.batch.commits.len()..]
         {
             return Err(invalid());
         }
+    } else if previous.covered != next.covered {
+        // A proven-covered prefix may advance the scheduling cursor without a
+        // consumer examination receipt. Observation remains append-only.
+        validate_excluded_prefix_retirement(previous, next)?;
     } else {
         // Without a receipt the covered cursor stands still: observation may only
         // append commits and retain every delivery already pending.
         if previous.waived != next.waived
-            || previous.covered != next.covered
             || !next.pending_commits.starts_with(&previous.pending_commits)
             || previous
                 .pending
                 .iter()
                 .any(|delivery| !next.pending.contains(delivery))
+            || previous
+                .excluded
+                .iter()
+                .any(|excluded| !next.excluded.contains(excluded))
         {
             return Err(invalid());
         }
@@ -358,6 +381,103 @@ fn validate_transition(
                 return Err(invalid());
             }
         }
+    }
+
+    Ok(())
+}
+
+fn validate_excluded_prefix_retirement(
+    previous: &AutomationState,
+    next: &AutomationState,
+) -> Result<(), OrbitError> {
+    let invalid = || OrbitError::InvalidInput("invalid automation checkpoint transition".into());
+
+    if previous.active.is_some()
+        || next.active.is_some()
+        || previous.observed != next.observed
+        || previous.pending != next.pending
+        || previous.waived != next.waived
+        || previous.pending_commits.len() <= next.pending_commits.len()
+        || !previous.pending_commits.ends_with(&next.pending_commits)
+    {
+        return Err(invalid());
+    }
+
+    let end = previous.pending_commits.len() - next.pending_commits.len();
+    let prefix = &previous.pending_commits[..end];
+    if prefix.last() != Some(&next.covered.commit) {
+        return Err(invalid());
+    }
+
+    let pending: std::collections::HashSet<&str> = previous
+        .pending
+        .iter()
+        .flat_map(|delivery| delivery.commits.iter().map(String::as_str))
+        .collect();
+    if prefix
+        .iter()
+        .any(|sha| previous.unresolved.contains_key(sha) || pending.contains(sha.as_str()))
+    {
+        return Err(invalid());
+    }
+
+    let closed = previous.excluded.iter().any(|excluded| {
+        excluded.delivery.after == next.covered
+            && excluded
+                .delivery
+                .commits
+                .iter()
+                .all(|sha| prefix.contains(sha))
+    });
+    if !closed {
+        return Err(invalid());
+    }
+
+    if previous.excluded.iter().any(|excluded| {
+        let hits = excluded
+            .delivery
+            .commits
+            .iter()
+            .any(|sha| prefix.contains(sha));
+        let whole = excluded
+            .delivery
+            .commits
+            .iter()
+            .all(|sha| prefix.contains(sha));
+        hits && !whole
+    }) || prefix.iter().any(|sha| {
+        !previous
+            .excluded
+            .iter()
+            .any(|excluded| excluded.delivery.commits.iter().any(|commit| commit == sha))
+    }) {
+        return Err(invalid());
+    }
+
+    let retained = previous
+        .excluded
+        .iter()
+        .filter(|excluded| {
+            !excluded
+                .delivery
+                .commits
+                .iter()
+                .all(|sha| prefix.contains(sha))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if next.excluded != retained {
+        return Err(invalid());
+    }
+
+    let mut unresolved = previous.unresolved.clone();
+    let mut associations = previous.associations.clone();
+    for sha in prefix {
+        unresolved.remove(sha);
+        associations.remove(sha);
+    }
+    if next.unresolved != unresolved || next.associations != associations {
+        return Err(invalid());
     }
 
     Ok(())

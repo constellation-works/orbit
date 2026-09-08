@@ -9,7 +9,8 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, to_bytes};
+use axum::http::uri::Authority;
 use axum::http::{Method, Request, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
@@ -17,6 +18,7 @@ use axum::routing::{get, post};
 use chrono::{DateTime, Duration, TimeZone, Timelike, Utc};
 use serde::Deserialize;
 use serde_json::json;
+use std::str::FromStr;
 use url::Url;
 
 mod audit;
@@ -149,6 +151,10 @@ pub(super) struct LogQuery {
     pub(super) level: Option<String>,
     #[serde(default)]
     pub(super) since: Option<String>,
+    /// Byte offset to resume `/log/stream` from. Ignored by `/log` snapshot.
+    /// Overridden by `Last-Event-ID` when both are present.
+    #[serde(default)]
+    pub(super) from: Option<u64>,
 }
 
 pub(super) fn current_year_month_utc() -> String {
@@ -365,6 +371,35 @@ pub(super) fn server_error(e: orbit_core::OrbitError) -> Response {
         .into_response()
 }
 
+/// Normalize framework-generated client errors to the dashboard's JSON error
+/// contract. Extractor rejections occur before handlers run, so this boundary
+/// covers every route without repeating rejection handling in each handler.
+async fn json_client_error(response: Response) -> Response {
+    if !response.status().is_client_error()
+        || response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .is_some_and(|value| value.as_bytes().starts_with(b"application/json"))
+    {
+        return response;
+    }
+
+    let (parts, body) = response.into_parts();
+    let message = match to_bytes(body, 64 * 1024).await {
+        Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+        Err(error) => format!("failed to read error response: {error}"),
+    };
+    let mut json_response = (parts.status, Json(json!({ "error": message }))).into_response();
+
+    for (name, value) in &parts.headers {
+        if name != header::CONTENT_TYPE {
+            json_response.headers_mut().insert(name, value.clone());
+        }
+    }
+
+    json_response
+}
+
 /// Run a blocking runtime call on the blocking pool instead of the async
 /// worker that is serving the request.
 ///
@@ -405,10 +440,14 @@ async fn require_localhost_origin(request: Request<Body>, next: Next) -> Respons
     let allowed = origin
         .and_then(|origin| origin.to_str().ok())
         .and_then(|origin| Url::parse(origin).ok())
-        .is_some_and(|origin| {
-            origin.scheme() == "http"
-                && matches!(origin.host_str(), Some("localhost" | "127.0.0.1"))
-        });
+        .zip(
+            request
+                .headers()
+                .get(header::HOST)
+                .and_then(|host| host.to_str().ok())
+                .and_then(|host| Authority::from_str(host).ok()),
+        )
+        .is_some_and(|(origin, host)| localhost_origin_matches_authority(&origin, &host));
     if !allowed && (unsafe_method || origin.is_some()) {
         return (
             StatusCode::FORBIDDEN,
@@ -417,6 +456,25 @@ async fn require_localhost_origin(request: Request<Body>, next: Next) -> Respons
             .into_response();
     }
     next.run(request).await
+}
+
+fn localhost_origin_matches_authority(origin: &Url, authority: &Authority) -> bool {
+    let Some(origin_host) = origin.host_str().map(|host| host.trim_matches(['[', ']'])) else {
+        return false;
+    };
+
+    let authority_host = authority.host().trim_matches(['[', ']']);
+    let same_host = origin_host.eq_ignore_ascii_case(authority_host);
+    let same_port = origin.port_or_known_default() == authority.port_u16().or(Some(80));
+    let valid_origin = origin.scheme() == "http"
+        && origin.path() == "/"
+        && origin.username().is_empty()
+        && origin.password().is_none()
+        && origin.query().is_none()
+        && origin.fragment().is_none();
+    let approved_loopback_host = matches!(origin_host, "localhost" | "127.0.0.1" | "::1");
+
+    valid_origin && approved_loopback_host && same_host && same_port
 }
 
 /// Tell long-lived streaming handlers (currently `/api/log/stream`) to close
@@ -528,6 +586,7 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
             get(diagnostics::diagnostics_implement_one),
         )
         .route("/diagnostics/denials", get(denials::list_denials))
+        .layer(middleware::map_response(json_client_error))
         .layer(middleware::from_fn(require_localhost_origin))
 }
 

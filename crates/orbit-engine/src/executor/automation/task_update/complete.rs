@@ -66,6 +66,7 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
             task_id,
             TaskActivityUpdate {
                 status: TaskStatus::Done,
+                expected_status: task.status,
                 // A completion transition delivers work someone else authored;
                 // it must not overwrite that record.
                 execution_summary: None,

@@ -3,11 +3,15 @@ use std::path::Path;
 
 use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType, task_dependencies_ready};
+use orbit_types::task::{
+    Task, TaskPriority, TaskReferenceIndex, TaskStatus, TaskType,
+    task_dependencies_ready_with_index,
+};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::job::crew_pools::CapturedCrewPools;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::lock_context_files_for_task;
 
@@ -136,10 +140,23 @@ pub(super) fn list_backlog_tasks(
         // list into the lookup, then clone only the backlog tasks that survive
         // the filter — tens of clones on a large workspace instead of one per
         // task, and one copy held rather than two.
+        let pools = if input.get("auto_crew_pools").is_some()
+            || action == "classify_workspace_auto_tasks"
+        {
+            runtime.auto_crew_pools_for_input(input).map_err(|error| {
+                DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: error.to_string(),
+                }
+            })?
+        } else {
+            CapturedCrewPools::new()
+        };
         let snapshot = backlog_snapshot(
             runtime,
             action,
             allowlist_from_input(runtime, action, input)?.as_ref(),
+            &pools,
         )?;
         (snapshot.admissible_leaves, Some(snapshot.excluded))
     } else {
@@ -212,6 +229,7 @@ pub(super) fn backlog_snapshot(
     runtime: &OrbitRuntime,
     action: &str,
     allowlist: Option<&CrewAllowlist>,
+    pools: &CapturedCrewPools,
 ) -> Result<BacklogSnapshot, DispatchError> {
     let task_lookup: BTreeMap<String, Task> = runtime
         .stores()
@@ -231,6 +249,7 @@ pub(super) fn backlog_snapshot(
                 action: action.to_string(),
                 message: format!("load global task status projection: {err}"),
             })?;
+    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let workspace_root = runtime.paths().repo_root.as_path();
     let lock_holders = active_task_lock_holders(&task_lookup, workspace_root);
     // `task_lookup` iterates in task-ID order rather than the store's
@@ -239,7 +258,8 @@ pub(super) fn backlog_snapshot(
     let mut backlog: Vec<Task> = task_lookup
         .values()
         .filter(|task| {
-            task.status == TaskStatus::Backlog && task_dependencies_ready(task, &status_by_id)
+            task.status == TaskStatus::Backlog
+                && task_dependencies_ready_with_index(task, &status_by_id, &reference_index)
         })
         .cloned()
         .collect();
@@ -253,8 +273,8 @@ pub(super) fn backlog_snapshot(
     // go on filling the drain's slots at the usual rate.
     if let Some(allowlist) = allowlist {
         backlog.retain(|task| {
-            match runtime.effective_task_crew(task) {
-                Ok(crew) if allowlist.permits(&crew) => true,
+            match runtime.auto_task_crew_candidates(task, pools, None) {
+                Ok((crews, _)) if crews.iter().any(|crew| allowlist.permits(crew)) => true,
                 // An unresolvable crew fails closed under an explicit
                 // restriction: the drain cannot show it is permitted, and
                 // guessing would spend a budget the operator scoped.
@@ -264,7 +284,11 @@ pub(super) fn backlog_snapshot(
                         reason: BacklogTaskExclusionReason::CrewNotAllowed,
                         conflicts: Vec::new(),
                         crew: Some(match resolution {
-                            Ok(crew) => crew.name,
+                            Ok((crews, _)) => crews
+                                .into_iter()
+                                .map(|crew| crew.name)
+                                .collect::<Vec<_>>()
+                                .join(", "),
                             Err(error) => format!("<unresolved: {error}>"),
                         }),
                     });

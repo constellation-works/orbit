@@ -22,7 +22,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fs2::FileExt;
+use super::file_lock::acquire_shared_file_lock;
+pub use super::file_lock::{
+    DEFAULT_FILE_LOCK_TIMEOUT, FileLockGuard, FileLockHolderInfo, FileLockOptions, FileLockTimeout,
+    acquire_exclusive_file_lock, read_file_lock_holder, try_acquire_exclusive_file_lock,
+};
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -71,47 +75,27 @@ pub(crate) fn append_private_file(path: &Path) -> io::Result<File> {
 /// Atomically write `content` to `path`, then fsync the parent directory so
 /// the rename survives a crash. Creates parent directories as needed.
 pub fn atomic_write_text(path: &Path, content: &str) -> io::Result<()> {
-    let mut staged = StagedTextFile::new_internal(path, content, true)?;
-    staged.commit()
+    atomic_write_bytes(path, content.as_bytes())
 }
 
 /// Atomically write `content` bytes to `path`, then fsync the parent directory
 /// so the rename survives a crash. Creates parent directories as needed.
 pub fn atomic_write_bytes(path: &Path, content: &[u8]) -> io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("no parent dir for {}", path.display()),
-        )
-    })?;
-    create_private_dir_all(parent)?;
+    let mut staged = StagedTextFile::new_internal(path, content, true)?;
+    staged.commit()
+}
 
-    let temp_path = temp_path_for(path);
-    let mut file = create_new_private_file(&temp_path)?;
-
-    let staged = (|| {
-        if let Ok(metadata) = fs::metadata(path) {
-            fs::set_permissions(&temp_path, metadata.permissions())?;
-        }
-        file.write_all(content)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temp_path, path)
-    })();
-    if staged.is_err() {
-        // Every temp name is fresh, so a leftover would never be reclaimed:
-        // a failed write (ENOSPC mid-`write_all`, a rename refused) must not
-        // keep consuming the space it was short of.
-        let _ = fs::remove_file(&temp_path);
-    }
-    staged?;
-    sync_parent_dir(path)
+/// Atomically write secret-bearing bytes to `path` with private file
+/// permissions, even when replacing an existing file with broader permissions.
+pub(crate) fn atomic_write_private_bytes(path: &Path, content: &[u8]) -> io::Result<()> {
+    let mut staged = StagedTextFile::new_internal_with_permissions(path, content, true, false)?;
+    staged.commit()
 }
 
 /// Atomically write `content` to `path` without fsyncing the parent.
 /// Cheaper than [`atomic_write_text`] but post-crash the rename may be lost.
 pub fn atomic_write_text_volatile(path: &Path, content: &str) -> io::Result<()> {
-    let mut staged = StagedTextFile::new_internal(path, content, false)?;
+    let mut staged = StagedTextFile::new_internal(path, content.as_bytes(), false)?;
     staged.commit()
 }
 
@@ -129,15 +113,41 @@ pub struct StagedTextFile {
 impl StagedTextFile {
     /// Stage a durable write. `commit()` renames and fsyncs the parent dir.
     pub fn new(target_path: &Path, content: &str) -> io::Result<Self> {
-        Self::new_internal(target_path, content, true)
+        Self::new_internal(target_path, content.as_bytes(), true)
     }
 
     /// Stage a volatile write. `commit()` renames without fsyncing.
     pub fn new_volatile(target_path: &Path, content: &str) -> io::Result<Self> {
-        Self::new_internal(target_path, content, false)
+        Self::new_internal(target_path, content.as_bytes(), false)
     }
 
-    fn new_internal(target_path: &Path, content: &str, durable: bool) -> io::Result<Self> {
+    fn new_internal(target_path: &Path, content: &[u8], durable: bool) -> io::Result<Self> {
+        Self::new_internal_with_permissions(target_path, content, durable, true)
+    }
+
+    fn new_internal_with_permissions(
+        target_path: &Path,
+        content: &[u8],
+        durable: bool,
+        preserve_existing_permissions: bool,
+    ) -> io::Result<Self> {
+        Self::stage_with(
+            target_path,
+            durable,
+            preserve_existing_permissions,
+            |file| file.write_all(content),
+        )
+    }
+
+    fn stage_with<F>(
+        target_path: &Path,
+        durable: bool,
+        preserve_existing_permissions: bool,
+        write: F,
+    ) -> io::Result<Self>
+    where
+        F: FnOnce(&mut File) -> io::Result<()>,
+    {
         let parent = target_path.parent().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -148,16 +158,19 @@ impl StagedTextFile {
 
         let temp_path = temp_path_for(target_path);
         let mut file = create_new_private_file(&temp_path)?;
+        let mut cleanup = TempFileCleanup::new(temp_path.clone());
 
-        if let Ok(metadata) = fs::metadata(target_path) {
+        if preserve_existing_permissions && let Ok(metadata) = fs::metadata(target_path) {
             fs::set_permissions(&temp_path, metadata.permissions())?;
         }
 
-        file.write_all(content.as_bytes())?;
+        write(&mut file)?;
         if durable {
             file.sync_all()?;
         }
         drop(file);
+
+        cleanup.disarm();
 
         Ok(Self {
             target_path: target_path.to_path_buf(),
@@ -167,6 +180,14 @@ impl StagedTextFile {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn stage_with_for_test<F>(target_path: &Path, write: F) -> io::Result<Self>
+    where
+        F: FnOnce(&mut File) -> io::Result<()>,
+    {
+        Self::stage_with(target_path, true, true, write)
+    }
+
     pub fn commit(&mut self) -> io::Result<()> {
         fs::rename(&self.temp_path, &self.target_path)?;
         self.committed = true;
@@ -174,6 +195,31 @@ impl StagedTextFile {
             sync_parent_dir(&self.target_path)?;
         }
         Ok(())
+    }
+}
+
+/// Removes a newly-created staging file if setup or writing fails before the
+/// staged file can take ownership of cleanup.
+struct TempFileCleanup {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl TempFileCleanup {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TempFileCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -237,11 +283,15 @@ pub fn create_dir_symlink(src: &Path, dst: &Path) -> io::Result<()> {
 /// Removes `path` if it exists, tolerating missing paths. Symlinks are
 /// unlinked without following; directories are removed recursively.
 pub fn remove_path_if_exists(path: &Path) -> io::Result<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+
+    if metadata.file_type().is_symlink() {
+        fs::remove_file(path)
+    } else if metadata.is_dir() {
         fs::remove_dir_all(path)
     } else {
         fs::remove_file(path)
@@ -296,8 +346,8 @@ fn claim_lock_path(path: &Path) -> Option<HeldLockPath> {
 ///
 /// The lock is re-entrant per thread: a nested call for the same lock path
 /// runs `op` directly under the outermost acquisition instead of deadlocking
-/// on a second descriptor. Cross-thread and cross-process callers still block
-/// on the flock as before, including readers holding
+/// on a second descriptor. Cross-thread and cross-process callers wait up to
+/// [`DEFAULT_FILE_LOCK_TIMEOUT`] on the flock, including readers holding
 /// [`with_shared_file_lock`] on the same target.
 ///
 /// The closure returns `Result<T, E>` where any filesystem error hit while
@@ -308,6 +358,20 @@ fn claim_lock_path(path: &Path) -> Option<HeldLockPath> {
 /// `label` prefixes error messages for diagnosability when the lock path
 /// alone isn't enough context.
 pub fn with_exclusive_file_lock<T, E, F>(target_path: &Path, label: &str, op: F) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    with_exclusive_file_lock_options(target_path, label, FileLockOptions::default(), op)
+}
+
+/// [`with_exclusive_file_lock`] with an explicit, testable acquisition policy.
+pub fn with_exclusive_file_lock_options<T, E, F>(
+    target_path: &Path,
+    label: &str,
+    options: FileLockOptions,
+    op: F,
+) -> Result<T, E>
 where
     F: FnOnce() -> Result<T, E>,
     E: From<io::Error>,
@@ -335,24 +399,7 @@ where
     let Some(_held) = claim_lock_path(&lock_path) else {
         return op();
     };
-    let mut options = OpenOptions::new();
-    options.create(true).read(true).write(true).truncate(false);
-    apply_private_file_mode(&mut options);
-    let lock_file = options.open(&lock_path).map_err(|e| {
-        classify_or_wrap_lock_io(&lock_path, e, |e| {
-            format!("open {label} lock '{}': {e}", lock_path.display())
-        })
-    })?;
-    set_private_file_permissions(&lock_path).map_err(|e| {
-        classify_or_wrap_lock_io(&lock_path, e, |e| {
-            format!("chmod {label} lock '{}': {e}", lock_path.display())
-        })
-    })?;
-    lock_file.lock_exclusive().map_err(|e| {
-        classify_or_wrap_lock_io(&lock_path, e, |e| {
-            format!("lock {label} '{}': {e}", lock_path.display())
-        })
-    })?;
+    let _lock = acquire_exclusive_file_lock(&lock_path, label, options)?;
 
     op()
 }
@@ -374,6 +421,8 @@ where
 /// - Acquisition is best effort. A store on a read-only mount, or any
 ///   filesystem that refuses the lock file, still serves the read unlocked
 ///   rather than failing it — the same exposure as before this lock existed.
+///   Active contention waits up to the configured deadline and returns a typed
+///   timeout instead of reading through a live writer.
 /// - Re-entrancy is shared with the exclusive variant, so a read nested inside
 ///   a writer's own critical section runs directly instead of deadlocking on a
 ///   second descriptor.
@@ -382,6 +431,20 @@ where
 /// target. A nested request never upgrades the outer acquisition, so the
 /// mutation would run under a shared lock that concurrent readers also hold.
 pub fn with_shared_file_lock<T, E, F>(target_path: &Path, label: &str, op: F) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    with_shared_file_lock_options(target_path, label, FileLockOptions::default(), op)
+}
+
+/// [`with_shared_file_lock`] with an explicit, testable acquisition policy.
+pub fn with_shared_file_lock_options<T, E, F>(
+    target_path: &Path,
+    label: &str,
+    options: FileLockOptions,
+    op: F,
+) -> Result<T, E>
 where
     F: FnOnce() -> Result<T, E>,
     E: From<io::Error>,
@@ -396,8 +459,9 @@ where
     let Some(_held) = claim_lock_path(&lock_path) else {
         return op();
     };
-    let _lock_file = match acquire_shared_lock(&lock_path) {
+    let _lock_file = match acquire_shared_file_lock(&lock_path, label, options) {
         Ok(file) => Some(file),
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => return Err(E::from(error)),
         Err(error) => {
             crate::tracing::debug!(
                 target: "orbit.common.fs",
@@ -411,14 +475,6 @@ where
     };
 
     op()
-}
-
-fn acquire_shared_lock(lock_path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.create(true).read(true).write(true).truncate(false);
-    let lock_file = open_private_file(lock_path, &mut options)?;
-    lock_file.lock_shared()?;
-    Ok(lock_file)
 }
 
 /// The lock path to open and to key re-entrancy on, resolved through symlinks
@@ -451,7 +507,7 @@ fn lock_path_for(path: &Path) -> io::Result<PathBuf> {
     Ok(path.with_file_name(format!(".{file_name}.lock")))
 }
 
-fn open_private_file(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
+pub(crate) fn open_private_file(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     apply_private_file_mode(options);
     let file = options.open(path)?;
     set_private_file_permissions(path)?;
@@ -541,14 +597,14 @@ pub(crate) fn write_access_error_message(path: &Path, err: &io::Error) -> Option
     })
 }
 
-fn classify_lock_io(path: &Path, err: io::Error) -> io::Error {
+pub(crate) fn classify_lock_io(path: &Path, err: io::Error) -> io::Error {
     match write_access_error_message(path, &err) {
         Some(message) => io::Error::new(err.kind(), message),
         None => err,
     }
 }
 
-fn classify_or_wrap_lock_io(
+pub(crate) fn classify_or_wrap_lock_io(
     path: &Path,
     err: io::Error,
     fallback: impl FnOnce(&io::Error) -> String,

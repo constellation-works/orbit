@@ -47,6 +47,10 @@ pub struct TaskAutomationUpdate {
 #[derive(Debug, Clone)]
 pub struct TaskActivityUpdate {
     pub status: TaskStatus,
+    /// Status observed before the activity requested this write. The runtime
+    /// compares it under the task lock so a delayed worker cannot overwrite a
+    /// newer operator decision.
+    pub expected_status: TaskStatus,
     pub execution_summary: Option<String>,
     pub comment: Option<String>,
     pub note: Option<String>,
@@ -94,6 +98,21 @@ pub enum StepRecoveryAdmission {
     Allowed,
     Reserved { episode: u32 },
     Denied { reason: String },
+}
+
+/// What completion observed about a reviewed candidate's managed landing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewLandingRequest {
+    pub run_id: String,
+    pub task_ids: Vec<String>,
+    pub workspace_path: std::path::PathBuf,
+    pub pr_number: String,
+    pub base: String,
+    pub reviewed_head_sha: String,
+    /// A conditional synchronous merge returned the same commit later observed.
+    pub managed_merge: bool,
+    /// The merge commit the provider reported, when it reported one.
+    pub landed_commit: Option<String>,
 }
 
 /// The single capability boundary between the job executor and its runtime.
@@ -240,6 +259,20 @@ pub trait RuntimeHost: Send + Sync {
     ) -> Result<(), OrbitError> {
         Ok(())
     }
+    /// Revalidate the live owner immediately before a recovery hook asks the
+    /// host process to mutate Git metadata. Agent subprocesses cannot confer
+    /// this authority through their response payload.
+    fn validate_step_recovery_mutation(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _task_ids: &[String],
+        _workspace_path: &Path,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability(
+            "validate_step_recovery_mutation",
+        ))
+    }
     /// Recheck the run's authority immediately before the guarded
     /// `review -> done` transition. An error refuses completion.
     fn authorize_task_completion(
@@ -247,6 +280,14 @@ pub trait RuntimeHost: Send + Sync {
         _run_id: &str,
         _task_ids: &[String],
     ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    // ── Before-PR review coverage [ORB-11333] ───────────────────────────
+
+    /// Record how a reviewed candidate actually landed after a managed
+    /// merge. Hosts without review evidence keep the pre-existing behavior.
+    fn record_review_landing(&self, _request: &ReviewLandingRequest) -> Result<(), OrbitError> {
         Ok(())
     }
 
@@ -574,6 +615,19 @@ pub trait RuntimeHost: Send + Sync {
         _output: &Value,
     ) -> Result<(), DispatchError> {
         Ok(())
+    }
+
+    /// Persist an exact host-validated recovered rebase before reporting recovery
+    /// success. Unlike ordinary step checkpoints, durability failure is fatal.
+    fn checkpoint_rebase_recovery(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _output: &Value,
+    ) -> Result<(), DispatchError> {
+        Err(DispatchError::JobExecution(
+            "host does not support durable rebase recovery checkpoints".to_string(),
+        ))
     }
 
     fn tool_context_for_activity(

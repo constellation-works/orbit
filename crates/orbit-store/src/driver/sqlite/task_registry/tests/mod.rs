@@ -1,4 +1,7 @@
 // Content moved from tests.rs per ORB-00231
+
+mod schema;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,12 +17,13 @@ use tempfile::TempDir;
 
 use super::REGISTRY_SCHEMA_VERSION;
 use super::schema::registry_user_version;
-use super::util::{normalize_path, now_string};
+use super::util::now_string;
 use super::{
     BindWorkspaceParams, ProjectionRebuildResult, RegisterWorkspaceParams, TaskIndexFilter,
     TaskRegistryStore, WorkspaceCheckoutBinding, task_registry_path,
 };
 use crate::contracts::WorkspaceConfig;
+use crate::fs::path_safety::normalize_path;
 use crate::{
     read_workspace_config, read_workspace_config_optional, workspace_config_path,
     workspace_id_for_orbit_dir, write_workspace_config,
@@ -1214,6 +1218,62 @@ fn workspace_config_round_trips_and_validates() {
 }
 
 #[test]
+fn persistence_consumers_share_workspace_id_grammar() {
+    let cases = [
+        ("ws_orbit", Some("ws_orbit")),
+        ("ws_orbit-main_2", Some("ws_orbit-main_2")),
+        ("orbit-test-abcdef", Some("orbit-test-abcdef")),
+        ("  orbit-test-abcdef  ", Some("orbit-test-abcdef")),
+        ("ws_", None),
+        ("ws_Orbit", None),
+        ("-orbit-abcdef", None),
+        ("orbit--test-abcdef", None),
+        ("orbit-ABCDEF", None),
+        ("orbit-abcde", None),
+        ("orbit-abcdef0", None),
+        ("orbit/test-abcdef", None),
+    ];
+
+    for (raw, expected) in cases {
+        let temp = TempDir::new().expect("tempdir");
+        let orbit_dir = temp.path().join(".orbit");
+        let file_result = write_workspace_config(
+            &orbit_dir,
+            &WorkspaceConfig {
+                schema_version: 1,
+                workspace_id: raw.into(),
+            },
+        );
+        let store = store(&temp);
+        let registry_result = store.register_workspace(RegisterWorkspaceParams {
+            workspace_id: raw.into(),
+            slug: "Workspace".into(),
+            repo_fingerprint: None,
+        });
+
+        match expected {
+            Some(expected) => {
+                file_result.expect("file workspace binding accepts id");
+                assert_eq!(
+                    read_workspace_config(&orbit_dir)
+                        .expect("read file workspace binding")
+                        .workspace_id,
+                    expected
+                );
+                assert_eq!(
+                    registry_result.expect("registry accepts id").workspace_id,
+                    expected
+                );
+            }
+            None => {
+                assert!(file_result.is_err(), "file binding accepted {raw:?}");
+                assert!(registry_result.is_err(), "registry accepted {raw:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn workspace_config_optional_distinguishes_missing_file() {
     let temp = TempDir::new().expect("tempdir");
 
@@ -1502,6 +1562,120 @@ fn unregister_task_bundle_removes_binding_indexes_and_relation_edges() {
             )
             .expect("inverse relation"),
         Vec::<String>::new()
+    );
+}
+
+#[test]
+fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace_a_root = temp.path().join("workspace-a");
+    let workspace_b_root = temp.path().join("workspace-b");
+    let bind_workspace = |workspace_id: &str, root: &Path| {
+        let orbit_dir = root.join(".orbit");
+        fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+        store
+            .bind_workspace(BindWorkspaceParams {
+                workspace_id: Some(workspace_id.into()),
+                slug: workspace_id.into(),
+                repo_root: root.to_path_buf(),
+                workspace_path: root.to_path_buf(),
+                orbit_dir,
+                repo_fingerprint: None,
+            })
+            .expect("bind workspace")
+    };
+    let workspace_a = bind_workspace("ws_a", &workspace_a_root);
+    let workspace_b = bind_workspace("ws_b", &workspace_b_root);
+
+    for task_id in ["ORB-1", "ORB-2"] {
+        let bundle_dir = create_canonical_bundle(&store, &workspace_b, task_id);
+        store
+            .register_task_bundle(task_id, &workspace_b.workspace_id, &bundle_dir)
+            .expect("register bundle");
+    }
+    store
+        .replace_task_index(
+            &workspace_b.workspace_id,
+            &envelope(
+                "ORB-1",
+                TaskStatus::Backlog,
+                vec!["sibling".into()],
+                Vec::new(),
+            ),
+        )
+        .expect("index tagged task");
+    store
+        .replace_task_index(
+            &workspace_b.workspace_id,
+            &envelope(
+                "ORB-2",
+                TaskStatus::Backlog,
+                Vec::new(),
+                vec![TaskRelation {
+                    relation_type: TaskRelationType::BlockedBy,
+                    target: "ORB-1".to_string(),
+                }],
+            ),
+        )
+        .expect("index inbound relation");
+
+    let versions_before = store
+        .indexed_task_versions_for_workspace(&workspace_b.workspace_id)
+        .expect("versions before unregister");
+    let tagged_before = store
+        .indexed_task_ids_filtered(
+            &workspace_b.workspace_id,
+            &TaskIndexFilter {
+                status: None,
+                priority: None,
+                job_run_id: None,
+                tags: vec!["sibling".into()],
+            },
+        )
+        .expect("tagged tasks before unregister");
+    let relation_sources_before = store
+        .indexed_relation_sources(
+            &workspace_b.workspace_id,
+            "ORB-1",
+            TaskRelationType::BlockedBy,
+        )
+        .expect("relation sources before unregister");
+
+    assert!(
+        !store
+            .unregister_task_bundle("ORB-1", &workspace_a.workspace_id)
+            .expect("unregister sibling task")
+    );
+    assert_eq!(
+        store
+            .indexed_task_versions_for_workspace(&workspace_b.workspace_id)
+            .expect("versions after unregister"),
+        versions_before
+    );
+    assert_eq!(
+        store
+            .indexed_task_ids_filtered(
+                &workspace_b.workspace_id,
+                &TaskIndexFilter {
+                    status: None,
+                    priority: None,
+                    job_run_id: None,
+                    tags: vec!["sibling".into()],
+                },
+            )
+            .expect("tagged tasks after unregister"),
+        tagged_before
+    );
+    assert_eq!(
+        store
+            .indexed_relation_sources(
+                &workspace_b.workspace_id,
+                "ORB-1",
+                TaskRelationType::BlockedBy,
+            )
+            .expect("relation sources after unregister"),
+        relation_sources_before
     );
 }
 

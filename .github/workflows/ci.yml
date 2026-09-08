@@ -65,7 +65,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run Linux sandbox/policy enforcement tests
-        run: cargo test -p orbit-exec -p orbit-policy -p orbit-tools --locked
+        run: cargo test --no-fail-fast -p orbit-exec -p orbit-policy -p orbit-tools --locked
 
   # [ORB-10010] MSRV floor: `rust-version` in [workspace.package] (Cargo.toml).
   # Evidence for 1.89: edition 2024 requires >= 1.85, the highest

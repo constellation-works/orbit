@@ -2,15 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::glob::{match_glob, normalize_glob_path};
 use orbit_common::fs::selector::anchor_path;
 use orbit_search::{DocEmbeddingSource, DocSearchSource};
+use orbit_types::policy::{match_glob, normalize_glob_path};
 
 use super::config::DocsRoot;
-use super::frontmatter::parse_doc_tolerant;
+use super::frontmatter::read_doc_tolerant;
 use super::path_util::{path_to_slash_string, repo_relative_path};
-use super::types::{DocRecord, DocShow, TaskRelatedDoc};
-use super::walk::{expand_root, walk_docs_roots};
+use super::types::{DocRecord, DocShow, TaskRelatedDoc, WalkedDoc};
+use super::walk::{expand_root, walk_docs_with_bodies};
 
 const DEFAULT_RELATED_DOC_LIMIT: usize = 5;
 
@@ -41,9 +41,7 @@ pub(super) fn show_doc(
         )));
     }
     let relative = repo_relative_path(repo_root, &absolute)?;
-    let raw = std::fs::read_to_string(&absolute)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", absolute.display())))?;
-    let parsed = parse_doc_tolerant(&relative, &absolute, &raw);
+    let parsed = read_doc_tolerant(&relative, &absolute)?;
     Ok(DocShow {
         path: path_to_slash_string(&relative),
         frontmatter: parsed.frontmatter,
@@ -113,22 +111,21 @@ pub(super) fn doc_embedding_sources(
     repo_root: &Path,
     roots: &[DocsRoot],
 ) -> Result<Vec<DocEmbeddingSource>, OrbitError> {
-    let mut sources = Vec::new();
-    for record in walk_docs_roots(repo_root, roots)? {
-        let shown = show_doc(repo_root, roots, &record.path)?;
-        sources.push(DocEmbeddingSource {
-            path: record.path,
-            title: shown.frontmatter.summary,
-            tags: shown.frontmatter.tags,
-            body: shown.body,
-        });
-    }
-    Ok(sources)
+    Ok(walk_docs_with_bodies(repo_root, roots)?
+        .into_iter()
+        .map(|doc| DocEmbeddingSource {
+            path: doc.record.path,
+            title: doc.record.frontmatter.summary,
+            tags: doc.record.frontmatter.tags,
+            body: doc.body,
+        })
+        .collect())
 }
 
 #[derive(Debug)]
 struct RelatedDocCandidate {
     record: DocRecord,
+    body: String,
     score: usize,
     matched_by: BTreeSet<String>,
 }
@@ -159,7 +156,7 @@ pub(super) fn related_docs_for_context(
     }
 
     let mut candidates = BTreeMap::<String, RelatedDocCandidate>::new();
-    for record in walk_docs_roots(repo_root, roots)? {
+    for WalkedDoc { record, body } in walk_docs_with_bodies(repo_root, roots)? {
         let mut score = 0usize;
         let mut matched_by = BTreeSet::new();
 
@@ -196,6 +193,7 @@ pub(super) fn related_docs_for_context(
             })
             .or_insert(RelatedDocCandidate {
                 record,
+                body,
                 score,
                 matched_by,
             });
@@ -210,19 +208,19 @@ pub(super) fn related_docs_for_context(
     });
     ranked.truncate(limit);
 
-    ranked
+    Ok(ranked
         .into_iter()
         .map(|candidate| {
-            let shown = show_doc(repo_root, roots, &candidate.record.path)?;
-            Ok(TaskRelatedDoc {
+            let excerpt = doc_excerpt(&candidate.body, &candidate.record.frontmatter.summary);
+            TaskRelatedDoc {
                 path: candidate.record.path,
                 doc_type: candidate.record.frontmatter.doc_type,
-                summary: candidate.record.frontmatter.summary.clone(),
-                excerpt: doc_excerpt(&shown.body, &candidate.record.frontmatter.summary),
+                summary: candidate.record.frontmatter.summary,
+                excerpt,
                 matched_by: candidate.matched_by.into_iter().collect(),
-            })
+            }
         })
-        .collect()
+        .collect())
 }
 
 fn context_selector_path(repo_root: &Path, selector: &str) -> Option<String> {

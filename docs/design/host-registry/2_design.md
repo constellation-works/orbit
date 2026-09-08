@@ -3,13 +3,13 @@ summary: "Host Registry — Design"
 type: design
 title: "Host Registry — Design"
 owner: codex
-last_updated: 2026-08-15
-last_validated: 2026-08-15
+last_updated: 2026-09-08
+last_validated: 2026-09-07
 status: Accepted
 feature: host-registry
 doc_role: design
 tags: [host-registry, machine-identity, workspace-catalog, runtime-composition]
-paths: ["crates/orbit-common/src/types/host.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-cli/src/command/init.rs", "crates/orbit-cli/src/command/host/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state.rs", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
+paths: ["crates/orbit-types/src/identity/host.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-cli/src/command/init/**", "crates/orbit-cli/src/command/host/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state.rs", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
 related_features: [host-registry, mcp-session-context, remote-access]
 related_artifacts: []
 ---
@@ -22,12 +22,12 @@ The live implementation has four layers.
 
 | Layer | Owns | Must not own |
 |---|---|---|
-| orbit-common | Host and workspace DTOs, identifier validation, lifecycle enums, schema constants | Files, runtime construction, transport |
+| orbit-types | Host and workspace identity DTOs, identifier validation, lifecycle enums, schema constants | Files, runtime construction, transport |
 | orbit-registry | Machine identity lifecycle; workspace catalog parsing, mutation, validation, health and file I/O | CLI orchestration, MCP framing, Core execution |
 | orbit-cmd | Registry-aware selection and Core runtime construction | Registry schemas or persistence |
 | CLI, Web and MCP server | User/API inputs, presentation, refresh timing and request dispatch | Alternate catalog semantics |
 
-HostIdentity and host.toml I/O live in orbit-registry. Shared primitives such as validate_machine_id, validate_host_id and the machine-ID namespace constants live in orbit-common so identity validation remains persistence-neutral.
+HostIdentity and host.toml I/O live in orbit-registry. Shared primitives such as validate_machine_id, validate_host_id and the machine-ID namespace constants live in orbit-types so identity validation remains persistence-neutral.
 
 ## 2. Machine identity
 
@@ -69,7 +69,7 @@ RegisteredRuntimeFactory projects task_prefix into the global task allocator bef
 - checkouts are machine-local bindings: workspace ID, repo_root, orbit_dir, role, optional replica owner and path overrides;
 - owner_host_ids maps owner machine IDs referenced by local workspace records to display names. It is a local presentation projection, not a fleet inventory.
 
-A logical workspace may exist without a local checkout. Runtime callers require both. The catalog allows at most one local checkout per logical workspace and rejects duplicate workspace IDs or names. Mutation helpers also reject reusing a registered repo_root or orbit_dir.
+A logical workspace may exist without a local checkout. Runtime callers require both. The catalog allows at most one local checkout per logical workspace and rejects duplicate workspace IDs or names. Load and save reject a `repo_root` or `path_override` claimed by more than one checkout. `register_checkout` refuses a reused `repo_root`; `set_path_override` refuses a path already claimed as another checkout's `repo_root` or override. Distinct checkouts may share an `orbit_dir`.
 
 ### Owner and replica roles
 
@@ -77,7 +77,7 @@ An identity-bearing machine must use explicit ownership data:
 
 - an owner checkout has no checkout-level owner_machine_id, and the logical owner must equal the local machine_id;
 - a replica checkout names a non-local owner_machine_id, and that value must equal the logical workspace owner;
-- all persisted machine IDs pass the same orbit-common validator;
+- all persisted machine IDs pass the same orbit-types validator;
 - ownership is never inferred from paths, Git remotes, SSH destinations or caller audit labels.
 
 Installations without host identity retain a narrow standalone compatibility path: a missing checkout role may canonicalize to owner. Once host identity exists, missing or contradictory roles and missing logical owners fail closed.

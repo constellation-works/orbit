@@ -60,7 +60,7 @@ pub(super) async fn list_workspaces(State(state): State<DashboardState>) -> Resp
 /// workspace is broken.
 pub(super) async fn list_all_tasks(State(state): State<DashboardState>) -> Response {
     match blocking("aggregate task list", move || Ok(all_tasks_json(&state))).await {
-        Ok(Ok(values)) => Json(values).into_response(),
+        Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => server_error(error),
         Err(response) => *response,
     }
@@ -230,15 +230,17 @@ fn run_timestamp(run: &JobRun) -> DateTime<Utc> {
     run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 
-fn all_tasks_json(state: &DashboardState) -> Result<Vec<Value>, orbit_core::OrbitError> {
+fn all_tasks_json(state: &DashboardState) -> Result<Value, orbit_core::OrbitError> {
     let pinned = state.pin();
     let home = home_dir();
     let mut candidates = Vec::new();
+    let mut total = 0;
     for entry in pinned.entries().iter().filter(|entry| entry.active) {
         let Ok(runtime) = pinned.runtime_for(&entry.id) else {
             continue;
         };
         let page = runtime.task_candidates(&TaskListFilter::default(), DEFAULT_TASK_LIST_LIMIT)?;
+        total += page.total;
         for task in page.items {
             candidates.push((task, runtime.clone(), entry));
         }
@@ -272,7 +274,12 @@ fn all_tasks_json(state: &DashboardState) -> Result<Vec<Value>, orbit_core::Orbi
         }
         values.push(value);
     }
-    Ok(values)
+    Ok(json!({
+        "items": values,
+        "total": total,
+        "limit": DEFAULT_TASK_LIST_LIMIT,
+        "truncated": total > values.len(),
+    }))
 }
 
 /// Render a filesystem path for display, collapsing the user's home directory

@@ -1,9 +1,10 @@
 schemaVersion: 1
 name: delivery-code-review
 description: Review a frozen delivery batch using typed artifact evidence
-enabled: false
+enabled: true
 schedule:
   deliveries_landed:
+    owner_machine: hm_9ca6004473492f06
     branch: agent-main
     threshold: 3
     max_wait_minutes: 360
@@ -30,10 +31,10 @@ template:
   - delivery-code-review
   - no-diff-expected
   priority: medium
-  crew: system
+  crew: grok
   status: backlog
 dedupe: skip_if_open
 created_by: system
 created_at: 2026-09-06T00:00:00Z
-updated_by: system
-updated_at: 2026-09-06T00:00:00Z
+updated_by: unknown
+updated_at: 2026-09-07T19:49:48.865084613+00:00

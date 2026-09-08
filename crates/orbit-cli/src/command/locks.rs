@@ -19,7 +19,7 @@ use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
 use serde_json::{Map, Value, json};
 
 use crate::command::task::output::format_task_locks;
-use crate::command::{Block, CommandOut, CommandOutput, Execute, Payload, require_confirmation};
+use crate::command::{Block, CommandOut, Execute, Payload, require_confirmation};
 use crate::output::table::{Column, Table};
 use crate::parse::parse_duration_seconds;
 
@@ -70,12 +70,7 @@ pub struct LocksListArgs {
 impl Execute for LocksListArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let locks = runtime.run_tool("orbit.task.locks", json!({}))?;
-        if self.json {
-            Ok(Payload::document(locks).into())
-        } else {
-            print!("{}", format_task_locks(&locks));
-            Ok(CommandOutput::Silent)
-        }
+        Ok(Payload::detail(locks.clone(), format_task_locks(&locks)).into())
     }
 }
 

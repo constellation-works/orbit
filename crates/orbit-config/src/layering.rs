@@ -103,9 +103,29 @@ pub struct EffectiveConfig {
 }
 
 impl EffectiveConfig {
-    /// Resolved value for one registry key.
+    /// Resolved value for one admitted key, including projected crew fields.
+    ///
+    /// Configured crew effort is present only when the assignment set it.
+    /// A live `crews.<name>.effort` key whose crew exists but omitted the
+    /// field returns JSON null rather than inventing a provider default.
     pub fn value_for(&self, key: &str) -> Option<serde_json::Value> {
-        self.snapshot.value_for(key)
+        if let Some(value) = self.snapshot.value_for(key) {
+            return Some(value);
+        }
+        if let Some(entry) = self.values.iter().find(|entry| entry.key == key) {
+            return Some(entry.value.clone());
+        }
+        if let Ok(Some(parsed)) = crate::registry::parse_crew_field_key(key) {
+            let prefix = format!("crews.{}.", parsed.name);
+            if self
+                .values
+                .iter()
+                .any(|entry| entry.key.starts_with(&prefix))
+            {
+                return Some(serde_json::Value::Null);
+            }
+        }
+        None
     }
 
     /// Every resolved value, sorted by key.
@@ -352,12 +372,18 @@ fn effective_values(
     });
 
     for (name, crew) in &resolved.crews {
-        for (field, value) in [
+        let mut fields = vec![
             ("model", serde_json::json!(crew.assignment.model)),
             ("provider", serde_json::json!(crew.assignment.provider)),
             ("description", serde_json::json!(crew.description)),
             ("tags", serde_json::json!(crew.tags)),
-        ] {
+        ];
+        // Configured effort only. An omitted field keeps the provider default
+        // and must not appear as a fabricated effective setting.
+        if let Some(effort) = crew.assignment.effort {
+            fields.push(("effort", serde_json::json!(effort)));
+        }
+        for (field, value) in fields {
             let key = format!("crews.{name}.{field}");
             values.push(EffectiveConfigValue {
                 source: source_for_crew_field(name, field, global, workspace),

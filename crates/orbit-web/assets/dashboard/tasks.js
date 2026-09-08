@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, statusPill, patchJson, postJson, syncNodes, isAggregateView, withWorkspace } from './common.js';
+import { onWorkspaceChange, panelCanRender, el, statusPill, patchJson, postJson, syncNodes, isAggregateView, withWorkspace, makeToggleRow } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 
 const $ = (id) => document.getElementById(id);
@@ -18,6 +18,14 @@ let pinnedExternalTask = null;
 let statusFeedback = new Map();
 let crewFeedback = new Map();
 const MUTATION_UNDO_WINDOW_MS = 8000;
+
+onWorkspaceChange(() => {
+  pinnedExternalTask = null;
+  expandedTaskIds.clear();
+  statusFeedback.clear();
+  crewFeedback.clear();
+});
+
 // ORB-10444: task ids whose Ship dispatch this page has already issued. Ship is
 // a write against a live pipeline, so a second click must not launch a second
 // run: the id stays here for the life of the page once a dispatch succeeds (the
@@ -305,10 +313,11 @@ export function openVisibleTask(taskId, context) {
   });
 }
 
-/* Global ID resolver support (ORB-00211): allow rendering detail for a task whose status
-   is outside the active chip filter (done/rejected/archived) without adding it to the
-   bulk-loaded list or mutating DASHBOARD_TASK_STATUSES. The pinned detail appears in a
-   highlighted block at top of #tasks-body; auto-clears if user later enables matching chip. */
+/* Global ID resolver support (ORB-00211): allow rendering detail for a task that
+   is outside the filtered list (hidden status, search, or truncated fetch)
+   without mutating DASHBOARD_TASK_STATUSES. The pinned detail appears in a
+   highlighted block at top of #tasks-body; auto-clears once the filtered list
+   actually contains the task. */
 export function setPinnedExternalTask(task, context) {
   if (!task || !task.id) return;
   pinnedExternalTask = { task, id: task.id };
@@ -508,6 +517,38 @@ function buildRelations(relations, context) {
   return wrap;
 }
 
+// ORB-11333: the settled before-PR review gate. Every value comes from the
+// certificate the gate wrote; nothing here is inferred from status or tags.
+function buildReviewGate(review) {
+  const wrap = el("div", { class: "review-gate" });
+  if (review.unreadable) {
+    wrap.appendChild(el("div", { text: `review evidence unreadable: ${review.unreadable}` }));
+    return wrap;
+  }
+  const reviewer = review.reviewer || {};
+  const consumed = review.consumed || {};
+  const budget = review.budget || {};
+  const lines = [
+    `verdict: ${review.verdict}${review.assurance ? ` (${review.assurance})` : ""}`,
+    `reviewer: ${reviewer.crew ?? "—"} · ${reviewer.provider ?? "—"} / ${reviewer.model ?? "—"}${reviewer.same_model_as_implementer ? " · same model as implementer" : ""}`,
+    `base ${review.base?.commit ?? "—"} → reviewed ${review.reviewed_candidate?.commit ?? "—"} → final ${review.final_candidate?.commit ?? "—"}`,
+    `repairs: ${Array.isArray(review.repair_commits) && review.repair_commits.length ? review.repair_commits.map((c) => `${c.commit.slice(0, 12)} by ${c.author}`).join(", ") : "none"}`,
+    `findings: ${Array.isArray(review.findings) ? review.findings.length : 0} · validation: ${Array.isArray(review.validation) ? review.validation.length : 0} record(s), complete: ${review.validation_complete ? "yes" : "no"}`,
+    `consumed: ${consumed.reviewer_starts ?? 0}/${budget.reviewer_starts ?? "?"} starts · ${consumed.repair_cycles ?? 0}/${budget.repair_cycles ?? "?"} repair cycles · ${consumed.seconds ?? 0}s of ${budget.minutes ?? "?"} min`,
+  ];
+  if (review.escalation) lines.push(`escalation: ${review.escalation}`);
+  if (Array.isArray(review.landings) && review.landings.length) {
+    for (const landing of review.landings) {
+      lines.push(`landing ${landing.landed?.commit ?? "?"}: ${landing.transformation} · ${landing.covered ? "covered" : `uncovered (${landing.reason ?? "unknown"})`}`);
+    }
+  }
+  if (Array.isArray(review.stale_reasons) && review.stale_reasons.length) {
+    lines.push(`stale gate reasons: ${review.stale_reasons.join(", ")}`);
+  }
+  for (const line of lines) wrap.appendChild(el("div", { text: line }));
+  return wrap;
+}
+
 function fmtSize(bytes) {
   const value = Number(bytes);
   if (!Number.isFinite(value) || value < 0) return "0 bytes";
@@ -613,7 +654,7 @@ function buildArtifactPreview(artifact, response) {
 
 export function buildArtifacts(task) {
   const wrap = el("div", { class: "artifacts" });
-  for (const artifact of task.artifacts) {
+  for (const [index, artifact] of task.artifacts.entries()) {
     const path = String(artifact.path || "");
     const mediaType = String(artifact.media_type || "application/octet-stream");
     const row = el("div", {
@@ -621,27 +662,38 @@ export function buildArtifacts(task) {
       text: `${path} · ${mediaType} · ${fmtSize(artifact.size_bytes)}`,
     });
     const preview = el("div", { class: "artifact-preview" });
+    // Artifact paths are free-form, so the position in the list is what makes a
+    // stable id the row's `aria-controls` can point at.
+    preview.id = `artifact-preview-${task.id}-${index}`;
     preview.hidden = true;
-    row.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      if (preview.dataset.loaded === "true" && !preview.hidden) {
-        preview.hidden = true;
-        return;
-      }
-      if (preview.dataset.loaded === "true") {
-        preview.hidden = false;
-        return;
-      }
-      preview.hidden = false;
-      preview.textContent = "loading...";
-      try {
-        const response = await fetch(artifactUrl(task.id, path));
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        preview.replaceChildren(await buildArtifactPreview(artifact, response));
-        preview.dataset.loaded = "true";
-      } catch (error) {
-        preview.textContent = `Unable to load ${path}: ${error.message}`;
-      }
+
+    // Disclosure lives on the preview's `hidden` flag; keeping the two in one
+    // setter is what stops the announced state from drifting from the visible one.
+    const revealPreview = (visible) => {
+      preview.hidden = !visible;
+      row.setAttribute("aria-expanded", String(visible));
+    };
+
+    makeToggleRow(row, {
+      expanded: false,
+      controls: preview.id,
+      onToggle: async (e) => {
+        e.stopPropagation();
+        if (preview.dataset.loaded === "true") {
+          revealPreview(preview.hidden);
+          return;
+        }
+        revealPreview(true);
+        preview.textContent = "loading...";
+        try {
+          const response = await fetch(artifactUrl(task.id, path));
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          preview.replaceChildren(await buildArtifactPreview(artifact, response));
+          preview.dataset.loaded = "true";
+        } catch (error) {
+          preview.textContent = `Unable to load ${path}: ${error.message}`;
+        }
+      },
     });
     wrap.appendChild(row);
     wrap.appendChild(preview);
@@ -663,9 +715,13 @@ function buildTaskDetail(task, context) {
     const block = el("div", { class: classes });
     const h4 = el("h4", { text: title });
     if (collapsible) {
-      h4.addEventListener("click", (e) => {
-        e.stopPropagation();
-        block.classList.toggle("collapsed");
+      makeToggleRow(h4, {
+        expanded: !collapsed,
+        onToggle: (e) => {
+          e.stopPropagation();
+          const nowCollapsed = block.classList.toggle("collapsed");
+          h4.setAttribute("aria-expanded", String(!nowCollapsed));
+        },
       });
     }
     block.appendChild(h4);
@@ -723,6 +779,10 @@ function buildTaskDetail(task, context) {
 
   if (Array.isArray(task.artifacts) && task.artifacts.length > 0) {
     addField(leftCol, "artifacts", buildArtifacts(task), true, true);
+  }
+
+  if (task.review && typeof task.review === "object") {
+    addField(leftCol, "review gate", buildReviewGate(task.review), true, true);
   }
 
   if (Array.isArray(task.tags) && task.tags.length > 0) {
@@ -1079,6 +1139,7 @@ async function shipTask(task, detail, btnNode, context) {
 function showCommentForm(task, detail, actions, context) {
   const form = el("div", { class: "comment-form" });
   form.addEventListener("click", (e) => e.stopPropagation());
+  detail.dataset.draft = "comment";
   const ta = el("textarea");
   ta.placeholder = "comment";
   const buttons = el("div", { class: "actions" });
@@ -1097,6 +1158,9 @@ function showCommentForm(task, detail, actions, context) {
     cancel.disabled = true;
     try {
       await postJson(`/api/tasks/${encodeURIComponent(task.id)}/comments`, { message });
+      // The draft is spent: let the next render rebuild the detail so the
+      // posted comment appears.
+      delete detail.dataset.draft;
       await refreshTasks(context);
     } catch (error) {
       submit.disabled = false;
@@ -1111,6 +1175,7 @@ function showCommentForm(task, detail, actions, context) {
   });
   cancel.addEventListener("click", (e) => {
     e.stopPropagation();
+    delete detail.dataset.draft;
     form.replaceWith(actions);
   });
   buttons.appendChild(submit);
@@ -1124,6 +1189,7 @@ function showCommentForm(task, detail, actions, context) {
 function showRejectForm(task, detail, actions, context) {
   const form = el("div", { class: "reject-form" });
   form.addEventListener("click", (e) => e.stopPropagation());
+  detail.dataset.draft = "reject";
   const ta = el("textarea");
   ta.placeholder = "reason for rejection";
   const buttons = el("div", { class: "actions" });
@@ -1140,6 +1206,7 @@ function showRejectForm(task, detail, actions, context) {
   });
   cancel.addEventListener("click", (e) => {
     e.stopPropagation();
+    delete detail.dataset.draft;
     form.replaceWith(actions);
   });
   buttons.appendChild(submit);
@@ -1200,7 +1267,65 @@ function takeTaskActionNotice() {
   return notice;
 }
 
+// The pinned global-resolver result: a task outside the active filter, shown
+// above the list with its own dismiss control.
+function buildPinnedTask(ptask, context) {
+  const row = el("div", {
+    class: "row pinned-external",
+    title: `${ptask.title} (global resolver; status ${ptask.status})`
+  }, [
+    el("span", { class: "id mono", text: ptask.id }),
+    el("span", { class: "title", text: ptask.title }),
+    buildStatusUpdateControl(ptask, context),
+    buildCrewUpdateControl(ptask, context),
+  ]);
+  // The pinned row's detail is always open, so the row is a plain copy-the-id
+  // action rather than a disclosure.
+  makeToggleRow(row, {
+    onToggle: (e) => {
+      e.stopPropagation();
+      if (navigator.clipboard) navigator.clipboard.writeText(ptask.id).catch(() => {});
+    },
+  });
+  row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, ptask.id)}-${feedbackSignature(crewFeedback, ptask.id)}`;
+
+  const detail = buildTaskDetail(ptask, context);
+  const dismiss = el("button", { class: "action", text: "Close" });
+  dismiss.title = "Dismiss global task detail";
+  dismiss.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    pinnedExternalTask = null;
+    renderTasks(taskList(context), context);
+  });
+  let actions = detail.querySelector(".actions");
+  if (!actions) {
+    actions = el("div", { class: "actions" });
+    detail.appendChild(actions);
+  }
+  actions.appendChild(dismiss);
+
+  const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
+  wrap.dataset.key = `pinned-${ptask.id}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}`;
+  return wrap;
+}
+
+/* ORB-11655: a comment or reject form holds text the operator is still typing,
+   so the 30 s refresh must not rebuild the detail node that contains it — not
+   even when the task itself changed. Collect the live top-level nodes holding
+   an open form, keyed the way syncNodes keys them, and reuse them verbatim.
+   The detail resumes tracking task data as soon as the form is closed. */
+function openDraftNodes(body) {
+  const drafts = new Map();
+  for (const node of Array.from(body.children)) {
+    if (!node.dataset.key) continue;
+    if (node.dataset.draft || node.querySelector?.("[data-draft]")) drafts.set(node.dataset.key, node);
+  }
+  return drafts;
+}
+
 export function renderTasks(tasks, context) {
+  if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
   if (!body) return;
 
@@ -1209,57 +1334,28 @@ export function renderTasks(tasks, context) {
   // data so no extra plumbing is needed (single-workspace lists lack the field).
   const aggregate = Array.isArray(tasks) && tasks.some((t) => t && t.workspace_name);
 
-  // Auto-clear pinned external (global resolver) if its status+search now makes it
-  // visible in the normal filtered list (user enabled the chip or cleared search).
+  // Auto-clear a pinned jump only when the task is actually in the filtered
+  // list. Matching status/search chips is not enough: a truncated fetch can
+  // omit the jumped task even when its chip is on.
   if (pinnedExternalTask && pinnedExternalTask.task) {
     const p = pinnedExternalTask.task;
-    const q = (searchQueryValue(context) || "").toLowerCase();
-    const act = activeStatusSet(context);
-    const matchesQ = !q || (p.id && p.id.toLowerCase().includes(q)) || (p.title && p.title.toLowerCase().includes(q));
-    if (act.has(p.status) && matchesQ) {
+    if (filterTasks(tasks, context).some((task) => task.id === p.id)) {
       pinnedExternalTask = null;
     }
   }
 
-  const frag = document.createDocumentFragment();
+  // Collected as a plain array rather than a document fragment: a fragment
+  // would detach every reused node from the panel, and moving a node is what
+  // costs an open draft its caret. syncNodes leaves a node it already holds in
+  // place.
+  const nodes = [];
+  const drafts = openDraftNodes(body);
   const notice = takeTaskActionNotice();
 
   // Render pinned external task detail (for statuses outside active filter) at top.
   if (pinnedExternalTask && pinnedExternalTask.task) {
     const ptask = pinnedExternalTask.task;
-    const pRow = el("div", {
-      class: "row pinned-external",
-      title: `${ptask.title} (global resolver; status ${ptask.status})`
-    }, [
-      el("span", { class: "id mono", text: ptask.id }),
-      el("span", { class: "title", text: ptask.title }),
-      buildStatusUpdateControl(ptask, context),
-      buildCrewUpdateControl(ptask, context),
-    ]);
-    pRow.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (navigator.clipboard) navigator.clipboard.writeText(ptask.id).catch(() => {});
-    });
-    pRow.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, ptask.id)}-${feedbackSignature(crewFeedback, ptask.id)}`;
-    const pDetail = buildTaskDetail(ptask, context);
-    // Dismiss button to close the global detail without affecting chips
-    const dismiss = el("button", { class: "action", text: "Close" });
-    dismiss.title = "Dismiss global task detail";
-    dismiss.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      pinnedExternalTask = null;
-      renderTasks(taskList(context), context);
-    });
-    let acts = pDetail.querySelector(".actions");
-    if (!acts) {
-      acts = el("div", { class: "actions" });
-      pDetail.appendChild(acts);
-    }
-    acts.appendChild(dismiss);
-    const pWrap = el("div", { class: "pinned-task-wrap" }, [pRow, pDetail]);
-    pWrap.dataset.key = `pinned-${ptask.id}`;
-    pWrap.dataset.hash = `${pRow.dataset.hash}-${JSON.stringify(ptask)}`;
-    frag.appendChild(pWrap);
+    nodes.push(drafts.get(`pinned-${ptask.id}`) || buildPinnedTask(ptask, context));
   }
 
   const filtered = filterTasks(tasks, context);
@@ -1269,7 +1365,7 @@ export function renderTasks(tasks, context) {
   const railCount = document.getElementById("rail-count-tasks");
   if (railCount) railCount.textContent = String(filtered.length);
   renderFilterSummary(context);
-  if (filtered.length === 0 && frag.children.length === 0) {
+  if (filtered.length === 0 && nodes.length === 0) {
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
     const emptyState = el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
@@ -1279,7 +1375,7 @@ export function renderTasks(tasks, context) {
     return;
   }
   const groups = new Map();
-  if (notice) frag.appendChild(notice);
+  if (notice) nodes.push(notice);
 
   // Column header strip (once, before first group-header). Uses .row.header so grid
   // (and all @media overrides) are identical to data rows; labels sit over ID/Title/Status/Crew.
@@ -1290,7 +1386,7 @@ export function renderTasks(tasks, context) {
     el("span", { class: "crew-cell", text: "Crew" }),
   ]);
   colHeader.dataset.key = "task-col-header";
-  frag.appendChild(colHeader);
+  nodes.push(colHeader);
 
   for (const t of filtered) {
     if (!groups.has(t.status)) groups.set(t.status, []);
@@ -1308,7 +1404,7 @@ export function renderTasks(tasks, context) {
     ]);
     header.dataset.key = `header-${status}`;
     header.dataset.hash = `${status}-${group.length}`;
-    frag.appendChild(header);
+    nodes.push(header);
     for (const t of group) {
       const idSpan = el("span", { class: "id mono", text: t.id, title: "Click to copy ID" });
       idSpan.addEventListener("click", (e) => {
@@ -1337,31 +1433,45 @@ export function renderTasks(tasks, context) {
       row.dataset.key = `task-${t.id}`;
       // Basic hash based on row presentation parameters + expanded state
       row.dataset.hash = `${t.id}-${t.title}-${t.status}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${expandedTaskIds.has(t.id)}`;
-      row.addEventListener("click", () => {
-        const toggle = () => {
-          if (expandedTaskIds.has(t.id)) expandedTaskIds.delete(t.id);
-          else expandedTaskIds.add(t.id);
-          renderTasks(taskList(context), context);
-        };
-        if (document.startViewTransition) {
-          row.style.viewTransitionName = `task-row-${t.id}`;
-          document.startViewTransition(toggle).finished.then(() => {
-            row.style.viewTransitionName = "";
-          });
-        } else {
-          toggle();
-        }
+      makeToggleRow(row, {
+        expanded: expandedTaskIds.has(t.id),
+        // The detail node only exists while the row is open, so the IDREF is
+        // only published while it actually resolves.
+        controls: expandedTaskIds.has(t.id) ? `detail-${t.id}` : null,
+        onToggle: () => {
+          const toggle = () => {
+            if (expandedTaskIds.has(t.id)) expandedTaskIds.delete(t.id);
+            else expandedTaskIds.add(t.id);
+            renderTasks(taskList(context), context);
+          };
+          if (document.startViewTransition) {
+            row.style.viewTransitionName = `task-row-${t.id}`;
+            document.startViewTransition(toggle).finished.then(() => {
+              row.style.viewTransitionName = "";
+            });
+          } else {
+            toggle();
+          }
+        },
       });
       if (expandedTaskIds.has(t.id)) row.classList.add("expanded");
-      frag.appendChild(row);
+      nodes.push(row);
       if (expandedTaskIds.has(t.id)) {
-        const detail = buildTaskDetail(t, context);
-        detail.dataset.key = `detail-${t.id}`;
-        // Diff by full task object stringified
-        detail.dataset.hash = JSON.stringify(t);
-        frag.appendChild(detail);
+        const key = `detail-${t.id}`;
+        const draft = drafts.get(key);
+        if (draft) {
+          nodes.push(draft);
+        } else {
+          const detail = buildTaskDetail(t, context);
+          detail.dataset.key = key;
+          // The row's `aria-controls` points here, so the detail needs a real id.
+          detail.id = key;
+          // Diff by full task object stringified
+          detail.dataset.hash = JSON.stringify(t);
+          nodes.push(detail);
+        }
       }
     }
   }
-  syncNodes(body, Array.from(frag.children));
+  syncNodes(body, nodes);
 }

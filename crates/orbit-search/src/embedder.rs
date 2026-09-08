@@ -18,6 +18,14 @@ pub trait Embedder: Send + Sync {
     fn max_input_tokens(&self) -> usize;
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, OrbitError>;
     fn token_count(&self, text: &str) -> Result<usize, OrbitError>;
+
+    /// Byte positions immediately after each model token in `text`.
+    ///
+    /// Chunking uses these positions to select likely boundaries without
+    /// treating independent token counts as additive. Callers still validate
+    /// every emitted chunk with `token_count` because model tokenization may
+    /// depend on the text surrounding a boundary.
+    fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,3 +1,4 @@
+pub(super) mod already_landed;
 mod author;
 mod git_ops;
 mod message;
@@ -17,10 +18,10 @@ use super::super::input::{canonicalize_existing_dir, input_string_field, require
 use super::failure::commit_head_matches_failure_handoff;
 use super::git::{git_output, git_success};
 use super::handoff::reject_failed_delivery;
-use author::{append_co_author_trailers, commit_author_for_tasks};
+use author::{append_co_author_trailers, commit_author_for_tasks, reviewer_author};
 use git_ops::{
-    ensure_named_branch, ensure_no_unmerged_changes, git_commit_with_identity, stage_paths,
-    staged_changed_files,
+    ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, git_commit_with_identity,
+    stage_paths, staged_changed_files,
 };
 use message::{batch_commit_message, finalize_commit_message, task_commit_message};
 use scope::{changed_files_for_task, collect_worktree_changes, filter_changed_files_for_task};
@@ -264,6 +265,27 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         if no_diff_expected || allow_empty {
             return Ok(skipped_no_diff_expected_result(&task.id));
         }
+        if input.get("verify_already_landed").and_then(Value::as_bool) == Some(true)
+            && let Some(base_sha) = base_sha.as_deref()
+        {
+            return already_landed::verify(
+                host,
+                &task,
+                &workspace_path,
+                input_string_field(input, "run_id")
+                    .as_deref()
+                    .unwrap_or(batch_id),
+                base_sha,
+            )
+            .map_err(|error| {
+                match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
+                    Ok(OrbitError::Execution(observed)) => {
+                        OrbitError::Execution(format!("{observed}; {error}"))
+                    }
+                    Ok(observed) | Err(observed) => observed,
+                }
+            });
+        }
         return Err(empty_stage_error(
             &task.id,
             &workspace_path,
@@ -289,6 +311,27 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         result["base_sha"] = json!(base_sha);
     }
     Ok(result)
+}
+
+/// Stage every worktree change for a reviewer repair commit [ORB-11333].
+pub(super) fn stage_everything(workspace_path: &Path) -> Result<(), OrbitError> {
+    ensure_named_branch(workspace_path)?;
+    ensure_no_unmerged_changes(workspace_path)?;
+    git_success(workspace_path, &["add", "--all", "--", "."])
+}
+
+/// The staged paths, relative to the worktree.
+pub(super) fn staged_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
+    staged_changed_files(workspace_path)
+}
+
+/// Commit the staged reviewer repairs under the reviewer's own identity.
+pub(super) fn commit_reviewer_repairs_in(
+    workspace_path: &Path,
+    reviewer_model: &str,
+    message: &str,
+) -> Result<(), OrbitError> {
+    git_commit_as(workspace_path, message, &reviewer_author(reviewer_model))
 }
 
 /// Commit a terminally-failed shipment's dirty candidate without consulting

@@ -1,5 +1,6 @@
 pub(crate) mod agent_invoke;
 pub(crate) mod catalog;
+pub(crate) mod crew_pools;
 mod exec;
 pub(crate) mod pipeline;
 mod resume;

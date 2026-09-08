@@ -12,6 +12,7 @@ use super::loader::{RoutineLoadError, RoutineWorkspaceProvider, collect_routines
 use super::validation::{RoutinePlacementProjection, RoutinePlacementProvider};
 use crate::OrbitRuntime;
 use crate::application::job::run_owner_liveness;
+use crate::application::routines::clock::load_clock_settings;
 use chrono::Utc;
 use orbit_automation::routines::sweep::run_sweep_core_with_registry;
 pub use orbit_automation::routines::sweep::{
@@ -20,11 +21,27 @@ pub use orbit_automation::routines::sweep::{
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::{self, LogRotationConfig};
 use orbit_types::workflow::JobRunState;
+use orbit_types::workspace::Workspace;
 use serde_json::json;
 
 /// Production dispatch over the per-workspace runtimes discovered this pass.
 pub(crate) struct RuntimeDispatch<'a> {
     runtimes: BTreeMap<PathBuf, &'a OrbitRuntime>,
+}
+
+/// Refresh each discovered workspace's read-side token projection once per
+/// successful sweep. A stale projection must not stop routine evaluation.
+pub(crate) fn refresh_discovered_token_scoreboards(workspaces: &[(Workspace, OrbitRuntime)]) {
+    for (workspace, runtime) in workspaces {
+        if let Err(error) = runtime.refresh_token_scoreboard() {
+            tracing::warn!(
+                target: "orbit.core.scoreboard",
+                workspace = %workspace.name,
+                error = %error,
+                "failed to refresh tokens scoreboard during routine sweep",
+            );
+        }
+    }
 }
 
 impl RoutineDispatch for RuntimeDispatch<'_> {
@@ -132,6 +149,10 @@ pub fn run_sweep_at_with_providers(
     };
 
     let store = super::open_routine_store(global_root)?;
+    // The OS unit and due calculation share this host-local setting. A
+    // configured five-minute clock therefore keeps a slot natural for two
+    // five-minute intervals instead of retaining the old 120-second default.
+    let options = configured_sweep_options(global_root, options)?;
     let now_utc = Utc::now();
     let RoutinePlacementProjection {
         local_host,
@@ -141,6 +162,7 @@ pub fn run_sweep_at_with_providers(
 
     // One runtime per active workspace; discovery and dispatch share them.
     let discovered = workspace_provider.discover_workspaces(global_root)?;
+    refresh_discovered_token_scoreboards(&discovered.entries);
     let mut load_errors: Vec<RoutineLoadError> = discovered.errors.clone();
 
     let mut collection = collect_routines(&discovered.entries, &local_host.host_id);
@@ -171,5 +193,18 @@ pub fn run_sweep_at_with_providers(
         lock_busy: false,
         reports,
         load_errors,
+    })
+}
+
+/// Bind a routine sweep to the same cadence the host clock installer renders.
+/// Kept separate so the production path and its configuration test share one
+/// explicit boundary.
+pub(crate) fn configured_sweep_options(
+    global_root: &Path,
+    options: SweepOptions,
+) -> Result<SweepOptions, OrbitError> {
+    Ok(SweepOptions {
+        sweep_cadence_seconds: load_clock_settings(global_root)?.cadence_seconds,
+        ..options
     })
 }

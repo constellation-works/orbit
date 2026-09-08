@@ -26,10 +26,11 @@ pub(super) fn run_parallel(
             .iter()
             .map(|branch| {
                 let branch_id = branch.id.clone();
+                let join_branch_id = branch_id.clone();
                 let ctx_ref = ctx;
                 let audit = ctx.audit.clone();
                 let inherited_parent_stack = inherited_parent_stack.clone();
-                scope.spawn(move || {
+                let handle = scope.spawn(move || {
                     let _parent_guard = match audit.install_parent_stack(inherited_parent_stack) {
                         Ok(guard) => guard,
                         Err(err) => {
@@ -40,12 +41,22 @@ pub(super) fn run_parallel(
                         }
                     };
                     (branch_id, run_step(branch, ctx_ref))
-                })
+                });
+                (join_branch_id, handle)
             })
             .collect();
         handles
             .into_iter()
-            .map(|h| h.join().expect("branch thread panicked"))
+            .map(|(branch_id, handle)| match handle.join() {
+                Ok(result) => result,
+                Err(payload) => (
+                    branch_id,
+                    Err(DispatchError::JobExecution(format!(
+                        "branch thread panicked: {}",
+                        panic_payload_message(payload.as_ref())
+                    ))),
+                ),
+            })
             .collect()
     });
 

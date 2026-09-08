@@ -3,12 +3,12 @@ summary: "Policy & Sandboxing — Decisions"
 type: design
 title: "Policy & Sandboxing — Decisions"
 owner: claude
-last_updated: 2026-09-06
+last_updated: 2026-09-08
 status: Draft
 feature: policy-sandbox
 doc_role: decisions
 tags: ["policy-sandbox"]
-last_validated: 2026-09-06
+last_validated: 2026-09-08
 ---
 
 # Policy & Sandboxing — Decisions
@@ -147,19 +147,22 @@ A timed-out or interrupted child needs a chance to flush state before being kill
 - Termination is deterministic, and annotated stderr distinguishes timeout, signal, and clean-exit paths.
 - Cost: the 5-second constant is global. Activities that need a longer drain (database flush, large I/O cleanup) cannot extend it without code changes.
 
-## Signal handler installation is process-global and serialized
+## Signal handler installation is process-global and refcounted
 
 **Recorded:** 2026-05-11 02:06:39.403286Z · [T20260417-0558-5]
+**Updated:** 2026-09-08 · [ORB-11697]
 
 ### Context
-Installing parent-side SIGINT/SIGTERM handlers is a process-global operation. Two concurrent `run_process` calls cannot install independent handlers without races, and a panicking call must restore the prior handler so the orbit process itself remains interruptible.
+Installing parent-side SIGINT/SIGTERM handlers is a process-global operation. Two concurrent `run_process` calls cannot install independent handlers without races, and a panicking call must restore the prior handler so the orbit process itself remains interruptible. Holding the install mutex for each child's entire lifetime also silently serialized every supervised subprocess in the daemon (parallel job branches, MCP `proc.spawn`, web-server `gh` calls).
 
 ### Decision
-`SignalHandlerGuard::install` acquires a `Mutex` from a `OnceLock`, creates a non-blocking pipe, calls `libc::sigaction` for SIGINT and SIGTERM, and stores the previous `sigaction` structs. Drop reverses the steps: restore previous handlers, close the pipe, release the mutex. The handler itself is async-signal-safe (atomic load + 1-byte `write`).
+`SignalHandlerGuard::install` refcounts a process-wide handler. The first live waiter installs SIGINT/SIGTERM and snapshots the previous `sigaction` structs; the last drop restores them and re-raises a captured signal (except `SIG_IGN`) so daemons still shut down. The mutex is held only for that install/drop critical section, never across `raise`. Each waiter registers its child's pgid in a lock-free table and snapshots a signal generation counter. The handler is async-signal-safe: atomic store of the signal, generation, and pending-forward, then `killpg` to every registered group. Waiters poll the generation counter and still run `terminate_process_group` so a missed slot or a race with unregister cannot leave a child running.
 
 ### Consequences
-- Concurrent `run_process` calls serialize handler install/drop, and panics still restore prior handlers via Drop.
-- Cost: contention on the global mutex limits exec parallelism in a single process. Named as an open question in [3_vision.md §1.11](./3_vision.md#1-open-questions).
+- Concurrent `run_process` / `supervise_child` waits overlap. Ctrl-C terminates every live child process group, not only the waiter that would have held an exclusive mutex.
+- The captured SIGINT/SIGTERM is re-raised after restore, so a daemon that installed tokio `ctrl_c` / SIGTERM (or that still has SIG_DFL) actually shuts down instead of swallowing the signal.
+- Panics still restore prior handlers via the last Drop.
+- Cost: at most `MAX_LIVE_PROCESS_GROUPS` children get immediate handler-side `killpg`; additional waiters terminate on the next 100 ms poll instead. The table is not a semaphore.
 
 ## `NoSandbox` is the default `Sandbox` impl; real isolation is deferred
 

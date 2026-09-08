@@ -11,13 +11,29 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) struct Source<'a> {
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(test)]
+static LS_TREE_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(super) fn reset_ls_tree_invocations() {
+    LS_TREE_INVOCATIONS.store(0, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(super) fn ls_tree_invocations() -> usize {
+    LS_TREE_INVOCATIONS.load(Ordering::SeqCst)
+}
+
+pub(crate) struct Source<'a> {
     root: &'a Path,
     started: Instant,
 }
 
 impl<'a> Source<'a> {
-    pub(super) fn new(root: &'a Path) -> Self {
+    pub(crate) fn new(root: &'a Path) -> Self {
         Self {
             root,
             started: Instant::now(),
@@ -26,6 +42,11 @@ impl<'a> Source<'a> {
 
     /// Run one bounded child process, capturing stdout under a size and time budget.
     fn command(&self, program: &str, args: &[&str]) -> Result<String, AutomationError> {
+        #[cfg(test)]
+        if program == "git" && args.first() == Some(&"ls-tree") {
+            LS_TREE_INVOCATIONS.fetch_add(1, Ordering::SeqCst);
+        }
+
         if self.started.elapsed() > Duration::from_secs(30) {
             return Err(AutomationError::Deferred("source_deadline".into()));
         }
@@ -88,11 +109,11 @@ impl<'a> Source<'a> {
         Ok(result.trim().into())
     }
 
-    pub(super) fn git(&self, args: &[&str]) -> Result<String, AutomationError> {
+    pub(crate) fn git(&self, args: &[&str]) -> Result<String, AutomationError> {
         self.command("git", args)
     }
 
-    pub(super) fn revision(&self, spec: &str) -> Result<SourceRevision, AutomationError> {
+    pub(crate) fn revision(&self, spec: &str) -> Result<SourceRevision, AutomationError> {
         let commit = self.git(&[
             "rev-parse",
             "--verify",
@@ -110,11 +131,20 @@ impl<'a> Source<'a> {
         Ok(SourceRevision { commit, tree })
     }
 
-    pub(super) fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
+    pub(crate) fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
         self.git(&["check-ref-format", "--branch", branch])?;
+        let repository = self.repository()?;
 
-        // A GitHub remote gives the provider-visible repository name; anything else
-        // is identified by a stable digest of whatever remote or git dir it has.
+        // Observe the configured integration ref, never the executor worktree HEAD.
+        let head = self.revision(&format!("refs/heads/{branch}"))?;
+
+        Ok((repository, head))
+    }
+
+    /// The stable repository identity shared by delivery observation and
+    /// review certificates: a GitHub remote gives the provider-visible name;
+    /// anything else is identified by a digest of its remote or git dir.
+    pub(crate) fn repository(&self) -> Result<String, AutomationError> {
         let remote = self
             .git(&["config", "--get", "remote.origin.url"])
             .unwrap_or_default();
@@ -134,10 +164,7 @@ impl<'a> Source<'a> {
             format!("git:{}", digest(identity.as_bytes()))
         };
 
-        // Observe the configured integration ref, never the executor worktree HEAD.
-        let head = self.revision(&format!("refs/heads/{branch}"))?;
-
-        Ok((repository, head))
+        Ok(repository)
     }
 
     pub(super) fn observe(
@@ -286,6 +313,7 @@ impl<'a> Source<'a> {
             deliveries,
             associations,
             unresolved,
+            exclusions: Default::default(),
             complete: count <= 200,
         })
     }

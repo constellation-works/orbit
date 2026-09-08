@@ -29,7 +29,7 @@ pub struct V2ActivityRunResult {
     pub output: Value,
     pub message: Option<String>,
     pub run_id: String,
-    pub events_emitted: usize,
+    pub events_emitted: u64,
 }
 
 /// Direct v2 activity execution surface for [`OrbitRuntime`] (extension
@@ -127,10 +127,7 @@ impl ActivityV2Commands for OrbitRuntime {
             state: outcome_str.to_string(),
         })?;
 
-        let events_count = writer
-            .events_snapshot()
-            .map(|s| s.len())
-            .unwrap_or_default();
+        let events_count = writer.emitted_event_count();
 
         match dispatch {
             Ok(o) => Ok(V2ActivityRunResult {

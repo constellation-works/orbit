@@ -134,13 +134,23 @@ pub fn routine_store(
 pub fn invocation_store(
     database: &std::path::Path,
 ) -> Result<Arc<dyn InvocationStoreBackend>, orbit_common::OrbitError> {
-    Ok(Arc::new(Store::open(database)?))
+    Ok(invocation_store_from_store(Store::open(database)?))
+}
+
+/// Compose invocation accounting over an already-opened host store.
+pub fn invocation_store_from_store(store: Store) -> Arc<dyn InvocationStoreBackend> {
+    Arc::new(store)
 }
 
 pub fn v2_audit_store(
     database: &std::path::Path,
 ) -> Result<Arc<dyn V2AuditStoreBackend>, orbit_common::OrbitError> {
-    Ok(Arc::new(Store::open(database)?))
+    Ok(v2_audit_store_from_store(Store::open(database)?))
+}
+
+/// Compose the v2 audit contract over an already-opened host store.
+pub fn v2_audit_store_from_store(store: Store) -> Arc<dyn V2AuditStoreBackend> {
+    Arc::new(store)
 }
 
 pub fn tool_store_sqlite(store: Store) -> Arc<dyn ToolStoreBackend> {
@@ -176,7 +186,10 @@ mod tests;
 
 /// Legacy cursor file persistence, retained for rollback compatibility.
 pub mod auto_task {
-    pub use crate::driver::file::auto_task::{cursor_state_path, load_cursor_state, upsert_cursor};
+    pub use crate::driver::file::auto_task::{
+        CursorSession, cursor_lock_path, cursor_state_path, load_cursor_state, upsert_cursor,
+        with_cursor_lock,
+    };
 }
 
 /// Open automation contracts over the already-configured host store.
@@ -184,6 +197,14 @@ pub fn automation_store(
     store: Store,
 ) -> Result<Arc<dyn crate::contracts::AutomationStoreBackend>, orbit_common::OrbitError> {
     crate::driver::sqlite::automation::initialize(&store)?;
+    Ok(Arc::new(store))
+}
+
+/// Open before-PR review ledger/certificate contracts over the host store.
+pub fn review_store(
+    store: Store,
+) -> Result<Arc<dyn crate::contracts::ReviewStoreBackend>, orbit_common::OrbitError> {
+    crate::driver::sqlite::review::initialize(&store)?;
     Ok(Arc::new(store))
 }
 

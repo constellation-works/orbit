@@ -37,8 +37,8 @@ fn executor_def(name: &str, model_pair_override: Option<ModelPairOverride>) -> E
         env: HashMap::new(),
         sandbox: None,
         allow_fallback: false,
-        created_at: now,
-        updated_at: now,
+        created_at: Some(now),
+        updated_at: Some(now),
     }
 }
 

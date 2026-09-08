@@ -1,6 +1,8 @@
 #![allow(missing_docs)]
 
 use std::ffi::OsString;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -126,6 +128,71 @@ fn write_creates_private_blob_file_and_dirs() {
     assert_eq!(mode(&blob_path), 0o600);
     assert_eq!(mode(&root), 0o700);
     assert_eq!(mode(&shard_dir), 0o700);
+}
+
+#[test]
+fn write_repairs_a_corrupt_existing_blob() {
+    let temp = tempdir().expect("tempdir");
+    let store = BlobStore::new(temp.path());
+    let content = b"complete audit payload";
+    let hash = sha256_hex(content);
+    let path = temp.path().join(&hash[..2]).join(&hash);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("create shard");
+    std::fs::write(&path, b"truncated").expect("seed corrupt blob");
+
+    assert_eq!(store.write(content).expect("repair blob"), hash);
+    let repaired = std::fs::read(path).expect("read repaired blob");
+    assert_eq!(sha256_hex(&repaired), hash);
+    assert_eq!(repaired, content);
+
+    #[cfg(unix)]
+    assert_eq!(mode(&temp.path().join(&hash[..2]).join(&hash)), 0o600);
+}
+
+#[test]
+fn concurrent_writes_never_publish_partial_blob_content() {
+    let temp = tempdir().expect("tempdir");
+    let store = Arc::new(BlobStore::new(temp.path()));
+    let content = Arc::new(vec![b'x'; 4 * 1024 * 1024]);
+    let hash = sha256_hex(&content);
+    let path = temp.path().join(&hash[..2]).join(&hash);
+    let complete = Arc::new(AtomicBool::new(false));
+    let remaining_writers = Arc::new(std::sync::atomic::AtomicUsize::new(2));
+
+    std::thread::scope(|scope| {
+        for _ in 0..2 {
+            let store = Arc::clone(&store);
+            let content = Arc::clone(&content);
+            let complete = Arc::clone(&complete);
+            let remaining_writers = Arc::clone(&remaining_writers);
+            scope.spawn(move || {
+                assert_eq!(
+                    store.write(&content).expect("write blob"),
+                    sha256_hex(&content)
+                );
+                if remaining_writers.fetch_sub(1, Ordering::AcqRel) == 1 {
+                    complete.store(true, Ordering::Release);
+                }
+            });
+        }
+
+        let complete = Arc::clone(&complete);
+        let reader_content = Arc::clone(&content);
+        let reader_path = path.clone();
+        scope.spawn(move || {
+            while !complete.load(Ordering::Acquire) {
+                match std::fs::read(&reader_path) {
+                    Ok(observed) => {
+                        assert_eq!(observed, *reader_content, "partial final blob was visible")
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => panic!("read blob: {error}"),
+                }
+            }
+        });
+    });
+
+    assert_eq!(std::fs::read(path).expect("final blob"), *content);
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

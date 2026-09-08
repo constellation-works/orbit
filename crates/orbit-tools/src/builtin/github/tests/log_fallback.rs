@@ -462,3 +462,72 @@ fn a_repository_that_could_traverse_the_endpoint_is_rejected() {
 /// Only a unix host gates execution on the permission bit.
 #[cfg(not(unix))]
 fn set_executable(_path: &Path) {}
+
+#[test]
+fn source_read_limit_defers_without_retrying_or_returning_a_partial_unit() {
+    let log = "bounded line\n".repeat(700_000);
+    let gh = FakeGh::new(&run_view(&run_url(RUN_ID)), &[(FAILED_JOB_ID, &log)]);
+    let read = gh.read(json!({"run": RUN_ID, "job": FAILED_JOB_ID}), 16_384);
+    assert!(read.log.diagnostic.is_none());
+    assert!(read.log.text.is_empty());
+    assert!(
+        read.fallback_error
+            .as_deref()
+            .is_some_and(|error| error.contains("8 MiB source read limit"))
+    );
+    assert_eq!(gh.calls().len(), 3);
+}
+
+#[test]
+#[ignore = "read-only live GitHub verification requires authenticated gh and retained historical logs"]
+fn live_long_job_logs_retain_complete_command_and_checkout() {
+    for job in [101862218002_u64, 101862218165] {
+        let requests = RunLogRequests::from_input(&json!({
+            "run": "34160850121", "job": job, "scope": "failed", "repo": "constellation-works/orbit",
+        })).expect("requests");
+        let read = read_run_log(&requests, LogReadBounds::new(16_384)).expect("live read");
+        match read.source {
+            "job_api_log" => {
+                assert_eq!(read.source_jobs.len(), 1);
+                assert_eq!(read.source_jobs[0]["job_id"], job);
+            }
+            "run_log" => assert!(read.source_jobs.is_empty()),
+            other => panic!("unexpected log source: {other}"),
+        }
+        assert!(read.log.total_bytes > 16_384);
+        assert!(read.log.returned_bytes <= 16_384 + 128);
+        assert!(read.log.truncated);
+        assert!(read.log.source_complete);
+        let checkout = if read.log.checkout_evidence.commits.is_empty() {
+            let requests = RunLogRequests::from_input(&json!({
+                "run": "34160850121", "job": job, "scope": "all", "repo": "constellation-works/orbit",
+            })).expect("checkout requests");
+            read_run_log(&requests, LogReadBounds::new(16_384))
+                .expect("checkout read")
+                .log
+                .checkout_evidence
+        } else {
+            read.log.checkout_evidence
+        };
+        assert!(checkout.complete);
+        assert_eq!(checkout.commits.len(), 1);
+        assert!(checkout.commits[0].starts_with("a52912235"));
+        let unit = read.log.diagnostic.expect("complete unit");
+        assert!(unit.len() <= 262_144);
+        assert!(unit.contains("owner_machine_id"));
+        assert!(unit.contains("error[E0063]"));
+        assert!(unit.contains("Process completed with exit code"));
+        assert!(!unit.contains("##[group]Run df -h"));
+        if read.source == "run_log" {
+            let (job_name, step) = if job == 101862218002 {
+                ("Check / Clippy / Test", "Run CI guardrails")
+            } else {
+                ("Coverage (informational)", "Collect workspace coverage")
+            };
+            assert!(
+                unit.lines()
+                    .all(|line| line.starts_with(&format!("{job_name}\t{step}\t")))
+            );
+        }
+    }
+}

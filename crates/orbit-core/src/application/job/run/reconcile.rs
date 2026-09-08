@@ -1,5 +1,7 @@
 //! Stale-run reconciliation, terminal timing repair, and audit helpers.
 
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::TaskReservationReleaseReason;
@@ -12,6 +14,44 @@ use super::owner::{
     owner_identity_error_code, pending_run_stale_reason, running_run_owner_is_stale,
     running_run_owner_stale_reason, stale_job_run_message, stale_pending_run_message,
 };
+
+/// Call-scoped reuse of healthy owner classifications.
+///
+/// Keyed by run/owner identity so a later row with a different pid, token, or
+/// state is classified again. Stale verdicts are never stored: orphan
+/// finalization always rereads the durable row. The set lives only for one
+/// list/history call.
+#[derive(Default)]
+pub(super) struct ReconcilePass {
+    healthy: HashSet<OwnerSnapshotKey>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct OwnerSnapshotKey {
+    run_id: String,
+    state: String,
+    pid: Option<u32>,
+    pid_start_time: Option<String>,
+}
+
+impl ReconcilePass {
+    fn key(run: &JobRun) -> OwnerSnapshotKey {
+        OwnerSnapshotKey {
+            run_id: run.run_id.clone(),
+            state: run.state.to_string(),
+            pid: run.pid,
+            pid_start_time: run.pid_start_time.clone(),
+        }
+    }
+
+    fn has_healthy(&self, run: &JobRun) -> bool {
+        self.healthy.contains(&Self::key(run))
+    }
+
+    fn remember_healthy(&mut self, run: &JobRun) {
+        self.healthy.insert(Self::key(run));
+    }
+}
 
 impl OrbitRuntime {
     /// [ORB-10002] Best-effort orphan scan at workspace open. Marks stuck
@@ -73,6 +113,14 @@ impl OrbitRuntime {
         &self,
         job_id: Option<&str>,
     ) -> Result<usize, OrbitError> {
+        self.reconcile_stale_job_runs_with_pass(job_id, &mut ReconcilePass::default())
+    }
+
+    pub(super) fn reconcile_stale_job_runs_with_pass(
+        &self,
+        job_id: Option<&str>,
+        pass: &mut ReconcilePass,
+    ) -> Result<usize, OrbitError> {
         let runs = if let Some(job_id) = job_id {
             self.stores()
                 .jobs()
@@ -83,7 +131,7 @@ impl OrbitRuntime {
 
         let mut reconciled = 0usize;
         for run in runs {
-            if self.reconcile_stale_job_run(&run)? {
+            if self.reconcile_stale_job_run_with_pass(&run, pass)? {
                 reconciled += 1;
             }
         }
@@ -91,12 +139,21 @@ impl OrbitRuntime {
     }
 
     pub(crate) fn reconcile_stale_job_run(&self, run: &JobRun) -> Result<bool, OrbitError> {
-        self.reconcile_stale_job_run_before_revalidation(run, || {})
+        self.reconcile_stale_job_run_with_pass(run, &mut ReconcilePass::default())
+    }
+
+    fn reconcile_stale_job_run_with_pass(
+        &self,
+        run: &JobRun,
+        pass: &mut ReconcilePass,
+    ) -> Result<bool, OrbitError> {
+        self.reconcile_stale_job_run_before_revalidation(run, pass, || {})
     }
 
     fn reconcile_stale_job_run_before_revalidation<F>(
         &self,
         run: &JobRun,
+        pass: &mut ReconcilePass,
         before_revalidation: F,
     ) -> Result<bool, OrbitError>
     where
@@ -105,7 +162,13 @@ impl OrbitRuntime {
         if terminal_run_timing_is_incomplete(run) {
             return self.repair_terminal_job_run_timing(run);
         }
+        if pass.has_healthy(run) {
+            return Ok(false);
+        }
         if stale_job_run_diagnostic(run).is_none() {
+            if !run.state.is_terminal() {
+                pass.remember_healthy(run);
+            }
             return Ok(false);
         }
 
@@ -124,7 +187,11 @@ impl OrbitRuntime {
     where
         F: FnOnce(),
     {
-        self.reconcile_stale_job_run_before_revalidation(run, concurrent_completion)
+        self.reconcile_stale_job_run_before_revalidation(
+            run,
+            &mut ReconcilePass::default(),
+            concurrent_completion,
+        )
     }
 
     /// [ORB-10002] Orphaned runs (owner process conclusively gone) become
@@ -214,17 +281,17 @@ impl OrbitRuntime {
 
     /// Timestamp of the most recent audit event recorded for a run.
     fn last_run_activity_at(&self, run_id: &str) -> Result<Option<DateTime<Utc>>, OrbitError> {
-        Ok(self
-            .collect_run_audit_events(run_id)?
-            .into_iter()
-            .filter_map(|event| event.timestamp)
-            .max())
+        self.latest_run_audit_timestamp(run_id)
     }
 
-    pub(super) fn reconcile_job_run_records(&self, runs: &[JobRun]) -> Result<usize, OrbitError> {
+    pub(super) fn reconcile_job_run_records_with_pass(
+        &self,
+        runs: &[JobRun],
+        pass: &mut ReconcilePass,
+    ) -> Result<usize, OrbitError> {
         let mut reconciled = 0usize;
         for run in runs {
-            if self.reconcile_stale_job_run(run)? {
+            if self.reconcile_stale_job_run_with_pass(run, pass)? {
                 reconciled += 1;
             }
         }
@@ -234,9 +301,10 @@ impl OrbitRuntime {
     pub(super) fn list_reconciled_job_history_backend(
         &self,
         job_id: &str,
+        pass: &mut ReconcilePass,
     ) -> Result<Vec<JobRun>, OrbitError> {
         let runs = self.list_job_history_backend(job_id)?;
-        if self.reconcile_job_run_records(&runs)? > 0 {
+        if self.reconcile_job_run_records_with_pass(&runs, pass)? > 0 {
             self.list_job_history_backend(job_id)
         } else {
             Ok(runs)
@@ -284,20 +352,17 @@ impl OrbitRuntime {
 fn stale_job_run_diagnostic(run: &JobRun) -> Option<(String, String)> {
     // [ORB-10070] Orphaned queued runs (claimed worker conclusively gone, or
     // never claimed past the grace window) finalize exactly like orphaned
-    // running runs.
+    // running runs. Each diagnostic is built from one classification result.
     if let Some(reason) = pending_run_stale_reason(run) {
         return Some((
             reason.error_code().to_string(),
             stale_pending_run_message(run, reason),
         ));
     }
-    if !running_run_owner_is_stale(run) {
-        return None;
-    }
-    let stale_reason = running_run_owner_stale_reason(run);
+    let stale_reason = running_run_owner_stale_reason(run)?;
     Some((
-        owner_identity_error_code(stale_reason).to_string(),
-        stale_job_run_message(run, stale_reason),
+        owner_identity_error_code(Some(stale_reason)).to_string(),
+        stale_job_run_message(run, Some(stale_reason)),
     ))
 }
 

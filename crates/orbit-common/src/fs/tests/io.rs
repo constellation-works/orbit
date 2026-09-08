@@ -3,7 +3,7 @@ use std::io;
 use tempfile::TempDir;
 
 use crate::OrbitError;
-use crate::fs::io::with_exclusive_file_lock;
+use crate::fs::io::{remove_path_if_exists, with_exclusive_file_lock};
 
 fn assert_sandbox_write_message(message: &str, path: &str) {
     assert!(
@@ -86,6 +86,40 @@ fn exclusive_lock_open_on_readonly_dir_names_path_and_hints_sandbox() {
         }
         other => panic!("expected Io, got {other}"),
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_path_if_exists_unlinks_a_dangling_symlink() {
+    let temp = TempDir::new().expect("tempdir");
+    let link = temp.path().join("link");
+    std::os::unix::fs::symlink(temp.path().join("missing"), &link).expect("symlink");
+
+    remove_path_if_exists(&link).expect("remove dangling symlink");
+
+    let error = std::fs::symlink_metadata(&link).expect_err("link must be removed");
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_path_if_exists_unlinks_a_directory_symlink_without_removing_its_target() {
+    let temp = TempDir::new().expect("tempdir");
+    let target = temp.path().join("target");
+    std::fs::create_dir(&target).expect("target directory");
+    let target_file = target.join("keep");
+    std::fs::write(&target_file, b"preserved").expect("target file");
+    let link = temp.path().join("link");
+    std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+    remove_path_if_exists(&link).expect("remove directory symlink");
+
+    let error = std::fs::symlink_metadata(&link).expect_err("link must be removed");
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    assert_eq!(
+        std::fs::read(target_file).expect("target preserved"),
+        b"preserved"
+    );
 }
 
 /// ORB-10988: nesting the same lock path on one thread must re-enter, not
@@ -231,5 +265,40 @@ fn atomic_write_bytes_removes_its_temp_file_when_the_rename_fails() {
     assert!(
         leftovers.is_empty(),
         "staging files left behind: {leftovers:?}"
+    );
+}
+
+#[test]
+fn staged_write_removes_partial_temp_file_when_writing_fails() {
+    use std::io::Write;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("target");
+
+    let error = match super::super::io::StagedTextFile::stage_with_for_test(&target, |file| {
+        file.write_all(b"partial payload")?;
+        Err(io::Error::other("injected write failure"))
+    }) {
+        Ok(_) => panic!("injected write must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert!(!target.exists(), "partial data was published at final path");
+
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "staging files left behind: {leftovers:?}"
+    );
+
+    super::super::io::atomic_write_private_bytes(&target, b"complete payload")
+        .expect("retry write");
+    assert_eq!(
+        std::fs::read(target).expect("read retry"),
+        b"complete payload"
     );
 }

@@ -113,32 +113,99 @@ fn split_long_paragraph(
     target_tokens: usize,
     overlap_tokens: usize,
 ) -> Result<Vec<String>, OrbitError> {
-    let words = paragraph.split_whitespace().collect::<Vec<_>>();
+    let word_ends = word_ends(paragraph);
+    let token_ends = embedder.token_boundaries(paragraph)?;
     let mut chunks = Vec::new();
     let mut start = 0;
-    while start < words.len() {
-        let mut end = start + 1;
-        while end <= words.len() {
-            let candidate = words[start..end].join(" ");
-            if embedder.token_count(&candidate)? > target_tokens {
+    while start < word_ends.len() {
+        let mut end = preferred_chunk_end(start, &word_ends, &token_ends, target_tokens);
+
+        // Token offsets come from the full paragraph, while the model counts
+        // emitted chunks independently. Validate each candidate instead of
+        // assuming those counts are additive or monotone across word ranges.
+        while embedder.token_count(word_range(paragraph, start, end, &word_ends))? > target_tokens {
+            if end == start + 1 {
+                // A word that alone exceeds the limit is an unbreakable unit:
+                // emit it intact rather than lose text or stall forever.
                 break;
             }
-            end += 1;
+            end -= 1;
         }
-        let chunk_end = (end - 1).max(start + 1).min(words.len());
-        chunks.push(words[start..chunk_end].join(" "));
-        if chunk_end == words.len() {
+
+        let chunk = word_range(paragraph, start, end, &word_ends).to_string();
+        chunks.push(chunk);
+        if end == word_ends.len() {
             break;
         }
-        let mut overlap_start = chunk_end;
-        while overlap_start > start {
-            let candidate = words[overlap_start - 1..chunk_end].join(" ");
-            if embedder.token_count(&candidate)? > overlap_tokens {
-                break;
-            }
-            overlap_start -= 1;
-        }
-        start = overlap_start.max(start + 1);
+        start = overlap_start(paragraph, start, end, &word_ends, embedder, overlap_tokens)?;
     }
     Ok(chunks)
+}
+
+fn word_ends(text: &str) -> Vec<usize> {
+    let mut ends = Vec::new();
+    let mut in_word = false;
+
+    for (index, character) in text.char_indices() {
+        if character.is_whitespace() {
+            if in_word {
+                ends.push(index);
+                in_word = false;
+            }
+        } else {
+            in_word = true;
+        }
+    }
+    if in_word {
+        ends.push(text.len());
+    }
+    ends
+}
+
+fn preferred_chunk_end(
+    start: usize,
+    word_ends: &[usize],
+    token_ends: &[usize],
+    target_tokens: usize,
+) -> usize {
+    let start_byte = if start == 0 { 0 } else { word_ends[start - 1] };
+    let token_start = token_ends.partition_point(|end| *end <= start_byte);
+    let token_end = token_ends
+        .get(token_start.saturating_add(target_tokens).saturating_sub(1))
+        .copied()
+        .unwrap_or(usize::MAX);
+    let end = word_ends.partition_point(|end| *end <= token_end);
+
+    end.clamp(start + 1, word_ends.len())
+}
+
+fn overlap_start(
+    paragraph: &str,
+    start: usize,
+    end: usize,
+    word_ends: &[usize],
+    embedder: &dyn Embedder,
+    overlap_tokens: usize,
+) -> Result<usize, OrbitError> {
+    if overlap_tokens == 0 {
+        return Ok(end);
+    }
+
+    let mut overlap_start = end;
+    while overlap_start > start + 1 {
+        let candidate_start = overlap_start - 1;
+        if embedder.token_count(word_range(paragraph, candidate_start, end, word_ends))?
+            > overlap_tokens
+        {
+            break;
+        }
+        overlap_start = candidate_start;
+    }
+
+    Ok(overlap_start.max(start + 1))
+}
+
+fn word_range<'a>(paragraph: &'a str, start: usize, end: usize, word_ends: &[usize]) -> &'a str {
+    let start_byte = if start == 0 { 0 } else { word_ends[start - 1] };
+    paragraph[start_byte..word_ends[end - 1]].trim()
 }

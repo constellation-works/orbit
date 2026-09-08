@@ -15,11 +15,28 @@ use super::helpers::{
 };
 use super::params::TaskUpdateParams;
 
+#[cfg(test)]
+use std::sync::Mutex;
+
 const UNAUTHORED_TASK_PLAN_PLACEHOLDER: &str = "To be authored by executing agent at start time.";
 const RELATION_RESOLVES: &str = "resolves";
 /// [ORB-10470] Status event recorded when a resumed run restores its own
 /// lineage's coupling to a task (re-admission and/or batch re-claim).
 const RESUME_READMITTED_EVENT: &str = "resume_readmitted";
+
+#[cfg(test)]
+static TRANSITION_READ_HOOK_STATUS: Mutex<Option<(String, TaskStatus)>> = Mutex::new(None);
+
+#[cfg(test)]
+pub(super) static TRANSITION_READ_HOOK_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(super) fn set_transition_read_hook_status(id: Option<&str>, status: Option<TaskStatus>) {
+    *TRANSITION_READ_HOOK_STATUS
+        .lock()
+        .expect("transition read hook mutex") =
+        id.zip(status).map(|(id, status)| (id.to_string(), status));
+}
 
 #[derive(Debug, Default)]
 struct StartTaskOptions {
@@ -52,70 +69,81 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
-        let task = self.get_task(id)?;
         let actor = self.actor().clone();
         let effective_label = effective_actor_label(
             &actor.label,
             canonical_agent.as_deref(),
             canonical_model.as_deref(),
         );
-        let implemented_by =
-            implementation_label(&task, effective_label.as_str(), canonical_model.as_deref());
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
-        if task.status == TaskStatus::Review {
-            self.ensure_resolves_are_workspace_local(&task)?;
-        }
+        let mut result = None;
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            let task = self.get_task(id)?;
+            #[cfg(test)]
+            self.apply_transition_read_hook(id)?;
+            let implemented_by =
+                implementation_label(&task, effective_label.as_str(), canonical_model.as_deref());
+            if task.status == TaskStatus::Review {
+                self.ensure_resolves_are_workspace_local(&task)?;
+            }
 
-        let result = match task.status {
-            TaskStatus::Proposed => self.with_mutation(|| {
-                let task = self.stores().task_records().update(
-                    id,
-                    StoreTaskUpdateParams {
-                        actor: effective_label.clone(),
-                        status_event: Some("proposal_approved".to_string()),
-                        status_note: note.clone(),
-                        append_comments: append_comments.clone(),
-                        ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                            status: Some(TaskStatus::Backlog),
-                            ..Default::default()
-                        })
-                    },
-                )?;
-                Ok((
-                    task.clone(),
-                    OrbitEvent::TaskProposalApproved {
-                        id: id.to_string(),
-                        approved_by: effective_label.clone(),
-                    },
-                ))
-            }),
-            TaskStatus::Review => self.with_mutation(|| {
-                let task = self.stores().task_records().update(
-                    id,
-                    StoreTaskUpdateParams {
-                        actor: effective_label.clone(),
-                        status_event: Some("review_approved".to_string()),
-                        status_note: note.clone(),
-                        implemented_by: implemented_by.clone().map(Some),
-                        append_comments: append_comments.clone(),
-                        ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                            status: Some(TaskStatus::Done),
-                            ..Default::default()
-                        })
-                    },
-                )?;
-                Ok((
-                    task.clone(),
-                    OrbitEvent::TaskReviewApproved {
-                        id: id.to_string(),
-                        approved_by: effective_label.clone(),
-                    },
-                ))
-            }),
-            other => Err(OrbitError::InvalidInput(format!(
-                "task '{id}' is in status '{other}'; approve requires 'proposed' or 'review'"
-            ))),
-        }?;
+            result = Some(match task.status {
+                TaskStatus::Proposed => self.with_mutation(|| {
+                    let task = self.stores().task_records().update(
+                        id,
+                        StoreTaskUpdateParams {
+                            actor: effective_label.clone(),
+                            status_event: Some("proposal_approved".to_string()),
+                            status_note: note.clone(),
+                            append_comments: append_comments.clone(),
+                            expected_status: Some(vec![task.status]),
+                            ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                                status: Some(TaskStatus::Backlog),
+                                ..Default::default()
+                            })
+                        },
+                    )?;
+                    Ok((
+                        task.clone(),
+                        OrbitEvent::TaskProposalApproved {
+                            id: id.to_string(),
+                            approved_by: effective_label.clone(),
+                        },
+                    ))
+                }),
+                TaskStatus::Review => self.with_mutation(|| {
+                    let task = self.stores().task_records().update(
+                        id,
+                        StoreTaskUpdateParams {
+                            actor: effective_label.clone(),
+                            status_event: Some("review_approved".to_string()),
+                            status_note: note.clone(),
+                            implemented_by: implemented_by.clone().map(Some),
+                            append_comments: append_comments.clone(),
+                            expected_status: Some(vec![task.status]),
+                            ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                                status: Some(TaskStatus::Done),
+                                ..Default::default()
+                            })
+                        },
+                    )?;
+                    Ok((
+                        task.clone(),
+                        OrbitEvent::TaskReviewApproved {
+                            id: id.to_string(),
+                            approved_by: effective_label.clone(),
+                        },
+                    ))
+                }),
+                other => Err(OrbitError::InvalidInput(format!(
+                    "task '{id}' is in status '{other}'; approve requires 'proposed' or 'review'"
+                ))),
+            }?);
+            Ok(())
+        })?;
+        let result = result.ok_or_else(|| {
+            OrbitError::Execution("task approve body did not run under the task lock".to_string())
+        })?;
 
         if result.status == TaskStatus::Done {
             self.record_resolves_side_effects(&result)?;
@@ -268,36 +296,6 @@ impl OrbitRuntime {
         } = options;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
-        let task = self.get_task(id)?;
-        // Validate status before crew resolution so a misleading
-        // "no crew selected" error can't mask the real problem
-        // (e.g. trying to restart a task that's already in-progress).
-        match task.status {
-            TaskStatus::Proposed
-            | TaskStatus::Backlog
-            | TaskStatus::Someday
-            | TaskStatus::Blocked => {}
-            TaskStatus::InProgress => {
-                return Err(OrbitError::InvalidInput(format!(
-                    "task '{id}' is already in-progress"
-                )));
-            }
-            other => {
-                return Err(OrbitError::InvalidInput(format!(
-                    "task '{id}' is in status '{other}'; start requires 'proposed', 'backlog', 'someday', or 'blocked'"
-                )));
-            }
-        }
-        self.resolve_and_log_crew_for_task_start(
-            id,
-            crew_override.as_deref(),
-            task.crew.as_deref(),
-        )?;
-        let dependency_status_index = self.task_status_index()?;
-        let unmet_dependencies = unmet_task_dependencies(&task, &dependency_status_index);
-        if in_progress_transition_requires_plan(task.status) {
-            ensure_task_has_execution_plan(id, task.plan.as_str())?;
-        }
         let actor = self.actor().clone();
         let effective_label = actor_label_override.unwrap_or_else(|| {
             effective_actor_label(
@@ -307,23 +305,57 @@ impl OrbitRuntime {
             )
         });
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
-        let unmet_dependency_labels: Vec<String> = unmet_dependencies
-            .iter()
-            .map(|dependency| dependency.label())
-            .collect();
-        let warn_unmet_dependencies = || {
-            if !unmet_dependency_labels.is_empty() {
-                orbit_common::tracing::warn!(
-                    target: "orbit.task.dependencies",
-                    task_id = id,
-                    unmet = unmet_dependency_labels.join(",").as_str(),
-                    "task has unmet dependencies",
-                );
+        let mut started = None;
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            let task = self.get_task(id)?;
+            #[cfg(test)]
+            self.apply_transition_read_hook(id)?;
+            // Validate status before crew resolution so a misleading
+            // "no crew selected" error can't mask the real problem
+            // (e.g. trying to restart a task that's already in-progress).
+            match task.status {
+                TaskStatus::Proposed
+                | TaskStatus::Backlog
+                | TaskStatus::Someday
+                | TaskStatus::Blocked => {}
+                TaskStatus::InProgress => {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "task '{id}' is already in-progress"
+                    )));
+                }
+                other => {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "task '{id}' is in status '{other}'; start requires 'proposed', 'backlog', 'someday', or 'blocked'"
+                    )));
+                }
             }
-        };
+            self.resolve_and_log_crew_for_task_start(
+                id,
+                crew_override.as_deref(),
+                task.crew.as_deref(),
+            )?;
+            let dependency_status_index = self.task_status_index()?;
+            let unmet_dependencies = unmet_task_dependencies(&task, &dependency_status_index);
+            if in_progress_transition_requires_plan(task.status) {
+                ensure_task_has_execution_plan(id, task.plan.as_str())?;
+            }
+            let unmet_dependency_labels: Vec<String> = unmet_dependencies
+                .iter()
+                .map(|dependency| dependency.label())
+                .collect();
+            let warn_unmet_dependencies = || {
+                if !unmet_dependency_labels.is_empty() {
+                    orbit_common::tracing::warn!(
+                        target: "orbit.task.dependencies",
+                        task_id = id,
+                        unmet = unmet_dependency_labels.join(",").as_str(),
+                        "task has unmet dependencies",
+                    );
+                }
+            };
 
-        match task.status {
-            TaskStatus::Proposed => {
+            started = Some(match task.status {
+                TaskStatus::Proposed => {
                 warn_unmet_dependencies();
                 let result = self.with_mutation(|| {
                     let at = chrono::Utc::now();
@@ -341,6 +373,7 @@ impl OrbitRuntime {
                                 to_status: Some(TaskStatus::Backlog),
                             }],
                             append_comments: append_comments.clone(),
+                            expected_status: Some(vec![task.status]),
                             ..StoreTaskUpdateParams::from(TaskUpdateParams {
                                 status: Some(TaskStatus::InProgress),
                                 ..Default::default()
@@ -352,13 +385,13 @@ impl OrbitRuntime {
                         OrbitEvent::TaskStarted {
                             id: id.to_string(),
                             started_by: effective_label.clone(),
-                            approved_from_proposed: task.status == TaskStatus::Proposed,
+                            approved_from_proposed: true,
                         },
                     ))
                 })?;
-                Ok(result)
-            }
-            TaskStatus::Backlog | TaskStatus::Someday | TaskStatus::Blocked => {
+                    Ok(result)
+                }
+                TaskStatus::Backlog | TaskStatus::Someday | TaskStatus::Blocked => {
                 warn_unmet_dependencies();
                 let task = self.with_mutation(|| {
                     let task = self.stores().task_records().update(
@@ -368,6 +401,7 @@ impl OrbitRuntime {
                             status_event: Some("started".to_string()),
                             status_note: note.clone(),
                             append_comments: append_comments.clone(),
+                            expected_status: Some(vec![task.status]),
                             ..StoreTaskUpdateParams::from(TaskUpdateParams {
                                 status: Some(TaskStatus::InProgress),
                                 ..Default::default()
@@ -383,15 +417,20 @@ impl OrbitRuntime {
                         },
                     ))
                 })?;
-                Ok(task)
-            }
-            TaskStatus::InProgress => Err(OrbitError::InvalidInput(format!(
-                "task '{id}' is already in-progress"
-            ))),
-            other => Err(OrbitError::InvalidInput(format!(
-                "task '{id}' is in status '{other}'; start requires 'proposed', 'backlog', 'someday', or 'blocked'"
-            ))),
-        }
+                    Ok(task)
+                }
+                TaskStatus::InProgress => Err(OrbitError::InvalidInput(format!(
+                    "task '{id}' is already in-progress"
+                ))),
+                other => Err(OrbitError::InvalidInput(format!(
+                    "task '{id}' is in status '{other}'; start requires 'proposed', 'backlog', 'someday', or 'blocked'"
+                ))),
+            }?);
+            Ok(())
+        })?;
+        started.ok_or_else(|| {
+            OrbitError::Execution("task start body did not run under the task lock".to_string())
+        })
     }
 
     /// Lifecycle half of workflow admission: is this task's *status* one a
@@ -582,7 +621,6 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
-        let task = self.get_task(id)?;
         let actor = self.actor().clone();
         let effective_label = effective_actor_label(
             &actor.label,
@@ -598,8 +636,13 @@ impl OrbitRuntime {
         let reason = reason.to_string();
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
 
-        let result = match task.status {
-            TaskStatus::Proposed => self.with_mutation(|| {
+        let mut result = None;
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            let task = self.get_task(id)?;
+            #[cfg(test)]
+            self.apply_transition_read_hook(id)?;
+            result = Some(match task.status {
+                TaskStatus::Proposed => self.with_mutation(|| {
                 let task = self.stores().task_records().update(
                     id,
                     StoreTaskUpdateParams {
@@ -608,6 +651,7 @@ impl OrbitRuntime {
                         status_event: Some("proposal_rejected".to_string()),
                         status_note: Some(reason.clone()),
                         append_comments: append_comments.clone(),
+                        expected_status: Some(vec![task.status]),
                         ..Default::default()
                     },
                 )?;
@@ -618,8 +662,8 @@ impl OrbitRuntime {
                         rejected_by: effective_label.clone(),
                     },
                 ))
-            }),
-            TaskStatus::Review => self.with_mutation(|| {
+                }),
+                TaskStatus::Review => self.with_mutation(|| {
                 let task = self.stores().task_records().update(
                     id,
                     StoreTaskUpdateParams {
@@ -628,6 +672,7 @@ impl OrbitRuntime {
                         status_event: Some("review_rejected".to_string()),
                         status_note: Some(reason.clone()),
                         append_comments: append_comments.clone(),
+                        expected_status: Some(vec![task.status]),
                         ..Default::default()
                     },
                 )?;
@@ -638,8 +683,8 @@ impl OrbitRuntime {
                         rejected_by: effective_label.clone(),
                     },
                 ))
-            }),
-            TaskStatus::Backlog => self.with_mutation(|| {
+                }),
+                TaskStatus::Backlog => self.with_mutation(|| {
                 let task = self.stores().task_records().update(
                     id,
                     StoreTaskUpdateParams {
@@ -648,6 +693,7 @@ impl OrbitRuntime {
                         status_event: Some("backlog_rejected".to_string()),
                         status_note: Some(reason.clone()),
                         append_comments: append_comments.clone(),
+                        expected_status: Some(vec![task.status]),
                         ..Default::default()
                     },
                 )?;
@@ -658,8 +704,8 @@ impl OrbitRuntime {
                         rejected_by: effective_label.clone(),
                     },
                 ))
-            }),
-            TaskStatus::InProgress => self.with_mutation(|| {
+                }),
+                TaskStatus::InProgress => self.with_mutation(|| {
                 let task = self.stores().task_records().update(
                     id,
                     StoreTaskUpdateParams {
@@ -668,6 +714,7 @@ impl OrbitRuntime {
                         status_event: Some("in_progress_rejected".to_string()),
                         status_note: Some(reason.clone()),
                         append_comments: append_comments.clone(),
+                        expected_status: Some(vec![task.status]),
                         ..Default::default()
                     },
                 )?;
@@ -678,38 +725,29 @@ impl OrbitRuntime {
                         rejected_by: effective_label.clone(),
                     },
                 ))
-            }),
-            other => Err(OrbitError::InvalidInput(format!(
-                "task '{id}' is in status '{other}'; reject requires 'proposed', 'review', 'backlog', or 'in-progress'"
-            ))),
-        }?;
+                }),
+                other => Err(OrbitError::InvalidInput(format!(
+                    "task '{id}' is in status '{other}'; reject requires 'proposed', 'review', 'backlog', or 'in-progress'"
+                ))),
+            }?);
+            Ok(())
+        })?;
+        let result = result.ok_or_else(|| {
+            OrbitError::Execution("task reject body did not run under the task lock".to_string())
+        })?;
 
         Ok(result)
     }
 
     pub fn archive_task(&self, id: &str) -> Result<(), OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        let task = self.get_task(id)?;
-
-        if task.status == TaskStatus::Archived {
-            return Err(OrbitError::InvalidInput(format!(
-                "task '{id}' is already archived"
-            )));
-        }
-
-        self.with_mutation(|| {
-            let _ = self.stores().task_records().update(
-                id,
-                StoreTaskUpdateParams {
-                    actor: self.actor_label().to_string(),
-                    status: Some(TaskStatus::Archived),
-                    ..Default::default()
-                },
-            )?;
-            Ok(((), OrbitEvent::TaskArchived { id: id.to_string() }))
-        })?;
-
-        Ok(())
+        self.update_task(
+            id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Archived),
+                ..Default::default()
+            },
+        )
+        .map(|_| ())
     }
 
     pub fn delete_task(&self, id: &str) -> Result<(), OrbitError> {
@@ -723,6 +761,26 @@ impl OrbitRuntime {
         })
     }
 
+    #[cfg(test)]
+    fn apply_transition_read_hook(&self, id: &str) -> Result<(), OrbitError> {
+        if let Some((hook_id, status)) = TRANSITION_READ_HOOK_STATUS
+            .lock()
+            .expect("transition read hook mutex")
+            .clone()
+            && hook_id == id
+        {
+            self.update_task(
+                id,
+                TaskUpdateParams {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )?;
+        }
+
+        Ok(())
+    }
+
     pub fn delete_task_guarded(&self, id: &str, force: bool) -> Result<(), OrbitError> {
         let task = self.get_task(id)?;
         ensure_task_delete_allowed(&task.id, task.status, force)?;
@@ -732,7 +790,7 @@ impl OrbitRuntime {
 
 /// Rejects an unqualified `resolves` friction ID that is missing locally
 /// but present in another workspace on this host.
-pub(crate) fn ensure_resolves_targets_are_workspace_local(
+fn ensure_resolves_targets_are_workspace_local(
     frictions: &dyn FrictionStoreBackend,
     workspace_id: &str,
     task: &Task,

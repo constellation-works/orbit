@@ -222,6 +222,62 @@ fn same_slot_second_sweep_does_not_double_fire() {
     assert_eq!(dispatch.submit_count(), 1);
 }
 
+#[test]
+fn five_minute_clock_fires_the_incident_slot_once_after_a_phase_gap() {
+    let store = store();
+    let dispatch = FakeDispatch::default();
+    let coll = collection(vec![routine("hourly", "5 * * * *", true, "allow", 0)]);
+    store
+        .routine_record_baseline("hourly", &ts(2026, 9, 7, 0, 5, 0).to_rfc3339())
+        .expect("baseline");
+    let options = SweepOptions {
+        sweep_cadence_seconds: 300,
+        ..SweepOptions::default()
+    };
+
+    // The first poll is before the 01:05 slot. The next poll is 305 seconds
+    // later, matching the observed 01:03:38 -> 01:08:43 phase gap.
+    let before_slot = run_sweep_core(
+        &store,
+        HOST,
+        &coll,
+        &dispatch,
+        options,
+        ts(2026, 9, 7, 1, 3, 38),
+    )
+    .expect("pre-slot sweep");
+    assert_eq!(before_slot[0].reason.as_deref(), Some("not_due"));
+
+    let fired = run_sweep_core(
+        &store,
+        HOST,
+        &coll,
+        &dispatch,
+        options,
+        ts(2026, 9, 7, 1, 8, 43),
+    )
+    .expect("delayed sweep");
+    assert_eq!(fired[0].action, "fired");
+    assert_eq!(fired[0].slot.as_deref(), Some("2026-09-07T01:05:00+00:00"));
+
+    let later_poll = run_sweep_core(
+        &store,
+        HOST,
+        &coll,
+        &dispatch,
+        options,
+        ts(2026, 9, 7, 1, 13, 43),
+    )
+    .expect("later sweep");
+    assert_eq!(later_poll[0].reason.as_deref(), Some("not_due"));
+    assert_eq!(dispatch.submit_count(), 1, "one ordinary fire for the slot");
+    assert_eq!(
+        fires(&store, "hourly").len(),
+        1,
+        "one persisted fire intent"
+    );
+}
+
 // ---- toggles --------------------------------------------------------------
 
 #[test]
@@ -611,6 +667,59 @@ fn sync_reclaims_stale_intent_and_dispatched_past_timeout() {
     );
 }
 
+#[test]
+fn malformed_timeout_in_one_dispatched_fire_reports_only_that_routine() {
+    let store = store();
+    let dispatch = FakeDispatch::default();
+    let mut malformed = routine("malformed", "* * * * *", true, "forbid", 0);
+    malformed.definition.policy.timeout_minutes = 1_000_000_000_000_000;
+    let coll = collection(vec![
+        malformed,
+        routine("healthy", "* * * * *", true, "forbid", 0),
+    ]);
+
+    let slot = ts(2026, 1, 1, 0, 5, 0).to_rfc3339();
+    store
+        .routine_record_fire_intent(&RoutineFireIntentParams {
+            routine_name: "malformed".to_string(),
+            slot: slot.clone(),
+            attempt: 1,
+            source_workspace: "polaris".to_string(),
+        })
+        .unwrap();
+    store
+        .routine_mark_fire_dispatched("malformed", &slot, 1, "malformed-run")
+        .unwrap();
+
+    let reports = run_sweep_core(
+        &store,
+        HOST,
+        &coll,
+        &dispatch,
+        SweepOptions::default(),
+        Utc::now(),
+    )
+    .expect("malformed policy is isolated to its routine");
+
+    let malformed_report = reports
+        .iter()
+        .find(|report| report.routine == "malformed")
+        .expect("malformed routine report");
+    assert_eq!(malformed_report.action, "error");
+    assert!(
+        malformed_report
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("policy.timeout_minutes"))
+    );
+    assert!(
+        reports
+            .iter()
+            .filter(|report| report.routine != "malformed")
+            .all(|report| report.action != "error")
+    );
+}
+
 // ---- dispatch-error retry --------------------------------------------------
 
 #[test]
@@ -686,7 +795,10 @@ fn dry_run_records_no_state() {
         HOST,
         &coll,
         &dispatch,
-        SweepOptions { dry_run: true },
+        SweepOptions {
+            dry_run: true,
+            ..SweepOptions::default()
+        },
         ts(2026, 1, 1, 0, 5, 10),
     )
     .unwrap();
@@ -722,7 +834,10 @@ fn state_and_temporal_owners_of_same_pipeline_are_withheld_in_preview() {
         HOST,
         &collection(vec![legacy, state]),
         &FakeDispatch::default(),
-        SweepOptions { dry_run: true },
+        SweepOptions {
+            dry_run: true,
+            ..SweepOptions::default()
+        },
         ts(2026, 9, 6, 0, 0, 0),
     )
     .unwrap();

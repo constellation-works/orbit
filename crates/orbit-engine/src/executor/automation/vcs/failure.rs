@@ -1,310 +1,34 @@
-use std::collections::HashMap;
 use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{ExternalRef, TaskComment, TaskStatus};
-use orbit_types::workflow::activity_job::JobV2;
-use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 
-use crate::DispatchError;
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string,
 };
 
 use super::commit::commit_failure_candidate;
-use super::freshness::{commit_sha, original_base_sha};
+use super::freshness::{commit_sha, original_base_sha, remote_branch_sha};
 use super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
 use super::pr::open_or_reuse_unchecked;
 use super::push::push_batch_changes_inner;
+use super::resume::ensure_retry_descends_from;
+
+pub(super) use super::resume::commit_head_matches_failure_handoff;
 
 const CONFLICT_BLOCKED_EVENT: &str = "pr_conflict_blocked";
 const FAILURE_HANDOFF_EVENT: &str = "pr_failure_handoff";
-const FAILURE_HANDOFF_LINEAGE_MAX_HOPS: usize = 64;
+/// A before-PR review gate stopped delivery [ORB-11333].
+const REVIEW_GATE_EVENT: &str = "review_gate_escalation";
 
-const RESUME_PRESERVATION_ERROR: &str = "resume_preservation_unverified";
-
-/// Authenticate a terminal failure handoff before a resumed run executes the
-/// first unfinished step.
-///
-/// The successful worktree checkpoint intentionally retains its original
-/// `base_sha`. If HEAD still equals that commit there is nothing to reconcile.
-/// A moved HEAD is accepted only when the source run durably recorded an exact
-/// `pr_failure_handoff` result for the same task, checkpoint owner, and commit,
-/// and the active run descends from the handoff run. The evidence stays in the
-/// durable run state for the later commit gate; no historical checkpoint or
-/// repository state is rewritten.
-pub(crate) fn reconcile_resumed_failure_handoff(
-    host: &dyn RuntimeHost,
-    job: &JobV2,
-    active_run_id: &str,
-    resume: &PipelineState,
-    pipeline: &HashMap<String, Value>,
-) -> Result<(), DispatchError> {
-    let Some(commit_index) = job
-        .steps
-        .iter()
-        .position(|step| step.id == "commit")
-        .map(|index| index as u32)
-    else {
-        return Ok(());
-    };
-    if resume.step_states.get(&commit_index) == Some(&JobRunState::Success) {
-        return Ok(());
-    }
-
-    let Some(worktree) = pipeline.get("worktree") else {
-        return Ok(());
-    };
-    let Some(workspace_path) = input_string_field(worktree, "workspace_path") else {
-        return Ok(());
-    };
-    let Some(original_base_sha) = input_string_field(worktree, "base_sha") else {
-        return Ok(());
-    };
-    let Some(checkpoint_owner) = input_string_field(worktree, "job_run_id")
-        .or_else(|| input_string_field(worktree, "batch_id"))
-    else {
-        return Ok(());
-    };
-
-    let workspace_path = canonicalize_existing_dir(&workspace_path, "resume workspace_path")
-        .map_err(resume_preservation_error)?;
-    let base_sha =
-        commit_sha(&workspace_path, &original_base_sha).map_err(resume_preservation_error)?;
-    let head_sha = commit_sha(&workspace_path, "HEAD").map_err(resume_preservation_error)?;
-    if head_sha == base_sha {
-        return Ok(());
-    }
-
-    let checkpoint = resume.failure_activity_checkpoint.as_ref().ok_or_else(|| {
-        resume_preservation_error(OrbitError::Execution(format!(
-            "resume found HEAD {head_sha} past immutable worktree base {base_sha}, but source run '{}' has no durable failure-activity preservation evidence",
-            resume.run_id
-        )))
-    })?;
-    let evidence = validate_failure_handoff_evidence(
-        host,
-        active_run_id,
-        &checkpoint_owner,
-        &workspace_path,
-        &base_sha,
-        &head_sha,
-        checkpoint,
-    )
-    .map_err(resume_preservation_error)?;
-    let evidence_task_id =
-        required_input_string(evidence, "task_id").map_err(resume_preservation_error)?;
-    let targets_task = resume
-        .initial_input
-        .get("task_ids")
-        .and_then(Value::as_array)
-        .is_some_and(|task_ids| {
-            task_ids
-                .iter()
-                .any(|task_id| task_id.as_str() == Some(evidence_task_id))
-        });
-    if !targets_task {
-        return Err(resume_preservation_error(OrbitError::Execution(format!(
-            "failure handoff evidence belongs to task '{evidence_task_id}', which is not targeted by the resumed run"
-        ))));
-    }
-    Ok(())
-}
-
-/// Re-authenticate the evidence carried into `git_commit` against the source
-/// run's immutable state. This is deliberately separate from the ordinary
-/// moved-HEAD escape hatch used by epic child merges.
-pub(super) fn commit_head_matches_failure_handoff<H: RuntimeHost + ?Sized>(
-    host: &H,
-    input: &Value,
-    task: &orbit_types::task::Task,
-    checkpoint_owner: &str,
-    workspace_path: &Path,
-    base_sha: &str,
-    head_sha: &str,
-) -> Result<bool, OrbitError> {
-    let Some(active_run_id) = input_string_field(input, "run_id") else {
-        return Ok(false);
-    };
-    let Some(active_state) = host.read_run_state(&active_run_id)? else {
-        return Ok(false);
-    };
-    let Some(checkpoint) = active_state.failure_activity_checkpoint.as_ref() else {
-        return Ok(false);
-    };
-    let evidence = &checkpoint.output;
-    validate_failure_handoff_evidence(
-        host,
-        &active_run_id,
-        checkpoint_owner,
-        workspace_path,
-        base_sha,
-        head_sha,
-        checkpoint,
-    )?;
-    if evidence.get("task_id").and_then(Value::as_str) != Some(task.id.as_str()) {
-        return Err(OrbitError::Execution(format!(
-            "git_commit: failure handoff evidence belongs to a different task than '{}'",
-            task.id
-        )));
-    }
-    Ok(true)
-}
-
-fn validate_failure_handoff_evidence<'a, H: RuntimeHost + ?Sized>(
-    host: &H,
-    active_run_id: &str,
-    checkpoint_owner: &str,
-    workspace_path: &Path,
-    base_sha: &str,
-    head_sha: &str,
-    checkpoint: &'a orbit_types::workflow::FailureActivityCheckpoint,
-) -> Result<&'a Value, OrbitError> {
-    if checkpoint.activity_name != "pr_failure_handoff" {
-        return Err(OrbitError::Execution(format!(
-            "failure activity '{}' is not authorized to reconcile a resumed worktree HEAD",
-            checkpoint.activity_name
-        )));
-    }
-    let evidence = &checkpoint.output;
-    let phase = required_input_string(evidence, "phase")?;
-    let decision = required_input_string(evidence, "decision")?;
-    if phase != "failure_handoff"
-        || !matches!(decision, "blocked_failure_pr" | "blocked_conflict_pr")
-    {
-        return Err(OrbitError::Execution(format!(
-            "failure activity result '{phase}/{decision}' is not candidate-preservation evidence"
-        )));
-    }
-
-    let task_id = required_input_string(evidence, "task_id")?;
-    let handoff_run_id = required_input_string(evidence, "handoff_run_id")?;
-    let evidence_owner = required_input_string(evidence, "checkpoint_owner")?;
-    let evidence_base = required_input_string(evidence, "original_base_sha")?;
-    let evidence_head = required_input_string(evidence, "head_sha")?;
-    if evidence
-        .get("preservation_commit_created")
-        .and_then(Value::as_bool)
-        != Some(true)
-    {
-        return Err(OrbitError::Execution(
-            "failure handoff did not create the candidate commit at the recorded HEAD".to_string(),
-        ));
-    }
-    if evidence_owner != checkpoint_owner {
-        return Err(OrbitError::Execution(format!(
-            "failure handoff checkpoint owner '{evidence_owner}' does not match reused worktree owner '{checkpoint_owner}'"
-        )));
-    }
-    if evidence_base != base_sha || evidence_head != head_sha {
-        return Err(OrbitError::Execution(format!(
-            "failure handoff evidence expected base {evidence_base} and HEAD {evidence_head}, but resume observed base {base_sha} and HEAD {head_sha}"
-        )));
-    }
-
-    let source_state = host.read_run_state(handoff_run_id)?.ok_or_else(|| {
-        OrbitError::Execution(format!(
-            "failure handoff run '{handoff_run_id}' has no durable run state"
-        ))
-    })?;
-    if source_state.failure_activity_checkpoint.as_ref() != Some(checkpoint) {
-        return Err(OrbitError::Execution(format!(
-            "failure handoff evidence does not match the immutable state of run '{handoff_run_id}'"
-        )));
-    }
-    ensure_preservation_parent_owned(
-        host,
-        workspace_path,
-        handoff_run_id,
-        base_sha,
-        head_sha,
-        &source_state,
-    )?;
-
-    let task = host.get_task(task_id)?;
-    if task.job_run_id.as_deref() != Some(checkpoint_owner) {
-        return Err(OrbitError::Execution(format!(
-            "task '{task_id}' belongs to run '{}', not preserved worktree owner '{checkpoint_owner}'",
-            task.job_run_id.as_deref().unwrap_or("none")
-        )));
-    }
-    ensure_retry_descends_from(
-        host,
-        "resume preservation",
-        "failure handoff run",
-        task_id,
-        active_run_id,
-        handoff_run_id,
-    )?;
-    Ok(evidence)
-}
-
-fn ensure_preservation_parent_owned<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace_path: &Path,
-    handoff_run_id: &str,
-    base_sha: &str,
-    head_sha: &str,
-    handoff_state: &PipelineState,
-) -> Result<(), OrbitError> {
-    let parent_sha = commit_sha(workspace_path, &format!("{head_sha}^"))?;
-    if parent_sha == base_sha
-        || handoff_state.step_outputs.values().any(|output| {
-            output.get("commit_sha").and_then(Value::as_str) == Some(parent_sha.as_str())
-        })
-    {
-        return Ok(());
-    }
-
-    let handoff_run = host.get_job_run(handoff_run_id)?.ok_or_else(|| {
-        OrbitError::Execution(format!(
-            "failure handoff run '{handoff_run_id}' was not found while verifying preservation ancestry"
-        ))
-    })?;
-    let mut cursor = handoff_run.retry_source_run_id;
-    for _ in 0..FAILURE_HANDOFF_LINEAGE_MAX_HOPS {
-        let Some(run_id) = cursor.take() else { break };
-        let run = host.get_job_run(&run_id)?.ok_or_else(|| {
-            OrbitError::Execution(format!(
-                "retry ancestor '{run_id}' was not found while verifying preservation ancestry"
-            ))
-        })?;
-        if run.job_id != handoff_run.job_id {
-            return Err(OrbitError::Execution(format!(
-                "preservation ancestry crosses from job '{}' to job '{}' at run '{}'",
-                handoff_run.job_id, run.job_id, run.run_id
-            )));
-        }
-        let ancestor_head = host
-            .read_run_state(&run_id)?
-            .and_then(|state| state.failure_activity_checkpoint)
-            .and_then(|checkpoint| checkpoint.output.get("head_sha").cloned())
-            .and_then(|head| head.as_str().map(ToOwned::to_owned));
-        if ancestor_head.as_deref() == Some(parent_sha.as_str()) {
-            return Ok(());
-        }
-        if run.retry_source_run_id.as_deref() == Some(run_id.as_str()) {
-            break;
-        }
-        cursor = run.retry_source_run_id;
-    }
-
-    Err(OrbitError::Execution(format!(
-        "failure handoff commit {head_sha} has unowned parent {parent_sha}; expected immutable base {base_sha}, a successful workflow commit, or an earlier preservation commit in the retry lineage"
-    )))
-}
-
-fn resume_preservation_error(error: OrbitError) -> DispatchError {
-    DispatchError::WorktreeIntegrity {
-        code: RESUME_PRESERVATION_ERROR,
-        diagnostic: error.to_string(),
-    }
-}
+/// The pipeline steps that belong to the before-PR review gate.
+pub(in crate::executor::automation) const REVIEW_GATE_STEPS: &[&str] =
+    &["review_gate_admit", "review", "review_gate_settle"];
 
 /// Terminal hook for `task_pr_pipeline`.
 ///
@@ -380,8 +104,25 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
                 .to_string(),
         ));
     }
-    if conflicting_paths.is_empty() {
+    if conflicting_paths.is_empty() && rebase_aborted {
         conflicting_paths = conflicts_from_error(error_message);
+    }
+
+    // [ORB-11333] A review-gate failure keeps the implementation and any
+    // partial reviewer repairs attributed to their authors, pushes the
+    // candidate so the evidence survives, and opens no PR: publication is
+    // exactly what the gate withheld.
+    if REVIEW_GATE_STEPS.contains(&failed_step_id) {
+        return preserve_review_gate_candidate(
+            host,
+            input,
+            &task,
+            run_id,
+            failed_step_id,
+            error_code,
+            error_message,
+            &workspace_path,
+        );
     }
 
     let (head_sha, committed_files) =
@@ -480,7 +221,9 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         "failed_step_id": failed_step_id,
         "branch": head,
         "head_sha": head_sha,
-        "original_base_sha": original_base_sha,
+        // Resume authenticates against the immutable worktree base, even when
+        // a recovered rebase moved the candidate's merge base forward.
+        "original_base_sha": input_string_field(worktree, "base_sha").unwrap_or(original_base_sha),
         "target_base_sha": target_base_sha,
         "conflicting_paths": conflicting_paths,
         "committed_files": committed_files,
@@ -490,6 +233,172 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         "pr_created": pr_created,
         "task_status": "blocked",
     }))
+}
+
+/// Preserve a candidate the before-PR review gate refused to publish.
+///
+/// Uncommitted reviewer changes are committed under the reviewer identity the
+/// gate admitted, never as implementer work; the branch is pushed so partial
+/// repairs and evidence are recoverable; the task is blocked with the gate's
+/// escalation. No PR is opened.
+#[allow(clippy::too_many_arguments)]
+fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_code: &str,
+    error_message: &str,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let reviewer = input
+        .get("pipeline")
+        .and_then(|pipeline| pipeline.get("review_gate_admit"))
+        .and_then(|admit| admit.get("reviewer"));
+    let reviewer_model = reviewer.and_then(|reviewer| {
+        let provider = reviewer.get("provider")?.as_str()?.trim();
+        let model = reviewer.get("model")?.as_str()?.trim();
+        (!provider.is_empty() && !model.is_empty()).then(|| format!("{provider} / {model}"))
+    });
+    let partial_repair = match &reviewer_model {
+        Some(model) => super::review_gate::commit_reviewer_repairs(
+            workspace_path,
+            model,
+            &format!(
+                "review: partial reviewer repairs preserved [{}]\n\nOrbit-Review-Run: {run_id}\n\
+                 Orbit-Review-Step: {failed_step_id}",
+                task.id
+            ),
+        )?,
+        None => None,
+    };
+    let leftover = super::review_gate::uncommitted_paths(workspace_path)?;
+    let head = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    if head == "HEAD" {
+        return Err(OrbitError::Execution(
+            "pr_failure_handoff: review-gate candidate is detached".to_string(),
+        ));
+    }
+    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let pushed = push_batch_changes_inner(
+        host,
+        &review_gate_preservation_push_input(input, &head, workspace_path, &head_sha)?,
+        workspace_path,
+    )?;
+
+    let note = format!(
+        "before-PR review gate stopped delivery: run={run_id}, failed_step={failed_step_id}, \
+         candidate={head_sha}, branch={head}; no PR was opened"
+    );
+    let body = format!(
+        "## Review gate escalation\n\nOrbit held PR publication because the before-PR review gate \
+         did not pass. The candidate branch was pushed so the implementation commits, any \
+         reviewer repairs, and the review evidence remain inspectable; nothing was merged or \
+         published as a PR.\n\n- Task: `{}`\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n\
+         - Error code: `{error_code}`\n- Candidate branch: `{head}`\n- Candidate head: `{head_sha}`\n\
+         - Partial reviewer repair commit: {}\n- Uncommitted paths left in the worktree: {}\n\n\
+         Resuming delivery needs a recorded decision: repair or re-scope, then run the gate again \
+         within the lineage's remaining review budget.\n\n## Failure\n\n```text\n{error_message}\n```",
+        task.id,
+        partial_repair
+            .as_ref()
+            .map(|commit| format!("`{}` ({})", commit.commit, commit.author))
+            .unwrap_or_else(|| "none".to_string()),
+        if leftover.is_empty() {
+            "none".to_string()
+        } else {
+            leftover.join(", ")
+        },
+    );
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            status: Some(TaskStatus::Blocked),
+            status_event: Some(REVIEW_GATE_EVENT.to_string()),
+            status_note: Some(note.clone()),
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message: format!("{note}\n\n{body}"),
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+
+    Ok(json!({
+        "phase": "failure_handoff",
+        "decision": "blocked_review_gate",
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "branch": head,
+        "head_sha": head_sha,
+        "partial_repair_commit": partial_repair.map(|commit| commit.commit),
+        "uncommitted_paths": leftover,
+        "push": pushed,
+        "pr_created": false,
+        "task_status": "blocked",
+    }))
+}
+
+/// Push input for a review-gate preservation.
+///
+/// First-time (missing origin) and fast-forward pushes ignore the lease
+/// fields. A diverged origin is replaced only when the lease names the exact
+/// remote SHA `git_push` currently observes. `rewrite_performed` is set by
+/// this handoff even when this run's `sync_base` did not rewrite: a previous
+/// preservation (or re-implementation onto the same head) still has to replace
+/// the published candidate.
+fn review_gate_preservation_push_input(
+    input: &Value,
+    branch: &str,
+    workspace_path: &Path,
+    local_sha: &str,
+) -> Result<Value, OrbitError> {
+    let mut push_input = json!({
+        "branch": branch,
+        "workspace_path": workspace_path,
+    });
+    if let Some((head_before, expected_remote_sha)) =
+        review_gate_rewrite_lease(input, branch, workspace_path, local_sha)?
+    {
+        push_input["rewrite_performed"] = json!(true);
+        push_input["rewrite_head_before"] = json!(head_before);
+        push_input["expected_remote_sha"] = json!(expected_remote_sha);
+    }
+    Ok(push_input)
+}
+
+fn review_gate_rewrite_lease(
+    input: &Value,
+    branch: &str,
+    workspace_path: &Path,
+    local_sha: &str,
+) -> Result<Option<(String, String)>, OrbitError> {
+    let checkpointed_remote = pipeline_checkpoint_string(input, "sync_base", "remote_sha_before")
+        .or_else(|| pipeline_checkpoint_string(input, "prepare_branch", "remote_sha"));
+    let expected_remote_sha = match checkpointed_remote {
+        Some(sha) => sha,
+        None => match remote_branch_sha(workspace_path, branch)? {
+            Some(sha) => sha,
+            None => return Ok(None),
+        },
+    };
+
+    let head_before = pipeline_checkpoint_string(input, "sync_base", "head_sha_before")
+        .filter(|sha| sha != local_sha)
+        .or_else(|| (expected_remote_sha != local_sha).then(|| expected_remote_sha.clone()));
+    Ok(head_before.map(|head_before| (head_before, expected_remote_sha)))
+}
+
+fn pipeline_checkpoint_string(input: &Value, step: &str, field: &str) -> Option<String> {
+    input
+        .get("pipeline")
+        .and_then(|pipeline| pipeline.get(step))
+        .and_then(|checkpoint| input_string_field(checkpoint, field))
 }
 
 fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
@@ -531,52 +440,6 @@ fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
         run_id,
         &checkpoint_owner,
     )
-}
-
-fn ensure_retry_descends_from<H: RuntimeHost + ?Sized>(
-    host: &H,
-    operation: &str,
-    ancestor_label: &str,
-    task_id: &str,
-    run_id: &str,
-    ancestor_run_id: &str,
-) -> Result<(), OrbitError> {
-    let mut current = host.get_job_run(run_id)?.ok_or_else(|| {
-        OrbitError::Execution(format!(
-            "{operation}: cannot verify ownership for task '{task_id}'; active run '{run_id}' was not found"
-        ))
-    })?;
-    let job_id = current.job_id.clone();
-
-    for _ in 0..FAILURE_HANDOFF_LINEAGE_MAX_HOPS {
-        let Some(parent_run_id) = current.retry_source_run_id.as_deref() else {
-            return Err(OrbitError::Execution(format!(
-                "{operation}: run '{run_id}' is not a retry descendant of {ancestor_label} '{ancestor_run_id}' for task '{task_id}'"
-            )));
-        };
-        let parent = host.get_job_run(parent_run_id)?.ok_or_else(|| {
-            OrbitError::Execution(format!(
-                "{operation}: cannot verify ownership for task '{task_id}'; retry ancestor '{parent_run_id}' was not found"
-            ))
-        })?;
-        if parent.job_id != job_id {
-            return Err(OrbitError::Execution(format!(
-                "{operation}: retry lineage for run '{run_id}' crosses from job '{job_id}' to job '{}' at run '{}'; refusing handoff for task '{task_id}'",
-                parent.job_id, parent.run_id
-            )));
-        }
-        if parent.run_id == ancestor_run_id {
-            return Ok(());
-        }
-        if parent.run_id == current.run_id {
-            break;
-        }
-        current = parent;
-    }
-
-    Err(OrbitError::Execution(format!(
-        "{operation}: run '{run_id}' has no bounded retry lineage to {ancestor_label} '{ancestor_run_id}' for task '{task_id}'"
-    )))
 }
 
 #[allow(clippy::too_many_arguments)]

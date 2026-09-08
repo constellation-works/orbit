@@ -7,6 +7,12 @@ spec:
   description: >
     Create a worktree and branch for one task or a task bundle, stamp the task
     records with job-run/workspace metadata, and move them to `in-progress`.
+    An existing branch or registered checkout is reused only when its HEAD
+    already equals the resolved `base_sha`. An unexplained mismatch refuses
+    before admission, names branch/tip/base, and leaves retained work
+    untouched. Retrying without recovering that leftover refuses again;
+    inspect it, then move the branch aside or delete it only after confirming
+    no retained candidate is needed.
   input_schema_json:
     type: object
     properties:
@@ -19,6 +25,14 @@ spec:
           type: string
       run_id:
         type: string
+        description: >
+          Worktree identity token. Epic pipelines pin `epic-<task-id>` so the
+          checkout is stable across runs. Distinct from the admitted job.
+      job_run_id:
+        type: string
+        description: >
+          Admitted job that owns task stamps and downstream execution. The
+          dispatcher injects this when `run_id` is already an identity token.
       base:
         type: string
       base_branch:
@@ -51,6 +65,10 @@ spec:
         description: Moving start-point ref name, for steps that reconcile against the live base.
       base_sha:
         type: string
-        description: Commit the worktree was created at, resolved once here so later steps never re-resolve the moving ref.
+        description: >
+          Immutable commit this worktree was created at, resolved once so later
+          steps never re-resolve the moving ref. A successful setup guarantees
+          the checkout HEAD equals this id; setup never publishes it against
+          unexplained reused history.
   action: worktree_setup
   config: {}

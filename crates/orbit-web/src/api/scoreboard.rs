@@ -13,8 +13,8 @@ use orbit_core::{FailureIncidentQuery, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::blocking;
 use super::incidents::{ActorFailureRollup, ROLLUP_SCAN_LIMIT, agent_family_key, rollup_by_actor};
-use super::server_error;
 
 /// Query-string shape for `GET /api/scoreboard`.
 ///
@@ -41,15 +41,23 @@ pub(super) async fn scoreboard(Ws(runtime): Ws, Query(query): Query<ScoreboardQu
         },
     };
 
-    let summary = match runtime.generate_scoreboard_summary(Some(window)) {
-        Ok(s) => s,
-        Err(e) => return server_error(e),
-    };
-    let mut value = match serde_json::to_value(&summary) {
-        Ok(v) => v,
-        Err(e) => return server_error(orbit_core::OrbitError::Store(e.to_string())),
+    let value = match blocking("scoreboard", move || {
+        let summary = runtime.generate_scoreboard_summary(Some(window))?;
+        let mut value = serde_json::to_value(&summary)
+            .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+        assemble_scoreboard_joins(&runtime, window, &mut value);
+        Ok(value)
+    })
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
     };
 
+    Json(value).into_response()
+}
+
+fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, value: &mut Value) {
     // Join MetricsEntry-derived per-actor stats and audit denials. A source
     // read/query failure is logged with full context and reported as an
     // explicit `unavailable` coverage note plus `null` per-agent fields —
@@ -62,7 +70,7 @@ pub(super) async fn scoreboard(Ws(runtime): Ws, Query(query): Query<ScoreboardQu
     let now = Utc::now();
     let since_window = window.duration().map(|d| now - d);
 
-    let metrics_extras = match compute_metrics_extras(&runtime, since_window, now) {
+    let metrics_extras = match compute_metrics_extras(runtime, since_window, now) {
         Ok(extras) => Some(extras),
         Err(e) => {
             tracing::error!(
@@ -145,8 +153,6 @@ pub(super) async fn scoreboard(Ws(runtime): Ws, Query(query): Query<ScoreboardQu
             failure_rollup.as_ref(),
         );
     }
-
-    Json(value).into_response()
 }
 
 /// Standard `{ "availability": ..., "detail": ... }` coverage note shape

@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Task Bundle V2"
 tags: ["task-artifacts"]
-last_validated: 2026-09-05
+last_validated: 2026-09-08
 ---
 
 # Spec: Task Bundle V2
@@ -330,18 +330,24 @@ Last revised by `claude` on 2026-08-09 for [ORB-10343].
 
 ORB-11205: bounded task queries validate the generated index against every
 registered, settled envelope, then apply metadata predicates and newest-first
-ordering (task ID ascending for ties) before loading full bundles. Exact totals
+ordering (task ID ascending for ties) before loading bundles. Exact totals
 count metadata matches; they do not certify off-page body, event, or artifact
-integrity. A selected corrupt bundle fails the request and is never replaced
-with another row. Direct and unbounded full-bundle reads remain strict.
+integrity. A selected bundle with envelope, body, or event-log damage fails
+the request and is never replaced with another row. Listing and search
+materialization use a locked lightweight bundle read: they still apply the
+canonical bundle lock and event/envelope status consistency, but they do not
+open or hash `artifacts/files/**` payload bytes. Direct `get` reads, explicit
+reindex, import, publication restore, and artifact retrieval remain strict
+full-bundle verification.
 
 Status, type, priority, parent, job run, tags and external-reference predicates
 use metadata. Readiness and context-path predicates currently use an explicit
 residual fallback, hydrating metadata matches before filtering and limiting.
-Missing/stale indexes require a strict bundle scan and best-effort index repair;
-errors encountered reading that scan propagate. An update racing selected-row
-hydration causes one strict rescan with filter-before-limit semantics. In-flight
-creation/deletion retains the existing list-read tolerance.
+Missing/stale indexes require a lightweight bundle scan (task fields only) and
+best-effort index repair; task-field errors encountered reading that scan
+propagate. An update racing selected-row hydration causes one rescan with
+filter-before-limit semantics. In-flight creation/deletion retains the
+existing list-read tolerance.
 
 Dashboard list and detail projections retain comments, history and the sorted
 artifact manifest from each validated bundle. The aggregate selects the global

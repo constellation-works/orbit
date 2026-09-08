@@ -1,5 +1,7 @@
 use orbit_types::task::{Task, TaskType};
 
+use super::super::attribution::orchestration_trailer;
+
 const BATCH_SUBJECT_BUDGET: usize = 72;
 const ELLIPSIS: char = '…';
 
@@ -9,6 +11,7 @@ pub(super) fn task_commit_message(task: &Task) -> String {
         message.push_str("\n\n");
         message.push_str(&summary);
     }
+    append_orchestration_trailers(&mut message, std::slice::from_ref(task));
     message
 }
 
@@ -23,6 +26,7 @@ pub(super) fn finalize_commit_message(tasks: &[Task]) -> String {
             message.push_str("\n\n");
             message.push_str(&summary);
         }
+        append_orchestration_trailers(&mut message, tasks);
         return message;
     }
 
@@ -41,7 +45,9 @@ pub(super) fn finalize_commit_message(tasks: &[Task]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    format!("fix: finalize ship batch [{ids_joined}]\n\n{summaries}")
+    let mut message = format!("fix: finalize ship batch [{ids_joined}]\n\n{summaries}");
+    append_orchestration_trailers(&mut message, tasks);
+    message
 }
 
 pub(super) fn batch_commit_message(task: &Task) -> String {
@@ -108,7 +114,19 @@ fn batch_commit_trailers(task: &Task) -> Vec<String> {
     if let Some(implemented_by) = task.implemented_by.as_deref() {
         trailers.push(format!("Implemented-By: {implemented_by}"));
     }
+    if let Some(trailer) = orchestration_trailer(std::slice::from_ref(task)) {
+        trailers.push(trailer);
+    }
     trailers
+}
+
+fn append_orchestration_trailers(message: &mut String, tasks: &[Task]) {
+    let Some(trailer) = orchestration_trailer(tasks) else {
+        return;
+    };
+
+    message.push_str("\n\n");
+    message.push_str(&trailer);
 }
 
 fn execution_summary_paragraph(task: &Task) -> Option<String> {

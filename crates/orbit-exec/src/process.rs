@@ -4,7 +4,9 @@ use orbit_common::OrbitError;
 
 use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
 
-pub(crate) fn spawn(req: &ExecRequest) -> Result<Child, OrbitError> {
+/// Build the child process description shared by every spawn path, so a
+/// sandbox that confines the child cannot drift from the unconfined one.
+pub(crate) fn command(req: &ExecRequest) -> Command {
     let mut command = Command::new(&req.program);
     command.args(&req.args).stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -41,6 +43,10 @@ pub(crate) fn spawn(req: &ExecRequest) -> Result<Child, OrbitError> {
     }
 
     command
+}
+
+pub(crate) fn spawn(req: &ExecRequest) -> Result<Child, OrbitError> {
+    command(req)
         .spawn()
         .map_err(|e| OrbitError::Execution(format!("failed to spawn `{}`: {e}", req.program)))
 }

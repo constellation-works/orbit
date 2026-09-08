@@ -16,12 +16,13 @@ use std::io::{Read, Seek, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::{
     RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME, TRUSTED_RELEASE_KEYS,
 };
-use reqwest::Url;
+use reqwest::{Url, blocking::Client};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -35,6 +36,11 @@ use crate::{CompanionPaths, platform_companion_filename};
 
 const COMPANION_URL_ENV: &str = "ORBIT_SEARCH_COMPANION_URL";
 const COMPANION_SHA256_ENV: &str = "ORBIT_SEARCH_COMPANION_SHA256";
+const COMPANION_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Longest silence tolerated on an accepted companion connection. This is an
+/// idle bound, not a transfer deadline: see [`companion_download_client`].
+pub(crate) const COMPANION_STALLED_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const CHECKSUM_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct SemanticInstallParams {
@@ -121,15 +127,15 @@ fn install_companion(destination: &Path) -> Result<(), OrbitError> {
     install_result
 }
 
-fn install_companion_to_temp(temp_path: &Path) -> Result<String, OrbitError> {
+pub(crate) fn install_companion_to_temp(temp_path: &Path) -> Result<String, OrbitError> {
     if let Some(local_path) = env_var_non_empty(COMPANION_OVERRIDE_ENV) {
         return install_local_companion(Path::new(&local_path), temp_path);
     }
 
     let source = resolve_download_source()?;
-    let bytes = download_bytes(&source.url)?;
-    let checksum = verify_download_integrity(&bytes, &source.integrity)?;
-    fs::write(temp_path, bytes).map_err(|error| OrbitError::Io(error.to_string()))?;
+    let client = companion_download_client()?;
+    let checksum = download_companion_to_temp(&client, &source.url, temp_path)?;
+    verify_download_integrity(&checksum, &source.integrity, &client)?;
     make_executable(temp_path)?;
     Ok(checksum)
 }
@@ -235,20 +241,63 @@ fn validate_download_url(url: &str) -> Result<(), OrbitError> {
     Ok(())
 }
 
-fn download_bytes(url: &str) -> Result<Vec<u8>, OrbitError> {
-    Ok(reqwest::blocking::get(url)
-        .map_err(|error| OrbitError::Execution(format!("failed to download companion: {error}")))?
-        .error_for_status()
-        .map_err(|error| OrbitError::Execution(format!("failed to download companion: {error}")))?
-        .bytes()
+/// Builds the companion download client.
+///
+/// Companion assets are large enough that a whole-request deadline rejects
+/// healthy slow links, so the client carries no transfer deadline. reqwest's
+/// blocking client re-arms `timeout` for every individual operation — the send
+/// phase, then each [`std::io::Read::read`] on the streamed response — so the
+/// bound below only fires when a connection goes silent, and resets after each
+/// chunk that arrives. Reading a companion body must therefore stay on the
+/// streaming loop in [`download_companion_to_temp`]; the buffering accessors
+/// (`Response::bytes`, `text`, `json`) apply the same value once to the whole
+/// body, which is exactly the total deadline this must not reintroduce.
+pub(crate) fn companion_download_client() -> Result<Client, OrbitError> {
+    Client::builder()
+        .timeout(COMPANION_STALLED_READ_TIMEOUT)
+        .connect_timeout(COMPANION_CONNECT_TIMEOUT)
+        .build()
         .map_err(|error| {
-            OrbitError::Execution(format!("failed to read companion download: {error}"))
-        })?
-        .to_vec())
+            OrbitError::Execution(format!("failed to configure companion download: {error}"))
+        })
 }
 
-fn download_checksum_manifest(url: &str) -> Result<Vec<u8>, OrbitError> {
-    Ok(reqwest::blocking::get(url)
+pub(crate) fn download_companion_to_temp(
+    client: &Client,
+    url: &str,
+    temp_path: &Path,
+) -> Result<String, OrbitError> {
+    let mut response = client
+        .get(url)
+        .send()
+        .map_err(|error| OrbitError::Execution(format!("failed to download companion: {error}")))?
+        .error_for_status()
+        .map_err(|error| OrbitError::Execution(format!("failed to download companion: {error}")))?;
+    let mut file =
+        fs::File::create(temp_path).map_err(|error| OrbitError::Io(error.to_string()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 8192];
+
+    loop {
+        let count = response.read(&mut buffer).map_err(|error| {
+            OrbitError::Execution(format!("failed to read companion download: {error}"))
+        })?;
+        if count == 0 {
+            break;
+        }
+        file.write_all(&buffer[..count])
+            .map_err(|error| OrbitError::Io(error.to_string()))?;
+        hasher.update(&buffer[..count]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn download_checksum_manifest(client: &Client, url: &str) -> Result<Vec<u8>, OrbitError> {
+    Ok(client
+        .get(url)
+        .timeout(CHECKSUM_METADATA_TIMEOUT)
+        .send()
         .map_err(|error| {
             OrbitError::Execution(format!(
                 "failed to download companion checksum manifest: {error}"
@@ -269,8 +318,11 @@ fn download_checksum_manifest(url: &str) -> Result<Vec<u8>, OrbitError> {
         .to_vec())
 }
 
-fn download_checksum_signature(url: &str) -> Result<Vec<u8>, OrbitError> {
-    Ok(reqwest::blocking::get(url)
+fn download_checksum_signature(client: &Client, url: &str) -> Result<Vec<u8>, OrbitError> {
+    Ok(client
+        .get(url)
+        .timeout(CHECKSUM_METADATA_TIMEOUT)
+        .send()
         .map_err(|error| {
             OrbitError::Execution(format!(
                 "failed to download companion checksum signature: {error}"
@@ -292,29 +344,29 @@ fn download_checksum_signature(url: &str) -> Result<Vec<u8>, OrbitError> {
 }
 
 fn verify_download_integrity(
-    bytes: &[u8],
+    checksum: &str,
     integrity: &CompanionIntegrity,
+    client: &Client,
 ) -> Result<String, OrbitError> {
-    let checksum = sha256_hex(bytes);
     match integrity {
         CompanionIntegrity::ReleaseSignedChecksum {
             checksums_url,
             signature_url,
             asset_name,
         } => {
-            let manifest = download_checksum_manifest(checksums_url)?;
-            let signature = download_checksum_signature(signature_url)?;
+            let manifest = download_checksum_manifest(client, checksums_url)?;
+            let signature = download_checksum_signature(client, signature_url)?;
             verify_release_checksum_signature(&manifest, &signature)?;
             let manifest = std::str::from_utf8(&manifest).map_err(|error| {
                 OrbitError::Execution(format!("companion checksum manifest is not UTF-8: {error}"))
             })?;
             let expected = checksum_from_manifest(manifest, asset_name)?;
-            verify_sha256_digest(&checksum, &expected)?;
+            verify_sha256_digest(checksum, &expected)?;
         }
-        CompanionIntegrity::Sha256(expected) => verify_sha256_digest(&checksum, expected)?,
+        CompanionIntegrity::Sha256(expected) => verify_sha256_digest(checksum, expected)?,
         CompanionIntegrity::UnsafeDeveloperOverride => {}
     }
-    Ok(checksum)
+    Ok(checksum.to_string())
 }
 
 fn verify_release_checksum_signature(manifest: &[u8], signature: &[u8]) -> Result<(), OrbitError> {
@@ -480,7 +532,7 @@ pub(crate) fn path_execution_fallback_rationale() -> &'static str {
     // a process with write access to ~/.orbit/embed/bin/ between freshness
     // check and exec can still substitute the binary. Tracked for posix_spawn
     // /dev/fd/N exploration as a follow-up to ORB-00271."
-    "this platform (notably macOS, plus Windows) does not expose fexecve through libc, so the managed companion keeps the pre-existing path execution behavior after descriptor-based freshness validation; the descriptor-vs-path TOCTOU window from ORB-00271 remains open on these targets"
+    "this platform (notably macOS, plus Windows) does not expose fexecve through libc, so the managed companion keeps the pre-existing path execution behavior after descriptor-based freshness validation; the descriptor-vs-path TOCTOU window remains open on these targets"
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -550,7 +602,7 @@ pub(crate) fn write_companion_integrity(path: &Path, checksum: &str) -> Result<(
     fs::write(manifest_path, content).map_err(|error| OrbitError::Io(error.to_string()))
 }
 
-fn companion_integrity_path(path: &Path) -> Option<std::path::PathBuf> {
+pub(crate) fn companion_integrity_path(path: &Path) -> Option<std::path::PathBuf> {
     let file_name = path.file_name()?.to_string_lossy();
     Some(path.with_file_name(format!("{file_name}.sha256")))
 }

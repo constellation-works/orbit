@@ -132,7 +132,11 @@ These are the keys `orbit config set` accepts:
 | `runtime.log_max_total_mb` | integer | Total size budget across JSONL log archives; oldest pruned first. |
 | `runtime.log_retention_days` | integer | Delete JSONL log archives older than this. |
 
-Crews are edited in the file rather than through `orbit config set`.
+Named crew fields are also settable as `crews.<name>.<field>` (`model`,
+`provider`, `effort`, `description`, `tags`). Example:
+`orbit config set crews.sol.effort high`. Creating a crew still requires a
+`[crews.<name>]` table with `model` and `provider`; `config keys` lists only
+the fixed settings above.
 
 ## Root override
 

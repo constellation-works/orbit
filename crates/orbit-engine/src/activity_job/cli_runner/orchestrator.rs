@@ -92,10 +92,25 @@ pub fn run_cli_backend(
         Some(requested) => requested.min(declared_timeout_seconds),
         None => declared_timeout_seconds,
     };
+    // A reviewer invocation may carry the captured leftover lineage
+    // allowance. It can only shorten the same ceiling; a zero leftover
+    // still gets one second so the process is not unbounded.
+    let timeout_seconds = match input.get("remaining_seconds").and_then(Value::as_u64) {
+        Some(remaining) => timeout_seconds.min(remaining.max(1)),
+        None => timeout_seconds,
+    };
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
 
     let task_ids = task_ids_from_input(input);
     let task_id = task_id_from_input(input);
+    if activity_name == "pr_conflict_recovery"
+        && (task_ids.is_empty() || input.get("run_id").and_then(Value::as_str) != Some(run_id))
+    {
+        return Err(DispatchError::CliInvocationPermanent(
+            "conflict recovery requires task IDs and the current run ID from its failed target"
+                .to_string(),
+        ));
+    }
     let activity_tools = host.resolve_activity_tools(&task_ids, &spec.tools)?;
 
     // §6 allowlist-advisory event — emitted once per invocation before the
@@ -103,7 +118,7 @@ pub fn run_cli_backend(
     audit.emit_lossy(V2AuditEventKind::ToolAllowlistHarnessDelegated {
         provider: provider.clone(),
         task_id: task_id.map(ToOwned::to_owned),
-        task_ids,
+        task_ids: task_ids.clone(),
         requested_tools: activity_tools.requested_tools.clone(),
         effective_tools: activity_tools.effective_tools.clone(),
         tools: activity_tools.effective_tools.clone(),
@@ -189,7 +204,12 @@ pub fn run_cli_backend(
     //     transparently inside our outer sandbox.
     //   - gemini: drop `-s` / `--sandbox` from the executor's static args.
     //   - claude: nothing to do; claude has no OS-level sandbox flag.
-    if sandbox.is_some() {
+    // An explicit executor opt-out must not silently restore the provider's
+    // inner sandbox when preparation selects a bare process.
+    let explicitly_off = resolved_sandbox
+        .as_ref()
+        .is_some_and(|sandbox| sandbox.kind == ExecutorSandboxKind::Off);
+    if sandbox.is_some() || explicitly_off {
         neutralize_inner_sandbox(&provider, &mut provider_config, &mut cli_executor.args);
     }
 
@@ -265,6 +285,15 @@ pub fn run_cli_backend(
         declared_worktree_pair.as_ref(),
     )?;
 
+    if activity_name == "pr_conflict_recovery" {
+        let boundary = worktree_boundary.as_mut().ok_or_else(|| {
+            DispatchError::CliInvocationPermanent(
+                "conflict recovery requires a validated assigned worktree; refusing primary-checkout execution".to_string(),
+            )
+        })?;
+        boundary.authorize_rebase_completion(input)?;
+    }
+
     if let Some(admission) = &trusted_host {
         tracing::warn!(
             target: "orbit.trusted_host",
@@ -273,6 +302,9 @@ pub fn run_cli_backend(
             provider = %provider,
             authorized_by = %admission.authorized_by,
             authorizer_provenance = %admission.authorizer_provenance,
+            caller_machine_id = admission.caller_machine_id.as_deref(),
+            caller_identity = admission.caller_identity.map(|identity| identity.to_string()),
+            agent_invoke_mode = admission.agent_invoke_mode.map(|mode| mode.to_string()),
             workspace_path = %admission.workspace_path,
             cwd = %admission.cwd,
             "starting an operator-admitted provider subprocess outside the executor sandbox"
@@ -282,6 +314,9 @@ pub fn run_cli_backend(
             activity_name: activity_name.to_string(),
             authorized_by: admission.authorized_by.clone(),
             authorizer_provenance: admission.authorizer_provenance.clone(),
+            caller_machine_id: admission.caller_machine_id.clone(),
+            caller_identity: admission.caller_identity,
+            agent_invoke_mode: admission.agent_invoke_mode,
             authorized_at: admission.authorized_at.clone(),
             workspace_path: admission.workspace_path.clone(),
             cwd: admission.cwd.clone(),
@@ -422,13 +457,22 @@ pub fn run_cli_backend(
         },
         output_capture_limit: None,
         on_spawn: Some(&on_spawn),
+        wait: None,
+        live_readers: None,
+        #[cfg(unix)]
+        cancel_pair: None,
     });
 
     let (stdout, stderr, exit_code, duration, timed_out) = match spawn_result {
         Ok(result) => result,
         Err(err) => {
             if let Some(boundary) = worktree_boundary.take() {
-                boundary.verify()?;
+                boundary.verify_after_provider(
+                    host,
+                    false,
+                    input.get("failed_step_id").and_then(Value::as_str),
+                    &task_ids,
+                )?;
             }
             // Spawn-layer classification (ORB-10006): executable missing /
             // permission denied fail fast; resource exhaustion (EAGAIN,
@@ -464,14 +508,6 @@ pub fn run_cli_backend(
         harness_version: None,
         timed_out,
     });
-
-    // Verify the write boundary after recording the terminal provider event
-    // but before its success/failure classification can reach the DAG. The
-    // integrity error deliberately takes precedence over exit zero, nonzero,
-    // and timeout outcomes.
-    if let Some(boundary) = worktree_boundary {
-        boundary.verify()?;
-    }
 
     // Provider output is not the system of record for artifact-backed
     // activities: task state, review threads, git state, and deterministic
@@ -566,6 +602,20 @@ pub fn run_cli_backend(
         && !completion_protocol_violation
         && !completion_status_failure
         && (!spec.require_response_envelope || response_envelope_valid);
+
+    // A conflict-recovery provider repairs files only. Once its process has
+    // satisfied the activity completion contract, the host-side boundary
+    // independently revalidates live ownership, stages exactly the conflict
+    // set, and continues the checkpointed rebase. No response result field is
+    // consulted. Ordinary providers retain the same post-run integrity check.
+    if let Some(boundary) = worktree_boundary {
+        boundary.verify_after_provider(
+            host,
+            success,
+            input.get("failed_step_id").and_then(Value::as_str),
+            &task_ids,
+        )?;
+    }
     let trace = parse_cli_invocation_trace(
         trace_stdout.as_ref(),
         stderr.protocol_bytes(),

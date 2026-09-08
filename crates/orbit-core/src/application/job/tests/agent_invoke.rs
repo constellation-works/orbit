@@ -13,7 +13,10 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::tool::{McpCapability, RemoteCallerGrant, ToolSessionContext};
+use orbit_types::tool::{
+    CallerIdentityProof, McpCapability, RemoteAgentInvokeMode, RemoteCallerGrant,
+    ToolSessionContext,
+};
 use orbit_types::workflow::activity_job::TRUSTED_HOST_ADMISSION_KEY;
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
@@ -62,15 +65,21 @@ fn runner_session() -> ToolSessionContext {
     }
 }
 
-/// A federated caller the destination granted full operator capability.
-fn federated_operator_session() -> ToolSessionContext {
+/// A remote caller the destination granted operator capability.
+fn remote_operator_session(
+    identity: CallerIdentityProof,
+    agent_invoke: bool,
+    agent_invoke_mode: Option<RemoteAgentInvokeMode>,
+) -> ToolSessionContext {
     ToolSessionContext {
         effective_capabilities: [McpCapability::Operator].into_iter().collect(),
         remote_caller_grant: Some(RemoteCallerGrant {
             caller_machine_id: "hm_remote".to_string(),
             granted_capabilities: [McpCapability::Operator].into_iter().collect(),
             source: "mcp-callers.toml".to_string(),
-            identity: Default::default(),
+            identity,
+            agent_invoke,
+            agent_invoke_mode,
         }),
         ..ToolSessionContext::default()
     }
@@ -101,6 +110,17 @@ fn assert_denied(error: OrbitError, expectation: &str) {
 // ---------------------------------------------------------------- admission
 
 #[test]
+fn a_local_operator_session_keeps_the_existing_admission_path() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let authorizer = runtime
+        .admit_agent_invoke(&operator_session())
+        .expect("a local operator remains compatible");
+
+    assert_eq!(authorizer.provenance.to_string(), "session");
+    assert!(authorizer.remote_caller.is_none());
+}
+
+#[test]
 fn an_agent_session_cannot_admit_an_invocation() {
     let (_root, runtime, repo_root) = test_runtime();
     let session = agent_session();
@@ -127,27 +147,98 @@ fn a_runs_own_runner_grant_cannot_admit_an_invocation() {
 }
 
 #[test]
-fn a_federated_operator_cannot_admit_an_invocation() {
-    // A destination-side grant may legitimately carry `operator` for ordinary
-    // operator work, but it cannot assert "a person is present on the machine
-    // that would run this process", which is what the mode requires.
+fn a_self_asserted_remote_operator_cannot_admit_an_invocation() {
     let (_root, runtime, repo_root) = test_runtime();
-    let session = federated_operator_session();
+    let session = remote_operator_session(CallerIdentityProof::SelfAsserted, true, None);
     let error = runtime
         .submit_agent_invoke_run(request(&repo_root.display().to_string(), &session))
-        .expect_err("a federated caller must not admit an unsandboxed process");
+        .expect_err("a spoofable remote identity must not admit an unsandboxed process");
     match error {
         OrbitError::CapabilityDenied(message) => {
-            assert_eq!(
-                message,
-                "operation 'orbit.agent.invoke' admits an unsandboxed host process and \
-                 is available only to an operator on the machine that would run it; caller \
-                 'hm_remote' was resolved through mcp-callers.toml"
+            assert!(
+                message.contains("identity is self-asserted"),
+                "the refusal must explain why the remote identity is insufficient: {message}"
             );
         }
         other => panic!("expected a capability denial, got {other:?}"),
     }
     assert_no_run_created(&runtime);
+}
+
+#[test]
+fn a_key_bound_remote_operator_still_needs_the_explicit_operation_grant() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let session = remote_operator_session(CallerIdentityProof::KeyBound, false, None);
+    let error = runtime
+        .admit_agent_invoke(&session)
+        .expect_err("operator capability alone must not grant unsandboxed remote execution");
+
+    match error {
+        OrbitError::CapabilityDenied(message) => assert!(
+            message.contains("does not enable `agent_invoke`"),
+            "the refusal must name the missing destination grant: {message}"
+        ),
+        other => panic!("expected a capability denial, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_explicit_key_bound_remote_grant_preserves_the_real_caller() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let session = remote_operator_session(CallerIdentityProof::KeyBound, true, None);
+
+    let authorizer = runtime
+        .admit_agent_invoke(&session)
+        .expect("the explicit authenticated remote grant admits one invocation");
+    let remote = authorizer
+        .remote_caller
+        .expect("remote admission retains destination-resolved caller facts");
+
+    assert_eq!(authorizer.provenance.to_string(), "remote-grant");
+    assert_eq!(remote.caller_machine_id, "hm_remote");
+    assert_eq!(remote.identity, CallerIdentityProof::KeyBound);
+    assert!(remote.agent_invoke);
+}
+
+#[test]
+fn an_explicit_cooperative_remote_operator_retains_self_asserted_provenance() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let session = remote_operator_session(
+        CallerIdentityProof::SelfAsserted,
+        true,
+        Some(RemoteAgentInvokeMode::Cooperative),
+    );
+
+    let authorizer = runtime
+        .admit_agent_invoke(&session)
+        .expect("the destination explicitly trusted its cooperative SSH operator channel");
+    let remote = authorizer.remote_caller.expect("remote caller facts");
+
+    assert_eq!(remote.identity, CallerIdentityProof::SelfAsserted);
+    assert_eq!(
+        remote.agent_invoke_mode,
+        Some(RemoteAgentInvokeMode::Cooperative)
+    );
+}
+
+#[test]
+fn revoking_the_remote_operation_grant_denies_the_next_invocation() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let mut session = remote_operator_session(CallerIdentityProof::KeyBound, true, None);
+    runtime
+        .admit_agent_invoke(&session)
+        .expect("the initial explicit grant is admitted");
+
+    session
+        .remote_caller_grant
+        .as_mut()
+        .expect("remote grant")
+        .agent_invoke = false;
+    let error = runtime
+        .admit_agent_invoke(&session)
+        .expect_err("revocation must deny the next admission");
+
+    assert_denied(error, "revoked remote operation grant");
 }
 
 #[test]

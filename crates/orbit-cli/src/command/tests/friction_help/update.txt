@@ -6,10 +6,11 @@ Arguments:
   <ID>  Friction record ID, e.g. FYYYY-MM-NNN
 
 Options:
-      --root <ROOT>      Override the Orbit root directory (highest precedence)
-      --status <STATUS>  Optional status: open, triaged, or resolved
-      --tag <TAGS>       Optional replacement taxonomy tag; repeat or comma-separate for multiple tags
-      --body <BODY>      Optional replacement markdown body
-      --title <TITLE>    Optional replacement title, max 120 chars; empty restores derivation
-      --json             Output as JSON
-  -h, --help             Print help
+      --root <ROOT>           Override the Orbit root directory (highest precedence)
+      --status <STATUS>       Optional status: open, triaged, or resolved
+      --tag <TAGS>            Optional replacement taxonomy tag; repeat or comma-separate for multiple tags
+      --workspace <SELECTOR>  Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory
+      --body <BODY>           Optional replacement markdown body
+      --title <TITLE>         Optional replacement title, max 120 chars; empty restores derivation
+      --json                  Output as JSON
+  -h, --help                  Print help

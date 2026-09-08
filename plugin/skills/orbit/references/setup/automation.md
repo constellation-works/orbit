@@ -189,11 +189,20 @@ Secret values must not be copied into task prose or logs.
 
 A missing GitHub client, authentication, or API permission is a capability gap,
 not evidence of a clean repository. Read the collect/file step outcomes. CI
-failure-key dedupe and security alert identity suppress already-covered work;
-they do not promise general semantic duplicate detection. Discovery and filing
-errors must remain visible and retryable. A previous done repair is evidence to
-inspect, not blanket dedupe: an old failed release already fixed on the current
-integration branch stays proposed as already-landed, while a distinct defect
-that still reproduces at the current revision remains eligible. Choose these
-routines independently of `ship-sweep`; admission to backlog does not authorize
-implementation or completion.
+filing first reuses a still-open `ci-failure:<key>` owner, then a rejected
+exact-key task whose comment names one still-open covering owner, then a
+high-confidence material match (generated workflow/job/step labels, or a
+specific error together with the failing command or the same run and job).
+That is not fuzzy title similarity: a shared workflow, generic npx/cargo
+exit, or the same affected file is not enough, and completion alone
+does not suppress a later recurrence. Completed owners can cover an exact pre-fix
+observation only after the bounded structured reassessment described in
+[workflows.md](../workflows.md#completed-ci-repair-reassessment). Coverage retains
+source and validation references on the existing owner and creates no new pilot
+candidate. Missing or contradictory proof is explicitly unresolved. Discovery,
+filing, and dedupe-lookup errors must remain visible and retryable. A previous done repair is evidence
+to inspect, not blanket dedupe: an old failed release already fixed on the
+current integration branch stays proposed as already-landed, while a distinct
+defect that still reproduces at the current revision remains eligible. Choose
+these routines independently of `ship-sweep`; admission to backlog does not
+authorize implementation or completion.

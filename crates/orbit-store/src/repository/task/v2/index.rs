@@ -83,6 +83,12 @@ impl TaskV2Store {
     }
 
     /// Reuse the freshness scan for bounded selection, without reading bodies.
+    ///
+    /// Each registered task costs one metadata probe; its envelope is parsed
+    /// again only when the [`EnvelopeCache`] stamp policy cannot prove the file
+    /// is the one already parsed. Reuse never replaces the index comparison
+    /// below — a cached envelope whose `updated_at` disagrees with its index
+    /// row still sends the caller to a rebuild.
     pub(super) fn validated_envelopes(&self) -> Result<Option<Vec<TaskEnvelopeV2>>, OrbitError> {
         let registered = self.registry.tasks_for_workspace(&self.workspace_id)?;
         let indexed = self
@@ -91,15 +97,14 @@ impl TaskV2Store {
         if registered.len() != indexed.len() {
             return Ok(None);
         }
+        self.envelope_cache.retain_registered(&registered);
+
         let mut envelopes = Vec::with_capacity(registered.len());
-        for binding in registered {
+        for binding in &registered {
             let Some(version) = indexed.get(&binding.task_id) else {
                 return Ok(None);
             };
-            let Some(envelope) = self
-                .bundle_store
-                .read_envelope_if_settled(&binding.task_id)?
-            else {
+            let Some(envelope) = self.settled_envelope(&binding.task_id)? else {
                 continue;
             };
             if envelope.updated_at.to_rfc3339() != *version {
@@ -110,9 +115,38 @@ impl TaskV2Store {
         Ok(Some(envelopes))
     }
 
+    /// One registered task's envelope, reusing the previous parse while the
+    /// envelope file is unchanged. `None` carries the same meaning as
+    /// [`TaskBundleStoreV2::read_envelope_if_settled`]: a concurrent writer
+    /// holds this bundle, so the scan skips it rather than failing.
+    fn settled_envelope(&self, task_id: &str) -> Result<Option<TaskEnvelopeV2>, OrbitError> {
+        // Stamped before the parse it labels, so a write that races this read
+        // costs one extra parse next scan instead of pinning stale content.
+        let stamp = self
+            .envelope_cache
+            .stamp(&self.bundle_store.envelope_path(task_id)?);
+        if let Some(stamp) = stamp
+            && let Some(envelope) = self.envelope_cache.reuse(task_id, &stamp)
+        {
+            return Ok(Some(envelope));
+        }
+
+        let Some(envelope) = self.bundle_store.read_envelope_if_settled(task_id)? else {
+            self.envelope_cache.forget(task_id);
+            return Ok(None);
+        };
+        if let Some(stamp) = stamp {
+            self.envelope_cache.remember(task_id, stamp, &envelope);
+        }
+        Ok(Some(envelope))
+    }
+
     /// Rebuild the generated index from the bundles, degrading to `false` (use
-    /// the bundle scan instead) on any failure. Every caller reaches this from
-    /// a *read*, so a rebuild that cannot run must not fail that read.
+    /// the bundle scan instead) on any failure. Listing-triggered rebuild uses
+    /// the lightweight bundle read (task fields only); explicit
+    /// `reindex_workspace` still hashes artifact payloads. Every caller
+    /// reaches this from a *read*, so a rebuild that cannot run must not fail
+    /// that read.
     fn rebuild_index_best_effort(&self, reason: &str) -> Result<bool, OrbitError> {
         let rebuilt = self.bundle_store.list_bundles().and_then(|bundles| {
             let envelopes = bundles

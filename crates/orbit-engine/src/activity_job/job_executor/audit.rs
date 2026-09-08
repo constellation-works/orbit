@@ -125,6 +125,8 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             step_id,
             recovery_activity,
             recovery_succeeded,
+            failure_phase,
+            error_message,
         } => {
             if *recovery_succeeded {
                 tracing::info!(
@@ -134,6 +136,8 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
                     step_id = step_id.as_str(),
                     recovery_activity = recovery_activity.as_str(),
                     recovery_succeeded = *recovery_succeeded,
+                    failure_phase = failure_phase.as_deref(),
+                    error_message = error_message.as_deref(),
                     "step recovery attempted",
                 );
             } else {
@@ -144,7 +148,39 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
                     step_id = step_id.as_str(),
                     recovery_activity = recovery_activity.as_str(),
                     recovery_succeeded = *recovery_succeeded,
+                    failure_phase = failure_phase.as_deref(),
+                    error_message = error_message.as_deref(),
                     "step recovery attempted",
+                );
+            }
+        }
+        V2AuditEventKind::StepPostRecoveryAttempt {
+            step_id,
+            recovery_activity,
+            outcome,
+            error_message,
+        } => {
+            if outcome == "success" {
+                tracing::info!(
+                    target: "orbit.job.step_post_recovery_attempt",
+                    job_run_id = job_run_id,
+                    task_id = task_id,
+                    step_id = step_id.as_str(),
+                    recovery_activity = recovery_activity.as_str(),
+                    outcome = outcome.as_str(),
+                    error_message = error_message.as_deref(),
+                    "step post-recovery attempt",
+                );
+            } else {
+                tracing::warn!(
+                    target: "orbit.job.step_post_recovery_attempt",
+                    job_run_id = job_run_id,
+                    task_id = task_id,
+                    step_id = step_id.as_str(),
+                    recovery_activity = recovery_activity.as_str(),
+                    outcome = outcome.as_str(),
+                    error_message = error_message.as_deref(),
+                    "step post-recovery attempt",
                 );
             }
         }

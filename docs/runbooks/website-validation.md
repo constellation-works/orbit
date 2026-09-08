@@ -154,6 +154,19 @@ export PREVIEW_URL="http://127.0.0.1:$PREVIEW_PORT"
 curl --fail --silent --show-error "$PREVIEW_URL/" >/dev/null
 ```
 
+For security.txt changes, validate both the source and generated static asset:
+
+```bash
+npm --prefix "$REPO/website" run validate:security-txt -- public/.well-known/security.txt
+npm --prefix "$REPO/website" run validate:security-txt -- dist/.well-known/security.txt
+```
+
+The validator rejects missing or malformed RFC 9116 fields, invalid or expired
+`Expires`, non-HTTPS `Contact`/`Policy` URIs, an incorrect `Canonical`, invalid
+UTF-8, and HTML fallback content. The Orbit maintainers own renewal: review the
+file before its `Expires` timestamp and renew it annually. A local build proves
+only that the asset is packaged; it does not prove public publication.
+
 Launch Chromium through the staged Playwright package at both representative desktop and
 mobile sizes. The following smoke check records HTTP status, heading, rendered text length,
 console/page errors, and horizontal overflow; extend `PAGES` with the routes changed by the
@@ -226,6 +239,17 @@ who currently owns the external account, which project owns the custom domain,
 or that repository secrets exist. Do not create a project, rotate or invent
 credentials, or edit DNS as part of website publication.
 
+Wrangler's Pages configuration validation still requires a top-level `name`, so
+`website/wrangler.toml` keeps `name = "orbit-website"`. Treat that value as a
+validation placeholder rather than the deployment target: the publish job always
+passes `--project-name` from the protected `CLOUDFLARE_PAGES_PROJECT` variable,
+which overrides the configured name, so the project still comes from the
+environment instead of the repository. Deleting the field to avoid restating an
+untrusted name breaks publication rather than hardening it. ORB-11379 removed it
+in commit `86d48ebd212a9a7d6f2f36ae25312f6e81e11105` (PR #1425), and `main`
+publication then failed Pages configuration validation with `Missing top-level
+field "name" in configuration file` until ORB-11511 restored it.
+
 ORB-11379 recorded the publication gap on 2026-09-06:
 
 - `.github/workflows/website.yml` had only a pull-request build trigger and no
@@ -248,7 +272,19 @@ deployments are serialized, use only `contents: read` and `deployments: write`,
 and are recorded in both the Actions run and GitHub Deployments. The final step
 checks the unique homepage headline, the delivery-mode setup explorer, the
 install route, and the expected source revision at both the deployment URL and
-`orbit-cli.com`.
+`orbit-cli.com`. It also checks the Pages `_headers` artifact during build, then
+checks the deployed custom domain for `Strict-Transport-Security:
+max-age=31536000` on homepage and install-route 200 responses and on a 404
+response. Finally, it checks that `http://orbit-cli.com/` redirects to the
+canonical HTTPS domain.
+
+The static `website/public/_headers` file is the sole repository-owned HSTS
+policy. Its one-year max-age intentionally does not use `includeSubDomains` or
+`preload`; the repository has not established that every subdomain is HTTPS-ready
+and under compatible operational ownership. HTTP redirect behavior belongs to the
+externally managed Cloudflare zone rather than the Pages artifact. Treat a failed
+redirect check as an external-zone configuration issue, not a reason to add a
+second redirect mechanism to the site.
 
 ### Operate and recover
 
@@ -271,6 +307,22 @@ install route, and the expected source revision at both the deployment URL and
    `https://orbit-cli.com/getting-started/install/`. Fetch
    `https://orbit-cli.com/deployment.json` and compare `sourceRevision` with the
    workflow's `github.sha` before declaring publication successful.
+
+For the security document, independently check the canonical endpoint after the
+production workflow succeeds:
+
+```bash
+curl --fail --show-error --silent --dump-header /tmp/security-txt.headers \
+  https://orbit-cli.com/.well-known/security.txt
+grep -Eiq '^content-type:[[:space:]]*text/plain(?:;|$)' /tmp/security-txt.headers
+```
+
+Then rerun the security scan. A 404, HTML response, stale `Expires`, or failed
+scan remains an external publication issue until the exact `main` artifact is
+published and verified. The production workflow performs the same status,
+`text/plain`, and body validation against both the deployment URL and the
+custom domain. Do not treat the local `dist/.well-known/security.txt` check as
+public deployment evidence.
 
 If the workflow has not yet reached `main`, the exact existing project mapping
 has not been confirmed, or the environment credentials are missing or invalid,

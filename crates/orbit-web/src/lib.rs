@@ -44,6 +44,9 @@ use tokio::sync::Notify;
 
 const INDEX_HTML: &str = include_str!("../assets/dashboard/index.html");
 const DASHBOARD_CSS: &str = include_str!("../assets/dashboard/dashboard.css");
+const INTER_FONT: &[u8] = include_bytes!("../assets/dashboard/fonts/inter-latin.woff2");
+const JETBRAINS_MONO_FONT: &[u8] =
+    include_bytes!("../assets/dashboard/fonts/jetbrains-mono-latin.woff2");
 const MARKED_JS: &str = include_str!("../assets/dashboard/marked.umd.js");
 const PURIFY_JS: &str = include_str!("../assets/dashboard/purify.min.js");
 // L-0021: Keep embedded dashboard JS modules in sync with /static routes.
@@ -64,8 +67,8 @@ const OPERATIONS_JS: &str = include_str!("../assets/dashboard/operations.js");
 const DASHBOARD_CSP: &str = concat!(
     "default-src 'self'; ",
     "script-src 'self'; ",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; ",
-    "font-src 'self' https://fonts.gstatic.com; ",
+    "style-src 'self' 'unsafe-inline'; ",
+    "font-src 'self'; ",
     "img-src 'self' data:; ",
     "connect-src 'self'; ",
     "object-src 'none'; ",
@@ -272,6 +275,11 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
     let app = Router::new()
         .route("/", get(serve_index))
         .route("/static/dashboard.css", get(serve_dashboard_css))
+        .route("/static/fonts/inter-latin.woff2", get(serve_inter_font))
+        .route(
+            "/static/fonts/jetbrains-mono-latin.woff2",
+            get(serve_jetbrains_mono_font),
+        )
         .route("/static/marked.umd.js", get(serve_marked_js))
         .route("/static/purify.min.js", get(serve_purify_js))
         .route("/static/app.js", get(serve_app_js))
@@ -423,6 +431,14 @@ async fn serve_dashboard_css() -> Response {
         .into_response()
 }
 
+async fn serve_inter_font() -> Response {
+    dashboard_bytes_response("font/woff2", INTER_FONT)
+}
+
+async fn serve_jetbrains_mono_font() -> Response {
+    dashboard_bytes_response("font/woff2", JETBRAINS_MONO_FONT)
+}
+
 async fn serve_marked_js() -> Response {
     dashboard_response("application/javascript; charset=utf-8", MARKED_JS)
 }
@@ -487,6 +503,17 @@ async fn serve_automation_js() -> Response {
 }
 
 fn dashboard_response(content_type: &'static str, body: &'static str) -> Response {
+    dashboard_content_response(content_type, body)
+}
+
+fn dashboard_bytes_response(content_type: &'static str, body: &'static [u8]) -> Response {
+    dashboard_content_response(content_type, body)
+}
+
+fn dashboard_content_response<T>(content_type: &'static str, body: T) -> Response
+where
+    T: IntoResponse,
+{
     let mut response = (
         [(header::CONTENT_TYPE, HeaderValue::from_static(content_type))],
         body,

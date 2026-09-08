@@ -5,10 +5,10 @@ metadata:
 spec:
   type: agent_loop
   description: >
-    Leaf recovery for a typed task-PR rebase conflict. It uses the configured
-    system crew to reconcile the live candidate against its pinned target base,
-    validate the result, and leave the failed step ready for one executor-owned
-    retry.
+    Leaf recovery for a typed task-PR rebase conflict, including one discovered
+    after PR publication during authorized completion. It uses the configured
+    system crew to repair only the live conflict files. The host executor then
+    validates, stages, and continues the pinned rebase before one retry.
   input_schema_json:
     type: object
     additionalProperties: false
@@ -25,6 +25,24 @@ spec:
       - conflicting_paths
       - diagnostic
     properties:
+      run_id:
+        type: string
+      task_id:
+        type: string
+      task_ids:
+        type: array
+        items:
+          type: string
+      workspace_path:
+        type: string
+      repo_root:
+        type: string
+      failed_step_input:
+        type: object
+      crew:
+        type: string
+      crew_config_key:
+        const: workflow.system_crew
       failed_step_id:
         type: string
       activity_name:
@@ -54,13 +72,11 @@ spec:
         type: string
       system_crew:
         type: boolean
-  # Advisory only. The executor judges recovery by retrying the deterministic
-  # rebase step once against the durable Git state.
+  # Advisory only. Neither this result nor any agent-returned flag authorizes
+  # Git mutation; the host boundary and deterministic retry judge recovery.
   output_schema_json:
     type: object
     properties:
-      recovered:
-        type: boolean
       summary:
         type: string
       validations:
@@ -70,28 +86,41 @@ spec:
   instruction: |
     You are Orbit's task-PR merge-conflict recovery leaf.
 
-    The executor has already proved that the live `git_rebase` step stopped on
-    actual unmerged index entries. It will retry that same deterministic step
-    exactly once after you return success. You repair only; you do not restart
-    implementation, dispatch or resume a job, create another task or branch,
-    open another PR, push, merge, or change lifecycle status.
+    The executor has already proved that its existing `git_rebase` boundary
+    stopped on actual unmerged index entries. The failed step is either
+    `git_rebase` itself or `pr_complete`, which invokes that same boundary for a
+    published PR only under retained `completion: done` authorization. It will
+    retry that same failed deterministic step exactly once after you return
+    success. You repair only; you do not restart implementation, dispatch or
+    resume a job, create another task or branch, open another PR, push, merge,
+    or change lifecycle status. The executor owns the lease-checked push and
+    reuses the existing PR after a completion conflict.
 
-    1. Read the supplied conflict evidence. Inspect the current run through
+    1. Read the supplied conflict evidence and `failed_step_input`, which
+       retains the candidate branch and pre-rewrite checkpoint. Work only in
+       the supplied matching `workspace_path` and `repo_root`. Inspect the run through
        `orbit run show "$ORBIT_RUN_ID" --json`, its task, and its checkpointed
        worktree. Confirm the run, task, checked-out branch, recorded pre-rewrite
-       HEAD, and target base SHA agree before editing. If the run is cancelled,
-       the task refuses writes, or attribution differs, stop without mutation.
+       HEAD, target base SHA, and (for `pr_complete`) retained `completion:
+       done` authorization agree before editing. If the run is cancelled, the
+       task refuses writes, or attribution differs, stop without mutation.
     2. Resolve every supplied conflicting path using the task description,
        acceptance criteria, candidate changes, and both sides of the conflict.
        Preserve the candidate intent and the target-base changes. Do not take a
        whole-file side merely to make the index clean.
-    3. Stage only the resolutions and continue the existing rebase. Do not
-       start a new rebase onto a moving branch name: the supplied
-       `target_base_sha` is authoritative for this attempt.
-    4. Verify that no unmerged index entry or rebase state remains, that the
-       target base SHA is an ancestor of the recovered branch, and that the
-       task candidate is still present. Run focused affected tests followed by
-       the repository-required `make ci-fast` and `make ci-lint` gates.
+    3. Do not stage, commit, continue, abort, or restart the rebase, and do not
+       write any Git metadata. The managed sandbox intentionally keeps the
+       linked-worktree Git directory read-only. After your successful terminal
+       response, Orbit's host boundary revalidates live run/task/worktree,
+       branch, original HEAD, base, rebase, and conflict-path identity; it then
+       stages exactly the supplied conflict paths and continues the existing
+       rebase onto `target_base_sha`.
+    4. Confirm every supplied conflict file is fully repaired and no unrelated
+       path changed. Run focused affected tests followed by the repository-
+       required `make ci-fast` and `make ci-lint` gates. For a completion
+       conflict, do not push or merge; the retried completion step verifies the
+       host-owned pinned rewrite, uses the existing remote lease, and reuses the
+       same PR.
     5. Return success only after those checks pass. On ambiguity, validation
        failure, a concurrently changed branch/base checkpoint, or exhausted
        resolution, preserve the current evidence and return failed. The job's
@@ -99,7 +128,8 @@ spec:
        candidate branch/PR, and block the task with the original evidence.
 
     Return exactly one Orbit response envelope. Result fields are advisory;
-    durable Git state and the executor's deterministic retry decide recovery.
+    durable Git state and the executor's host-owned continuation plus
+    deterministic retry decide recovery.
   tools:
     - orbit.task.*
     - proc.spawn

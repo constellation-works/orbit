@@ -72,11 +72,20 @@ pub use registry::{ToolRegistry, canonical_builtin_mcp_tool_definitions};
 
 /// Materialize a task artifact before a spoke sends the coordination request
 /// to its hub. The returned value contains artifact bytes but no source path.
+///
+/// `source_path` is resolved against `cwd` and must land inside
+/// `workspace_root` after symlink resolution. The hub never sees the path.
 pub fn prepare_remote_task_artifact_put(
     input: Value,
     cwd: Option<&std::path::Path>,
+    workspace_root: Option<&std::path::Path>,
 ) -> Result<Value, OrbitError> {
-    builtin::orbit::task::artifact_put::prepare_remote_payload(input, cwd)
+    let ctx = ToolContext {
+        cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
+        workspace_root: workspace_root.map(PathBuf::from),
+        ..ToolContext::default()
+    };
+    builtin::orbit::task::artifact_put::prepare_remote_payload(input, &ctx)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

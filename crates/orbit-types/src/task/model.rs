@@ -2,15 +2,9 @@
 //!
 //! ## Task Status Lifecycle
 //!
-//! Transitions are **permissive by default** — any move is allowed unless it
-//! violates one of the three invariants below.
-//!
-//! ### Invariants (blocklist)
-//! 1. **Done is terminal** — no transitions out of done.
-//! 2. **Archived requires dedicated command** — use `orbit task archive`; the
-//!    bare `--status archived` path is rejected.
-//! 3. **InProgress → Review requires execution_summary** — enforced at the
-//!    command layer, not in [`TaskStatus::validate_transition`].
+//! An explicit, authorized edit may move a task directly between any two
+//! statuses. Status is an audited classification; workflow admission,
+//! completion, and delivery keep their own stricter operational gates.
 //!
 //! ### Statuses
 //! | Status       | Purpose |
@@ -20,12 +14,10 @@
 //! | Someday      | Future-scoped — wanted but not yet actionable. Agents skip someday tasks. |
 //! | InProgress   | Actively being worked on. |
 //! | Review       | Implementation complete; awaiting review/merge. |
-//! | Done         | Accepted and closed. Terminal. |
+//! | Done         | Accepted and closed. May be reopened by an explicit edit. |
 //! | Blocked      | Temporarily paused. |
-//! | Archived     | Soft-deleted. Restorable to Backlog. |
+//! | Archived     | Soft-deleted. Restorable to any other status. |
 //! | Rejected     | Declined. Can be re-opened. |
-//!
-//! See [`TaskStatus::validate_transition`] for the blocklist implementation.
 
 // Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
 #![allow(clippy::expect_used)]
@@ -115,7 +107,7 @@ pub fn complexity_bucket_ord(label: &str) -> (u8, &str) {
 
 /// Current lifecycle state of a task.
 ///
-/// See the module-level doc for the full state transition diagram.
+/// See the module-level documentation for status-edit semantics.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "snake_case")]
@@ -130,13 +122,13 @@ pub enum TaskStatus {
     InProgress,
     /// Implementation complete; awaiting review/merge.
     Review,
-    /// Accepted and closed. Terminal — no further transitions.
+    /// Accepted and closed. May be reopened by an explicit status edit.
     Done,
     /// Temporarily paused (waiting on a dependency or decision).
     Blocked,
-    /// Soft-deleted. Can be restored to Backlog.
+    /// Soft-deleted. Can be restored to any other status.
     Archived,
-    /// Declined. Can be re-opened to Backlog or InProgress.
+    /// Declined. Can be reclassified to any other status.
     Rejected,
     /// Future-scoped — wanted but not yet actionable. Agents skip someday tasks.
     Someday,
@@ -240,40 +232,6 @@ impl TaskStatus {
             | TaskStatus::Blocked
             | TaskStatus::Someday => None,
         }
-    }
-
-    /// Validates a status transition using a short blocklist of invariants:
-    ///
-    /// 1. **Done is terminal** — no transitions out of done.
-    /// 2. **Archived requires dedicated command** — use `orbit task archive`, not a
-    ///    bare status update (enforced upstream; blocked here as defense-in-depth).
-    /// 3. **InProgress → Review requires execution_summary** — enforced upstream in
-    ///    `update_task_with_status_note`, not here (we lack the task data).
-    ///
-    /// Everything else is allowed.
-    pub fn validate_transition(&self, target: TaskStatus) -> Result<(), String> {
-        // No-op transitions are always fine.
-        if *self == target {
-            return Ok(());
-        }
-
-        // Done is terminal.
-        if *self == TaskStatus::Done {
-            return Err(format!(
-                "invalid status transition: {} -> {} (done is terminal)",
-                self, target
-            ));
-        }
-
-        // Archived requires the dedicated archive command.
-        if target == TaskStatus::Archived {
-            return Err(format!(
-                "invalid status transition: {} -> {} (use the archive command)",
-                self, target
-            ));
-        }
-
-        Ok(())
     }
 }
 
@@ -1021,6 +979,18 @@ pub fn resolve_task_dependencies(
     task: &Task,
     status_by_id: &BTreeMap<OrbitId, TaskStatus>,
 ) -> Vec<ResolvedTaskDependency> {
+    let reference_index = TaskReferenceIndex::from_status_index(status_by_id);
+    resolve_task_dependencies_with_index(task, status_by_id, &reference_index)
+}
+
+/// Resolve dependency targets using prefix knowledge derived from one status
+/// projection. Callers that inspect several tasks from the same projection
+/// should create one [`TaskReferenceIndex`] and reuse it.
+pub fn resolve_task_dependencies_with_index(
+    task: &Task,
+    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
+    reference_index: &TaskReferenceIndex,
+) -> Vec<ResolvedTaskDependency> {
     task.dependencies()
         .into_iter()
         .map(|dependency_id| ResolvedTaskDependency {
@@ -1029,7 +999,7 @@ pub fn resolve_task_dependencies(
                 .get(&dependency_id)
                 .map(|status| status.to_string())
                 .unwrap_or_else(|| {
-                    if task_reference_is_not_verifiable_here(task, &dependency_id, status_by_id) {
+                    if reference_index.is_not_verifiable_here(task, &dependency_id, status_by_id) {
                         TASK_REFERENCE_NOT_VERIFIABLE_HERE.to_string()
                     } else {
                         "missing".to_string()
@@ -1045,19 +1015,79 @@ pub fn resolve_task_relations(
     task: &Task,
     status_by_id: &BTreeMap<OrbitId, TaskStatus>,
 ) -> Vec<ResolvedTaskRelation> {
+    let reference_index = TaskReferenceIndex::from_status_index(status_by_id);
+    resolve_task_relations_with_index(task, status_by_id, &reference_index)
+}
+
+/// Resolve relation targets using prefix knowledge derived from one status
+/// projection. Callers that inspect several tasks from the same projection
+/// should create one [`TaskReferenceIndex`] and reuse it.
+pub fn resolve_task_relations_with_index(
+    task: &Task,
+    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
+    reference_index: &TaskReferenceIndex,
+) -> Vec<ResolvedTaskRelation> {
     task.relations
         .iter()
         .map(|relation| ResolvedTaskRelation {
             relation_type: relation.relation_type,
             target: relation.target.clone(),
-            verification: task_reference_is_not_verifiable_here(
-                task,
-                &relation.target,
-                status_by_id,
-            )
-            .then(|| TASK_REFERENCE_NOT_VERIFIABLE_HERE.to_string()),
+            verification: reference_index
+                .is_not_verifiable_here(task, &relation.target, status_by_id)
+                .then(|| TASK_REFERENCE_NOT_VERIFIABLE_HERE.to_string()),
         })
         .collect()
+}
+
+/// Prefix knowledge derived from one bounded status-index snapshot.
+///
+/// This is intentionally an owned, short-lived value rather than a global
+/// cache: task stores may change between snapshots, and the snapshot's caller
+/// already defines the correct freshness boundary.
+#[derive(Debug)]
+pub struct TaskReferenceIndex {
+    known_prefixes: BTreeSet<String>,
+    indexed_task_count: usize,
+}
+
+impl TaskReferenceIndex {
+    /// Build prefix knowledge with one scan of a status-index snapshot.
+    pub fn from_status_index(status_by_id: &BTreeMap<OrbitId, TaskStatus>) -> Self {
+        Self {
+            known_prefixes: status_by_id
+                .keys()
+                .filter_map(|id| task_id_prefix(id).map(ToOwned::to_owned))
+                .collect(),
+            indexed_task_count: status_by_id.len(),
+        }
+    }
+
+    /// Number of task IDs examined while building this snapshot's prefix set.
+    /// This provides bounded-work evidence without depending on wall-clock time.
+    pub fn indexed_task_count(&self) -> usize {
+        self.indexed_task_count
+    }
+
+    /// Whether a missing valid task target belongs to a prefix this snapshot
+    /// cannot verify. The source task's prefix is local even when its task ID
+    /// is absent from the projection.
+    pub fn is_not_verifiable_here(
+        &self,
+        task: &Task,
+        target: &str,
+        status_by_id: &BTreeMap<OrbitId, TaskStatus>,
+    ) -> bool {
+        if status_by_id.contains_key(target) || !is_valid_orb_task_id(target) {
+            return false;
+        }
+        let Some(target_prefix) = task_id_prefix(target) else {
+            return false;
+        };
+        if task_id_prefix(&task.id).is_some_and(|source_prefix| source_prefix == target_prefix) {
+            return false;
+        }
+        !self.known_prefixes.contains(target_prefix)
+    }
 }
 
 /// Whether a missing valid task target belongs to a prefix this status
@@ -1069,28 +1099,29 @@ pub fn task_reference_is_not_verifiable_here(
     target: &str,
     status_by_id: &BTreeMap<OrbitId, TaskStatus>,
 ) -> bool {
-    if status_by_id.contains_key(target) || !is_valid_orb_task_id(target) {
-        return false;
-    }
-    let Some(target_prefix) = task_id_prefix(target) else {
-        return false;
-    };
-    let mut known_prefixes = status_by_id
-        .keys()
-        .filter_map(|id| task_id_prefix(id))
-        .collect::<BTreeSet<_>>();
-    if let Some(source_prefix) = task_id_prefix(&task.id) {
-        known_prefixes.insert(source_prefix);
-    }
-    !known_prefixes.contains(target_prefix)
+    TaskReferenceIndex::from_status_index(status_by_id).is_not_verifiable_here(
+        task,
+        target,
+        status_by_id,
+    )
 }
 
 pub fn task_dependencies_ready(task: &Task, status_by_id: &BTreeMap<OrbitId, TaskStatus>) -> bool {
+    let reference_index = TaskReferenceIndex::from_status_index(status_by_id);
+    task_dependencies_ready_with_index(task, status_by_id, &reference_index)
+}
+
+/// Check readiness using prefix knowledge derived from one status projection.
+pub fn task_dependencies_ready_with_index(
+    task: &Task,
+    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
+    reference_index: &TaskReferenceIndex,
+) -> bool {
     task.dependencies().iter().all(|dependency_id| {
         status_by_id
             .get(dependency_id)
             .is_some_and(|status| status.satisfies_dependency())
-            || task_reference_is_not_verifiable_here(task, dependency_id, status_by_id)
+            || reference_index.is_not_verifiable_here(task, dependency_id, status_by_id)
     })
 }
 
@@ -1098,10 +1129,21 @@ pub fn unmet_task_dependencies(
     task: &Task,
     status_by_id: &BTreeMap<OrbitId, TaskStatus>,
 ) -> Vec<ResolvedTaskDependency> {
-    resolve_task_dependencies(task, status_by_id)
+    let reference_index = TaskReferenceIndex::from_status_index(status_by_id);
+    unmet_task_dependencies_with_index(task, status_by_id, &reference_index)
+}
+
+/// Return unmet dependencies using prefix knowledge derived from one status
+/// projection.
+pub fn unmet_task_dependencies_with_index(
+    task: &Task,
+    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
+    reference_index: &TaskReferenceIndex,
+) -> Vec<ResolvedTaskDependency> {
+    resolve_task_dependencies_with_index(task, status_by_id, reference_index)
         .into_iter()
         .filter(|dependency| {
-            !task_reference_is_not_verifiable_here(task, &dependency.id, status_by_id)
+            !reference_index.is_not_verifiable_here(task, &dependency.id, status_by_id)
                 && status_by_id
                     .get(&dependency.id)
                     .is_none_or(|status| !status.satisfies_dependency())
@@ -1118,10 +1160,21 @@ pub fn unsatisfiable_task_dependencies(
     task: &Task,
     status_by_id: &BTreeMap<OrbitId, TaskStatus>,
 ) -> Vec<UnsatisfiableTaskDependency> {
+    let reference_index = TaskReferenceIndex::from_status_index(status_by_id);
+    unsatisfiable_task_dependencies_with_index(task, status_by_id, &reference_index)
+}
+
+/// Return dependency dead ends using prefix knowledge derived from one status
+/// projection.
+pub fn unsatisfiable_task_dependencies_with_index(
+    task: &Task,
+    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
+    reference_index: &TaskReferenceIndex,
+) -> Vec<UnsatisfiableTaskDependency> {
     task.dependencies()
         .into_iter()
         .filter_map(|dependency_id| {
-            if task_reference_is_not_verifiable_here(task, &dependency_id, status_by_id) {
+            if reference_index.is_not_verifiable_here(task, &dependency_id, status_by_id) {
                 return None;
             }
             let (status, reason) = match status_by_id.get(&dependency_id) {

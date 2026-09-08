@@ -6,7 +6,7 @@ use orbit_registry::{
     HostIdentityOutcome, NewHostIdentity, ensure_host_identity, os_hostname,
     validate_new_task_prefix,
 };
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 use super::collect_config_seed_for_init;
@@ -15,7 +15,8 @@ use crate::command::{CommandOut, CommandOutput, Execute};
 #[derive(Args)]
 #[command(about = "Initialize the global Orbit root (~/.orbit)")]
 pub struct InitCommand {
-    /// Reset the global Orbit root (~/.orbit/) to defaults before initialization
+    /// Reset the global Orbit root (~/.orbit/) to shipped defaults before
+    /// initialization, including executor sandbox settings
     #[arg(long)]
     pub force: bool,
 
@@ -174,26 +175,71 @@ fn prompt_host_name() -> Result<String, OrbitError> {
     }
 }
 
+const MAX_TASK_PREFIX_ATTEMPTS: usize = 4;
+
 fn prompt_task_prefix() -> Result<String, OrbitError> {
-    loop {
-        let answer = read_line("Task prefix (2-5 uppercase ASCII letters): ")?;
+    let stdin = io::stdin();
+    let mut reader = stdin.lock();
+    let stderr = io::stderr();
+    let mut output = stderr.lock();
+
+    prompt_task_prefix_from(&mut reader, &mut output)
+}
+
+pub(super) fn prompt_task_prefix_from(
+    reader: &mut impl BufRead,
+    output: &mut impl Write,
+) -> Result<String, OrbitError> {
+    for _ in 0..MAX_TASK_PREFIX_ATTEMPTS {
+        let answer = read_line_from(
+            "Task prefix (2-5 uppercase ASCII letters): ",
+            reader,
+            output,
+        )?;
         match validate_new_task_prefix(&answer) {
             Ok(prefix) => return Ok(prefix),
-            Err(error) => println!("{error}"),
+            Err(error) => {
+                writeln!(output, "{error}").map_err(|error| OrbitError::Io(error.to_string()))?;
+            }
         }
     }
+
+    Err(OrbitError::InvalidInput(format!(
+        "task prefix remained invalid after {MAX_TASK_PREFIX_ATTEMPTS} attempts; pass --task-prefix or --non-interactive"
+    )))
 }
 
 fn read_line(prompt: &str) -> Result<String, OrbitError> {
-    let mut stdout = io::stdout();
-    write!(stdout, "{prompt}").map_err(|error| OrbitError::Io(error.to_string()))?;
-    stdout
+    let stdin = io::stdin();
+    let mut reader = stdin.lock();
+    let stderr = io::stderr();
+    let mut output = stderr.lock();
+
+    read_line_from(prompt, &mut reader, &mut output)
+}
+
+fn read_line_from(
+    prompt: &str,
+    reader: &mut impl BufRead,
+    output: &mut impl Write,
+) -> Result<String, OrbitError> {
+    write!(output, "{prompt}").map_err(|error| OrbitError::Io(error.to_string()))?;
+    output
         .flush()
         .map_err(|error| OrbitError::Io(error.to_string()))?;
+
     let mut line = String::new();
-    io::stdin()
+    let bytes_read = reader
         .read_line(&mut line)
         .map_err(|error| OrbitError::Io(error.to_string()))?;
+
+    if bytes_read == 0 {
+        return Err(OrbitError::InvalidInput(
+            "stdin closed before an interactive prompt was answered; pass --task-prefix/--host-name or --non-interactive"
+                .to_string(),
+        ));
+    }
+
     Ok(line.trim().to_string())
 }
 

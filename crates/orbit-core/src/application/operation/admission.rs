@@ -36,6 +36,7 @@ pub struct OperationDrainRequest<'a> {
     /// Requested leaf ceiling; may only narrow the grant's captured ceiling.
     pub max_active_leaf_runs: Option<u32>,
     pub allowed_crews: &'a [String],
+    pub complexity_crews: &'a orbit_config::ComplexityCrewPools,
     pub actor: Option<&'a str>,
     pub claim_token: Option<&'a str>,
 }
@@ -106,6 +107,7 @@ impl OrbitRuntime {
             completion,
             &self.canonical_allowed_crews(request.allowed_crews)?,
         )?;
+        Self::set_auto_crew_overrides(&mut input, request.complexity_crews);
         if let Some(object) = input.as_object_mut() {
             object.insert(
                 OPERATION_ADMISSION_KEY.to_string(),

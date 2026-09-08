@@ -10,7 +10,7 @@ use orbit_core::metrics::aggregate as aggregate_knowledge_stats;
 use orbit_core::{InvocationInsertParams, InvocationQuery};
 use serde::Deserialize;
 
-use super::{LimitQuery, map_runtime_error, non_empty_string};
+use super::{LimitQuery, blocking, map_runtime_error, non_empty_string};
 
 const INVOCATIONS_DEFAULT_LIMIT: usize = 20;
 
@@ -45,33 +45,41 @@ pub(super) struct OrchestratorMetricsQuery {
 }
 
 pub(super) async fn knowledge_metrics(Ws(runtime): Ws, Query(q): Query<LimitQuery>) -> Response {
-    match runtime.list_job_runs(JobRunListParams {
-        limit: q.limit,
-        ..Default::default()
-    }) {
+    match blocking("knowledge metrics", move || {
+        runtime.list_job_runs(JobRunListParams {
+            limit: q.limit,
+            ..Default::default()
+        })
+    })
+    .await
+    {
         Ok(runs) => Json(aggregate_knowledge_stats(&runs)).into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
 pub(super) async fn activity_metrics(Ws(runtime): Ws) -> Response {
-    match runtime.activity_invocation_metrics() {
+    match blocking("activity metrics", move || {
+        runtime.activity_invocation_metrics()
+    })
+    .await
+    {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
 pub(super) async fn tool_metrics(Ws(runtime): Ws) -> Response {
-    match runtime.tool_invocation_metrics() {
+    match blocking("tool metrics", move || runtime.tool_invocation_metrics()).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
 pub(super) async fn task_metrics(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
-    match runtime.task_invocation_metrics(&id) {
+    match blocking("task metrics", move || runtime.task_invocation_metrics(&id)).await {
         Ok(row) => Json(row).into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
@@ -90,9 +98,13 @@ pub(super) async fn orchestrator_metrics(
         Ok(value) => value,
         Err(error) => return map_runtime_error(error),
     };
-    match runtime.orchestrator_invocation_metrics(since, until) {
+    match blocking("orchestrator metrics", move || {
+        runtime.orchestrator_invocation_metrics(since, until)
+    })
+    .await
+    {
         Ok(metrics) => Json(metrics).into_response(),
-        Err(error) => map_runtime_error(error),
+        Err(response) => *response,
     }
 }
 
@@ -104,9 +116,13 @@ pub(super) async fn invocation_metrics(
         Ok(query) => query,
         Err(e) => return map_runtime_error(e),
     };
-    match runtime.invocation_records(query) {
+    match blocking("invocation metrics", move || {
+        runtime.invocation_records(query)
+    })
+    .await
+    {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
@@ -114,9 +130,13 @@ pub(super) async fn ingest_invocation(
     Ws(runtime): Ws,
     Json(params): Json<InvocationInsertParams>,
 ) -> Response {
-    match runtime.insert_invocation_trace_record(&params) {
+    match blocking("ingest invocation", move || {
+        runtime.insert_invocation_trace_record(&params)
+    })
+    .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 

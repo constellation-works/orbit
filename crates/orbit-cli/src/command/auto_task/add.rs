@@ -4,7 +4,7 @@ use orbit_core::{
     TaskType,
 };
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::output::definition_to_json;
 use super::schedule_args::require_schedule;
@@ -23,7 +23,7 @@ pub struct AutoTaskAddArgs {
     /// Interval in minutes (mutually exclusive with `--cron`)
     #[arg(long = "every-minutes")]
     pub every_minutes: Option<u64>,
-    /// Delivery trigger JSON: owner_machine, branch, threshold, max_wait_minutes, coverage; optional max_items/retries.
+    /// Delivery trigger JSON: branch, threshold, max_wait_minutes, coverage; optional owner_machine (defaults to this workspace's registered owner machine), max_items, retries.
     #[arg(long)]
     pub deliveries_landed: Option<String>,
     /// Title of each minted task
@@ -91,11 +91,6 @@ impl Execute for AutoTaskAddArgs {
             dedupe: self.dedupe,
         })?;
 
-        if self.json {
-            Ok(Payload::document(definition_to_json(&definition)).into())
-        } else {
-            println!("{}", definition.name);
-            Ok(CommandOutput::Silent)
-        }
+        Ok(Payload::detail(definition_to_json(&definition), definition.name).into())
     }
 }

@@ -59,41 +59,16 @@ y4rLO3hkxWhxfgF5KPSR2iftc3LMONRGWELK6jpD5KB7No5vwIvjpVPUc5xA45Xw
 tT/bo0mm4TvrumxYr1xyEHrdum+ej/WYz/0BZQlwDOtXAgMBAAE=
 -----END PUBLIC KEY-----"#;
 
-/// `orbit-release-key-4` is a PLACEHOLDER pre-staged for the next rotation.
-/// The PEM below was generated locally and the matching private key is NOT
-/// held by release infrastructure — no production signature will ever verify
-/// against it. Replace with a real keypair (generated on the signing host)
-/// before rotating off key-3.
-const ORBIT_RELEASE_KEY_4_PEM: &str = r#"-----BEGIN PUBLIC KEY-----
-MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAiEVVbwQYDnbPg86xYrI8
-Ddm6qpkEJ6GSJOW9NfR/eLpqwwaeWb3EPR9H/U39Rrt8ABPAGObLG9vuvSzg8YqU
-Rz6NjtrSKQ4k9xO/up+qQ/zRsHkOyISEx+6MnIrw5hY/IfkrZ+3+jm8IfXJ+VAjS
-VepR+o58u73ycrnLG1eXWIHtjED3SQSPffJjxSvVDEb3ogiJAsWClCMWNLnEjsQc
-IHYrNdS5N0m5tfcIb9LiV2cDVXgdwdRUU41Ks9sWvBQIHrNup721UWyMdJoK1hTI
-rc4PST3WTHQwFcQvVaAqod9MDPkQYlgD7IjiPkSGLHyIs52kNgFXY55E5DlU4O4e
-9QDbyQTGzZI0XlnoqAuCIXbcNXjMZuEn9UjVN35NeObsj6F/yL07YUhvORnxozjL
-41ouRFtFTWFHNenthtZnH9SUV4+O2cKDmtJpPJd68ZJ/NBqJHM4a6cteT72HJzLb
-t6yto3B43nTeXtp9ozRjetznPnPD7gmI6Zq1P2ce8v49AgMBAAE=
------END PUBLIC KEY-----"#;
-
-/// The release signing keys this binary trusts, newest-generation last.
+/// The release signing keys this binary trusts.
 ///
 /// Kept in lockstep with the same list in `install.sh` and
 /// `npm/scripts/install-binary.js`.
-pub const TRUSTED_RELEASE_KEYS: &[TrustedReleaseKey] = &[
-    TrustedReleaseKey {
-        id: "orbit-release-key-3",
-        not_after: "2029-12-31",
-        revoked_at: None,
-        public_key_pem: ORBIT_RELEASE_KEY_3_PEM,
-    },
-    TrustedReleaseKey {
-        id: "orbit-release-key-4",
-        not_after: "2030-12-31",
-        revoked_at: None,
-        public_key_pem: ORBIT_RELEASE_KEY_4_PEM,
-    },
-];
+pub const TRUSTED_RELEASE_KEYS: &[TrustedReleaseKey] = &[TrustedReleaseKey {
+    id: "orbit-release-key-3",
+    not_after: "2029-12-31",
+    revoked_at: None,
+    public_key_pem: ORBIT_RELEASE_KEY_3_PEM,
+}];
 
 /// Lowercase hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {

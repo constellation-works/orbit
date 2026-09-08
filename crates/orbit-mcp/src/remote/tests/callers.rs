@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::{McpCapability, RemoteAgentInvokeMode, ToolSessionContext};
 
 use orbit_types::tool::CallerIdentityProof;
 
@@ -236,6 +236,230 @@ workspaces = ["ws_orbit"]
 }
 
 #[test]
+fn agent_invoke_is_an_explicit_key_bound_workspace_grant() {
+    let (_dir, path) = write(&format!(
+        r#"
+default = "deny"
+
+[[callers]]
+machine_id = "hm_beta"
+capabilities = ["agent", "operator"]
+workspaces = ["ws_orbit"]
+ssh_key_fingerprint = "{PINNED}"
+agent_invoke = true
+"#,
+    ));
+    let file = load_callers(&path).expect("scoped remote invocation grant");
+    let policy = SessionCapabilityPolicy::from_grant(
+        McpSessionAuthority::Operator,
+        file.resolve(&RemoteCallerIdentity::key_bound(
+            "hm_beta",
+            observed(PINNED),
+        )),
+    );
+
+    let on_workspace = policy
+        .grant_for(Some("ws_orbit"))
+        .expect("remote grant on workspace");
+    assert!(on_workspace.agent_invoke);
+    assert_eq!(on_workspace.identity, CallerIdentityProof::KeyBound);
+    assert_eq!(
+        on_workspace.agent_invoke_mode,
+        Some(RemoteAgentInvokeMode::KeyBound),
+        "omitting the new mode must preserve the original strict behavior"
+    );
+
+    let elsewhere = policy
+        .grant_for(Some("ws_other"))
+        .expect("remote grant outside narrowing");
+    assert!(!elsewhere.agent_invoke);
+    assert!(policy.effective_for(Some("ws_other")).is_empty());
+}
+
+#[test]
+fn cooperative_agent_invoke_is_explicit_and_workspace_scoped() {
+    let (_dir, path) = write(
+        r#"
+default = "deny"
+
+[[callers]]
+machine_id = "hm_beta"
+capabilities = ["agent", "operator"]
+workspaces = ["ws_orbit"]
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+"#,
+    );
+    let file = load_callers(&path).expect("cooperative invocation grant");
+    let policy = SessionCapabilityPolicy::from_grant(
+        McpSessionAuthority::Operator,
+        file.resolve(&caller("hm_beta")),
+    );
+
+    let on_workspace = policy.grant_for(Some("ws_orbit")).expect("remote grant");
+    assert_eq!(on_workspace.identity, CallerIdentityProof::SelfAsserted);
+    assert_eq!(
+        on_workspace.agent_invoke_mode,
+        Some(RemoteAgentInvokeMode::Cooperative)
+    );
+
+    let elsewhere = policy.grant_for(Some("ws_other")).expect("remote grant");
+    assert!(!elsewhere.agent_invoke);
+    assert_eq!(elsewhere.agent_invoke_mode, None);
+    assert!(policy.effective_for(Some("ws_other")).is_empty());
+}
+
+#[test]
+fn invocation_workspace_scope_does_not_narrow_ordinary_operator_access() {
+    let (_dir, path) = write(
+        r#"
+default = "deny"
+
+[[callers]]
+machine_id = "hm_beta"
+capabilities = ["agent", "operator"]
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = ["ws_orbit"]
+"#,
+    );
+    let file = load_callers(&path).expect("independent invocation scope");
+    let policy = SessionCapabilityPolicy::from_grant(
+        McpSessionAuthority::Operator,
+        file.resolve(&caller("hm_beta")),
+    );
+
+    assert_eq!(policy.effective_for(Some("ws_orbit")), operator());
+    assert_eq!(policy.effective_for(Some("ws_other")), operator());
+    assert!(
+        policy
+            .grant_for(Some("ws_orbit"))
+            .expect("remote grant")
+            .agent_invoke
+    );
+    assert!(
+        !policy
+            .grant_for(Some("ws_other"))
+            .expect("remote grant")
+            .agent_invoke
+    );
+}
+
+#[test]
+fn incomplete_agent_invoke_grants_fail_the_callers_file_closed() {
+    for (contents, expected) in [
+        (
+            format!(
+                r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent"]
+workspaces = ["ws_orbit"]
+ssh_key_fingerprint = "{PINNED}"
+agent_invoke = true
+"#,
+            ),
+            "operator",
+        ),
+        (
+            format!(
+                r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+ssh_key_fingerprint = "{PINNED}"
+agent_invoke = true
+"#,
+            ),
+            "workspaces",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = []
+"#
+            .to_string(),
+            "agent_invoke_workspaces",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+agent_invoke_workspaces = ["ws_orbit"]
+"#
+            .to_string(),
+            "without enabling `agent_invoke`",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = ["orbit"]
+"#
+            .to_string(),
+            "agent_invoke_workspaces",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+agent_invoke_workspcaes = ["ws_orbit"]
+"#
+            .to_string(),
+            "unknown field",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+workspaces = ["ws_orbit"]
+agent_invoke = true
+"#
+            .to_string(),
+            "ssh_key_fingerprint",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+workspaces = ["ws_orbit"]
+agent_invoke_mode = "cooperative"
+"#
+            .to_string(),
+            "without enabling `agent_invoke`",
+        ),
+        (
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+workspaces = ["ws_orbit"]
+agent_invoke = true
+agent_invoke_mode = "invented"
+"#
+            .to_string(),
+            "unknown variant",
+        ),
+    ] {
+        let (_dir, path) = write(&contents);
+        let error = load_callers(&path).expect_err("incomplete grant must fail closed");
+
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn a_local_session_keeps_argv_authority_and_stamps_no_grant() {
     let policy = SessionCapabilityPolicy::local(McpSessionAuthority::Operator);
     let mut context = ToolSessionContext::default();
@@ -369,6 +593,43 @@ ssh_key_fingerprint = "{PINNED}"
         CallerIdentityProof::KeyBound,
         "a Tier 1 and a Tier 2 destination produce identical grants; only this field \
          distinguishes them in the trail"
+    );
+}
+
+/// [ORB-11712] Observing that no key authenticated is evidence, not the absence
+/// of it. A pinned row exists so a key mismatch is refused, and a password or
+/// keyboard-interactive login under that row is the plainest mismatch it can
+/// have.
+#[test]
+fn a_session_that_authenticated_without_a_key_refuses_a_pinned_row() {
+    let (dir, _path) = write(&format!(
+        r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+ssh_key_fingerprint = "{PINNED}"
+"#
+    ));
+    let identity = RemoteCallerIdentity::key_bound(
+        "hm_alpha",
+        Some(ObservedKeys {
+            fingerprints: Vec::new(),
+            observation: KeyObservation::AuthInfoFile,
+        }),
+    );
+
+    let error =
+        SessionCapabilityPolicy::resolve(dir.path(), McpSessionAuthority::Operator, &identity)
+            .expect_err("a pinned row must not be served to a session that used no key");
+
+    assert!(
+        matches!(
+            error,
+            OrbitError::UnauthorizedCaller(ref message)
+                if message.contains("hm_alpha")
+                    && message.contains("authenticated without a public key")
+        ),
+        "expected a refusal naming the caller and the missing key, got {error:?}"
     );
 }
 

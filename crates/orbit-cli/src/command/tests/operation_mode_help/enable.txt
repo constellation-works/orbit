@@ -9,6 +9,8 @@ Options:
           Task in the finite scope; repeat or comma-separate (at most 50)
       --for <WINDOW>
           Admission window from now, e.g. `30m`, `2h` (at most 24h)
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory
       --right <RIGHTS>
           Right to grant: prepare, promote, or complete; repeat or comma-separate
       --preset <PRESET>
@@ -22,7 +24,7 @@ Options:
       --recovery-minutes <RECOVERY_MINUTES>
           Run-layer recovery wall-time minutes allowed per task
       --review-policy <REVIEW_POLICY>
-          Run-layer review policy: none or after-landing (before-pr is not yet supported at admission)
+          Run-layer review policy: none, before-pr (holds PR creation for a fresh reviewer), or after-landing
       --claim-token <CLAIM_TOKEN>
           Token for this workspace's exclusive claim, when another operator holds one
       --json

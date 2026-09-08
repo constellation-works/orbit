@@ -183,8 +183,7 @@ impl DoctorCommands for OrbitRuntime {
     }
 
     fn health_check_store_writable(&self) -> Result<String, OrbitError> {
-        let store = self.sqlite_store()?;
-        store.check_writable()?;
+        self.check_sqlite_store_writable()?;
         Ok("store database accepts writes".to_string())
     }
 }
@@ -211,7 +210,7 @@ fn doctor_check_config(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
 
 /// `PRAGMA quick_check` plus migration-ledger schema version vs binary.
 fn doctor_check_database(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    let store = match runtime.sqlite_store() {
+    let store = match runtime.sqlite_store_for_diagnostics() {
         Ok(store) => store,
         Err(error) => {
             return check(
@@ -612,8 +611,9 @@ fn doctor_check_task_relations(runtime: &OrbitRuntime) -> WorkspaceDoctorResult 
 /// fails to parse is the operator's own in-progress edit, and classifying it
 /// as `Error` would silently start failing `orbit doctor` in cron and CI for
 /// workspaces that were passing yesterday. Only an *unloadable shipped
-/// default* — provably Orbit-written content that no longer parses, i.e. a
-/// broken install — escalates to `Error`. Everything else warns.
+/// default* — a broken install: Orbit-written content that no longer parses,
+/// or a primary shipped default that is simply gone — escalates to `Error`.
+/// Everything else warns.
 fn doctor_check_definition_artifacts(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     let report = match runtime.inspect_definition_artifacts() {
         Ok(report) => report,
@@ -636,7 +636,7 @@ fn doctor_check_definition_artifacts(runtime: &OrbitRuntime) -> Vec<WorkspaceDoc
                     format!("no {} on disk yet", health.kind.as_str())
                 } else {
                     format!(
-                        "{} {} loaded, none residual, stale, deprecated, or faulty",
+                        "{} {} loaded, none residual, stale, deprecated, faulty, or missing",
                         health.scanned,
                         health.kind.as_str()
                     )

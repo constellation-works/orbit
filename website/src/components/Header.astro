@@ -1,0 +1,10 @@
+---
+import Default from '@astrojs/starlight/components/Header.astro';
+import HomeMenu from './HomeMenu.astro';
+
+const { hasSidebar } = Astro.locals.starlightRoute;
+---
+
+<Default />
+{/* Splash pages omit Starlight's sidebar Menu; this is the homepage replacement. */}
+{!hasSidebar && <HomeMenu />}

@@ -50,10 +50,14 @@ pub use activity_job::{
 };
 pub use context::{
     AGENT_INVOCATION_FAILED, AGENT_TIMEOUT, ActivityInvocationResult, CrewConfig, PrConfig,
-    ResolvedActivityTools, RuntimeHost, StepRecoveryAdmission, TaskActivityUpdate,
-    TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT, blocked_workflow_failure_update,
+    ResolvedActivityTools, ReviewLandingRequest, RuntimeHost, StepRecoveryAdmission,
+    TaskActivityUpdate, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT,
+    blocked_workflow_failure_update,
 };
-pub use executor::automation::vcs::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees};
+pub use executor::automation::vcs::review_gate;
+pub use executor::automation::vcs::{
+    WorktreeGcOptions, WorktreeGcResult, collect_worktrees, fetch_remote_base,
+};
 pub use executor::automation::{
     StateExecutionContext, execute_action as execute_deterministic_action,
 };

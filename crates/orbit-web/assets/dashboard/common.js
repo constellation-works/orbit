@@ -10,8 +10,24 @@ export function getWorkspace() {
   return currentWorkspace;
 }
 
+let workspaceRevision = 0;
+const workspaceListeners = new Set();
+
+export function getWorkspaceRevision() {
+  return workspaceRevision;
+}
+
+export function onWorkspaceChange(listener) {
+  workspaceListeners.add(listener);
+  return () => workspaceListeners.delete(listener);
+}
+
 export function setWorkspace(id) {
-  currentWorkspace = id || null;
+  const next = id || null;
+  if (next === currentWorkspace) return;
+  currentWorkspace = next;
+  workspaceRevision += 1;
+  for (const listener of workspaceListeners) listener();
 }
 
 // ORB-10872: workspace + time window are one dashboard scope. Scoreboard,
@@ -183,10 +199,84 @@ export const AGGREGATE_PANEL_PLACEHOLDER = "Select a workspace to view this pane
 export function renderPanelPlaceholder(bodyId) {
   const body = document.getElementById(bodyId);
   if (!body) return;
+  panelRequests.delete(bodyId);
+  body.setAttribute("aria-busy", "false");
   const note = el("div", { class: "panel-placeholder", text: AGGREGATE_PANEL_PLACEHOLDER });
   note.dataset.key = "aggregate-placeholder";
   note.dataset.hash = "aggregate-placeholder";
   syncNodes(body, [note]);
+}
+
+// One state per rendered panel. Revision plus request identity rejects A→B→A
+// responses and overlapping refreshes, even when their URLs happen to match.
+const panelRequests = new Map();
+
+function panelMessage(bodyId, state) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
+  body.setAttribute("aria-busy", state.pending ? "true" : "false");
+  let note = Array.from(body.children).find(node => node.dataset.panelStatus);
+  if (!note) {
+    note = el("div", { class: "panel-placeholder" });
+    note.dataset.panelStatus = "true";
+    note.setAttribute("role", "status");
+    note.setAttribute("aria-live", "polite");
+    body.insertBefore(note, body.children[0] || null);
+  }
+  note.className = state.error ? "panel-placeholder action-error" : "panel-placeholder";
+  if (state.error) {
+    const label = state.loaded ? "Refresh failed; showing stale data" : "Unable to load";
+    note.textContent = `${label}: ${state.error.message}. Use Refresh to retry.`;
+  } else if (state.pending) {
+    note.textContent = state.loaded ? "Refreshing… showing previous data." : "Loading…";
+  } else {
+    note.textContent = "Updated.";
+  }
+}
+
+export function panelCanRender(bodyId) {
+  const state = panelRequests.get(bodyId);
+  return !state || state.loaded;
+}
+
+export function resetPanel(bodyId, countId) {
+  const state = { loaded: false, pending: true, countId };
+  panelRequests.set(bodyId, state);
+  const body = document.getElementById(bodyId);
+  if (body) body.textContent = "";
+  const count = document.getElementById(countId);
+  if (count) count.textContent = "—";
+  panelMessage(bodyId, state);
+}
+
+onWorkspaceChange(() => {
+  for (const [bodyId, state] of panelRequests) resetPanel(bodyId, state.countId);
+});
+
+export async function requestPanel(bodyId, scope, request, render, countId) {
+  const revision = getWorkspaceRevision();
+  const previous = panelRequests.get(bodyId);
+  if (!previous || previous.scope !== scope) resetPanel(bodyId, countId);
+  const state = { ...panelRequests.get(bodyId), scope, pending: true, error: null };
+  panelRequests.set(bodyId, state);
+  panelMessage(bodyId, state);
+  const current = () => revision === getWorkspaceRevision() && panelRequests.get(bodyId) === state;
+  try {
+    const payload = await request();
+    if (!current()) return;
+    state.loaded = true;
+    state.pending = false;
+    render(payload);
+  } catch (error) {
+    if (!current()) return;
+    state.error = error;
+    throw error;
+  } finally {
+    if (current()) {
+      state.pending = false;
+      panelMessage(bodyId, state);
+    }
+  }
 }
 
 // Append the selected workspace to an API path, unless one is already present
@@ -215,6 +305,50 @@ export function el(tag, opts = {}, children = []) {
   return node;
 }
 
+// ORB-11658: expanding a row is the dashboard's primary interaction, so it has
+// to be operable without a mouse. The row itself carries the button semantics —
+// wrapping the cells in a real <button> would break the CSS grid every row type
+// lays out in — so this is the one place that grants the tab stop, the ARIA
+// role and state, and the Enter/Space binding, and it binds `click` from the
+// same handler so pointer and keyboard can never drift apart.
+//
+// `expanded` is omitted for rows that navigate instead of disclosing; those get
+// button semantics with no expansion state. `controls` names the detail node
+// when the row renders one with a stable id.
+export function makeToggleRow(node, { expanded, onToggle, controls } = {}) {
+  node.tabIndex = 0;
+  node.setAttribute("role", "button");
+  if (expanded != null) node.setAttribute("aria-expanded", String(!!expanded));
+  if (controls) node.setAttribute("aria-controls", controls);
+  node.addEventListener("click", onToggle);
+  node.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    // Key events target whatever holds focus. A nested select or button is its
+    // own tab stop and owns its keys; only the row's own activation belongs to
+    // the row, so a bubbled key press must not toggle it.
+    if (event.target !== node) return;
+    event.preventDefault();
+    onToggle(event);
+  });
+  return node;
+}
+
+// ORB-11655: a panel refresh rebuilds its nodes every 30 s, but disclosure is
+// operator state, not payload state — a <details> the operator opened has to
+// come back open. Keyed in one store so every rebuilt panel restores the same
+// way; `key` must identify the disclosure across renders, not the node.
+const expandedDetails = new Set();
+
+export function detailsPanel(key, opts = {}) {
+  const panel = el("details", opts);
+  panel.open = expandedDetails.has(key);
+  panel.addEventListener("toggle", () => {
+    if (panel.open) expandedDetails.add(key);
+    else expandedDetails.delete(key);
+  });
+  return panel;
+}
+
 export function statusPill(status) {
   const color = `var(--status-${status}, var(--fg))`;
   const pill = el("span", { class: "pill mono", text: status });
@@ -235,18 +369,38 @@ export function stateCell(state) {
   return node;
 }
 
-export function fetchJson(path) {
-  return fetch(withWorkspace(path), { headers: { accept: "application/json" } })
-    .then(res => {
-      if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
-      return res.json();
-    });
+export async function fetchJson(path) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const res = await fetch(withWorkspace(path), { headers: { accept: "application/json" }, signal: controller.signal });
+    if (!res.ok) {
+      const text = await res.text();
+      let message = `${path}: HTTP ${res.status}`;
+      try {
+        const body = JSON.parse(text);
+        if (body && body.error) message = body.error;
+      } catch (_) {}
+      const error = new Error(message);
+      error.status = res.status;
+      throw error;
+    }
+    return await res.json();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("Request timed out after 30 seconds");
+    // Fetch and response-body transport failures are TypeErrors; HTTP and JSON
+    // errors describe an available server and must stay local to the panel.
+    error.networkFailure = error instanceof TypeError;
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
-// ORB-10400: /api/tasks answers a paginated envelope
+// ORB-10400: task-list endpoints answer a paginated envelope
 // `{ items, total, limit, truncated }` so a client can tell an empty result from
-// a truncated window, while the /api/tasks/all aggregate still answers a bare
-// array. Accept either shape rather than teaching each call site the difference.
+// a truncated window. Accept either shape for compatibility with non-task list
+// call sites that use this helper.
 export function listItems(payload) {
   if (Array.isArray(payload)) return payload;
   if (payload && Array.isArray(payload.items)) return payload.items;
@@ -265,7 +419,14 @@ export function requestJson(path, method, body) {
   }
   return fetch(withWorkspace(path), opts).then(async (res) => {
     const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
+    let body = {};
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = { error: text };
+      }
+    }
     if (!res.ok) {
       throw new Error(body.error || `${path}: HTTP ${res.status}`);
     }
@@ -282,6 +443,12 @@ export function patchJson(path, body) {
 }
 
 export function syncNodes(container, newNodesArr) {
+  const state = panelRequests.get(container.id);
+  if (state) {
+    panelMessage(container.id, state);
+    const note = Array.from(container.children).find(node => node.dataset.panelStatus);
+    newNodesArr = [note, ...newNodesArr];
+  }
   const oldNodes = Array.from(container.children);
   const oldMap = new Map();
   for (const node of oldNodes) {
@@ -316,4 +483,5 @@ export function syncNodes(container, newNodesArr) {
   while (container.children.length > newNodesArr.length) {
     container.removeChild(container.lastElementChild);
   }
+  if (state) panelMessage(container.id, state);
 }

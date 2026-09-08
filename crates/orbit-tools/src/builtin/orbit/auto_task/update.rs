@@ -24,7 +24,7 @@ impl Tool for OrbitAutoTaskUpdateTool {
             ToolParam {
                 name: "schedule".to_string(),
                 description:
-                    "New schedule object: `{ cron: string }` `{ every_minutes: number }`, or `{ deliveries_landed: { owner_machine, branch, threshold, max_wait_minutes, coverage, max_items?, retries? } }` (coverage: integrated_qa_v1 or landed_code_review_v1)."
+                    "New schedule object: `{ cron: string }` `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: integrated_qa_v1 or landed_code_review_v1)."
                         .to_string(),
                 param_type: "object".to_string(),
                 required: false,

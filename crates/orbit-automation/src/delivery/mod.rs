@@ -56,6 +56,10 @@ pub fn definition_epoch<T: serde::Serialize>(definition: &T) -> Result<String, A
         .map_err(|e| AutomationError::Evidence(e.to_string()))
 }
 
+/// An edited definition pauses new admission until it is restored. Hosts that
+/// layer their own reasons over this one report it ahead of theirs.
+pub const DEFINITION_CHANGED: &str = "definition_changed";
+
 /// Inputs supplied by the existing sweep clock.
 pub struct Evaluation<'a> {
     pub consumer: &'a str,
@@ -105,6 +109,7 @@ pub fn evaluate(
                 pending_commits: vec![],
                 pending: vec![],
                 waived: vec![],
+                excluded: vec![],
                 unresolved: Default::default(),
                 associations: Default::default(),
                 active: None,
@@ -138,7 +143,7 @@ pub fn evaluate(
     }
 
     if state.epoch != epoch || state.branch != trigger.branch {
-        return diagnostic(store, consumer, "definition_changed", Some(state));
+        return diagnostic(store, consumer, DEFINITION_CHANGED, Some(state));
     }
 
     if !enabled {
@@ -170,15 +175,20 @@ pub fn evaluate(
         state = admit_active(store, host, &state)?;
     }
 
+    // Proven-covered prefixes are not debt. Retire them before backpressure so
+    // an already-stalled excluded-only consumer can observe again.
+    state = retire_covered_prefix(store, state, dry_run)?;
+
     // Backpressure pauses observation, never admission of already retained debt.
     if state.pending.len() < 950 && state.pending_commits.len() <= 4800 {
         let page = host.observe(&trigger.branch, &state)?;
-        let next = observe::apply(&state, page)?;
+        let next = observe::apply(&state, page, trigger.coverage, now)?;
         state = if dry_run {
             next
         } else {
             commit(store, &state, next, None)?
         };
+        state = retire_covered_prefix(store, state, dry_run)?;
     }
 
     if let Some(active) = &state.active {
@@ -261,6 +271,21 @@ pub fn evaluate(
         ));
     }
 
+    // Excluded landings inside the range travel with the batch as readable
+    // context; they are not obligations and the evidence never lists them.
+    let exclusions = state
+        .excluded
+        .iter()
+        .filter(|excluded| {
+            excluded
+                .delivery
+                .commits
+                .iter()
+                .all(|sha| commits.contains(sha))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
     let mut batch = CoverageBatch {
         schema_version: 1,
         id: String::new(),
@@ -273,6 +298,7 @@ pub fn evaluate(
         through_inclusive: through,
         commits,
         deliveries,
+        exclusions,
         created_at: now,
         max_attempts: trigger.retries + 1,
         retry_until: now + chrono::Duration::hours(24),
@@ -341,6 +367,21 @@ fn admit_active(
     commit(store, state, next, None)
 }
 
+fn retire_covered_prefix(
+    store: &dyn AutomationStoreBackend,
+    state: AutomationState,
+    dry_run: bool,
+) -> Result<AutomationState, AutomationError> {
+    let Some(next) = observe::retire_excluded_prefix(&state) else {
+        return Ok(state);
+    };
+    if dry_run {
+        Ok(next)
+    } else {
+        commit(store, &state, next, None)
+    }
+}
+
 fn reconcile(
     store: &dyn AutomationStoreBackend,
     host: &dyn DeliveryHost,
@@ -386,6 +427,13 @@ fn reconcile(
             });
             next.pending.retain(|delivery| {
                 !delivery
+                    .commits
+                    .iter()
+                    .all(|sha| active.batch.commits.contains(sha))
+            });
+            next.excluded.retain(|excluded| {
+                !excluded
+                    .delivery
                     .commits
                     .iter()
                     .all(|sha| active.batch.commits.contains(sha))

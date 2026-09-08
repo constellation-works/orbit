@@ -38,6 +38,44 @@ orbit run trace <run_id>
 orbit run logs <run_id> --json
 ```
 
+### Inspect recovery evidence before falling back to audit files
+
+The authoritative run-show response includes `recovery_attempts`, a bounded
+projection of persisted `step.recovery_attempted` events. Its `state` is
+`unavailable` for legacy runs with no v2 audit trail, `not_attempted` when a
+trail exists but recovery did not run, or `recorded` when `items` contain
+attempts. Each item names the durable run/event and failed-step identifiers,
+the recovery activity, outcome, failure phase, and a redacted bounded
+diagnostic. `limit` and `truncated` say when older attempts were omitted.
+
+Keep `error_code` and `error_message` from the run itself as the original
+workflow failure. A recovery attempt is secondary evidence: `succeeded` does
+not rewrite that original failure, and a failed `authorization`, preparation,
+`dispatch`, or `activity` attempt explains why recovery did not complete.
+
+### Tell a working agent from an abandoned wrapper
+
+For a run that is still `running`, `orbit_workflow_run_show` carries
+`execution_progress`: the activity step that is open and the provider children
+it spawned. Only `show` carries it — `orbit_workflow_run_list` pages many runs
+and does not pay for an audit scan and a liveness probe per row.
+
+Its `state` is `observed` when the run has a v2 audit trail and `unavailable`
+when it has none, so an empty projection never has to be read as "nothing is
+running". `active_step` names the open `step_id` and `step_index`, and each
+`provider_processes.items` entry names the child's `pid`, `provider`, owning
+step, and a `liveness` of `alive`, `exited`, or `unknown`.
+
+`liveness` is judged against the identity token recorded with the PID, so a
+recycled PID reads `exited` rather than a false `alive`, and a PID recorded in
+another PID namespace reads `unknown` rather than a false `exited`. A child with
+`finished: true` carries its `exit_code` instead. `limit` and `truncated` say
+when a long retry history was bounded; open children are never the ones dropped.
+
+A `running` run whose open step has no `alive` child is the signature of an
+abandoned wrapper. `orbit run show <run_id> --json` reports the same
+`provider_processes` for the owning host.
+
 ### Verify model routing before reading logs
 
 `orbit run show <run_id> --json` separates three identities: `requested_crew`
@@ -119,7 +157,10 @@ These runs execute their provider subprocess outside the executor sandbox by
 explicit per-invocation operator admission, so a sandbox-denial diagnostic is
 never the explanation for one failing. The run trail records the admission as a
 `trusted_host.execution_admitted` audit event naming the authorizing operator
-and the working directory. They are deliberately **not resumable**: the
+and the working directory. For remote admission it also records the
+destination-resolved caller machine ID, remote invocation mode, and actual
+identity proof. A cooperative grant is recorded as `cooperative` plus
+`self-asserted`, never as key-bound. They are deliberately **not resumable**: the
 admission covered one invocation, so submit a new one rather than resuming.
 
 For recurring signatures and known remedies, read [common-failures.md](common-failures.md) after the initial classification — keep this file focused on investigation flow; add new patterns there.

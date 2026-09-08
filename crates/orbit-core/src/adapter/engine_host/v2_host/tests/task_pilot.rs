@@ -3,7 +3,7 @@ use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 
-use super::super::task_pilot::{apply, prepare};
+use super::super::task_pilot::{apply, member_ready, prepare};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_layout, write_workspace_file,
@@ -106,6 +106,37 @@ fn partition_result(partition_index: usize, task_ids: &[String], tasks: Vec<Valu
         "tasks": tasks,
         "summary": "fixture partition",
     })
+}
+
+#[test]
+fn automatic_readiness_requires_selectors_and_no_deferring_finding() {
+    let mut assessment = json!({
+        "task_id": "ORB-FIXTURE",
+        "disposition": "selectors",
+        "context_files_after": ["file:src/existing.rs"],
+        "blocked_by": [],
+        "duplicate_of": null,
+        "already_landed": null,
+        "release_action_required": null,
+        "adr_conflicts": [],
+        "utility_warnings": [],
+        "surface_warnings": [],
+    });
+    assert!(member_ready(&assessment));
+
+    // A pilot may return the selectors it would change and still report that
+    // the correct repair is an operator-reserved release action. That finding
+    // withholds automatic promotion the same way a duplicate does.
+    assessment["release_action_required"] = json!({
+        "action": "publish the recorded release version as a release operation",
+        "evidence": "the failing job resolves a version this repository records but never published",
+    });
+    assert!(!member_ready(&assessment));
+
+    assessment["release_action_required"] = Value::Null;
+    assert!(member_ready(&assessment));
+    assessment["disposition"] = json!("verified_no_diff");
+    assert!(!member_ready(&assessment));
 }
 
 #[test]
@@ -623,6 +654,59 @@ fn stale_partition_does_not_discard_independent_valid_partition() {
         runtime.get_task(&new_task.id).unwrap().context_files,
         vec!["file:src/new.rs"]
     );
+}
+
+#[test]
+fn all_stale_partition_diagnostic_identifies_zero_apply() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/new.rs");
+    let task = seed_task(&runtime, "status changed", TaskStatus::Backlog, &[], &[]);
+    let snapshot = prepared(&runtime, &repo_root, std::slice::from_ref(&task.id));
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("operator advances task status");
+
+    let output = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": snapshot,
+            "results": [partition_result(
+                0,
+                std::slice::from_ref(&task.id),
+                vec![selector_assessment(&task, vec!["file:src/new.rs"])],
+            )],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("stale outcome is retained as a durable failed decision");
+
+    let error = output["error"]
+        .as_str()
+        .expect("all-stale apply carries a diagnostic");
+    assert_eq!(output["status"], "failed");
+    assert_eq!(
+        output["skipped_stale_partitions"].as_array().unwrap().len(),
+        1
+    );
+    assert!(error.contains("1 partition(s) were skipped as stale"));
+    assert!(error.contains("status_changed"));
+    assert!(error.contains(&task.id));
+    assert!(
+        !error.contains("valid partitions were applied"),
+        "zero-apply diagnostic must not claim that valid partitions were applied: {error}"
+    );
+    assert_eq!(
+        runtime.get_task(&task.id).unwrap().status,
+        TaskStatus::InProgress
+    );
+    assert!(runtime.get_task(&task.id).unwrap().context_files.is_empty());
 }
 
 #[test]

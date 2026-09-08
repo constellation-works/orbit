@@ -13,7 +13,10 @@ use orbit_types::task::{
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
-use super::{append_jsonl_row, read_bundle_at, read_task_events, write_bundle_atomically};
+use super::{
+    append_jsonl_row, read_bundle_at, read_bundle_lightweight_at, read_task_events,
+    take_artifact_payload_reads, write_bundle_atomically,
+};
 use crate::repository::task::tests::test_support::{bundle_store, sample_bundle};
 
 #[test]
@@ -357,6 +360,57 @@ fn read_bundle_rejects_manifest_entry_with_missing_artifact_file() {
 }
 
 #[test]
+fn lightweight_read_skips_tampered_artifact_bytes_that_strict_read_rejects() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = bundle_store(&temp);
+    store
+        .create_bundle(&sample_bundle("ORB-00000"))
+        .expect("create bundle");
+    let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
+    let bundle_dir = store.bundle_path("ORB-00000").expect("bundle path");
+    let blob = format!("{TASK_ARTIFACT_FILES_DIR_NAME}/result.txt");
+    let blob_path = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME).join(&blob);
+    atomic_write_text(&blob_path, "hello").expect("write artifact blob");
+    let manifest = ArtifactManifestV2 {
+        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+        files: vec![ArtifactManifestFileV2 {
+            path: "result.txt".to_string(),
+            blob: blob.clone(),
+            sha256: format!("{:x}", Sha256::digest(b"hello")),
+            media_type: "text/plain".to_string(),
+            size_bytes: 5,
+            created_by: "codex:gpt-5.5".to_string(),
+            created_at: now,
+        }],
+    };
+    store
+        .rewrite_artifact_manifest("ORB-00000", &manifest)
+        .expect("write manifest");
+    atomic_write_text(&blob_path, "wrong").expect("tamper artifact blob");
+    let _ = take_artifact_payload_reads();
+
+    let light = read_bundle_lightweight_at(&bundle_dir).expect("lightweight read");
+    assert_eq!(take_artifact_payload_reads(), 0);
+    assert_eq!(
+        light
+            .artifact_manifest
+            .as_ref()
+            .map(|manifest| manifest.files[0].path.as_str()),
+        Some("result.txt")
+    );
+
+    assert!(matches!(
+        read_bundle_at(&bundle_dir),
+        Err(OrbitError::TaskBundleCorrupt {
+            task_id,
+            reason,
+            ..
+        }) if task_id == "ORB-00000" && reason.contains("sha256 mismatch")
+    ));
+    assert_eq!(take_artifact_payload_reads(), 1);
+}
+
+#[test]
 fn read_bundle_rejects_event_status_newer_than_envelope_status() {
     let temp = TempDir::new().expect("tempdir");
     let store = bundle_store(&temp);
@@ -377,4 +431,149 @@ fn read_bundle_rejects_event_status_newer_than_envelope_status() {
             ..
         }) if task_id == "ORB-00000" && reason.contains("event log status")
     ));
+}
+
+#[test]
+fn read_bundle_rejects_a_status_event_without_pending_write_evidence() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = bundle_store(&temp);
+    store
+        .create_bundle(&sample_bundle("ORB-00000"))
+        .expect("create bundle");
+    store
+        .append_event(
+            "ORB-00000",
+            &TaskEventRowV2 {
+                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                event_id: "EV-0002".to_string(),
+                at: Utc.with_ymd_and_hms(2026, 5, 11, 13, 0, 0).unwrap(),
+                by: "codex:gpt-5.5".to_string(),
+                event_type: "status_changed".to_string(),
+                note: None,
+                from_status: Some(TaskStatus::Backlog),
+                to_status: Some(TaskStatus::InProgress),
+            },
+        )
+        .expect("append event without pending record");
+
+    assert!(matches!(
+        store.read_bundle("ORB-00000"),
+        Err(OrbitError::TaskBundleCorrupt {
+            task_id,
+            reason,
+            ..
+        }) if task_id == "ORB-00000" && reason.contains("event log status")
+    ));
+}
+
+/// `write_yaml_atomic_with` is bound to durable `atomic_write_text`, so both
+/// bundle create and envelope rewrite fsync the `task.yaml` temp file before
+/// rename. When `strace` is available this asserts the syscall order; a
+/// sandbox denial is not a product failure.
+#[test]
+fn task_yaml_temp_is_fsynced_before_rename_on_create_and_rewrite() {
+    exercise_task_yaml_create_and_rewrite();
+
+    #[cfg(target_os = "linux")]
+    trace_task_yaml_fsync_before_rename();
+}
+
+fn exercise_task_yaml_create_and_rewrite() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = bundle_store(&temp);
+    store
+        .create_bundle(&sample_bundle("ORB-00000"))
+        .expect("create bundle");
+    let mut envelope = sample_bundle("ORB-00000").envelope;
+    envelope.title = "Rewritten".to_string();
+    store
+        .rewrite_envelope("ORB-00000", &envelope)
+        .expect("rewrite envelope");
+    let read = store.read_bundle("ORB-00000").expect("read");
+    assert_eq!(read.envelope.title, "Rewritten");
+}
+
+#[cfg(target_os = "linux")]
+fn trace_task_yaml_fsync_before_rename() {
+    use std::process::Command;
+
+    if std::env::var_os("ORB_TASK_YAML_FSYNC_PROBE").is_some() {
+        return;
+    }
+    let Ok(version) = Command::new("strace").arg("-V").output() else {
+        return;
+    };
+    if !version.status.success() {
+        return;
+    }
+    let log = tempfile::NamedTempFile::new().expect("strace log");
+    let Some(test_name) = std::thread::current().name().map(ToOwned::to_owned) else {
+        return;
+    };
+    let output = Command::new("strace")
+        .args([
+            "-f",
+            "-y",
+            "-e",
+            "trace=fsync,fdatasync,rename,renameat,renameat2",
+            "-o",
+        ])
+        .arg(log.path())
+        .arg(std::env::current_exe().expect("test exe"))
+        .args(["--exact", &test_name])
+        .env("ORB_TASK_YAML_FSYNC_PROBE", "1")
+        .env("RUST_TEST_THREADS", "1")
+        .output();
+    let output = match output {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => return,
+        Err(_) => return,
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("Operation not permitted")
+            || stderr.contains("Permission denied")
+            || stderr.contains("not permitted")
+        {
+            return;
+        }
+        // Probe ran the test body; parse the log even if the harness exit is noisy.
+    }
+    let trace = fs::read_to_string(log.path()).unwrap_or_default();
+    if trace.is_empty() {
+        return;
+    }
+    assert_task_yaml_tmp_fsynced_before_rename(&trace);
+}
+
+#[cfg(target_os = "linux")]
+fn assert_task_yaml_tmp_fsynced_before_rename(trace: &str) {
+    let mut last_rename_line = 0usize;
+    let mut last_fsync_line = 0usize;
+    let mut renames = 0usize;
+    for (index, line) in trace.lines().enumerate() {
+        let number = index + 1;
+        if (line.contains("fsync") || line.contains("fdatasync")) && !line.contains("unfinished") {
+            last_fsync_line = number;
+        }
+        if is_task_yaml_tmp_rename(line) {
+            assert!(
+                last_fsync_line > last_rename_line,
+                "task.yaml temp rename without a preceding fsync (rename line {number}): {line}\n{trace}"
+            );
+            last_rename_line = number;
+            renames += 1;
+        }
+    }
+    assert!(
+        renames >= 2,
+        "expected fsynced create and rewrite renames of task.yaml, found {renames}:\n{trace}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn is_task_yaml_tmp_rename(line: &str) -> bool {
+    let is_rename =
+        line.contains("rename(") || line.contains("renameat(") || line.contains("renameat2(");
+    is_rename && line.contains(".task.yaml.") && line.contains(".tmp") && line.contains("task.yaml")
 }

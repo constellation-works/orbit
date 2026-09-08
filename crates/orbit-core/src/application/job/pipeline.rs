@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use orbit_common::fs::io::atomic_write_text;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
@@ -293,12 +294,14 @@ impl OrbitRuntime {
     /// registry names are what gets persisted and forwarded. It gates what the
     /// drain may *start* — it does not touch workspace configuration, reassign
     /// a task's crew, or cancel work another invocation already has in flight.
+    #[allow(clippy::too_many_arguments)]
     pub fn submit_workspace_auto_run(
         &self,
         for_seconds: Option<u64>,
         max_active_leaf_runs: Option<u32>,
         completion: crate::application::workflow::CompletionPolicy,
         allowed_crews: &[String],
+        complexity_crews: &orbit_config::ComplexityCrewPools,
         actor: Option<&str>,
         claim_token: Option<&str>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
@@ -307,12 +310,13 @@ impl OrbitRuntime {
             crate::application::workflow::AUTO_WORKFLOW_ALIAS,
         )
         .ok_or_else(|| OrbitError::InvalidInput("unknown workflow 'auto'".to_string()))?;
-        let input = workspace_auto_run_input(
+        let mut input = workspace_auto_run_input(
             for_seconds,
             max_active_leaf_runs,
             completion,
             &self.canonical_allowed_crews(allowed_crews)?,
         )?;
+        Self::set_auto_crew_overrides(&mut input, complexity_crews);
         self.submit_pipeline_run(workflow.job_id, input, None, actor)
     }
 
@@ -765,6 +769,25 @@ impl OrbitRuntime {
                 (input, None)
             }
         };
+        // [ORB-11333] The review admission follows the same discipline: a
+        // child inherits its parent's snapshot, a grant-bound or ordinary
+        // delivery submission captures the effective policy once, and
+        // ordinary input naming the key is refused.
+        let mut input = input;
+        crate::application::review::install_review_admission(
+            self,
+            job_name,
+            &mut input,
+            admission.map(|admission| admission.parent_run_id.as_str()),
+            resume.is_some(),
+        )?;
+        self.install_auto_crew_admission(
+            job_name,
+            &mut input,
+            admission.map(|admission| admission.parent_run_id.as_str()),
+            resume.is_some(),
+            &mut super::crew_pools::random_crew_ticket,
+        )?;
         let result = (|| {
             let spec = match &definition {
                 SubmittedDefinition::Catalog => self.load_v2_job_asset_by_name(job_name)?.1,
@@ -774,6 +797,12 @@ impl OrbitRuntime {
                 return Err(OrbitError::InvalidInput(format!(
                     "job '{job_name}' is disabled"
                 )));
+            }
+
+            if job_name == "ci_failure_sweep_pipeline"
+                && matches!(definition, SubmittedDefinition::Catalog)
+            {
+                self.resolve_ci_sweep_input(&spec, &mut input)?;
             }
 
             let submitted_at = Utc::now();
@@ -886,14 +915,8 @@ impl OrbitRuntime {
     /// Durably pin a submitted run's job definition next to the run record.
     fn write_run_definition_snapshot(&self, run_id: &str, yaml: &str) -> Result<(), OrbitError> {
         let dir = self.paths().job_runs_dir.clone();
-        std::fs::create_dir_all(&dir).map_err(|error| {
-            OrbitError::Io(format!(
-                "create job run definition directory '{}': {error}",
-                dir.display()
-            ))
-        })?;
         let path = run_definition_snapshot_path(&dir, run_id);
-        std::fs::write(&path, yaml).map_err(|error| {
+        atomic_write_text(&path, yaml).map_err(|error| {
             OrbitError::Io(format!(
                 "write job run definition snapshot '{}': {error}",
                 path.display()
@@ -1418,6 +1441,8 @@ impl OrbitRuntime {
         let child_pid = child.id();
         let mut claimed = false;
         loop {
+            #[cfg(test)]
+            worker_observer_read_counter::record(self, run_id);
             let run = self
                 .get_job_run_backend(run_id)?
                 .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
@@ -1440,11 +1465,33 @@ impl OrbitRuntime {
                 claimed = true;
             }
 
-            if let Some(status) = child.try_wait().map_err(|error| {
-                OrbitError::Execution(format!(
-                    "observe pipeline worker process for run '{run_id}': {error}"
-                ))
-            })? {
+            // A persisted owner or non-pending state settles the only startup
+            // question this observer owns. Waiting for the child avoids a
+            // full run/step SQLite read every 25ms throughout normal work.
+            let status = if run.pid.is_some() || run.state != JobRunState::Pending {
+                Some(child.wait().map_err(|error| {
+                    OrbitError::Execution(format!(
+                        "wait for pipeline worker process for run '{run_id}': {error}"
+                    ))
+                })?)
+            } else {
+                child.try_wait().map_err(|error| {
+                    OrbitError::Execution(format!(
+                        "observe pipeline worker process for run '{run_id}': {error}"
+                    ))
+                })?
+            };
+
+            if let Some(status) = status {
+                // The worker may have changed the run after the last startup
+                // observation. Exit handling must use fresh state so duplicate
+                // ownership, cancellation, and terminal outcomes stay
+                // authoritative.
+                #[cfg(test)]
+                worker_observer_read_counter::record(self, run_id);
+                let run = self.get_job_run_backend(run_id)?.ok_or_else(|| {
+                    OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string())
+                })?;
                 let output = read_pipeline_worker_log_tail(worker_log);
                 let output_detail = output
                     .as_deref()
@@ -2091,5 +2138,70 @@ pub(crate) mod worker_command_override {
             .current_dir(workspace)
             .stdin(Stdio::null());
         Some(command)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod worker_observer_read_counter {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{LazyLock, Mutex};
+
+    use crate::OrbitRuntime;
+
+    type StoreRun = (PathBuf, String);
+
+    static COUNTS: LazyLock<Mutex<HashMap<StoreRun, usize>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    pub(crate) struct Counter {
+        key: StoreRun,
+    }
+
+    fn key(runtime: &OrbitRuntime, run_id: &str) -> StoreRun {
+        // Run IDs are local to a database. Its resolved path remains stable
+        // across runtime clones while isolating independent temporary stores.
+        (
+            runtime.context.persistence().audit_db.clone(),
+            run_id.to_string(),
+        )
+    }
+
+    pub(crate) fn track(runtime: &OrbitRuntime, run_id: &str) -> Counter {
+        let key = key(runtime, run_id);
+        COUNTS
+            .lock()
+            .expect("test observer counters are not poisoned")
+            .insert(key.clone(), 0);
+        Counter { key }
+    }
+
+    pub(crate) fn record(runtime: &OrbitRuntime, run_id: &str) {
+        if let Some(count) = COUNTS
+            .lock()
+            .expect("test observer counters are not poisoned")
+            .get_mut(&key(runtime, run_id))
+        {
+            *count += 1;
+        }
+    }
+
+    impl Counter {
+        pub(crate) fn reads(&self) -> usize {
+            *COUNTS
+                .lock()
+                .expect("test observer counters are not poisoned")
+                .get(&self.key)
+                .expect("tracked observer counter exists")
+        }
+    }
+
+    impl Drop for Counter {
+        fn drop(&mut self) {
+            COUNTS
+                .lock()
+                .expect("test observer counters are not poisoned")
+                .remove(&self.key);
+        }
     }
 }

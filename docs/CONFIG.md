@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-08-17
+last_validated: 2026-09-07
 ---
 
 # Orbit Configuration
@@ -110,6 +110,24 @@ inline baseline in the same way as the rest of that assignment. For the
 standard Codex tiers, use the model-specific crew to choose capability first:
 Terra (`gpt-5.6-terra`) is the medium-low crew; `effort` adjusts the reasoning
 budget inside the chosen Codex model.
+
+Named crew fields are addressable through `orbit config` as
+`crews.<name>.<field>` (`model`, `provider`, `effort`, `description`, `tags`):
+
+```bash
+orbit config set crews.sol.effort high
+orbit config get crews.sol.effort
+orbit config show --json
+```
+
+`get` and `show` report the same configured effort the runtime assignment
+uses. `show` includes `crews.sol.effort` with `workspace` or `global`
+provenance when the field is set; omitting it leaves the provider default and
+does not invent a configured value in effective output. Invalid values,
+unsupported provider/model combinations, and misspelled crew fields are
+refused before the file is written. Creating a crew still requires a
+`[crews.<name>]` table with `model` and `provider` — `config set` will not
+persist an incomplete crew.
 
 Example — the standard Grok crew:
 
@@ -839,6 +857,66 @@ authoritative.
 
 This means you can mix-and-match in a single ship run: route a tricky refactor to `claude` while routing routine cleanups to `codex` — both go through the same `orbit run ship` invocation, each picking its own crew at dispatch time. `orbit run ship` fans singleton child runs, so each task's `crew` is recorded on that child (`orbit run show` → `resolved_crew`) and used by `implement_one`. A single child pipeline whose `task_ids` name more than one distinct crew (or mix set and unset crews) fails closed rather than inheriting `[workflow].default_crew`.
 
+### Automatic crew pools by complexity
+
+Auto drains can randomly select a crew for each task that has no explicit
+`task.crew`:
+
+```sh
+orbit run auto --medium-complexity-crews grok,terra
+```
+
+The equivalent configuration is:
+
+```toml
+[workflow]
+low_complexity_crews = ["luna"]
+medium_complexity_crews = ["grok", "terra"]
+hard_complexity_crews = ["astra"]
+```
+
+Use `--low-complexity-crews`, `--medium-complexity-crews`, and
+`--hard-complexity-crews` for run overrides, including with `--grant`. Each
+provided CLI pool replaces only its matching configuration pool for that
+drain. Configuration arrays replace their corresponding global arrays when
+specified in the workspace file. Set/get/show use the same fields:
+
+```sh
+orbit config set workflow.medium_complexity_crews '["grok", "terra"]'
+orbit config get workflow.medium_complexity_crews
+orbit config show
+```
+
+For automatic task admission the order is an explicit run-input crew, an
+explicit task crew, the matching nonempty complexity pool, then the existing
+default crew resolution chain. Low, medium and hard are the task complexity
+values; unset or `unassessed` complexity uses the default chain. An omitted
+pool inherits configuration; an absent or empty effective pool uses the
+default chain. `medium_complexity_crews = []` disables that configured pool;
+`orbit run auto --medium-complexity-crews` (with no names) disables it for one
+drain. Blank entries such as `""` and unknown crew names fail before dispatch.
+Names are trimmed, resolved against the configured registry and deduplicated,
+so repeated entries never add random weight.
+
+Pools are selection preferences. They do not install a crew allowlist or
+restrict manual assignments, ordinary `run ship`, or explicit activity crews.
+When a separately supplied `--allow-crew` restricts the drain, random selection
+is uniform among the pool's permitted members. A disjoint pool is ineligible
+and `orbit run readiness --allow-crew <crew>` diagnoses `crew_not_allowed`; an explicit task assignment
+outside the allowlist is also excluded. The allowlist still applies to system
+and review activities at dispatch, and operation grants keep their scope and
+admission limits.
+
+The coordinator captures effective pools in run input `auto_crew_pools`.
+Each admitted leaf or epic root records `crew` and `crew_selection`, including
+the task ID, complexity, source (`task.crew`, `run_input.<complexity>_complexity_crews`,
+`workflow.<complexity>_complexity_crews`, `explicit`, or `default`), and eligible
+pool. Inspect these with `orbit run show <RUN_ID>`. Same-task pipeline children
+and retries/resumes retain the admitted selection even if configuration or
+the task assignment changes later. Different tasks, including epic descendants,
+receive independent draws at their own admission. No choice rewrites
+`task.crew`; a newly admitted run outside the retry lineage can select again.
+
 ### Setting `task.crew`
 
 Three equivalent surfaces:
@@ -873,7 +951,7 @@ receives exactly four groups of variables, and nothing else:
 | Baseline | `HOME`, `LANG`, `LC_ALL`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `TMPDIR`, `TZ`, `USER` — the minimum runtime context a provider CLI needs to start. `USER`/`LOGNAME` are resolved from the OS when the dispatching process has no login environment. |
 | `pass` | The names you list in `[execution.env].pass`. Default: `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER` (plus `__CF_USER_TEXT_ENCODING` on macOS). |
 | Provider extras | The variables the selected provider runtime declares it requires. |
-| `ORBIT_*` | Orbit's own execution envelope — run, task, and session identity, `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, and `ORBIT_BIN`. `ORBIT_REGISTRY_ROOT` is emitted only for a managed child and locates the authoritative global registry without changing workspace discovery. `ORBIT_WORKSPACE` is the trusted logical `ws_*` selector for nested `orbit tool run` and `orbit mcp serve` calls; it is honored only together with managed-run provenance and does not infer ownership from a linked-worktree cwd. An explicit `--workspace` or tool-payload selector still wins and still fails closed. The runner removes an inherited `ORBIT_ROOT` from that child: `ORBIT_ROOT` remains the operator-facing explicit data-root override, equivalent to `--root`, and pins global/shared/local roots when used on a direct command. The dispatching run's envelope values win over any inherited from an outer process. |
+| Orbit envelope | Named execution-envelope variables Orbit actually exports — not every name that starts with `ORBIT_`. The set is run, task, and session identity (`ORBIT_RUN_ID`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_AGENT_NAME`, `ORBIT_AGENT_MODEL`, `ORBIT_SESSION_ID`, `ORBIT_TASK_ID`, `ORBIT_ACTIVE_TASK_ID`), locators (`ORBIT_ROOT`, `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_WORKTREE_ROOT`, `ORBIT_BIN`), activity bindings (`ORBIT_ACTIVITY_*`, `ORBIT_STEP_INDEX`, `ORBIT_TASK_ACTOR_KIND`), and `ORBIT_SEARCH_COMPANION*`. Privilege-bearing names in the same namespace (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`, `ORBIT_MCP_SSH_ACCEPTANCE`) are **not** admitted. `ORBIT_REGISTRY_ROOT` is emitted only for a managed child and locates the authoritative global registry without changing workspace discovery. `ORBIT_WORKSPACE` is the trusted logical `ws_*` selector for nested `orbit tool run` and `orbit mcp serve` calls; it is honored only together with managed-run provenance and does not infer ownership from a linked-worktree cwd. An explicit `--workspace` or tool-payload selector still wins and still fails closed. The runner removes an inherited `ORBIT_ROOT` from that child: `ORBIT_ROOT` remains the operator-facing explicit data-root override, equivalent to `--root`, and pins global/shared/local roots when used on a direct command. The dispatching run's envelope values win over any inherited from an outer process. |
 
 A variable in none of those groups is **absent** from the child, whatever it is
 named. This is an allowlist, not a filter: Orbit does *not* forward "everything
@@ -910,7 +988,7 @@ agent subprocess to full inheritance. Inheritance is fixed off; a stale
 | `[tasks]` | `id_start = N` sets a floor for the local task-id allocator: on runtime build the counter is raised to at least `N` (never lowered), so machines can hold disjoint id ranges (e.g. one `0–9999`, another `10000+`) and avoid cross-machine collisions. Capped by `ORB_TASK_ID_MAX` (99999) — setting it near the ceiling shrinks the usable range. Prefer the one-shot `orbit workspace init --task-id-start N` for the initial seed; the config key keeps the floor sticky across machines that share a config. See [task-migration overview](design/task-migration/1_overview.md). |
 | `[scoring]` | `enabled = true` records per-agent scoreboard counters under `.orbit/state/scoreboard/`. |
 | `[pr]` | PR creation defaults (template, labels, draft mode) for `orbit run ship --mode pr`. |
-| `[operation]` | Operation-mode preferences [ORB-11332]: `preset` (`supervised` default / `autonomous`) plus the preset-managed `preparation`, `preparation_due_seconds`, `leaf_ceiling`, `promotion`, `completion`, `recovery`, `recovery_episodes_per_task`, `recovery_minutes_per_task`, and the independent `review_policy` (`none` default), `review_crew`, `delivery_cap` (`review` default). Resolve built-in → global → workspace → run; an explicit `preset` at a layer resets the preset-managed keys before that layer's own values apply, while the independent keys keep their own precedence. Unknown keys and out-of-range values fail load. **Preferences authorize nothing**: scoped automation needs `orbit operation enable`; `orbit operation explain` shows each effective value with its winning source. See [operation-mode operations](design/operation-mode/5_operations.md). |
+| `[operation]` | Operation-mode preferences [ORB-11332]: `preset` (`supervised` default / `autonomous`) plus the preset-managed `preparation`, `preparation_due_seconds`, `leaf_ceiling`, `promotion`, `completion`, `recovery`, `recovery_episodes_per_task`, `recovery_minutes_per_task`, and the independent `review_policy` (`none` default), `review_crew`, `review_reviewer_starts` (2), `review_repair_cycles` (2), `review_minutes` (30), `delivery_cap` (`review` default). `before-pr` holds PR creation for a fresh reviewer from `review_crew` on the PR route [ORB-11333]; `review_crew` applies to that reviewer only, while `after-landing` review is minted by the `delivery-code-review` auto-task with that definition's own template crew. Resolve built-in → global → workspace → run; an explicit `preset` at a layer resets the preset-managed keys before that layer's own values apply, while the independent keys keep their own precedence. Unknown keys and out-of-range values fail load. **Preferences authorize nothing**: scoped automation needs `orbit operation enable`; `orbit operation explain` shows each effective value with its winning source. See [operation-mode operations](design/operation-mode/5_operations.md). |
 | `[runtime]` | **JSONL log rotation/retention** (`~/.orbit/state/logs/orbit.jsonl`): `log_retention_days` (default `7`) deletes archives older than N days; `log_max_total_mb` (default `500`) caps total archive size, pruning oldest first; `log_max_file_mb` (default `100`) rolls the active file to a dated archive once it exceeds N MiB. Rotation runs opportunistically at process start. Invalid values (`0`, or `log_max_file_mb > log_max_total_mb`) are rejected at config load. |
 
 ---

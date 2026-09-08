@@ -47,13 +47,12 @@ impl fmt::Display for ExecutorType {
     }
 }
 
-/// Sandbox primitive applied to a CLI-backend agent invocation. The variant
-/// names a concrete OS primitive; `orbit-exec` selects the implementation.
-///
-/// Each variant names one concrete, platform-specific kernel wrapper.
+/// Executor sandbox choice: a concrete OS wrapper or an explicit opt-out.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExecutorSandboxKind {
+    /// Persist an operator's choice to disable outer and provider-inner sandboxing.
+    Off,
     MacosSandboxExec,
     LinuxBwrap,
 }
@@ -61,6 +60,7 @@ pub enum ExecutorSandboxKind {
 impl ExecutorSandboxKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Off => "off",
             Self::MacosSandboxExec => "macos-sandbox-exec",
             Self::LinuxBwrap => "linux-bwrap",
         }
@@ -69,12 +69,12 @@ impl ExecutorSandboxKind {
     /// OS this sandbox primitive can be applied on, named to match
     /// `std::env::consts::OS` (e.g. `"macos"`, `"linux"`).
     ///
-    /// Every kind is single-OS. The seed-time platform selector in
-    /// `orbit-core` reads this value when installing shipped executors.
-    pub fn target_os(self) -> &'static str {
+    /// Concrete wrappers are single-OS; explicit off has no OS requirement.
+    pub fn target_os(self) -> Option<&'static str> {
         match self {
-            Self::MacosSandboxExec => "macos",
-            Self::LinuxBwrap => "linux",
+            Self::Off => None,
+            Self::MacosSandboxExec => Some("macos"),
+            Self::LinuxBwrap => Some("linux"),
         }
     }
 
@@ -83,7 +83,8 @@ impl ExecutorSandboxKind {
     /// seed-time selection (see `orbit-core`) be tested deterministically on
     /// either OS without a `#[cfg]` split (see [ORB-10112]).
     pub fn is_available_on(self, target_os: &str) -> bool {
-        self.target_os() == target_os
+        self.target_os()
+            .is_none_or(|required| required == target_os)
     }
 }
 
@@ -155,10 +156,10 @@ pub struct ExecutorDef {
     pub timeout_seconds: Option<u64>,
     #[serde(default)]
     pub env: HashMap<String, String>,
-    /// OS sandbox primitive to wrap the CLI invocation in. When `None`, the
-    /// CLI is spawned bare (today's behavior). When `Some`, `orbit-exec`
-    /// translates the activity's `FsProfile` into a sandbox payload and
-    /// wraps the spawn.
+    /// Sandbox choice. `Off` persistently disables outer and provider-inner
+    /// sandboxing. `None` is unspecified: installed Linux defaults migrate to
+    /// Bubblewrap during seeding; other executors retain provider behavior.
+    /// Concrete kinds wrap the invocation using the activity's `FsProfile`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<ExecutorSandboxKind>,
     /// When `sandbox` is set but the platform's trusted sandbox primitive is
@@ -166,8 +167,10 @@ pub struct ExecutorDef {
     /// degrade to bare exec? Default `false` (fail-closed).
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_fallback: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 /// Legacy override for an agent family's strong/weak `AgentModelPair`.
@@ -194,8 +197,8 @@ impl ExecutorDef {
     pub fn from_resource_spec(
         name: String,
         spec: ExecutorResourceSpec,
-        created_at: DateTime<Utc>,
-        updated_at: DateTime<Utc>,
+        created_at: Option<DateTime<Utc>>,
+        updated_at: Option<DateTime<Utc>>,
     ) -> Self {
         let ExecutorResourceSpec {
             executor_type,
@@ -208,8 +211,8 @@ impl ExecutorDef {
             env,
             sandbox,
             allow_fallback,
-            created_at: _,
-            updated_at: _,
+            created_at: spec_created_at,
+            updated_at: spec_updated_at,
         } = spec;
 
         Self {
@@ -224,8 +227,8 @@ impl ExecutorDef {
             env,
             sandbox,
             allow_fallback,
-            created_at,
-            updated_at,
+            created_at: created_at.or(spec_created_at),
+            updated_at: updated_at.or(spec_updated_at),
         }
     }
 

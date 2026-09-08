@@ -327,8 +327,9 @@ where
 /// the window (previously indistinguishable, because the handler answered a bare
 /// truncated array with no metadata).
 ///
-/// The cross-workspace `/api/tasks/all` aggregate still answers a bare array; it
-/// takes no filters and is bounded by the same default limit.
+/// The cross-workspace `/api/tasks/all` aggregate uses the same envelope. It
+/// takes no filters and its `total` sums the untruncated candidate counts from
+/// active workspaces.
 pub(super) async fn list_tasks(Ws(runtime): Ws, RawQuery(query): RawQuery) -> Response {
     let query = match TaskListQuery::parse(query.as_deref()) {
         Ok(query) => query,
@@ -468,17 +469,18 @@ fn task_list_page_json(
 }
 
 pub(super) async fn list_task_locks(Ws(runtime): Ws) -> Response {
-    match task_locks_json(&runtime) {
-        Ok(value) => Json(value).into_response(),
-        Err(e) => server_error(e),
+    match blocking("task locks", move || Ok(task_locks_json(&runtime))).await {
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(e)) => server_error(e),
+        Err(response) => *response,
     }
 }
 
 /// Dependency-status projection for dashboard task serialization.
 ///
 /// Uses the coordination registry's global status index
-/// ([`OrbitRuntime::task_status_index`]) rather than `runtime.list_tasks()`
-/// (workspace-scoped), so a task depending on another registered workspace's
+/// ([`OrbitRuntime::task_status_index`]) rather than a workspace-scoped
+/// task list, so a task depending on another registered workspace's
 /// task resolves that dependency's real status instead of `[missing]`
 /// (ORB-10291). Task *listing* stays workspace-scoped: this index is only
 /// consulted to label dependencies, never to add tasks to the response body.
@@ -519,7 +521,14 @@ pub(super) async fn get_task_artifact(
         Ok(path) => path,
         Err(message) => return bad_request(message),
     };
-    match runtime.get_task_artifact(id, &path) {
+    let id = id.to_string();
+    let path_owned = path.to_string();
+    let missing = format!("artifact not found: {id}/{path_owned}");
+    match blocking("task artifact", move || {
+        runtime.get_task_artifact(&id, &path_owned)
+    })
+    .await
+    {
         Ok(Some(artifact)) => {
             let policy = artifact_response_policy(&artifact.media_type);
             let mut response = Response::new(Body::from(artifact.content));
@@ -539,8 +548,8 @@ pub(super) async fn get_task_artifact(
             }
             response
         }
-        Ok(None) => super::not_found(format!("artifact not found: {id}/{path}")),
-        Err(e) => map_runtime_error(e),
+        Ok(None) => super::not_found(missing),
+        Err(response) => *response,
     }
 }
 

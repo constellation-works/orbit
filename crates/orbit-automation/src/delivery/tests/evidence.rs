@@ -14,18 +14,18 @@ use std::{
     },
 };
 
-fn revision(n: usize) -> SourceRevision {
+pub(super) fn revision(n: usize) -> SourceRevision {
     SourceRevision {
         commit: format!("c{n}"),
         tree: format!("t{n}"),
     }
 }
 
-fn now() -> chrono::DateTime<Utc> {
+pub(super) fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 6, 0, 0, 0).unwrap()
 }
 
-fn trigger() -> DeliveryTrigger {
+pub(super) fn trigger() -> DeliveryTrigger {
     DeliveryTrigger {
         owner_machine: Some("fixture-machine".into()),
         branch: "agent-main".into(),
@@ -37,7 +37,7 @@ fn trigger() -> DeliveryTrigger {
     }
 }
 
-fn landing(n: usize) -> Delivery {
+pub(super) fn landing(n: usize) -> Delivery {
     Delivery {
         key: format!("pr:owner/repo:{n}"),
         repository: "owner/repo".into(),
@@ -52,17 +52,17 @@ fn landing(n: usize) -> Delivery {
     }
 }
 
-struct Host {
-    page: Mutex<SourcePage>,
-    actions: Mutex<BTreeMap<String, String>>,
+pub(super) struct Host {
+    pub(super) page: Mutex<SourcePage>,
+    pub(super) actions: Mutex<BTreeMap<String, String>>,
     evidence: Mutex<Option<CoverageEvidence>>,
     fail_admit: AtomicBool,
-    failed: AtomicBool,
+    pub(super) failed: AtomicBool,
     admission_deferred: AtomicBool,
 }
 
 impl Host {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             page: Mutex::new(SourcePage {
                 from: revision(0),
@@ -71,6 +71,7 @@ impl Host {
                 deliveries: vec![],
                 unresolved: BTreeMap::new(),
                 associations: Default::default(),
+                exclusions: Default::default(),
                 complete: true,
             }),
             actions: Mutex::new(BTreeMap::new()),
@@ -81,7 +82,7 @@ impl Host {
         }
     }
 
-    fn page(&self, from: usize, to: usize) {
+    pub(super) fn page(&self, from: usize, to: usize) {
         let commits = (from + 1..=to).map(|n| revision(n).commit).collect();
         *self.page.lock().unwrap() = SourcePage {
             from: revision(from),
@@ -90,11 +91,12 @@ impl Host {
             deliveries: (from + 1..=to).map(landing).collect(),
             unresolved: BTreeMap::new(),
             associations: Default::default(),
+            exclusions: Default::default(),
             complete: true,
         };
     }
 
-    fn evidence(&self, attempt: &BatchAttempt) {
+    pub(super) fn evidence(&self, attempt: &BatchAttempt) {
         let batch = &attempt.batch;
         *self.evidence.lock().unwrap() = Some(CoverageEvidence {
             schema_version: 1,
@@ -173,7 +175,7 @@ impl DeliveryHost for Host {
     }
 }
 
-fn evaluate(
+pub(super) fn evaluate(
     store: &dyn AutomationStoreBackend,
     host: &Host,
     trigger: &DeliveryTrigger,
@@ -194,7 +196,7 @@ fn evaluate(
     .unwrap()
 }
 
-fn setup() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
+pub(super) fn setup() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
     let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
     let host = Host::new();
     let trigger = trigger();

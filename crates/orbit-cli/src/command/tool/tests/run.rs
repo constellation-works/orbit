@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use serde_json::json;
 
 use super::super::run::{
@@ -13,12 +15,11 @@ fn task_show_id_is_read_only_from_orbit_task_show_input() {
         input_file: None,
         agent: None,
         model: None,
-        timeout: None,
         dry_run: false,
         fields: Vec::new(),
         full: false,
         pretty: false,
-        output: super::super::run::OutputFormat::Json,
+        parsed_input: OnceLock::new(),
     };
     assert_eq!(show.task_show_id().as_deref(), Some("ORB-10961"));
 
@@ -34,7 +35,6 @@ fn task_show_id_is_read_only_from_orbit_task_show_input() {
 fn list_output_uses_minimal_task_projection() {
     let shaped = shape_tool_output(
         "orbit.task.list",
-        &json!({ "status": "backlog" }),
         json!([{
             "id": "T20260422-0001",
             "title": "Backlog task",
@@ -70,10 +70,33 @@ fn list_output_uses_minimal_task_projection() {
 }
 
 #[test]
+fn show_output_preserves_task_details_by_default() {
+    let output = json!({
+        "id": "T20260422-0001",
+        "title": "Task details",
+        "status": "backlog",
+        "priority": "medium",
+        "type": "feature",
+        "dependencies": [],
+        "resolved_dependencies": [],
+        "implemented_by": null,
+        "created_at": "2026-04-22T00:00:00Z",
+        "updated_at": "2026-04-22T00:00:00Z",
+        "description": "details must remain available",
+        "acceptance_criteria": ["inspect the complete task"]
+    });
+
+    assert_eq!(
+        shape_tool_output("orbit.task.show", output.clone(), false, &[],),
+        output
+    );
+}
+
+#[test]
 fn local_invocation_context_has_trace_and_explicit_identity_fallback() {
     let runtime = orbit_core::OrbitRuntime::in_memory().expect("in-memory runtime");
 
-    let context = local_tool_session_context(&runtime).expect("local invocation context");
+    let context = local_tool_session_context(&runtime, None).expect("local invocation context");
 
     assert!(
         context
@@ -91,6 +114,34 @@ fn local_invocation_context_has_trace_and_explicit_identity_fallback() {
     );
     assert_eq!(context.caller_ip, None);
     assert!(context.effective_capabilities.is_empty());
+}
+
+#[test]
+fn parsed_input_reads_an_input_file_once() {
+    let file = tempfile::NamedTempFile::new().expect("input file");
+    std::fs::write(file.path(), r#"{"id":"first"}"#).expect("write initial input");
+    let show = ToolRunArgs {
+        name: "orbit.task.show".to_string(),
+        input: None,
+        input_file: Some(file.path().to_string_lossy().into_owned()),
+        agent: None,
+        model: None,
+        dry_run: false,
+        fields: Vec::new(),
+        full: false,
+        pretty: false,
+        parsed_input: OnceLock::new(),
+    };
+
+    assert_eq!(
+        show.parsed_input().expect("first parse"),
+        json!({"id":"first"})
+    );
+    std::fs::write(file.path(), r#"{"id":"second"}"#).expect("write replacement input");
+    assert_eq!(
+        show.parsed_input().expect("cached parse"),
+        json!({"id":"first"})
+    );
 }
 
 #[test]

@@ -1,7 +1,7 @@
-//! Guarded status transitions through `update_task` (ORB-10000): the
-//! approve / reject / unarchive verbs folded into `--status` updates.
+//! Explicit status classification through the owning `update_task` layer.
 
-use orbit_types::task::{Task, TaskStatus};
+use orbit_engine::TaskActivityUpdate;
+use orbit_types::task::{Task, TaskArtifact, TaskStatus};
 
 use super::test_runtime;
 use crate::OrbitRuntime;
@@ -33,73 +33,49 @@ fn update_status(
     )
 }
 
-#[test]
-fn update_status_backlog_restores_archived_task() {
-    let (_root, runtime) = test_runtime();
-    let task = add_proposed_task(&runtime, "Archive then restore");
-    runtime.archive_task(&task.id).expect("archive task");
-
-    let restored = update_status(&runtime, &task.id, TaskStatus::Backlog)
-        .expect("archived task restores to backlog via update");
-    assert_eq!(restored.status, TaskStatus::Backlog);
-}
-
-#[test]
-fn archived_task_rejects_non_restore_mutations() {
-    let (_root, runtime) = test_runtime();
-    let task = add_proposed_task(&runtime, "Archived stays frozen");
-    runtime.archive_task(&task.id).expect("archive task");
-
-    let err = runtime
-        .update_task(
-            &task.id,
-            TaskUpdateParams {
-                title: Some("new title".to_string()),
-                ..Default::default()
-            },
-        )
-        .expect_err("archived task rejects field edits");
-    assert!(err.to_string().contains("--status backlog"), "{err}");
-
-    let err = update_status(&runtime, &task.id, TaskStatus::InProgress)
-        .expect_err("archived task only restores to backlog");
-    assert!(err.to_string().contains("--status backlog"), "{err}");
-}
+const ALL_STATUSES: [TaskStatus; 9] = [
+    TaskStatus::Proposed,
+    TaskStatus::Backlog,
+    TaskStatus::InProgress,
+    TaskStatus::Review,
+    TaskStatus::Done,
+    TaskStatus::Blocked,
+    TaskStatus::Archived,
+    TaskStatus::Rejected,
+    TaskStatus::Someday,
+];
 
 #[test]
-fn update_status_rejected_is_guarded() {
+fn explicit_update_allows_the_complete_status_transition_matrix() {
     let (_root, runtime) = test_runtime();
 
-    // Legal: proposed -> rejected.
-    let task = add_proposed_task(&runtime, "Reject a proposal");
-    let rejected = update_status(&runtime, &task.id, TaskStatus::Rejected)
-        .expect("proposed task rejects via update");
-    assert_eq!(rejected.status, TaskStatus::Rejected);
+    for source in ALL_STATUSES {
+        for target in ALL_STATUSES {
+            let task = add_proposed_task(&runtime, &format!("Matrix {source} to {target}"));
+            update_status(&runtime, &task.id, source).expect("establish matrix source");
+            let history_before = runtime
+                .get_task_history(&task.id)
+                .expect("history before transition");
 
-    // Legal: backlog -> rejected and in-progress -> rejected.
-    let task = add_proposed_task(&runtime, "Reject from backlog");
-    update_status(&runtime, &task.id, TaskStatus::Backlog).expect("approve to backlog");
-    let rejected = update_status(&runtime, &task.id, TaskStatus::Rejected)
-        .expect("backlog task rejects via update");
-    assert_eq!(rejected.status, TaskStatus::Rejected);
-}
+            let updated = update_status(&runtime, &task.id, target)
+                .unwrap_or_else(|error| panic!("{source} -> {target} failed: {error}"));
 
-#[test]
-fn update_status_rejects_illegal_jumps() {
-    let (_root, runtime) = test_runtime();
-    let task = add_proposed_task(&runtime, "Done is terminal");
-    let done = drive_to_done(&runtime, &task.id);
-    assert_eq!(done.status, TaskStatus::Done);
-
-    let err = update_status(&runtime, &task.id, TaskStatus::Rejected)
-        .expect_err("done -> rejected is an illegal jump");
-    assert!(err.to_string().contains("done"), "{err}");
-
-    // Setting archived through update stays blocked too.
-    let other = add_proposed_task(&runtime, "No bare archived writes");
-    let err = update_status(&runtime, &other.id, TaskStatus::Archived)
-        .expect_err("update --status archived is blocked");
-    assert!(err.to_string().contains("archive"), "{err}");
+            assert_eq!(updated.id, task.id);
+            assert_eq!(updated.status, target);
+            let history_after = runtime
+                .get_task_history(&task.id)
+                .expect("history after transition");
+            if source == target {
+                assert_eq!(history_after, history_before, "{source} same-status edit");
+            } else {
+                let event = history_after.last().expect("status transition event");
+                assert_eq!(event.from_status, Some(source));
+                assert_eq!(event.to_status, Some(target));
+                assert!(!event.by.trim().is_empty());
+                assert!(event.at >= task.created_at);
+            }
+        }
+    }
 }
 
 #[test]
@@ -115,6 +91,117 @@ fn update_status_covers_approve_transitions() {
     // review -> done (the former review approval).
     let done = drive_to_done(&runtime, &task.id);
     assert_eq!(done.status, TaskStatus::Done);
+}
+
+#[test]
+fn reopening_done_preserves_identity_history_artifacts_and_execution_evidence() {
+    let (_root, runtime) = test_runtime();
+    let task = add_proposed_task(&runtime, "Preserve reopen evidence");
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text("evidence.txt", "durable")],
+                ..Default::default()
+            },
+        )
+        .expect("attach evidence before completion");
+    let done = drive_to_done(&runtime, &task.id);
+    let history_before = runtime.get_task_history(&task.id).expect("done history");
+    let artifacts_before = runtime
+        .get_task_artifacts(&task.id)
+        .expect("done artifacts");
+
+    let reopened = runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Proposed),
+                title: Some("Reclassified without replacing evidence".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("reopen done task directly");
+
+    assert_eq!(reopened.id, done.id);
+    assert_eq!(reopened.execution_summary, done.execution_summary);
+    assert_eq!(reopened.implemented_by, done.implemented_by);
+    assert_eq!(
+        runtime
+            .get_task_artifacts(&task.id)
+            .expect("reopened artifacts"),
+        artifacts_before
+    );
+    let history_after = runtime
+        .get_task_history(&task.id)
+        .expect("reopened history");
+    assert_eq!(&history_after[..history_before.len()], history_before);
+    let reopen = history_after.last().expect("reopen event");
+    assert_eq!(reopen.from_status, Some(TaskStatus::Done));
+    assert_eq!(reopen.to_status, Some(TaskStatus::Proposed));
+}
+
+#[test]
+fn manual_status_edits_do_not_require_execution_fields_or_fabricate_attribution() {
+    let (_root, runtime) = test_runtime();
+    let task = add_proposed_task(&runtime, "Classification is not execution");
+
+    let in_progress = update_status(&runtime, &task.id, TaskStatus::InProgress)
+        .expect("manual in-progress status needs no plan");
+    assert!(in_progress.plan.is_empty());
+    let review = update_status(&runtime, &task.id, TaskStatus::Review)
+        .expect("manual review status needs no summary");
+    assert!(review.execution_summary.is_empty());
+    assert_eq!(review.implemented_by, None);
+}
+
+#[test]
+fn invalid_accompanying_edit_does_not_partially_apply_status() {
+    let (_root, runtime) = test_runtime();
+    let task = add_proposed_task(&runtime, "Atomic invalid edit");
+
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                title: Some("   ".to_string()),
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .expect_err("invalid title rejects the entire update");
+
+    let unchanged = runtime.get_task(&task.id).expect("unchanged task");
+    assert_eq!(unchanged.title, task.title);
+    assert_eq!(unchanged.status, TaskStatus::Proposed);
+}
+
+#[test]
+fn stale_activity_status_write_cannot_overwrite_operator_reclassification() {
+    let (_root, runtime) = test_runtime();
+    let task = add_proposed_task(&runtime, "Stale activity");
+    update_status(&runtime, &task.id, TaskStatus::Review).expect("prepare review snapshot");
+    update_status(&runtime, &task.id, TaskStatus::Backlog).expect("operator reclassifies task");
+
+    let error = runtime
+        .update_task_from_activity(
+            &task.id,
+            TaskActivityUpdate {
+                status: TaskStatus::Done,
+                expected_status: TaskStatus::Review,
+                execution_summary: Some("stale worker evidence".to_string()),
+                comment: None,
+                note: Some("late completion".to_string()),
+                agent: Some("codex".to_string()),
+                model: None,
+            },
+        )
+        .expect_err("stale activity must lose to the operator");
+    assert!(error.to_string().contains("expected 'review'"), "{error}");
+
+    let current = runtime.get_task(&task.id).expect("operator state survives");
+    assert_eq!(current.status, TaskStatus::Backlog);
+    assert_ne!(current.execution_summary, "stale worker evidence");
 }
 
 #[test]
@@ -247,40 +334,29 @@ fn drive_to_done(runtime: &OrbitRuntime, id: &str) -> Task {
     update_status(runtime, id, TaskStatus::Done).expect("review -> done")
 }
 
-/// ORB-10988 / F2026-07-119: the update path must hold the task lock across
-/// its *whole* read-modify-write, not just around the store write.
-///
-/// The body reads the task, decides from that snapshot whether the mutation is
-/// even legal, and only then writes. When the lock covered the write alone, a
-/// concurrent update could commit a status change inside that gap: the second
-/// writer had already cleared the guard against a status it never saw, and its
-/// write landed on a task that had since become unmodifiable.
-///
-/// The other thread holds the bundle lock directly, so the window is opened
-/// deliberately rather than raced for.
+/// The explicit edit waits for the status write, re-reads under the same task
+/// lock, and changes only the requested field. Flexible status editing must not
+/// weaken serialization or restore an older status snapshot.
 #[test]
-fn concurrent_update_cannot_write_through_a_status_change_it_never_saw() {
+fn concurrent_explicit_edit_preserves_the_newer_status() {
     use std::sync::mpsc::sync_channel;
     use std::time::Duration;
 
-    let (root, runtime) = test_runtime();
+    let (_root, runtime) = test_runtime();
     let task = add_proposed_task(&runtime, "Guard under contention");
-    let lock_target = task_bundle_dir(root.path(), &task.id).join("task.yaml");
 
     let (locked_tx, locked_rx) = sync_channel::<()>(0);
     let (contender_tx, contender_rx) = sync_channel::<()>(0);
 
-    // `move` on the holder closure captures only the channel endpoints; the
-    // runtime and paths cross as shared references, which are `Copy`.
+    // Contend through the same store-owned lock used by task updates.
     let holder_runtime = &runtime;
-    let holder_lock_target = lock_target.as_path();
     let holder_id = task.id.clone();
     let contended = std::thread::scope(|scope| {
         scope.spawn(move || {
-            orbit_common::fs::io::with_exclusive_file_lock::<(), orbit_common::OrbitError, _>(
-                holder_lock_target,
-                "ORB-10988 regression",
-                || {
+            holder_runtime
+                .stores()
+                .tasks()
+                .with_task_write_lock(&holder_id, &mut || {
                     locked_tx.send(()).expect("announce the held lock");
                     contender_rx.recv().expect("await the contending update");
                     // Long enough that an update which reads before locking has
@@ -290,9 +366,8 @@ fn concurrent_update_cannot_write_through_a_status_change_it_never_saw() {
                         .archive_task(&holder_id)
                         .expect("archive under the lock");
                     Ok(())
-                },
-            )
-            .expect("hold the task lock");
+                })
+                .expect("hold the task lock");
         });
 
         locked_rx.recv().expect("await the held lock");
@@ -308,36 +383,12 @@ fn concurrent_update_cannot_write_through_a_status_change_it_never_saw() {
         )
     });
 
-    let err = contended.expect_err("an archived task must refuse a rename");
-    assert!(
-        err.to_string().contains("cannot be modified"),
-        "expected the archived-task guard, got: {err}"
-    );
+    let updated = contended.expect("explicit metadata edit remains valid");
+    assert_eq!(updated.status, TaskStatus::Archived);
     let reread = runtime.get_task(&task.id).expect("task still readable");
     assert_eq!(reread.status, TaskStatus::Archived);
     assert_eq!(
-        reread.title, "Guard under contention",
-        "the losing writer must not have renamed an archived task"
+        reread.title, "renamed by the loser of the race",
+        "the serialized edit must not restore its earlier status snapshot"
     );
-}
-
-/// Locate a task's bundle directory under a test runtime's roots. The store
-/// owns the layout; the test only needs *a* path to contend on.
-fn task_bundle_dir(root: &std::path::Path, id: &str) -> std::path::PathBuf {
-    fn walk(dir: &std::path::Path, id: &str) -> Option<std::path::PathBuf> {
-        for entry in std::fs::read_dir(dir).ok()?.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            if path.file_name().is_some_and(|name| name == id) && path.join("task.yaml").is_file() {
-                return Some(path);
-            }
-            if let Some(found) = walk(&path, id) {
-                return Some(found);
-            }
-        }
-        None
-    }
-    walk(root, id).unwrap_or_else(|| panic!("no bundle directory for {id} under {root:?}"))
 }

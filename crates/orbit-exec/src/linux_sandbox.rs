@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::glob::compile_glob_regex;
-use orbit_types::policy::ResolvedFsProfile;
+use orbit_types::policy::{ResolvedFsProfile, compile_glob_regex};
 
 const TRUSTED_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
@@ -50,10 +49,11 @@ pub struct LinuxBwrapSpawnRequest<'a> {
     pub stderr: Stdio,
 }
 
-/// Snapshot guard for Bubblewrap's one known write-policy gap: a
-/// non-subtree deny glob cannot be represented for a path that does not exist
-/// yet. Managed worktrees are disposable and single-writer, so Orbit records
-/// existing matches before spawn and rejects any new matches after the child.
+/// Snapshot guard for write-policy gaps Bubblewrap cannot represent as a
+/// mount at spawn time: a non-subtree deny glob, and an exact or subtree
+/// deny whose root does not exist yet. Managed worktrees are disposable and
+/// single-writer, so Orbit records existing matches before spawn and rejects
+/// any new matches after the child.
 #[derive(Debug, Clone)]
 pub struct LinuxBwrapPostRunGuard {
     rules: Vec<String>,
@@ -62,7 +62,7 @@ pub struct LinuxBwrapPostRunGuard {
 
 impl LinuxBwrapPostRunGuard {
     pub fn capture(profile: &ResolvedFsProfile) -> Result<Option<Self>, OrbitError> {
-        let rules = non_subtree_denies(profile);
+        let rules = post_run_deny_rules(profile);
         if rules.is_empty() {
             return Ok(None);
         }
@@ -574,6 +574,33 @@ pub fn compile_linux_bwrap_argv(
             push_mount(&mut out, "--bind", &path);
         }
     }
+    // Bind every writable ancestor entry of an existing deny before applying
+    // restrictions. Linux permits renaming an ancestor of a mount; making each
+    // such entry a mountpoint prevents moving it aside to replace the path.
+    let mut anchors = BTreeSet::new();
+    for denied in profile
+        .modify
+        .iter()
+        .filter_map(|rule| rule.strip_prefix('!'))
+    {
+        for path in mount_paths_for_rule(denied, false)? {
+            for ancestor in path.ancestors().skip(1) {
+                if writable_roots.iter().any(|root| ancestor.starts_with(root)) {
+                    anchors.insert(ancestor.to_path_buf());
+                }
+            }
+        }
+    }
+    for anchor in anchors {
+        let rendered = anchor.display().to_string();
+        let already_mounted = out
+            .windows(3)
+            .any(|args| args[0] == "--bind" && args[1] == rendered && args[2] == rendered);
+        if !already_mounted {
+            push_mount(&mut out, "--bind", &anchor);
+        }
+    }
+
     for (index, rule) in profile.modify.iter().enumerate() {
         if let Some(denied) = rule.strip_prefix('!') {
             if !is_exact_or_subtree(denied)
@@ -614,6 +641,9 @@ pub fn compile_linux_bwrap_argv(
         if managed_worktree && cwd_is_writable_root(&cwd, &writable_roots) {
             append_stable_toolchain_mounts(&mut out, &cwd)?;
         }
+        // Keep the provider agent on the real worktree path. rustc cache-key
+        // cwd normalization belongs in scripts/rustc-compiler-cache.sh, which
+        // chdirs onto LINUX_STABLE_WORKSPACE_MOUNT only for compiler invocations.
         out.push("--chdir".to_string());
         out.push(cwd.display().to_string());
     }
@@ -704,6 +734,15 @@ fn append_stable_toolchain_mounts(out: &mut Vec<String>, cwd: &Path) -> Result<(
         ))
     })?;
     let target = canonical_existing(&target, "stable build mount")?;
+    // Bind sources are host paths: a second bind does not inherit the first
+    // destination's policy overlays. Replay the ordered mounts through both
+    // aliases, clipping a containing restriction to the alias root itself.
+    let policy_mounts: Vec<_> = out
+        .windows(3)
+        .filter(|args| matches!(args[0].as_str(), "--bind" | "--ro-bind"))
+        .filter(|args| args[1] == args[2] && args[1] != "/")
+        .map(|args| (args[0].clone(), PathBuf::from(&args[1])))
+        .collect();
     out.extend([
         "--dir".to_string(),
         LINUX_STABLE_WORKSPACE_MOUNT.to_string(),
@@ -716,6 +755,25 @@ fn append_stable_toolchain_mounts(out: &mut Vec<String>, cwd: &Path) -> Result<(
         target.display().to_string(),
         LINUX_STABLE_BUILD_MOUNT.to_string(),
     ]);
+    for (root, alias) in [
+        (cwd, Path::new(LINUX_STABLE_WORKSPACE_MOUNT)),
+        (target.as_path(), Path::new(LINUX_STABLE_BUILD_MOUNT)),
+    ] {
+        for (option, source) in &policy_mounts {
+            let (source, destination) = if let Ok(relative) = source.strip_prefix(root) {
+                (source.as_path(), alias.join(relative))
+            } else if root.starts_with(source) {
+                (root, alias.to_path_buf())
+            } else {
+                continue;
+            };
+            out.extend([
+                option.clone(),
+                source.display().to_string(),
+                destination.display().to_string(),
+            ]);
+        }
+    }
     Ok(())
 }
 
@@ -781,14 +839,46 @@ fn overlaps_writable_root(rule: &str, roots: &[PathBuf]) -> bool {
         .any(|root| root.starts_with(&prefix) || prefix.starts_with(root))
 }
 
-fn non_subtree_denies(profile: &ResolvedFsProfile) -> Vec<String> {
+/// Deny rules that have nothing to `--ro-bind` at spawn: non-subtree globs,
+/// and exact/subtree denies whose root is still absent.
+///
+/// An absent exact/subtree deny with a later nested re-allow is omitted.
+/// Grant preparation materializes that re-allow (creating the deny root) so
+/// `--ro-bind` can apply; watching the root would false-positive on that
+/// pre-spawn create. The orchestrator snapshots this guard before spawn
+/// preparation, so the skip is what keeps default `.orbit/**` plus
+/// `.orbit/auto_tasks/**` from failing on a fresh worktree.
+fn post_run_deny_rules(profile: &ResolvedFsProfile) -> Vec<String> {
     profile
         .modify
         .iter()
-        .filter_map(|rule| rule.strip_prefix('!'))
-        .filter(|rule| !is_exact_or_subtree(rule))
-        .map(str::to_string)
+        .enumerate()
+        .filter_map(|(index, rule)| {
+            let denied = rule.strip_prefix('!')?;
+            if is_exact_or_subtree(denied) {
+                let root = denied.strip_suffix("/**").unwrap_or(denied);
+                if Path::new(root).exists() || deny_has_nested_reallow(&profile.modify, index) {
+                    return None;
+                }
+            }
+            Some(denied.to_string())
+        })
         .collect()
+}
+
+fn deny_has_nested_reallow(modify: &[String], deny_index: usize) -> bool {
+    let Some(denied_root) = modify
+        .get(deny_index)
+        .and_then(|rule| rule.strip_prefix('!'))
+        .and_then(exact_or_subtree_root)
+    else {
+        return false;
+    };
+    modify.iter().skip(deny_index + 1).any(|rule| {
+        !rule.starts_with('!')
+            && exact_or_subtree_root(rule)
+                .is_some_and(|root| root != denied_root && root.starts_with(&denied_root))
+    })
 }
 
 /// Every existing path matched by any of `rules`.
@@ -807,16 +897,33 @@ fn expand_rules(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitError> {
                 "invalid linux-bwrap filesystem glob `{rule}`: {error}"
             ))
         })?;
-        let root = nearest_existing_ancestor(&static_prefix(rule))?;
-        by_root.entry(root).or_default().push(regex);
+        let prefix = static_prefix(rule);
+        let display_root = existing_ancestor(&prefix)?;
+        let root = canonical_existing(&display_root, "glob search root")?;
+        by_root.entry(root).or_default().push((regex, display_root));
     }
     let mut matches = BTreeSet::new();
-    for (root, regexes) in by_root {
+    for (root, matchers) in by_root {
         let mut candidates = Vec::new();
         walk_paths(&root, &mut candidates)?;
         for candidate in candidates {
             let rendered = candidate.to_string_lossy().replace('\\', "/");
-            if regexes.iter().any(|regex| regex.is_match(&rendered)) {
+            let relative = candidate.strip_prefix(&root).map_err(|error| {
+                OrbitError::Execution(format!(
+                    "glob candidate `{}` must remain beneath search root `{}`: {error}",
+                    candidate.display(),
+                    root.display()
+                ))
+            })?;
+            if matchers.iter().any(|(regex, display_root)| {
+                regex.is_match(&rendered)
+                    || regex.is_match(
+                        &display_root
+                            .join(relative)
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    )
+            }) {
                 matches.insert(canonical_existing(&candidate, "denyModify match")?);
             }
         }
@@ -842,7 +949,7 @@ fn static_prefix(rule: &str) -> PathBuf {
     PathBuf::from(prefix)
 }
 
-fn nearest_existing_ancestor(path: &Path) -> Result<PathBuf, OrbitError> {
+fn existing_ancestor(path: &Path) -> Result<PathBuf, OrbitError> {
     let mut current = path.to_path_buf();
     while !current.exists() {
         if !current.pop() {
@@ -852,7 +959,7 @@ fn nearest_existing_ancestor(path: &Path) -> Result<PathBuf, OrbitError> {
             )));
         }
     }
-    canonical_existing(&current, "glob search root")
+    Ok(current)
 }
 
 /// `root` itself and everything beneath it, each path once.

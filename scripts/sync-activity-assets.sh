@@ -8,7 +8,10 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 source_root="$repo_root/crates/orbit-core/assets/activities"
 target_root="$repo_root/.orbit/resources/activities"
 
-mapfile -t activity_names < <(
+activity_names=()
+while IFS= read -r name; do
+  activity_names+=("$name")
+done < <(
   rg --no-filename --only-matching \
     'include_str!\("[^"]*\.orbit/resources/activities/[^\"]+\.yaml"\)' \
     "$repo_root/crates" \

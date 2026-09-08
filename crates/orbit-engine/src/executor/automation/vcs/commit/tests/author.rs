@@ -136,6 +136,33 @@ fn git_commit_without_resolved_model_uses_generic_fallback_and_no_local_config()
 }
 
 #[test]
+fn git_commit_per_task_preserves_orchestration_attribution_in_the_source_message() {
+    let temp = initialized_git_repo();
+    let workspace = temp.path();
+    fs::create_dir_all(workspace.join("src")).unwrap();
+    fs::write(workspace.join("src/task.txt"), "orchestrated work\n").unwrap();
+
+    let mut task = task_with_file("T1", "Implement one task", "src/task.txt", "gpt-5.6-terra");
+    task.orchestrator = Some("sol".to_string());
+    task.created_by = Some("gpt-5.6-sol".to_string());
+    let host =
+        CommitTestHost::new(vec![task], workspace.to_path_buf()).with_crew_model("gpt-5.6-terra");
+    let input = json!({
+        "scope": "per_task",
+        "job_run_id": "batch-1",
+        "workspace_path": workspace.to_string_lossy().to_string(),
+        "completed_task_ids": ["T1"],
+    });
+
+    git_commit(&host, &input).expect("per-task commit succeeds");
+
+    assert_eq!(
+        git_output(workspace, &["log", "-1", "--format=%B"]).expect("read source commit message"),
+        "[T1] Implement one task\n\nOrchestrated-By: sol"
+    );
+}
+
+#[test]
 fn git_commit_treats_bare_configured_model_as_opaque() {
     let temp = initialized_git_repo();
     let workspace = temp.path();

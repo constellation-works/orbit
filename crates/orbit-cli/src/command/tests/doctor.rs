@@ -110,3 +110,45 @@ fn warning_only_workspace_keeps_zero_exit_and_structured_rows() {
         "warning"
     );
 }
+
+#[test]
+fn fix_stale_locks_records_repair_count_in_payload_doc() {
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    let lock_path = runtime.paths().state_dir.join("doctor-test.lock");
+    std::fs::write(
+        lock_path,
+        r#"{"pid":0,"acquired_at":"2026-08-15T23:00:00Z","label":"test"}"#,
+    )
+    .expect("write stale lock metadata");
+
+    let output = super::super::doctor::DoctorCommand {
+        json: false,
+        fix_stale_locks: true,
+        fix_stale_task_locks: false,
+        remove_graph: false,
+        fix_stale_artifacts: false,
+        fix_retired_activity_backends: false,
+    }
+    .execute(&runtime)
+    .expect("doctor should run repairs and render report");
+
+    let CommandOutput::Payload(payload) = output else {
+        panic!("doctor should return its report payload");
+    };
+    assert_eq!(payload.exit_code(), 0);
+    let (document, _) = payload.into_view();
+    let rows = document.as_array().expect("doctor rows");
+    let fix_row = rows
+        .iter()
+        .find(|row| row["check"] == "fix-stale-locks")
+        .expect("fix-stale-locks row");
+    assert_eq!(fix_row["status"], "ok");
+    assert!(
+        fix_row["message"]
+            .as_str()
+            .expect("message")
+            .contains("Removed 1 stale lock file(s)."),
+        "expected repair count in fix-stale-locks row message, got: {:?}",
+        fix_row["message"]
+    );
+}

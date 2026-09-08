@@ -3,7 +3,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::policy::DEFAULT_POLICY_NAME;
 use serde_json::json;
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::support::status_word;
 
@@ -34,36 +34,29 @@ impl Execute for PolicyCheckArgs {
             &self.path,
         )?;
 
-        if self.json {
-            return Ok(Payload::document(json!({
-                "policy": DEFAULT_POLICY_NAME,
-                "profile": self.profile_name,
-                "path": self.path,
-                "read": {
-                    "allowed": read.allowed,
-                    "matched_rule": read.matched_rule,
-                },
-                "modify": {
-                    "allowed": modify.allowed,
-                    "matched_rule": modify.matched_rule,
-                },
-            }))
-            .into());
-        }
-
-        println!("Policy:  {}", DEFAULT_POLICY_NAME);
-        println!("Profile: {}", self.profile_name);
-        println!("Path:    {}", self.path);
-        println!(
-            "read:    {} ({})",
+        let doc = json!({
+            "policy": DEFAULT_POLICY_NAME,
+            "profile": self.profile_name,
+            "path": self.path,
+            "read": {
+                "allowed": read.allowed,
+                "matched_rule": read.matched_rule,
+            },
+            "modify": {
+                "allowed": modify.allowed,
+                "matched_rule": modify.matched_rule,
+            },
+        });
+        let text = format!(
+            "Policy:  {}\nProfile: {}\nPath:    {}\nread:    {} ({})\nmodify:  {} ({})",
+            DEFAULT_POLICY_NAME,
+            self.profile_name,
+            self.path,
             status_word(read.allowed),
-            read.matched_rule
-        );
-        println!(
-            "modify:  {} ({})",
+            read.matched_rule,
             status_word(modify.allowed),
             modify.matched_rule
         );
-        Ok(CommandOutput::Silent)
+        Ok(Payload::detail(doc, text).into())
     }
 }

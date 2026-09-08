@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-09-08
+last_validated: 2026-09-08
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -11,7 +11,7 @@ summary: Current implementation of the auto-task record, due-math, host-local cu
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/operations.js"]
 related_features: [auto-tasks]
-related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315]
+related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730]
 ---
 
 # Auto-tasks — Design
@@ -59,33 +59,84 @@ interval math jumps straight to the most recent boundary
 `baseline + floor((now-baseline)/interval)·interval`. Either way a downtime gap
 collapses to **one** fire, never one per missed slot.
 
+## 2b. Catch-up eligibility is not the next scheduled occurrence
+
+`decide_due` answers **catch-up eligibility**: is there an unconsumed slot this
+pass may fire? After downtime that answer is a slot *already in the past* — a
+fire the scheduler still owes. `schedule::next_scheduled_slot(schedule,
+baseline, now)` answers a different question: when does the schedule **next
+come around**? It is always strictly after `now`, and it is what operator
+surfaces render as next evaluation. The two disagree exactly while a missed
+slot is pending, and that disagreement is correct — neither output is a check
+on the other.
+
+Both derive every slot from one place so the two views stay anchored
+identically. `routines::due::next_occurrence` is the cron owner: it pins each
+occurrence to its minute, as the due path does, so a slot is stable across
+polls within one minute. Interval slots share one anchoring rule
+(`baseline + n·interval`), one range check, and checked date arithmetic — an
+out-of-range interval or an extreme cursor baseline is an error, never a
+wrapped slot the scheduler would mistake for a due boundary. Interval
+projections need the cursor's baseline to anchor to; cron projections are
+absolute and need no cursor.
+
 ## 3. Cursor state
 
 `state.rs` stores one cursor per definition in
 `<orbit_dir>/state/auto-tasks.json` (`{ baseline_at, last_slot, last_fired_at,
-last_task_id }`), using a file-locked read-modify-write.
-This is workspace-local, gitignored runtime state (the scoreboard precedent,
-L-0041), so a scheduler fire never rewrites the git-versioned definition and a
-definition edit never races the scheduler.
+last_task_id, pending? }`). This is workspace-local, gitignored runtime state
+(the scoreboard precedent, L-0041), so a scheduler fire never rewrites the
+git-versioned definition and a definition edit never races the scheduler.
+
+Admission and persistence share one stable sidecar lock,
+`.auto-tasks.json.lock`. The JSON file is replaced by rename, so exclusion is
+not tied to the inode being replaced and a reader never observes truncated
+JSON. Updates re-read under that lock, so concurrent upserts for different
+definitions keep both cursors.
+
+A missing file is empty state and may baseline on first observation. An
+existing file that cannot be read or parsed is an explicit error; the bytes
+are left unchanged for investigation. The dashboard list surfaces that error
+instead of rendering a silent never-observed baseline.
+
+`pending` is durable in-flight evidence: `{ slot, task_id? }`. It is written
+before mint and cleared only after the consumed-slot checkpoint. It is not a
+cross-store exactly-once token.
 
 ## 4. The scheduler pass
 
-`scheduler::run_auto_task_scheduler_at` loads the workspace's definitions and
-cursors, then per enabled definition: on first sight it records a baseline and
-fires nothing; otherwise it evaluates due-math. On `Fire`, if `dedupe =
-skip_if_open` and a task tagged `auto-task:<name>` is still open, it skips
-**without advancing the cursor** — so the pending occurrence fires (once,
-collapsed) the moment the queue drains. Otherwise it mints a `system_created`
-task from the template (tagged for provenance, complexity `unassessed`)
-and advances the cursor. Every
-minted title is `[auto-task] ` followed by the template title; the prefix is
-applied at the shared template-to-task mapping, so definition YAML titles stay
-clean and an already-prefixed template is not double-prefixed.
+`scheduler::run_auto_task_scheduler_at` loads the workspace's definitions,
+then per enabled definition holds the sidecar lock, re-reads cursors, and
+either baselines, skips, or fires. Dry-run never writes. On first sight it
+records a baseline and fires nothing; otherwise it evaluates due-math. On
+`Fire`, if `dedupe = skip_if_open` and a task tagged `auto-task:<name>` is
+still open, it skips **without claiming or advancing the cursor** — so the
+pending occurrence fires (once, collapsed) the moment the queue drains.
+Otherwise it claims the slot, mints a `system_created` task from the template
+(tagged for provenance, complexity `unassessed`), and checkpoints
+`last_slot` / `last_task_id`. Every minted title is `[auto-task] ` followed
+by the template title; the prefix is applied at the shared template-to-task
+mapping, so definition YAML titles stay clean and an already-prefixed
+template is not double-prefixed.
+
+Recovery on the next locked pass:
+
+- Mint failure rolls the claim back; the slot is not consumed and a later
+  pass may fire it.
+- `pending.task_id` set: checkpoint the already-minted task, do not remint.
+- `pending` without `task_id`: report `unresolved_pending` and leave the
+  file alone. The scheduler will not silently consume an unminted slot or
+  remint an uncertain one. An operator inspects tagged tasks and
+  `auto-tasks.json`.
+- Checkpoint write failure reports `fired` with the task id and best-effort
+  mint evidence; retry reconciles from `pending.task_id` or stays
+  unresolved.
 
 The pass is the deterministic `run_auto_task_scheduler` action
 (`dispatch.rs`), wrapped in `auto_task_scheduler_pipeline` (`max_active_runs:
 1`), fired by the seeded `auto_task_scheduler` routine (`overlap: forbid`,
-minutely). Because it is a routine, its fires flow to `GET /api/routines`.
+minutely). Those job/routine knobs reduce overlap; they are not storage-level
+idempotency. Because it is a routine, its fires flow to `GET /api/routines`.
 
 ## 5. CRUD surfaces
 
@@ -175,8 +226,16 @@ cursor-neutral on every surface.
 The dashboard Operations tab exposes the same CRUD/mint runtime rather than a
 second scheduler. `#operations/auto-tasks` lists the selected workspace's
 definitions (name, enabled, schedule, template summary, dedupe, last
-evaluation/mint, last minted task id, next evaluation when the cursor makes
-that derivable). Enable/disable writes `enabled` through `auto_task_toggle`
+scheduler evaluation, last minted task id, and a structured next-evaluation
+state). Next evaluation is the schedule's next occurrence (§2b) computed by
+the scheduler's own arithmetic, never catch-up eligibility: a definition owed
+a make-up fire still shows the upcoming slot, not the owed one. It is also
+never an unqualified future timestamp: disabled rows show `Disabled` (a
+theoretical slot is labeled hypothetical), delivery rows show
+waiting-for-deliveries, a missing cursor is never observed, and inspect
+failures are unavailable. Last scheduler evaluation is the host-local
+cursor; last minted task is the newest tagged instance and is labeled a
+manual mint when the two ids differ. Enable/disable writes `enabled` through `auto_task_toggle`
 with `expected_enabled` compare-and-swap, operator authorization
 (`auto_task.toggle`), and a dashboard-operations audit row. `Mint now` calls
 `auto_task_mint` after the operator acknowledges the unconditional warning
@@ -184,6 +243,40 @@ with `expected_enabled` compare-and-swap, operator authorization
 disclosure. All-workspace and inactive/unknown workspace selections stay
 read-only. Refresh and hash navigation only GET — they never replay a toggle
 or mint.
+
+List responses expose separate `capabilities` decisions for auto-task toggle,
+manual mint, routine toggle, clock service, and clock cadence. Each decision
+uses the same governed operation as its POST endpoint; no client-side grant
+is inferred from another action. These five operations currently all require
+operator authority, while bounded-window submission has a separate policy.
+The legacy `controls_authorized` field remains for existing API consumers.
+
+One session-access explanation appears above Operations. Dashboard authority
+comes from the **server process**, not from opening a browser or terminal.
+For deliberate operator access, restart the server with
+`ORBIT_OPERATOR=1 orbit web serve`, preserving its existing root, port, and
+workspace options, then reload the page. No dashboard button grants authority.
+Unavailable actions retain a keyboard-focusable explanation, including host
+and workspace restrictions.
+
+Toggle and mint controls remain pending through server readback. Failures stay
+inline; mint success links to the created task in its originating workspace
+and never dispatches delivery. The confirmation warns when an open duplicate
+exists and preserves unconditional manual-mint semantics. Workspace changes
+invalidate old controls, list responses, and feedback, including switching
+away and back while a request is pending. The in-flight guard survives that
+switch until the request settles; it is a UI duplicate-click guard, not a
+server-side idempotency promise for manual mint. A failed readback preserves
+the successful action result and task link, so a refresh failure does not
+invite another mint.
+
+Validation uses the shipped modules in the existing Node harness
+(`cargo test -p orbit-web --lib operations_actions_preserve`). The same fixture
+runs in Chromium with `node crates/orbit-web/src/tests/dashboard_operations_browser.mjs
+/absolute/path/to/playwright/index.mjs /evidence/directory` (on one shell line).
+The optional runner serves isolated markup, styles and mocked API responses,
+checks behavior, and captures routine/auto-task panels at 1440px and 390px;
+Rust API tests separately exercise the canonical handlers and persisted state.
 
 ## 6. Concerns & Honest Limitations
 

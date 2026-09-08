@@ -19,7 +19,6 @@ use crate::application::task::{TaskAddParams, TaskUpdateParams};
 fn completion_merge_failure_routes_to_review_recovery_without_republishing() {
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
-    let run_id = "jrun-completion-merge-failure";
     let task = runtime
         .add_task(TaskAddParams {
             title: "Published completion candidate".to_string(),
@@ -40,6 +39,9 @@ fn completion_merge_failure_routes_to_review_recovery_without_republishing() {
             ..Default::default()
         })
         .expect("seed published task");
+    // The executor uses the run ID as retry-jitter salt. Reuse the
+    // store-generated fixture task ID instead of a hard-coded salt.
+    let run_id = task.id.clone();
     runtime
         .update_task(
             &task.id,
@@ -57,8 +59,6 @@ fn completion_merge_failure_routes_to_review_recovery_without_republishing() {
     job.steps.retain(|step| step.id == "complete_pr");
     let complete = job.steps.first_mut().expect("complete_pr step");
     complete.when = None;
-    complete.recovery_activity = None;
-    complete.resolved_recovery_activity = None;
     let JobV2StepBody::Target(complete) = &mut complete.body else {
         panic!("resolved complete_pr target");
     };
@@ -78,7 +78,7 @@ fn completion_merge_failure_routes_to_review_recovery_without_republishing() {
         &host,
         job,
         json!({ "task_ids": [task.id] }),
-        run_id,
+        &run_id,
     )
     .expect_err("private merge denial must fail the pipeline");
 

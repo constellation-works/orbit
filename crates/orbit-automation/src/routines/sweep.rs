@@ -1,6 +1,8 @@
 //! Deterministic routine evaluation, retry and overlap coordination.
 
-use super::due::{DueDecision, due_decision, parse_cron};
+use super::due::{
+    DueDecision, due_decision_with_grace, natural_slot_grace_for_cadence, parse_cron,
+};
 use super::loader::{LoadedRoutine, RoutineCollection, RoutineLoadError};
 #[cfg(test)]
 use super::validation::RoutineHostIdentity;
@@ -62,10 +64,23 @@ pub trait RoutineDispatch {
 }
 
 /// Options for one sweep pass.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct SweepOptions {
     /// Report what would fire without recording or dispatching anything.
     pub dry_run: bool,
+    /// Cadence of the host clock that invokes this pass. The production
+    /// assembly supplies the configured clock cadence; deterministic callers
+    /// use the compatible 60-second default.
+    pub sweep_cadence_seconds: u64,
+}
+
+impl Default for SweepOptions {
+    fn default() -> Self {
+        Self {
+            dry_run: false,
+            sweep_cadence_seconds: 60,
+        }
+    }
 }
 
 /// Per-routine outcome of one sweep pass.
@@ -174,9 +189,11 @@ pub fn run_sweep_core_with_registry(
         .map(|routine| (routine.definition.name.clone(), routine))
         .collect();
 
-    if !options.dry_run {
-        sync_unresolved_fires(store, &routines_by_name, dispatch, now_utc)?;
-    }
+    let sync_errors = if options.dry_run {
+        BTreeMap::new()
+    } else {
+        sync_unresolved_fires(store, &routines_by_name, dispatch, now_utc)?
+    };
 
     let pauses = store.routine_pauses()?;
 
@@ -206,6 +223,10 @@ pub fn run_sweep_core_with_registry(
             reports.push(skipped(routine, &validation, "duplicate_routine_ownership"));
             continue;
         }
+        if let Some(reason) = sync_errors.get(&routine.definition.name) {
+            reports.push(failure_report(routine, &validation, reason.clone()));
+            continue;
+        }
         let report = sweep_routine(
             store,
             routine,
@@ -215,16 +236,7 @@ pub fn run_sweep_core_with_registry(
             options,
             now_utc,
         )
-        .unwrap_or_else(|error| RoutineSweepReport {
-            routine: routine.definition.name.clone(),
-            source: routine.source_workspace.clone(),
-            origin: routine.origin.as_str(),
-            action: "error",
-            reason: Some(error.to_string()),
-            slot: None,
-            run_id: None,
-            validation: validation.clone(),
-        });
+        .unwrap_or_else(|error| failure_report(routine, &validation, error.to_string()));
         reports.push(report);
     }
 
@@ -303,11 +315,13 @@ fn sweep_routine(
     let lower_bound_raw = cursor.last_slot.as_deref().unwrap_or(&cursor.baseline_at);
     let lower_bound = parse_rfc3339(lower_bound_raw)?.with_timezone(&Local);
 
-    match due_decision(
+    let natural_slot_grace = natural_slot_grace_for_cadence(options.sweep_cadence_seconds)?;
+    match due_decision_with_grace(
         &cron,
         definition.trigger.missed_run,
         &lower_bound,
         &now_local,
+        natural_slot_grace,
     )? {
         DueDecision::Fire { slot, .. } => {
             let slot_utc = slot.with_timezone(&Utc).to_rfc3339();
@@ -377,7 +391,8 @@ fn retry_candidate(
         return Ok(None);
     }
     let failed_at = parse_rfc3339(&latest.updated_at)?;
-    if now_utc.signed_duration_since(failed_at) < Duration::minutes(retries.backoff_minutes as i64)
+    if now_utc.signed_duration_since(failed_at)
+        < duration_from_minutes(retries.backoff_minutes, "policy.retries.backoff_minutes")?
     {
         return Ok(None);
     }
@@ -494,7 +509,8 @@ fn sync_unresolved_fires(
     routines_by_name: &BTreeMap<String, &LoadedRoutine>,
     dispatch: &dyn RoutineDispatch,
     now_utc: DateTime<Utc>,
-) -> Result<(), OrbitError> {
+) -> Result<BTreeMap<String, String>, OrbitError> {
+    let mut errors = BTreeMap::new();
     for fire in store.routine_unresolved_fires()? {
         // Eligibility was resolved before this mutation phase. A routine that
         // is no longer assigned to this machine must leave this machine's
@@ -502,13 +518,23 @@ fn sync_unresolved_fires(
         let Some(routine) = routines_by_name.get(&fire.routine_name) else {
             continue;
         };
-        let timeout_minutes = routine.definition.policy.timeout_minutes;
+        let timeout = match duration_from_minutes(
+            routine.definition.policy.timeout_minutes,
+            "policy.timeout_minutes",
+        ) {
+            Ok(timeout) => timeout,
+            Err(error) => {
+                errors
+                    .entry(routine.definition.name.clone())
+                    .or_insert_with(|| error.to_string());
+                continue;
+            }
+        };
         let created_at = match parse_rfc3339(&fire.created_at) {
             Ok(value) => value,
             Err(_) => continue,
         };
-        let expired =
-            now_utc.signed_duration_since(created_at) > Duration::minutes(timeout_minutes as i64);
+        let expired = now_utc.signed_duration_since(created_at) > timeout;
 
         match fire.state {
             // A recorded intent whose sweep died before dispatch: reclaim it
@@ -622,7 +648,17 @@ fn sync_unresolved_fires(
         }
     }
 
-    Ok(())
+    Ok(errors)
+}
+
+fn duration_from_minutes(minutes: u64, field: &str) -> Result<Duration, OrbitError> {
+    let minutes = i64::try_from(minutes).map_err(|_| {
+        OrbitError::InvalidInput(format!("routine {field} is too large for a duration"))
+    })?;
+
+    Duration::try_minutes(minutes).ok_or_else(|| {
+        OrbitError::InvalidInput(format!("routine {field} is too large for a duration"))
+    })
 }
 
 fn skipped(
@@ -636,6 +672,23 @@ fn skipped(
         origin: routine.origin.as_str(),
         action: "skipped",
         reason: Some(reason.to_string()),
+        slot: None,
+        run_id: None,
+        validation: validation.clone(),
+    }
+}
+
+fn failure_report(
+    routine: &LoadedRoutine,
+    validation: &RoutinePinValidation,
+    reason: String,
+) -> RoutineSweepReport {
+    RoutineSweepReport {
+        routine: routine.definition.name.clone(),
+        source: routine.source_workspace.clone(),
+        origin: routine.origin.as_str(),
+        action: "error",
+        reason: Some(reason),
         slot: None,
         run_id: None,
         validation: validation.clone(),

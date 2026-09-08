@@ -154,6 +154,12 @@ pub(super) fn fallback_reason(error: &OrbitError) -> String {
         OrbitError::CompanionNotInstalled(_) => {
             "optional inference companion unavailable".to_string()
         }
+        OrbitError::Store(message)
+            if message
+                .contains("semantic index layout is incompatible with this Orbit runtime") =>
+        {
+            message.clone()
+        }
         _ => error.to_string(),
     }
 }

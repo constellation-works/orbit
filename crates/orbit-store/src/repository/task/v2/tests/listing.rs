@@ -1,7 +1,17 @@
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use super::*;
 use crate::contracts::TaskListFilter;
+use crate::driver::file::task_bundle::take_artifact_payload_reads;
+use crate::workflow::task::reindex_workspace;
+
+/// Metadata probes charged to the envelope freshness scan since the previous
+/// call. Paired with [`reads`], this separates stamping an envelope file from
+/// parsing it.
+pub(super) fn probes(store: &TaskV2Store) -> usize {
+    store.envelope_cache.take_stat_calls()
+}
 
 pub(super) fn reads(store: &TaskV2Store) -> (usize, usize) {
     (
@@ -47,9 +57,11 @@ fn bounded_queries_load_only_selected_bundles_as_the_corpus_grows() {
             tags: vec!["selective".to_string()],
             ..Default::default()
         };
+        // The freshness scan already parsed every envelope above, so the
+        // second query pays metadata probes and no envelope parse.
         let page = store.query_task_rows(&filter, 50, None).unwrap();
         assert_eq!(page.total, count / 10);
-        assert_eq!(reads(&store), ((count / 10).min(50), count));
+        assert_eq!(reads(&store), ((count / 10).min(50), 0));
         assert!(
             page.items
                 .iter()
@@ -60,7 +72,7 @@ fn bounded_queries_load_only_selected_bundles_as_the_corpus_grows() {
 
 #[test]
 fn bounded_integrity_is_selected_only_but_direct_unbounded_and_fallback_reads_are_strict() {
-    for corruption in ["body", "events", "artifact"] {
+    for corruption in ["body", "events"] {
         let temp = TempDir::new().unwrap();
         let store = store(&temp);
         let old = store
@@ -138,6 +150,12 @@ fn bounded_integrity_is_selected_only_but_direct_unbounded_and_fallback_reads_ar
 fn missing_and_stale_indexes_rebuild_then_return_to_bounded_reads() {
     let temp = TempDir::new().unwrap();
     let store = corpus(&temp, 10);
+    // Parse every envelope once up front, so each iteration below measures the
+    // rebuild itself rather than the first freshness scan's parses.
+    store
+        .query_task_rows(&TaskListFilter::default(), 2, None)
+        .unwrap();
+    reads(&store);
     let conn = rusqlite::Connection::open(task_registry_path(temp.path())).unwrap();
     for sql in [
         "DELETE FROM task_bundle_index",
@@ -153,7 +171,7 @@ fn missing_and_stale_indexes_rebuild_then_return_to_bounded_reads() {
         store
             .query_task_rows(&TaskListFilter::default(), 2, None)
             .unwrap();
-        assert_eq!(reads(&store), (2, 10));
+        assert_eq!(reads(&store), (2, 0));
     }
 }
 
@@ -189,14 +207,12 @@ fn selected_corruption_is_not_replaced_and_in_flight_deletion_is_tolerated() {
             .query_task_rows(&TaskListFilter::default(), 1, None)
             .is_err()
     );
-    let sentinel = crate::driver::file::task_bundle::task_bundle_lock_sentinel_path(&path).unwrap();
+    let sentinel = path.with_file_name(format!(".{}.lock", selected.id));
     fs::write(sentinel, "").unwrap();
     assert!(
         store
             .query_task_rows(&TaskListFilter::default(), 1, None)
-            .unwrap()
-            .items
-            .is_empty()
+            .is_err()
     );
     fs::remove_dir_all(path).unwrap();
     assert_eq!(
@@ -290,5 +306,157 @@ fn metadata_filters_preserve_ties_and_legacy_tag_normalization() {
             .map(|row| &row.task.id)
             .collect::<Vec<_>>(),
         expected[..2].iter().collect::<Vec<_>>()
+    );
+}
+
+fn upsert_proof(store: &TaskV2Store, id: &str, content: &[u8]) {
+    store
+        .upsert_task_artifacts(
+            id,
+            &TaskArtifactUpdateParams {
+                owner_run_id: None,
+                actor: "codex".to_string(),
+                upsert_artifacts: vec![TaskArtifact {
+                    path: "proof.txt".to_string(),
+                    media_type: "text/plain".to_string(),
+                    content: content.to_vec(),
+                    created_by: None,
+                }],
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn listing_and_search_defer_artifact_payload_verification() {
+    let temp = TempDir::new().unwrap();
+    let store = store(&temp);
+    let old = store
+        .create_task(create_params("Old matching", TaskStatus::Backlog))
+        .unwrap();
+    upsert_proof(&store, &old.id, b"proof");
+    let newest = store
+        .create_task(create_params("New task", TaskStatus::Backlog))
+        .unwrap();
+    let path = store.bundle_store.bundle_path(&old.id).unwrap();
+    fs::write(path.join("artifacts/files/proof.txt"), "wrong").unwrap();
+    let _ = take_artifact_payload_reads();
+
+    let listed = store.list_tasks().unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![newest.id.as_str(), old.id.as_str()]
+    );
+    let searched = store.search_tasks("old matching").unwrap();
+    assert_eq!(
+        searched
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![old.id.as_str()]
+    );
+    let page = store
+        .query_task_rows(&TaskListFilter::default(), 2, None)
+        .unwrap();
+    assert_eq!(page.total, 2);
+    assert_eq!(page.items[0].task.id, newest.id);
+    assert_eq!(page.items[1].task.id, old.id);
+    assert_eq!(page.items[1].artifacts[0].path, "proof.txt");
+    assert_eq!(take_artifact_payload_reads(), 0);
+
+    assert!(store.get_task(&old.id).is_err());
+    assert!(store.get_task_row(&old.id, false).is_err());
+    assert!(store.get_task_artifact(&old.id, "proof.txt").is_err());
+    assert!(reindex_workspace(&store.registry, &store.workspace_id).is_err());
+    let _ = take_artifact_payload_reads();
+
+    let conn = rusqlite::Connection::open(task_registry_path(temp.path())).unwrap();
+    conn.execute("DELETE FROM task_bundle_index", []).unwrap();
+    let rebuilt = store
+        .query_task_rows(&TaskListFilter::default(), 2, None)
+        .unwrap();
+    assert_eq!(rebuilt.total, 2);
+    assert_eq!(take_artifact_payload_reads(), 0);
+}
+
+#[test]
+#[allow(clippy::print_stdout)]
+fn lightweight_listing_skips_artifact_payload_io() {
+    let temp = TempDir::new().unwrap();
+    let store = store(&temp);
+    const TASKS: usize = 8;
+    const BLOB_BYTES: usize = 512 * 1024;
+    let payload = vec![b'x'; BLOB_BYTES];
+    let mut ids = Vec::with_capacity(TASKS);
+    for index in 0..TASKS {
+        let task = store
+            .create_task(create_params(
+                &format!("Heavy artifact task {index}"),
+                TaskStatus::Backlog,
+            ))
+            .unwrap();
+        upsert_proof(&store, &task.id, &payload);
+        ids.push(task.id);
+    }
+    let _ = take_artifact_payload_reads();
+    let _ = store.list_tasks().unwrap();
+    let _ = store.search_tasks("heavy artifact").unwrap();
+    let _ = store
+        .query_task_rows(&TaskListFilter::default(), TASKS, None)
+        .unwrap();
+    for id in &ids {
+        let _ = store.get_task(id).unwrap();
+    }
+    let _ = take_artifact_payload_reads();
+
+    let list_started = Instant::now();
+    let listed = store.list_tasks().unwrap();
+    let list_ms = list_started.elapsed().as_secs_f64() * 1000.0;
+    let list_payload_opens = take_artifact_payload_reads();
+
+    let search_started = Instant::now();
+    let searched = store.search_tasks("heavy artifact").unwrap();
+    let search_ms = search_started.elapsed().as_secs_f64() * 1000.0;
+    let search_payload_opens = take_artifact_payload_reads();
+
+    let rows_started = Instant::now();
+    let page = store
+        .query_task_rows(&TaskListFilter::default(), TASKS, None)
+        .unwrap();
+    let rows_ms = rows_started.elapsed().as_secs_f64() * 1000.0;
+    let row_payload_opens = take_artifact_payload_reads();
+
+    let strict_started = Instant::now();
+    for id in &ids {
+        store.get_task(id).unwrap().unwrap();
+    }
+    let strict_ms = strict_started.elapsed().as_secs_f64() * 1000.0;
+    let strict_payload_opens = take_artifact_payload_reads();
+
+    assert_eq!(listed.len(), TASKS);
+    assert_eq!(searched.len(), TASKS);
+    assert_eq!(page.items.len(), TASKS);
+    assert_eq!(list_payload_opens, 0);
+    assert_eq!(search_payload_opens, 0);
+    assert_eq!(row_payload_opens, 0);
+    assert_eq!(strict_payload_opens, TASKS);
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "tasks": TASKS,
+            "blob_bytes_per_task": BLOB_BYTES,
+            "lightweight_list_ms": list_ms,
+            "lightweight_search_ms": search_ms,
+            "lightweight_rows_ms": rows_ms,
+            "strict_get_all_ms": strict_ms,
+            "lightweight_list_payload_opens": list_payload_opens,
+            "lightweight_search_payload_opens": search_payload_opens,
+            "lightweight_rows_payload_opens": row_payload_opens,
+            "strict_get_all_payload_opens": strict_payload_opens,
+        })
     );
 }

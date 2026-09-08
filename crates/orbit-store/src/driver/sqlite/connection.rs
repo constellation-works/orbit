@@ -1,12 +1,21 @@
-use std::path::Path;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::{apply_default_pragmas, open_private};
-use rusqlite::{Connection, Transaction, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 
 use crate::driver::sqlite::migration;
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
+
+thread_local! {
+    static FILE_OPEN_PATHS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+}
+
+fn record_file_open(path: &Path) {
+    FILE_OPEN_PATHS.with(|paths| paths.borrow_mut().push(path.to_path_buf()));
+}
 
 /// SQLite store handle: one writer connection behind a mutex (WAL permits a
 /// single writer) plus a read-only connection pool so reads never queue
@@ -70,7 +79,22 @@ impl Store {
         .map_err(|e| OrbitError::Store(e.to_string()))?;
         Ok(())
     }
+    /// Writer-handle constructions of `path` on this thread via [`Store::open`].
+    ///
+    /// Read-pool checkouts use `Connection::open` and are not counted. In-memory
+    /// stores have no file path and are also excluded.
+    pub fn thread_file_open_count_for(path: &Path) -> u64 {
+        FILE_OPEN_PATHS.with(|paths| {
+            paths
+                .borrow()
+                .iter()
+                .filter(|opened| opened.as_path() == path)
+                .count() as u64
+        })
+    }
+
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
+        record_file_open(path);
         let opened = open_private(path)?;
         let conn = opened.connection;
         let read_only = opened.read_only;
@@ -90,6 +114,18 @@ impl Store {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
+        })
+    }
+
+    /// Open an existing database for an observational probe, without creating
+    /// the database, applying migrations, or changing database pragmas. Use a fresh
+    /// connection so a cached runtime handle cannot hide a replaced path.
+    pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            readers: None,
         })
     }
 
@@ -218,6 +254,17 @@ impl Store {
         )))
     }
 
+    /// Probe the current database path without creating or migrating it.
+    /// A fresh read-write connection detects replaced paths and must acquire
+    /// the write lock; cached handles and read-only opens cannot prove readiness.
+    pub fn check_path_writable(path: &Path) -> Result<(), OrbitError> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(1))
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        check_connection_writable(&conn)
+    }
+
     /// Prove the database accepts writes without mutating it: acquire the
     /// write lock via `BEGIN IMMEDIATE`, then roll back. Fails when the
     /// database file (or its WAL sidecars) is not writable, or when the
@@ -227,7 +274,11 @@ impl Store {
             .conn
             .lock()
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
-            .map_err(|e| OrbitError::Store(format!("write probe failed: {e}")))
+        check_connection_writable(&conn)
     }
+}
+
+fn check_connection_writable(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
+        .map_err(|error| OrbitError::Store(format!("write probe failed: {error}")))
 }

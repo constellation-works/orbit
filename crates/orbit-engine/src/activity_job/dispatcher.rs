@@ -51,11 +51,11 @@ pub struct ResolvedShellExecutor {
 /// just before spawn (keeping the orbit-exec dependency local to orbit-engine).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSandbox {
-    /// OS sandbox primitive selected by the executor declaration.
+    /// Executor choice, including explicit off (no wrapper or profile use).
     pub kind: ExecutorSandboxKind,
     /// Workspace-absolute resolved `read` / `modify` rules from the activity's
     /// `FsProfile`. The engine passes this to `orbit_exec::compile_*_profile`
-    /// to produce a kernel-shaped payload.
+    /// to produce a kernel-shaped payload. Unused and empty for explicit off.
     pub fs_profile: ResolvedFsProfile,
     /// Whether to fall back to bare exec if the OS primitive is unavailable.
     pub allow_fallback: bool,
@@ -344,12 +344,20 @@ fn dispatch_v2_activity_inner(
     result
 }
 
-fn inject_run_id(input: &Value, run_id: &str) -> Value {
+pub(crate) fn inject_run_id(input: &Value, run_id: &str) -> Value {
     let Value::Object(map) = input else {
         return input.clone();
     };
     if map.contains_key("run_id") {
-        return input.clone();
+        // An explicit `run_id` is a worktree identity token (epic pipelines
+        // pin `epic-<task-id>`). The admitted job still owns execution
+        // authority; expose it as `job_run_id` when the caller did not.
+        if map.contains_key("job_run_id") {
+            return input.clone();
+        }
+        let mut augmented = map.clone();
+        augmented.insert("job_run_id".to_string(), Value::String(run_id.to_string()));
+        return Value::Object(augmented);
     }
 
     let mut augmented = map.clone();

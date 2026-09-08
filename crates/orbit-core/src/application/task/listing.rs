@@ -1,4 +1,4 @@
-//! Shared bounded task queries for runtime and checkoutless transports.
+//! Shared bounded task queries for the runtime task-list surface.
 
 use std::collections::BTreeMap;
 
@@ -31,7 +31,7 @@ impl Default for TaskListQuery {
 
 /// Readiness and path matching retain their existing application policy. These
 /// residual predicates hydrate metadata matches before applying the limit.
-pub(crate) fn query_task_store(
+fn query_task_store(
     store: &dyn TaskStoreBackend,
     query: &TaskListQuery,
 ) -> Result<TaskPage, OrbitError> {

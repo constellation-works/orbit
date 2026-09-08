@@ -9,6 +9,8 @@ Options:
           Override the Orbit root directory (highest precedence)
       --completion <COMPLETION>
           Run-layer completion preference: review or done (an explicit done past the delivery cap is refused)
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory
       --leaf-ceiling <LEAF_CEILING>
           Run-layer ceiling on concurrently live leaf runs
       --recovery-episodes <RECOVERY_EPISODES>
@@ -16,7 +18,7 @@ Options:
       --recovery-minutes <RECOVERY_MINUTES>
           Run-layer recovery wall-time minutes allowed per task
       --review-policy <REVIEW_POLICY>
-          Run-layer review policy: none or after-landing (before-pr is not yet supported at admission)
+          Run-layer review policy: none, before-pr (holds PR creation for a fresh reviewer), or after-landing
       --json
           Output as JSON
   -h, --help

@@ -4,12 +4,12 @@ type: design
 title: "Host Registry — Decisions"
 owner: codex
 last_updated: 2026-08-23
-last_validated: 2026-08-15
+last_validated: 2026-09-07
 status: Accepted
 feature: host-registry
 doc_role: decisions
 tags: [host-registry, machine-identity, workspace-catalog, runtime-composition]
-paths: ["crates/orbit-common/src/types/host.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-cli/src/command/host/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/**"]
+paths: ["crates/orbit-types/src/identity/host.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-cli/src/command/host/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/**"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
 related_artifacts: [ORB-11008, ORB-11009]
 ---
@@ -24,7 +24,7 @@ must not become a replica protocol. The federated MCP contract itself lives in
 
 **Context.** Host and workspace values are shared across Store, Registry, Core and presentation crates, but file lifecycle needs one owner.
 
-**Decision.** orbit-common owns persistence-neutral DTOs and validators. orbit-registry owns host.toml and workspaces.json. orbit-cmd owns the join from selected registry state to Core runtime state. CLI, Web and MCP remain outer callers.
+**Decision.** orbit-types owns persistence-neutral host/workspace identity DTOs and validators. orbit-registry owns host.toml and workspaces.json. orbit-cmd owns the join from selected registry state to Core runtime state. CLI, Web and MCP remain outer callers.
 
 **Consequences.** Dependency direction stays acyclic and lookup semantics are reusable. Cost: adding a registry field may require coordinated DTO, persistence and composition changes.
 

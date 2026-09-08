@@ -5,6 +5,28 @@ use orbit_common::OrbitError;
 use super::path_util::component_str;
 use super::types::{DocFrontmatter, DocType, FrontmatterBlock, ParsedDoc, RawDocFrontmatter};
 
+#[cfg(test)]
+thread_local! {
+    static DOC_FILE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_doc_file_read() {
+    DOC_FILE_READS.with(|reads| reads.set(reads.get() + 1));
+}
+
+/// Reset the doc-file read counter (test helper).
+#[cfg(test)]
+pub(super) fn reset_doc_file_reads() {
+    DOC_FILE_READS.with(|reads| reads.set(0));
+}
+
+/// Return how many doc files have been read since the last reset (test helper).
+#[cfg(test)]
+pub(super) fn doc_file_reads() -> usize {
+    DOC_FILE_READS.with(std::cell::Cell::get)
+}
+
 pub(super) fn parse_doc_strict(path: &Path, raw: &str) -> Result<ParsedDoc, OrbitError> {
     let block = split_frontmatter(raw).map_err(|message| {
         OrbitError::InvalidInput(format!(
@@ -57,6 +79,24 @@ pub(super) fn parse_doc_strict(path: &Path, raw: &str) -> Result<ParsedDoc, Orbi
         },
         body: block.body.to_string(),
     })
+}
+
+/// Read a Markdown doc from disk and parse it tolerantly.
+///
+/// This is the one place the docs pipeline opens a doc file: the walk, and the
+/// single-path `docs show` lookup, both come through here. Keeping the read
+/// and the parse together is what lets one docs operation touch each file
+/// exactly once, and `doc_file_reads` makes that observable to tests.
+pub(super) fn read_doc_tolerant(
+    repo_relative: &Path,
+    absolute_path: &Path,
+) -> Result<ParsedDoc, OrbitError> {
+    #[cfg(test)]
+    record_doc_file_read();
+
+    let raw = std::fs::read_to_string(absolute_path)
+        .map_err(|error| OrbitError::Io(format!("read {}: {error}", absolute_path.display())))?;
+    Ok(parse_doc_tolerant(repo_relative, absolute_path, &raw))
 }
 
 pub(super) fn parse_doc_tolerant(

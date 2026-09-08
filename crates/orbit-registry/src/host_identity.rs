@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::atomic_write_text;
+use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 use orbit_common::protocol::toml::escape_basic_string;
 use orbit_types::identity::{MACHINE_ID_PREFIX, validate_machine_id};
 use serde::Deserialize;
@@ -328,51 +328,58 @@ pub fn load_host_identity(global_root: &Path) -> Result<HostIdentity, OrbitError
 ///
 /// Idempotent: a present identity is returned `Unchanged` with no write. A
 /// malformed or future-schema file is never overwritten — the error propagates.
+///
+/// Concurrent callers on the same root are serialised with an exclusive lock
+/// on `host.toml`. Inspect runs after the lock is held, so a racing second
+/// create observes `Present` and returns `Unchanged` instead of minting a
+/// second `machine_id`.
 pub fn ensure_host_identity(
     global_root: &Path,
     new: impl FnOnce() -> Result<NewHostIdentity, OrbitError>,
 ) -> Result<HostIdentityOutcome, OrbitError> {
-    match inspect_host_identity(global_root)? {
-        HostIdentityState::Present(identity) => Ok(HostIdentityOutcome::Unchanged(identity)),
-        HostIdentityState::Legacy {
-            host_id,
-            machine_id,
-        } => {
-            // Migrate atomically: preserve an existing schema-v1 machine id,
-            // generate one only for the oldest host-id-only format, and retain
-            // the historical ORB namespace. Rollback leaves the last valid
-            // file readable.
-            let identity = HostIdentity {
-                schema_version: HOST_IDENTITY_SCHEMA_VERSION,
-                machine_id: machine_id.unwrap_or_else(generate_machine_id),
+    with_exclusive_file_lock(&host_toml_path(global_root), "host identity", move || {
+        match inspect_host_identity(global_root)? {
+            HostIdentityState::Present(identity) => Ok(HostIdentityOutcome::Unchanged(identity)),
+            HostIdentityState::Legacy {
                 host_id,
-                task_prefix: LEGACY_TASK_PREFIX.to_string(),
-            };
-            write_host_identity(global_root, &identity)?;
-            Ok(HostIdentityOutcome::Migrated(identity))
-        }
-        HostIdentityState::Absent => {
-            let NewHostIdentity {
-                host_id,
-                task_prefix,
-            } = new()?;
-            let host_id = host_id.trim().to_string();
-            if host_id.is_empty() {
-                return Err(OrbitError::InvalidInput(
-                    "host name must not be empty".to_string(),
-                ));
+                machine_id,
+            } => {
+                // Migrate atomically: preserve an existing schema-v1 machine id,
+                // generate one only for the oldest host-id-only format, and retain
+                // the historical ORB namespace. Rollback leaves the last valid
+                // file readable.
+                let identity = HostIdentity {
+                    schema_version: HOST_IDENTITY_SCHEMA_VERSION,
+                    machine_id: machine_id.unwrap_or_else(generate_machine_id),
+                    host_id,
+                    task_prefix: LEGACY_TASK_PREFIX.to_string(),
+                };
+                write_host_identity(global_root, &identity)?;
+                Ok(HostIdentityOutcome::Migrated(identity))
             }
-            let task_prefix = validate_new_task_prefix(&task_prefix)?;
-            let identity = HostIdentity {
-                schema_version: HOST_IDENTITY_SCHEMA_VERSION,
-                machine_id: generate_machine_id(),
-                host_id,
-                task_prefix,
-            };
-            write_host_identity(global_root, &identity)?;
-            Ok(HostIdentityOutcome::Created(identity))
+            HostIdentityState::Absent => {
+                let NewHostIdentity {
+                    host_id,
+                    task_prefix,
+                } = new()?;
+                let host_id = host_id.trim().to_string();
+                if host_id.is_empty() {
+                    return Err(OrbitError::InvalidInput(
+                        "host name must not be empty".to_string(),
+                    ));
+                }
+                let task_prefix = validate_new_task_prefix(&task_prefix)?;
+                let identity = HostIdentity {
+                    schema_version: HOST_IDENTITY_SCHEMA_VERSION,
+                    machine_id: generate_machine_id(),
+                    host_id,
+                    task_prefix,
+                };
+                write_host_identity(global_root, &identity)?;
+                Ok(HostIdentityOutcome::Created(identity))
+            }
         }
-    }
+    })
 }
 
 /// Atomically (re)write `host.toml`. The staged-rename write never leaves a

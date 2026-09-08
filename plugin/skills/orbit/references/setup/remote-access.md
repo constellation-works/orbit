@@ -76,6 +76,86 @@ the destination grant, with ordinary tool policy still enforced. A malformed
 file fails closed. Inspect the check result and session audit evidence when a
 workflow tool is absent or denied; do not treat changing remote argv as a fix.
 
+### Remote host-agent invocation
+
+Remote `orbit_agent_invoke` is a narrower grant than remote operator access.
+The matched caller row must explicitly enable the operation on named
+workspaces and grant operator capability. Omission of `agent_invoke_mode`
+preserves the strict key-bound mode:
+
+```toml
+default = "deny"
+
+[[callers]]
+machine_id = "<caller-machine-id>"
+label = "<display-name>"
+capabilities = ["agent", "operator"]
+ssh_key_fingerprint = "SHA256:<caller-public-key-fingerprint>"
+agent_invoke = true
+agent_invoke_workspaces = ["<invocation-workspace-id>"]
+```
+
+The destination can instead opt one row into the existing cooperative SSH
+operator channel without Tier-2 infrastructure:
+
+```toml
+default = "deny"
+
+[[callers]]
+machine_id = "<caller-machine-id>"
+label = "<display-name>"
+capabilities = ["agent", "operator"]
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = ["<invocation-workspace-id>"]
+```
+
+This is an explicit destination-owner statement that callers using the same
+SSH OS account cooperate. The machine ID remains self-asserted: any peer able
+to start the same non-interactive SSH operator session can name another row.
+The policy prevents accidental use and limits Orbit's admission to the named
+workspace and one invocation; it does not isolate mutually malicious peers who
+share the account and already control that account's files and processes.
+Never describe a cooperative admission as key-bound.
+
+`agent_invoke_workspaces` is independent from ordinary `workspaces`. When a
+caller already has general operator access, add the operation scope without
+narrowing that access. Leave its existing capabilities and absent `workspaces`
+unchanged, then add only:
+
+```toml
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = ["ws_orbit"]
+```
+
+Omitting `agent_invoke_workspaces` preserves the older behavior where
+`workspaces` is also the invocation scope. Empty, malformed, or unknown scope
+shapes fail closed.
+
+For either mode, install the updated Orbit binary on the destination, review
+and edit `~/.orbit/mcp-callers.toml` there, run `orbit mcp callers check
+<caller-machine-id>`, then close and recreate the calling MCP connection. A
+live session keeps the policy loaded at establishment. For strict mode, first
+generate and install the destination-issued forced command with `orbit mcp
+callers authorize`. To revoke either mode, remove the row or set
+`agent_invoke = false`, then reconnect; the next invocation is denied.
+
+After reconnecting, a minimal smoke is one short, read-only invocation with an
+explicit destination workspace selector, checkout `cwd`, bounded timeout, and
+the configured Luna crew. Ask it to report one harmless fact and explicitly not
+to modify files or start other work. Verify the submission and
+`trusted_host.execution_admitted` event report `agent_invoke_mode = "cooperative"`
+with `caller_identity = "self-asserted"` (or both fields as `key-bound` in
+strict mode), and verify the run reaches a terminal state.
+
+Strict mode is an authenticated caller and accident-resistant admission path;
+neither mode is process isolation. The invoked provider runs outside Orbit's
+filesystem sandbox as the same operating-system user as the destination Orbit
+process and can access everything that user can. Keep the prompt read-only when
+that is the intent; a tool declaration does not confine the provider's own
+shell.
+
 There are two identity strengths. Ordinary SSH proxy identity is a self-asserted
 audit label, suitable for cooperative operators with shell access; it is not
 proof against a caller naming a different machine. Key-bound acceptance uses a

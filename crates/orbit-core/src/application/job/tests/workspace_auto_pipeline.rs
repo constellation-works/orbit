@@ -355,9 +355,15 @@ fn workspace_auto_keeps_dispatching_while_earlier_leaves_are_still_running() {
 /// detached leaf.
 #[test]
 fn workspace_auto_fails_promptly_when_leaf_dispatch_has_no_durable_child() {
-    let (_root, runtime, repo_root, global_root) = test_runtime();
+    let (root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::DispatchFailure);
+    let run_id = root
+        .path()
+        .file_name()
+        .expect("test tempdir has a final path component")
+        .to_string_lossy()
+        .into_owned();
 
     let err = try_execute_named_job(
         &runtime,
@@ -365,7 +371,7 @@ fn workspace_auto_fails_promptly_when_leaf_dispatch_has_no_durable_child() {
         &host,
         "workspace_auto_pipeline",
         json!({"max_tasks": 50, "for_seconds": 0, "idle_sleep_seconds": 0}),
-        "jrun-workspace-auto-dispatch-failure",
+        &run_id,
     )
     .expect_err("pre-link dispatch failure must fail the workspace drain");
 
@@ -379,9 +385,15 @@ fn workspace_auto_fails_promptly_when_leaf_dispatch_has_no_durable_child() {
 
 #[test]
 fn workspace_auto_preserves_concrete_workspace_step_failure() {
-    let (_root, runtime, repo_root, global_root) = test_runtime();
+    let (root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::ClassifierFailure);
+    let run_id = root
+        .path()
+        .file_name()
+        .expect("test tempdir has a final path component")
+        .to_string_lossy()
+        .into_owned();
 
     let err = try_execute_named_job(
         &runtime,
@@ -389,7 +401,7 @@ fn workspace_auto_preserves_concrete_workspace_step_failure() {
         &host,
         "workspace_auto_pipeline",
         json!({"max_tasks": 50, "for_seconds": 0, "idle_sleep_seconds": 0}),
-        "jrun-workspace-auto-classifier-failure",
+        &run_id,
     )
     .expect_err("workspace-level deterministic failure must fail the drain");
 
@@ -409,7 +421,7 @@ fn workspace_auto_preserves_concrete_workspace_step_failure() {
 /// job declares, not a Rust helper.
 #[test]
 fn workspace_auto_forwards_its_crew_allowlist_to_every_detached_child() {
-    let (_root, runtime, repo_root, global_root) = test_runtime();
+    let (root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::LeafAndEpic);
     let input = json!({
@@ -419,16 +431,19 @@ fn workspace_auto_forwards_its_crew_allowlist_to_every_detached_child() {
         "idle_sleep_seconds": 0,
         "allowed_crews": ["opus", "sonnet"],
     });
+    // Keep the fixture's persisted job id unique. The engine uses the run id
+    // as retry-jitter salt, and a hard-coded job id can reach that seed through
+    // the run-id collision fallback.
+    let fixture_job_id = root
+        .path()
+        .file_name()
+        .expect("test tempdir has a final path component")
+        .to_string_lossy()
+        .into_owned();
     let run = runtime
         .stores()
         .jobs()
-        .insert_job_run(
-            "workspace_auto_pipeline",
-            1,
-            Utc::now(),
-            Some(input.clone()),
-            None,
-        )
+        .insert_job_run(&fixture_job_id, 1, Utc::now(), Some(input.clone()), None)
         .expect("insert workspace auto run");
     runtime
         .write_run_state(

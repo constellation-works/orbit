@@ -14,11 +14,24 @@ pub enum CoverageClass {
     LandedCodeReviewV1,
 }
 
+impl std::fmt::Display for CoverageClass {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let wire_name = match self {
+            Self::IntegratedQaV1 => "integrated_qa_v1",
+            Self::LandedCodeReviewV1 => "landed_code_review_v1",
+        };
+
+        formatter.write_str(wire_name)
+    }
+}
+
 /// Opt-in delivery scheduling configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeliveryTrigger {
-    /// Stable registry machine ID; execution remains inert until explicitly selected.
+    /// Stable registry machine ID. When omitted, the registered owner of the
+    /// workspace owns the definition; execution stays inert while that owner
+    /// is missing or contradicted.
     #[serde(default)]
     pub owner_machine: Option<String>,
     pub branch: String,
@@ -89,7 +102,36 @@ pub struct SourcePage {
     pub unresolved: BTreeMap<String, String>,
     #[serde(default)]
     pub associations: BTreeMap<String, Option<DeliveryAssociation>>,
+    /// Accepted before-PR review coverage keyed by delivery key, supplied by
+    /// Core from verified certificates [ORB-11333]. Only a
+    /// `landed_code_review_v1` consumer excludes on it; QA never does.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub exclusions: BTreeMap<String, DeliveryExclusion>,
     pub complete: bool,
+}
+
+/// A delivery whose content is proven covered by an accepted before-PR
+/// review certificate. It stays in the examined range as context but is not
+/// an obligation and does not count toward a review threshold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryExclusion {
+    /// The certificate attempt that covers this delivery.
+    pub attempt_id: String,
+    /// The assurance label the certificate carries.
+    pub assurance: String,
+    /// The certificate's task-meaning digest, retained for audit.
+    pub task_meaning_digest: String,
+    /// The verified reviewed tree the landing reproduced.
+    pub final_candidate_tree: String,
+}
+
+/// A delivery excluded from review obligations, with the reason it was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExcludedDelivery {
+    pub delivery: Delivery,
+    pub exclusion: DeliveryExclusion,
+    pub decided_at: DateTime<Utc>,
 }
 
 /// Frozen input supplied verbatim to the task or job.
@@ -107,6 +149,10 @@ pub struct CoverageBatch {
     pub through_inclusive: SourceRevision,
     pub commits: Vec<String>,
     pub deliveries: Vec<Delivery>,
+    /// Deliveries inside the range that accepted before-PR coverage excludes
+    /// from examination; they are readable context, not obligations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclusions: Vec<ExcludedDelivery>,
     pub created_at: DateTime<Utc>,
     /// Aggregate budget is frozen with the batch, including configuration edits.
     pub max_attempts: u32,
@@ -155,6 +201,12 @@ pub struct AutomationState {
     pub pending: Vec<Delivery>,
     #[serde(default)]
     pub waived: Vec<Delivery>,
+    /// Deliveries proven covered before landing. They never count toward a
+    /// threshold. An exclusively excluded prefix may retire without a consumer
+    /// examination receipt; interleaved exclusions retire with the examined
+    /// range that contains them.
+    #[serde(default)]
+    pub excluded: Vec<ExcludedDelivery>,
     pub unresolved: BTreeMap<String, String>,
     #[serde(default)]
     pub associations: BTreeMap<String, Option<DeliveryAssociation>>,
@@ -204,6 +256,52 @@ pub struct AcceptedCoverage {
     pub accepted_at: DateTime<Utc>,
 }
 
+/// How the effective owner of a delivery consumer was determined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerAuthority {
+    /// The definition names `owner_machine` explicitly.
+    Definition,
+    /// Inherited from the registered owner of this workspace, which is
+    /// authoritative whenever the definition omits an owner.
+    Workspace,
+    /// Nothing names an owner: the workspace record predates host identity,
+    /// or this checkout is not registered.
+    Missing,
+    /// The workspace record and this checkout's replica role name different
+    /// owners, so neither may be trusted.
+    Conflicting,
+}
+
+/// Effective ownership of one delivery consumer on this host. Preview,
+/// inspection and real evaluation all report it, so "no admission here" is
+/// never indistinguishable from a definition the operator disabled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryOwnership {
+    /// The machine allowed to admit work, when one could be resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_machine: Option<String>,
+    pub authority: OwnerAuthority,
+    /// True only when this host is the resolved owner. Admission is
+    /// impossible otherwise, whatever the definition's `enabled` says.
+    pub owned_here: bool,
+}
+
+impl DeliveryOwnership {
+    /// Scheduling reason for an enabled definition this host may not admit
+    /// work for; `None` when this host is the owner.
+    pub fn refusal(&self) -> Option<&'static str> {
+        if self.owned_here {
+            return None;
+        }
+
+        Some(match self.authority {
+            OwnerAuthority::Definition | OwnerAuthority::Workspace => "owned_elsewhere",
+            OwnerAuthority::Missing | OwnerAuthority::Conflicting => "ownership_unresolved",
+        })
+    }
+}
+
 /// Existing inspection surfaces render the same domain projection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutomationDiagnostic {
@@ -211,6 +309,10 @@ pub struct AutomationDiagnostic {
     pub state: Option<AutomationState>,
     pub receipts: Vec<CoverageReceiptSummary>,
     pub waivers: Vec<BatchWaiver>,
+    /// Resolved ownership for a delivery consumer. Absent on state-trigger
+    /// routines, whose trigger always names its owner outright.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<DeliveryOwnership>,
 }
 
 /// Core-verified writer authority for exact artifact bytes; this is not coverage.

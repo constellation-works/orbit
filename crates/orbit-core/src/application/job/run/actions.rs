@@ -1,7 +1,8 @@
 //! Cancellation, archive, delete, and run-state helpers for job runs.
 
+use std::collections::HashMap;
 #[cfg(unix)]
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
@@ -394,6 +395,14 @@ impl OrbitRuntime {
         run_id: &str,
     ) -> Result<Option<orbit_types::workflow::PipelineState>, OrbitError> {
         self.stores().jobs().read_run_state(run_id)
+    }
+
+    /// Pipeline state for a list page in one store round-trip, not one per run.
+    pub fn read_run_states(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<orbit_types::workflow::PipelineState>>, OrbitError> {
+        self.stores().jobs().read_run_states(run_ids)
     }
 
     /// Persist a run's pipeline state. The write side of [`Self::read_run_state`],

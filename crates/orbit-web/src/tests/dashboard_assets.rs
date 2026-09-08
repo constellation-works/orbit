@@ -6,9 +6,10 @@ use std::process::Command;
 
 use crate::{
     DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_automation_js, serve_common_js,
-    serve_diagnostics_js, serve_index, serve_log_tail_js, serve_markdown_js, serve_marked_js,
-    serve_operations_js, serve_purify_js, serve_reliability_js, serve_router_js,
-    serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
+    serve_diagnostics_js, serve_index, serve_inter_font, serve_jetbrains_mono_font,
+    serve_log_tail_js, serve_markdown_js, serve_marked_js, serve_operations_js, serve_purify_js,
+    serve_reliability_js, serve_router_js, serve_run_detail_js, serve_runs_js, serve_scoreboard_js,
+    serve_tasks_js,
 };
 
 // The recent-history, aggregate-request, and route-selection assertions
@@ -54,6 +55,8 @@ fn run_dashboard_javascript_test(script: &str) {
 async fn dashboard_html_and_js_routes_emit_csp() {
     let routes = [
         ("index", serve_index().await),
+        ("inter", serve_inter_font().await),
+        ("jetbrains_mono", serve_jetbrains_mono_font().await),
         ("marked", serve_marked_js().await),
         ("purify", serve_purify_js().await),
         ("app", serve_app_js().await),
@@ -88,6 +91,34 @@ async fn dashboard_index_self_hosts_markdown_runtime() {
     assert!(body.contains(r#"<script src="/static/marked.umd.js"></script>"#));
     assert!(body.contains(r#"<script src="/static/purify.min.js"></script>"#));
     assert!(!body.contains("cdn.jsdelivr.net"));
+}
+
+#[tokio::test]
+async fn dashboard_self_hosts_fonts_without_google_requests() {
+    let index = response_body(serve_index().await).await;
+    let css = response_body(crate::serve_dashboard_css().await).await;
+
+    assert!(!index.contains("fonts.googleapis.com"));
+    assert!(!index.contains("fonts.gstatic.com"));
+    assert!(css.contains("/static/fonts/inter-latin.woff2"));
+    assert!(css.contains("/static/fonts/jetbrains-mono-latin.woff2"));
+    assert_eq!(
+        DASHBOARD_CSP,
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    );
+
+    for response in [serve_inter_font().await, serve_jetbrains_mono_font().await] {
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("font/woff2"))
+        );
+        assert!(
+            !to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read font response body")
+                .is_empty()
+        );
+    }
 }
 
 #[test]
@@ -183,7 +214,9 @@ fn dashboard_task_actions_route_to_selected_workspace() {
         "withWorkspace must be exported from common.js so other modules can reuse it"
     );
     assert!(
-        tasks.contains("withWorkspace } from './common.js'"),
+        tasks
+            .lines()
+            .any(|line| line.contains("from './common.js'") && line.contains("withWorkspace")),
         "tasks.js must import withWorkspace from common.js"
     );
     assert!(
@@ -221,6 +254,56 @@ fn dashboard_run_resume_matches_runtime_guard_and_surfaces_lineage_and_errors() 
     assert!(
         runs.contains(r#"class: "action-error", text: e.message || "resume failed""#),
         "Resume failures must display the server-provided error text"
+    );
+}
+
+#[test]
+fn dashboard_run_events_show_scan_errors_but_keep_404_empty() {
+    run_dashboard_javascript_test(
+        r#"
+import assert from "node:assert/strict";
+class Node {
+  constructor() { this.children = []; this.dataset = {}; this.className = ""; this._text = ""; this.parentNode = null; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { if (child.parentNode) child.parentNode.removeChild(child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; }
+  get textContent() { return this._text + this.children.map((child) => child.textContent).join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get firstChild() { return this.children[0] || null; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+}
+const nodes = new Map();
+const get = (id) => nodes.get(id) || (nodes.set(id, new Node()), nodes.get(id));
+globalThis.document = { getElementById: get, createElement: () => new Node(), createDocumentFragment: () => new Node() };
+globalThis.window = { location: new URL("http://dashboard.test/") };
+let responseStatus = 413;
+globalThis.fetch = async () => ({
+  ok: responseStatus < 400,
+  status: responseStatus,
+  text: async () => JSON.stringify({ error: "run-events audit rows exceed bounded scan budget" }),
+});
+const { fetchJson } = await import("./common.js");
+const { setActiveRunEvents, setActiveRunEventsError, renderRunEvents } = await import("./run-detail.js");
+let scanError;
+try {
+  await fetchJson("/api/runs/jrun-1/events?limit=100");
+} catch (error) {
+  scanError = error;
+}
+assert.equal(scanError.status, 413);
+assert.match(scanError.message, /bounded scan budget/);
+setActiveRunEvents([]);
+setActiveRunEventsError(scanError.message);
+renderRunEvents();
+assert.match(get("run-events-body").textContent, /bounded scan budget/);
+assert.match(get("run-events-body").textContent, /narrowing the kind filter/);
+responseStatus = 404;
+await assert.rejects(fetchJson("/api/runs/jrun-1/events?limit=100"), (error) => error.status === 404);
+setActiveRunEvents([]);
+renderRunEvents();
+assert.match(get("run-events-body").textContent, /No v2 envelope events for this run/);
+"#,
     );
 }
 
@@ -412,6 +495,10 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(operations.contains("routine.target"));
     assert!(operations.contains("last_evaluated_slot"));
     assert!(operations.contains("next_tick_at"));
+    assert!(operations.contains("Last scheduler evaluation"));
+    assert!(operations.contains("hypothetical next"));
+    assert!(operations.contains("Waiting for deliveries"));
+    assert!(operations.contains("Never observed"));
     assert!(operations.contains("acknowledge_unconditional: true"));
     assert!(operations.contains("UNCONDITIONAL_MINT_WARNING"));
     assert!(operations.contains(
@@ -423,7 +510,7 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(operations.contains("Minted") || operations.contains("result.message"));
     assert!(operations.contains("Auto-task change failed"));
     assert!(operations.contains("Manual mint failed"));
-    assert!(operations.contains("fetchJson(\"/api/auto-tasks\")"));
+    assert!(operations.contains("\"/api/auto-tasks\""));
     assert!(
         !operations.contains("postJson(\"/api/auto-tasks")
             || operations.contains("addEventListener(\"click\"")
@@ -441,7 +528,161 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(css.contains(".operation-grid { grid-template-columns: 1fr; }"));
     assert!(css.contains("body.operations-active"));
     assert!(css.contains(".operation-mint-warning"));
+    assert!(css.contains(".operation-row-head"));
+    assert!(css.contains(".operation-details summary"));
+    assert!(operations.contains("operation-row-head"));
+    assert!(operations.contains(r#"{ class: "operation-details" }"#));
     assert!(router.contains(r#"classList.toggle("operations-active", top === "operations")"#));
+}
+
+/// ORB-11559: below 760px the 216px rail must give up the content column so
+/// Tasks can use the 520px two-row grid at phone widths, and every top-level
+/// tab plus diagnostics subtab stays in the (now horizontal) nav.
+#[test]
+fn dashboard_narrow_shell_collapses_rail_and_task_rows() {
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let index = include_str!("../../assets/dashboard/index.html");
+
+    let narrow = css
+        .split("@media (max-width: 760px)")
+        .skip(1)
+        .find(|block| {
+            block.contains(".shell {") && block.contains("grid-template-columns: minmax(0, 1fr);")
+        })
+        .expect("760px must collapse .shell to a single column");
+    assert!(
+        narrow.contains(".rail-group { display: contents; }"),
+        "rail groups must unwrap so tabs and diagnostics subtabs can reflow"
+    );
+    assert!(
+        narrow.contains("flex: 1 1 100%"),
+        "diagnostics subtabs must wrap onto a second row"
+    );
+    assert!(
+        narrow.contains(".kpi .k { display: none; }")
+            && narrow.contains(".kpi-spark { display: none; }"),
+        "KPI labels and the sparkline must collapse at the same width as the rail"
+    );
+    assert!(
+        css.contains(
+            "grid-template-areas:\n            \"id title\"\n            \"status crew\";"
+        ),
+        "the 520px task row must keep its two-row areas for phone widths"
+    );
+
+    for tab in ["tasks", "audit", "diagnostics", "operations", "knowledge"] {
+        assert!(
+            index.contains(&format!(r#"class="tab" data-tab="{tab}""#)),
+            "{tab} must remain a top-level tab"
+        );
+    }
+    for subtab in [
+        "runs",
+        "metrics",
+        "errors",
+        "incidents",
+        "reliability",
+        "scoreboard",
+    ] {
+        assert!(
+            index.contains(&format!(r#"data-subtab="{subtab}""#)),
+            "{subtab} must remain a reachable diagnostics subtab"
+        );
+    }
+}
+
+/// ORB-11558: disabled/paused rows must not look scheduled; clock cadence is a
+/// duration; timestamps name a timezone, including PST/PDT across DST.
+#[test]
+fn dashboard_operations_label_paused_schedules_timezones_and_clock_units() {
+    run_dashboard_javascript_test(
+        r#"
+process.env.TZ = "America/Los_Angeles";
+const nodes = [];
+class Node {
+  constructor(id = "") { this.id = id; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.hidden = false; this.disabled = false; this.value = ""; nodes.push(this); }
+  appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
+  append(...children) { for (const child of children) this.appendChild(child); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  querySelectorAll() { return []; }
+  querySelector() { return null; }
+  insertBefore(child, before) { const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); return child; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+for (const id of ["routines-body", "clock-body", "auto-tasks-body", "auto-drain-body", "operation-mode-body", "routines-count", "clock-host", "auto-tasks-count", "auto-drain-count", "operation-mode-count", "operations-session", "routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "operation-mode-operation-feedback"]) get(id);
+globalThis.document = { getElementById: get, createElement: () => new Node(), createTextNode: (text) => Object.assign(new Node(), { textContent: text }), body: new Node("body") };
+globalThis.window = { confirm: () => true, location: new URL("http://dashboard.test/"), addEventListener: () => {}, localStorage: { getItem: () => null, setItem: () => {} } };
+const pad = (n) => String(n).padStart(2, "0");
+const formatAbsoluteTime = (value) => {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+const routines = {
+  host_id: "host-1",
+  session_explanation: "test",
+  capabilities: {},
+  clock: {
+    health: "healthy", provider: "systemd", enabled: true, loaded: true, running: true, schedulable: true,
+    configured_cadence_seconds: 300, effective_cadence_seconds: 300,
+    last_tick_at: "2026-09-07T21:00:00Z", next_tick_at: "2026-09-07T21:05:00Z",
+  },
+  routines: [
+    { name: "ship-sweep-orbit", source: "one", target: "job:ship", enabled: false, effective: false, cron: "30 14 * * *", hosts: ["host-1"], pinned_to_host: true, next_due: "2026-09-07T21:30:00Z", next_evaluation: { state: "disabled", at: "2026-09-07T21:30:00Z", hypothetical: true }, last_fire: null },
+    { name: "paused-nightly", source: "one", target: "job:nightly", enabled: true, effective: false, paused_at: "2026-09-07T20:00:00Z", cron: "0 2 * * *", hosts: ["host-1"], pinned_to_host: true, next_due: "2026-09-08T09:00:00Z", next_evaluation: { state: "paused", at: "2026-09-08T09:00:00Z", hypothetical: true }, last_fire: null },
+    { name: "delivery-cover", source: "one", target: "job:cover", enabled: true, effective: true, trigger: { deliveries_landed: { threshold: 3, branch: "agent-main" } }, hosts: ["host-1"], pinned_to_host: true, next_evaluation: { state: "waiting", at: null, hypothetical: false }, last_fire: null },
+  ],
+};
+const autoTasks = {
+  unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.",
+  capabilities: { auto_task_toggle: { authorized: true }, auto_task_mint: { authorized: true } },
+  definitions: [
+    { name: "ci-failure-remediation", enabled: false, schedule_summary: "every 15 minutes", template_summary: "[auto-task] remediate", next_evaluation: { state: "disabled", at: "2026-09-07T21:15:00Z", hypothetical: true }, last_evaluation: null, last_minted_task_id: null },
+    { name: "hourly", enabled: true, schedule_summary: "every 60 minutes", last_evaluation: { kind: "fired", last_task_id: "ORB-00001", last_fired_at: "2026-09-07T20:00:00Z" }, last_minted_task_id: "ORB-00099", last_minted_task_status: "backlog", next_evaluation: { state: "scheduled", at: "2026-09-07T22:00:00Z", hypothetical: false } },
+    { name: "fresh", enabled: true, schedule_summary: "every 60 minutes", last_evaluation: null, last_minted_task_id: null, next_evaluation: { state: "never_observed", at: null, hypothetical: false } },
+    { name: "broken-cover", enabled: true, schedule_summary: "3 deliveries on agent-main", next_evaluation: { state: "unavailable", at: null, hypothetical: false } },
+  ],
+};
+globalThis.fetch = async (path) => {
+  const url = String(path);
+  const payload = url.startsWith("/api/routines") ? routines
+    : url.startsWith("/api/auto-tasks") ? autoTasks
+    : {};
+  return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
+};
+const { setWorkspace } = await import("./common.js");
+const { initOperations, fetchAndRenderOperations } = await import("./operations.js");
+setWorkspace("one");
+initOperations({ getWorkspaces: () => [{ id: "one", name: "one", status: "active" }], formatAbsoluteTime });
+await fetchAndRenderOperations();
+const routineText = get("routines-body").textContent;
+const autoText = get("auto-tasks-body").textContent;
+const clockText = get("clock-body").textContent;
+for (const expected of ["Disabled · hypothetical next", "Paused · hypothetical next", "Waiting for deliveries"]) {
+  if (!routineText.includes(expected)) throw new Error(`routines missing ${JSON.stringify(expected)} in: ${routineText}`);
+}
+if (routineText.includes("Next evaluation2026-09-07") && !routineText.includes("hypothetical")) {
+  throw new Error(`unqualified next evaluation in: ${routineText}`);
+}
+for (const expected of ["Disabled · hypothetical next", "Never observed", "Unavailable", "Last scheduler evaluation", "manual mint"]) {
+  if (!autoText.includes(expected)) throw new Error(`auto-tasks missing ${JSON.stringify(expected)} in: ${autoText}`);
+}
+if (!clockText.includes("every 5 minutes (300s)")) throw new Error(`cadence should be a duration, got: ${clockText}`);
+const tzName = (iso) => new Intl.DateTimeFormat("en-US", { timeZoneName: "short" }).formatToParts(new Date(iso)).find((part) => part.type === "timeZoneName")?.value;
+if (tzName("2026-01-15T20:00:00Z") !== "PST") throw new Error(`expected PST in January, got ${tzName("2026-01-15T20:00:00Z")}`);
+if (tzName("2026-07-15T19:00:00Z") !== "PDT") throw new Error(`expected PDT in July, got ${tzName("2026-07-15T19:00:00Z")}`);
+if (!routineText.includes("14:30 PDT") || !routineText.includes("hypothetical")) {
+  throw new Error(`disabled 14:30 must be labeled PDT and hypothetical: ${routineText}`);
+}
+if (!clockText.includes("14:00 PDT") && !clockText.includes("14:05 PDT")) {
+  throw new Error(`clock last/next tick must be absolute local times with a timezone: ${clockText}`);
+}
+"#,
+    );
 }
 
 /// ORB-11250: the bounded auto-delivery window action. Default completion
@@ -480,7 +721,7 @@ fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
         "starting the window must submit through the dashboard auto-drain endpoint"
     );
     assert!(
-        operations.contains(r#"fetchJson(`/api/workflows/auto/readiness"#),
+        operations.contains(r#"`/api/workflows/auto/readiness"#),
         "the panel must project the read-only readiness snapshot, not recompute eligibility"
     );
     assert!(
@@ -1038,6 +1279,231 @@ fn dashboard_task_filter_hash_round_trips_default_all_someday_and_none() {
     );
 }
 
+#[test]
+fn dashboard_renders_every_other_status_for_a_done_task() {
+    let app = include_str!("../../assets/dashboard/app.js");
+    for status in [
+        "in-progress",
+        "review",
+        "blocked",
+        "proposed",
+        "backlog",
+        "someday",
+        "done",
+        "rejected",
+        "archived",
+    ] {
+        assert!(
+            app.contains(&format!("\"{status}\"")),
+            "dashboard status catalog must include {status}"
+        );
+    }
+
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor() { this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const old = child.parentNode; if (old) old.children = old.children.filter((candidate) => candidate !== child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() { return { add: (...names) => { this.className = `${this.className} ${names.join(" ")}`.trim(); } }; }
+}
+const nodes = new Map();
+const get = (id) => nodes.get(id) || (nodes.set(id, new Node()), nodes.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: () => new Node(),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+const location = new URL("http://dashboard.test/#tasks");
+globalThis.window = { location, addEventListener: () => {}, confirm: () => false };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+globalThis.setTimeout = () => 0;
+
+const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
+const task = { id: "ORB-1", title: "Done task", status: "done", history: [], artifacts: [] };
+const { renderTasks } = await import("./tasks.js");
+renderTasks([task], {
+  getTasks: () => [task], getTasksMeta: () => null, getSearchQuery: () => "",
+  getActiveStatuses: () => new Set(["done"]), statusOrder: statuses,
+  statusUpdateTargets: statuses, fmtAbsTime: (value) => value,
+  refreshDashboard: () => Promise.resolve(),
+});
+
+function find(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
+  return null;
+}
+const select = find(get("tasks-body"), (node) => node.className === "task-status-select mono");
+if (!select) throw new Error("status select did not render");
+const values = select.children.map((option) => option.value).filter(Boolean);
+const expected = statuses.filter((status) => status !== "done");
+if (JSON.stringify(values) !== JSON.stringify(expected)) throw new Error(`status options ${JSON.stringify(values)} != ${JSON.stringify(expected)}`);
+"#,
+    );
+}
+
+/// ORB-11655: the Tasks detail node is diffed on the whole task object, so any
+/// field change (an agent bumping `updated_at`) rebuilt it — discarding a
+/// comment the operator was still typing inside it.
+#[test]
+fn dashboard_task_refresh_keeps_a_half_written_comment() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(tag = "") { this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const old = child.parentNode; if (old) old.children = old.children.filter((candidate) => candidate !== child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  replaceWith(next) { const parent = this.parentNode; if (!parent) return; parent.children = parent.children.map((candidate) => candidate === this ? next : candidate); next.parentNode = parent; this.parentNode = null; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  focus() {}
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() { return { add: (...names) => { this.className = `${this.className} ${names.join(" ")}`.trim(); } }; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node()), byId.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: (tag) => new Node(tag),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+};
+globalThis.window = { location: new URL("http://dashboard.test/#tasks"), addEventListener: () => {}, confirm: () => false };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+globalThis.setTimeout = () => 0;
+
+const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
+const task = { id: "ORB-1", title: "Reviewable", status: "review", updated_at: "2026-09-08T01:00:00Z", history: [], artifacts: [] };
+const context = {
+  getTasks: () => [task], getTasksMeta: () => null, getSearchQuery: () => "",
+  getActiveStatuses: () => new Set(["review"]), statusOrder: statuses,
+  statusUpdateTargets: statuses, fmtAbsTime: (value) => value,
+  refreshDashboard: () => Promise.resolve(),
+};
+const { renderTasks } = await import("./tasks.js");
+
+function find(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
+  return null;
+}
+const body = get("tasks-body");
+const detail = () => find(body, (node) => node.dataset.key === "detail-ORB-1");
+const tick = () => { task.updated_at = `${task.updated_at}+`; renderTasks([task], context); };
+
+renderTasks([task], context);
+find(body, (node) => node.dataset.key === "task-ORB-1").listeners.click();
+
+// Control: with no draft open, a task field change does rebuild the detail.
+const before = detail();
+if (!before) throw new Error("expanding the task did not render its detail");
+tick();
+if (detail() === before) throw new Error("a changed task must still rebuild its detail");
+
+const held = detail();
+find(held, (node) => node.className === "action comment").listeners.click({ stopPropagation: () => {} });
+const textarea = find(held, (node) => node.tag === "textarea");
+if (!textarea) throw new Error("the comment form did not render a textarea");
+textarea.value = "half written";
+
+tick();
+if (detail() !== held) throw new Error("the refresh replaced a detail holding an open comment form");
+const live = find(body, (node) => node.tag === "textarea");
+if (live !== textarea) throw new Error("the refresh replaced the textarea the operator was typing in");
+if (live.value !== "half written") throw new Error(`the draft text was lost: ${JSON.stringify(live.value)}`);
+
+// Closing the form hands the detail back to the data: the next tick rebuilds it.
+find(held, (node) => node.className === "action cancel").listeners.click({ stopPropagation: () => {} });
+tick();
+if (detail() === held) throw new Error("the detail stayed frozen after the draft was cancelled");
+if (find(body, (node) => node.tag === "textarea")) throw new Error("the cancelled comment form is still rendered");
+"#,
+    );
+}
+
+/// ORB-11655: the Audit summary and the Diagnostics side card are their own
+/// scroll boxes. Emptying them on the 30 s tick collapsed their height and
+/// dropped the operator's scroll position, so they diff by keyed card instead.
+#[test]
+fn dashboard_summary_scroll_boxes_replace_only_the_cards_whose_data_moved() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(tag = "") { this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const old = child.parentNode; if (old) old.children = old.children.filter((candidate) => candidate !== child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() { return { add: () => {} }; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node()), byId.get(id));
+globalThis.document = { getElementById: get, createElement: (tag) => new Node(tag), createTextNode: (text) => Object.assign(new Node(), { textContent: text }) };
+globalThis.window = { location: new URL("http://dashboard.test/#audit"), addEventListener: () => {} };
+
+const ctx = { fmtDuration: (value) => String(value) };
+const { renderAuditSummary } = await import("./audit.js");
+const { renderDiagnosticsSideCard } = await import("./diagnostics.js");
+
+const cardsIn = (container) => new Map(container.children.filter((node) => node.dataset.key).map((node) => [node.dataset.key, node]));
+function expectStable(label, container, before, changedKey) {
+  const after = cardsIn(container);
+  if (after.size !== before.size) throw new Error(`${label}: card set changed (${before.size} -> ${after.size})`);
+  for (const [key, node] of before) {
+    const reused = after.get(key) === node;
+    if (key === changedKey && reused) throw new Error(`${label}: the ${key} card was not rebuilt after its data moved`);
+    if (key !== changedKey && !reused) throw new Error(`${label}: the ${key} card was rebuilt with unchanged data`);
+  }
+}
+
+const summary = {
+  window: "24h",
+  duration_by_tool: [{ tool: "orbit.task.show", count: 3, avg: 10, p95: 20 }],
+  role_split: [{ label: "human", count: 1, mcp: 1, cli: 0, other: 0, no_subcommand: 0 }],
+  mcp_vs_cli_split: [{ label: "mcp", count: 1 }],
+};
+const auditBody = get("audit-summary-body");
+renderAuditSummary(summary, ctx);
+const auditCards = cardsIn(auditBody);
+if (auditCards.size !== 3) throw new Error(`expected three keyed audit cards, got ${auditCards.size}`);
+renderAuditSummary(summary, ctx);
+expectStable("audit summary", auditBody, auditCards, null);
+summary.role_split[0].count = 2;
+renderAuditSummary(summary, ctx);
+expectStable("audit summary", auditBody, auditCards, "role-split");
+
+const diagnostics = {
+  completion_by_complexity: [{ complexity: "low", total: 2, statuses: [{ status: "done", count: 1 }] }],
+  implement_one_by_complexity: [],
+  implement_one: [{ actor: "claude", n: 2, avg: 5, p50: 4, p95: 9 }],
+};
+const diagBody = get("diag-implement-one-body");
+renderDiagnosticsSideCard(diagnostics, ctx);
+const diagCards = cardsIn(diagBody);
+if (diagCards.size !== 2) throw new Error(`expected two keyed diagnostics cards, got ${diagCards.size}`);
+renderDiagnosticsSideCard(diagnostics, ctx);
+expectStable("diagnostics side card", diagBody, diagCards, null);
+diagnostics.implement_one[0].n = 3;
+renderDiagnosticsSideCard(diagnostics, ctx);
+expectStable("diagnostics side card", diagBody, diagCards, "implement-one");
+"#,
+    );
+}
+
 /// ORB-10874: switching the workspace selector only updated in-memory state,
 /// so a reload silently fell back to the server's default workspace instead
 /// of the one the operator had selected.
@@ -1117,6 +1583,153 @@ fn dashboard_log_dock_has_two_modes_and_an_always_on_status_bar() {
         css.contains(".main-col > .tab-pane[data-tab=\"tasks\"] .col-tasks")
             && css.contains(".col-tasks {\n        min-height: 0;"),
         "the tasks column must be allowed to shrink so #tasks-body can scroll"
+    );
+    assert!(
+        css.contains("#side-dock.disconnected .live-dot")
+            && css.contains(".log-statusbar.disconnected .live-dot"),
+        "a failed log stream must restyle the dock and status-bar live dots"
+    );
+}
+
+/// ORB-11660: the tail must resume from the snapshot byte offset, mark the
+/// dock/status bar disconnected when EventSource goes CLOSED (503 / fatal),
+/// show "log stream unavailable, retrying", and recover on the next open.
+#[test]
+fn dashboard_log_tail_resumes_from_snapshot_offset_and_retries_on_close() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(id = "") {
+    this.id = id;
+    this.children = [];
+    this.dataset = {};
+    this.style = {};
+    this.listeners = {};
+    this.className = "";
+    this._text = "";
+    this.parentNode = null;
+    this.attributes = {};
+  }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) {
+    const index = this.children.indexOf(before);
+    if (index < 0) return this.appendChild(child);
+    this.children.splice(index, 0, child);
+    child.parentNode = this;
+    return child;
+  }
+  remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this._text = String(value); this.children = []; }
+  get innerHTML() { return this.textContent; }
+  get firstChild() { return this.children[0] || null; }
+  querySelector(sel) {
+    if (sel.startsWith(".")) {
+      const cls = sel.slice(1);
+      return this.children.find((child) => (child.className || "").split(/\s+/).includes(cls)) || null;
+    }
+    return null;
+  }
+  querySelectorAll() { return []; }
+  get classList() {
+    const self = this;
+    const tokens = () => self.className.split(/\s+/).filter(Boolean);
+    const write = (next) => { self.className = next.join(" "); };
+    return {
+      add: (...c) => write([...new Set([...tokens(), ...c])]),
+      remove: (...c) => write(tokens().filter((token) => !c.includes(token))),
+      toggle: (c, on) => {
+        const has = tokens().includes(c);
+        const should = on === undefined ? !has : Boolean(on);
+        if (should) write([...new Set([...tokens(), c])]);
+        else write(tokens().filter((token) => token !== c));
+        return should;
+      },
+      contains: (c) => tokens().includes(c),
+    };
+  }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+const bar = get("log-statusbar");
+const label = new Node();
+label.className = "sb-label";
+label.textContent = "orbit.log";
+bar.appendChild(label);
+get("logInner");
+get("side-dock");
+globalThis.document = {
+  body: new Node("body"),
+  getElementById: get,
+  createElement: () => new Node(),
+  querySelectorAll: () => [],
+  querySelector: () => null,
+  addEventListener: () => {},
+};
+const location = new URL("http://dashboard.test/");
+globalThis.window = { location, innerHeight: 900, addEventListener: () => {}, localStorage: { getItem: () => null, setItem: () => {} } };
+// Long timers are held rather than run so the retry can be driven by hand.
+// clearTimeout has to actually clear: fetchJson arms a 30s abort timer and
+// cancels it in its `finally`, and a no-op stub would leave that behind and
+// make it look like a pending stream retry.
+const pendingTimers = new Map();
+let nextTimerId = 1;
+const nativeSetTimeout = setTimeout;
+globalThis.setTimeout = (fn, ms = 0) => {
+  if (ms < 250) return nativeSetTimeout(fn, ms);
+  const id = nextTimerId++;
+  pendingTimers.set(id, fn);
+  return id;
+};
+globalThis.clearTimeout = (id) => { pendingTimers.delete(id); };
+const retryFns = () => [...pendingTimers.values()];
+const sources = [];
+class MockEventSource {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 2;
+  constructor(url) {
+    this.url = String(url);
+    this.readyState = MockEventSource.CONNECTING;
+    this.onopen = null;
+    this.onmessage = null;
+    this.onerror = null;
+    sources.push(this);
+  }
+  close() { this.readyState = MockEventSource.CLOSED; }
+}
+globalThis.EventSource = MockEventSource;
+globalThis.fetch = async (path) => {
+  const payload = { events: [{ ts: "t", source: "job", code: "OK", level: "info", message_html: "hi" }], offset: 42 };
+  return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
+};
+const tick = () => new Promise((resolve) => nativeSetTimeout(resolve, 0));
+const { initLogTail } = await import("./log-tail.js");
+initLogTail();
+await tick();
+await tick();
+if (sources.length !== 1) throw new Error(`expected one EventSource, got ${sources.length}`);
+if (!sources[0].url.includes("from=42")) throw new Error(`stream url missing snapshot offset: ${sources[0].url}`);
+sources[0].readyState = EventSource.CLOSED;
+sources[0].onerror();
+if (label.textContent !== "log stream unavailable, retrying") {
+  throw new Error(`disconnected copy missing, label=${label.textContent}`);
+}
+if (!bar.classList.contains("disconnected")) throw new Error("status bar did not mark disconnected");
+if (!get("side-dock").classList.contains("disconnected")) throw new Error("dock did not mark disconnected");
+if (retryFns().length !== 1) throw new Error(`expected one retry timer, got ${retryFns().length}`);
+retryFns()[0]();
+if (sources.length !== 2) throw new Error(`retry did not open a new EventSource, got ${sources.length}`);
+if (!sources[1].url.includes("from=42")) throw new Error(`retry lost resume offset: ${sources[1].url}`);
+sources[1].readyState = EventSource.OPEN;
+sources[1].onopen();
+if (label.textContent !== "orbit.log") throw new Error(`did not recover label, got ${label.textContent}`);
+if (bar.classList.contains("disconnected")) throw new Error("status bar stayed disconnected after open");
+if (get("side-dock").classList.contains("disconnected")) throw new Error("dock stayed disconnected after open");
+"#,
     );
 }
 
@@ -1465,8 +2078,7 @@ fn dashboard_failure_metrics_are_incident_aware_and_state_their_denominators() {
         "the incidents subtab must be routable"
     );
     assert!(
-        app.contains(r#"if (activeDiagSubtab === "incidents")"#)
-            && app.contains("/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}"),
+        app.contains("/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}"),
         "the incidents fetch must hang off the diagnostics subtab branch and honor the shared window"
     );
 
@@ -1564,7 +2176,6 @@ fn dashboard_failure_metrics_are_incident_aware_and_state_their_denominators() {
 fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
     let audit = include_str!("../../assets/dashboard/audit.js");
     let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
-    let preview = include_str!("../../assets/dashboard/_preview_failures_card.html");
     let css = include_str!("../../assets/dashboard/dashboard.css");
 
     assert!(
@@ -1587,12 +2198,6 @@ fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
         "incident expansion must expose run/task/tool identifiers for every row"
     );
     assert!(
-        preview.contains("lifecycle diagnostics")
-            && preview.contains("7 incidents · 14 raw events · 7 affected runs")
-            && preview.contains("isNamedTool"),
-        "the failures-card preview must render the diagnostic category and three counts"
-    );
-    assert!(
         css.contains(".lifecycle-failure-card")
             && css.contains(".lifecycle-failure-counts")
             && css.contains(".incident-lifecycle-note"),
@@ -1607,7 +2212,6 @@ fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
 fn dashboard_reliability_separates_all_four_failure_populations() {
     let audit = include_str!("../../assets/dashboard/audit.js");
     let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
-    let preview = include_str!("../../assets/dashboard/_preview_failures_card.html");
     let css = include_str!("../../assets/dashboard/dashboard.css");
 
     for needle in [
@@ -1648,14 +2252,6 @@ fn dashboard_reliability_separates_all_four_failure_populations() {
             "incident expansion must retain `{evidence}`"
         );
     }
-    assert!(
-        preview.contains("pipeline.worker.exit")
-            && preview.contains("pipeline.run.terminal_conflict")
-            && preview.contains("orbit.task.show")
-            && preview.contains("orbit.task.update")
-            && preview.contains("7 incidents · 14 raw events · 7 affected runs"),
-        "the deterministic preview must keep diagnostic and expected-negative fixtures outside rateRows but visible in evidence"
-    );
     assert!(
         css.contains(".incident-class-chip.diagnostic")
             && css.contains(".incident-row.diagnostic")
@@ -1966,6 +2562,163 @@ if (rows.length !== 1 || !rows[0].textContent.includes("Beta")) throw new Error(
     );
 }
 
+/// ORB-11561: Recent Runs used to limit first, then filter to failed in the
+/// browser, so an older Failed run outside the newest success/active slice
+/// rendered as 0/0. Loading and mismatched-filter paints must not look like
+/// that empty result either.
+#[test]
+fn dashboard_failed_runs_filter_before_limit_and_label_distinct_scopes() {
+    let app = include_str!("../../assets/dashboard/app.js");
+    let runs = include_str!("../../assets/dashboard/runs.js");
+    let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
+    let index = include_str!("../../assets/dashboard/index.html");
+
+    assert!(
+        app.contains(
+            r#"`/api/job-runs?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`"#
+        ),
+        "single-workspace Recent Runs must send the active state filter to the server"
+    );
+    assert!(
+        !runs.contains("${top.length}/${sorted.length}"),
+        "the old ambiguous N/M run count shorthand must be gone"
+    );
+    assert!(
+        runs.contains("export function formatRunCount(")
+            && runs.contains("shown")
+            && runs.contains("total")
+            && runs.contains("server limit"),
+        "run counts must use explicit shown/total/server-limit language"
+    );
+    assert!(
+        index.contains("Failed, timeout, and interrupted job runs in the selected window"),
+        "the Failed runs header tile must explain its windowed population"
+    );
+    assert!(
+        diagnostics
+            .contains("No error events this month (step/event failures, not job-run states)."),
+        "Errors empty copy must name the month-scoped event population"
+    );
+
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(id = "") { this.id = id; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; }
+  appendChild(child) { if (child == null) return child; if (child.parentNode) child.parentNode.removeChild(child); this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { if (child.parentNode) child.parentNode.removeChild(child); const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get innerHTML() { return this.textContent; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  get classList() { const self = this; return { add: (...classes) => { for (const c of classes) if (!self.className.split(/\s+/).includes(c)) self.className = `${self.className} ${c}`.trim(); }, toggle: (c, on) => { if (on) this.addClass(c); } }; }
+  addClass(c) { if (!this.className.split(/\s+/).includes(c)) this.className = `${this.className} ${c}`.trim(); }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: () => new Node(),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+const location = new URL("http://dashboard.test/?run_state=failed");
+globalThis.window = { location, innerWidth: 1200, confirm: () => true };
+globalThis.history = { replaceState: (_, __, url) => { location.href = String(url); } };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+
+const { initRuns, renderRuns, formatRunCount } = await import("./runs.js");
+const { renderDiagnostics } = await import("./diagnostics.js");
+
+if (formatRunCount(20, 25, { total: 81, limit: 25, truncated: true }) !== "20 shown (of 25 fetched) · 81 total · server limit 25") {
+  throw new Error(`formatRunCount missed shown/total/limit language: ${formatRunCount(20, 25, { total: 81, limit: 25, truncated: true })}`);
+}
+
+let loading = true;
+let lastRuns = [];
+let lastMeta = { state: "all", total: 4, limit: 3, truncated: true };
+let navigated = null;
+initRuns({
+  getLastRuns: () => lastRuns,
+  getRunsMeta: () => lastMeta,
+  getRunsLoading: () => loading,
+  markRunsLoading: () => { loading = true; },
+  getRunSourcesUnavailable: () => [],
+  navigateToRun: (runId, workspaceId) => { navigated = { runId, workspaceId }; },
+  fetchAndRenderRuns: () => Promise.resolve(),
+  getActiveRunId: () => null,
+});
+
+renderRuns(lastRuns);
+const loadingBody = get("runs-body").textContent;
+if (loadingBody.includes("No failed job runs")) throw new Error("loading painted a zero-failure empty state");
+if (get("diag-count").textContent !== "…") throw new Error(`loading count was treated as zero: ${get("diag-count").textContent}`);
+if (!get("runs-body").children.some((node) => node.className.includes("skeleton-state"))) {
+  throw new Error("loading must keep the skeleton, not an empty result");
+}
+
+loading = false;
+lastRuns = [];
+lastMeta = { state: "failed", total: 0, limit: 25, truncated: false };
+renderRuns(lastRuns);
+const emptyText = get("runs-body").textContent;
+if (!emptyText.includes("No failed job runs (durable Failed state, no time window).")) {
+  throw new Error(`empty copy did not name the failed-run scope: ${emptyText}`);
+}
+if (!emptyText.includes("Header Failed runs counts Failed, Timeout, and Interrupted")) {
+  throw new Error("scope note must explain header vs Recent Runs vs Errors");
+}
+if (!get("diag-count").textContent.includes("0 shown") || !get("diag-count").textContent.includes("0 total")) {
+  throw new Error(`empty count must still say shown/total, got ${get("diag-count").textContent}`);
+}
+
+lastRuns = [
+  { run_id: "jrun-older-failed", job_id: "ship", state: "failed", created_at: "2026-09-07T10:00:00Z", finished_at: "2026-09-07T10:01:00Z" },
+];
+lastMeta = { state: "failed", total: 1, limit: 3, truncated: false };
+renderRuns(lastRuns);
+const failedRows = get("runs-body").children.filter((node) => node.className.includes("runs-row") && !node.className.includes("runs-header"));
+if (failedRows.length !== 1 || !failedRows[0].textContent.includes("jrun-older-failed")) {
+  throw new Error("server-filtered failed payload must keep a failure older than the recent success slice");
+}
+failedRows[0].listeners.click();
+if (!navigated || navigated.runId !== "jrun-older-failed") {
+  throw new Error(`failed-run drilldown did not open the older failure: ${JSON.stringify(navigated)}`);
+}
+
+lastRuns = Array.from({ length: 25 }, (_, index) => ({
+  run_id: `jrun-failed-${index}`,
+  job_id: "ship",
+  state: "failed",
+  created_at: "2026-09-07T12:00:00Z",
+}));
+lastMeta = { state: "failed", total: 81, limit: 25, truncated: true };
+renderRuns(lastRuns);
+if (!get("diag-count").textContent.includes("server limit 25") || !get("diag-count").textContent.includes("81 total")) {
+  throw new Error(`truncated count missing shown/total/limit: ${get("diag-count").textContent}`);
+}
+if (!get("runs-body").textContent.includes("Raise the runs URL parameter to load older matches")) {
+  throw new Error("truncated results must explain how to find older failures");
+}
+
+renderDiagnostics({
+  getActiveDiagSubtab: () => "errors",
+  getLastDiagnostics: () => ({ metrics: [], errors: [], incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] }),
+});
+if (!get("diag-body").textContent.includes("No error events this month (step/event failures, not job-run states).")) {
+  throw new Error(`errors empty copy was wrong: ${get("diag-body").textContent}`);
+}
+if (get("diag-count").textContent !== "0 error events this month") {
+  throw new Error(`errors count must name its month-scoped population, got ${get("diag-count").textContent}`);
+}
+"#,
+    );
+}
+
 async fn response_body(response: Response) -> String {
     let bytes = match to_bytes(response.into_body(), usize::MAX).await {
         Ok(bytes) => bytes,
@@ -1994,7 +2747,7 @@ const {renderAutomation} = await import('./automation.js');
 const panel = renderAutomation({reason:'fresh_unready',state:{consumer:'host/ws/routine/pilot',members:{
   pending:{}, assessed:{task:{ready:false,resulting_fingerprint:'f'}},withheld:{other:'human_block'},failed:{},
   active:{member:{key:'task'},attempt:2,max_attempts:2,deadline:'2026-09-06T12:00:00Z',action_id:'run'}
-},unresolved:{}},receipts:[],waivers:[]});
+},unresolved:{}},receipts:[],waivers:[]}, 'routine:pilot:automation');
 function text(node) { return [node.textContent,...(node.children||[]).map(text)].join(' '); }
 const rendered=text(panel);
 assert.match(rendered,/State automation/);
@@ -2004,6 +2757,150 @@ assert.match(rendered,/2026-09-06T12:00:00Z/);
 assert.match(rendered,/Unknown/);
 assert.match(rendered,/does not authorize promotion/);
 assert.doesNotMatch(rendered,/Examined through/);
+"#,
+    );
+}
+
+/// ORB-11655: `refreshDashboard` rebuilds every Operations panel on a 30 s
+/// timer the operator did not trigger. Disclosure state and an unapplied
+/// cadence choice are operator state, not payload state, and must survive it.
+#[test]
+fn dashboard_operations_refresh_keeps_open_details_and_an_unapplied_cadence() {
+    run_dashboard_javascript_test(
+        r#"
+const created = [];
+class Node {
+  constructor(id = "", tag = "") { this.id = id; this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; this.open = false; created.push(this); }
+  appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
+  append(...children) { for (const child of children) this.appendChild(child); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() { return { add: () => {}, toggle: () => {} }; }
+  querySelectorAll() { return []; }
+  querySelector() { return null; }
+  insertBefore(child, before) { const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); return child; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+globalThis.document = { getElementById: get, createElement: (tag) => new Node("", tag), createTextNode: (text) => Object.assign(new Node(), { textContent: text }), body: new Node("body") };
+globalThis.window = { confirm: () => true, location: new URL("http://dashboard.test/"), addEventListener: () => {} };
+
+const routines = {
+  host_id: "hm_local",
+  session_explanation: "session access",
+  capabilities: { routine_toggle: { authorized: true }, clock_service: { authorized: true }, clock_cadence: { authorized: true } },
+  routines: [{
+    name: "pilot", source: "one", target: "orbit.workflow.auto", enabled: true, effective: true,
+    pinned_to_host: true, cron: "*/5 * * * *", hosts: ["hm_local"], description: "pilot routine",
+    next_evaluation: { state: "scheduled", at: "2026-09-08T01:00:00Z" }, last_fire: null,
+    automation: {
+      reason: "not_due", ownership: { owned_here: true }, receipts: [], waivers: [],
+      state: { consumer: "hm_local/one/routine/pilot", baseline: null, observed: null, covered: null, pending: [], pending_commits: [], unresolved: {} },
+    },
+  }],
+  clock: { provider: "systemd", enabled: true, health: "healthy", schedulable: true, loaded: true, running: true, configured_cadence_seconds: 60, effective_cadence_seconds: 60, next_tick_at: "2026-09-08T01:00:00Z", last_tick_at: null },
+};
+const payloads = {
+  "/api/routines": routines,
+  "/api/auto-tasks": { definitions: [], capabilities: {} },
+  "/api/workflows/auto/readiness": { tasks: [], capacity: {}, controls_authorized: true },
+  "/api/operation/explain": { policy: {}, authority: {}, delivery: {}, limiting_reasons: [], controls_authorized: true },
+};
+globalThis.fetch = async (path) => {
+  const url = String(path).split("?")[0];
+  const payload = payloads[url] || {};
+  return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
+};
+
+const { setWorkspace } = await import("./common.js");
+const { initOperations, fetchAndRenderOperations } = await import("./operations.js");
+setWorkspace("one");
+initOperations({ getWorkspaces: () => [{ id: "one", name: "one", status: "active" }], formatAbsoluteTime: (value) => value });
+
+const latest = (predicate) => created.filter(predicate).pop();
+const automationPanel = () => latest((node) => node.className === "automation-diagnostic");
+const routineDetails = () => latest((node) => node.className === "operation-details" && node.textContent.includes("pilot routine"));
+const cadenceSelect = () => latest((node) => node.tag === "select" && node.title === "Clock cadence");
+const applyButton = () => latest((node) => node.textContent === "Apply cadence");
+const chosenCadence = (select) => select.children.filter((option) => option.selected).map((option) => option.value);
+
+await fetchAndRenderOperations();
+if (automationPanel().open) throw new Error("an automation diagnostic must start closed");
+
+// The operator opens both disclosures and picks a cadence without applying it.
+for (const panel of [routineDetails(), automationPanel()]) {
+  if (typeof panel.listeners.toggle !== "function") throw new Error("a disclosure must record its open state on toggle");
+  panel.open = true;
+  panel.listeners.toggle();
+}
+const select = cadenceSelect();
+select.value = "300";
+select.listeners.change();
+if (applyButton().disabled) throw new Error("a changed cadence must enable Apply");
+
+// The 30 s tick: same payload, every panel rebuilt.
+await fetchAndRenderOperations();
+
+if (!routineDetails().open) throw new Error("the routine details snapped shut on refresh");
+if (!automationPanel().open) throw new Error("the automation diagnostic snapped shut on refresh");
+const rechosen = chosenCadence(cadenceSelect());
+if (JSON.stringify(rechosen) !== JSON.stringify(["300"])) throw new Error(`refresh reverted the cadence choice to ${JSON.stringify(rechosen)}`);
+if (applyButton().disabled) throw new Error("refresh disabled Apply for a still-unapplied cadence");
+
+// Once the host reports the chosen cadence as configured, the select follows
+// the payload again rather than pinning the stale choice forever.
+routines.clock.configured_cadence_seconds = 300;
+await fetchAndRenderOperations();
+if (!applyButton().disabled) throw new Error("Apply must be disabled once the chosen cadence is the configured one");
+routines.clock.configured_cadence_seconds = 900;
+await fetchAndRenderOperations();
+const configured = chosenCadence(cadenceSelect());
+if (JSON.stringify(configured) !== JSON.stringify(["900"])) throw new Error(`the select must track the configured cadence again, got ${JSON.stringify(configured)}`);
+"#,
+    );
+}
+
+/// An enabled delivery consumer this host cannot admit for must say so where
+/// the operator reads it, instead of an empty "no baseline recorded" panel.
+#[test]
+fn delivery_automation_renders_the_ownership_admission_blocker() {
+    run_dashboard_javascript_test(
+        r#"
+import assert from 'node:assert/strict';
+class Element {
+  constructor(tag) { this.tag = tag; this.children = []; this.textContent = ''; this.dataset = {}; this.style = {}; }
+  appendChild(child) { this.children.push(child); return child; }
+  setAttribute(key, value) { this[key] = value; }
+  addEventListener() {}
+}
+globalThis.document = {createElement: tag => new Element(tag), createTextNode: text => ({textContent:text})};
+globalThis.window = {location: {search:''}};
+const {renderAutomation} = await import('./automation.js');
+function text(node) { return [node.textContent,...(node.children||[]).map(text)].join(' '); }
+
+const unresolved = text(renderAutomation({reason:'ownership_unresolved',state:null,receipts:[],waivers:[],
+  ownership:{authority:'missing',owned_here:false}}, 'a:automation'));
+assert.match(unresolved,/ownership_unresolved/);
+assert.match(unresolved,/No owner machine is registered/);
+assert.match(unresolved,/set owner_machine on the definition/);
+
+const elsewhere = text(renderAutomation({reason:'owned_elsewhere',state:null,receipts:[],waivers:[],
+  ownership:{owner_machine:'hm_other',authority:'workspace',owned_here:false}}, 'b:automation'));
+assert.match(elsewhere,/Owned by machine hm_other/);
+
+const conflicting = text(renderAutomation({reason:'ownership_unresolved',state:null,receipts:[],waivers:[],
+  ownership:{authority:'conflicting',owned_here:false}}, 'c:automation'));
+assert.match(conflicting,/contradictory/);
+
+const owned = text(renderAutomation({reason:'not_due',receipts:[],waivers:[],
+  ownership:{owner_machine:'hm_local',authority:'workspace',owned_here:true},
+  state:{consumer:'hm_local/ws/auto-task/delivery-qa',baseline:{commit:'a',tree:'b'},
+    observed:{commit:'a',tree:'b'},covered:{commit:'a',tree:'b'},pending:[],pending_commits:[],unresolved:{}}}, 'd:automation'));
+assert.doesNotMatch(owned,/Owned by machine/);
 "#,
     );
 }
@@ -2167,7 +3064,7 @@ fn dashboard_operation_mode_panel_is_explained_governed_and_guarded() {
         assert!(index.contains(&format!(r#"id="{id}""#)), "{id}");
     }
     assert!(
-        operations.contains(r#"fetchJson("/api/operation/explain")"#),
+        operations.contains(r#""/api/operation/explain""#),
         "the panel must project the runtime explanation, not recompute policy"
     );
     assert!(
@@ -2182,6 +3079,12 @@ fn dashboard_operation_mode_panel_is_explained_governed_and_guarded() {
         operations.contains("Changing a preference activates nothing")
             && operations.contains("no grant authorizes merge"),
         "the panel must state that preferences activate nothing and merge is never granted"
+    );
+    assert!(
+        operations.contains("Active grant policy (captured at enablement")
+            && operations.contains("Current preferences (apply to a future grant only).")
+            && operations.contains("const grantPolicy = authority.policy"),
+        "an active grant must show the captured policy separately from current preferences"
     );
     assert!(
         !operations.contains("/api/operation/enable"),
@@ -2211,6 +3114,7 @@ class Node {
   set textContent(value) { this._text = String(value); this.children = []; }
   querySelectorAll() { return []; }
   querySelector() { return null; }
+  insertBefore(child, before) { const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); return child; }
 }
 const byId = new Map();
 const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
@@ -2219,8 +3123,8 @@ let confirmed = false;
 globalThis.window = { confirm: () => { confirmed = true; return true; }, location: new URL("http://dashboard.test/"), addEventListener: () => {}, localStorage: { getItem: () => null, setItem: () => {} } };
 const requests = [];
 const explanation = {
-  policy: { preset: { value: "autonomous", source: "workspace" }, leaf_ceiling: { value: 10, source: "preset:autonomous@workspace" }, preparation: { value: "automatic", source: "preset:autonomous@workspace" }, promotion: { value: "automatic", source: "preset:autonomous@workspace" }, completion: { value: "done", source: "preset:autonomous@workspace" }, recovery: { value: "scheduled", source: "preset:autonomous@workspace" }, review_policy: { value: "none", source: "built-in" }, delivery_cap: { value: "review", source: "built-in" } },
-  authority: { grant_id: "ogrant-1", status: "active", admission: "open", rights: ["prepare", "promote"], task_ids: ["ORB-1", "ORB-2"], expires_at: "2026-09-07T12:00:00Z", revision: 3 },
+  policy: { preset: { value: "supervised", source: "workspace" }, leaf_ceiling: { value: 5, source: "preset:supervised@workspace" }, preparation: { value: "manual", source: "preset:supervised@workspace" }, promotion: { value: "separate_approval", source: "preset:supervised@workspace" }, completion: { value: "review", source: "preset:supervised@workspace" }, recovery: { value: "existing", source: "preset:supervised@workspace" }, review_policy: { value: "after-landing", source: "workspace" }, review_crew: { value: "reviewers", source: "workspace" }, review_reviewer_starts: { value: 2, source: "built-in" }, review_repair_cycles: { value: 2, source: "built-in" }, review_minutes: { value: 30, source: "built-in" }, delivery_cap: { value: "done", source: "workspace" } },
+  authority: { grant_id: "ogrant-1", status: "active", admission: "open", rights: ["prepare", "promote"], task_ids: ["ORB-1", "ORB-2"], expires_at: "2026-09-07T12:00:00Z", revision: 3, policy: { preset: { value: "autonomous", source: "workspace" }, leaf_ceiling: { value: 10, source: "preset:autonomous@workspace" }, preparation: { value: "automatic", source: "preset:autonomous@workspace" }, promotion: { value: "automatic", source: "preset:autonomous@workspace" }, completion: { value: "done", source: "preset:autonomous@workspace" }, recovery: { value: "scheduled", source: "preset:autonomous@workspace" }, review_policy: { value: "before-pr", source: "workspace" }, review_crew: { value: "reviewers", source: "workspace" }, review_reviewer_starts: { value: 2, source: "built-in" }, review_repair_cycles: { value: 2, source: "built-in" }, review_minutes: { value: 30, source: "built-in" }, delivery_cap: { value: "review", source: "built-in" } } },
   delivery: { effective_completion: "review", cap: "delivery_cap_review" },
   limiting_reasons: ["delivery_cap_review"],
   controls_authorized: true,
@@ -2240,7 +3144,7 @@ initOperations({ getWorkspaces: () => [{ id: "one", name: "one", status: "active
 await fetchAndRenderOperationMode();
 const body = get("operation-mode-body");
 const text = body.textContent;
-for (const expected of ["autonomous [workspace]", "10 [preset:autonomous@workspace]", "none [built-in]", "review (cap: delivery_cap_review)", "ogrant-1", "Limiting reasons: delivery_cap_review", "prepare, promote", "2 task(s)"]) {
+for (const expected of ["Active grant policy (captured at enablement", "Current preferences (apply to a future grant only).", "autonomous [workspace]", "10 [preset:autonomous@workspace]", "before-pr [workspace]", "supervised [workspace]", "5 [preset:supervised@workspace]", "after-landing [workspace]", "reviewers [workspace]", "Reviewer starts / lineage", "2 [built-in]", "30 [built-in]", "review (cap: delivery_cap_review)", "ogrant-1", "Limiting reasons: delivery_cap_review", "prepare, promote", "2 task(s)"]) {
   if (!text.includes(expected)) throw new Error(`panel is missing ${JSON.stringify(expected)} in: ${text}`);
 }
 if (!get("operation-mode-count").textContent.includes("open")) throw new Error("count must show the grant admission");
@@ -2264,4 +3168,376 @@ const disabled = nodes.filter((node) => node.listeners.click && node.textContent
 if (!disabled.disabled) throw new Error("controls must be disabled for an unauthorized caller");
 "#,
     );
+}
+
+/// ORB-11691: Jump to task ids must accept non-ORB prefixes, look up in the
+/// selected workspace, and probe concrete workspaces from the aggregate view,
+/// not the server default. The live failure was Diagnostics/Errors on ws_orbit with
+/// `window=24h&run_state=failed`: GET /api/tasks/ORB-11514 (no workspace) 404'd
+/// against polaris while the same id existed as blocked in ws_orbit.
+#[test]
+fn dashboard_global_task_jump_scopes_to_selected_workspace_and_distinguishes_errors() {
+    let app = include_str!("../../assets/dashboard/app.js");
+    let index = include_str!("../../assets/dashboard/index.html");
+    assert!(app.contains(r#"const ID_RE = /^[A-Z]{2,5}-\d+$/i;"#));
+    assert!(index.contains(r#"placeholder="Jump to task id"#));
+
+    run_dashboard_javascript_test(
+        r##"
+class Node {
+  constructor(id = "") {
+    this.id = id;
+    this.children = [];
+    this.dataset = {};
+    this.style = { setProperty: () => {}, display: "" };
+    this.listeners = {};
+    this.className = "";
+    this._text = "";
+    this.parentNode = null;
+    this.hidden = false;
+    this.disabled = false;
+    this.value = "";
+    this.offsetWidth = 40;
+    this.offsetLeft = 0;
+  }
+  appendChild(child) {
+    if (child == null) return child;
+    this.children.push(child);
+    child.parentNode = this;
+    return child;
+  }
+  insertBefore(child, before) {
+    const index = this.children.indexOf(before);
+    if (index < 0) return this.appendChild(child);
+    this.children.splice(index, 0, child);
+    child.parentNode = this;
+    return child;
+  }
+  removeChild(child) {
+    this.children = this.children.filter((candidate) => candidate !== child);
+    child.parentNode = null;
+    return child;
+  }
+  prepend(child) { this.children.unshift(child); child.parentNode = this; return child; }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this._text = String(value); this.children = []; }
+  get innerHTML() { return this.textContent; }
+  get firstChild() { return this.children[0] || null; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  querySelectorAll() { return []; }
+  querySelector() { return null; }
+  scrollIntoView() {}
+  get classList() {
+    const self = this;
+    const tokens = () => self.className.split(/\s+/).filter(Boolean);
+    const add = (...names) => { self.className = [...new Set([...tokens(), ...names])].join(" "); };
+    const remove = (...names) => {
+      const drop = new Set(names);
+      self.className = tokens().filter((token) => !drop.has(token)).join(" ");
+    };
+    return {
+      add,
+      remove,
+      contains: (name) => tokens().includes(name),
+      toggle: (name, on) => {
+        if (on === undefined) on = !tokens().includes(name);
+        if (on) add(name); else remove(name);
+      },
+    };
+  }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+const tabs = ["tasks", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
+const panes = [...tabs, Object.assign(new Node(), { dataset: { tab: "run-detail" } })];
+const tabsStrip = new Node("tabs");
+tabsStrip.className = "tabs";
+const wrap = get("global-id-wrap");
+wrap.className = "global-id-wrap";
+wrap.appendChild(get("global-task-id"));
+wrap.appendChild(get("global-task-id-error"));
+globalThis.document = {
+  body: new Node("body"),
+  hidden: false,
+  getElementById: get,
+  createElement: () => new Node(),
+  createElementNS: () => new Node(),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+  querySelectorAll: (selector) => {
+    if (selector === ".tab") return tabs;
+    if (selector === ".tab-pane") return panes;
+    if (selector === "#task-filter .chip") return get("task-filter").children;
+    if (selector === "#tasks-body .row") return get("tasks-body").children.filter((node) => String(node.className).includes("row"));
+    return [];
+  },
+  querySelector: (selector) => {
+    if (selector === ".tabs") return tabsStrip;
+    const tabMatch = /^\.tab\[data-tab="([^"]+)"\]$/.exec(selector || "");
+    if (tabMatch) return tabs.find((tab) => tab.dataset.tab === tabMatch[1]) || null;
+    return new Node();
+  },
+  addEventListener: () => {},
+};
+const location = new URL("http://dashboard.test/?workspace=ws_orbit&window=24h&run_state=failed");
+location.hash = "#diagnostics/errors?window=24h";
+const hashListeners = [];
+globalThis.window = {
+  location,
+  innerHeight: 900,
+  addEventListener: (name, fn) => { if (name === "hashchange") hashListeners.push(fn); },
+  matchMedia: () => ({ addEventListener: () => {}, matches: false }),
+  localStorage: { getItem: () => null, setItem: () => {} },
+};
+Object.defineProperty(globalThis.window, "location", {
+  configurable: true,
+  get: () => location,
+  set: () => {},
+});
+Object.defineProperty(location, "hash", {
+  configurable: true,
+  get() { return this._hash || ""; },
+  set(value) {
+    const next = String(value || "");
+    const normalized = next.startsWith("#") ? next : `#${next}`;
+    if (this._hash === normalized) return;
+    this._hash = normalized;
+    for (const fn of hashListeners) fn();
+  },
+});
+location._hash = "#diagnostics/errors?window=24h";
+globalThis.history = { replaceState: (_, __, url) => { const next = new URL(String(url), location.href); location.search = next.search; location.pathname = next.pathname; } };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+globalThis.requestAnimationFrame = (fn) => fn();
+globalThis.setInterval = () => 0;
+globalThis.EventSource = class { constructor() {} close() {} };
+
+const existing = { id: "DANI-00012", title: "Enforce proc.spawn filesystem policy against indirect child access", status: "blocked", history: [], artifacts: [], comments: [] };
+let lookupMode = "existing";
+let delayed = null;
+const requests = [];
+function json(payload, status = 200) {
+  return { ok: status >= 200 && status < 300, status, json: async () => payload, text: async () => JSON.stringify(payload) };
+}
+globalThis.fetch = async (path) => {
+  const url = new URL(String(path), "http://dashboard.test");
+  requests.push(url.pathname + url.search);
+  if (url.pathname === "/api/workspaces") {
+    return json([
+      { id: "ws_polaris", name: "polaris", status: "active", is_default: true },
+      { id: "ws_orbit", name: "orbit", status: "active", is_default: false },
+    ]);
+  }
+  if (/^\/api\/tasks\/(?:ORB-|DANI-)/.test(url.pathname)) {
+    const id = decodeURIComponent(url.pathname.slice("/api/tasks/".length));
+    const workspace = url.searchParams.get("workspace");
+    if (lookupMode === "network" && id === "ORB-00001") throw new Error("offline");
+    if (lookupMode === "denied" && id === "ORB-00002") return json({ error: "cross-origin requests not allowed" }, 403);
+    if (lookupMode === "server" && id === "ORB-00003") return json({ error: "boom" }, 500);
+    if (lookupMode === "stale" && id === "DANI-00012") {
+      await new Promise((resolve) => { delayed = resolve; });
+      return workspace === "ws_orbit" ? json(existing) : json({ error: `task not found: ${id}` }, 404);
+    }
+    if (id === "DANI-00012" && workspace === "ws_orbit") return json(existing);
+    return json({ error: `task not found: ${id}` }, 404);
+  }
+  if (url.pathname === "/api/tasks" || url.pathname === "/api/tasks/all") {
+    return json({ items: [], total: 0, limit: 50, truncated: false });
+  }
+  return json([]);
+};
+
+const originalSetTimeout = setTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => originalSetTimeout(fn, ms === 250 ? 0 : ms, ...args);
+const tick = () => new Promise((resolve) => originalSetTimeout(resolve, 0));
+
+await import("./app.js");
+await tick(); await tick(); await tick();
+
+const { getWorkspace, setWorkspace } = await import("./common.js");
+if (getWorkspace() !== "ws_orbit") throw new Error(`selected workspace should remain ws_orbit, got ${getWorkspace()}`);
+
+const input = get("global-task-id");
+const err = get("global-task-id-error");
+function jump(id) {
+  input.value = id;
+  if (input.listeners.keydown) input.listeners.keydown({ key: "Enter", preventDefault() {} });
+  else input.listeners.input();
+}
+
+requests.length = 0;
+jump("dani-00012");
+await tick(); await tick(); await tick(); await tick(); await tick();
+const taskGets = requests.filter((url) => url.startsWith("/api/tasks/DANI-00012"));
+if (!taskGets[0] || !taskGets[0].includes("workspace=ws_orbit")) {
+  throw new Error(`existing-task jump must query the selected workspace first; got ${JSON.stringify(taskGets)}`);
+}
+if (err.textContent.includes("not found")) throw new Error(`existing task reported missing: ${err.textContent}`);
+if (wrap.classList.contains("error")) throw new Error("successful jump must not leave the error state");
+if (input.value) throw new Error("successful jump should clear the input");
+if (!String(location.hash).includes("tasks")) throw new Error(`successful jump should open Tasks, hash=${location.hash}`);
+const opened = get("tasks-body").children.some((node) => String(node.textContent).includes("DANI-00012"));
+if (!opened) throw new Error("existing blocked task must render after jump");
+
+setWorkspace("");
+requests.length = 0;
+jump("DANI-00012");
+await tick(); await tick(); await tick(); await tick(); await tick();
+const aggregateGets = requests.filter((url) => url.startsWith("/api/tasks/DANI-00012"));
+if (aggregateGets.length < 2 || !aggregateGets[0].includes("workspace=ws_polaris") || !aggregateGets.some((url) => url.includes("workspace=ws_orbit"))) {
+  throw new Error(`aggregate lookup must probe concrete workspaces; got ${JSON.stringify(aggregateGets)}`);
+}
+if (getWorkspace() !== "ws_orbit") throw new Error(`aggregate lookup should adopt the owner, got ${getWorkspace()}`);
+if (err.textContent.includes("Error 400")) throw new Error(`aggregate lookup must not expose a missing workspace: ${err.textContent}`);
+
+lookupMode = "missing";
+requests.length = 0;
+jump("ORB-99999");
+await tick(); await tick(); await tick();
+if (err.textContent !== "ORB-99999 not found") throw new Error(`missing task copy: ${err.textContent}`);
+if (!wrap.classList.contains("error") || wrap.classList.contains("pending")) throw new Error("confirmed miss must use the error state");
+
+lookupMode = "network";
+jump("ORB-00001");
+await tick(); await tick(); await tick();
+if (err.textContent !== "Network error resolving ORB-00001") throw new Error(`transport copy: ${err.textContent}`);
+if (err.textContent.includes("not found")) throw new Error("transport failure must not look like a miss");
+
+lookupMode = "denied";
+jump("ORB-00002");
+await tick(); await tick(); await tick();
+if (err.textContent !== "Lookup denied for ORB-00002") throw new Error(`denied copy: ${err.textContent}`);
+
+lookupMode = "server";
+jump("ORB-00003");
+await tick(); await tick(); await tick();
+if (err.textContent !== "Server error resolving ORB-00003") throw new Error(`server copy: ${err.textContent}`);
+
+lookupMode = "stale";
+const hashBeforeStale = String(location.hash);
+input.value = "DANI-00012";
+jump("DANI-00012");
+await tick();
+setWorkspace("ws_polaris");
+if (typeof delayed === "function") delayed();
+await tick(); await tick(); await tick();
+if (String(location.hash) !== hashBeforeStale) throw new Error(`stale lookup overwrote navigation: ${location.hash}`);
+if (!input.value) throw new Error("stale lookup must not clear the jump input as a success");
+"##,
+    );
+}
+
+#[test]
+fn operations_actions_preserve_capabilities_feedback_and_workspace_identity() {
+    let dom = r#"
+class Node {
+  constructor() { this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this._text = ""; }
+  appendChild(child) { this.children.push(child); return child; }
+  append(...children) { children.forEach(child => this.appendChild(child)); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get textContent() { return this._text + this.children.map(child => child.textContent).join(""); }
+  setAttribute(name, value) { this[name] = String(value); }
+  getAttribute(name) { return this[name]; }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  click() { if (!this.disabled) return this.listeners.click?.(); }
+  dispatchEvent(event) { return this.listeners[event.type]?.(event); }
+  insertBefore(child, before) { const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); return child; }
+}
+const nodes = new Map();
+globalThis.document = {
+  getElementById: id => { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); },
+  createElement: () => new Node(),
+};
+globalThis.window = { location: new URL("http://dashboard.test"), localStorage: { getItem: () => null } };
+"#;
+    run_dashboard_javascript_test(&format!(
+        "{dom}\n{}",
+        include_str!("dashboard_operations.mjs")
+    ));
+}
+
+#[test]
+fn dashboard_loading_rejects_stale_responses_and_reports_panel_errors() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_loading_dom.mjs"),
+        include_str!("dashboard_loading.mjs")
+    ));
+}
+
+// ORB-11658: the dashboard's primary interaction is expanding a row, and the
+// log dock's level filters gate what the operator can even see. Both were
+// pointer-only. Two things carry the fix and are asserted separately: the
+// shipped markup (a real <button> is what makes Space activate a pill, and
+// document order is what makes Tab reach a row from the search box), and the
+// shipped modules (role, tab stop, aria state, and the key handlers), which the
+// Node scenario drives directly.
+#[test]
+fn dashboard_log_dock_controls_are_real_toggle_buttons() {
+    let index = include_str!("../../assets/dashboard/index.html");
+
+    for control in [
+        r#"<button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">all</button>"#,
+        r#"<button type="button" class="filter-pill" data-filter="err" aria-pressed="false">err</button>"#,
+        r#"<button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">deny</button>"#,
+        r#"<button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">warn</button>"#,
+        r#"<button type="button" class="seg right on" id="log-follow-tail" title="Follow the tail" aria-pressed="true">"#,
+        r#"<button type="button" class="count" id="log-buffered-count""#,
+    ] {
+        assert!(
+            index.contains(control),
+            "the log dock must ship this control as a pressable button: {control}"
+        );
+    }
+    assert!(
+        !index.contains(r#"<span class="filter-pill"#),
+        "no log filter may remain a <span>"
+    );
+
+    // Tab order is document order: the search box has to come before the rows
+    // it filters for "Tab from the search box reaches the first task row".
+    let search = index
+        .find(r#"id="task-search""#)
+        .expect("task search input must exist");
+    let rows = index
+        .find(r#"id="tasks-body""#)
+        .expect("task list body must exist");
+    assert!(
+        search < rows,
+        "the task search box must precede the task rows in document order"
+    );
+}
+
+#[test]
+fn dashboard_rows_are_keyboard_operable_without_changing_click_behaviour() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        include_str!("dashboard_keyboard.mjs")
+    ));
+}
+
+// The focus ring is the other half of keyboard operability: a row that can be
+// focused but shows nothing is not usable.
+#[test]
+fn dashboard_css_shows_focus_on_every_operable_row() {
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+
+    for selector in [
+        ".row:focus-visible",
+        ".artifact-row:focus-visible",
+        ".audit-row:focus-visible",
+        ".step-row:focus-visible",
+        ".runs-row:focus-visible",
+        ".field-block.collapsible h4:focus-visible",
+        ".log-foot .filter-pill:focus-visible",
+    ] {
+        assert!(
+            css.contains(selector),
+            "{selector} must have a visible focus ring"
+        );
+    }
 }

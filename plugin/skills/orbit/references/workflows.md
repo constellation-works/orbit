@@ -74,7 +74,7 @@ not a rewrite of failed history.
 | `ci_failure_sweep_pipeline` | File GitHub Actions findings as proposed, pilot them, and admit only current warning-free repairs to backlog; never implements them. |
 | `dependabot_alert_sweep_pipeline` | Collect Dependabot/code/secret-scanning evidence and file remediation tasks. |
 | `worktree_gc_pipeline` | Reclaim settled worktrees. |
-| `agent_invoke_pipeline` | One operator-admitted agent invocation for exploration or debugging, run on the host outside the executor sandbox. Submit it with `orbit run agent` / `orbit_agent_invoke`, never `orbit run job`: it needs a per-invocation operator admission, changes no task, and is not resumable. See [tool-surface.md](tool-surface.md). |
+| `agent_invoke_pipeline` | One operator-admitted agent invocation for exploration or debugging, run on the host outside the executor sandbox. Submit it with `orbit run agent` / `orbit_agent_invoke`, never `orbit run job`: it needs a per-invocation local admission or an explicit workspace-scoped remote callers-file grant (strict key-bound by default, or explicitly cooperative on a same-account SSH operator channel), changes no task, and is not resumable. See [tool-surface.md](tool-surface.md). |
 
 Inspect any of them with `orbit job show <id>` before invoking — the step list is
 the contract.
@@ -87,7 +87,132 @@ empty selectors, pilot failure, duplicates, already-landed
 work, conflicts, and warnings leave that task proposed without blocking other
 pilot children. A standalone task-pilot run has no promotion authority. The
 source run/job/SHA/step remains in the task description, while parent and child
-run state retain the pilot run ID, result, and admission decision.
+run state retain the pilot run ID, result, and admission decision. Filing
+clusters failures by a normalized error signature that prefers a concrete test
+or panic identity over ANSI styling, generic runner/cargo/nextest trailers, and
+assertion payload help text; the raw excerpt stays in the description.
+
+CI evidence schema 2 binds each failure row to one failed job: both log scopes
+select that job, and checkout provenance carries its job ID. A separate
+`diagnostic_unit` retains a complete runner command from its `Run` group through
+its nonzero process completion, up to 256 KiB (`kind: runner_command`,
+`complete: true`). When retention exceeds that limit, collection can instead
+supply `kind: runner_failure_regions`, `complete: false`, with
+`command_complete: true` and `selection_complete: true`: the command boundaries
+and every recognized failure anchor were scanned, but the command was not fully
+retained. Regions keep the command header, anchored test failures, panics,
+assertions and compiler errors, their next 11 context lines, summaries and exit.
+Gaps carry byte-omission markers; large left/right assertion payloads retain a
+512-byte prefix and explicitly count omitted payload bytes. The structured
+`command_bytes`, `retained_source_bytes`, `omitted_bytes`,
+`assertion_payload_omitted_bytes` and `failure_anchor_count` make these limits
+auditable. A failure-anchor count includes repeated reports of the same test.
+The standalone log tool exposes this alternative as `failure_regions`.
+
+Exactly one failing command and one known failed step are required; all primary
+command log columns, including omitted lines, must match that job and step.
+Filing validates the evidence contract and uses selected evidence for signatures;
+`log_excerpt`, `log_truncated`, and byte counts still describe the head/tail
+display. Complete command descriptions use a 4,000-byte diagnostic display cap.
+Failure-region descriptions retain the entire bounded selection (at most 64 KiB)
+and its omission accounting so offline workers receive every selected failure.
+Partial command retention cannot establish a complete compiler set for cross-job
+compiler deduplication. Existing complete-command compiler proofs are unchanged.
+
+Each process stdout read stops with a retryable error beyond 8 MiB (at most one
+4 KiB lookahead chunk); the existing process timeout still applies. Command
+selection uses at most two 256 KiB full-command buffers, two 64 KiB region
+buffers and a 16 KiB line buffer. Only left/right assertion payloads may exceed
+the line buffer; other overlong/invalid lines fail closed. Explicit source
+truncation notices, missing command boundaries, multiple failing commands,
+unknown/ambiguous failed steps, incomplete checkout identity, exhausted read
+budgets and failure-region overflow defer that job. Oversized commands are never
+labelled fully retained. No extra queries or retries
+are introduced; complete siblings still file. `max_job_log_reads` caps failed-job
+reads across the snapshot (default
+6, maximum 25); `max_checkout_log_reads` separately caps additional same-job
+checkout reads (default 3, maximum 25). The rotating investigation slot also
+rotates overflow jobs in stable ID order. Legacy schema-1 failures require
+recollection because their run-wide logs and checkout scans cannot establish
+job attribution. Neither event nor PR head can substitute for runner checkout.
+
+Read-only verification: inspect the run's job metadata with `gh run view <run>
+--json databaseId,jobs --repo <owner/repo>`, then use the production bounded log
+reader with explicit `run`, `job`, and `scope` for each failed job. Compare each
+row's job ID, diagnostic, and checkout provenance with that supplying job; repeat
+with reversed metadata order and a one-job budget. Do not download whole logs
+into memory or use a sweep that files tasks merely to verify collection.
+
+### Completed CI repair reassessment
+
+When open-owner lookup misses, filing examines at most eight completed exact-key
+owners and attempts at most 32 assessments per snapshot. Metadata lookup is
+bounded before task hydration. Each owner may carry `ci-repair-assessment.json`
+(schema version 1) in its existing task artifacts. Completion, ancestry, a shared
+key/test/path, task summaries and pilot rationale are discovery hints; none is
+coverage proof by itself. The introducing seam was the original filer's exclusion
+of completed owners, preserved by the later shared open-owner lookup.
+
+The assessment contains these required fields:
+
+- `schema_version: 1`, `task_id`, `failure_key`, `delivery_run_id`,
+  `delivery_step_index`, and `landed_revision` (full commit SHA).
+- `observations`: at most 32 records with string `run_id`, `job_id`, `checkout`,
+  `diagnostic_sha256`, `branch`, and `ref_kind` (`integration` or `release`). The
+  digest is full SHA-256 of the selected diagnostic unit's exact UTF-8 bytes,
+  or the complete untruncated excerpt when no selected unit exists. No signature
+  normalization is applied. Source run/job/checkout and diagnostic bytes must
+  match the collector snapshot, including retained assertion details and omission
+  accounting enforced by the collection contract.
+- `before` and `after`: references `{path, sha256}` to validation JSON artifacts
+  on that same owner. Paths are relative to its artifact bundle; digests bind
+  the exact file bytes. Artifacts are limited to 1 MiB each.
+- `command`: the same nonempty argv array in both validation records;
+  `diagnostic_details`: concrete assertion/error substrings present in every
+  observed diagnostic and failing validation output, absent from passing output;
+  `coverage_reason`: why the repair fixes those particular details.
+
+Each validation artifact has `schema_version: 1`, `task_id`, `revision`,
+`command`, `exit_code`, `outcome`, `origin`, `recorded_at` (RFC3339), and captured
+`output`. The before result must be `failed` with nonzero exit at the observed
+checkout; the after result must be `passed` with zero exit at exactly the landed
+revision. Both must identify the same owner and command. `origin` is `recovered`
+for retained execution evidence or `retrospective` for a newly executed check.
+An assessment never executes argv or instructions copied from a log.
+
+The owner's PR delivery run must exist, succeed, match its recorded `job_run_id`,
+and assign that owner in its original `task_ids`. The referenced successful
+completion step must have `phase: complete`, `merge.merged: true`, the same
+`merge.landed_commit`, and that owner among `completed_task_ids`. Aggregate
+pipeline fields or agent result prose cannot substitute for that step. Git must
+confirm that the observed checkout strictly predates the landed revision. The collector's observed branch head and the
+available local remote-tracking (or local) branch must both contain the repair.
+Git inspection reuses the bounded source reader (two seconds per command, thirty
+seconds total). Missing objects or branch refs are unavailable evidence, never
+an inferred ancestry success. A post-fix recurrence, changed diagnostic, or branch
+without the repair therefore remains actionable. Existing release/integration
+pilot dispositions and promotion authority remain unchanged.
+
+For insufficient historical records, inspect the original collector/run evidence
+and the covering delivery. Recover actual command/result evidence when available.
+Otherwise choose the narrow faithful command from repository instructions and
+code, reproduce at the immutable pre-fix revision and validate at the exact landed
+revision in isolated extracts or fixtures with independent build outputs, and
+capture both outputs as explicitly retrospective records. Attach those records and the structured assessment through
+`orbit.task.artifact.put`; do not invent historical execution artifacts or edit
+run state. Then reassess the same collector snapshot through the filing path.
+The original insufficient state remains `unresolved` until the referenced proof
+is available. An existing open owner still takes precedence.
+
+Coverage appears in `repair_assessments` and `skipped_existing` as
+`covered_by_repair`, with the owner, source provenance and evidence references.
+Filing retains an idempotent `ci-repair-observations/<digest>.json` receipt on the
+completed owner without changing its meaning or lifecycle, creating another
+repair task, or sending it to pilot/implementation admission. Unavailable,
+contradictory and over-budget assessments instead report `unresolved` with a
+bounded reason and leave ordinary proposed filing and pilot checks available.
+There is no extra incident store, scheduler, automatic revalidation command or
+unbounded historical scan.
 
 ### The `completion` input
 

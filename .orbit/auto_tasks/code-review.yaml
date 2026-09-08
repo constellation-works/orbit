@@ -1,7 +1,7 @@
 schemaVersion: 1
 name: code-review
 description: Post-merge code review of changes merged since the last completed sweep
-enabled: true
+enabled: false
 schedule:
   cron: 40 * * * *
 template:
@@ -75,7 +75,7 @@ template:
   priority: medium
   # The portable system lane is seeded per machine and compatibility-aliased
   # for configs written before that crew existed.
-  crew: terra
+  crew: sol
   status: backlog
 dedupe: skip_if_open
 created_by: system

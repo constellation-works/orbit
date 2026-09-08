@@ -12,7 +12,9 @@
 # - `file` (deterministic): clusters the snapshot's current, non-stale failures
 #   by root cause and files each surviving cluster as a `proposed` bug task
 #   carrying that evidence inline. Filing is deduped against still-open tasks
-#   by failure key. Proposed is the quarantine boundary: an active auto-drain
+#   by failure key. Completed owners require structured diagnostic, validation,
+#   delivery and branch proof; covered observations never become pilot candidates.
+#   Proposed is the quarantine boundary: an active auto-drain
 #   cannot see the finding yet.
 # - `pilots` (bounded fan-out): invokes the existing task_pilot_pipeline once
 #   for each newly filed task and each still-proposed matching task from an
@@ -76,12 +78,12 @@ spec:
   kind: workflow
   max_active_runs: 1
   default_input:
-    # The branch this workspace ships onto. Empty means "use whatever GitHub
-    # reports as this repository's default branch", which is right for a
-    # workspace that ships onto its default branch and wrong for one that
-    # ships onto a separate integration branch — set it in the workspace copy
-    # of this job when they differ, the same way `task_pr_pipeline` carries
-    # `base_branch`.
+    # Named submission resolves an empty integration branch from the registered
+    # workspace base branch, or explicit workflow.base_branch config when no
+    # registration is available. The resolved input is persisted for collect
+    # and every pilot. Missing authority fails admission; GitHub's default is
+    # the release identity. Override with run input or a trusted job catalog,
+    # never the ignored workspace copy of this shipped named job.
     integration_branch: ""
     max_tasks: 5
     max_investigated_runs: 6

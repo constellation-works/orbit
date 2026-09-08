@@ -13,7 +13,7 @@ pub(crate) fn schedule_summary(definition: &AutoTaskDefinition) -> String {
         orbit_core::AutoTaskSchedule::Deliveries {
             deliveries_landed: t,
         } => format!(
-            "deliveries={} branch={} coverage={:?}",
+            "deliveries={} branch={} coverage={}",
             t.threshold, t.branch, t.coverage
         ),
         orbit_core::AutoTaskSchedule::Cron { cron } => format!("cron={cron}"),

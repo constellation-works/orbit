@@ -57,6 +57,15 @@ fn times_out_naming_lock_path_and_holder() {
     // (flock(2) treats separate opens independently), so this must time out.
     let error = acquire_exclusive_with(&path, "waiter", short_options(150))
         .expect_err("acquisition should time out while the lock is held");
+    let timeout = error
+        .file_lock_timeout()
+        .expect("timeout must be a structured OrbitError variant");
+    assert_eq!(timeout.lock_path, path);
+    assert_eq!(timeout.label, "waiter");
+    assert_eq!(
+        timeout.holder.as_ref().map(|holder| holder.label.as_str()),
+        Some("holder")
+    );
     let message = error.to_string();
 
     assert!(
@@ -146,6 +155,8 @@ fn read_lock_holder_is_lenient_on_missing_or_garbage_files() {
 #[cfg(unix)]
 #[test]
 fn sigkilled_holder_releases_lock() {
+    use std::os::unix::fs::MetadataExt;
+
     let dir = TempDir::new().expect("tempdir");
     let lock_path = dir.path().join("crash.lock");
     let ready_path = dir.path().join("ready");
@@ -170,6 +181,8 @@ fn sigkilled_holder_releases_lock() {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+    let child_pid = child.id();
+    let inode = std::fs::metadata(&lock_path).expect("lock metadata").ino();
 
     // While the child holds it, the parent cannot acquire within a short budget.
     let held = acquire_exclusive_with(&lock_path, "parent-probe", short_options(200));
@@ -178,6 +191,9 @@ fn sigkilled_holder_releases_lock() {
     // Crash the holder: Child::kill() sends SIGKILL on Unix.
     child.kill().expect("SIGKILL child");
     child.wait().expect("reap child");
+    let stale = read_lock_holder(&lock_path).expect("crash leaves diagnostic metadata");
+    assert_eq!(stale.pid, child_pid);
+    assert_eq!(stale.label, "crash-holder");
 
     // The advisory lock is released on process death: acquisition now succeeds.
     let guard = acquire_exclusive_with(
@@ -188,10 +204,16 @@ fn sigkilled_holder_releases_lock() {
             warn_after: Duration::from_secs(3600),
         },
     );
+    let guard = guard.expect("lock released after holder was SIGKILLed");
+    assert_eq!(
+        std::fs::metadata(&lock_path).expect("lock retained").ino(),
+        inode,
+        "recovery must acquire the existing lock file"
+    );
+    drop(guard);
     assert!(
-        guard.is_ok(),
-        "lock not released after holder was SIGKILLed: {:?}",
-        guard.err()
+        read_lock_holder(&lock_path).is_none(),
+        "clean reacquisition clears the stale crash metadata"
     );
 }
 

@@ -7,6 +7,8 @@
 //! bodies, and the dashboard-specific defaults (`limit`, the human actor
 //! fallback, the `tag_options` enrichment on GET).
 
+use std::sync::Arc;
+
 use crate::state::Ws;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query};
@@ -16,7 +18,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::{bad_request, bounded_limit, map_runtime_error, non_empty_string};
+use super::{bad_request, blocking, bounded_limit, map_runtime_error, non_empty_string};
 
 const FRICTIONS_DEFAULT_LIMIT: usize = 100;
 const HUMAN_ACTOR_LABEL: &str = "human";
@@ -67,14 +69,25 @@ impl FrictionCall {
     /// `orbit.friction.add` requires a non-empty `model`; when the caller
     /// supplies no attribution, default to the human actor label rather than a
     /// model constant. No other friction verb consumes `model`.
-    fn run(mut self, runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
+    fn into_tool_call(mut self) -> (String, Value) {
         if self.verb == FrictionVerb::Add {
             self.input
                 .entry("model".to_string())
                 .or_insert_with(|| Value::String(HUMAN_ACTOR_LABEL.to_string()));
         }
-        runtime.run_tool(self.verb.tool_name(), Value::Object(self.input))
+        (self.verb.tool_name().to_string(), Value::Object(self.input))
     }
+}
+
+async fn run_friction(
+    runtime: Arc<OrbitRuntime>,
+    call: FrictionCall,
+) -> Result<Value, Box<Response>> {
+    blocking("friction tool", move || {
+        let (tool, input) = call.into_tool_call();
+        runtime.run_tool(&tool, input)
+    })
+    .await
 }
 
 #[derive(Deserialize, Default)]
@@ -147,31 +160,55 @@ pub(super) async fn list_frictions(
         return map_runtime_error(e);
     }
 
-    let items = match call.run(&runtime) {
-        Ok(Value::Array(items)) => items,
-        Ok(other) => {
+    let listed = match blocking("friction list", move || {
+        let (tool, input) = call.into_tool_call();
+        let items = runtime.run_tool(&tool, input)?;
+        let stats_call = FrictionCall::new(FrictionVerb::Stats).into_tool_call();
+        let stats = runtime.run_tool(&stats_call.0, stats_call.1)?;
+        let tags_call = FrictionCall::new(FrictionVerb::Tags).into_tool_call();
+        let tags = runtime.run_tool(&tags_call.0, tags_call.1)?;
+        Ok((items, stats, tags))
+    })
+    .await
+    {
+        Ok(listed) => listed,
+        Err(response) => return *response,
+    };
+    let (items_json, stats, tags) = listed;
+    let (items, notes) = match items_json {
+        Value::Array(items) => (items, Vec::new()),
+        Value::Object(object) => {
+            let items = object
+                .get("records")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let notes = object
+                .get("notes")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            (items, notes)
+        }
+        other => {
             return map_runtime_error(OrbitError::Execution(format!(
                 "{} returned non-array JSON: {other}",
                 FrictionVerb::List.tool_name()
             )));
         }
-        Err(e) => return map_runtime_error(e),
-    };
-    let stats = match FrictionCall::new(FrictionVerb::Stats).run(&runtime) {
-        Ok(stats) => stats,
-        Err(e) => return map_runtime_error(e),
-    };
-    let tags = match FrictionCall::new(FrictionVerb::Tags).run(&runtime) {
-        Ok(tags) => tags,
-        Err(e) => return map_runtime_error(e),
     };
 
-    Json(json!({
+    let mut body = json!({
         "stats": stats,
         "tags": tags,
         "items": items,
-    }))
-    .into_response()
+    });
+    if !notes.is_empty()
+        && let Some(object) = body.as_object_mut()
+    {
+        object.insert("notes".to_string(), Value::Array(notes));
+    }
+    Json(body).into_response()
 }
 
 /// `POST /frictions` — file a new friction, mirroring `orbit.friction.add`.
@@ -208,20 +245,24 @@ pub(super) async fn create_friction_action(
         return map_runtime_error(e);
     }
 
-    match call.run(&runtime) {
+    match run_friction(runtime, call).await {
         Ok(friction) => Json(friction).into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
 pub(super) async fn get_friction(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
-    let mut friction = match id_call(FrictionVerb::Show, id).and_then(|call| call.run(&runtime)) {
-        Ok(friction) => friction,
+    let call = match id_call(FrictionVerb::Show, id) {
+        Ok(call) => call,
         Err(e) => return map_runtime_error(e),
     };
-    let tags = match FrictionCall::new(FrictionVerb::Tags).run(&runtime) {
+    let mut friction = match run_friction(runtime.clone(), call).await {
+        Ok(friction) => friction,
+        Err(response) => return *response,
+    };
+    let tags = match run_friction(runtime, FrictionCall::new(FrictionVerb::Tags)).await {
         Ok(tags) => tags,
-        Err(e) => return map_runtime_error(e),
+        Err(response) => return *response,
     };
     if let Some(object) = friction.as_object_mut() {
         object.insert("tag_options".to_string(), tags);
@@ -230,9 +271,9 @@ pub(super) async fn get_friction(Ws(runtime): Ws, Path(id): Path<String>) -> Res
 }
 
 pub(super) async fn friction_stats(Ws(runtime): Ws) -> Response {
-    match FrictionCall::new(FrictionVerb::Stats).run(&runtime) {
+    match run_friction(runtime, FrictionCall::new(FrictionVerb::Stats)).await {
         Ok(stats) => Json(stats).into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
@@ -267,16 +308,20 @@ pub(super) async fn update_friction_action(
         Err(e) => return map_runtime_error(e),
     };
 
-    match call.run(&runtime) {
+    match run_friction(runtime, call).await {
         Ok(friction) => Json(friction).into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
 pub(super) async fn resolve_friction_action(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
-    match id_call(FrictionVerb::Resolve, id).and_then(|call| call.run(&runtime)) {
+    let call = match id_call(FrictionVerb::Resolve, id) {
+        Ok(call) => call,
+        Err(e) => return map_runtime_error(e),
+    };
+    match run_friction(runtime, call).await {
         Ok(friction) => Json(friction).into_response(),
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 

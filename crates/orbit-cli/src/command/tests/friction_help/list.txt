@@ -3,15 +3,16 @@ List friction records
 Usage: orbit friction list [OPTIONS]
 
 Options:
-      --model <MODEL>    Optional model filter
-      --root <ROOT>      Override the Orbit root directory (highest precedence)
-      --status <STATUS>  Optional status filter: open, triaged, or resolved
-      --tag <TAG>        Optional tag filter
-      --month <MONTH>    Optional YYYY-MM month filter for reported records
-      --q <Q>            Optional case-insensitive query over id, model, tags, status, task, and body
-      --from <FROM>      Optional RFC3339 lower bound for created_at
-      --to <TO>          Optional RFC3339 upper bound for created_at
-      --limit <LIMIT>    Optional maximum number of records to return
-      --offset <OFFSET>  Optional number of records to skip
-      --json             Output as JSON
-  -h, --help             Print help
+      --model <MODEL>         Optional model filter
+      --root <ROOT>           Override the Orbit root directory (highest precedence)
+      --status <STATUS>       Optional status filter: open, triaged, or resolved
+      --workspace <SELECTOR>  Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory
+      --tag <TAG>             Optional tag filter
+      --month <MONTH>         Optional YYYY-MM month filter for reported records
+      --q <Q>                 Optional case-insensitive query over id, model, tags, status, task, and body
+      --from <FROM>           Optional RFC3339 lower bound for created_at
+      --to <TO>               Optional RFC3339 upper bound for created_at
+      --limit <LIMIT>         Optional maximum number of records to return
+      --offset <OFFSET>       Optional number of records to skip
+      --json                  Output as JSON
+  -h, --help                  Print help

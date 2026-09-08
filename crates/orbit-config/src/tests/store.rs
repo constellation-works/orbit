@@ -79,6 +79,43 @@ fn set_parses_toml_literal_types_not_just_strings() {
 }
 
 #[test]
+fn set_descends_through_inline_tables() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    fs::write(&path, "execution = { env = { pass = [\"A\"] } }\n").expect("write config");
+
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    store
+        .set_value("execution.env.pass", "[\"A\",\"B\"]")
+        .expect("set value through inline tables");
+    store.validate().expect("validate");
+    store.save().expect("save");
+
+    let saved = fs::read_to_string(&path).expect("read saved config");
+    assert!(saved.contains("A"), "{saved}");
+    assert!(saved.contains("B"), "{saved}");
+}
+
+#[test]
+fn set_rejects_scalar_ancestor_with_existing_message() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    fs::write(&path, "execution = 1\n").expect("write config");
+
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    let error = store
+        .set_value("execution.env.pass", "[\"A\"]")
+        .expect_err("scalar ancestor must be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("'execution' along its path is already a non-table value"),
+        "{error}"
+    );
+}
+
+#[test]
 fn set_falls_back_to_plain_string_for_non_literal_values() {
     let dir = tempdir().expect("tempdir");
     let path = config_path(dir.path());
@@ -410,6 +447,180 @@ fn admission_registry_snapshot_and_lookup_are_complete() {
             .windows(2)
             .all(|pair| pair[0].key < pair[1].key),
         "registry order drives stable config keys/show output"
+    );
+}
+
+fn sol_crew_document() -> &'static str {
+    "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\nprovider = \"codex\"\n# keep this comment\n"
+}
+
+#[test]
+fn get_crew_effort_is_null_when_omitted_and_does_not_invent_a_default() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    fs::write(&path, sol_crew_document()).expect("write config");
+
+    let store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    assert_eq!(
+        store
+            .effective_value("crews.sol.effort")
+            .expect("omitted effort is an admitted key"),
+        serde_json::Value::Null
+    );
+}
+
+#[test]
+fn set_crew_effort_round_trips_and_preserves_unrelated_toml() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    fs::write(&path, sol_crew_document()).expect("write config");
+
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    store
+        .set_value("crews.sol.effort", "high")
+        .expect("set crew effort");
+    store.validate().expect("validate");
+    store.save().expect("save");
+
+    let saved = fs::read_to_string(&path).expect("read saved config");
+    assert!(saved.contains("effort = \"high\""), "{saved}");
+    assert!(saved.contains("# keep this comment"), "{saved}");
+    assert!(saved.contains("default_crew = \"sol\""), "{saved}");
+    assert!(saved.contains("model = \"gpt-5.6-sol\""), "{saved}");
+
+    let reopened = ConfigStore::open(ConfigScope::Workspace, &path).expect("reopen store");
+    assert_eq!(
+        reopened
+            .effective_value("crews.sol.effort")
+            .expect("get configured effort"),
+        serde_json::json!("high")
+    );
+}
+
+#[test]
+fn hand_authored_crew_effort_is_readable_without_config_set() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    fs::write(
+        &path,
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\nprovider = \"codex\"\neffort = \"high\"\n",
+    )
+    .expect("write config");
+
+    let store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    assert_eq!(
+        store
+            .effective_value("crews.sol.effort")
+            .expect("hand-authored effort is readable"),
+        serde_json::json!("high")
+    );
+}
+
+#[test]
+fn set_crew_effort_rejects_invalid_value_and_leaves_file_byte_identical() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    let original = sol_crew_document();
+    fs::write(&path, original).expect("write config");
+
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    store
+        .set_value("crews.sol.effort", "medium-low")
+        .expect("set_value only mutates in-memory");
+    let error = store
+        .validate()
+        .expect_err("invalid effort must fail validation");
+    assert!(
+        error
+            .to_string()
+            .contains("expected one of low, medium, high, xhigh, max"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read(&path).expect("read after failed validate"),
+        original.as_bytes()
+    );
+}
+
+#[test]
+fn set_crew_effort_rejects_unsupported_provider_before_save() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    let original = "[workflow]\ndefault_crew = \"gemini\"\n\n[crews.gemini]\nmodel = \"gemini\"\nprovider = \"gemini\"\n";
+    fs::write(&path, original).expect("write config");
+
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    store
+        .set_value("crews.gemini.effort", "high")
+        .expect("set_value only mutates in-memory");
+    let error = store
+        .validate()
+        .expect_err("unsupported provider must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("does not support configured reasoning effort"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read(&path).expect("read after failed validate"),
+        original.as_bytes()
+    );
+}
+
+#[test]
+fn set_rejects_unknown_crew_field_before_mutating_document() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    let original = sol_crew_document();
+    fs::write(&path, original).expect("write config");
+
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    let error = store
+        .set_value("crews.sol.effrot", "high")
+        .expect_err("misspelled crew field must be rejected");
+    match error {
+        OrbitError::InvalidInputDiagnostic {
+            message,
+            did_you_mean,
+        } => {
+            assert!(message.contains("effrot"), "{message}");
+            assert!(
+                did_you_mean.contains(&"crews.sol.effort".to_string()),
+                "{did_you_mean:?}"
+            );
+        }
+        other => panic!("expected InvalidInputDiagnostic, got {other:?}"),
+    }
+    assert_eq!(
+        fs::read(&path).expect("read after rejected set"),
+        original.as_bytes()
+    );
+}
+
+#[test]
+fn grok_crew_effort_round_trips_supported_value() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    fs::write(
+        &path,
+        "[workflow]\ndefault_crew = \"grok\"\n\n[crews.grok]\nmodel = \"grok-4.6\"\nprovider = \"grok\"\n",
+    )
+    .expect("write config");
+
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    store
+        .set_value("crews.grok.effort", "xhigh")
+        .expect("set grok effort");
+    store.validate().expect("validate grok effort");
+    store.save().expect("save");
+
+    let reopened = ConfigStore::open(ConfigScope::Workspace, &path).expect("reopen store");
+    assert_eq!(
+        reopened
+            .effective_value("crews.grok.effort")
+            .expect("get grok effort"),
+        serde_json::json!("xhigh")
     );
 }
 

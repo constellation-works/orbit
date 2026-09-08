@@ -1,11 +1,16 @@
 //! Monotonic bounded observation; no observation certifies examination.
 
 use crate::AutomationError;
-use orbit_types::workflow::automation::{AutomationState, SourcePage};
+use orbit_types::workflow::automation::{
+    AutomationState, CoverageClass, ExcludedDelivery, SourcePage,
+};
+use std::collections::HashSet;
 
 pub(super) fn apply(
     state: &AutomationState,
     page: SourcePage,
+    coverage: CoverageClass,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<AutomationState, AutomationError> {
     let invalid = || AutomationError::Deferred("source_page_invalid".into());
 
@@ -53,7 +58,12 @@ pub(super) fn apply(
             return Err(invalid());
         }
 
-        if state.waived.iter().any(|old| old.key == delivery.key) {
+        if state.waived.iter().any(|old| old.key == delivery.key)
+            || state
+                .excluded
+                .iter()
+                .any(|old| old.delivery.key == delivery.key)
+        {
             continue;
         }
 
@@ -103,6 +113,20 @@ pub(super) fn apply(
         for sha in &delivery.commits {
             next.unresolved.remove(sha);
         }
+
+        // Proven before-PR coverage is an exclusion only for a review consumer:
+        // QA still owes every landing its own integrated examination.
+        if coverage == CoverageClass::LandedCodeReviewV1
+            && let Some(exclusion) = page.exclusions.get(&delivery.key)
+        {
+            next.excluded.push(ExcludedDelivery {
+                delivery,
+                exclusion: exclusion.clone(),
+                decided_at: now,
+            });
+            continue;
+        }
+
         next.pending.push(delivery);
     }
 
@@ -110,6 +134,10 @@ pub(super) fn apply(
     for (sha, reason) in page.unresolved {
         if next.pending_commits.contains(&sha)
             && !next.pending.iter().any(|d| d.commits.contains(&sha))
+            && !next
+                .excluded
+                .iter()
+                .any(|excluded| excluded.delivery.commits.contains(&sha))
         {
             next.unresolved.insert(sha, reason);
         }
@@ -127,4 +155,102 @@ pub(super) fn apply(
     }
 
     Ok(next)
+}
+
+/// Drop a proven-covered prefix so it cannot stall later observation.
+///
+/// This advances the scheduling cursor only. It does not write an examination
+/// receipt or turn excluded landings into review debt.
+pub(super) fn retire_excluded_prefix(state: &AutomationState) -> Option<AutomationState> {
+    if state.active.is_some() {
+        return None;
+    }
+
+    let end = excluded_prefix_len(state)?;
+    let prefix = &state.pending_commits[..end];
+    let last = prefix.last()?;
+    let covered = state
+        .excluded
+        .iter()
+        .find(|excluded| {
+            &excluded.delivery.after.commit == last
+                && excluded
+                    .delivery
+                    .commits
+                    .iter()
+                    .all(|sha| prefix.contains(sha))
+        })?
+        .delivery
+        .after
+        .clone();
+
+    let mut next = state.clone();
+    next.covered = covered;
+    next.pending_commits = state.pending_commits[end..].to_vec();
+    next.excluded.retain(|excluded| {
+        !excluded
+            .delivery
+            .commits
+            .iter()
+            .all(|sha| prefix.contains(sha))
+    });
+    next.unresolved
+        .retain(|sha, _| !prefix.iter().any(|commit| commit == sha));
+    next.associations
+        .retain(|sha, _| !prefix.iter().any(|commit| commit == sha));
+    Some(next)
+}
+
+fn excluded_prefix_len(state: &AutomationState) -> Option<usize> {
+    let pending: HashSet<&str> = state
+        .pending
+        .iter()
+        .flat_map(|delivery| delivery.commits.iter().map(String::as_str))
+        .collect();
+
+    let mut end = 0;
+    for sha in &state.pending_commits {
+        if state.unresolved.contains_key(sha) || pending.contains(sha.as_str()) {
+            break;
+        }
+        if !state
+            .excluded
+            .iter()
+            .any(|excluded| excluded.delivery.commits.iter().any(|commit| commit == sha))
+        {
+            break;
+        }
+        end += 1;
+    }
+
+    while end > 0 {
+        let prefix = &state.pending_commits[..end];
+        let split = state.excluded.iter().any(|excluded| {
+            let hits = excluded
+                .delivery
+                .commits
+                .iter()
+                .any(|sha| prefix.contains(sha));
+            let whole = excluded
+                .delivery
+                .commits
+                .iter()
+                .all(|sha| prefix.contains(sha));
+            hits && !whole
+        });
+        let closed = state.excluded.iter().any(|excluded| {
+            prefix.last() == Some(&excluded.delivery.after.commit)
+                && excluded
+                    .delivery
+                    .commits
+                    .iter()
+                    .all(|sha| prefix.contains(sha))
+        });
+        if !split && closed {
+            return Some(end);
+        }
+        end -= 1;
+    }
+
+    None
 }

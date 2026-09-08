@@ -1,6 +1,8 @@
 //! Real Git + task registry + artifact tool consumer tests, without provider/network I/O.
 
-use super::super::{COVERAGE_ARTIFACT, evaluate_auto_task, record_direct_landing_intent};
+use super::super::{
+    COVERAGE_ARTIFACT, consumer_key, evaluate_auto_task, record_direct_landing_intent,
+};
 use crate::{
     OrbitRuntime,
     application::{auto_tasks::AutoTaskAddParams, task::TaskUpdateParams},
@@ -398,48 +400,241 @@ fn no_diff_pr_is_zero_but_distinct_revert_pr_is_new_delivery() {
     );
 }
 
-#[test]
-fn unowned_delivery_is_disabled_and_preview_is_read_only() {
-    let runtime = runtime();
-    let mut definition = definition(&runtime, "ownership", CoverageClass::IntegratedQaV1);
+/// Ownership fixtures edit the trigger in place; the definition is otherwise
+/// the shared delivery fixture.
+fn set_owner(definition: &mut orbit_types::workflow::AutoTaskDefinition, owner: Option<&str>) {
     let AutoTaskSchedule::Deliveries { deliveries_landed } = &mut definition.schedule else {
-        unreachable!()
+        unreachable!("delivery fixture")
     };
-    deliveries_landed.owner_machine = None;
-    let diagnostic = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
-    assert_eq!(diagnostic.reason, "disabled");
-    assert!(diagnostic.state.is_none());
+    deliveries_landed.owner_machine = owner.map(ToOwned::to_owned);
+}
+
+fn ownership(diagnostic: &AutomationDiagnostic) -> DeliveryOwnership {
+    diagnostic
+        .ownership
+        .clone()
+        .expect("delivery diagnostics report ownership")
+}
+
+#[test]
+fn an_omitted_owner_resolves_to_the_registered_workspace_owner() {
+    let runtime = runtime().with_workspace_owner_machine_id(Some("fixture-machine"));
+    let mut definition = definition(&runtime, "workspace-owner", CoverageClass::IntegratedQaV1);
+    set_owner(&mut definition, None);
+
     let preview = evaluate_auto_task(&runtime, &definition, true, Utc::now()).unwrap();
     assert_eq!(preview.reason, "would_baseline");
-    let consumer = &preview.state.unwrap().consumer;
-    assert!(consumer.starts_with("fixture-machine/"));
+    assert_eq!(
+        ownership(&preview),
+        DeliveryOwnership {
+            owner_machine: Some("fixture-machine".into()),
+            authority: OwnerAuthority::Workspace,
+            owned_here: true,
+        }
+    );
+
+    let inspection = super::super::inspect_auto_task(&runtime, &definition, Utc::now()).unwrap();
+    assert_eq!(inspection.reason, "awaiting_baseline");
+    assert_eq!(ownership(&inspection), ownership(&preview));
+
+    let evaluated = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
+    assert_eq!(
+        evaluated.reason, "baselined",
+        "an unambiguously owned workspace admits without redundant owner_machine"
+    );
+    assert_eq!(ownership(&evaluated), ownership(&preview));
+}
+
+#[test]
+fn adopting_the_workspace_default_keeps_an_explicitly_owned_consumer() {
+    let runtime = runtime().with_workspace_owner_machine_id(Some("fixture-machine"));
+    let mut definition = definition(&runtime, "adopt-default", CoverageClass::IntegratedQaV1);
+
+    let pinned = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
+    assert_eq!(ownership(&pinned).authority, OwnerAuthority::Definition);
+    let pinned_epoch = pinned.state.unwrap().epoch;
+
+    set_owner(&mut definition, None);
+    let adopted = super::super::inspect_auto_task(&runtime, &definition, Utc::now()).unwrap();
+    assert_eq!(
+        adopted.reason, "not_due",
+        "the identical resolved owner is not a definition change"
+    );
+    assert_eq!(adopted.state.unwrap().epoch, pinned_epoch);
+
+    set_owner(&mut definition, Some("another-machine"));
+    assert_eq!(
+        super::super::inspect_auto_task(&runtime, &definition, Utc::now())
+            .unwrap()
+            .reason,
+        "definition_changed",
+        "a genuinely different owner still moves the epoch"
+    );
+}
+
+#[test]
+fn a_replica_cannot_claim_ownership_by_omitting_it() {
+    let runtime = runtime().with_workspace_owner_machine_id(Some("another-machine"));
+    let mut definition = definition(&runtime, "replica", CoverageClass::IntegratedQaV1);
+    set_owner(&mut definition, None);
+
+    for diagnostic in [
+        evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap(),
+        evaluate_auto_task(&runtime, &definition, true, Utc::now()).unwrap(),
+        super::super::inspect_auto_task(&runtime, &definition, Utc::now()).unwrap(),
+    ] {
+        assert_eq!(diagnostic.reason, "owned_elsewhere");
+        assert_eq!(
+            ownership(&diagnostic),
+            DeliveryOwnership {
+                owner_machine: Some("another-machine".into()),
+                authority: OwnerAuthority::Workspace,
+                owned_here: false,
+            }
+        );
+    }
+
+    let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
     assert!(
         runtime
             .automation_store()
             .unwrap()
-            .automation_state(consumer)
+            .automation_state(&consumer)
             .unwrap()
-            .is_none()
+            .is_none(),
+        "a refused owner records nothing, so no host admits the same work twice"
     );
-    let AutoTaskSchedule::Deliveries { deliveries_landed } = &mut definition.schedule else {
-        unreachable!()
-    };
-    deliveries_landed.owner_machine = Some("another-machine".into());
+}
+
+#[test]
+fn an_explicit_owner_overrides_the_registered_workspace_owner() {
+    let runtime = runtime().with_workspace_owner_machine_id(Some("another-machine"));
+    let definition = definition(&runtime, "explicit", CoverageClass::IntegratedQaV1);
+
+    let evaluated = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
+    assert_eq!(evaluated.reason, "baselined");
+    assert_eq!(
+        ownership(&evaluated),
+        DeliveryOwnership {
+            owner_machine: Some("fixture-machine".into()),
+            authority: OwnerAuthority::Definition,
+            owned_here: true,
+        }
+    );
+}
+
+#[test]
+fn unregistered_and_contradicted_ownership_refuse_with_a_named_authority() {
+    let unregistered = runtime();
+    let mut definition = definition(&unregistered, "unregistered", CoverageClass::IntegratedQaV1);
+    set_owner(&mut definition, None);
+
+    for diagnostic in [
+        evaluate_auto_task(&unregistered, &definition, false, Utc::now()).unwrap(),
+        evaluate_auto_task(&unregistered, &definition, true, Utc::now()).unwrap(),
+        super::super::inspect_auto_task(&unregistered, &definition, Utc::now()).unwrap(),
+    ] {
+        assert_eq!(
+            diagnostic.reason, "ownership_unresolved",
+            "an enabled definition nobody owns must not read as disabled"
+        );
+        assert_eq!(
+            ownership(&diagnostic),
+            DeliveryOwnership {
+                owner_machine: None,
+                authority: OwnerAuthority::Missing,
+                owned_here: false,
+            }
+        );
+    }
+
+    // The workspace record claims this machine while the checkout is a replica
+    // of another: neither answer may be trusted.
+    let contradicted = unregistered
+        .clone()
+        .with_workspace_owner_machine_id(Some("fixture-machine"))
+        .with_coordination_write_owner(Some("another-machine".into()));
+    let diagnostic = evaluate_auto_task(&contradicted, &definition, false, Utc::now()).unwrap();
+    assert_eq!(diagnostic.reason, "ownership_unresolved");
+    assert_eq!(
+        ownership(&diagnostic),
+        DeliveryOwnership {
+            owner_machine: None,
+            authority: OwnerAuthority::Conflicting,
+            owned_here: false,
+        }
+    );
+
+    let consumer = consumer_key(&unregistered, "auto-task", &definition.name).unwrap();
+    assert!(
+        unregistered
+            .automation_store()
+            .unwrap()
+            .automation_state(&consumer)
+            .unwrap()
+            .is_none(),
+        "unresolved ownership never records a baseline"
+    );
+}
+
+#[test]
+fn a_delivery_routine_resolves_ownership_the_same_way() {
+    let runtime = runtime().with_workspace_owner_machine_id(Some("another-machine"));
+    let mut routine: orbit_types::workflow::RoutineDefinition = serde_json::from_value(json!({
+        "schemaVersion": 1,
+        "name": "delivery-routine",
+        "enabled": true,
+        "hosts": ["fixture-host"],
+        "target": "job:delivery_pipeline",
+        "trigger": {"deliveries_landed": {
+            "branch": "agent-main",
+            "threshold": 1,
+            "max_wait_minutes": 60,
+            "coverage": "integrated_qa_v1",
+        }},
+    }))
+    .unwrap();
+
+    let refused = super::super::evaluate_routine(&runtime, &routine, false, Utc::now()).unwrap();
+    assert_eq!(refused.reason, "owned_elsewhere");
+    assert_eq!(
+        ownership(&refused).owner_machine.as_deref(),
+        Some("another-machine")
+    );
+    assert_eq!(
+        ownership(&super::super::inspect_routine(&runtime, &routine, Utc::now()).unwrap()),
+        ownership(&refused)
+    );
+
+    routine
+        .trigger
+        .deliveries_landed
+        .as_mut()
+        .unwrap()
+        .owner_machine = Some("fixture-machine".into());
+    let owned = super::super::evaluate_routine(&runtime, &routine, false, Utc::now()).unwrap();
+    assert_eq!(owned.reason, "baselined");
+    assert!(ownership(&owned).owned_here);
+}
+
+#[test]
+fn a_disabled_definition_reads_as_disabled_whoever_owns_it() {
+    let runtime = runtime().with_workspace_owner_machine_id(Some("another-machine"));
+    let mut definition = definition(&runtime, "disabled-owner", CoverageClass::IntegratedQaV1);
+    definition.enabled = false;
+    set_owner(&mut definition, None);
+
     assert_eq!(
         evaluate_auto_task(&runtime, &definition, false, Utc::now())
             .unwrap()
             .reason,
-        "owned_elsewhere"
+        "disabled"
     );
-    let AutoTaskSchedule::Deliveries { deliveries_landed } = &mut definition.schedule else {
-        unreachable!()
-    };
-    deliveries_landed.owner_machine = Some("fixture-machine".into());
     assert_eq!(
-        evaluate_auto_task(&runtime, &definition, false, Utc::now())
+        super::super::inspect_auto_task(&runtime, &definition, Utc::now())
             .unwrap()
             .reason,
-        "baselined"
+        "disabled"
     );
 }
 

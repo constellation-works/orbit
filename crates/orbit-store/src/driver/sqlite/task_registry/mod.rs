@@ -16,8 +16,10 @@ mod store;
 mod util;
 mod workspace_id;
 
-// Auxiliary action-key tables do not change the v5 task/allocator format.
-// Keep it readable by rollback binaries, which safely ignore those tables.
+// Reader compatibility floor, not a counter for additive setup. Action keys
+// preserve the v5 task/allocator format and can be ignored by older readers.
+// Version 6 was shipped for that addition alone; schema.rs recovers it. Never
+// reuse 6 for an incompatible format.
 const REGISTRY_SCHEMA_VERSION: u32 = 5;
 
 pub fn task_registry_path(global_root: &Path) -> PathBuf {

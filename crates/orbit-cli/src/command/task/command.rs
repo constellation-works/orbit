@@ -93,8 +93,8 @@ pub enum TaskSubcommand {
     Archive(TaskArchiveArgs),
     /// List tasks with optional filters
     List(TaskListArgs),
-    /// Show detailed information about a task, found by ID in any registered
-    /// workspace unless `--workspace` narrows the search
+    /// Show detailed information about a task, found by ID with an optional
+    /// workspace filter
     Show(TaskShowArgs),
     /// Manage task artifact files
     Artifact(TaskArtifactCommand),

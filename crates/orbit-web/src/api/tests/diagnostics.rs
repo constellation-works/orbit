@@ -223,10 +223,12 @@ async fn diagnostics_errors_include_codex_style_stderr_rows() {
         .filter(|row| row["source"] == "agent-stderr" && row["job_run"] == run_id)
         .collect::<Vec<_>>();
     assert_eq!(agent_rows.len(), 2);
+    assert_eq!(agent_rows[0]["job_run"], run_id);
     assert_eq!(agent_rows[0]["step"], "implement");
     assert_eq!(agent_rows[0]["step_index"], 0);
     assert_eq!(agent_rows[0]["provider"], "codex");
     assert_eq!(agent_rows[0]["blob_ref"], stderr_ref);
+    assert!(agent_rows[0]["affiliation"].is_null());
     assert!(rows.iter().any(|row| {
         row["message"]
             .as_str()
@@ -298,11 +300,96 @@ fn global_error_rows_include_process_log_errors() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["ts"], "2026-05-08T04:01:00Z");
     assert_eq!(rows[0]["source"], "process");
+    assert_eq!(rows[0]["job_run"], serde_json::Value::Null);
+    assert_eq!(rows[0]["step"], serde_json::Value::Null);
+    assert_eq!(rows[0]["task_id"], serde_json::Value::Null);
+    assert_eq!(rows[0]["provider"], serde_json::Value::Null);
+    assert_eq!(rows[0]["affiliation"], "unaffiliated");
     assert!(
         rows[0]["message"]
             .as_str()
             .is_some_and(|message| message.contains("process failed"))
     );
+}
+
+#[test]
+fn global_error_rows_copy_run_attribution_from_process_log() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.log.jsonl");
+    write_lines(
+        &path,
+        &[
+            json!({
+                "timestamp": "2026-05-08T04:02:00Z",
+                "level": "ERROR",
+                "target": "orbit.job.step_finished",
+                "fields": {
+                    "message": "step finished",
+                    "job_run_id": "jrun-20260906-0306-2",
+                    "task_id": "ORB-11398",
+                    "step_id": "require_apply_success",
+                    "provider": "codex",
+                    "outcome": "failed",
+                    "success": false
+                }
+            })
+            .to_string(),
+            json!({
+                "timestamp": "2026-05-08T04:03:00Z",
+                "level": "ERROR",
+                "target": "orbit.core.job_run",
+                "fields": {
+                    "message": "failed to observe pipeline worker startup",
+                    "run_id": "jrun-20260906-0204-9",
+                    "task_id": "ORB-11331",
+                    "step": "starvation_check"
+                }
+            })
+            .to_string(),
+        ],
+    );
+
+    let rows = global_error_rows_from_path(&path, 10).expect("rows");
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["source"], "process");
+    assert_eq!(rows[0]["job_run"], "jrun-20260906-0306-2");
+    assert_eq!(rows[0]["task_id"], "ORB-11398");
+    assert_eq!(rows[0]["step"], "require_apply_success");
+    assert_eq!(rows[0]["provider"], "codex");
+    assert_eq!(rows[0]["affiliation"], "run");
+    assert_eq!(rows[1]["source"], "process");
+    assert_eq!(rows[1]["job_run"], "jrun-20260906-0204-9");
+    assert_eq!(rows[1]["task_id"], "ORB-11331");
+    assert_eq!(rows[1]["step"], "starvation_check");
+    assert_eq!(rows[1]["provider"], serde_json::Value::Null);
+    assert_eq!(rows[1]["affiliation"], "run");
+}
+
+#[test]
+fn global_error_rows_prefer_job_run_id_over_run_id() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.log.jsonl");
+    write_lines(
+        &path,
+        &[json!({
+            "timestamp": "2026-05-08T04:04:00Z",
+            "level": "ERROR",
+            "target": "orbit.test",
+            "fields": {
+                "message": "both run keys present",
+                "job_run_id": "jrun-canonical",
+                "run_id": "jrun-alias"
+            }
+        })
+        .to_string()],
+    );
+
+    let rows = global_error_rows_from_path(&path, 10).expect("rows");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["job_run"], "jrun-canonical");
+    assert_eq!(rows[0]["affiliation"], "run");
 }
 
 #[test]

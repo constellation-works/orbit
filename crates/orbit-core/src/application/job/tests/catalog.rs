@@ -1,5 +1,4 @@
-use super::super::catalog::JobCatalogFilter;
-
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -10,70 +9,11 @@ use orbit_types::workflow::{
     ActivityV2Spec, JobRunState, JobV2, JobV2Step, JobV2StepBody, PipelineState,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
 use tempfile::tempdir;
 
+use super::super::catalog::{DEFAULT_JOB_FILES, JobCatalogFilter, seed_default_jobs};
 use crate::OrbitRuntime;
-use crate::bootstrap::activity::DEFAULT_ACTIVITY_FILES;
-
-const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
-    (
-        "agent_invoke_pipeline",
-        include_str!("../../../../assets/jobs/agent_invoke_pipeline.yaml"),
-    ),
-    (
-        "auto_task_scheduler_pipeline",
-        include_str!("../../../../assets/jobs/auto_task_scheduler_pipeline.yaml"),
-    ),
-    (
-        "ci_failure_sweep_pipeline",
-        include_str!("../../../../assets/jobs/ci_failure_sweep_pipeline.yaml"),
-    ),
-    (
-        "dependabot_alert_sweep_pipeline",
-        include_str!("../../../../assets/jobs/dependabot_alert_sweep_pipeline.yaml"),
-    ),
-    (
-        "epic_pipeline",
-        include_str!("../../../../assets/jobs/epic_pipeline.yaml"),
-    ),
-    (
-        "task_auto_pipeline",
-        include_str!("../../../../assets/jobs/task_auto_pipeline.yaml"),
-    ),
-    (
-        "task_gate_pipeline",
-        include_str!("../../../../assets/jobs/task_gate_pipeline.yaml"),
-    ),
-    (
-        "task_local_pipeline",
-        include_str!("../../../../assets/jobs/task_local_pipeline.yaml"),
-    ),
-    (
-        "task_pilot_pipeline",
-        include_str!("../../../../assets/jobs/task_pilot_pipeline.yaml"),
-    ),
-    (
-        "task_pr_pipeline",
-        include_str!("../../../../assets/jobs/task_pr_pipeline.yaml"),
-    ),
-    (
-        "task_triage_pipeline",
-        include_str!("../../../../assets/jobs/task_triage_pipeline.yaml"),
-    ),
-    (
-        "workspace_ship_pipeline",
-        include_str!("../../../../assets/jobs/workspace_ship_pipeline.yaml"),
-    ),
-    (
-        "workspace_auto_pipeline",
-        include_str!("../../../../assets/jobs/workspace_auto_pipeline.yaml"),
-    ),
-    (
-        "worktree_gc_pipeline",
-        include_str!("../../../../assets/jobs/worktree_gc_pipeline.yaml"),
-    ),
-];
+use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathBuf) {
     let root = tempdir().expect("create tempdir");
@@ -152,6 +92,57 @@ spec:
     );
     std::fs::create_dir_all(path.parent().expect("job path has parent")).expect("create job dir");
     std::fs::write(path, yaml).expect("write job yaml");
+}
+
+#[test]
+fn fresh_job_seeding_copies_every_canonical_asset() {
+    let root = tempdir().expect("create tempdir");
+    let jobs_dir = root.path().join("resources/jobs");
+    seed_default_jobs(&jobs_dir, false).expect("seed canonical jobs");
+
+    for (name, yaml) in DEFAULT_JOB_FILES {
+        let seeded = std::fs::read_to_string(jobs_dir.join(format!("{name}.yaml")))
+            .expect("read seeded job");
+        assert_eq!(
+            seeded, *yaml,
+            "freshly seeded {name} must match its canonical asset"
+        );
+        load_job_asset(&seeded).expect("seeded canonical job must parse");
+    }
+}
+
+#[test]
+fn job_reseeding_preserves_local_concurrency_override() {
+    let root = tempdir().expect("create tempdir");
+    let jobs_dir = root.path().join("resources/jobs");
+    seed_default_jobs(&jobs_dir, false).expect("seed canonical jobs");
+
+    let path = jobs_dir.join("task_gate_pipeline.yaml");
+    let seeded = std::fs::read_to_string(&path).expect("read seeded gate job");
+    let original_limit = load_job_asset(&seeded)
+        .expect("parse gate job")
+        .spec
+        .max_active_runs;
+    let override_limit = original_limit + 5;
+    let modified = seeded.replacen(
+        &format!("  max_active_runs: {original_limit}\n"),
+        &format!("  max_active_runs: {override_limit}\n"),
+        1,
+    );
+    assert_eq!(
+        load_job_asset(&modified)
+            .expect("parse modified gate job")
+            .spec
+            .max_active_runs,
+        override_limit
+    );
+    std::fs::write(&path, &modified).expect("write local override");
+
+    seed_default_jobs(&jobs_dir, false).expect("reseed jobs without overwriting overrides");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read preserved override"),
+        modified
+    );
 }
 
 #[test]
@@ -891,11 +882,6 @@ fn local_task_pipeline_commits_before_merge_and_reconciles_with_local_base() {
         .iter()
         .find_map(|(name, yaml)| (*name == "task_local_pipeline").then_some(*yaml))
         .expect("task local pipeline default exists");
-    assert_eq!(
-        yaml,
-        include_str!("../../../../../../.orbit/resources/jobs/task_local_pipeline.yaml"),
-        "shipped and workspace task_local_pipeline resources must remain byte-identical"
-    );
     let asset = load_job_asset(yaml).expect("parse task local pipeline");
     let root_step_ids = asset
         .spec
@@ -1057,6 +1043,12 @@ fn pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints() {
                 "activity:git_rebase",
                 Some("pr_conflict_recovery")
             ),
+            // ORB-11333: the before-PR review gate always runs between the
+            // final base sync and publication; a non-pass fails the settle
+            // step so the failure handoff preserves the candidate.
+            ("review_gate_admit", "activity:review_gate_admit", None),
+            ("review", "activity:agent_review_repair", None),
+            ("review_gate_settle", "activity:review_gate_settle", None),
             ("push", "activity:git_push", Some("step_failure_recovery")),
             ("pr_open", "activity:pr_open", Some("step_failure_recovery")),
             (
@@ -1074,7 +1066,7 @@ fn pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints() {
             (
                 "complete_pr",
                 "activity:pr_complete",
-                Some("step_failure_recovery")
+                Some("pr_conflict_recovery")
             ),
             (
                 "complete_no_diff",
@@ -1100,6 +1092,25 @@ fn pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints() {
             "pr_open must not embed earlier {hidden_phase} phase input"
         );
     }
+
+    let complete_pr = asset
+        .spec
+        .steps
+        .iter()
+        .find(|step| step.id == "complete_pr")
+        .expect("PR completion phase");
+    let JobV2StepBody::TargetRef(target) = &complete_pr.body else {
+        panic!("PR completion must reference a focused activity");
+    };
+    let input = target.default_input.as_ref().expect("PR completion input");
+    assert_eq!(input["completion"], "{{ input.completion }}");
+    assert_eq!(input["head"], "{{ steps.sync_base.output.head }}");
+    assert_eq!(
+        input["published_head_sha"],
+        "{{ steps.push.output.local_sha }}"
+    );
+    assert_eq!(input["base"], "{{ steps.sync_base.output.base }}");
+    assert_eq!(input["base_sync"], "{{ input.base_sync }}");
 }
 
 #[test]
@@ -1108,11 +1119,6 @@ fn gate_pipeline_releases_reservation_before_child_success_guard() {
         .iter()
         .find_map(|(name, yaml)| (*name == "task_gate_pipeline").then_some(*yaml))
         .expect("task gate pipeline default exists");
-    assert_eq!(
-        yaml,
-        include_str!("../../../../../../.orbit/resources/jobs/task_gate_pipeline.yaml"),
-        "shipped and workspace task_gate_pipeline resources must remain byte-identical"
-    );
     let asset = load_job_asset(yaml).expect("parse task gate pipeline");
     let root_step_ids = asset
         .spec
@@ -1443,11 +1449,6 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
         .iter()
         .find_map(|(name, yaml)| (*name == "workspace_auto_pipeline").then_some(*yaml))
         .expect("workspace auto pipeline exists");
-    assert_eq!(
-        yaml,
-        include_str!("../../../../../../.orbit/resources/jobs/workspace_auto_pipeline.yaml"),
-        "shipped and workspace workspace_auto_pipeline resources must remain byte-identical"
-    );
     let asset = load_job_asset(yaml).expect("workspace auto pipeline parses");
     assert_eq!(asset.spec.max_active_runs, 1);
     assert_eq!(asset.spec.steps[0].id, "resolve_ship_input");
@@ -1681,7 +1682,9 @@ fn task_shipment_jobs_resolve_default_recovery_activity() {
             "default job {job_name} should wire recovery on direct shipment steps"
         );
         for (step_id, recovery_activity, resolved) in recovery_steps {
-            let expected = if job_name == "task_pr_pipeline" && step_id == "sync_base" {
+            let expected = if job_name == "task_pr_pipeline"
+                && matches!(step_id, "sync_base" | "complete_pr")
+            {
                 "pr_conflict_recovery"
             } else {
                 "step_failure_recovery"
@@ -1729,15 +1732,11 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
         .iter()
         .find_map(|(name, yaml)| (*name == "epic_pipeline").then_some(*yaml))
         .expect("epic pipeline exists");
-    assert_eq!(
-        yaml,
-        include_str!("../../../../../../.orbit/resources/jobs/epic_pipeline.yaml"),
-        "shipped and workspace epic_pipeline resources must remain byte-identical"
-    );
     let asset = load_job_asset(yaml).expect("epic pipeline parses");
     assert_eq!(asset.spec.max_active_runs, 1);
-    // ORB-11187 added the two authorized PR completion steps.
-    assert_eq!(asset.spec.steps.len(), 15);
+    // ORB-11187 added the two authorized PR completion steps; ORB-11333 added
+    // the three before-PR review gate steps.
+    assert_eq!(asset.spec.steps.len(), 18);
     let root_step_ids = asset
         .spec
         .steps
@@ -1754,6 +1753,9 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
             "commit_delivery",
             "prepare_branch",
             "sync_base",
+            "review_gate_admit",
+            "review",
+            "review_gate_settle",
             "push",
             "pr_open",
             "promote_pr",
@@ -1897,17 +1899,19 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
     let pr_when = Some(
         "{{ steps.resolve_ship_input.output.mode }} == pr && {{ steps.commit_delivery.output.skipped_no_diff_expected }} != true",
     );
+    // ORB-11333: the three review-gate steps sit between sync_base and push
+    // and run unconditionally, so only the PR handoff steps carry `pr_when`.
     for (index, id) in [
-        "prepare_branch",
-        "sync_base",
-        "push",
-        "pr_open",
-        "promote_pr",
+        ("prepare_branch", 5),
+        ("sync_base", 6),
+        ("push", 10),
+        ("pr_open", 11),
+        ("promote_pr", 12),
     ]
     .into_iter()
-    .enumerate()
+    .map(|(id, index)| (index, id))
     {
-        let step = &asset.spec.steps[5 + index];
+        let step = &asset.spec.steps[index];
         assert_eq!(step.id, id);
         assert_eq!(step.when.as_deref(), pr_when);
         let JobV2StepBody::TargetRef(target) = &step.body else {
@@ -1931,7 +1935,7 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
         }
     }
 
-    let promote_no_diff = &asset.spec.steps[10];
+    let promote_no_diff = &asset.spec.steps[13];
     assert_eq!(
         promote_no_diff.when.as_deref(),
         Some(
@@ -1950,7 +1954,7 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
         "review"
     );
 
-    let merge = &asset.spec.steps[13];
+    let merge = &asset.spec.steps[16];
     assert_eq!(
         merge.when.as_deref(),
         Some("{{ steps.resolve_ship_input.output.mode }} == local")
@@ -1969,7 +1973,7 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
         "{{ steps.resolve_ship_input.output.base_branch }}"
     );
 
-    let mark_done = &asset.spec.steps[14];
+    let mark_done = &asset.spec.steps[17];
     assert_eq!(
         mark_done.when.as_deref(),
         Some("{{ steps.resolve_ship_input.output.mode }} == local")
@@ -2460,6 +2464,10 @@ fn pr_pipelines_complete_only_when_authorized_and_handle_no_diff_without_a_pr() 
             assert_eq!(no_diff.target, "activity:pr_complete");
             let input = no_diff.default_input.as_ref().expect("no-diff input");
             assert_eq!(input["no_diff_expected"], true);
+            assert_eq!(
+                input["already_landed_checkpoint"],
+                "{{ steps.commit.output }}"
+            );
             assert!(
                 input.get("pr_number").is_none(),
                 "{job_name} no-diff completion must not require a nonexistent PR"

@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
-use super::{expand_rule, expand_rules, walk_paths};
+use super::{LinuxBwrapPostRunGuard, expand_rule, expand_rules, walk_paths};
+use orbit_common::OrbitError;
+use orbit_types::policy::ResolvedFsProfile;
 
 fn tree() -> tempfile::TempDir {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -77,4 +79,150 @@ fn walk_lists_every_path_once() {
     // 1 root + 4 dirs (a, a/deep, b, target, target/debug = 5) + 6 files.
     assert_eq!(paths.len(), 1 + 5 + 6);
     assert_eq!(paths[0], root);
+}
+
+fn profile(modify: Vec<String>) -> ResolvedFsProfile {
+    ResolvedFsProfile {
+        name: "test".to_string(),
+        read: vec!["/**".to_string()],
+        modify,
+    }
+}
+
+#[test]
+fn capture_watches_absent_exact_and_subtree_denies() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("workspace");
+    let secrets = workspace.join("secrets");
+    let lock = workspace.join("Cargo.lock");
+    let resolved = profile(vec![
+        format!("{}/**", workspace.display()),
+        format!("!{}/**", secrets.display()),
+        format!("!{}", lock.display()),
+    ]);
+
+    let guard = LinuxBwrapPostRunGuard::capture(&resolved)
+        .expect("capture")
+        .expect("absent exact/subtree denies must be guarded");
+    fs::create_dir_all(&secrets).expect("create secrets");
+    fs::write(secrets.join("x"), b"k").expect("write secret");
+    fs::write(&lock, b"k").expect("write lock");
+
+    let error = guard
+        .verify()
+        .expect_err("creating an absent deny root must fail closed");
+    assert!(
+        matches!(error, OrbitError::PolicyDenied(_)),
+        "expected PolicyDenied, got {error}"
+    );
+}
+
+/// macOS commonly reaches `/private/var` through the `/var` symlink. The
+/// guard must match rules written through that spelling even though its walk
+/// canonicalizes the search root.
+#[cfg(unix)]
+#[test]
+fn capture_watches_absent_denies_through_a_symlinked_workspace_path() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let real_workspace = temp.path().join("real-workspace");
+    let workspace = temp.path().join("workspace-link");
+    fs::create_dir_all(&real_workspace).expect("real workspace");
+    symlink(&real_workspace, &workspace).expect("workspace symlink");
+
+    let secrets = workspace.join("secrets");
+    let lock = workspace.join("Cargo.lock");
+    let resolved = profile(vec![
+        format!("{}/**", workspace.display()),
+        format!("!{}/**", secrets.display()),
+        format!("!{}", lock.display()),
+    ]);
+
+    let guard = LinuxBwrapPostRunGuard::capture(&resolved)
+        .expect("capture")
+        .expect("absent exact/subtree denies must be guarded");
+    fs::create_dir_all(&secrets).expect("create secrets");
+    fs::write(secrets.join("x"), b"k").expect("write secret");
+    fs::write(&lock, b"k").expect("write lock");
+
+    let error = guard
+        .verify()
+        .expect_err("creating a deny root through a symlink must fail closed");
+    assert!(
+        matches!(error, OrbitError::PolicyDenied(_)),
+        "expected PolicyDenied, got {error}"
+    );
+}
+
+#[test]
+fn capture_skips_absent_deny_whose_nested_reallow_will_create_the_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("workspace");
+    let orbit = workspace.join(".orbit");
+    let resolved = profile(vec![
+        format!("{}/**", workspace.display()),
+        format!("!{}/**", orbit.display()),
+        format!("{}/**", orbit.join("auto_tasks").display()),
+    ]);
+
+    assert!(
+        LinuxBwrapPostRunGuard::capture(&resolved)
+            .expect("capture")
+            .is_none(),
+        "grant preparation will create .orbit, so watching it would false-positive"
+    );
+}
+
+#[test]
+fn managed_aliases_replay_denies_and_pin_replaceable_parents() {
+    use super::{LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, compile_linux_bwrap_argv};
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let protected = root.join("target/nested/metadata");
+    fs::create_dir_all(&protected).unwrap();
+    fs::write(root.join(".git"), "gitdir: target/nested/metadata").unwrap();
+    let resolved = profile(vec![
+        format!("{}/**", root.display()),
+        format!("!{}", root.join(".git").display()),
+        format!("!{}/**", protected.display()),
+    ]);
+    let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&root), true).unwrap();
+    let mounts: Vec<_> = plan
+        .args
+        .windows(3)
+        .filter(|args| matches!(args[0].as_str(), "--bind" | "--ro-bind"))
+        .collect();
+    for (source, destination, mode) in [
+        (
+            root.join(".git"),
+            PathBuf::from(LINUX_STABLE_WORKSPACE_MOUNT).join(".git"),
+            "--ro-bind",
+        ),
+        (
+            protected.clone(),
+            PathBuf::from(LINUX_STABLE_BUILD_MOUNT).join("nested/metadata"),
+            "--ro-bind",
+        ),
+        (
+            root.join("target/nested"),
+            root.join("target/nested"),
+            "--bind",
+        ),
+        (
+            root.join("target/nested"),
+            PathBuf::from(LINUX_STABLE_BUILD_MOUNT).join("nested"),
+            "--bind",
+        ),
+    ] {
+        let final_mount = mounts
+            .iter()
+            .rfind(|args| args[2] == destination.display().to_string())
+            .unwrap();
+        assert_eq!(final_mount[0], mode);
+        assert_eq!(final_mount[1], source.display().to_string());
+    }
 }

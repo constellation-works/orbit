@@ -18,7 +18,7 @@ use orbit_mcp::{
     federated,
 };
 use orbit_types::identity::validate_machine_id;
-use orbit_types::tool::McpCapability;
+use orbit_types::tool::{McpCapability, RemoteAgentInvokeMode};
 
 use crate::command::{CommandOut, CommandOutput};
 
@@ -142,9 +142,23 @@ fn list(path: &Path) -> CommandOut {
         if let Some(workspaces) = &row.workspaces {
             println!("    workspaces: {}", workspaces.join(", "));
         }
+        if let Some(workspaces) = &row.agent_invoke_workspaces {
+            println!("    agent_invoke_workspaces: {}", workspaces.join(", "));
+        }
         if let Some(fingerprint) = &row.ssh_key_fingerprint {
             println!("    ssh_key_fingerprint: {fingerprint}");
         }
+        println!(
+            "    agent_invoke: {}",
+            if row.agent_invoke {
+                match row.agent_invoke_mode.unwrap_or_default() {
+                    RemoteAgentInvokeMode::KeyBound => "enabled (key-bound)",
+                    RemoteAgentInvokeMode::Cooperative => "enabled (cooperative)",
+                }
+            } else {
+                "disabled"
+            }
+        );
     }
     Ok(CommandOutput::Silent)
 }
@@ -169,8 +183,10 @@ fn check(path: &Path, machine_id: &str) -> CommandOut {
     println!("granted: [{}]", capability_list(&grant.granted));
     match &grant.pinned_fingerprint {
         Some(fingerprint) => println!(
-            "identity: key-bound to {fingerprint} where this machine can observe the \
-             authenticating key"
+            "identity pin: {fingerprint}, enforced where this machine can observe the \
+             authenticating key. The identity itself is key-bound only on the \
+             destination-issued forced-command path; the ordinary SSH proxy remains \
+             self-asserted."
         ),
         None => println!(
             "identity: self-asserted — this row is selected by a name, so any caller that \
@@ -188,6 +204,19 @@ fn check(path: &Path, machine_id: &str) -> CommandOut {
             "  elsewhere on this machine: [{}]",
             capability_list(&grant.elsewhere)
         );
+    }
+    match (&grant.agent_invoke_workspaces, grant.agent_invoke_mode) {
+        (Some(workspaces), Some(RemoteAgentInvokeMode::KeyBound)) => println!(
+            "agent_invoke: configured for {} in key-bound mode; admission requires a \
+             destination-issued forced-command session",
+            workspaces.iter().cloned().collect::<Vec<_>>().join(", ")
+        ),
+        (Some(workspaces), Some(RemoteAgentInvokeMode::Cooperative)) => println!(
+            "agent_invoke: configured for {} in cooperative mode; identity remains self-asserted \
+             and the SSH OS-account/operator channel is the trust boundary",
+            workspaces.iter().cloned().collect::<Vec<_>>().join(", ")
+        ),
+        _ => println!("agent_invoke: not granted"),
     }
     // Both requests, because the grant is a ceiling and the caller's argv is
     // the other half of the intersection: printing only one would read as the
@@ -308,6 +337,14 @@ fn authorize(global_root: &Path, callers_path: &Path, args: &CallersAuthorizeArg
         "The forced command requests operator authority, but does not grant it: the matched row \
          in the callers file remains the ceiling, so agent-only and deny rows cannot become \
          operator sessions."
+    );
+    eprintln!(
+        "Remote `orbit.agent.invoke` remains denied unless the matched row also sets \
+         `agent_invoke = true`, grants `operator`, and narrows `workspaces` to the destination \
+         workspace IDs. The omitted `agent_invoke_mode` remains strict and requires this pinned \
+         key. A destination owner may instead set `agent_invoke_mode = \"cooperative\"` for an \
+         existing same-OS-account SSH operator channel; that records a self-asserted identity and \
+         is not Tier 2. The operation grant never comes from the file default."
     );
     // The row guidance is written against what is actually in the file: a
     // template that restated `capabilities` would invite an operator to paste

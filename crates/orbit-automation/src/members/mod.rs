@@ -135,6 +135,7 @@ pub fn evaluate(
                 pending_commits: vec![],
                 pending: vec![],
                 waived: vec![],
+                excluded: vec![],
                 unresolved: BTreeMap::new(),
                 associations: BTreeMap::new(),
                 active: None,

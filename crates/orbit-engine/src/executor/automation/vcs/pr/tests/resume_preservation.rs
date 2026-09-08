@@ -117,3 +117,70 @@ fn resume_preflight_rejects_unrelated_lineage_and_changed_ownership() {
         );
     }
 }
+
+#[test]
+fn resumed_recovery_requires_the_exact_immutable_source_checkpoint() {
+    use crate::executor::automation::vcs::freshness::recovered_head_checkpoint;
+
+    let workspace = no_diff_pr_workspace();
+    let mut source = completed_worktree_checkpoint(FIRST_RESUME_RUN_ID, &workspace.repo);
+    let base = git(&workspace.repo, &["rev-parse", "HEAD"]);
+    fs::write(
+        workspace.repo.join("candidate.txt"),
+        "recovered candidate\n",
+    )
+    .unwrap();
+    git(&workspace.repo, &["add", "candidate.txt"]);
+    git(&workspace.repo, &["commit", "-m", "recovered candidate"]);
+    let head = git(&workspace.repo, &["rev-parse", "HEAD"]);
+    let checkpoint = json!({
+        "run_id": FIRST_RESUME_RUN_ID,
+        "step_id": "sync_base",
+        "task_ids": [TASK_ID],
+        "workspace_path": workspace.repo,
+        "head": "orbit/test-batch",
+        "head_sha_before": "original-candidate",
+        "original_base_sha": base,
+        "base_sha": base,
+        "head_sha": head,
+        "rewritten": true,
+    });
+    source
+        .rebase_recovery_checkpoints
+        .insert("sync_base".to_string(), checkpoint.clone());
+    let host = ResumeFailureHost::new(
+        PrOpenTestHost::new(
+            vec![task_owned_by(CHECKPOINT_RUN_ID)],
+            workspace.repo.clone(),
+        )
+        .with_job_run(FIRST_RESUME_RUN_ID, None)
+        .with_job_run(SECOND_RESUME_RUN_ID, Some(FIRST_RESUME_RUN_ID)),
+    );
+    host.write_state(source.clone());
+    let mut resumed: PipelineState =
+        serde_json::from_slice(&serde_json::to_vec(&source).unwrap()).unwrap();
+    resumed.run_id = SECOND_RESUME_RUN_ID.to_string();
+    host.write_state(resumed.clone());
+    assert_eq!(
+        recovered_head_checkpoint(&host, SECOND_RESUME_RUN_ID, &workspace.repo, &head).unwrap(),
+        Some(checkpoint)
+    );
+    assert_eq!(
+        recovered_head_checkpoint(&host, SECOND_RESUME_RUN_ID, &workspace.repo, &base).unwrap(),
+        None
+    );
+
+    resumed
+        .rebase_recovery_checkpoints
+        .get_mut("sync_base")
+        .unwrap()["head_sha_before"] = json!("substituted-origin");
+    host.write_state(resumed);
+    let error =
+        recovered_head_checkpoint(&host, SECOND_RESUME_RUN_ID, &workspace.repo, &head).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("differs from its source checkpoint"),
+        "{error}"
+    );
+}

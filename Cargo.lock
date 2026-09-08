@@ -374,6 +374,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "chrono-tz"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+dependencies = [
+ "chrono",
+ "phf",
+]
+
+[[package]]
 name = "clap"
 version = "4.5.60"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2084,7 +2094,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orbit-agent"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "orbit-common",
@@ -2102,9 +2112,10 @@ dependencies = [
 
 [[package]]
 name = "orbit-automation"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "chrono",
+ "chrono-tz",
  "croner",
  "orbit-common",
  "orbit-store",
@@ -2119,7 +2130,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-cli"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -2152,7 +2163,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-cmd"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "flate2",
@@ -2178,7 +2189,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-common"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "fs2",
@@ -2204,7 +2215,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-config"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "orbit-common",
  "orbit-types",
@@ -2218,12 +2229,13 @@ dependencies = [
 
 [[package]]
 name = "orbit-core"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
  "croner",
  "fs2",
+ "getrandom 0.3.4",
  "libc",
  "orbit-automation",
  "orbit-common",
@@ -2248,7 +2260,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-engine"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "jsonschema",
@@ -2273,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-exec"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "libc",
  "orbit-common",
@@ -2285,7 +2297,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-mcp"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2307,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-policy"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "orbit-common",
@@ -2318,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-registry"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "hostname",
@@ -2332,7 +2344,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-search"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "blake3",
  "chrono",
@@ -2352,7 +2364,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-store"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "blake3",
  "chrono",
@@ -2375,7 +2387,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-tools"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "orbit-common",
@@ -2395,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-types"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "clap",
@@ -2412,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-web"
-version = "0.19.2"
+version = "0.20.0"
 dependencies = [
  "axum",
  "chrono",
@@ -2508,6 +2520,24 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "phf"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
+dependencies = [
+ "phf_shared",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
+dependencies = [
+ "siphasher",
+]
 
 [[package]]
 name = "pin-project-lite"
@@ -3252,6 +3282,12 @@ name = "simd-adler32"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
+
+[[package]]
+name = "siphasher"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "slab"

@@ -51,13 +51,20 @@ STEP_COLORS = {
 # ── Parsing ───────────────────────────────────────────────────────────────────
 
 def parse_actor(raw) -> str:
+    """Render an ActorIdentity: a flat label string, or the tagged
+    ``{"human": ...}`` / ``{"agent": {...}}`` shape used for the labels a flat
+    string cannot represent."""
     if isinstance(raw, str):
         return raw
     if isinstance(raw, dict):
+        if isinstance(raw.get("human"), str):
+            return raw["human"] or "unknown"
         agent = raw.get("agent", {})
-        name = agent.get("name", "unknown")
+        name = agent.get("name", "")
         model = agent.get("model", "")
-        return f"{name} / {model}" if model else name
+        if name and model:
+            return f"{name} / {model}"
+        return model or name or "unknown"
     return "unknown"
 
 

@@ -7,9 +7,9 @@ use orbit_core::{CompletionPolicy, OrbitError, OrbitRuntime, find_workflow};
 #[cfg(test)]
 use serde_json::Value;
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use crate::command::{CommandOut, Execute};
 
-use super::support::{WorkflowDispatchResult, print_workflow_dispatch_results};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload};
 
 pub(super) const SHIP_WORKFLOW: &str = "ship";
 
@@ -115,10 +115,7 @@ impl Execute for ShipCommand {
             error_code: None,
             error_message: None,
         };
-        {
-            print_workflow_dispatch_results(SHIP_WORKFLOW, &[run], self.json)?;
-            Ok(CommandOutput::Silent)
-        }
+        workflow_dispatch_payload(SHIP_WORKFLOW, &[run])
     }
 }
 
@@ -128,24 +125,37 @@ impl Execute for ShipCommand {
 /// workspace's registry entry (matched by `orbit_dir`): explicit `ship_mode`,
 /// else the `pr` default. If the current workspace isn't found in the registry,
 /// fall back to `pr` so omitted configuration still uses reviewable delivery.
-fn resolve_ship_mode(
+pub(crate) fn resolve_ship_mode(
     args: &ShipCommand,
     runtime: &OrbitRuntime,
 ) -> Result<orbit_core::ShipMode, OrbitError> {
     if let Some(mode) = args.mode {
         return Ok(mode.to_core());
     }
-    let registry = orbit_registry::workspace_registry::load_registry()?;
+    let registry_path =
+        orbit_registry::workspace_registry::registry_path_for(&runtime.global_root());
+    let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
     let orbit_dir = runtime.shared_root();
     let mode = registry
         .checkouts
         .iter()
         .find(|checkout| checkout.orbit_dir == orbit_dir)
         .and_then(|checkout| {
-            orbit_registry::workspace_registry::find_workspace(&registry, &checkout.workspace_id)
+            registry
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.id == checkout.workspace_id)
         })
-        .map(orbit_core::resolved_ship_mode)
-        .unwrap_or(orbit_core::ShipMode::Pr);
+        .map(orbit_core::resolved_ship_mode);
+    let Some(mode) = mode else {
+        tracing::warn!(
+            registry_path = %registry_path.display(),
+            orbit_dir = %orbit_dir.display(),
+            fallback = "pr",
+            "workspace was not found in registry; falling back to PR ship mode"
+        );
+        return Ok(orbit_core::ShipMode::Pr);
+    };
     Ok(mode)
 }
 

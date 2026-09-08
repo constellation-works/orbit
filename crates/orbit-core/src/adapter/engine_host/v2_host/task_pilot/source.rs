@@ -9,8 +9,10 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 
-use orbit_common::fs::git::run_git;
-use orbit_common::fs::io::with_exclusive_file_lock;
+use orbit_common::fs::git::{
+    GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, run_git, should_retry_git_ref_cas,
+    with_git_fetch_lock,
+};
 use orbit_engine::DispatchError;
 use serde_json::{Value, json};
 
@@ -204,39 +206,25 @@ pub(super) fn resolve_source_snapshot(
     }
     let has_origin = has_origin_remote(action, workspace_root)?;
 
-    // Serialize fetch + resolution across linked checkouts sharing refs. Git's
-    // common directory works for both a primary .git directory and gitfiles.
-    let common = git(
-        action,
-        workspace_root,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    if !common.success {
-        return Err(action_failed(
-            action,
-            "unable to locate shared Git directory",
-        ));
-    }
-    let lock_target = Path::new(common.stdout.trim()).join("orbit-task-pilot-fetch");
-    let (source_ref, source_revision) =
-        with_exclusive_file_lock(&lock_target, "task-pilot source fetch", || {
-            let source_ref = if has_origin {
-                fetch_origin_branch(action, workspace_root, &base_branch)
-                    .map_err(FetchLockError::Dispatch)?;
-                format!("origin/{base_branch}")
-            } else {
-                format!("refs/heads/{base_branch}")
-            };
-            let revision = rev_parse_commit(action, workspace_root, &source_ref)
+    // Shared git-common-dir lock (`orbit-git-fetch`): the same identity
+    // delivery `fetch_remote_base` uses. ORB-11269's pilot-only
+    // `orbit-task-pilot-fetch` lock left that writer uncoordinated.
+    let (source_ref, source_revision) = with_git_fetch_lock(workspace_root, || {
+        let source_ref = if has_origin {
+            fetch_origin_branch(action, workspace_root, &base_branch)
                 .map_err(FetchLockError::Dispatch)?;
-            Ok::<_, FetchLockError>((source_ref, revision))
-        })
-        .map_err(|error| match error {
-            FetchLockError::Dispatch(error) => error,
-            FetchLockError::Io(error) => {
-                action_failed(action, format!("task-pilot fetch lock: {error}"))
-            }
-        })?;
+            format!("origin/{base_branch}")
+        } else {
+            format!("refs/heads/{base_branch}")
+        };
+        let revision = rev_parse_commit(action, workspace_root, &source_ref)
+            .map_err(FetchLockError::Dispatch)?;
+        Ok::<_, FetchLockError>((source_ref, revision))
+    })
+    .map_err(|error| match error {
+        FetchLockError::Dispatch(error) => error,
+        FetchLockError::Io(error) => action_failed(action, format!("git fetch lock: {error}")),
+    })?;
 
     Ok(Some(SourceSnapshot {
         base_branch,
@@ -277,7 +265,7 @@ fn normalize_base_branch(action: &str, base: &str) -> Result<String, DispatchErr
     Ok(branch.to_string())
 }
 
-/// Local-error wrapper so [`with_exclusive_file_lock`] (which requires
+/// Local-error wrapper so [`with_git_fetch_lock`] (which requires
 /// `E: From<io::Error>`) can carry either lock-acquisition failures or the
 /// module's own [`DispatchError`] out of the locked closure.
 enum FetchLockError {
@@ -310,29 +298,42 @@ fn has_origin_remote(action: &str, workspace: &Path) -> Result<bool, DispatchErr
 
 fn fetch_origin_branch(action: &str, workspace: &Path, branch: &str) -> Result<(), DispatchError> {
     let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
-    let output = Command::new("git")
-        .args(["fetch", "origin", &spec])
-        .current_dir(workspace)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .map_err(|error| {
-            action_failed(
-                action,
-                format!(
-                    "failed to fetch origin/{branch} in '{}': {error}",
-                    workspace.display()
-                ),
-            )
-        })?;
-    if output.status.success() {
-        return Ok(());
+    let mut last_stderr = String::new();
+    for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
+        let output = Command::new("git")
+            .args(["fetch", "origin", &spec])
+            .current_dir(workspace)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|error| {
+                action_failed(
+                    action,
+                    format!(
+                        "failed to fetch origin/{branch} in '{}': {error}",
+                        workspace.display()
+                    ),
+                )
+            })?;
+        if output.status.success() {
+            return Ok(());
+        }
+        last_stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if should_retry_git_ref_cas(attempt, &last_stderr) {
+            tracing::warn!(
+                attempt,
+                branch,
+                "retrying origin fetch after git ref update contention"
+            );
+            std::thread::sleep(git_fetch_cas_retry_delay());
+            continue;
+        }
+        break;
     }
     Err(action_failed(
         action,
         format!(
-            "remote failure: could not fetch origin/{branch} in '{}': {}",
+            "remote failure: could not fetch origin/{branch} in '{}': {last_stderr}",
             workspace.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
         ),
     ))
 }

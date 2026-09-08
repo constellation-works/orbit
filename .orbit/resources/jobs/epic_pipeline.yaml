@@ -43,6 +43,10 @@ spec:
       default_input:
         task_ids:
           - "{{ input.epic_task_id }}"
+        # Stable checkout token only. Dispatcher still injects the admitted
+        # job as `job_run_id`; setup stamps tasks and returns that run so
+        # the review gate and later delivery steps look up the captured
+        # policy, not this worktree identity [ORB-11520].
         run_id: "epic-{{ input.epic_task_id }}"
         branch_prefix: epic
         base: "{{ steps.resolve_ship_input.output.base_branch }}"
@@ -66,6 +70,9 @@ spec:
               items: "{{ steps.descendants.output.task_ids }}"
               max_iterations: 256
               steps:
+                # Intermediate assembly onto the epic branch, not local-only
+                # final delivery. A before-pr snapshot is inherited and the
+                # combined candidate is gated later [ORB-11521].
                 - id: land_child
                   target: activity:invoke_and_wait
                   timeout_seconds: 7200
@@ -161,6 +168,50 @@ spec:
         commits_behind: "{{ steps.prepare_branch.output.commits_behind }}"
         sync_required: "{{ steps.prepare_branch.output.sync_required }}"
 
+    # ORB-11333 / ORB-11520: the before-PR review gate examines the epic's
+    # final combined diff after base synchronization and before publication.
+    # `job_run_id` is the admitted job (setup output), not the epic worktree
+    # token. Both gate steps always run; the local route and no-diff outcomes
+    # report `applies: false` or refuse, and a non-pass verdict stops delivery
+    # without a PR.
+    - id: review_gate_admit
+      target: activity:review_gate_admit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids:
+          - "{{ input.epic_task_id }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ steps.resolve_ship_input.output.base_branch }}"
+        base_sync: remote
+        mode: "{{ steps.resolve_ship_input.output.mode }}"
+        skipped_no_diff_expected: "{{ steps.commit_delivery.output.skipped_no_diff_expected }}"
+
+    - id: review
+      when: "{{ steps.review_gate_admit.output.applies }} == true"
+      target: activity:agent_review_repair
+      default_input:
+        task_id: "{{ input.epic_task_id }}"
+        task_ids:
+          - "{{ input.epic_task_id }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        repo_root: "{{ steps.worktree.output.workspace_path }}"
+        attempt_id: "{{ steps.review_gate_admit.output.attempt_id }}"
+        manifest_artifact: "{{ steps.review_gate_admit.output.manifest_artifact }}"
+        report_artifact: "{{ steps.review_gate_admit.output.report_artifact }}"
+        crew: "{{ steps.review_gate_admit.output.reviewer.crew }}"
+        remaining_seconds: "{{ steps.review_gate_admit.output.remaining.seconds }}"
+
+    - id: review_gate_settle
+      target: activity:review_gate_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids:
+          - "{{ input.epic_task_id }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ steps.resolve_ship_input.output.base_branch }}"
+        base_sync: remote
+        admission: "{{ steps.review_gate_admit.output }}"
+
     - id: push
       when: "{{ steps.resolve_ship_input.output.mode }} == pr && {{ steps.commit_delivery.output.skipped_no_diff_expected }} != true"
       target: activity:git_push
@@ -189,6 +240,8 @@ spec:
         base_sha: "{{ steps.sync_base.output.base_sha }}"
         base_sync: remote
         head: "{{ steps.sync_base.output.head }}"
+        reviewed_head_sha: "{{ steps.review_gate_settle.output.reviewed_head_sha }}"
+        reviewed_base_sha: "{{ steps.review_gate_settle.output.reviewed_base_sha }}"
 
     - id: promote_pr
       when: "{{ steps.resolve_ship_input.output.mode }} == pr && {{ steps.commit_delivery.output.skipped_no_diff_expected }} != true"
@@ -222,6 +275,7 @@ spec:
           - "{{ input.epic_task_id }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
+        reviewed_head_sha: "{{ steps.review_gate_settle.output.reviewed_head_sha }}"
 
     - id: complete_pr_no_diff
       when: "{{ steps.resolve_ship_input.output.mode }} == pr && {{ input.completion }} == done && {{ steps.commit_delivery.output.skipped_no_diff_expected }} == true"

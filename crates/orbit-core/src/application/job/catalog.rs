@@ -113,6 +113,76 @@ impl JobCatalogEntry {
 }
 
 impl OrbitRuntime {
+    /// Capture integration identity at named submission, before the worker
+    /// merges job defaults. Both collection and pilot admission then consume
+    /// the same durable input, independent of GitHub's release default.
+    pub(crate) fn resolve_ci_sweep_input(
+        &self,
+        spec: &JobV2,
+        input: &mut Value,
+    ) -> Result<(), OrbitError> {
+        if input.is_null() {
+            *input = serde_json::json!({});
+        }
+        if !input.is_object() {
+            return Err(OrbitError::InvalidInput(
+                "CI sweep run input must be an object".to_string(),
+            ));
+        }
+
+        let branch = self.ci_sweep_integration_branch(spec, input)?;
+        let branch = validate_ci_integration_branch(&self.paths().repo_root, &branch)?;
+        input["integration_branch"] = Value::String(branch);
+        Ok(())
+    }
+
+    fn ci_sweep_integration_branch(
+        &self,
+        spec: &JobV2,
+        input: &Value,
+    ) -> Result<String, OrbitError> {
+        for key in ["integration_branch", "base_branch"] {
+            if let Some(branch) = ci_branch_field(input, key)? {
+                return Ok(branch);
+            }
+        }
+        if let Some(defaults) = spec.default_input.as_ref()
+            && let Some(branch) = ci_branch_field(defaults, "integration_branch")?
+        {
+            return Ok(branch);
+        }
+        if let Some(branch) = self
+            .workspace_runtime_binding()
+            .and_then(|binding| binding.base_branch.as_ref())
+        {
+            return Ok(branch.clone());
+        }
+
+        // Standalone workspaces can explicitly configure integration identity.
+        // The built-in "main" fallback is not evidence of that identity.
+        let config = orbit_config::load_effective_config(&orbit_config::ConfigRoots::new(
+            self.global_root(),
+            self.shared_root(),
+        ))?;
+        config
+            .values()
+            .iter()
+            .find(|entry| {
+                entry.key == "workflow.base_branch"
+                    && entry.source.kind() != orbit_config::ConfigValueSourceKind::BuiltIn
+            })
+            .and_then(|entry| entry.value.as_str())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(
+                    "CI sweep integration branch is unavailable; set the registered workspace \
+                     base branch, explicit workflow.base_branch config, or integration_branch \
+                     run input"
+                        .to_string(),
+                )
+            })
+    }
+
     pub fn list_job_catalog_with_last_run(
         &self,
         include_disabled: bool,
@@ -263,6 +333,42 @@ impl OrbitRuntime {
             );
         }
         dirs.into_vec()
+    }
+}
+
+fn validate_ci_integration_branch(repo_root: &Path, branch: &str) -> Result<String, OrbitError> {
+    // Match pilot admission's origin-prefix normalization once, so collection
+    // and every child receive the identical literal branch, never @{-1} or
+    // another Git revision expression.
+    let branch = branch.trim();
+    let branch = branch.strip_prefix("origin/").unwrap_or(branch).trim();
+    let valid = std::process::Command::new("git")
+        .args(["check-ref-format", &format!("refs/heads/{branch}")])
+        .current_dir(repo_root)
+        .output()
+        .map_err(|error| {
+            OrbitError::Execution(format!("validate CI sweep integration branch: {error}"))
+        })?
+        .status
+        .success();
+    if !valid || branch == "HEAD" || branch.starts_with('-') {
+        return Err(OrbitError::InvalidInput(format!(
+            "CI sweep integration branch {branch:?} is not a valid branch name"
+        )));
+    }
+    Ok(branch.to_string())
+}
+
+fn ci_branch_field(input: &Value, key: &str) -> Result<Option<String>, OrbitError> {
+    match input.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(branch)) => {
+            let branch = branch.trim();
+            Ok((!branch.is_empty()).then(|| branch.to_string()))
+        }
+        Some(_) => Err(OrbitError::InvalidInput(format!(
+            "CI sweep integration branch input.{key} must be a string"
+        ))),
     }
 }
 

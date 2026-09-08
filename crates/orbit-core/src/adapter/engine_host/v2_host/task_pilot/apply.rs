@@ -14,7 +14,7 @@ use crate::application::task::TaskUpdateParams;
 
 use super::source::SourceSnapshot;
 use super::{
-    action_failed, requested_workspace_root, required_string, required_string_array,
+    action_failed, member_ready, requested_workspace_root, required_string, required_string_array,
     string_array_value, validate_after_selectors, validate_recommendations,
 };
 
@@ -463,13 +463,42 @@ pub(in super::super) fn apply(
         .filter(|decision| decision["outcome"] == "skipped_stale")
         .cloned()
         .collect::<Vec<_>>();
+    let applied_partitions = partition_decisions
+        .iter()
+        .filter(|decision| decision["outcome"] == "applied")
+        .count();
     let succeeded = failed_partitions.is_empty() && skipped_stale_partitions.is_empty();
     let status = if succeeded { "succeeded" } else { "failed" };
     let error = (!succeeded).then(|| {
+        let stale_tasks = skipped_stale_partitions
+            .iter()
+            .flat_map(|partition| partition["stale_tasks"].as_array())
+            .flatten()
+            .filter_map(|task| {
+                Some(format!(
+                    "{}: {}",
+                    task["task_id"].as_str()?,
+                    task["reason"].as_str()?
+                ))
+            })
+            .collect::<Vec<_>>();
+        let stale_details = if stale_tasks.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", stale_tasks.join(", "))
+        };
+        let applied_details = if applied_partitions == 0 {
+            String::new()
+        } else {
+            "; valid partitions were applied".to_string()
+        };
         format!(
-            "{} partition(s) failed and {} partition(s) were skipped as stale; valid partitions were applied",
+            "{} partition(s) failed, {} partition(s) were skipped as stale{}, and {} partition(s) applied{}",
             failed_partitions.len(),
-            skipped_stale_partitions.len()
+            skipped_stale_partitions.len(),
+            stale_details,
+            applied_partitions,
+            applied_details
         )
     });
 
@@ -485,23 +514,7 @@ pub(in super::super) fn apply(
             member_key: claim.member.key,
             input_fingerprint: claim.member.fingerprint,
             resulting_fingerprint: resulting.clone(),
-            ready: assessment["disposition"] == "selectors"
-                && [
-                    "blocked_by",
-                    "adr_conflicts",
-                    "utility_warnings",
-                    "surface_warnings",
-                ]
-                .iter()
-                .all(|field| {
-                    assessment
-                        .get(field)
-                        .and_then(Value::as_array)
-                        .is_some_and(Vec::is_empty)
-                })
-                && ["duplicate_of", "already_landed"]
-                    .iter()
-                    .all(|field| assessment.get(field).is_none_or(Value::is_null)),
+            ready: member_ready(assessment),
             result: assessment.clone(),
         })
     });

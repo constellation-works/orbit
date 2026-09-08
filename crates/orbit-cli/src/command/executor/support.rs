@@ -9,7 +9,9 @@ pub(super) fn executor_def_json(def: &orbit_core::ExecutorDef) -> Value {
         "stdout_format": def.stdout_format.as_ref().map(ToString::to_string),
         "timeout_seconds": def.timeout_seconds,
         "env": def.env,
-        "created_at": def.created_at.to_rfc3339(),
-        "updated_at": def.updated_at.to_rfc3339(),
+        "sandbox": def.sandbox,
+        "allow_fallback": def.allow_fallback,
+        "created_at": def.created_at.map(|t| t.to_rfc3339()),
+        "updated_at": def.updated_at.map(|t| t.to_rfc3339()),
     })
 }

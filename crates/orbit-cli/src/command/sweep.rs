@@ -82,13 +82,11 @@ impl SweepCommand {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
         let options = SweepOptions {
             dry_run: self.dry_run,
+            ..SweepOptions::default()
         };
         let outcome = run_sweep_for_selected_root(root_override, options)?;
 
         let doc = outcome_json(&outcome, self.dry_run);
-        if self.json {
-            return Ok(Payload::document(doc).into());
-        }
 
         // Load errors are diagnostics, not records: they stay on stderr in
         // every mode so a `--format json` consumer still sees them.

@@ -2,7 +2,7 @@ use clap::Args;
 use orbit_core::{AuditStats, OrbitRuntime};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 use crate::parse::parse_since;
 
 #[derive(Args)]
@@ -23,18 +23,17 @@ impl Execute for AuditStatsArgs {
         let since = self.since.map(|s| parse_since(&s)).transpose()?;
         let stats = runtime.audit_event_stats(since, self.tool)?;
 
-        if self.json {
-            Ok(Payload::document(stats_to_json(&stats)).into())
-        } else {
-            println!("Total:             {}", stats.total);
-            println!("Success:           {}", stats.success_count);
-            println!("Failure:           {}", stats.failure_count);
-            println!("Denied:            {}", stats.denied_count);
-            println!("Avg duration (ms): {:.1}", stats.avg_duration_ms);
-            println!("P95 duration (ms): {}", stats.p95_duration_ms);
-            println!("Max duration (ms): {}", stats.max_duration_ms);
-            Ok(CommandOutput::Silent)
-        }
+        let text = format!(
+            "Total:             {}\nSuccess:           {}\nFailure:           {}\nDenied:            {}\nAvg duration (ms): {:.1}\nP95 duration (ms): {}\nMax duration (ms): {}",
+            stats.total,
+            stats.success_count,
+            stats.failure_count,
+            stats.denied_count,
+            stats.avg_duration_ms,
+            stats.p95_duration_ms,
+            stats.max_duration_ms
+        );
+        Ok(Payload::detail(stats_to_json(&stats), text).into())
     }
 }
 

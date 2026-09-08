@@ -20,9 +20,46 @@ use sha2::{Digest, Sha256};
 
 use super::migrations as task_migrations;
 use super::types::TaskBundleV2;
-use crate::fs::yaml::{parse_yaml_with, write_yaml_atomic_with};
+use crate::fs::yaml::{parse_yaml_with, write_yaml_durable_with};
+
+mod commit;
+
+pub(crate) use commit::{
+    BundleWriteFault, PENDING_WRITE_FILE_NAME, PendingWriteGuard, fail_if_injected,
+    publish_envelope, recover_pending_bundle_at,
+};
+
+#[cfg(test)]
+pub(crate) use commit::inject_bundle_write_faults;
 
 static STAGING_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Whether a bundle read must hash every `artifacts/files/**` payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArtifactPayloadCheck {
+    /// Canonical full-read: open each blob and verify size plus sha256.
+    Verify,
+    /// Listing/search materialization: parse the manifest, skip payload bytes.
+    Defer,
+}
+
+#[cfg(test)]
+thread_local! {
+    static ARTIFACT_PAYLOAD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn record_artifact_payload_read() {
+    #[cfg(test)]
+    ARTIFACT_PAYLOAD_READS.with(|count| count.set(count.get() + 1));
+}
+
+/// Number of artifact payload files opened by strict bundle verification on
+/// this thread since the previous take. Listing tests use this to prove the
+/// lightweight path does not touch blob bytes.
+#[cfg(test)]
+pub(crate) fn take_artifact_payload_reads() -> usize {
+    ARTIFACT_PAYLOAD_READS.with(|count| count.replace(0))
+}
 
 /// Write a new v2 bundle at `bundle_dir`.
 ///
@@ -80,7 +117,11 @@ where
             })?;
             copy_artifact_blobs(source, &staging_dir, manifest)?;
         }
-        read_bundle_for_id(&staging_dir, &bundle.envelope.id)?;
+        read_bundle_for_id(
+            &staging_dir,
+            &bundle.envelope.id,
+            ArtifactPayloadCheck::Verify,
+        )?;
         sync_staged_bundle_dirs(&staging_dir)?;
         publish(&staging_dir, bundle_dir).map_err(|err| OrbitError::from_write_io(bundle_dir, err))
     })();
@@ -93,7 +134,7 @@ where
 
 fn write_bundle_contents(bundle_dir: &Path, bundle: &TaskBundleV2) -> Result<(), OrbitError> {
     ensure_bundle_dirs(bundle_dir)?;
-    write_yaml_atomic_with(
+    write_yaml_durable_with(
         &bundle_dir.join(TASK_ENVELOPE_FILE_NAME),
         &bundle.envelope,
         |err| OrbitError::Store(err.to_string()),
@@ -114,7 +155,7 @@ fn write_bundle_contents(bundle_dir: &Path, bundle: &TaskBundleV2) -> Result<(),
     write_jsonl_file(&bundle_dir.join(TASK_EVENTS_FILE_NAME), &bundle.events)?;
     write_jsonl_file(&bundle_dir.join(TASK_COMMENTS_FILE_NAME), &bundle.comments)?;
     if let Some(manifest) = &bundle.artifact_manifest {
-        write_yaml_atomic_with(
+        write_yaml_durable_with(
             &bundle_dir
                 .join(TASK_ARTIFACTS_DIR_NAME)
                 .join(TASK_ARTIFACT_MANIFEST_FILE_NAME),
@@ -174,9 +215,32 @@ fn publish_staged_bundle(staging_dir: &Path, bundle_dir: &Path) -> std::io::Resu
     sync_parent_dir(bundle_dir)
 }
 
+/// Canonical full-bundle read: parse every sidecar and hash every artifact blob.
 pub(crate) fn read_bundle_at(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    read_bundle_at_with(bundle_dir, ArtifactPayloadCheck::Verify)
+}
+
+/// Assemble a task bundle without opening artifact payload bytes.
+///
+/// This is the listing/search materialization primitive. It still reads the
+/// envelope, markdown bodies, events, comments, and `artifacts/manifest.yaml`,
+/// applies the pending-write view, and checks event-log/envelope status
+/// consistency. Callers that need a consistent snapshot must take the same
+/// canonical bundle lock used by [`read_bundle_at`].
+///
+/// Deferred checks, performed by [`read_bundle_at`] and by import, reindex,
+/// publication restore, and artifact retrieval: existence, size, and sha256 of
+/// every `artifacts/files/**` blob named by the manifest.
+pub(crate) fn read_bundle_lightweight_at(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    read_bundle_at_with(bundle_dir, ArtifactPayloadCheck::Defer)
+}
+
+fn read_bundle_at_with(
+    bundle_dir: &Path,
+    payloads: ArtifactPayloadCheck,
+) -> Result<TaskBundleV2, OrbitError> {
     let expected_task_id = task_id_from_bundle_dir(bundle_dir)?;
-    read_bundle_for_id(bundle_dir, &expected_task_id).map_err(|error| match error {
+    read_bundle_for_id(bundle_dir, &expected_task_id, payloads).map_err(|error| match error {
         OrbitError::NotFound {
             kind: NotFoundKind::Task,
             ..
@@ -240,8 +304,9 @@ fn read_envelope_for_id(
 fn read_bundle_for_id(
     bundle_dir: &Path,
     expected_task_id: &str,
+    payloads: ArtifactPayloadCheck,
 ) -> Result<TaskBundleV2, OrbitError> {
-    let bundle = TaskBundleV2 {
+    let mut bundle = TaskBundleV2 {
         envelope: read_envelope_for_id(bundle_dir, expected_task_id)?,
         description: read_required_text(&bundle_dir.join(TASK_DESCRIPTION_FILE_NAME))?,
         acceptance: read_required_text(&bundle_dir.join(TASK_ACCEPTANCE_FILE_NAME))?,
@@ -249,8 +314,9 @@ fn read_bundle_for_id(
         execution_summary: read_required_text(&bundle_dir.join(TASK_EXECUTION_SUMMARY_FILE_NAME))?,
         events: read_task_events(&bundle_dir.join(TASK_EVENTS_FILE_NAME))?,
         comments: read_task_comments(&bundle_dir.join(TASK_COMMENTS_FILE_NAME))?,
-        artifact_manifest: read_artifact_manifest(bundle_dir)?,
+        artifact_manifest: read_artifact_manifest(bundle_dir, payloads)?,
     };
+    commit::apply_pending_read_view(bundle_dir, &mut bundle)?;
     validate_bundle(&bundle)?;
     Ok(bundle)
 }
@@ -488,7 +554,10 @@ fn scan_jsonl_tail(path: &Path, raw: &str) -> Result<JsonlTailScan, OrbitError> 
     })
 }
 
-fn read_artifact_manifest(bundle_dir: &Path) -> Result<Option<ArtifactManifestV2>, OrbitError> {
+fn read_artifact_manifest(
+    bundle_dir: &Path,
+    payloads: ArtifactPayloadCheck,
+) -> Result<Option<ArtifactManifestV2>, OrbitError> {
     let artifact_dir = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
     if !artifact_dir.is_dir() {
         return Err(OrbitError::Store(format!(
@@ -507,7 +576,9 @@ fn read_artifact_manifest(bundle_dir: &Path) -> Result<Option<ArtifactManifestV2
                 ))
             })?;
             manifest.validate()?;
-            validate_artifact_manifest_files(&artifact_dir, &manifest)?;
+            if payloads == ArtifactPayloadCheck::Verify {
+                validate_artifact_manifest_files(&artifact_dir, &manifest)?;
+            }
             Ok(Some(manifest))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -576,6 +647,7 @@ fn validate_artifact_manifest_files(
 ) -> Result<(), OrbitError> {
     for file in &manifest.files {
         let blob_path = artifact_dir.join(&file.blob);
+        record_artifact_payload_read();
         let bytes = fs::read(&blob_path).map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
                 OrbitError::Store(format!(

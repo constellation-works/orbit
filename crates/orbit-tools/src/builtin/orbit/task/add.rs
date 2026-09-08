@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{required_string, strip_retired_task_add_input_fields};
 use orbit_types::tool::{ToolParam, ToolSchema};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext};
 
@@ -129,6 +129,17 @@ impl Tool for OrbitTaskAddTool {
             );
         }
 
-        super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskAdd)
+        let mut response =
+            super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskAdd)?;
+        if !ignored_fields.is_empty() {
+            let response_object = response.as_object_mut().ok_or_else(|| {
+                OrbitError::Execution(
+                    "orbit.task.add host returned a non-object response".to_string(),
+                )
+            })?;
+            response_object.insert("ignored_fields".to_string(), json!(ignored_fields));
+        }
+
+        Ok(response)
     }
 }

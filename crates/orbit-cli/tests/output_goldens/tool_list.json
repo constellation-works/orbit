@@ -91,7 +91,7 @@
   {
     "active": true,
     "builtin": true,
-    "description": "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is drained incrementally; checkout extraction stops after 8 MiB and reports incomplete evidence rather than retaining an unbounded log. When the run-scoped read succeeds with no output at all, the excerpt is recovered from the log API of a job the run itself reported failed, and `source` says so.",
+    "description": "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is read incrementally with an 8 MiB stdout limit and process timeout. A separate diagnostic_unit retains a unique complete failing runner command up to 256 KiB; display truncation does not imply missing command evidence. Source-limit exhaustion is retryable. When the run-scoped read succeeds with no output at all, the excerpt is recovered from the log API of a job the run itself reported failed, and `source` says so.",
     "enabled": true,
     "name": "github.run.logs",
     "parameters": [
@@ -114,7 +114,7 @@
         "required": false
       },
       {
-        "description": "Maximum log bytes to return (default 16384, capped at 262144). The excerpt keeps the head and the tail and marks the omitted gap.",
+        "description": "Maximum display excerpt bytes (default 16384, capped at 262144), plus an omission marker. The separate complete diagnostic_unit is capped at 262144 bytes.",
         "name": "max_bytes",
         "param_type": "integer",
         "required": false
@@ -153,7 +153,7 @@
   {
     "active": true,
     "builtin": true,
-    "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability. Track it with `orbit.workflow.run.show`, read output with `orbit run logs <RUN_ID>`, and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
+    "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability. Remote callers also require an explicit destination-owned, workspace-scoped `agent_invoke` grant; its default mode requires a key-bound identity, while an explicit cooperative mode trusts the same-OS-account SSH operator channel and records identity as self-asserted. Track it with `orbit.workflow.run.show`, read output with `orbit run logs <RUN_ID>`, and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
     "enabled": true,
     "name": "orbit.agent.invoke",
     "parameters": [
@@ -455,7 +455,7 @@
         "required": false
       },
       {
-        "description": "Run-layer review policy: none or after-landing (before-pr is not yet supported at admission)",
+        "description": "Run-layer review policy: none, before-pr (holds PR creation for a fresh reviewer), or after-landing",
         "name": "review_policy",
         "param_type": "string",
         "required": false
@@ -507,7 +507,7 @@
         "required": false
       },
       {
-        "description": "Run-layer review policy: none or after-landing (before-pr is not yet supported at admission)",
+        "description": "Run-layer review policy: none, before-pr (holds PR creation for a fresh reviewer), or after-landing",
         "name": "review_policy",
         "param_type": "string",
         "required": false
@@ -949,7 +949,7 @@
         "required": true
       },
       {
-        "description": "Source file to store as a task artifact.",
+        "description": "Source file to store as a task artifact. Resolved against the caller cwd, then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected.",
         "name": "source_path",
         "param_type": "string",
         "required": true
@@ -1299,7 +1299,7 @@
     "name": "orbit.workflow.run.list",
     "parameters": [
       {
-        "description": "Maximum runs to return (default 25, maximum 200).",
+        "description": "Maximum runs to return (default 25; values above 200 are rejected).",
         "name": "limit",
         "param_type": "integer",
         "required": false
@@ -1469,7 +1469,7 @@
         "required": false
       },
       {
-        "description": "Execution timeout in milliseconds",
+        "description": "Execution timeout in milliseconds (default 15000; larger values are clamped to 60000)",
         "name": "timeout_ms",
         "param_type": "u64",
         "required": false

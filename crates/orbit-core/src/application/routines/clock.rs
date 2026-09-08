@@ -700,7 +700,10 @@ struct SystemdClockDetails {
     loaded: Option<bool>,
     running: Option<bool>,
     last_tick_at: Option<String>,
+    /// Wall-clock next elapse from `NextElapseUSecRealtime`. Monotonic values
+    /// are durations from boot, not a next-tick timestamp.
     next_tick_at: Option<String>,
+    next_elapse_known: bool,
 }
 
 impl SystemdClockDetails {
@@ -711,17 +714,19 @@ impl SystemdClockDetails {
                 (key == name).then(|| useful_manager_value(value)).flatten()
             })
         };
+        let next_tick_at = property("NextElapseUSecRealtime");
+        let next_elapse_monotonic = property("NextElapseUSecMonotonic");
         Self {
             loaded: property("LoadState").map(|value| value == "loaded"),
             running: property("ActiveState").map(|value| value == "active"),
             last_tick_at: property("LastTriggerUSec"),
-            next_tick_at: property("NextElapseUSecRealtime")
-                .or_else(|| property("NextElapseUSecMonotonic")),
+            next_elapse_known: next_tick_at.is_some() || next_elapse_monotonic.is_some(),
+            next_tick_at,
         }
     }
 
     fn is_schedulable(&self) -> bool {
-        self.loaded == Some(true) && self.running == Some(true) && self.next_tick_at.is_some()
+        self.loaded == Some(true) && self.running == Some(true) && self.next_elapse_known
     }
 }
 

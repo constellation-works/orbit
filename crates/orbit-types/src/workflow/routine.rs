@@ -222,6 +222,10 @@ const fn default_backoff_minutes() -> u64 {
     2
 }
 
+/// Maximum supported timeout or retry backoff. A week is long enough for
+/// unattended maintenance while keeping routine policy mistakes bounded.
+const MAX_DURATION_MINUTES: u64 = 7 * 24 * 60;
+
 impl RoutineDefinition {
     /// Origin-agnostic semantic checks beyond serde shape: name charset, no
     /// blank host entries, non-empty cron, positive timeout. Full cron parsing
@@ -274,9 +278,15 @@ impl RoutineDefinition {
                 self.name
             )));
         }
-        if self.policy.timeout_minutes == 0 {
+        if self.policy.timeout_minutes == 0 || self.policy.timeout_minutes > MAX_DURATION_MINUTES {
             return Err(WorkflowError::Invalid(format!(
-                "routine '{}' policy.timeout_minutes must be at least 1",
+                "routine '{}' policy.timeout_minutes must be between 1 and {MAX_DURATION_MINUTES}",
+                self.name
+            )));
+        }
+        if self.policy.retries.backoff_minutes > MAX_DURATION_MINUTES {
+            return Err(WorkflowError::Invalid(format!(
+                "routine '{}' policy.retries.backoff_minutes must not exceed {MAX_DURATION_MINUTES}",
                 self.name
             )));
         }

@@ -7,4 +7,6 @@ mod merge;
 mod open;
 mod resume_failure;
 mod resume_preservation;
-pub(in crate::executor::automation::vcs::pr) mod test_support;
+mod resume_refresh;
+mod review_gate;
+pub(in crate::executor::automation::vcs) mod test_support;

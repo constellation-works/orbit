@@ -6,12 +6,13 @@ use orbit_common::OrbitError;
 use orbit_config::{ConfigRoots, ResolvedConfig};
 use orbit_store::compose::global_policy_def_store;
 
+use crate::bootstrap::global_defaults::global_defaults_are_current;
 use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::task_migration::apply_configured_id_start;
 use crate::runtime::run_input::managed_run_context_from_env;
 use crate::runtime::{
-    OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint,
+    HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint,
     WorkspaceRuntimeBinding, resolve_bootstrap_roots, resolve_bootstrap_roots_with_hint,
     resolve_global_root, resolve_initialize_roots, resolve_initialize_roots_with_hint,
 };
@@ -38,6 +39,7 @@ impl OrbitRuntime {
             &roots.local_root,
             binding,
             true,
+            HostLifetime::ShortLived,
         )
     }
 
@@ -53,6 +55,7 @@ impl OrbitRuntime {
             &roots.local_root,
             binding,
             false,
+            HostLifetime::ShortLived,
         )
     }
 
@@ -107,7 +110,27 @@ impl OrbitRuntime {
         workspace_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<Self, OrbitError> {
-        Self::from_resolved_roots_with_binding(global_root, workspace_root, workspace_root, binding)
+        Self::from_roots_with_binding_for(
+            global_root,
+            workspace_root,
+            binding,
+            HostLifetime::ShortLived,
+        )
+    }
+
+    pub fn from_roots_with_binding_for(
+        global_root: &Path,
+        workspace_root: &Path,
+        binding: WorkspaceRuntimeBinding,
+        host_lifetime: HostLifetime,
+    ) -> Result<Self, OrbitError> {
+        Self::from_resolved_roots_with_binding_for(
+            global_root,
+            workspace_root,
+            workspace_root,
+            binding,
+            host_lifetime,
+        )
     }
 
     pub fn from_resolved_roots(
@@ -115,7 +138,14 @@ impl OrbitRuntime {
         shared_root: &Path,
         local_root: &Path,
     ) -> Result<Self, OrbitError> {
-        build_runtime(global_root, shared_root, local_root, None, true)
+        build_runtime(
+            global_root,
+            shared_root,
+            local_root,
+            None,
+            true,
+            HostLifetime::ShortLived,
+        )
     }
 
     pub fn from_resolved_roots_with_binding(
@@ -124,7 +154,31 @@ impl OrbitRuntime {
         local_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<Self, OrbitError> {
-        build_runtime(global_root, shared_root, local_root, Some(binding), true)
+        Self::from_resolved_roots_with_binding_for(
+            global_root,
+            shared_root,
+            local_root,
+            binding,
+            HostLifetime::ShortLived,
+        )
+    }
+
+    /// Open a runtime whose embed worker matches the constructing host's lifetime.
+    pub fn from_resolved_roots_with_binding_for(
+        global_root: &Path,
+        shared_root: &Path,
+        local_root: &Path,
+        binding: WorkspaceRuntimeBinding,
+        host_lifetime: HostLifetime,
+    ) -> Result<Self, OrbitError> {
+        build_runtime(
+            global_root,
+            shared_root,
+            local_root,
+            Some(binding),
+            true,
+            host_lifetime,
+        )
     }
 
     pub fn from_resolved_roots_read_only_with_binding(
@@ -133,7 +187,14 @@ impl OrbitRuntime {
         local_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<Self, OrbitError> {
-        build_runtime(global_root, shared_root, local_root, Some(binding), false)
+        build_runtime(
+            global_root,
+            shared_root,
+            local_root,
+            Some(binding),
+            false,
+            HostLifetime::ShortLived,
+        )
     }
 
     pub fn in_memory() -> Result<Self, OrbitError> {
@@ -142,8 +203,14 @@ impl OrbitRuntime {
             .tempdir()
             .map_err(|error| OrbitError::Io(error.to_string()))?;
         let data_root = temp_dir.path().to_path_buf();
-        let runtime_config = prepare_resolved_config(&data_root, &data_root)?;
-        Self::build_in_memory_from_resolved_config(&data_root, &runtime_config, temp_dir)
+        let workspace_root = data_root.join(".orbit");
+        let runtime_config = prepare_resolved_config(&data_root, &workspace_root)?;
+        Self::build_in_memory_from_resolved_config(
+            &data_root,
+            &workspace_root,
+            &runtime_config,
+            temp_dir,
+        )
     }
 }
 
@@ -153,6 +220,7 @@ fn build_runtime(
     local_root: &Path,
     binding: Option<WorkspaceRuntimeBinding>,
     reconcile_stale_runs: bool,
+    host_lifetime: HostLifetime,
 ) -> Result<OrbitRuntime, OrbitError> {
     let layout_report = match orbit_store::workflow::layout::upgrade_workspace_layout(shared_root) {
         Ok(report) => report,
@@ -175,6 +243,7 @@ fn build_runtime(
         binding,
         &runtime_config,
         layout_report,
+        host_lifetime,
     )?;
     if reconcile_stale_runs && !managed_run_context_from_env() {
         runtime.reconcile_stale_job_runs_on_open();
@@ -201,17 +270,25 @@ fn prepare_resolved_config(
             return Err(error);
         }
     }
-    let global_policy_store = global_policy_def_store(resolved.persistence.policy_dir.clone());
-    if let Err(error) = seed_default_policies(global_policy_store.as_ref(), false) {
-        if error.is_readonly_or_access_failure() {
-            tracing::warn!(
-                target: "orbit.core.bootstrap",
-                root = %global_root.display(),
-                error = %error,
-                "skipped incidental default-policy persistence"
-            );
-        } else {
-            return Err(error);
+    // Not every runtime open bootstraps its global root: opening a registered
+    // checkout or an observation-only runtime goes straight to composition, so
+    // the shipped default policy is seeded here. `policy_dir` is derived from
+    // the global root and cannot be relocated by config, so the same stamp that
+    // lets bootstrap skip reconciliation settles this seed too — a root already
+    // reconciled by this binary carries the policy.
+    if !global_defaults_are_current(global_root) {
+        let global_policy_store = global_policy_def_store(resolved.persistence.policy_dir.clone());
+        if let Err(error) = seed_default_policies(global_policy_store.as_ref(), false) {
+            if error.is_readonly_or_access_failure() {
+                tracing::warn!(
+                    target: "orbit.core.bootstrap",
+                    root = %global_root.display(),
+                    error = %error,
+                    "skipped incidental default-policy persistence"
+                );
+            } else {
+                return Err(error);
+            }
         }
     }
     Ok(resolved)

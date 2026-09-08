@@ -11,9 +11,10 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use crate::workspace_registry::{
-    assign_checkout_role, find_checkout_by_path, find_workspace, find_workspace_by_path,
-    load_registry_from, load_registry_from_with_writer, register_checkout,
-    rename_local_owner_host_id, resolve_logical_workspace, save_registry_to, validate_workspaces,
+    assign_checkout_role, find_checkout_by_path, find_workspace, find_workspace_by_id,
+    find_workspace_by_path, load_registry_from, load_registry_from_with_writer, register_checkout,
+    remove_workspace, rename_local_owner_host_id, resolve_logical_workspace, save_registry_to,
+    set_path_override, validate_workspaces,
 };
 
 fn timestamp() -> chrono::DateTime<Utc> {
@@ -347,11 +348,15 @@ fn identity_lookup_is_path_independent_and_path_lookup_is_checkout_only() {
         .push(PathBuf::from("/repos/inner"));
 
     assert_eq!(
-        find_workspace(&registry, "ws_remote").map(|workspace| workspace.id.as_str()),
+        find_workspace(&registry, "ws_remote")
+            .expect("lookup by id")
+            .map(|workspace| workspace.id.as_str()),
         Some("ws_remote")
     );
     assert_eq!(
-        find_workspace(&registry, "remote").map(|workspace| workspace.id.as_str()),
+        find_workspace(&registry, "remote")
+            .expect("lookup by name")
+            .map(|workspace| workspace.id.as_str()),
         Some("ws_remote")
     );
     assert_eq!(
@@ -394,6 +399,87 @@ fn checkout_registration_allows_distinct_repos_to_share_an_orbit_root() {
     .expect("shared Orbit root is not checkout identity");
 
     assert_eq!(registry.checkouts.len(), 2);
+}
+
+#[test]
+fn save_rejects_two_checkouts_sharing_a_repo_root() {
+    let root = tempdir().expect("tempdir");
+    let path = root.path().join("workspaces.json");
+    let shared = PathBuf::from("/repos/shared");
+    let registry = WorkspaceRegistry {
+        workspaces: vec![
+            logical_workspace("ws_alpha", None),
+            logical_workspace("ws_beta", None),
+        ],
+        checkouts: vec![
+            WorkspaceCheckout::owner(
+                "ws_alpha".to_string(),
+                shared.clone(),
+                PathBuf::from("/repos/shared/.orbit-alpha"),
+            ),
+            WorkspaceCheckout::owner(
+                "ws_beta".to_string(),
+                shared,
+                PathBuf::from("/repos/shared/.orbit-beta"),
+            ),
+        ],
+        ..Default::default()
+    };
+
+    let error = save_registry_to(&registry, &path)
+        .expect_err("duplicate repo_root must fail at the persistence boundary")
+        .to_string();
+    assert!(error.contains("invalid registry:"), "{error}");
+    assert!(error.contains("ws_alpha"), "{error}");
+    assert!(error.contains("ws_beta"), "{error}");
+    assert!(!path.exists(), "rejected save must not write the registry");
+}
+
+#[test]
+fn set_path_override_rejects_a_path_claimed_by_another_checkout() {
+    let mut registry = WorkspaceRegistry {
+        workspaces: vec![
+            logical_workspace("ws_alpha", None),
+            logical_workspace("ws_beta", None),
+        ],
+        checkouts: vec![
+            WorkspaceCheckout::owner(
+                "ws_alpha".to_string(),
+                PathBuf::from("/repos/alpha"),
+                PathBuf::from("/repos/alpha/.orbit"),
+            ),
+            {
+                let mut beta = WorkspaceCheckout::owner(
+                    "ws_beta".to_string(),
+                    PathBuf::from("/repos/beta"),
+                    PathBuf::from("/repos/beta/.orbit"),
+                );
+                beta.path_overrides = vec![PathBuf::from("/overrides/beta")];
+                beta
+            },
+        ],
+        ..Default::default()
+    };
+    let before = registry.clone();
+
+    let claimed_root = set_path_override(&mut registry, PathBuf::from("/repos/alpha"), "ws_beta")
+        .expect_err("override equal to another repo_root must fail")
+        .to_string();
+    assert!(
+        claimed_root.contains("already registered to workspace 'ws_alpha'"),
+        "{claimed_root}"
+    );
+    assert_eq!(registry, before);
+
+    let claimed_override =
+        set_path_override(&mut registry, PathBuf::from("/overrides/beta"), "ws_alpha")
+            .expect_err("override equal to another override must fail")
+            .to_string();
+    assert!(
+        claimed_override.contains("already registered to workspace 'ws_beta'"),
+        "{claimed_override}"
+    );
+    assert_eq!(registry, before);
 }
 
 #[test]
@@ -442,6 +528,129 @@ fn resolve_logical_workspace_accepts_name_or_id_and_fails_closed() {
         }
         other => panic!("expected InvalidInput, got {other}"),
     }
+}
+
+#[test]
+fn mutation_helpers_reject_a_name_that_matches_another_workspace_id() {
+    let mut registry = WorkspaceRegistry {
+        workspaces: vec![
+            logical_workspace("ws_1", None),
+            logical_workspace("ws_2", None),
+        ],
+        checkouts: vec![WorkspaceCheckout::owner(
+            "ws_1".to_string(),
+            PathBuf::from("/repos/one"),
+            PathBuf::from("/repos/one/.orbit"),
+        )],
+        ..Default::default()
+    };
+    registry.workspaces[0].name = "x".to_string();
+    registry.workspaces[1].name = "ws_1".to_string();
+    let before = registry.clone();
+
+    let resolved = resolve_logical_workspace(&registry, "ws_1")
+        .expect_err("selector must be ambiguous")
+        .to_string();
+    assert!(
+        resolved.contains("ambiguous workspace selector"),
+        "{resolved}"
+    );
+
+    let removed = remove_workspace(&mut registry, "ws_1")
+        .expect_err("removal must reject an ambiguous selector")
+        .to_string();
+    assert!(
+        removed.contains("ambiguous workspace selector"),
+        "{removed}"
+    );
+    assert_eq!(registry, before);
+
+    let assigned = assign_checkout_role(
+        &mut registry,
+        "ws_1",
+        WorkspaceCheckoutRole::Owner,
+        None,
+        None,
+    )
+    .expect_err("role assignment must reject an ambiguous selector")
+    .to_string();
+    assert!(
+        assigned.contains("ambiguous workspace selector"),
+        "{assigned}"
+    );
+    assert_eq!(registry, before);
+}
+
+#[test]
+fn exact_id_lookup_survives_a_name_that_matches_another_workspace_id() {
+    let mut registry = WorkspaceRegistry {
+        workspaces: vec![
+            logical_workspace("ws_alpha", None),
+            logical_workspace("ws_ws_alpha", None),
+        ],
+        checkouts: vec![
+            WorkspaceCheckout::owner(
+                "ws_alpha".to_string(),
+                PathBuf::from("/repos/alpha"),
+                PathBuf::from("/repos/alpha/.orbit"),
+            ),
+            WorkspaceCheckout::owner(
+                "ws_ws_alpha".to_string(),
+                PathBuf::from("/repos/ws_alpha"),
+                PathBuf::from("/repos/ws_alpha/.orbit"),
+            ),
+        ],
+        ..Default::default()
+    };
+    registry.workspaces[0].name = "alpha".to_string();
+    registry.workspaces[1].name = "ws_alpha".to_string();
+    let before = registry.clone();
+
+    assert_eq!(
+        find_workspace_by_id(&registry, "ws_alpha").map(|workspace| workspace.name.as_str()),
+        Some("alpha")
+    );
+    assert_eq!(
+        find_workspace_by_id(&registry, "ws_ws_alpha").map(|workspace| workspace.name.as_str()),
+        Some("ws_alpha")
+    );
+    assert_eq!(
+        find_workspace_by_path(&registry, Path::new("/repos/alpha/src"))
+            .map(|workspace| workspace.id.as_str()),
+        Some("ws_alpha")
+    );
+
+    let ambiguous = find_workspace(&registry, "ws_alpha")
+        .expect_err("id-or-name selector must stay fail-closed")
+        .to_string();
+    assert!(
+        ambiguous.contains("ambiguous workspace selector"),
+        "{ambiguous}"
+    );
+
+    let removed = remove_workspace(&mut registry, "ws_alpha")
+        .expect_err("removal must reject an ambiguous selector")
+        .to_string();
+    assert!(
+        removed.contains("ambiguous workspace selector"),
+        "{removed}"
+    );
+    assert_eq!(registry, before);
+
+    let assigned = assign_checkout_role(
+        &mut registry,
+        "ws_alpha",
+        WorkspaceCheckoutRole::Owner,
+        None,
+        None,
+    )
+    .expect_err("role assignment must reject an ambiguous selector")
+    .to_string();
+    assert!(
+        assigned.contains("ambiguous workspace selector"),
+        "{assigned}"
+    );
+    assert_eq!(registry, before);
 }
 
 #[test]

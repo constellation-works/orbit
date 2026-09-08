@@ -16,7 +16,9 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
-use crate::context::{PrConfig, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate};
+use crate::context::{
+    PrConfig, ReviewLandingRequest, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
+};
 
 use super::super::super::freshness::BranchFreshness;
 use super::super::super::operations;
@@ -38,6 +40,7 @@ pub struct VcsCall {
 }
 
 pub struct PrOpenTestHost {
+    run_states: Mutex<HashMap<String, orbit_types::workflow::PipelineState>>,
     tasks: Mutex<Vec<Task>>,
     job_runs: Mutex<Vec<JobRun>>,
     comments: Mutex<HashMap<String, Vec<TaskComment>>>,
@@ -50,7 +53,9 @@ pub struct PrOpenTestHost {
     vcs_errors: Mutex<HashMap<String, String>>,
     queued_vcs_results: Mutex<HashMap<String, VecDeque<Result<Value, String>>>>,
     pr_exists: Mutex<bool>,
+    provider_completion: bool,
     activity_updates: Mutex<Vec<(String, TaskActivityUpdate)>>,
+    review_landings: Mutex<Vec<ReviewLandingRequest>>,
 }
 
 impl PrOpenTestHost {
@@ -58,6 +63,7 @@ impl PrOpenTestHost {
         let data_root = repo_root.join(".orbit-test-data");
         let scoreboard_dir = data_root.join("scoreboard");
         Self {
+            run_states: Mutex::new(HashMap::new()),
             tasks: Mutex::new(tasks),
             job_runs: Mutex::new(Vec::new()),
             comments: Mutex::new(HashMap::new()),
@@ -70,8 +76,23 @@ impl PrOpenTestHost {
             vcs_errors: Mutex::new(HashMap::new()),
             queued_vcs_results: Mutex::new(HashMap::new()),
             pr_exists: Mutex::new(false),
+            provider_completion: false,
             activity_updates: Mutex::new(Vec::new()),
+            review_landings: Mutex::new(Vec::new()),
         }
+    }
+
+    #[cfg(unix)]
+    pub fn with_provider_completion(mut self) -> Self {
+        self.provider_completion = true;
+        self
+    }
+
+    pub fn review_landings(&self) -> Vec<ReviewLandingRequest> {
+        self.review_landings
+            .lock()
+            .expect("review landings lock")
+            .clone()
     }
 
     pub fn with_activity_implementer(mut self, agent: &str, model: &str) -> Self {
@@ -235,6 +256,33 @@ impl PrOpenTestHost {
 }
 
 impl RuntimeHost for PrOpenTestHost {
+    fn read_run_state(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::PipelineState>, OrbitError> {
+        Ok(self.run_states.lock().unwrap().get(run_id).cloned())
+    }
+
+    fn checkpoint_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), crate::DispatchError> {
+        let mut states = self.run_states.lock().unwrap();
+        let state = states.entry(run_id.to_string()).or_insert_with(|| {
+            orbit_types::workflow::PipelineState::new(
+                run_id.to_string(),
+                "task_pr_pipeline".to_string(),
+                json!({}),
+            )
+        });
+        state
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), output.clone());
+        Ok(())
+    }
+
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
         Ok(self
             .job_runs
@@ -346,6 +394,14 @@ impl RuntimeHost for PrOpenTestHost {
         Ok(task.clone())
     }
 
+    fn record_review_landing(&self, request: &ReviewLandingRequest) -> Result<(), OrbitError> {
+        self.review_landings
+            .lock()
+            .expect("review landings lock")
+            .push(request.clone());
+        Ok(())
+    }
+
     fn apply_task_automation_update(
         &self,
         task_id: &str,
@@ -432,6 +488,12 @@ impl RuntimeHost for PrOpenTestHost {
                 operation: operation.to_string(),
                 input: input.clone(),
             });
+
+        if self.provider_completion
+            && matches!(operation, operations::PR_STATUS | operations::PR_MERGE)
+        {
+            return operations::run(operation, &input);
+        }
 
         if let Some(message) = self
             .vcs_errors

@@ -39,7 +39,7 @@ use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, workspace_runtime_binding};
-use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::runtime::{HostLifetime, WorkspaceRuntimeBinding};
 use orbit_core::{OrbitError, OrbitRuntime, ShipMode};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::WorkspaceStatus;
@@ -315,11 +315,12 @@ impl StateInner {
         }
 
         // Build outside the lock (no lock held across construction).
-        let runtime = RegisteredRuntimeFactory::open_resolved_checkout(
+        let runtime = RegisteredRuntimeFactory::open_resolved_checkout_for(
             &self.global_root,
             &orbit_dir,
             &orbit_dir,
             binding.clone(),
+            HostLifetime::LongLived,
         )
         .map_err(|e| WsRejection::build_failed(id, &e))?;
         let runtime = Arc::new(runtime);
@@ -439,8 +440,10 @@ impl DashboardState {
             binding: Some(WorkspaceRuntimeBinding {
                 logical_workspace_id: SINGLE_WORKSPACE_ID.to_string(),
                 workspace_id: SINGLE_WORKSPACE_ID.to_string(),
+                owner_machine_id: None,
                 repo_root: PathBuf::new(),
                 ship_mode: ShipMode::Local,
+                base_branch: None,
             }),
             active: true,
         };
@@ -451,8 +454,10 @@ impl DashboardState {
                 binding: WorkspaceRuntimeBinding {
                     logical_workspace_id: SINGLE_WORKSPACE_ID.to_string(),
                     workspace_id: SINGLE_WORKSPACE_ID.to_string(),
+                    owner_machine_id: None,
                     repo_root: PathBuf::new(),
                     ship_mode: ShipMode::Local,
+                    base_branch: None,
                 },
                 orbit_dir: PathBuf::new(),
                 generation: INITIAL_GENERATION,

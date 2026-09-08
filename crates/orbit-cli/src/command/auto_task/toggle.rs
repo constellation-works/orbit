@@ -1,7 +1,7 @@
 use clap::{Args, ValueEnum};
 use orbit_core::OrbitRuntime;
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::output::definition_to_json;
 
@@ -30,19 +30,15 @@ impl Execute for AutoTaskToggleArgs {
         let enabled = self.state == ToggleState::On;
         let definition = runtime.auto_task_toggle(&self.name, enabled)?;
 
-        if self.json {
-            Ok(Payload::document(definition_to_json(&definition)).into())
+        let status = if definition.enabled {
+            "enabled"
         } else {
-            println!(
-                "{} {}",
-                definition.name,
-                if definition.enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                }
-            );
-            Ok(CommandOutput::Silent)
-        }
+            "disabled"
+        };
+        Ok(Payload::detail(
+            definition_to_json(&definition),
+            format!("{} {status}", definition.name),
+        )
+        .into())
     }
 }

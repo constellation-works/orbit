@@ -4,7 +4,7 @@
 //! used by /api/log and /api/diagnostics.
 
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -142,28 +142,137 @@ pub(crate) fn resolve_log_path(override_path: Option<&Path>) -> Result<PathBuf, 
     })
 }
 
-pub(crate) fn read_recent_rendered_events(
+/// Block size for reverse JSONL scans. Sparse filters may still walk every
+/// block to offset 0; a dense tail stops once `limit` matches are in hand.
+pub(crate) const TAIL_READ_BLOCK: usize = 64 * 1024;
+
+pub(crate) fn read_recent_matching_events(
     path: &Path,
     filters: &Filters,
     limit: usize,
-) -> io::Result<Vec<RenderedLogEvent>> {
+) -> io::Result<Vec<Value>> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err),
     };
-    let reader = BufReader::new(file);
-    let mut kept = Vec::new();
-    for line in reader.lines() {
-        let line = line?;
-        if let Some(event) = parse_matching_event(&line, filters) {
-            kept.push(render_log_event_for_web(&event));
-            if kept.len() > limit {
-                kept.remove(0);
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    read_recent_matching_events_from(file, filters, limit, TAIL_READ_BLOCK)
+}
+
+/// Newest matching JSONL events from a seekable reader, scanning backwards.
+///
+/// `block_size` is the read window so tests can force a line to span blocks
+/// without a huge fixture. Production callers use [`TAIL_READ_BLOCK`].
+pub(crate) fn read_recent_matching_events_from<R: Read + Seek>(
+    mut reader: R,
+    filters: &Filters,
+    limit: usize,
+    block_size: usize,
+) -> io::Result<Vec<Value>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let block_size = if block_size == 0 {
+        TAIL_READ_BLOCK
+    } else {
+        block_size
+    };
+
+    let mut pos = reader.seek(SeekFrom::End(0))?;
+    if pos == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut newest_first = Vec::with_capacity(limit);
+    let mut carry = Vec::new();
+    let mut buf = Vec::new();
+
+    while pos > 0 && newest_first.len() < limit {
+        let chunk_len = u64::min(block_size as u64, pos);
+        let start = pos - chunk_len;
+        reader.seek(SeekFrom::Start(start))?;
+        buf.clear();
+        buf.resize(chunk_len as usize, 0);
+        reader.read_exact(&mut buf)?;
+        if !carry.is_empty() {
+            buf.extend_from_slice(&carry);
+        }
+
+        let (next_carry, complete) = split_tail_chunk(&buf, start > 0)?;
+        carry = next_carry;
+        pos = start;
+
+        for line in complete.into_iter().rev() {
+            if let Some(event) = parse_matching_event(&line, filters) {
+                newest_first.push(event);
+                if newest_first.len() == limit {
+                    break;
+                }
             }
         }
     }
-    Ok(kept)
+
+    newest_first.reverse();
+    Ok(newest_first)
+}
+
+/// Split a reverse-scan block into an incomplete prefix (belongs to earlier
+/// bytes) and complete lines in chronological order, including a final
+/// fragment that has no trailing newline.
+fn split_tail_chunk(chunk: &[u8], has_earlier_bytes: bool) -> io::Result<(Vec<u8>, Vec<String>)> {
+    if chunk.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    if has_earlier_bytes {
+        match chunk.iter().position(|&b| b == b'\n') {
+            None => Ok((chunk.to_vec(), Vec::new())),
+            Some(i) => {
+                let carry = chunk[..i].to_vec();
+                let lines = decode_lines(&chunk[i + 1..])?;
+                Ok((carry, lines))
+            }
+        }
+    } else {
+        Ok((Vec::new(), decode_lines(chunk)?))
+    }
+}
+
+fn decode_lines(bytes: &[u8]) -> io::Result<Vec<String>> {
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' {
+            lines.push(decode_line(&bytes[start..i])?);
+            start = i + 1;
+        }
+    }
+    if start < bytes.len() {
+        lines.push(decode_line(&bytes[start..])?);
+    }
+    Ok(lines)
+}
+
+fn decode_line(raw: &[u8]) -> io::Result<String> {
+    let line =
+        std::str::from_utf8(raw).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    Ok(line.strip_suffix('\r').unwrap_or(line).to_string())
+}
+
+pub(crate) fn read_recent_rendered_events(
+    path: &Path,
+    filters: &Filters,
+    limit: usize,
+) -> io::Result<Vec<RenderedLogEvent>> {
+    Ok(read_recent_matching_events(path, filters, limit)?
+        .into_iter()
+        .map(|event| render_log_event_for_web(&event))
+        .collect())
 }
 
 pub(crate) fn parse_matching_event(raw: &str, filters: &Filters) -> Option<Value> {

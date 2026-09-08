@@ -3,8 +3,8 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-08-15
-last_validated: 2026-08-23
+last_updated: 2026-09-08
+last_validated: 2026-09-08
 status: Draft
 feature: activity-job
 doc_role: decisions
@@ -1231,16 +1231,16 @@ Recognition is the entire change: no safety gate moved. Non-terminal run, `--old
 
 ## Provider launchers resolve at the shared CLI spawn boundary
 
-**Recorded:** 2026-08-01 19:17:24.893725Z · [ORB-10456], [ORB-10479]
+**Recorded:** 2026-08-01 19:17:24.893725Z · [ORB-10456], [ORB-10479], [ORB-11808]
 
-**Context.** Dashboard shipment reproduced the same provider-launcher ENOENT previously seen in routine sweeps: independent process entry points inherited different `PATH` values even though every `backend: cli` provider invocation converges on one engine spawn boundary. The alternatives were to keep pinning `PATH` in each service/entry point or resolve configured launcher names once at that shared boundary.
+**Context.** Dashboard shipment reproduced the same provider-launcher ENOENT previously seen in routine sweeps: independent process entry points inherited different `PATH` values even though every `backend: cli` provider invocation converges on one engine spawn boundary. The alternatives were to keep pinning `PATH` in each service/entry point or resolve configured launcher names once at that shared boundary. [ORB-11808] then showed the same seam still missed Apple Silicon Homebrew: launchd's default `PATH` is `/usr/bin:/bin:/usr/sbin:/sbin`, and the `$HOME` fallback list does not include `/opt/homebrew/bin`. Interactive MCP and login-shell pilot inherit that prefix; scheduled drain does not. Pinning Homebrew into the launchd unit would have been a scheduler change; hardcoding a user home would have broken isolation.
 
-**Decision.** Resolve every bare provider launcher at the orbit-engine CLI spawn boundary. Search the process `PATH` first, then portable per-user fallback directories derived from `HOME`; preserve explicitly pathed commands unchanged. Missing-launcher failures remain permanent and name the provider plus every searched path.
+**Decision.** Resolve every bare provider launcher at the orbit-engine CLI spawn boundary. Search the process `PATH` first, then portable per-user fallback directories derived from `HOME`, then portable supported system prefixes (`/opt/homebrew/bin`, `/usr/local/bin`). Preserve explicitly pathed commands unchanged. Searched candidates must be regular executable files; missing-launcher failures remain permanent and name the provider plus every searched path.
 
 **Consequences.**
 - Dashboard, routine, CLI ship, and direct job dispatch share one provider-launcher resolution mechanism rather than depending on each parent environment being curated.
-- Explicit command paths and `PATH` precedence remain authoritative, while common user-local installations work from scrubbed service environments.
-- Cost: Orbit now recognizes a small ordered set of conventional user-local bin directories outside `PATH`, so moving a launcher into a new convention requires extending and testing that list.
+- Explicit command paths and `PATH` precedence remain authoritative, while common user-local installations and Homebrew prefixes work from scrubbed service environments, including macOS launchd.
+- Cost: Orbit now recognizes a small ordered set of conventional user-local and supported-system bin directories outside `PATH`, so moving a launcher into a new convention requires extending and testing that list.
 
 ## Resume is a durable submission scoped by explicit retry lineage
 
@@ -1545,8 +1545,51 @@ which is a broken install and the only artifact fault that escalates
   preserved copy under `.retired-managed/` to reconcile by hand — where
   previously the file would simply have stayed put and kept working.
 
+## Timeout recovery is not conflict or failure-handoff recovery
+
+**Recorded:** 2026-09-08 · [ORB-11606]
+
+### Context
+
+Host Git helpers shared a 30s deadline. A timeout during `worktree add` could leave a registered incomplete checkout that a retry then admitted, and a timeout during `git rebase` could leave rebase-merge without unmerged paths that a retry misclassified as an unexplained wedge. Ordinary conflict recovery (`RecoverableVcsConflict` / `pr_conflict_recovery`) and terminal failure-handoff (`pr_failure_handoff`) already preserve candidates; they must not be reused as a blanket reset/clean/abort.
+
+### Decision
+
+Give heavyweight Git children explicit finite budgets through `ExecRequest.timeout_ms`, with per-operation defaults and optional activity overlays (`git_timeout_ms` / `git_timeouts`). Reject 0, unknown keys, and values above 600s; never omit the deadline. Keep the secured Git environment and hook policy.
+
+On timeout, mutate only state this attempt owns. Remove a newly registered worktree only when ownership and lack of retained work are established; otherwise refuse with evidence and never admit an incomplete checkout. Abort an interrupted rebase only when provenance shows this attempt started it; leave pre-existing or foreign rebase state intact. Deleted tracked files, dirty files, and retained candidate commits are not completeness failures and must not be restored or deleted as a shortcut. Unexplained stale-branch provenance is [Worktree setup refuses unexplained stale branch reuse before publishing checkpoints](#worktree-setup-refuses-unexplained-stale-branch-reuse-before-publishing-checkpoints).
+
+### Consequences
+
+- A retry after an owned worktree-add timeout either recreates a complete checkout or refuses the leftover; it does not silently reuse a broken tree.
+- A retry after an owned rebase timeout is not permanently wedged: the leftover rebase is aborted and documented as timeout recovery.
+- Conflicted rebases still take the typed conflict path; failure-handoff still publishes the candidate.
+- Cost: operators who previously relied on `git clean -fd` during worktree reuse keep dirty files until they reconcile them; that is the intended preservation.
+
+## Worktree setup refuses unexplained stale branch reuse before publishing checkpoints
+
+**Recorded:** 2026-09-08 · [ORB-11639]
+
+### Context
+
+`worktree_setup` resolves a fresh `base_sha` and then may attach an existing orphan branch or reuse a registered checkout without checking that HEAD already equals that commit. The published checkpoint therefore names a base the worktree is not on, and downstream `git_commit` rejects the mismatch as `worktree_head_changed`. Completeness checks from [Timeout recovery is not conflict or failure-handoff recovery](#timeout-recovery-is-not-conflict-or-failure-handoff-recovery) already refuse to reset retained commits or dirty files; they do not own this provenance question. Validated failure-handoff resume and epic `allow_moved_head` already accept a moved HEAD against the *original* setup checkpoint; they must not be implemented as a setup-time reuse that republishes old history under a new `base_sha`.
+
+### Decision
+
+Before creating a worktree, admitting a task, or returning checkpoints, compare the existing branch tip or registered checkout HEAD with the freshly resolved `base_sha`. Reuse only when they already match. An unexplained mismatch fails closed, naming branch, tip, and requested base, and leaves the leftover untouched — including a retained candidate that has been pushed. Setup does not reset, clean, or attach that history, and does not invent an unchecked branch-reuse escape. `base_ref` stays the moving start-point name; `base_sha` stays the immutable commit a successful setup's HEAD equals.
+
+Retrying setup while the stale leftover remains keeps refusing. Recovery is operator-led: inspect the branch and checkout, then move them aside or delete them only after confirming no retained candidate is needed. Authorized moved-head and failure-handoff continue to run at commit/resume against the original checkpoint.
+
+### Consequences
+
+- A temporary repo whose base moved while an orphan branch or registered checkout stayed behind fails before admission instead of publishing a checkpoint commit will reject.
+- Retained candidate commits and dirty work survive the refusal; being pushed is not a license to discard them.
+- Cost: a fresh setup that finds unexplained leftover history requires an explicit recovery step. That is cheaper than admitting a run whose later commit cannot reconcile.
+
 ## Task References
 
+- **[ORB-11639]** — Validate reused worktree branch provenance before publishing setup checkpoints ([Worktree setup refuses unexplained stale branch reuse before publishing checkpoints](#worktree-setup-refuses-unexplained-stale-branch-reuse-before-publishing-checkpoints)).
+- **[ORB-11606]** — Bound heavyweight Git operations and recover only owned interrupted mutations ([Timeout recovery is not conflict or failure-handoff recovery](#timeout-recovery-is-not-conflict-or-failure-handoff-recovery)).
 - **[ORB-11456]** — Preserve terminal failure-activity evidence and admit only
   its exact Orbit-created candidate across resume
   ([Resumed shipment accepts only its durable Orbit preservation commit](#resumed-shipment-accepts-only-its-durable-orbit-preservation-commit)).
@@ -1568,6 +1611,7 @@ which is a broken install and the only artifact fault that escalates
 - **[ORB-10471]** — Scope the worktree boundary guard's primary dirt check to paths the run touched, so unrelated primary dirt no longer defeats a benign fast-forward ([Primary fast-forward acceptance is decided by interference with the run, not primary dirty-state byte-identity](#primary-fast-forward-acceptance-is-decided-by-interference-with-the-run-not-primary-dirty-state-byte-identity)).
 - **[ORB-10470]** — Make resume submit a detached run that starts at the failed checkpoint, and reconcile blocked/re-stamped tasks against the run's retry lineage ([Resume is a durable submission scoped by explicit retry lineage](#resume-is-a-durable-submission-scoped-by-explicit-retry-lineage)).
 - **[ORB-10456]** — Resolve provider launchers at the shared CLI spawn boundary and add provider-aware missing-launcher diagnostics ([Provider launchers resolve at the shared CLI spawn boundary](#provider-launchers-resolve-at-the-shared-cli-spawn-boundary)).
+- **[ORB-11808]** — Search `/opt/homebrew/bin` and `/usr/local/bin` after `PATH` and `$HOME` bins so launchd-minimal Mac drains resolve Homebrew provider CLIs at the same seam.
 - **[ORB-10454]** — Allocate [Step completion is a separate contract from response content](#step-completion-is-a-separate-contract-from-response-content) for the step-completion / response-content split and retire the IOU in [CLI response envelopes are optional for artifact-backed activities](#cli-response-envelopes-are-optional-for-artifact-backed-activities)'s amendment block.
 - **[ORB-10427]** — Share one worktree-path derivation between `setup_worktree` and gc; collect bundles only when every member has settled.
 - **[ORB-10393]** — Port planning-duel planner and arbiter legs to seeded v2

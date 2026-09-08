@@ -8,14 +8,16 @@ use std::path::Path;
 
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
-use orbit_core::{JobRunState, OrbitError, TaskStatus, task_dependencies_ready};
+use orbit_core::{
+    JobRunState, OrbitError, TaskReferenceIndex, TaskStatus, task_dependencies_ready_with_index,
+};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceStatus};
 use serde_json::{Value, json};
 
 use super::ship::ShipMode;
 use super::support::TASK_AUTO_PIPELINE_JOB;
-use crate::command::{CommandOut, CommandOutput};
+use crate::command::{CommandOut, Payload};
 
 #[derive(Args)]
 #[command(
@@ -130,31 +132,29 @@ impl ShipSweepCommand {
             .collect();
 
         let failed = reports.iter().filter(|r| r.action == "error").count();
-        if self.json {
-            crate::output::json::print_pretty(&json!({
-                "dry_run": self.dry_run,
-                "workspaces": reports.len(),
-                "dispatched": reports.iter().filter(|r| r.action == "dispatched").count(),
-                "would_dispatch": reports.iter().filter(|r| r.action == "would_dispatch").count(),
-                "skipped": reports.iter().filter(|r| r.action == "skipped").count(),
-                "failed": failed,
-                "reports": reports.iter().map(SweepReport::to_json).collect::<Vec<_>>(),
-            }))?;
-        } else if reports.is_empty() {
-            println!("no workspaces registered");
+        let doc = json!({
+            "dry_run": self.dry_run,
+            "workspaces": reports.len(),
+            "dispatched": reports.iter().filter(|r| r.action == "dispatched").count(),
+            "would_dispatch": reports.iter().filter(|r| r.action == "would_dispatch").count(),
+            "skipped": reports.iter().filter(|r| r.action == "skipped").count(),
+            "failed": failed,
+            "reports": reports.iter().map(SweepReport::to_json).collect::<Vec<_>>(),
+        });
+        let text = if reports.is_empty() {
+            "no workspaces registered".to_string()
         } else {
-            for report in &reports {
-                println!("{}", report.to_line());
-            }
-        }
-
+            reports
+                .iter()
+                .map(SweepReport::to_line)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let payload = Payload::detail(doc, text);
         if failed > 0 {
-            return Err(OrbitError::WorkspaceError(format!(
-                "ship-sweep: {failed} of {} workspace(s) failed",
-                reports.len()
-            )));
+            return Ok(payload.with_exit_code(1).into());
         }
-        Ok(CommandOutput::Silent)
+        Ok(payload.into())
     }
 }
 
@@ -201,10 +201,12 @@ fn sweep_active_workspace(
 
     let tasks = runtime.list_tasks()?;
     let status_by_id = runtime.task_status_index()?;
+    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let ready_backlog = tasks
         .iter()
         .filter(|task| {
-            task.status == TaskStatus::Backlog && task_dependencies_ready(task, &status_by_id)
+            task.status == TaskStatus::Backlog
+                && task_dependencies_ready_with_index(task, &status_by_id, &reference_index)
         })
         .count();
     if ready_backlog == 0 {

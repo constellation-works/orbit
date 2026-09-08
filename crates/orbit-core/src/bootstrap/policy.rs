@@ -5,7 +5,7 @@ use orbit_store::contracts::PolicyDefStoreBackend;
 use orbit_types::policy::{DEFAULT_POLICY_NAME, PolicyDef};
 use orbit_types::resource::ResourceKind;
 
-const DEFAULT_POLICY_FILES: &[(&str, &str)] = &[(
+pub(crate) const DEFAULT_POLICY_FILES: &[(&str, &str)] = &[(
     DEFAULT_POLICY_NAME,
     include_str!("../../assets/policies/default.yaml"),
 )];
@@ -53,8 +53,8 @@ fn parse_default_policy(
         deny_read: resource.spec.deny_read,
         deny_modify: resource.spec.deny_modify,
         fs_profiles: resource.spec.fs_profiles,
-        created_at: now,
-        updated_at: now,
+        created_at: resource.spec.created_at.or(Some(now)),
+        updated_at: resource.spec.updated_at.or(Some(now)),
     };
     def.validate()?;
     Ok(def)

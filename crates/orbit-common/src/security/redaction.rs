@@ -22,7 +22,11 @@
 // Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
 #![allow(clippy::expect_used)]
 
-use std::{borrow::Cow, sync::OnceLock};
+use std::{
+    borrow::Cow,
+    path::{Component, Path},
+    sync::OnceLock,
+};
 
 use regex::Regex;
 use serde_json::Value;
@@ -79,10 +83,31 @@ pub fn redact_sensitive_env_json(value: Value) -> Value {
 /// `rust/cleartext-logging`.
 pub fn redact_home_dir(text: &str) -> String {
     if let Some(home) = home_dir_string() {
-        text.replace(&home, "~")
+        redact_path_prefix(text, &home)
     } else {
         text.to_string()
     }
+}
+
+fn redact_path_prefix(text: &str, prefix: &str) -> String {
+    let mut redacted = String::with_capacity(text.len());
+    let mut remaining = text;
+
+    while let Some(index) = remaining.find(prefix) {
+        let (before_match, match_and_after) = remaining.split_at(index);
+        let after_match = &match_and_after[prefix.len()..];
+
+        redacted.push_str(before_match);
+        if after_match.is_empty() || after_match.starts_with('/') {
+            redacted.push('~');
+        } else {
+            redacted.push_str(prefix);
+        }
+        remaining = after_match;
+    }
+
+    redacted.push_str(remaining);
+    redacted
 }
 
 /// Apply env-value redaction to the message carried by any `OrbitError` variant.
@@ -223,6 +248,9 @@ pub fn redact_sensitive_env_error(error: OrbitError) -> OrbitError {
             path: redact_sensitive_env_text(&path),
             reason: redact_sensitive_env_text(&reason),
         },
+        OrbitError::FileLockTimeout(timeout) => OrbitError::FileLockTimeout(
+            redact_file_lock_timeout(*timeout, redact_sensitive_env_text),
+        ),
         OrbitError::Store(m) => OrbitError::Store(redact_sensitive_env_text(&m)),
         OrbitError::TaskStatusTransition(m) => {
             OrbitError::TaskStatusTransition(redact_sensitive_env_text(&m))
@@ -366,6 +394,9 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
             path: redact_all(&path),
             reason: redact_all(&reason),
         },
+        OrbitError::FileLockTimeout(timeout) => {
+            OrbitError::FileLockTimeout(redact_file_lock_timeout(*timeout, redact_all))
+        }
         OrbitError::Store(m) => OrbitError::Store(redact_all(&m)),
         OrbitError::TaskStatusTransition(m) => OrbitError::TaskStatusTransition(redact_all(&m)),
         OrbitError::DependencyNotDelivered(diagnostic) => OrbitError::DependencyNotDelivered(
@@ -385,6 +416,19 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
         OrbitError::WorkspaceError(m) => OrbitError::WorkspaceError(redact_all(&m)),
         OrbitError::Migration(m) => OrbitError::Migration(redact_all(&m)),
     }
+}
+
+fn redact_file_lock_timeout(
+    mut timeout: crate::fs::io::FileLockTimeout,
+    redact: fn(&str) -> String,
+) -> Box<crate::fs::io::FileLockTimeout> {
+    timeout.lock_path = redact(&timeout.lock_path.to_string_lossy()).into();
+    timeout.label = redact(&timeout.label);
+    if let Some(holder) = &mut timeout.holder {
+        holder.acquired_at = redact(&holder.acquired_at);
+        holder.label = redact(&holder.label);
+    }
+    Box::new(timeout)
 }
 
 fn redact_friction_not_local(
@@ -497,7 +541,13 @@ fn home_dir_string() -> Option<String> {
     std::env::var("HOME")
         .ok()
         .or_else(|| std::env::var("USERPROFILE").ok())
-        .filter(|h| !h.is_empty())
+        .filter(|home| {
+            let path = Path::new(home);
+            path.is_absolute()
+                && path
+                    .components()
+                    .any(|component| matches!(component, Component::Normal(_)))
+        })
 }
 
 fn sensitive_env_values() -> Vec<String> {

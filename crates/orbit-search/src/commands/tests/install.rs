@@ -8,9 +8,10 @@
 )))]
 use super::super::install::path_execution_fallback_rationale;
 use super::super::install::{
-    CompanionIntegrity, CompanionLaunchMode, ManagedCompanion, SemanticInstallParams,
-    checksum_from_manifest, companion_launch_mode, default_release_download_source, run,
-    sha256_hex,
+    COMPANION_STALLED_READ_TIMEOUT, CompanionIntegrity, CompanionLaunchMode, ManagedCompanion,
+    SemanticInstallParams, checksum_from_manifest, companion_download_client,
+    companion_launch_mode, default_release_download_source, download_companion_to_temp,
+    install_companion_to_temp, run, sha256_hex,
 };
 
 use orbit_common::security::release::verify_checksum_signature_with_key;
@@ -19,10 +20,181 @@ use crate::companion::{
     ensure_semantic_search_supported_for_platform, unsafe_companion_overrides_enabled,
 };
 use crate::{CompanionPaths, locate_companion, platform_companion_filename};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use tempfile::{TempDir, tempdir};
+
+#[test]
+fn companion_install_streams_a_slow_one_mebibyte_download_without_a_total_timeout() {
+    let _guard = EnvGuard::new();
+    let fixture = InstallFixture::new();
+    let body = vec![b'x'; 1024 * 1024];
+    let checksum = sha256_hex(&body);
+    let url = serve_throttled_response(body, Duration::from_millis(2_400));
+    let temp_path = fixture.paths.bin_dir.join("downloaded-companion");
+
+    remove_env("ORBIT_SEARCH_COMPANION");
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+    set_env("no_proxy", "127.0.0.1,localhost");
+    set_env("ORBIT_SEARCH_COMPANION_URL", &url);
+    set_env("ORBIT_SEARCH_COMPANION_SHA256", &checksum);
+    set_env("ORBIT_SEARCH_COMPANION_ALLOW_UNSAFE", "1");
+
+    let started = Instant::now();
+    let actual_checksum = install_companion_to_temp(&temp_path)
+        .expect("a healthy response taking more than 35 seconds should install");
+
+    assert!(
+        started.elapsed() > Duration::from_secs(35),
+        "the fixture must outlast the idle bound so only a total deadline could reject it"
+    );
+    assert_eq!(actual_checksum, checksum);
+    assert_eq!(
+        std::fs::metadata(temp_path)
+            .expect("download metadata")
+            .len(),
+        1024 * 1024
+    );
+}
+
+#[test]
+fn companion_download_bounds_a_stalled_response_after_partial_progress() {
+    let _guard = EnvGuard::new();
+    let temp = tempdir().expect("tempdir");
+    let url = serve_stalled_response();
+
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+    set_env("no_proxy", "127.0.0.1,localhost");
+
+    let client = companion_download_client().expect("configure companion download");
+    let started = Instant::now();
+    let error = download_companion_to_temp(&client, &url, &temp.path().join("companion"))
+        .expect_err("a response that stops sending body bytes must not block forever");
+    let elapsed = started.elapsed();
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to read companion download"),
+        "{error}"
+    );
+    assert!(
+        elapsed >= COMPANION_STALLED_READ_TIMEOUT,
+        "the reads that did succeed must not count against the idle bound; failed after {elapsed:?}"
+    );
+    assert!(
+        elapsed < COMPANION_STALLED_READ_TIMEOUT * 3,
+        "the stalled read must fail near {COMPANION_STALLED_READ_TIMEOUT:?}; took {elapsed:?}"
+    );
+}
+
+#[test]
+fn companion_install_reports_a_dead_connection() {
+    let _guard = EnvGuard::new();
+    let fixture = InstallFixture::new();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("reserve local port");
+    let address = listener.local_addr().expect("listener address");
+    drop(listener);
+    let temp_path = fixture.paths.bin_dir.join("downloaded-companion");
+
+    remove_env("ORBIT_SEARCH_COMPANION");
+    set_env(
+        "ORBIT_SEARCH_COMPANION_URL",
+        &format!("https://{address}/companion"),
+    );
+    set_env("ORBIT_SEARCH_COMPANION_SHA256", &"0".repeat(64));
+
+    let error = install_companion_to_temp(&temp_path)
+        .expect_err("a closed local port should fail the connection");
+
+    assert!(
+        error.to_string().contains("failed to download companion"),
+        "{error}"
+    );
+}
+
+/// Serves `body` in 64 KiB chunks separated by `delay_between_chunks`, so the
+/// whole transfer takes far longer than any single quiet period.
+fn serve_throttled_response(body: Vec<u8>, delay_between_chunks: Duration) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind throttled HTTP server");
+    let address = listener.local_addr().expect("throttled server address");
+
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept companion download");
+        consume_request_head(&mut stream);
+        std::io::Write::write_all(
+            &mut stream,
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .expect("write response headers");
+
+        for (index, chunk) in body.chunks(64 * 1024).enumerate() {
+            if index != 0 {
+                thread::sleep(delay_between_chunks);
+            }
+            std::io::Write::write_all(&mut stream, chunk).expect("write throttled response chunk");
+        }
+    });
+
+    format!("http://{address}/companion")
+}
+
+/// Serves response headers and one 64 KiB chunk of a body that promises one
+/// more byte, then holds the socket open without ever sending it. The client
+/// must therefore observe a stalled read rather than a premature EOF.
+fn serve_stalled_response() -> String {
+    const DELIVERED_PREFIX: usize = 64 * 1024;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind stalled HTTP server");
+    let address = listener.local_addr().expect("stalled server address");
+
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept companion download");
+        consume_request_head(&mut stream);
+        std::io::Write::write_all(
+            &mut stream,
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                DELIVERED_PREFIX + 1
+            )
+            .as_bytes(),
+        )
+        .expect("write response headers");
+        std::io::Write::write_all(&mut stream, &vec![b'x'; DELIVERED_PREFIX])
+            .expect("write partial response body");
+
+        // Outlast the assertion window by a wide margin: an unbounded client
+        // must be seen hanging, not rescued by the fixture closing the socket.
+        thread::sleep(COMPANION_STALLED_READ_TIMEOUT * 6);
+    });
+
+    format!("http://{address}/companion")
+}
+
+/// Reads and discards the request head so a fixture responds only after the
+/// client has finished sending its request. hyper rejects a response that
+/// overlaps the request it is still writing (`UnexpectedMessage`), which makes
+/// an eager fixture fail the exchange at random (ORB-11761).
+fn consume_request_head(stream: &mut TcpStream) {
+    let mut head = Vec::new();
+    let mut byte = [0; 1];
+
+    while !head.ends_with(b"\r\n\r\n") {
+        match std::io::Read::read(stream, &mut byte) {
+            Ok(0) => break,
+            Ok(_) => head.push(byte[0]),
+            Err(error) => panic!("read companion request head: {error}"),
+        }
+    }
+}
 
 #[test]
 #[cfg(unix)]
@@ -525,6 +697,8 @@ impl EnvGuard {
             "ORBIT_SEARCH_COMPANION_URL",
             "ORBIT_SEARCH_COMPANION_SHA256",
             "ORBIT_SEARCH_COMPANION_ALLOW_UNSAFE",
+            "NO_PROXY",
+            "no_proxy",
         ];
         let vars = names
             .into_iter()

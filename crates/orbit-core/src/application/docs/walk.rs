@@ -7,9 +7,9 @@ use std::process::{Command, Stdio};
 use orbit_common::OrbitError;
 
 use super::config::DocsRoot;
-use super::frontmatter::parse_doc_tolerant;
+use super::frontmatter::read_doc_tolerant;
 use super::path_util::{path_to_slash_string, repo_relative_path};
-use super::types::DocRecord;
+use super::types::{DocRecord, WalkedDoc};
 
 #[cfg(test)]
 thread_local! {
@@ -37,7 +37,22 @@ pub(super) fn git_check_ignore_invocations() -> usize {
     GIT_CHECK_IGNORE_INVOCATIONS.with(std::cell::Cell::get)
 }
 
+/// Walk the configured roots and return one record per doc, dropping the
+/// bodies. Callers that need the text should walk with
+/// [`walk_docs_with_bodies`] rather than re-opening each file.
 pub fn walk_docs_roots(repo_root: &Path, roots: &[DocsRoot]) -> Result<Vec<DocRecord>, OrbitError> {
+    Ok(walk_docs_with_bodies(repo_root, roots)?
+        .into_iter()
+        .map(|doc| doc.record)
+        .collect())
+}
+
+/// Walk the configured roots, keeping each doc's body from the same read that
+/// produced its frontmatter.
+pub(super) fn walk_docs_with_bodies(
+    repo_root: &Path,
+    roots: &[DocsRoot],
+) -> Result<Vec<WalkedDoc>, OrbitError> {
     // A path may be reachable from more than one configured root; if any
     // contributing root names it explicitly (respect_gitignore = false),
     // that override wins over a root that would still filter it.
@@ -71,23 +86,24 @@ pub fn walk_docs_roots(repo_root: &Path, roots: &[DocsRoot]) -> Result<Vec<DocRe
         .collect::<Vec<_>>();
     let ignored = git_ignored_paths(repo_root, &gitignore_checked);
 
-    let mut records = Vec::new();
+    let mut docs = Vec::new();
     for (relative, respect_gitignore) in candidates {
         if respect_gitignore && ignored.contains(&relative) {
             continue;
         }
         let path = repo_root.join(&relative);
-        let raw = fs::read_to_string(&path)
-            .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
-        let parsed = parse_doc_tolerant(&relative, &path, &raw);
-        records.push(DocRecord {
-            path: path_to_slash_string(&relative),
-            frontmatter: parsed.frontmatter,
+        let parsed = read_doc_tolerant(&relative, &path)?;
+        docs.push(WalkedDoc {
+            record: DocRecord {
+                path: path_to_slash_string(&relative),
+                frontmatter: parsed.frontmatter,
+            },
+            body: parsed.body,
         });
     }
-    records.sort_by(|left, right| left.path.cmp(&right.path));
-    records.dedup_by(|left, right| left.path == right.path);
-    Ok(records)
+    docs.sort_by(|left, right| left.record.path.cmp(&right.record.path));
+    docs.dedup_by(|left, right| left.record.path == right.record.path);
+    Ok(docs)
 }
 
 pub(super) fn expand_root(repo_root: &Path, root: &str) -> Result<Vec<PathBuf>, OrbitError> {

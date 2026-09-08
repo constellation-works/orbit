@@ -11,6 +11,9 @@ stability = "internal"
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 chrono.workspace = true
 libc = { workspace = true }
@@ -34,3 +37,7 @@ tracing.workspace = true
 [dev-dependencies]
 orbit-common = { path = "../orbit-common", features = ["test-util"] }
 tracing-subscriber.workspace = true
+
+[[test]]
+name = "v2_cli_agent"
+required-features = ["test-support"]

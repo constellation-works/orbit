@@ -84,6 +84,20 @@ pub enum V2AuditEventKind {
         step_id: String,
         recovery_activity: String,
         recovery_succeeded: bool,
+        /// Absent on historical events and successful attempts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_phase: Option<String>,
+        /// Bounded and redacted independently of the original step error.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_message: Option<String>,
+    },
+    /// The failed step's single re-attempt after recovery completed.
+    StepPostRecoveryAttempt {
+        step_id: String,
+        recovery_activity: String,
+        outcome: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_message: Option<String>,
     },
     StepDenied {
         step_id: String,
@@ -188,6 +202,15 @@ pub enum V2AuditEventKind {
         authorized_by: String,
         /// How the authorization chokepoint resolved that operator.
         authorizer_provenance: String,
+        /// Destination-resolved remote caller, absent for local admission.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller_machine_id: Option<String>,
+        /// How the destination established the remote caller identity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller_identity: Option<crate::tool::CallerIdentityProof>,
+        /// Destination-selected trust mode for the remote invocation grant.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_invoke_mode: Option<crate::tool::RemoteAgentInvokeMode>,
         /// RFC 3339 timestamp the admission was stamped.
         authorized_at: String,
         /// Canonical checkout the invocation was admitted against.
@@ -269,6 +292,7 @@ impl V2AuditEventKind {
             V2AuditEventKind::StepSkipped { .. } => "step.skipped",
             V2AuditEventKind::StepRetry { .. } => "step.retry",
             V2AuditEventKind::StepRecoveryAttempted { .. } => "step.recovery_attempted",
+            V2AuditEventKind::StepPostRecoveryAttempt { .. } => "step.post_recovery_attempt",
             V2AuditEventKind::StepDenied { .. } => V2_EVENT_TYPE_STEP_DENIED,
             V2AuditEventKind::StepJoin { .. } => "step.join",
             V2AuditEventKind::FanoutDispatched { .. } => "fanout.dispatched",

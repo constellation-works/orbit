@@ -9,6 +9,9 @@ fn admission() -> TrustedHostAdmission {
     TrustedHostAdmission {
         authorized_by: "human".to_string(),
         authorizer_provenance: "interactive-terminal".to_string(),
+        caller_machine_id: None,
+        caller_identity: None,
+        agent_invoke_mode: None,
         authorized_at: "2026-09-06T00:00:00Z".to_string(),
         workspace_path: "/checkout".to_string(),
         cwd: "/checkout/crates".to_string(),

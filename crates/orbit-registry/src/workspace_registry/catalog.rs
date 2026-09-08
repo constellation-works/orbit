@@ -1,6 +1,6 @@
 //! Versioned logical workspace catalog and machine-local checkout bindings.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -113,7 +113,7 @@ pub fn rebind_workspace_source_remote(
     })?;
     validate_machine_id(local_machine_id)?;
 
-    let workspace = find_workspace(registry, id_or_name)
+    let workspace = find_workspace(registry, id_or_name)?
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
     let workspace_id = workspace.id.clone();
     let old_remote = workspace.git_remote.clone().ok_or_else(|| {
@@ -217,7 +217,7 @@ pub fn assign_checkout_role(
     owner_machine_id: Option<&str>,
     local_machine_id: Option<&str>,
 ) -> Result<(), OrbitError> {
-    let workspace = find_workspace(registry, id_or_name)
+    let workspace = find_workspace(registry, id_or_name)?
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
     let workspace_id = workspace.id.clone();
     let declared_owner = workspace.owner_machine_id.clone();
@@ -314,10 +314,14 @@ pub fn remove_workspace(
     registry: &mut WorkspaceRegistry,
     id_or_name: &str,
 ) -> Result<Workspace, OrbitError> {
+    let workspace_id = find_workspace(registry, id_or_name)?
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?
+        .id
+        .clone();
     let idx = registry
         .workspaces
         .iter()
-        .position(|w| w.id == id_or_name || w.name == id_or_name)
+        .position(|workspace| workspace.id == workspace_id)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
     let removed = registry.workspaces.remove(idx);
     registry
@@ -337,15 +341,32 @@ pub fn remove_workspace(
     Ok(removed)
 }
 
-/// Finds a workspace by id or name.
+/// Finds a workspace by id or name, rejecting ambiguous selectors.
 pub fn find_workspace<'a>(
     registry: &'a WorkspaceRegistry,
     id_or_name: &str,
+) -> Result<Option<&'a Workspace>, OrbitError> {
+    match resolve_logical_workspace_match(registry, id_or_name) {
+        LogicalWorkspaceMatch::Found(workspace) => Ok(Some(workspace)),
+        LogicalWorkspaceMatch::NotFound => Ok(None),
+        LogicalWorkspaceMatch::Ambiguous => Err(ambiguous_workspace_selector(id_or_name)),
+    }
+}
+
+/// Finds a workspace by its exact catalog ID.
+///
+/// Checkout bindings and other persisted relations already store
+/// `workspace_id`. Those lookups must not reuse [`find_workspace`], which
+/// treats the argument as an id-or-name selector and fails closed when one
+/// workspace's ID equals another's name.
+pub fn find_workspace_by_id<'a>(
+    registry: &'a WorkspaceRegistry,
+    workspace_id: &str,
 ) -> Option<&'a Workspace> {
     registry
         .workspaces
         .iter()
-        .find(|w| w.id == id_or_name || w.name == id_or_name)
+        .find(|workspace| workspace.id == workspace_id)
 }
 
 /// Resolve a logical selector (registered name or `ws_*` id) to exactly one workspace.
@@ -357,15 +378,34 @@ pub fn resolve_logical_workspace<'a>(
     registry: &'a WorkspaceRegistry,
     selector: &str,
 ) -> Result<&'a Workspace, OrbitError> {
-    let matches: Vec<&Workspace> = registry
+    match resolve_logical_workspace_match(registry, selector) {
+        LogicalWorkspaceMatch::Found(workspace) => Ok(workspace),
+        LogicalWorkspaceMatch::NotFound => Err(unknown_workspace_selector(selector)),
+        LogicalWorkspaceMatch::Ambiguous => Err(ambiguous_workspace_selector(selector)),
+    }
+}
+
+enum LogicalWorkspaceMatch<'a> {
+    Found(&'a Workspace),
+    NotFound,
+    Ambiguous,
+}
+
+fn resolve_logical_workspace_match<'a>(
+    registry: &'a WorkspaceRegistry,
+    selector: &str,
+) -> LogicalWorkspaceMatch<'a> {
+    let mut matches = registry
         .workspaces
         .iter()
-        .filter(|workspace| workspace.id == selector || workspace.name == selector)
-        .collect();
-    match matches.as_slice() {
-        [workspace] => Ok(workspace),
-        [] => Err(unknown_workspace_selector(selector)),
-        _ => Err(ambiguous_workspace_selector(selector)),
+        .filter(|workspace| workspace.id == selector || workspace.name == selector);
+    let Some(workspace) = matches.next() else {
+        return LogicalWorkspaceMatch::NotFound;
+    };
+    if matches.next().is_some() {
+        LogicalWorkspaceMatch::Ambiguous
+    } else {
+        LogicalWorkspaceMatch::Found(workspace)
     }
 }
 
@@ -385,12 +425,14 @@ pub(crate) fn ambiguous_workspace_selector(selector: &str) -> OrbitError {
 pub fn find_checkout<'a>(
     registry: &'a WorkspaceRegistry,
     id_or_name: &str,
-) -> Option<&'a WorkspaceCheckout> {
-    let workspace = find_workspace(registry, id_or_name)?;
-    registry
+) -> Result<Option<&'a WorkspaceCheckout>, OrbitError> {
+    let Some(workspace) = find_workspace(registry, id_or_name)? else {
+        return Ok(None);
+    };
+    Ok(registry
         .checkouts
         .iter()
-        .find(|checkout| checkout.workspace_id == workspace.id)
+        .find(|checkout| checkout.workspace_id == workspace.id))
 }
 
 /// Iterates logical workspaces that have a machine-local checkout binding.
@@ -398,10 +440,7 @@ pub fn local_workspaces(
     registry: &WorkspaceRegistry,
 ) -> impl Iterator<Item = (&Workspace, &WorkspaceCheckout)> {
     registry.checkouts.iter().filter_map(|checkout| {
-        registry
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.id == checkout.workspace_id)
+        find_workspace_by_id(registry, &checkout.workspace_id)
             .map(|workspace| (workspace, checkout))
     })
 }
@@ -436,27 +475,49 @@ pub fn find_workspace_by_path<'a>(
     cwd: &Path,
 ) -> Option<&'a Workspace> {
     let checkout = find_checkout_by_path(registry, cwd)?;
-    registry
-        .workspaces
-        .iter()
-        .find(|workspace| workspace.id == checkout.workspace_id)
+    find_workspace_by_id(registry, &checkout.workspace_id)
 }
 
 /// Sets a path override binding a directory to a workspace.
+///
+/// The path must not already be another checkout's `repo_root` or override.
+/// Persistence repeats this uniqueness rule so a hand-edited or CLI-rewritten
+/// registry cannot save a collision that would make `find_checkout_by_path`
+/// order-dependent.
 pub fn set_path_override(
     registry: &mut WorkspaceRegistry,
     path: PathBuf,
     workspace_id: &str,
 ) -> Result<(), OrbitError> {
-    let checkout = registry
+    let checkout_index = registry
         .checkouts
-        .iter_mut()
-        .find(|checkout| checkout.workspace_id == workspace_id)
+        .iter()
+        .position(|checkout| checkout.workspace_id == workspace_id)
         .ok_or_else(|| {
             OrbitError::WorkspaceError(format!(
                 "workspace '{workspace_id}' has no local checkout binding"
             ))
         })?;
+    if let Some(existing) = registry
+        .checkouts
+        .iter()
+        .enumerate()
+        .find(|(index, checkout)| {
+            *index != checkout_index
+                && (checkout.repo_root == path
+                    || checkout
+                        .path_overrides
+                        .iter()
+                        .any(|claimed| claimed == &path))
+        })
+        .map(|(_, checkout)| checkout.workspace_id.as_str())
+    {
+        return Err(OrbitError::WorkspaceError(format!(
+            "checkout path '{}' is already registered to workspace '{existing}'",
+            path.display()
+        )));
+    }
+    let checkout = &mut registry.checkouts[checkout_index];
     if !checkout.path_overrides.contains(&path) {
         checkout.path_overrides.push(path);
         checkout.path_overrides.sort();
@@ -741,6 +802,23 @@ pub fn validate_workspace_registry(
         checkout.path_overrides.dedup();
         changed |= checkout.path_overrides.len() != before;
     }
+
+    // A path may belong to only one checkout. `register_checkout` and
+    // `set_path_override` refuse the same collision early; this check is the
+    // persistence rule so a rewritten `repo_root` or hand-edited override
+    // cannot save and then resolve by JSON order.
+    let mut claimed_paths: HashMap<&Path, &str> = HashMap::new();
+    for checkout in &registry.checkouts {
+        claim_checkout_path(
+            &mut claimed_paths,
+            &checkout.repo_root,
+            &checkout.workspace_id,
+        )?;
+        for override_path in &checkout.path_overrides {
+            claim_checkout_path(&mut claimed_paths, override_path, &checkout.workspace_id)?;
+        }
+    }
+
     if context.machine_id.is_some() {
         for workspace in &registry.workspaces {
             if workspace.owner_machine_id.is_none() {
@@ -858,6 +936,31 @@ pub fn rename_local_owner_host_id(
             .insert(machine_id.to_string(), new_host_id.to_string());
     }
     Ok(affected)
+}
+
+fn claim_checkout_path<'a>(
+    claimed: &mut HashMap<&'a Path, &'a str>,
+    path: &'a Path,
+    workspace_id: &'a str,
+) -> Result<(), OrbitError> {
+    match claimed.get(path) {
+        Some(existing) if *existing != workspace_id => {
+            let (first, second) = if *existing <= workspace_id {
+                (*existing, workspace_id)
+            } else {
+                (workspace_id, *existing)
+            };
+            Err(invalid_registry(format!(
+                "checkout path '{}' is claimed by both '{first}' and '{second}'",
+                path.display()
+            )))
+        }
+        Some(_) => Ok(()),
+        None => {
+            claimed.insert(path, workspace_id);
+            Ok(())
+        }
+    }
 }
 
 fn invalid_registry(message: String) -> OrbitError {

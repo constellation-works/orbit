@@ -22,16 +22,15 @@ on:
       # [ORB-10009] SBPL profiles are compiled from resolved policy rules, so
       # policy-evaluation changes can alter what the macOS sandbox enforces.
       - "crates/orbit-policy/**"
-      - "crates/orbit-common/src/types/policy_def.rs"
-      - "crates/orbit-common/src/utility/glob.rs"
+      - "crates/orbit-common/src/fs/**"
+      - "crates/orbit-types/src/policy/**"
       # [ORB-11067] Managed-child logging must use the registry root authorized
       # by the macOS sandbox rather than the provider-specific HOME.
       - "crates/orbit-common/src/observability/logging.rs"
       - "crates/orbit-common/src/observability/tests/logging.rs"
       # [ORB-10682] Darwin owner/cancellation liveness uses native libproc
       # state so unreaped zombies do not look like surviving work.
-      - "crates/orbit-common/src/utility/process_identity.rs"
-      - "crates/orbit-common/src/utility/tests/process_identity.rs"
+      - "crates/orbit-common/src/process/**"
       - "crates/orbit-core/src/application/job/run/owner.rs"
       - "crates/orbit-core/src/application/job/run/tests/actions.rs"
       - "crates/orbit-core/src/application/job/run/tests/owner.rs"
@@ -74,7 +73,7 @@ jobs:
       # runner forbids `sandbox-exec`, `sandbox_exec_can_apply()` self-skips the
       # apply-time tests rather than failing — never worse than the Linux gate.
       - name: Run orbit-exec sandbox tests (real sandbox-exec)
-        run: cargo test -p orbit-exec --locked
+        run: cargo test --no-fail-fast -p orbit-exec --locked
 
       # [ORB-11055] The nested `orbit.task.update` regression needs the CLI
       # binary; the child-runtime inventory test lives in orbit-core.
@@ -82,12 +81,12 @@ jobs:
         run: cargo build -p orbit-cli --locked --bin orbit
 
       - name: Run orbit-core sandbox tests
-        run: cargo test -p orbit-core --locked sandbox
+        run: cargo test --no-fail-fast -p orbit-core --locked sandbox
 
       # Linux cannot exercise Darwin's libproc zombie/group semantics. Keep
       # these filters aligned with the owner/liveness path triggers above.
       - name: Run process identity and job-run owner tests
         run: |
-          cargo test -p orbit-common --locked process_identity -- --nocapture
-          cargo test -p orbit-core --locked command::job::run::tests::owner -- --nocapture
-          cargo test -p orbit-core --locked command::job::run::tests::actions -- --nocapture
+          cargo test --no-fail-fast -p orbit-common --locked process::tests::identity -- --nocapture
+          cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::owner -- --nocapture
+          cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::actions -- --nocapture

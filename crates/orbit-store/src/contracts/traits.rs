@@ -13,7 +13,7 @@ use orbit_types::workflow::{
     RunStateUpdate,
 };
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::friction::{
     FrictionAddParams, FrictionListFilter, FrictionReportedCount, FrictionUpdateParams,
@@ -253,6 +253,24 @@ pub trait V2AuditStoreBackend: Send + Sync {
         filter: &V2AuditEventFilter,
     ) -> Result<Vec<V2AuditEventRow>, OrbitError>;
     fn count_v2_audit_events(&self, filter: &V2AuditEventFilter) -> Result<i64, OrbitError>;
+    /// Newest matching envelope rows for each run, capped independently so a
+    /// busy earlier run cannot consume a page-wide LIMIT.
+    fn list_v2_audit_events_for_runs_partitioned(
+        &self,
+        workspace_id: &str,
+        run_ids: &[String],
+        source: Option<&str>,
+        body_kind: Option<&str>,
+        per_run_limit: usize,
+    ) -> Result<Vec<V2AuditEventRow>, OrbitError>;
+    /// Run ids in `run_ids` that have at least one reconstructable v2 envelope
+    /// row. Used to distinguish `unavailable` from `not_attempted`.
+    fn list_v2_audit_run_ids_with_events(
+        &self,
+        workspace_id: &str,
+        run_ids: &[String],
+        source: Option<&str>,
+    ) -> Result<HashSet<String>, OrbitError>;
 }
 
 pub trait TaskDocumentStoreBackend: Send + Sync {
@@ -473,6 +491,15 @@ pub trait JobRunStoreBackend: Send + Sync {
     fn archive_job_run(&self, run_id: &str) -> Result<String, OrbitError>;
     fn delete_job_run(&self, run_id: &str) -> Result<String, OrbitError>;
     fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError>;
+    /// Pipeline state for a list page in one query per chunk, not one per run.
+    ///
+    /// Missing runs and unreadable JSON are omitted / `None` rather than failing
+    /// the page: the MCP list surface degrades those rows the same way a
+    /// per-run `read_run_state` error already does.
+    fn read_run_states(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError>;
     fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError>;
     /// [ORB-11253] Read-modify-write a run's pipeline state in one immediate
     /// transaction.

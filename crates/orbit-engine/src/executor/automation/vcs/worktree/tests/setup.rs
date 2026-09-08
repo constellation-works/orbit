@@ -19,11 +19,15 @@ use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate};
 
+#[cfg(unix)]
+use crate::executor::automation::vcs::tests::with_fake_git;
+
+use super::super::super::commit::git_commit;
 use super::super::resolve_worktree_path_from_prefix;
 use super::super::setup::{ensure_worktree, setup_worktree, worktree_setup_output};
 
 #[test]
-fn ensure_worktree_reattaches_existing_checkout_without_resetting_its_branch() {
+fn ensure_worktree_refuses_registered_checkout_whose_head_is_not_the_new_base() {
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     let worktree = temp.path().join("worktree");
@@ -39,10 +43,32 @@ fn ensure_worktree_reattaches_existing_checkout_without_resetting_its_branch() {
     let epic_commit = commit_file(&worktree, "child.txt", "landed");
 
     let second_base = commit_file(&repo, "base.txt", "v2");
-    let reattached = ensure_worktree(&repo, &worktree, &second_base, "orbit/new-name").unwrap();
+    let error = ensure_worktree(&repo, &worktree, &second_base, "orbit/new-name").unwrap_err();
+
+    assert_stale_branch_refusal(&error, "orbit/test", &epic_commit, &second_base);
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), epic_commit);
+    assert_eq!(
+        git(&worktree, &["symbolic-ref", "--short", "HEAD"]),
+        "orbit/test"
+    );
+}
+
+#[test]
+fn ensure_worktree_reattaches_existing_checkout_at_the_same_base() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let worktree = temp.path().join("worktree");
+    init_repo(&repo, "agent-main");
+    let first_base = commit_file(&repo, "base.txt", "v1");
+
+    assert_eq!(
+        ensure_worktree(&repo, &worktree, &first_base, "orbit/test").unwrap(),
+        "orbit/test"
+    );
+    let reattached = ensure_worktree(&repo, &worktree, &first_base, "orbit/new-name").unwrap();
 
     assert_eq!(reattached, "orbit/test");
-    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), epic_commit);
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), first_base);
 }
 
 /// A checkout that is a git work tree but not one this repository registered
@@ -73,7 +99,7 @@ fn ensure_worktree_refuses_to_clean_a_foreign_checkout_at_the_resolved_path() {
 }
 
 #[test]
-fn ensure_worktree_reuses_orphan_branch_from_failed_attempt() {
+fn ensure_worktree_refuses_orphan_branch_whose_tip_is_not_the_new_base() {
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     let worktree = temp.path().join("worktree");
@@ -82,7 +108,26 @@ fn ensure_worktree_reuses_orphan_branch_from_failed_attempt() {
     git(&repo, &["branch", "orbit/test", &first_base]);
 
     let second_base = commit_file(&repo, "base.txt", "v2");
-    ensure_worktree(&repo, &worktree, &second_base, "orbit/test").unwrap();
+    let error = ensure_worktree(&repo, &worktree, &second_base, "orbit/test").unwrap_err();
+
+    assert_stale_branch_refusal(&error, "orbit/test", &first_base, &second_base);
+    assert!(
+        !worktree.exists(),
+        "refused orphan attach must not create a worktree"
+    );
+    assert_eq!(git(&repo, &["rev-parse", "orbit/test"]), first_base);
+}
+
+#[test]
+fn ensure_worktree_reuses_orphan_branch_at_the_same_base() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let worktree = temp.path().join("worktree");
+    init_repo(&repo, "agent-main");
+    let first_base = commit_file(&repo, "base.txt", "v1");
+    git(&repo, &["branch", "orbit/test", &first_base]);
+
+    ensure_worktree(&repo, &worktree, &first_base, "orbit/test").unwrap();
 
     assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), first_base);
 }
@@ -182,6 +227,356 @@ fn worktree_setup_publishes_the_resolved_base_commit_alongside_the_moving_ref() 
         output["base_sha"],
         json!("2222222222222222222222222222222222222222")
     );
+}
+
+#[test]
+fn completeness_leaves_deletions_dirty_files_and_retained_commits_intact() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let worktree = temp.path().join("worktree");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, "base.txt", "v1");
+    let first_base = commit_file(&repo, "keep.txt", "tracked");
+
+    assert_eq!(
+        ensure_worktree(&repo, &worktree, &first_base, "orbit/test").unwrap(),
+        "orbit/test"
+    );
+    let retained = commit_file(&worktree, "child.txt", "landed");
+    fs::remove_file(worktree.join("keep.txt")).unwrap();
+    fs::write(worktree.join("dirty.txt"), "untracked work").unwrap();
+
+    let second_base = commit_file(&repo, "base.txt", "v2");
+    let error = ensure_worktree(&repo, &worktree, &second_base, "orbit/new-name").unwrap_err();
+
+    assert_stale_branch_refusal(&error, "orbit/test", &retained, &second_base);
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), retained);
+    assert!(
+        !worktree.join("keep.txt").exists(),
+        "tracked deletion must not be restored by completeness or provenance"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join("dirty.txt")).unwrap(),
+        "untracked work"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join("child.txt")).unwrap(),
+        "landed"
+    );
+}
+
+#[test]
+fn ensure_worktree_reuses_matching_checkout_without_cleaning_dirty_files() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let worktree = temp.path().join("worktree");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, "base.txt", "v1");
+    let first_base = commit_file(&repo, "keep.txt", "tracked");
+
+    assert_eq!(
+        ensure_worktree(&repo, &worktree, &first_base, "orbit/test").unwrap(),
+        "orbit/test"
+    );
+    fs::remove_file(worktree.join("keep.txt")).unwrap();
+    fs::write(worktree.join("dirty.txt"), "untracked work").unwrap();
+
+    let reattached = ensure_worktree(&repo, &worktree, &first_base, "orbit/new-name").unwrap();
+
+    assert_eq!(reattached, "orbit/test");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), first_base);
+    assert!(
+        !worktree.join("keep.txt").exists(),
+        "tracked deletion must not be restored when HEAD already matches the base"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join("dirty.txt")).unwrap(),
+        "untracked work"
+    );
+}
+
+#[test]
+fn ensure_worktree_does_not_reset_a_pushed_retained_candidate() {
+    let temp = tempdir().unwrap();
+    let remote = temp.path().join("remote.git");
+    let repo = temp.path().join("repo");
+    let worktree = temp.path().join("worktree");
+    git(temp.path(), &["init", "--bare", remote.to_str().unwrap()]);
+    init_repo(&repo, "agent-main");
+    let first_base = commit_file(&repo, "base.txt", "v1");
+    git(
+        &repo,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&repo, &["push", "-u", "origin", "agent-main"]);
+
+    ensure_worktree(&repo, &worktree, &first_base, "orbit/test").unwrap();
+    let retained = commit_file(&worktree, "candidate.txt", "keep me");
+    git(&worktree, &["push", "-u", "origin", "orbit/test"]);
+
+    let second_base = commit_file(&repo, "base.txt", "v2");
+    git(&repo, &["push", "origin", "agent-main"]);
+    let error = ensure_worktree(&repo, &worktree, &second_base, "orbit/test").unwrap_err();
+
+    assert_stale_branch_refusal(&error, "orbit/test", &retained, &second_base);
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), retained);
+    assert_eq!(
+        fs::read_to_string(worktree.join("candidate.txt")).unwrap(),
+        "keep me"
+    );
+    assert_eq!(git(&repo, &["rev-parse", "origin/orbit/test"]), retained);
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_add_timeout_after_registration_is_not_admitted_on_retry() {
+    let stamp_dir = tempdir().unwrap();
+    let stamp = stamp_dir.path().join("worktree-once");
+    if !with_fake_git(
+        module_path!(),
+        "worktree_add_timeout_after_registration_is_not_admitted_on_retry",
+        &[("ORBIT_TEST_GIT_WORKTREE_ONCE", stamp.display().to_string())],
+    ) {
+        return;
+    }
+
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, "base.txt", "v1");
+    let host = FakeHost::new(&repo, &["ORB-11606"]);
+    let run_id = "jrun-timeout-worktree";
+    let input = json!({
+        "task_ids": ["ORB-11606"],
+        "run_id": run_id,
+        "base": "agent-main",
+        "base_sync": "local",
+        "dependency_delivery": "ignore",
+        "git_timeouts": { "worktree_add": 400 },
+    });
+
+    let first = setup_worktree(&host, &input).expect_err("first add must time out");
+    let first_message = first.to_string();
+    assert!(
+        first_message.contains("timed out"),
+        "expected timeout diagnostic, got {first_message}"
+    );
+    assert!(
+        first_message.contains("timeout recovery") || first_message.contains("Timeout recovery"),
+        "timeout recovery must be named: {first_message}"
+    );
+    assert!(
+        !first_message.contains("unresolved conflict"),
+        "timeout must not be labeled a conflict: {first_message}"
+    );
+    assert!(
+        host.admitted().is_empty(),
+        "timed-out setup must not admit the task"
+    );
+
+    let worktree_path = resolve_worktree_path_from_prefix(&repo, "orbit", run_id).unwrap();
+    let second = setup_worktree(&host, &input);
+    match second {
+        Ok(_) => {
+            assert!(
+                git_ok(&worktree_path, &["rev-parse", "--verify", "HEAD^{commit}"]),
+                "retry may admit only a complete checkout"
+            );
+            assert_eq!(host.admitted(), vec!["ORB-11606".to_string()]);
+        }
+        Err(error) => {
+            let message = error.to_string();
+            assert!(
+                host.admitted().is_empty(),
+                "retry must not admit an incomplete checkout"
+            );
+            assert!(
+                message.contains("incomplete") || message.contains("leaving checkout"),
+                "refusal must preserve evidence: {message}"
+            );
+            assert!(
+                worktree_path.exists(),
+                "quarantined checkout must remain for inspection"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_add_stderr_timeout_phrase_is_ordinary_failure_not_timeout_recovery() {
+    if !with_fake_git(
+        module_path!(),
+        "worktree_add_stderr_timeout_phrase_is_ordinary_failure_not_timeout_recovery",
+        &[("ORBIT_TEST_GIT_PHRASE_FAIL", "worktree".to_string())],
+    ) {
+        return;
+    }
+
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, "base.txt", "v1");
+    let host = FakeHost::new(&repo, &["ORB-11802"]);
+    let run_id = "jrun-phrase-worktree";
+    let input = json!({
+        "task_ids": ["ORB-11802"],
+        "run_id": run_id,
+        "base": "agent-main",
+        "base_sync": "local",
+        "dependency_delivery": "ignore",
+    });
+
+    let error = setup_worktree(&host, &input)
+        .expect_err("injected stderr phrase must fail as ordinary Git");
+    let message = error.to_string();
+    assert!(
+        message.contains("failed in"),
+        "expected ordinary Git failure, got {message}"
+    );
+    assert!(
+        !message.contains("timed out after"),
+        "stderr phrase must not be a deadline error: {message}"
+    );
+    assert!(
+        !message.contains("timeout recovery") && !message.contains("Timeout recovery"),
+        "timeout recovery must not run: {message}"
+    );
+    assert!(
+        host.admitted().is_empty(),
+        "ordinary worktree add failure must not admit the task"
+    );
+}
+
+#[test]
+fn setup_worktree_refuses_stale_registered_checkout_before_admission() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo, "agent-main");
+    let first_base = commit_file(&repo, "base.txt", "v1");
+    let run_id = "jrun-stale-setup";
+    let worktree_path = resolve_worktree_path_from_prefix(&repo, "orbit", run_id).unwrap();
+    ensure_worktree(&repo, &worktree_path, &first_base, "orbit/test").unwrap();
+    let retained = commit_file(&worktree_path, "child.txt", "landed");
+    let second_base = commit_file(&repo, "base.txt", "v2");
+
+    let host = FakeHost::new(&repo, &["ORB-11639"]);
+    let input = json!({
+        "task_ids": ["ORB-11639"],
+        "run_id": run_id,
+        "base": "agent-main",
+        "base_sync": "local",
+        "dependency_delivery": "ignore",
+    });
+
+    let error = setup_worktree(&host, &input).unwrap_err();
+    assert_stale_branch_refusal(&error, "orbit/test", &retained, &second_base);
+    assert!(
+        host.admitted().is_empty(),
+        "stale reuse must fail before workflow admission"
+    );
+    assert_eq!(git(&worktree_path, &["rev-parse", "HEAD"]), retained);
+}
+
+#[test]
+fn stale_setup_retry_stays_refused_until_operator_recovers_the_branch() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo, "agent-main");
+    let first_base = commit_file(&repo, "base.txt", "v1");
+    let run_id = "jrun-stale-retry";
+    let worktree_path = resolve_worktree_path_from_prefix(&repo, "orbit", run_id).unwrap();
+    ensure_worktree(&repo, &worktree_path, &first_base, "orbit/test").unwrap();
+    let retained = commit_file(&worktree_path, "candidate.txt", "inspect me");
+    let second_base = commit_file(&repo, "base.txt", "v2");
+
+    let host = FakeHost::new(&repo, &["ORB-11639"]);
+    let input = json!({
+        "task_ids": ["ORB-11639"],
+        "run_id": run_id,
+        "base": "agent-main",
+        "base_sync": "local",
+        "dependency_delivery": "ignore",
+    });
+
+    let first = setup_worktree(&host, &input).unwrap_err();
+    assert_stale_branch_refusal(&first, "orbit/test", &retained, &second_base);
+    assert!(host.admitted().is_empty());
+    assert_eq!(git(&worktree_path, &["rev-parse", "HEAD"]), retained);
+
+    let retry = setup_worktree(&host, &input).unwrap_err();
+    assert_stale_branch_refusal(&retry, "orbit/test", &retained, &second_base);
+    assert!(
+        host.admitted().is_empty(),
+        "setup must not auto-succeed on retry while the stale checkout remains"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree_path.join("candidate.txt")).unwrap(),
+        "inspect me"
+    );
+
+    git(
+        &repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            worktree_path.to_str().unwrap(),
+        ],
+    );
+    git(&repo, &["branch", "-D", "orbit/test"]);
+
+    let output =
+        setup_worktree(&host, &input).expect("operator recovery can recreate at the new base");
+    assert_eq!(host.admitted(), vec!["ORB-11639".to_string()]);
+    assert_eq!(output["base_sha"], json!(second_base));
+    let workspace = PathBuf::from(output["workspace_path"].as_str().expect("workspace_path"));
+    assert_eq!(git(&workspace, &["rev-parse", "HEAD"]), second_base);
+
+    fs::write(workspace.join("task.txt"), "recovered work\n").unwrap();
+    let commit = git_commit(
+        &host,
+        &json!({
+            "scope": "all",
+            "job_run_id": run_id,
+            "workspace_path": workspace,
+            "base_ref": output["base_ref"],
+            "base_sha": output["base_sha"],
+        }),
+    )
+    .expect("commit accepts a setup checkpoint whose HEAD still equals base_sha");
+    assert_eq!(commit["decision"], json!("performed"));
+    assert_eq!(commit["base_sha"], json!(second_base));
+}
+
+fn assert_stale_branch_refusal(error: &OrbitError, branch: &str, tip: &str, base: &str) {
+    let message = error.to_string();
+    assert!(
+        message.contains("refusing stale branch"),
+        "expected a stale-branch refusal, got {message}"
+    );
+    assert!(
+        message.contains(&format!("'{branch}'")),
+        "must name branch {branch}: {message}"
+    );
+    assert!(message.contains(tip), "must name tip {tip}: {message}");
+    assert!(
+        message.contains(base),
+        "must name requested base {base}: {message}"
+    );
+    assert!(
+        message.contains("retrying setup without that recovery will refuse again"),
+        "must describe recovery, got {message}"
+    );
+}
+
+fn git_ok(current_dir: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .args(args)
+        .current_dir(current_dir)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 fn init_repo(path: &Path, branch: &str) {
@@ -329,12 +724,48 @@ fn setup_worktree_succeeds_when_landing_mode_is_local_and_base_is_clean() {
     assert_eq!(host.admitted(), vec!["ORB-11373".to_string()]);
 }
 
+#[test]
+fn setup_worktree_keeps_an_explicit_identity_token_and_stamps_the_admitted_job() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, "base.txt", "v1");
+
+    let host = FakeHost::new(&repo, &["ORB-EPIC"]);
+    let worktree_token = "epic-ORB-EPIC";
+    let admitted_run = "jrun-admitted-epic";
+    let input = json!({
+        "task_ids": ["ORB-EPIC"],
+        "run_id": worktree_token,
+        "job_run_id": admitted_run,
+        "branch_prefix": "epic",
+        "base": "agent-main",
+        "base_sync": "local",
+        "dependency_delivery": "ignore",
+    });
+
+    let output = setup_worktree(&host, &input).expect("epic identity split");
+    let worktree_path = resolve_worktree_path_from_prefix(&repo, "epic", worktree_token).unwrap();
+
+    assert!(
+        worktree_path.exists(),
+        "the stable epic token still names the checkout"
+    );
+    assert_eq!(output["job_run_id"], json!(admitted_run));
+    assert_eq!(output["batch_id"], json!(admitted_run));
+    assert_eq!(
+        host.stamped_job_run_id("ORB-EPIC").as_deref(),
+        Some(admitted_run)
+    );
+}
+
 struct FakeHost {
     tasks: BTreeMap<String, Task>,
     repo_root: PathBuf,
     data_root: PathBuf,
     scoreboard_dir: PathBuf,
     admitted: Mutex<Vec<String>>,
+    stamped_job_run_id: Mutex<BTreeMap<String, String>>,
 }
 
 impl FakeHost {
@@ -380,11 +811,20 @@ impl FakeHost {
             data_root: repo_root.join(".orbit-test-data"),
             scoreboard_dir: repo_root.join(".orbit-test-data").join("scoreboard"),
             admitted: Mutex::new(Vec::new()),
+            stamped_job_run_id: Mutex::new(BTreeMap::new()),
         }
     }
 
     fn admitted(&self) -> Vec<String> {
         self.admitted.lock().expect("admitted lock").clone()
+    }
+
+    fn stamped_job_run_id(&self, task_id: &str) -> Option<String> {
+        self.stamped_job_run_id
+            .lock()
+            .expect("stamp lock")
+            .get(task_id)
+            .cloned()
     }
 }
 
@@ -443,9 +883,15 @@ impl RuntimeHost for FakeHost {
 
     fn apply_task_automation_update(
         &self,
-        _task_id: &str,
-        _update: TaskAutomationUpdate,
+        task_id: &str,
+        update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
+        if let Some(job_run_id) = update.job_run_id {
+            self.stamped_job_run_id
+                .lock()
+                .expect("stamp lock")
+                .insert(task_id.to_string(), job_run_id);
+        }
         Ok(())
     }
 

@@ -45,8 +45,8 @@ struct McpWorkspace {
 }
 
 /// Write an executable no-op named `name` into `bin`, standing in for an agent
-/// CLI during detection. Nothing in these tests dispatches an agent, so the
-/// stub only has to exist and be executable.
+/// CLI during detection. Tests that dispatch overwrite it with a response
+/// fixture before starting the server.
 fn plant_agent_cli_stub(bin: &Path, name: &str) {
     std::fs::create_dir_all(bin).expect("create stub CLI directory");
     let stub = bin.join(name);
@@ -57,6 +57,17 @@ fn plant_agent_cli_stub(bin: &Path, name: &str) {
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
             .expect("mark the stub agent CLI executable");
     }
+}
+
+fn plant_agent_response_stub(bin: &Path, name: &str) {
+    plant_agent_cli_stub(bin, name);
+    let stub = bin.join(name);
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' \
+         '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"summary\":\"remote probe complete\"},\"error\":null}'\n",
+    )
+    .expect("write response stub");
 }
 
 /// `PATH` with the fixture's stub directory first, so agent detection sees the
@@ -1318,6 +1329,255 @@ ssh_key_fingerprint = "{CALLER_KEY_FINGERPRINT}"
     assert_eq!(
         denied["code"], "capability_denied",
         "the generated request must not raise a deny grant: {denied}"
+    );
+}
+
+/// A destination can delegate exactly the trusted-host operation without
+/// turning every remote operator into an unsandboxed dispatcher.
+/// This crosses the destination-issued forced command, real MCP transport,
+/// workspace routing, durable run submission, worker, response projection,
+/// and revocation-on-reconnect boundaries.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_key_bound_remote_operator_invokes_an_agent_only_in_the_granted_workspace() {
+    let workspace = McpWorkspace::init();
+    plant_agent_response_stub(&McpWorkspace::stub_bin_dir(&workspace.home), "codex");
+    let registry: Value = serde_json::from_str(
+        &std::fs::read_to_string(workspace.home.join(".orbit/workspaces.json"))
+            .expect("read workspace registry"),
+    )
+    .expect("parse workspace registry");
+    let workspace_id = registry["workspaces"][0]["id"]
+        .as_str()
+        .expect("workspace id");
+
+    let Some(generated) = generated_forced_command(&workspace) else {
+        return;
+    };
+
+    write_callers(
+        &workspace,
+        &format!(
+            r#"
+default = "deny"
+
+[[callers]]
+machine_id = "hm_caller"
+capabilities = ["agent", "operator"]
+ssh_key_fingerprint = "{CALLER_KEY_FINGERPRINT}"
+agent_invoke = true
+agent_invoke_workspaces = ["ws_wrong"]
+"#,
+        ),
+    );
+    let mut wrong_workspace = workspace.serve_with_generated_command(&generated);
+    assert_eq!(
+        wrong_workspace.call_tool_ok("orbit_workflow_run_list", json!({}))["items"],
+        json!([]),
+        "the invocation-only scope must not reduce ordinary operator access"
+    );
+    let denied = wrong_workspace.call_tool_err(
+        "orbit_agent_invoke",
+        json!({
+            "prompt": "read-only remote probe",
+            "cwd": workspace.work,
+            "timeout_seconds": 30,
+        }),
+    );
+    assert_eq!(denied["code"], "capability_denied", "{denied}");
+    drop(wrong_workspace);
+
+    write_callers(
+        &workspace,
+        &format!(
+            r#"
+default = "deny"
+
+[[callers]]
+machine_id = "hm_caller"
+capabilities = ["agent", "operator"]
+ssh_key_fingerprint = "{CALLER_KEY_FINGERPRINT}"
+agent_invoke = true
+agent_invoke_workspaces = ["{workspace_id}"]
+"#,
+        ),
+    );
+    let mut granted = workspace.serve_with_generated_command(&generated);
+    let submitted = granted.call_tool_ok(
+        "orbit_agent_invoke",
+        json!({
+            "prompt": "read-only remote probe",
+            "cwd": workspace.work,
+            "timeout_seconds": 30,
+            "model": "codex",
+        }),
+    );
+    assert_eq!(submitted["authorized_by"], "hm_caller");
+    assert_eq!(submitted["authorizer_provenance"], "remote-grant");
+    assert_eq!(submitted["caller_machine_id"], "hm_caller");
+    assert_eq!(submitted["caller_identity"], "key-bound");
+    assert_eq!(
+        submitted["workspace_path"],
+        workspace.work.display().to_string()
+    );
+    assert_eq!(submitted["timeout_seconds"], 30);
+    let run_id = submitted["run_id"].as_str().expect("run id").to_string();
+
+    let deadline = Instant::now() + RESPONSE_TIMEOUT;
+    let terminal = loop {
+        let shown = granted.call_tool_ok("orbit_workflow_run_show", json!({ "id": run_id }));
+        if matches!(
+            shown["state"].as_str(),
+            Some("success" | "failed" | "timeout" | "cancelled" | "interrupted")
+        ) {
+            break shown;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "agent invocation did not finish: {shown}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(terminal["state"], "success", "{terminal}");
+    assert_eq!(terminal["agent_invocation"]["completed_envelope"], true);
+    assert_eq!(
+        terminal["agent_invocation"]["summary"],
+        "remote probe complete"
+    );
+
+    let connection =
+        Connection::open(workspace.home.join(".orbit/orbit.db")).expect("open destination store");
+    let input_json: String = connection
+        .query_row(
+            "SELECT input_json FROM job_runs WHERE run_id = ?1",
+            [&run_id],
+            |row| row.get(0),
+        )
+        .expect("persisted invocation input");
+    let input: Value = serde_json::from_str(&input_json).expect("parse invocation input");
+    let admission = &input["trusted_host_admission"];
+    assert_eq!(admission["caller_machine_id"], "hm_caller");
+    assert_eq!(admission["caller_identity"], "key-bound");
+    assert_eq!(
+        admission["workspace_path"],
+        workspace.work.display().to_string()
+    );
+    drop(granted);
+
+    write_callers(
+        &workspace,
+        &format!(
+            r#"
+default = "deny"
+
+[[callers]]
+machine_id = "hm_caller"
+capabilities = ["agent", "operator"]
+workspaces = ["{workspace_id}"]
+ssh_key_fingerprint = "{CALLER_KEY_FINGERPRINT}"
+agent_invoke = false
+"#,
+        ),
+    );
+    let mut revoked = workspace.serve_with_generated_command(&generated);
+    let denied = revoked.call_tool_err(
+        "orbit_agent_invoke",
+        json!({
+            "prompt": "must not run",
+            "cwd": workspace.work,
+            "timeout_seconds": 30,
+        }),
+    );
+    assert_eq!(denied["code"], "capability_denied", "{denied}");
+}
+
+/// The destination may deliberately trust the existing SSH operator channel
+/// when both ends cooperate through the same OS account. The invocation is
+/// still workspace- and operation-scoped, while its output and durable
+/// admission must say `cooperative` and `self-asserted`, never `key-bound`.
+#[test]
+fn a_cooperative_ssh_operator_invocation_records_its_actual_trust_boundary() {
+    let workspace = McpWorkspace::init();
+    plant_agent_response_stub(&McpWorkspace::stub_bin_dir(&workspace.home), "codex");
+    let registry: Value = serde_json::from_str(
+        &std::fs::read_to_string(workspace.home.join(".orbit/workspaces.json"))
+            .expect("read workspace registry"),
+    )
+    .expect("parse workspace registry");
+    let workspace_id = registry["workspaces"][0]["id"]
+        .as_str()
+        .expect("workspace id");
+
+    write_callers(
+        &workspace,
+        &format!(
+            r#"
+default = "deny"
+
+[[callers]]
+machine_id = "hm_caller"
+capabilities = ["agent", "operator"]
+agent_invoke = true
+agent_invoke_mode = "cooperative"
+agent_invoke_workspaces = ["{workspace_id}"]
+"#,
+        ),
+    );
+    let mut cooperative = workspace.serve_with_args_and_env(
+        &["--operator", "--remote-caller-machine-id", "hm_caller"],
+        &[("SSH_CONNECTION", "192.0.2.8 43100 198.51.100.2 22")],
+    );
+    let submitted = cooperative.call_tool_ok(
+        "orbit_agent_invoke",
+        json!({
+            "prompt": "read-only cooperative probe",
+            "cwd": workspace.work,
+            "crew": "system",
+            "timeout_seconds": 30,
+            "model": "codex",
+        }),
+    );
+
+    assert_eq!(submitted["authorized_by"], "hm_caller");
+    assert_eq!(submitted["authorizer_provenance"], "remote-grant");
+    assert_eq!(submitted["caller_machine_id"], "hm_caller");
+    assert_eq!(submitted["caller_identity"], "self-asserted");
+    assert_eq!(submitted["agent_invoke_mode"], "cooperative");
+    let run_id = submitted["run_id"].as_str().expect("run id").to_string();
+
+    let deadline = Instant::now() + RESPONSE_TIMEOUT;
+    loop {
+        let shown = cooperative.call_tool_ok("orbit_workflow_run_show", json!({ "id": run_id }));
+        if matches!(
+            shown["state"].as_str(),
+            Some("success" | "failed" | "timeout" | "cancelled" | "interrupted")
+        ) {
+            assert_eq!(shown["state"], "success", "{shown}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "cooperative agent invocation did not finish: {shown}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    let connection =
+        Connection::open(workspace.home.join(".orbit/orbit.db")).expect("destination store");
+    let input_json: String = connection
+        .query_row(
+            "SELECT input_json FROM job_runs WHERE run_id = ?1",
+            [&run_id],
+            |row| row.get(0),
+        )
+        .expect("persisted invocation input");
+    let input: Value = serde_json::from_str(&input_json).expect("parse invocation input");
+    let admission = &input["trusted_host_admission"];
+    assert_eq!(admission["caller_identity"], "self-asserted");
+    assert_eq!(admission["agent_invoke_mode"], "cooperative");
+    assert_eq!(
+        admission["workspace_path"],
+        workspace.work.display().to_string()
     );
 }
 

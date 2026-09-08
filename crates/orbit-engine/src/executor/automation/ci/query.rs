@@ -61,11 +61,15 @@ pub(super) struct RunLog {
     /// after the run-scoped read came back empty.
     pub(super) source: String,
     /// Identity of the job whose log was read, when the fallback supplied it.
+    /// Primary reads are bound by the explicit job_id query argument.
     pub(super) source_jobs: Vec<Value>,
     /// Why the fallback recovered nothing. Present only when the read ends
     /// with no text at all, so the run's evidence gap can name its own cause.
     pub(super) fallback_error: Option<String>,
     pub(super) text: String,
+    pub(super) diagnostic: Option<String>,
+    pub(super) failure_regions: Option<Value>,
+    pub(super) source_complete: bool,
     pub(super) truncated: bool,
     pub(super) total_bytes: usize,
     pub(super) returned_bytes: usize,
@@ -94,6 +98,7 @@ pub(super) trait CiQueries {
     fn run_logs(
         &self,
         run_id: &str,
+        job_id: u64,
         scope: LogScope,
         max_bytes: usize,
     ) -> Result<RunLog, OrbitError>;
@@ -199,20 +204,31 @@ impl CiQueries for HostCiQueries {
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError> {
         let request = github_cli::run_view_request(&json!({"run": run_id}))?;
         let stdout = self.run_gh(request, "gh run view")?;
-        Ok(github_cli::project_run_view(&github_cli::parse_gh_json(
-            &stdout,
-            "gh run view",
-        )?))
+        let view =
+            github_cli::project_run_view(&github_cli::parse_gh_json(&stdout, "gh run view")?);
+        if view
+            .get("run_id")
+            .and_then(Value::as_u64)
+            .map(|id| id.to_string())
+            .as_deref()
+            != Some(run_id)
+        {
+            return Err(OrbitError::Execution(
+                "gh run view returned a different or missing run identity".to_string(),
+            ));
+        }
+        Ok(view)
     }
 
     fn run_logs(
         &self,
         run_id: &str,
+        job_id: u64,
         scope: LogScope,
         max_bytes: usize,
     ) -> Result<RunLog, OrbitError> {
         let requests = github_cli::RunLogRequests::from_input(
-            &json!({"run": run_id, "scope": scope.as_str()}),
+            &json!({"run": run_id, "job": job_id, "scope": scope.as_str()}),
         )?
         .in_directory(&self.repo_root.to_string_lossy());
         let read = github_cli::read_run_log(&requests, github_cli::LogReadBounds::new(max_bytes))?;
@@ -222,6 +238,9 @@ impl CiQueries for HostCiQueries {
             source_jobs: read.source_jobs,
             fallback_error: read.fallback_error,
             text: read.log.text,
+            diagnostic: read.log.diagnostic,
+            failure_regions: read.log.failure_regions,
+            source_complete: read.log.source_complete,
             truncated: read.log.truncated,
             total_bytes: read.log.total_bytes,
             returned_bytes: read.log.returned_bytes,
@@ -253,13 +272,19 @@ impl CiQueries for HostCiQueries {
 /// does not retain an unbounded `gh` stdout value.
 #[cfg(test)]
 pub(super) fn bounded_run_log(raw: &str, max_bytes: usize) -> RunLog {
-    let bounded = github_cli::bound_log_text(raw, max_bytes);
-    let evidence = github_cli::scan_checkout_evidence(raw, github_cli::MAX_EVIDENCE_LINES);
+    let mut collector =
+        github_cli::StreamedLogCollector::new(max_bytes, github_cli::MAX_EVIDENCE_LINES);
+    collector.push(raw.as_bytes());
+    let bounded = collector.finish();
+    let evidence = bounded.checkout_evidence;
     RunLog {
         source: github_cli::SOURCE_RUN_LOG.to_string(),
         source_jobs: Vec::new(),
         fallback_error: None,
         text: bounded.text,
+        diagnostic: bounded.diagnostic,
+        failure_regions: bounded.failure_regions,
+        source_complete: bounded.source_complete,
         truncated: bounded.truncated,
         total_bytes: bounded.total_bytes,
         returned_bytes: bounded.returned_bytes,

@@ -1,3 +1,10 @@
+---
+type: design
+summary: "Delivery automation operations [ORB-11330]"
+tags: [automation-triggers]
+last_validated: 2026-09-07
+---
+
 # Delivery automation operations [ORB-11330]
 
 Delivery triggers are opt-in. The existing sweep clock evaluates routines; the
@@ -20,7 +27,6 @@ name: delivery-qa
 enabled: false
 schedule:
   deliveries_landed:
-    owner_machine: hm_your_registered_machine
     branch: agent-main
     threshold: 3
     max_wait_minutes: 360
@@ -30,11 +36,32 @@ schedule:
 # Retain the normal template, dedupe and attribution fields.
 ```
 
-`owner_machine` must explicitly select the stable registered machine ID shown by
-preview before an enabled definition can baseline or admit work. Cmd supplies the
-local identity; Core does not read the registry. A different machine fails closed
-until ownership is explicitly reassigned. Retain/settle the old owner's debt and
-preview the new baseline before that reassignment.
+`owner_machine` is optional and selects the stable registered machine ID shown by
+preview. Omitted, the definition is owned by the machine registered as this
+workspace's owner, so an unambiguously owned workspace needs no redundant
+per-definition configuration. Cmd supplies both the local identity and the
+registered workspace owner through the runtime binding; Core does not read the
+registry itself. An explicit `owner_machine` stays authoritative and overrides
+that default, and because the epoch is derived from the resolved owner, dropping
+an explicit owner that names the same machine keeps the consumer's state, frozen
+batches, receipts and coverage.
+
+A machine that is not the resolved owner fails closed as `owned_elsewhere`: it
+reconciles work it already admitted and admits nothing new, so a replica cannot
+claim a workspace by omitting the field. When no owner can be resolved at all —
+no registered workspace owner, or a workspace record and replica checkout naming
+different owners — an enabled definition reports `ownership_unresolved` rather
+than `disabled`, and `disabled` continues to mean the operator disabled it.
+Preview, inspection and real evaluation report the same effective owner and the
+same refusal. Fix it by registering the workspace owner or by setting
+`owner_machine` explicitly. Reassigning ownership is a definition change: retain
+and settle the old owner's debt and preview the new baseline first.
+
+A delivery review definition mints its tasks with the crew named in its own
+template, exactly like any other auto-task. `operation.review_crew` is a
+different setting: it selects the reviewer for `before-pr` review only and does
+not apply to `after-landing` review, which runs through this definition. See
+[operation-mode operations](../operation-mode/5_operations.md).
 
 `coverage` is `integrated_qa_v1` or `landed_code_review_v1`. Threshold must be
 positive and at most `max_items` (maximum 50). Maximum wait is positive and retries
@@ -67,7 +94,7 @@ observation records an explicit baseline exclusion; it does not certify that old
 history was examined. Source repository identity and branch are retained.
 
 To migrate, first inspect and disable the corresponding legacy time-triggered
-consumer, finish any existing open sweep, review the delivery template, explicit owner and branch,
+consumer, finish any existing open sweep, review the delivery template, resolved owner and branch,
 preview its baseline, and explicitly enable the delivery definition through the
 existing toggle surface. Enable the existing scheduler routine/clock separately
 if needed. No shipped change activates live automation or imports prose cursors
@@ -105,7 +132,7 @@ range, including unattributed neighbors. Fill in the actual checks and findings,
 replace the action ID placeholder with the current task ID, and attach:
 
 ```sh
-orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":"/tmp/automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
+orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":"./automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
 ```
 
 The version-1 schema has these required fields:
@@ -148,11 +175,15 @@ input, gaps and validation reason. **Accepted evidence** downloads the accepted
 bytes; replacing the current task artifact does not change that receipt. Usage is
 shown as unknown until an authoritative measurement exists.
 
+Every delivery diagnostic also carries `ownership`: the resolved
+`owner_machine`, the `authority` that supplied it (`definition`, `workspace`,
+`missing` or `conflicting`) and whether it is `owned_here`.
+
 Read-only inspection reports persisted scheduling reasons including
-`awaiting_baseline`, `disabled`, `owned_elsewhere`, `definition_changed`,
-`open_instance`, `threshold_reached`, `max_wait_reached`, `batch_pending`,
-`retry_backoff`, `retry_deadline_expired`, `needs_attention`, and
-`evidence_unavailable`. It does not fetch source or provider evidence: source
+`awaiting_baseline`, `disabled`, `owned_elsewhere`, `ownership_unresolved`,
+`definition_changed`, `open_instance`, `threshold_reached`, `max_wait_reached`,
+`batch_pending`, `retry_backoff`, `retry_deadline_expired`, `needs_attention`,
+and `evidence_unavailable`. It does not fetch source or provider evidence: source
 history failures are reported by an evaluation run, not fabricated by inspection.
 Validation failures such as `unauthorized_submitter`, `batch_or_attempt_mismatch`
 and `incomplete_examination` remain attached to the relevant admission or evidence
@@ -201,9 +232,30 @@ no automatic GC policy is added here.
 The source currently understands GitHub PR evidence and authorized local direct
 landings. Other/manual direct changes stay unresolved until an authoritative
 receipt exists. History rewrites pause rather than silently reset. Automatic
-policy migration, before-PR exclusion producers and
-complete usage accounting remain separately scoped work. No review exclusions are
-inferred from tags or summaries, and QA coverage never substitutes for review.
+policy migration and complete usage accounting remain separately scoped work.
+No review exclusions are inferred from tags or summaries, and QA coverage never
+substitutes for review.
+
+## Before-PR coverage exclusions [ORB-11333]
+
+Passed before-PR certificates (see [operation-mode operations
+§10](../operation-mode/5_operations.md)) are the only exclusion producer.
+When observation first sees a landing, Core looks up passed certificates
+whose final tree equals the landed tree, verifies that the certificate's
+objects still exist and every task still has the reviewed meaning, and asks
+`orbit_automation::review::exclusion` for the decision: same base tree, same
+final tree, no contradicting managed landing record. A `landed_code_review_v1`
+consumer moves an accepted landing into its `excluded` list; it does not
+count toward the threshold, is absent from `examined_deliveries`, and does
+not mint an examination receipt. An exclusively excluded prefix advances the
+covered cursor and leaves the pending window so later uncovered landings can
+still be observed. Interleaved exclusions travel with the next frozen batch
+as readable context (`exclusions`) and retire with that examined range.
+`integrated_qa_v1` consumers ignore exclusions entirely. A different base
+tree, any later edit, an unreviewed conflict repair, task drift, missing
+objects, or an external landing race keeps the landing an ordinary
+obligation. Inspection surfaces and the dashboard list
+excluded landings with their certificate and assurance label.
 
 ## State preparation and failure triage [ORB-11331]
 

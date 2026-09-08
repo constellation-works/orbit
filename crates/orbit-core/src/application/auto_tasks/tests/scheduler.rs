@@ -77,12 +77,11 @@ fn fires_and_stamps_provenance() {
     );
 }
 
-/// The task is minted before the cursor is advanced. When that checkpoint
-/// cannot be written the pass must still report the fire and the task it
-/// created, not a `skipped` row that hides a task the backlog now carries.
+/// Claim is persisted before mint, so a state directory that cannot accept
+/// atomic replacement must fail closed: no task, baseline cursor left intact.
 #[cfg(unix)]
 #[test]
-fn cursor_write_failure_after_minting_is_reported_as_a_fire() {
+fn unwritable_cursor_directory_does_not_mint_or_rewrite_baseline() {
     use std::os::unix::fs::PermissionsExt;
 
     let runtime = runtime();
@@ -93,11 +92,13 @@ fn cursor_write_failure_after_minting_is_reported_as_a_fire() {
     fire(&runtime, t0); // baseline writes the cursor file
 
     let state_path = cursor_state_path(&runtime.paths().state_dir);
-    let writable = std::fs::metadata(&state_path)
-        .expect("state file")
+    let before = std::fs::read_to_string(&state_path).expect("baseline cursor");
+    let state_dir = runtime.paths().state_dir.clone();
+    let writable = std::fs::metadata(&state_dir)
+        .expect("state dir")
         .permissions();
-    std::fs::set_permissions(&state_path, std::fs::Permissions::from_mode(0o444))
-        .expect("make cursor file read-only");
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o555))
+        .expect("make cursor directory read-only so atomic replace cannot create a temp file");
 
     let outcome = run_auto_task_scheduler_at(
         &runtime,
@@ -105,19 +106,22 @@ fn cursor_write_failure_after_minting_is_reported_as_a_fire() {
         SchedulerOptions::default(),
     )
     .expect("scheduler pass");
-    std::fs::set_permissions(&state_path, writable).expect("restore permissions");
+    std::fs::set_permissions(&state_dir, writable).expect("restore permissions");
 
     assert_eq!(outcome.reports.len(), 1);
     let report = &outcome.reports[0];
-    assert_eq!(report.action, "fired", "{report:?}");
-    let task_id = report.task_id.clone().expect("minted task id");
-    assert!(runtime.get_task(&task_id).is_ok());
+    assert_eq!(report.action, "skipped", "{report:?}");
     assert!(
         report
             .reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("cursor not advanced")),
+            .is_some_and(|reason| reason.contains("error:")),
         "{report:?}"
+    );
+    assert!(runtime.list_tasks().expect("tasks").is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&state_path).expect("cursor after denied write"),
+        before
     );
 }
 

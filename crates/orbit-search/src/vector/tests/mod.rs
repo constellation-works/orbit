@@ -1,6 +1,7 @@
 mod chunker;
 mod doc_fields;
 mod task_fields;
+mod worker;
 
 #[test]
 fn cosine_similarity_unit_and_orthogonal() {

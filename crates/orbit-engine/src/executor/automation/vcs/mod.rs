@@ -1,3 +1,4 @@
+mod attribution;
 mod base_obsolescence;
 mod commit;
 mod delivery_marker;
@@ -8,14 +9,17 @@ mod handoff;
 mod operations;
 mod pr;
 mod push;
+mod resume;
+pub mod review_gate;
 mod worktree;
 
 pub(super) use commit::git_commit;
 pub(super) use failure::pr_failure_handoff;
-pub(crate) use failure::reconcile_resumed_failure_handoff;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
+pub use git::fetch_remote_base;
 pub(super) use pr::{git_merge, pr_complete, pr_open, pr_promote, ship_done_attribution};
 pub(super) use push::push_batch_changes;
+pub(crate) use resume::reconcile_resumed_failure_handoff;
 pub(super) use worktree::setup_worktree;
 pub use worktree::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees};
 
@@ -27,4 +31,4 @@ pub(crate) fn run_private_operation(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

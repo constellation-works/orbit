@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use orbit_common::{OrbitError, RecoverableVcsConflict};
 use serde_json::{Value, json};
@@ -6,7 +6,10 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::super::input::{input_string_field, required_input_string};
-use super::git::{BaseSyncMode, git_command_success, git_output, resolve_worktree_start_point};
+use super::git::{
+    BaseSyncMode, GitTimeoutBudget, GitTimeoutBudgetGuard, git_command_success, git_failure_error,
+    git_output, git_run, git_success, git_timeout_error, resolve_worktree_start_point,
+};
 use super::handoff::{
     FailedHandoffPhase, HandoffContext, load_handoff_context, rebase_in_progress,
     record_failed_handoff,
@@ -93,8 +96,9 @@ pub(in crate::executor::automation) fn rebase_pr_branch<H: RuntimeHost + ?Sized>
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
+    let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
     let context = load_handoff_context(host, input, "git_rebase")?;
-    match rebase_pr_branch_inner(input, &context) {
+    match rebase_pr_branch_inner(host, input, &context) {
         Ok(output) => Ok(output),
         Err(error) => {
             record_failed_handoff(host, &context, input, FailedHandoffPhase::Rebase, &error)?;
@@ -103,7 +107,11 @@ pub(in crate::executor::automation) fn rebase_pr_branch<H: RuntimeHost + ?Sized>
     }
 }
 
-fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Value, OrbitError> {
+fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    context: &HandoffContext,
+) -> Result<Value, OrbitError> {
     let head = required_input_string(input, "head")?;
     let head_sha_before = required_input_string(input, "head_sha")?;
     let base = required_input_string(input, "base")?;
@@ -132,20 +140,12 @@ fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Val
         &["rev-parse", "--abbrev-ref", "HEAD"],
     )?;
     if rebase_in_progress(&context.workspace_path)? {
-        let conflicting_paths = unmerged_paths(&context.workspace_path)?;
-        if conflicting_paths.is_empty() {
-            return Err(OrbitError::Execution(
-                "git_rebase: rebase remains in progress without unresolved conflict entries"
-                    .to_string(),
-            ));
-        }
-        return Err(rebase_conflict_error(
+        return refuse_or_recover_existing_rebase(
             &context.workspace_path,
+            head,
             head_sha_before,
             base_sha,
-            conflicting_paths,
-            "rebase remains stopped with unresolved conflicts",
-        )?);
+        );
     }
     if current_branch.trim() != head {
         return Err(OrbitError::Execution(format!(
@@ -190,6 +190,7 @@ fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Val
             }
             ("skipped_current", false, current_sha)
         } else if sync_required {
+            validate_recovered_rewrite(host, input, context, &current_sha)?;
             ("reused_recovery", true, current_sha)
         } else {
             return Err(OrbitError::Execution(format!(
@@ -203,12 +204,24 @@ fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Val
                     .to_string(),
             ));
         }
-        if !git_command_success(&context.workspace_path, &["rebase", base_sha])? {
+        let rebase_outcome = git_run(&context.workspace_path, &["rebase", base_sha])?;
+        if rebase_outcome.timed_out {
+            return recover_started_rebase_timeout(
+                &context.workspace_path,
+                head,
+                head_sha_before,
+                base_sha,
+                &rebase_outcome,
+            );
+        }
+        if !rebase_outcome.success {
             let conflicting_paths = unmerged_paths(&context.workspace_path)?;
             if conflicting_paths.is_empty() {
-                return Err(OrbitError::Execution(format!(
-                    "git_rebase: rebase of '{head}' onto checkpoint '{base_sha}' failed without unresolved conflict entries"
-                )));
+                return Err(git_failure_error(
+                    &context.workspace_path,
+                    &["rebase", base_sha],
+                    &rebase_outcome.stderr,
+                ));
             }
             return Err(rebase_conflict_error(
                 &context.workspace_path,
@@ -244,6 +257,172 @@ fn rebase_pr_branch_inner(input: &Value, context: &HandoffContext) -> Result<Val
         "remote_sha_before": input_string_field(input, "remote_sha"),
         "rewritten": rewritten,
     }))
+}
+
+fn refuse_or_recover_existing_rebase(
+    workspace_path: &Path,
+    head: &str,
+    head_sha_before: &str,
+    base_sha: &str,
+) -> Result<Value, OrbitError> {
+    let conflicting_paths = unmerged_paths(workspace_path)?;
+    if !conflicting_paths.is_empty() {
+        return Err(rebase_conflict_error(
+            workspace_path,
+            head_sha_before,
+            base_sha,
+            conflicting_paths,
+            "rebase remains stopped with unresolved conflicts",
+        )?);
+    }
+    if rebase_belongs_to_attempt(workspace_path, head, head_sha_before, base_sha)? {
+        abort_owned_rebase(workspace_path)?;
+        return Err(OrbitError::Execution(
+            "git_rebase: interrupted rebase started by this attempt was aborted after a Git timeout. Retry can start clean. This is timeout recovery, not a merge conflict and not failure-handoff recovery.".to_string(),
+        ));
+    }
+    let provenance = rebase_provenance_summary(workspace_path);
+    Err(OrbitError::Execution(format!(
+        "git_rebase: a pre-existing rebase is in progress without unresolved conflict entries ({provenance}). Not aborting; foreign or retained candidate state was left intact. Inspect the worktree before retrying. This is not conflict recovery."
+    )))
+}
+
+fn recover_started_rebase_timeout(
+    workspace_path: &Path,
+    head: &str,
+    head_sha_before: &str,
+    base_sha: &str,
+    outcome: &super::git::GitOutcome,
+) -> Result<Value, OrbitError> {
+    let timeout = git_timeout_error(
+        workspace_path,
+        &["rebase", base_sha],
+        outcome.timeout_ms,
+        &outcome.stderr,
+    );
+    if !rebase_in_progress(workspace_path).unwrap_or(false) {
+        return Err(OrbitError::Execution(format!(
+            "{timeout}; git_rebase of '{head}' onto '{base_sha}' timed out. This is timeout recovery, not a merge conflict and not failure-handoff recovery."
+        )));
+    }
+    let conflicting_paths = unmerged_paths(workspace_path).unwrap_or_default();
+    if !conflicting_paths.is_empty() {
+        return Err(rebase_conflict_error(
+            workspace_path,
+            head_sha_before,
+            base_sha,
+            conflicting_paths,
+            &format!(
+                "rebase of '{head}' onto checkpoint '{base_sha}' timed out while stopped with conflicts"
+            ),
+        )?);
+    }
+    abort_owned_rebase(workspace_path)?;
+    Err(OrbitError::Execution(format!(
+        "{timeout}; interrupted rebase started by this attempt was aborted. Retry can start clean. This is timeout recovery, not a merge conflict and not failure-handoff recovery."
+    )))
+}
+
+fn abort_owned_rebase(workspace_path: &Path) -> Result<(), OrbitError> {
+    git_success(workspace_path, &["rebase", "--abort"]).map_err(|error| {
+        OrbitError::Execution(format!(
+            "git_rebase: failed to abort an interrupted rebase started by this attempt: {error}"
+        ))
+    })
+}
+
+fn rebase_belongs_to_attempt(
+    workspace_path: &Path,
+    head: &str,
+    head_sha_before: &str,
+    base_sha: &str,
+) -> Result<bool, OrbitError> {
+    let orig_head = read_rebase_state(workspace_path, "orig-head")?;
+    let onto = read_rebase_state(workspace_path, "onto")?;
+    let head_name = read_rebase_state(workspace_path, "head-name")?;
+    let orig_ok = orig_head.as_deref() == Some(head_sha_before);
+    let onto_ok = onto.as_deref() == Some(base_sha);
+    let head_ok = head_name.as_deref().is_some_and(|name| {
+        name == head || name == format!("refs/heads/{head}") || name.ends_with(&format!("/{head}"))
+    });
+    Ok(orig_ok && onto_ok && head_ok)
+}
+
+fn rebase_provenance_summary(workspace_path: &Path) -> String {
+    let orig_head = read_rebase_state(workspace_path, "orig-head")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "unknown".to_string());
+    let onto = read_rebase_state(workspace_path, "onto")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "unknown".to_string());
+    let head_name = read_rebase_state(workspace_path, "head-name")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "unknown".to_string());
+    format!("orig-head={orig_head}, onto={onto}, head-name={head_name}")
+}
+
+fn read_rebase_state(workspace_path: &Path, name: &str) -> Result<Option<String>, OrbitError> {
+    for dir in ["rebase-merge", "rebase-apply"] {
+        let rel = match git_output(
+            workspace_path,
+            &["rev-parse", "--git-path", &format!("{dir}/{name}")],
+        ) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let path = if Path::new(&rel).is_absolute() {
+            PathBuf::from(rel)
+        } else {
+            workspace_path.join(rel)
+        };
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            let trimmed = contents.trim();
+            if !trimmed.is_empty() {
+                return Ok(Some(trimmed.to_string()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn validate_recovered_rewrite<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    context: &HandoffContext,
+    current_sha: &str,
+) -> Result<(), OrbitError> {
+    let run_id = input
+        .get("run_id")
+        .and_then(Value::as_str)
+        .unwrap_or(&context.batch_id);
+    let Some(checkpoint) =
+        recovered_head_checkpoint(host, run_id, &context.workspace_path, current_sha)?
+    else {
+        return Err(OrbitError::Execution(
+            "git_rebase: changed HEAD has no exact host-validated recovery checkpoint".to_string(),
+        ));
+    };
+    let task_ids = context
+        .tasks
+        .iter()
+        .map(|task| task.id.as_str())
+        .collect::<Vec<_>>();
+    if checkpoint["head"] != input["head"]
+        || checkpoint["head_sha_before"] != input["head_sha"]
+        || checkpoint["base_sha"] != input["base_sha"]
+        || checkpoint["remote_sha_before"]
+            != input.get("remote_sha").cloned().unwrap_or(Value::Null)
+        || checkpoint["task_ids"] != json!(task_ids)
+    {
+        return Err(OrbitError::Execution(
+            "git_rebase: recovered HEAD provenance does not match the prepared rewrite checkpoint"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn unmerged_paths(repo_root: &Path) -> Result<Vec<String>, OrbitError> {
@@ -382,4 +561,67 @@ fn parse_divergence_count(
             "invalid {label} divergence count '{raw}' while comparing '{head}' to '{base}': {error}"
         ))
     })
+}
+
+/// Read only host-written provenance, authenticating the original durable run
+/// when a resume carries a copy. Advisory activity outputs never authorize HEAD.
+pub(super) fn recovered_head_checkpoint<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    workspace: &Path,
+    head_sha: &str,
+) -> Result<Option<Value>, OrbitError> {
+    let Some(state) = host.read_run_state(run_id)? else {
+        return Ok(None);
+    };
+    for (step_id, checkpoint) in &state.rebase_recovery_checkpoints {
+        if !matches!(step_id.as_str(), "sync_base" | "complete_pr")
+            || checkpoint.get("head_sha").and_then(Value::as_str) != Some(head_sha)
+            || checkpoint.get("workspace_path").and_then(Value::as_str) != workspace.to_str()
+            || checkpoint.get("step_id").and_then(Value::as_str) != Some(step_id)
+            || checkpoint.get("rewritten").and_then(Value::as_bool) != Some(true)
+        {
+            continue;
+        }
+        let source_run_id = required_input_string(checkpoint, "run_id")?;
+        if source_run_id != run_id {
+            let source = host.read_run_state(source_run_id)?.ok_or_else(|| {
+                OrbitError::Execution(
+                    "recovered rebase source run has no durable state".to_string(),
+                )
+            })?;
+            if source.rebase_recovery_checkpoints.get(step_id) != Some(checkpoint) {
+                return Err(OrbitError::Execution(
+                    "recovered rebase differs from its source checkpoint".to_string(),
+                ));
+            }
+            let task_id = checkpoint
+                .get("task_ids")
+                .and_then(Value::as_array)
+                .and_then(|ids| ids.first())
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    OrbitError::Execution("recovered rebase has no task identity".to_string())
+                })?;
+            super::resume::ensure_retry_descends_from(
+                host,
+                "rebase recovery",
+                "recovery run",
+                task_id,
+                run_id,
+                source_run_id,
+            )?;
+        }
+        let target = required_input_string(checkpoint, "base_sha")?;
+        if !git_command_success(
+            workspace,
+            &["merge-base", "--is-ancestor", target, head_sha],
+        )? {
+            return Err(OrbitError::Execution(
+                "recovered candidate does not descend from its pinned base".to_string(),
+            ));
+        }
+        return Ok(Some(checkpoint.clone()));
+    }
+    Ok(None)
 }

@@ -2,7 +2,9 @@
 //!
 //! Module layout:
 //!
-//! - [`schema`] — `CREATE TABLE IF NOT EXISTS` DDL for `embeddings` + `corpus_fts`.
+//! - [`schema`] — DDL for `embeddings`, the `chunks` content table, and the
+//!   `corpus_fts` FTS5 index built over it, plus the in-place migrations from
+//!   earlier layouts.
 //! - [`upsert`] — `upsert_embeddings`, the BLAKE3-deduped per-field write path,
 //!   plus its private SQL helpers (`delete_field_rows`, content-hash check).
 //! - [`tasks`] — `index_task` / `reindex_tasks` task-corpus entry points.
@@ -16,7 +18,7 @@
 
 mod docs;
 mod queries;
-mod schema;
+pub(crate) mod schema;
 mod tasks;
 mod upsert;
 
@@ -39,7 +41,7 @@ impl VectorStore {
     /// Open the workspace-local orbit-search SQLite at `path`, applying the
     /// shared Orbit connection defaults (WAL best-effort, busy_timeout,
     /// foreign_keys, synchronous=NORMAL) and creating the
-    /// embeddings/corpus_fts schema if missing.
+    /// embeddings/chunks/corpus_fts schema if missing.
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
         let conn = orbit_common::storage::sqlite::open_private(path)?.connection;
         if let Err(error) = schema::ensure_vector_schema(&conn) {

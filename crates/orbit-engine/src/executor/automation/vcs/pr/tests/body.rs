@@ -263,6 +263,27 @@ fn single_task_pr_body_matches_snapshot() {
 }
 
 #[test]
+fn generated_pr_body_keeps_explicit_orchestration_attribution_for_squash_delivery() {
+    let mut task = task_with_contract(
+        "ORB-10474",
+        "Preserve orchestration",
+        "Done.",
+        "Keep the task's explicit orchestration attribution in the generated delivery message.",
+        &[],
+        None,
+    );
+    task.orchestrator = Some("sol".to_string());
+    task.created_by = Some("gpt-5.6-sol".to_string());
+    task.implemented_by = Some("gpt-5.6-terra".to_string());
+
+    let body = build_batch_pr_body(&[task], &freshness(), &[], &test_pr_config(None), None);
+
+    assert!(body.ends_with("Orchestrated-By: sol"), "{body}");
+    assert!(!body.contains("Orchestrated-By: gpt-5.6-sol"), "{body}");
+    assert!(!body.contains("Orchestrated-By: gpt-5.6-terra"), "{body}");
+}
+
+#[test]
 fn single_task_pr_body_uses_contract_first_layout() {
     let body = build_batch_pr_body(
         &[task_with_contract(

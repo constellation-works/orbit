@@ -9,7 +9,7 @@ use orbit_tools::ToolContext;
 use serde_json::{Value, json};
 
 use super::test_support::*;
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate};
 use crate::executor::automation::vcs::failure::pr_failure_handoff;
 use crate::{DispatchError, V2AuditWriter, execute_job_with_resume};
 use orbit_types::task::{Task, TaskStatus};
@@ -26,8 +26,9 @@ pub(super) const SECOND_RESUME_RUN_ID: &str = "jrun-second-resume";
 pub(super) const THIRD_RESUME_RUN_ID: &str = "jrun-third-resume";
 
 pub(super) struct ResumeFailureHost {
-    inner: PrOpenTestHost,
+    pub(super) inner: PrOpenTestHost,
     run_states: Mutex<HashMap<String, PipelineState>>,
+    job_run_states: Mutex<HashMap<String, JobRunState>>,
 }
 
 impl ResumeFailureHost {
@@ -35,6 +36,7 @@ impl ResumeFailureHost {
         Self {
             inner,
             run_states: Mutex::new(HashMap::new()),
+            job_run_states: Mutex::new(HashMap::new()),
         }
     }
 
@@ -43,6 +45,13 @@ impl ResumeFailureHost {
             .lock()
             .expect("run states lock")
             .insert(state.run_id.clone(), state);
+    }
+
+    pub(super) fn set_job_run_state(&self, run_id: &str, state: JobRunState) {
+        self.job_run_states
+            .lock()
+            .expect("job run states lock")
+            .insert(run_id.to_string(), state);
     }
 }
 
@@ -130,6 +139,50 @@ impl RuntimeHost for ResumeFailureHost {
                     }
                 })
             }
+            "test_resolve_rebase_conflict" => {
+                let workspace_path = input
+                    .get("workspace_path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| DispatchError::DeterministicActionFailed {
+                        action: action.to_string(),
+                        message: "conflict recovery is missing workspace_path".to_string(),
+                    })?;
+                let workspace_path = Path::new(workspace_path);
+                fs::write(
+                    workspace_path.join("src/lib.rs"),
+                    "pub fn base_advanced() {}\npub fn changed() {}\n",
+                )
+                .map_err(|error| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("write conflict resolution: {error}"),
+                })?;
+                git(workspace_path, &["add", "src/lib.rs"]);
+                git(
+                    workspace_path,
+                    &["-c", "core.editor=true", "rebase", "--continue"],
+                );
+                let run_id = input["run_id"].as_str().unwrap();
+                let prepared = &input["failed_step_input"];
+                self.checkpoint_rebase_recovery(
+                    run_id,
+                    "sync_base",
+                    &json!({
+                        "run_id": run_id,
+                        "step_id": "sync_base",
+                        "workspace_path": workspace_path,
+                        "task_ids": [TASK_ID],
+                        "head": prepared["head"],
+                        "head_sha_before": prepared["head_sha"],
+                        "original_base_sha": input["original_base_sha"],
+                        "base_ref": prepared["base_ref"],
+                        "base_sha": prepared["base_sha"],
+                        "remote_sha_before": prepared["remote_sha"],
+                        "head_sha": git(workspace_path, &["rev-parse", "HEAD"]),
+                        "rewritten": true,
+                    }),
+                )?;
+                Ok(json!({"recovered": true}))
+            }
             "git_push" => crate::executor::automation::vcs::push_batch_changes(self, input)
                 .map_err(|error| DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
@@ -156,7 +209,17 @@ impl RuntimeHost for ResumeFailureHost {
     }
 
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
-        self.inner.get_job_run(run_id)
+        let mut run = self.inner.get_job_run(run_id)?;
+        if let (Some(run), Some(state)) = (
+            run.as_mut(),
+            self.job_run_states
+                .lock()
+                .expect("job run states lock")
+                .get(run_id),
+        ) {
+            run.state = *state;
+        }
+        Ok(run)
     }
 
     fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
@@ -182,6 +245,22 @@ impl RuntimeHost for ResumeFailureHost {
             .ok_or_else(|| DispatchError::JobExecution(format!("missing state for {run_id}")))?;
         state.record_step(step_index, JobRunState::Success, Some(output.clone()), None);
         state.sync_pipeline(pipeline_snapshot.clone());
+        Ok(())
+    }
+
+    fn checkpoint_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        self.run_states
+            .lock()
+            .unwrap()
+            .get_mut(run_id)
+            .unwrap()
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), output.clone());
         Ok(())
     }
 
@@ -249,12 +328,24 @@ impl RuntimeHost for ResumeFailureHost {
         self.inner.apply_task_automation_update(task_id, update)
     }
 
+    fn update_task_from_activity(
+        &self,
+        task_id: &str,
+        update: TaskActivityUpdate,
+    ) -> Result<Task, OrbitError> {
+        self.inner.update_task_from_activity(task_id, update)
+    }
+
     fn run_private_vcs_operation(
         &self,
         operation: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
         self.inner.run_private_vcs_operation(operation, input)
+    }
+
+    fn system_crew_for_dispatch(&self) -> Option<String> {
+        Some("system-test".to_string())
     }
 }
 
@@ -290,7 +381,7 @@ fn resumed_failure_input(workspace_path: &std::path::Path, run_id: &str) -> Valu
     })
 }
 
-fn deterministic_activity(action: &str) -> ActivityV2 {
+pub(super) fn deterministic_activity(action: &str) -> ActivityV2 {
     ActivityV2 {
         description: format!("test action {action}"),
         input_schema_json: Value::Null,
@@ -303,7 +394,11 @@ fn deterministic_activity(action: &str) -> ActivityV2 {
     }
 }
 
-fn deterministic_step(id: &str, action: &str, default_input: Option<Value>) -> JobV2Step {
+pub(super) fn deterministic_step(
+    id: &str,
+    action: &str,
+    default_input: Option<Value>,
+) -> JobV2Step {
     JobV2Step {
         id: id.to_string(),
         when: None,

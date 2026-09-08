@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use orbit_core::OrbitRuntime;
 use tempfile::tempdir;
 
+mod get;
 mod set;
 mod show;
 mod support;

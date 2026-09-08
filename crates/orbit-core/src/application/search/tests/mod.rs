@@ -14,6 +14,10 @@ mod path_match;
 mod types;
 
 fn add_task_with_status(runtime: &OrbitRuntime, title: &str, status: TaskStatus) -> String {
+    add_task(runtime, title, "needle task body", status)
+}
+
+fn add_task(runtime: &OrbitRuntime, title: &str, description: &str, status: TaskStatus) -> String {
     runtime
         .stores()
         .task_records()
@@ -21,7 +25,7 @@ fn add_task_with_status(runtime: &OrbitRuntime, title: &str, status: TaskStatus)
             actor: "test".to_string(),
             parent_id: None,
             title: title.to_string(),
-            description: "needle task body".to_string(),
+            description: description.to_string(),
             acceptance_criteria: Vec::new(),
             dependencies: Vec::new(),
             relations: Vec::new(),

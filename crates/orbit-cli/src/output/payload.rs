@@ -195,9 +195,10 @@ impl Payload {
         }
     }
 
-    /// A payload written as it is produced. `doc` describes what the stream
-    /// carries for a caller that asked for `json`; the stream itself is used
-    /// for the human and `ndjson` forms.
+    /// A payload written as it is produced. The stream consults
+    /// [`OutputSink::mode`] for line shape (`json`/`ndjson` vs human). `doc`
+    /// is unused by the renderer: a stream exists because its records cannot
+    /// be collected into a document before the first write.
     pub fn stream(doc: Value, stream: StreamFn) -> Self {
         Self {
             doc,

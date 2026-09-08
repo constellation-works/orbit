@@ -2,11 +2,11 @@
 //! proposed tasks.
 //!
 //! The snapshot arrives from the host-owned `collect_ci_evidence` step, which
-//! ran `gh` outside any agent sandbox. Everything below is a pure function of
-//! that JSON plus the workspace's open tasks: cluster the current failures by
-//! root cause, drop the clusters a still-open task already covers, and file
-//! what is left as `proposed` bug tasks whose descriptions carry the evidence
-//! inline. The CI sweep then pilots and revalidates those tasks before a
+//! ran `gh` outside any agent sandbox. Filing combines that JSON with workspace
+//! task/run evidence and Git applicability: cluster current failures by
+//! root cause, reuse open owners or completed owners with verified repair
+//! evidence, and file what is left as `proposed` bug tasks with inline evidence.
+//! The CI sweep then pilots and revalidates those tasks before a
 //! separate admission boundary may expose them to backlog auto-drain.
 //!
 //! A filed task deliberately has no `required_tools`: the pilot and eventual
@@ -21,15 +21,18 @@
 //! regression observed across a push run and a pull-request run of the *same*
 //! commit collapses into one task instead of two.
 //!
-//! `failure_key` — the dedupe tag — deliberately omits the commit. The sweep is
-//! hourly and a fix takes longer than that; keying dedupe on the commit would
-//! file the same root cause again every time the branch advanced, which is the
-//! backlog flood this step exists to prevent.
+//! Ordinary `failure_key` tags omit the commit to keep a still-open repair
+//! across branch advances. Proven compiler causes instead include the exact
+//! diagnostic set, source locations and observed checkout, omitting job and
+//! workflow wrappers. That conservative proof consolidates cross-job failures
+//! without conflating different compiler operands or source revisions. Shipped
+//! per-job tags remain readable for the same immutable supplying evidence.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_tools::github_cli::strip_ansi_sequences;
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -41,6 +44,9 @@ use crate::adapter::engine_host::v2_host::duplicate_tasks::{
 };
 use crate::application::task::TaskAddParams;
 
+#[path = "ci_repair_assessment.rs"]
+mod repair_assessment;
+
 /// Wire contract with `collect_ci_evidence` (`orbit-engine`'s
 /// `executor::automation::ci`), also stated in both activity assets' schemas.
 /// The three endings must never collapse into one another, and none of them is
@@ -50,7 +56,7 @@ const OUTCOME_NO_CURRENT_FAILURE: &str = "no_current_failure";
 const OUTCOME_CURRENT_FAILURES: &str = "current_failures";
 
 /// Snapshot schema this step knows how to read.
-const SUPPORTED_SCHEMA_VERSION: u64 = 1;
+const SUPPORTED_SCHEMA_VERSION: u64 = 2;
 
 /// Provenance tag: every task this step files carries it.
 pub(crate) const CI_FAILURE_TAG: &str = "ci-failure-sweep";
@@ -139,7 +145,7 @@ where
     let schema_version = evidence
         .get("schema_version")
         .and_then(Value::as_u64)
-        .unwrap_or(SUPPORTED_SCHEMA_VERSION);
+        .unwrap_or(1);
     if schema_version > SUPPORTED_SCHEMA_VERSION {
         return Err(OrbitError::InvalidInput(format!(
             "ci_evidence schema version {schema_version} is newer than the supported version \
@@ -171,11 +177,18 @@ where
     }
 
     let max_tasks = bounded_u64(input, "max_tasks", DEFAULT_MAX_TASKS, MAX_MAX_TASKS)? as usize;
-    let failures = evidence
-        .get("current_failures")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let (failures, inconclusive) = split_inconclusive_cancellations(
+        evidence
+            .get("current_failures")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        evidence
+            .get("inconclusive")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    );
     let audit = audit_summary(evidence, &failures);
     let mut retryable_errors = evidence
         .get("retryable_errors")
@@ -195,6 +208,7 @@ where
         .into_iter()
         .map(normalize_retryable_error)
         .collect();
+    retryable_errors = drop_inconclusive_log_errors(retryable_errors, &inconclusive);
     // A gap in one run's evidence is a fact about that run. Letting it also
     // withhold every complete finding in the same snapshot is how a sweep that
     // had three fully evidenced regressions in hand filed nothing at all.
@@ -217,6 +231,7 @@ where
             "stage": "registration",
             "operation": "current_failure_not_investigated",
             "run_id": failure.get("run_id"),
+            "job_id": failure.get("job_id"),
             "retryable": true,
             "message": "a current CI failure has no complete investigation and cannot be filed safely",
         });
@@ -240,7 +255,7 @@ where
             retryable_errors,
         ));
     }
-    let (complete, mut deferred) = split_deferred_failures(&failures, &run_errors);
+    let (complete, mut deferred) = split_deferred_failures(&failures, &run_errors, schema_version);
     // A run-scoped retryable error whose run never made it into
     // `current_failures` at all — an in-flight run with an observed failed
     // job but logs collection could not read yet — has no failure row for
@@ -278,7 +293,7 @@ where
             "reasons": reasons,
         }));
     }
-    let audit = deferral_audit(audit, &deferred);
+    let audit = inconclusive_audit(deferral_audit(audit, &deferred), &inconclusive);
     let clusters = cluster_failures(&complete);
 
     if !complete.is_empty() && clusters.is_empty() {
@@ -315,8 +330,13 @@ where
             "skipped_existing": [],
             "skipped_over_cap": [],
             "deferred": [],
+            "inconclusive": inconclusive,
             "audit": audit,
-            "detail": "the queries ran and found no current, non-superseded failure",
+            "detail": if inconclusive.is_empty() {
+                "the queries ran and found no current, non-superseded failure"
+            } else {
+                "the queries ran and found no current, non-superseded failure; cancelled jobs without failed steps remain explicit inconclusive evidence, not a pass"
+            },
         }));
     }
 
@@ -339,10 +359,12 @@ where
 
     // Complete every external lookup before the first task write. A transient
     // duplicate-check failure must leave no partial filing or dedupe state.
+    let mut assessor = repair_assessment::Assessor::new(runtime);
+    let mut repair_assessments = Vec::new();
     let duplicate_matches = clusters
         .iter()
         .map(|cluster| {
-            find_covering_task(lookup, &cluster.duplicate_candidate()).map_err(|error| {
+            let existing = cluster.find_covering_task(lookup).map_err(|error| {
                 retryable_pipeline_error(
                     "dedupe_lookup",
                     &audit,
@@ -354,9 +376,21 @@ where
                         "message": bounded_error(&error.to_string()),
                     })],
                 )
-            })
+            })?;
+            if existing.is_some() {
+                return Ok(existing);
+            }
+            let assessment = assessor.assess(cluster);
+            if !assessment.evidence.is_null() {
+                repair_assessments.push(assessment.evidence.clone());
+            }
+            Ok(assessment.owner.map(|task_id| DuplicateTaskMatch {
+                task_id,
+                match_kind: "covered_by_repair",
+                evidence: assessment.evidence,
+            }))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, OrbitError>>()?;
     let duplicate_tasks = duplicate_matches
         .iter()
         .map(|duplicate_match| {
@@ -390,6 +424,9 @@ where
             evidence,
         }) = duplicate_match
         {
+            if match_kind == "covered_by_repair" {
+                repair_assessment::retain(runtime, &task_id, &evidence)?;
+            }
             if let Some(existing) = duplicate_task {
                 let expected_key_tag =
                     format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", cluster.failure_key);
@@ -408,6 +445,7 @@ where
                 "workflow": cluster.workflow,
                 "match_kind": match_kind,
                 "match_evidence": evidence,
+                "sources": cluster.filing_entry(&task_id)["sources"],
             }));
             continue;
         }
@@ -496,8 +534,10 @@ where
         "pilot_candidate_count": pilot_candidates.len(),
         "pilot_candidates": pilot_candidates,
         "skipped_existing": skipped_existing,
+        "repair_assessments": repair_assessments,
         "skipped_over_cap": skipped_over_cap,
         "deferred": deferred,
+        "inconclusive": inconclusive,
         "max_tasks": max_tasks,
         "audit": final_audit,
     }))
@@ -514,9 +554,124 @@ fn run_id_key(entry: &Value) -> Option<String> {
     }
 }
 
+fn job_is_cancelled_without_failed_steps(job: &Value) -> bool {
+    job.get("conclusion").and_then(Value::as_str) == Some("cancelled")
+        && job
+            .get("failed_steps")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+}
+
+fn is_inconclusive_cancellation(failure: &Value) -> bool {
+    if failure.get("evidence_state").and_then(Value::as_str) == Some("inconclusive") {
+        return true;
+    }
+    match failure.get("failed_jobs").and_then(Value::as_array) {
+        Some(jobs) if !jobs.is_empty() => jobs.iter().all(job_is_cancelled_without_failed_steps),
+        Some(_) | None => {
+            failure.get("conclusion").and_then(Value::as_str) == Some("cancelled")
+                && failure.get("investigated").and_then(Value::as_bool) == Some(true)
+        }
+    }
+}
+
+fn split_inconclusive_cancellations(
+    failures: Vec<Value>,
+    mut inconclusive: Vec<Value>,
+) -> (Vec<Value>, Vec<Value>) {
+    let mut seen: BTreeSet<(Option<String>, Option<u64>)> = inconclusive
+        .iter()
+        .map(|entry| {
+            (
+                run_id_key(entry),
+                entry.get("job_id").and_then(Value::as_u64),
+            )
+        })
+        .collect();
+    let mut remaining = Vec::new();
+    for failure in failures {
+        if is_inconclusive_cancellation(&failure) {
+            let identity = (
+                run_id_key(&failure),
+                failure.get("job_id").and_then(Value::as_u64),
+            );
+            if seen.insert(identity) {
+                inconclusive.push(failure);
+            }
+        } else {
+            remaining.push(failure);
+        }
+    }
+    (remaining, inconclusive)
+}
+
+fn log_or_checkout_investigation_operation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "run_logs"
+            | "run_logs_all"
+            | "checkout_evidence"
+            | "checkout_evidence_budget"
+            | "job_log_truncated"
+            | "job_log_budget"
+    )
+}
+
+/// Absent logs for a cancelled job with no failed steps are not a repair
+/// gap. Keep transport, auth, listing, and genuine-failure log errors.
+fn drop_inconclusive_log_errors(errors: Vec<Value>, inconclusive: &[Value]) -> Vec<Value> {
+    let inconclusive_runs: BTreeSet<String> = inconclusive.iter().filter_map(run_id_key).collect();
+    let inconclusive_jobs: BTreeSet<(String, u64)> = inconclusive
+        .iter()
+        .filter_map(|entry| {
+            Some((
+                run_id_key(entry)?,
+                entry.get("job_id").and_then(Value::as_u64)?,
+            ))
+        })
+        .collect();
+    errors
+        .into_iter()
+        .filter(|error| {
+            let operation = error
+                .get("operation")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !log_or_checkout_investigation_operation(operation) {
+                return true;
+            }
+            let Some(run_id) = run_id_key(error) else {
+                return true;
+            };
+            match error.get("job_id").and_then(Value::as_u64) {
+                Some(job_id) => !inconclusive_jobs.contains(&(run_id, job_id)),
+                None => !inconclusive_runs.contains(&run_id),
+            }
+        })
+        .collect()
+}
+
+fn inconclusive_audit(mut audit: Value, inconclusive: &[Value]) -> Value {
+    audit["inconclusive"] = json!(inconclusive.len());
+    audit["inconclusive_run_ids"] = json!(
+        inconclusive
+            .iter()
+            .filter_map(|entry| entry.get("run_id").cloned())
+            .collect::<Vec<_>>()
+    );
+    audit["inconclusive_job_ids"] = json!(
+        inconclusive
+            .iter()
+            .filter_map(|entry| entry.get("job_id").cloned())
+            .filter(|value| !value.is_null())
+            .collect::<Vec<_>>()
+    );
+    audit
+}
+
 /// Split retryable errors by blast radius.
 ///
-/// An error that names a run spoils that run's finding and nothing else. An
+/// A job error affects only that job; a run error affects all its jobs. An
 /// error that names none — a repository read, a run listing, a pull-request
 /// listing — leaves the whole snapshot in doubt: any finding it did produce
 /// could be missing the newer run that would have superseded it, so filing
@@ -537,25 +692,45 @@ fn partition_retryable_errors(errors: &[Value]) -> (usize, BTreeMap<String, Vec<
 /// incomplete.
 ///
 /// Per-finding evidence requirements are unchanged: a failure is filed only
-/// when collection investigated it fully and no error is recorded against its
-/// run. What changes is that a deferred failure now says so in its own entry
+/// when collection investigated it fully and no applicable job or run error
+/// is recorded. What changes is that a deferred failure now says so in its own entry
 /// instead of silently withholding its neighbours.
 fn split_deferred_failures(
     failures: &[Value],
     run_errors: &BTreeMap<String, Vec<Value>>,
+    schema_version: u64,
 ) -> (Vec<Value>, Vec<Value>) {
     let mut complete = Vec::new();
     let mut deferred = Vec::new();
     for failure in failures {
-        let reasons = run_id_key(failure)
-            .and_then(|run_id| run_errors.get(&run_id).cloned())
-            .unwrap_or_default();
+        let mut reasons = run_id_key(failure)
+            .and_then(|run_id| run_errors.get(&run_id))
+            .into_iter()
+            .flatten()
+            .filter(|error| {
+                error.get("job_id").is_none_or(Value::is_null)
+                    || error.get("job_id") == failure.get("job_id")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if reasons.is_empty()
+            && failure.get("investigated").and_then(Value::as_bool) == Some(true)
+            && let Some(message) = job_evidence_gap(failure, schema_version)
+        {
+            reasons.push(json!({
+                "stage": "registration", "operation": "job_evidence_identity",
+                "run_id": failure.get("run_id"), "job_id": failure.get("job_id"),
+                "retryable": true, "message": message,
+            }));
+        }
         let investigated = failure.get("investigated").and_then(Value::as_bool) == Some(true);
         if reasons.is_empty() && investigated {
             complete.push(failure.clone());
             continue;
         }
         deferred.push(json!({
+            "job_id": failure.get("job_id"),
+            "failed_jobs": failure.get("failed_jobs"),
             "run_id": failure.get("run_id"),
             "url": failure.get("url"),
             "workflow": failure.get("workflow"),
@@ -577,6 +752,127 @@ fn split_deferred_failures(
         }));
     }
     (complete, deferred)
+}
+
+/// Old snapshots did not bind the run log or its checkout scan to the named
+/// job. They remain readable audit evidence, but must be recollected before
+/// filing; inferring attribution from job order would repeat the original bug.
+fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<&'static str> {
+    if schema_version < 2 {
+        return Some("legacy run-scoped evidence has no verified job binding; recollect this run");
+    }
+    let Some(job_id) = failure.get("job_id").and_then(Value::as_u64) else {
+        return Some("failure has no numeric job identity");
+    };
+    let jobs = failure.get("failed_jobs").and_then(Value::as_array);
+    let Some(job) = jobs
+        .filter(|jobs| jobs.len() == 1)
+        .and_then(|jobs| jobs.first())
+    else {
+        return Some("failure must identify exactly one supplying job");
+    };
+    if job.get("job_id").and_then(Value::as_u64) != Some(job_id)
+        || failure.get("log_job_id").and_then(Value::as_u64) != Some(job_id)
+    {
+        return Some("diagnostic evidence is not bound to the named job");
+    }
+    if job
+        .get("failed_steps")
+        .and_then(Value::as_array)
+        .is_none_or(|steps| steps.len() != 1)
+    {
+        return Some("failed step identity is missing or ambiguous within this job");
+    }
+    if failure["diagnostic_unit"]["kind"] == "runner_failure_regions"
+        && selected_diagnostic(failure).is_none()
+    {
+        return Some(
+            "failure regions have invalid completeness, omission accounting or attribution",
+        );
+    }
+    if let Some(text) = selected_diagnostic(failure)
+        && error_signature(text, &value_string(&job["failed_steps"][0], "name")).step_fallback
+    {
+        return Some("selected evidence contains no concrete diagnostic");
+    }
+    if failure["log_source_complete"] == false {
+        return Some("job log source is incomplete");
+    }
+    if selected_diagnostic(failure).is_none()
+        && (value_string(failure, "log_excerpt").trim().is_empty()
+            || failure.get("log_truncated").and_then(Value::as_bool) != Some(false))
+    {
+        return Some("job diagnostic evidence is missing or truncated");
+    }
+    if value_string(failure, "log_source") == "job_api_log"
+        && failure
+            .get("log_source_jobs")
+            .and_then(Value::as_array)
+            .is_none_or(|jobs| jobs.len() != 1 || jobs[0]["job_id"].as_u64() != Some(job_id))
+    {
+        return Some("fallback log evidence belongs to a different or unknown job");
+    }
+    let identity = &failure["checkout_identity"];
+    if identity["provenance"]["job_id"].as_u64() != Some(job_id)
+        || identity["provenance"]["complete"].as_bool() != Some(true)
+        || identity["state"] != "observed"
+        || failure
+            .get("actual_checkout_shas")
+            .and_then(Value::as_array)
+            .is_none_or(|shas| shas.len() != 1)
+    {
+        return Some("checkout identity is not completely observed for this job");
+    }
+    None
+}
+
+/// Additive schema-2 evidence. Old snapshots remain conservative when their
+/// display was truncated; a complete command or explicitly partial failure
+/// regions from a completely scanned command can replace that display.
+fn selected_diagnostic(failure: &Value) -> Option<&str> {
+    let unit = &failure["diagnostic_unit"];
+    let job = failure["failed_jobs"].as_array()?.first()?;
+    let step = job["failed_steps"].as_array()?.first()?["name"].as_str()?;
+    let text = unit["text"].as_str()?;
+    let complete_command = unit["kind"] == "runner_command" && unit["complete"] == true;
+    let failure_regions = valid_failure_regions(unit) && failure["log_source_complete"] == true;
+    ((complete_command || failure_regions)
+        && unit["job_id"].as_u64()? == failure["job_id"].as_u64()?
+        && unit["step"].as_str()? == step
+        && !text.trim().is_empty()
+        && text.len() <= 262_144)
+        .then_some(text)
+}
+
+/// Region completeness describes selection and command boundaries, never full
+/// retention. Reject malformed or contradictory omission accounting at filing.
+fn valid_failure_regions(unit: &Value) -> bool {
+    let Some(total) = unit["command_bytes"].as_u64() else {
+        return false;
+    };
+    let Some(retained) = unit["retained_source_bytes"].as_u64() else {
+        return false;
+    };
+    let Some(omitted) = unit["omitted_bytes"].as_u64() else {
+        return false;
+    };
+    let Some(assertions) = unit["assertion_payload_omitted_bytes"].as_u64() else {
+        return false;
+    };
+    unit["kind"] == "runner_failure_regions"
+        && unit["complete"] == false
+        && unit["command_complete"] == true
+        && unit["selection_complete"] == true
+        && retained > 0
+        && omitted > 0
+        && retained.checked_add(omitted) == Some(total)
+        && assertions <= omitted
+        && unit["failure_anchor_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+        && unit["text"].as_str().is_some_and(|text| {
+            text.len() <= 65_536 && unit["returned_bytes"].as_u64() == Some(text.len() as u64)
+        })
 }
 
 /// The deferred entries flattened back into the error list shape, for the
@@ -683,6 +979,7 @@ fn normalize_retryable_error(error: Value) -> Value {
             .and_then(Value::as_str)
             .unwrap_or("unknown"),
         "run_id": error.get("run_id").cloned().unwrap_or(Value::Null),
+        "job_id": error.get("job_id").cloned().unwrap_or(Value::Null),
         "retryable": true,
         "message": bounded_error(
             error
@@ -696,8 +993,8 @@ fn normalize_retryable_error(error: Value) -> Value {
 
 /// One root cause, with every current run that exhibited it.
 struct FailureCluster {
-    /// Dedupe identity across sweeps: workflow, failing job, failing step, and
-    /// normalized error signature. Commit-independent by design.
+    /// Dedupe identity across sweeps. Compiler proof replaces the ordinary
+    /// workflow/job/step/signature key only at the same observed checkout.
     failure_key: String,
     /// Grouping identity within one snapshot: `failure_key` plus the commit the
     /// runner actually tested.
@@ -707,12 +1004,15 @@ struct FailureCluster {
     step: String,
     tested_commit: String,
     signature: String,
+    compiler_cause: Option<String>,
+    legacy_keys: BTreeSet<String>,
     /// True when `signature` is the failing step name because no error line
     /// survived in the excerpt. The description must label that as a fallback
     /// rather than a captured diagnostic; collapsing every distinct failure of
     /// the step into one `failure_key` is the weaker identity, not a quote.
     signature_is_step_fallback: bool,
     log_excerpt: String,
+    failure_region_note: Option<String>,
     log_truncated: bool,
     /// The job whose own log supplied the excerpt, when the run-scoped read
     /// returned nothing and collection recovered it per job. Such an excerpt is
@@ -723,9 +1023,71 @@ struct FailureCluster {
 }
 
 impl FailureCluster {
+    fn find_covering_task<L: DuplicateTaskLookup + ?Sized>(
+        &self,
+        lookup: &L,
+    ) -> Result<Option<DuplicateTaskMatch>, OrbitError> {
+        if let Some(found) = find_covering_task(lookup, &self.duplicate_candidate())? {
+            return Ok(Some(found));
+        }
+        // Shipped per-job keys (including the old first-marker signature) are
+        // durable references. Keep their exact/rejected-owner continuity, but
+        // never use their weak command or source-only fingerprints as proof.
+        for key in &self.legacy_keys {
+            let tag = format!("{CI_FAILURE_KEY_TAG_PREFIX}{key}");
+            let candidate = DuplicateCandidate::new(
+                tag.clone(),
+                vec![CoverageFingerprint::new(
+                    "legacy_compiler_key",
+                    vec![CoverageAnchor::new("exact_failure_key", tag)],
+                )],
+            );
+            if let Some(found) = find_covering_task(lookup, &candidate)? {
+                let source_id = found.evidence["matched_fields"]
+                    .as_array()
+                    .and_then(|fields| {
+                        fields
+                            .iter()
+                            .find(|field| field["field"] == "rejected_task_id")
+                    })
+                    .and_then(|field| field["value"].as_str())
+                    .unwrap_or(&found.task_id);
+                let source = lookup.get_task(source_id)?;
+                let owner = lookup.get_task(&found.task_id)?;
+                let prior_cause = compiler_cause(&source.description)
+                    .or_else(|| compiler_cause(&owner.description));
+                if prior_cause.is_some() && prior_cause != self.compiler_cause {
+                    continue;
+                }
+                // An old chatter-based key can recur for a different compiler
+                // cause. Only immutable supplying evidence justifies migration.
+                if self
+                    .runs
+                    .iter()
+                    .any(|run| legacy_source_matches(&source.description, run))
+                {
+                    return Ok(Some(found));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     fn duplicate_candidate(&self) -> DuplicateCandidate {
         let exact_tag = format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", self.failure_key);
-        let fingerprints = if self.signature_is_step_fallback {
+        if let Some(cause) = &self.compiler_cause {
+            return DuplicateCandidate::new(
+                exact_tag,
+                vec![CoverageFingerprint::new(
+                    "ci_compiler_cause",
+                    vec![
+                        CoverageAnchor::new("compiler_cause", digest(&[cause])),
+                        CoverageAnchor::new("tested_commit", &self.tested_commit),
+                    ],
+                )],
+            );
+        }
+        let mut fingerprints = if self.signature_is_step_fallback {
             // A step-name fallback contains no diagnostic. It is sufficient
             // for exact-key idempotency but too weak for broader free-text
             // coverage, where it could suppress an unrelated failure of the
@@ -745,6 +1107,25 @@ impl FailureCluster {
                 ],
             )]
         };
+        if !self.signature_is_step_fallback {
+            if let Some(command) = specific_command_from_log(&self.log_excerpt) {
+                for diagnostic in specific_error_anchors(&self.log_excerpt, &self.signature)
+                    .into_iter()
+                    .take(3)
+                {
+                    fingerprints.push(CoverageFingerprint::new(
+                        "ci_failure_error_and_command",
+                        vec![
+                            CoverageAnchor::new("specific_error", diagnostic),
+                            CoverageAnchor::new("command", command.clone()),
+                        ],
+                    ));
+                }
+            }
+            if let Some(fingerprint) = source_identity_fingerprint(&self.runs) {
+                fingerprints.push(fingerprint);
+            }
+        }
         DuplicateCandidate::new(exact_tag, fingerprints)
     }
 
@@ -772,6 +1153,11 @@ impl FailureCluster {
             "job": self.job,
             "step": self.step,
             "tested_commit": self.tested_commit,
+            "sources": self.runs.iter().map(|run| json!({
+                "run_id": run["run_id"], "job_id": run["job_id"],
+                "workflow": run["workflow"], "failed_jobs": run["failed_jobs"],
+                "actual_checkout_shas": run["actual_checkout_shas"],
+            })).collect::<Vec<_>>(),
             "run_ids": self.run_ids(),
             "run_urls": self.run_urls(),
             "ref_kinds": self.distinct_run_strings("ref_kind"),
@@ -846,10 +1232,21 @@ impl FailureCluster {
             "- Commit the runner actually checked out: `{}`\n",
             display(&self.tested_commit)
         ));
+        if let Some(cause) = &self.compiler_cause {
+            out.push_str(&format!(
+                "- Compiler cause identity: `{}`\n",
+                digest(&[cause])
+            ));
+        }
         if self.signature_is_step_fallback {
             out.push_str(&format!(
                 "- Normalized error signature (step-name fallback — no error line was captured; \
                  the dedupe identity, not a quote): `{}`\n",
+                display(&self.signature)
+            ));
+        } else if self.compiler_cause.is_some() {
+            out.push_str(&format!(
+                "- Normalized error signature (display only; the compiler cause identity controls dedupe): `{}`\n",
                 display(&self.signature)
             ));
         } else {
@@ -907,7 +1304,17 @@ impl FailureCluster {
                 }
             }
         } else {
-            let excerpt = render_failed_step_excerpt(&self.log_excerpt, DESCRIPTION_LOG_BYTES);
+            let excerpt = if let Some(note) = &self.failure_region_note {
+                out.push_str(note);
+                // Already capped at 64 KiB by collection and checked again at
+                // filing. Keep every selected failure for the offline worker.
+                FailedStepExcerpt {
+                    body: self.log_excerpt.clone(),
+                    has_anchor: true,
+                }
+            } else {
+                render_failed_step_excerpt(&self.log_excerpt, DESCRIPTION_LOG_BYTES)
+            };
             if !excerpt.body.trim().is_empty() {
                 out.push_str("```\n");
                 out.push_str(&excerpt.body);
@@ -921,14 +1328,14 @@ impl FailureCluster {
             }
             if self.log_truncated {
                 out.push_str(
-                    "\n_The excerpt above was truncated at collection. Head and tail are kept; \
-                     the omitted region is marked inline._\n",
+                    "\n_The collection display was truncated. Selected evidence is used for diagnosis; \
+                     its retention limits are independent of that display._\n",
                 );
             }
             if let Some(job) = &self.log_source_job {
                 out.push_str(&format!(
                     "\n_The run-scoped failed-step log came back empty, so this excerpt is the \
-                     whole log of job {job}, read from the job log API._\n"
+                     evidence from job {job}, read from the job log API._\n"
                 ));
             }
         }
@@ -1120,12 +1527,32 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         }
         let workflow = value_string(failure, "workflow");
         let (job, step) = failing_job_and_step(failure);
-        let log_excerpt = value_string(failure, "log_excerpt");
+        let log_excerpt = selected_diagnostic(failure)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| value_string(failure, "log_excerpt"));
         let signature = error_signature(&log_excerpt, &step);
         let tested_commit = tested_commit(failure);
 
-        let failure_key = digest(&[&workflow, &job, &step, &signature.text]);
-        let cluster_key = digest(&[&workflow, &job, &step, &signature.text, &tested_commit]);
+        let regions = valid_failure_regions(&failure["diagnostic_unit"]);
+        // Partial command retention cannot prove an exhaustive compiler set.
+        let compiler_cause = (!regions).then(|| compiler_cause(&log_excerpt)).flatten();
+        let legacy_key = compiler_cause.as_ref().map(|_| {
+            let lines = classify_log_lines(&log_excerpt);
+            let legacy = legacy_signature(&lines, &step);
+            digest(&[&workflow, &job, &step, &legacy])
+        });
+        // Cross-job consolidation requires the complete compiler diagnostic
+        // set, exact source locations and the same observed checkout. Generic
+        // step wrappers and shared paths are never sufficient.
+        let failure_key = match &compiler_cause {
+            Some(cause) => digest(&["compiler", cause, &tested_commit]),
+            None => digest(&[&workflow, &job, &step, &signature.text]),
+        };
+        let cluster_key = if compiler_cause.is_some() {
+            digest(&[&failure_key, &tested_commit])
+        } else {
+            digest(&[&workflow, &job, &step, &signature.text, &tested_commit])
+        };
 
         let cluster = grouped.entry(cluster_key.clone()).or_insert_with(|| {
             order.push(cluster_key.clone());
@@ -1137,8 +1564,18 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
                 step,
                 tested_commit,
                 signature: signature.text,
+                compiler_cause,
+                legacy_keys: BTreeSet::new(),
                 signature_is_step_fallback: signature.step_fallback,
                 log_excerpt,
+                failure_region_note: regions.then(|| {
+                    let unit = &failure["diagnostic_unit"];
+                    format!(
+                        "_Failure regions from a completely scanned command; the full command was not retained. {} of {} source bytes omitted, including {} assertion payload bytes. All {} recognized failure anchors and bounded context are retained (64 KiB selection limit)._\n\n",
+                        unit["omitted_bytes"], unit["command_bytes"],
+                        unit["assertion_payload_omitted_bytes"], unit["failure_anchor_count"],
+                    )
+                }),
                 log_truncated: failure
                     .get("log_truncated")
                     .and_then(Value::as_bool)
@@ -1147,6 +1584,9 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
                 runs: Vec::new(),
             }
         });
+        if let Some(key) = legacy_key {
+            cluster.legacy_keys.insert(key);
+        }
         cluster.runs.push(failure.clone());
     }
 
@@ -1156,7 +1596,7 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         .collect()
 }
 
-/// The first failing job and step named by the snapshot.
+/// The single job and step whose evidence passed registration.
 fn failing_job_and_step(failure: &Value) -> (String, String) {
     let Some(job) = failure
         .get("failed_jobs")
@@ -1174,8 +1614,8 @@ fn failing_job_and_step(failure: &Value) -> (String, String) {
     (value_string(job, "name"), step)
 }
 
-/// The commit under test: what the runner checked out when that is evidenced,
-/// falling back to the SHA the event reported.
+/// The observed checkout, validated before clustering. Event and PR heads
+/// are never substitutes for the commit the supplying job tested.
 fn tested_commit(failure: &Value) -> String {
     failure
         .get("actual_checkout_shas")
@@ -1183,7 +1623,247 @@ fn tested_commit(failure: &Value) -> String {
         .and_then(|shas| shas.first())
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| value_string(failure, "event_reported_head_sha"))
+        .unwrap_or_default()
+}
+
+/// Generated descriptions shipped these exact provenance labels. This is a
+/// compatibility check for old tags, not a free-text root-cause heuristic.
+fn legacy_source_matches(description: &str, run: &Value) -> bool {
+    let run_id = value_string(run, "run_id");
+    let job_id = value_string(run, "job_id");
+    let checkout = tested_commit(run);
+    !run_id.is_empty()
+        && !job_id.is_empty()
+        && !checkout.is_empty()
+        && description.contains(&format!("run `{run_id}`"))
+        && description.contains(&format!("(id `{job_id}`)"))
+        && description.contains(&format!("commit actually checked out: `{checkout}`"))
+}
+
+fn source_identity_fingerprint(runs: &[Value]) -> Option<CoverageFingerprint> {
+    let run = runs.first()?;
+    let run_id = value_string(run, "run_id");
+    let job_id = value_string(run, "job_id");
+    if run_id.is_empty() || job_id.is_empty() {
+        return None;
+    }
+    Some(CoverageFingerprint::new(
+        "ci_failure_source_identity",
+        vec![
+            CoverageAnchor::new("run_id", run_id),
+            CoverageAnchor::new("job_id", job_id),
+        ],
+    ))
+}
+
+/// Distinctive diagnostic lines a manual repair brief can quote without
+/// generated `workflow` / `failing job` / `failing step` labels.
+fn specific_error_anchors(log: &str, signature: &str) -> Vec<String> {
+    let mut anchors: Vec<String> = Vec::new();
+    let mut push = |value: &str| {
+        let Some(normalized) = specific_error_text(value) else {
+            return;
+        };
+        if !anchors
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&normalized))
+        {
+            anchors.push(normalized);
+        }
+    };
+    push(signature);
+    for (kind, line) in classify_log_lines(log) {
+        if !matches!(
+            kind,
+            LineKind::CompilerDiagnostic
+                | LineKind::ConcreteDiagnostic
+                | LineKind::ErrorAnnotated
+                | LineKind::Marker
+                | LineKind::Content
+        ) {
+            continue;
+        }
+        push(&strip_ansi_sequences(log_payload(line)));
+    }
+    anchors
+}
+
+fn specific_error_text(value: &str) -> Option<String> {
+    let trimmed = value
+        .trim()
+        .trim_start_matches(|character: char| {
+            character == '-' || character == '*' || character.is_whitespace()
+        })
+        .trim();
+    if trimmed.chars().count() < 16 || trimmed.chars().count() > 180 {
+        return None;
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    if is_generic_trailer(&lowered)
+        || is_run_command_payload(&lowered)
+        || lowered.starts_with("[command]")
+        || (lowered.contains("added ") && lowered.contains("packages"))
+        || lowered.contains("looking for funding")
+        || lowered.contains("found 0 vulnerabilities")
+        || lowered.contains("wrangler installed")
+        || lowered.contains("logs were written")
+    {
+        return None;
+    }
+    let diagnostic = ERROR_MARKERS.iter().any(|marker| lowered.contains(marker))
+        || lowered.contains("missing")
+        || lowered.contains("not found")
+        || lowered.contains("cannot")
+        || lowered.contains("invalid")
+        || lowered.contains("expected")
+        || lowered.contains("required");
+    diagnostic.then(|| trimmed.to_string())
+}
+
+fn specific_command_from_log(log: &str) -> Option<String> {
+    let mut best = None;
+    for (kind, line) in classify_log_lines(log) {
+        let payload = log_payload(line);
+        let raw = if kind == LineKind::RunCommand {
+            run_command_body(payload)
+        } else {
+            bracket_command_body(payload)
+        };
+        let Some(raw) = raw else {
+            continue;
+        };
+        if let Some(stable) = stabilize_command(raw) {
+            best = Some(stable);
+        }
+    }
+    best
+}
+
+fn run_command_body(payload: &str) -> Option<&str> {
+    let trimmed = payload.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    const PREFIX: &str = "##[group]run ";
+    lower
+        .starts_with(PREFIX)
+        .then(|| trimmed.get(PREFIX.len()..).unwrap_or_default().trim())
+        .filter(|body| !body.is_empty())
+}
+
+fn bracket_command_body(payload: &str) -> Option<&str> {
+    let trimmed = payload.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    const PREFIX: &str = "[command]";
+    lower
+        .starts_with(PREFIX)
+        .then(|| trimmed.get(PREFIX.len()..).unwrap_or_default().trim())
+        .filter(|body| !body.is_empty())
+}
+
+fn stabilize_command(raw: &str) -> Option<String> {
+    let mut tokens = raw.split_whitespace().collect::<Vec<_>>();
+    if tokens
+        .first()
+        .is_some_and(|token| token.eq_ignore_ascii_case("[command]"))
+    {
+        tokens.remove(0);
+    }
+    while tokens
+        .first()
+        .is_some_and(|token| is_javascript_runtime_token(token))
+    {
+        tokens.remove(0);
+        if tokens.first().is_some_and(|token| {
+            matches!(*token, "--no-install" | "--yes" | "-y" | "--prefer-offline")
+        }) {
+            tokens.remove(0);
+        }
+    }
+    if tokens.is_empty() || is_install_invocation(&tokens) {
+        return None;
+    }
+    let mut kept = Vec::new();
+    let mut skip_value = false;
+    for token in tokens {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if is_volatile_command_flag(token) {
+            if !token.contains('=') {
+                skip_value = true;
+            }
+            continue;
+        }
+        kept.push(token);
+    }
+    if is_generic_command(&kept) {
+        return None;
+    }
+    Some(kept.join(" "))
+}
+
+fn is_javascript_runtime_token(token: &str) -> bool {
+    let base = token
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(token)
+        .to_ascii_lowercase();
+    matches!(base.as_str(), "npx" | "npm" | "node" | "yarn" | "pnpm")
+}
+
+fn is_install_invocation(tokens: &[&str]) -> bool {
+    matches!(
+        tokens
+            .first()
+            .map(|token| token.to_ascii_lowercase())
+            .as_deref(),
+        Some("i" | "install" | "add" | "ci")
+    )
+}
+
+fn is_volatile_command_flag(token: &str) -> bool {
+    let name = token
+        .trim_start_matches('-')
+        .split_once('=')
+        .map(|(name, _)| name)
+        .unwrap_or_else(|| token.trim_start_matches('-'));
+    matches!(
+        name,
+        "commit-hash" | "commit-message" | "commit" | "sha" | "hash"
+    )
+}
+
+fn is_generic_command(tokens: &[&str]) -> bool {
+    if tokens.is_empty() {
+        return true;
+    }
+    let joined = tokens.join(" ").to_ascii_lowercase();
+    if matches!(
+        joined.as_str(),
+        "cargo test"
+            | "cargo build"
+            | "cargo check"
+            | "cargo clippy"
+            | "cargo nextest run"
+            | "cargo llvm-cov"
+            | "npm test"
+            | "npm run build"
+            | "yarn test"
+            | "pnpm test"
+            | "npx"
+            | "node"
+            | "wrangler --version"
+            | "wrangler version"
+    ) {
+        return true;
+    }
+    let distinctive = tokens.iter().any(|token| {
+        token.contains('/')
+            || token.contains('\\')
+            || (token.starts_with("--") && token.contains('='))
+            || token.contains('@')
+    });
+    tokens.len() < 3 && !distinctive
 }
 
 /// Lines a runner emits when something breaks.
@@ -1201,60 +1881,150 @@ const ERROR_MARKERS: &[&str] = &[
 /// Reduce a failed-step log to one normalized line that survives a rerun.
 ///
 /// Reruns of the same regression differ in timestamps, durations, run numbers,
-/// and paths under a run-specific temp directory. Normalizing those away is
-/// what lets an hourly sweep recognize the same root cause instead of filing it
-/// again every hour. Prefer an `##[error]`-annotated line over an unanchored
-/// marker substring, except that GitHub's generic runner-completion annotation
-/// yields to a specific unannotated diagnostic immediately before it. Never
-/// sign off runner-bookkeeping (checkout, group headers, `env:`/`with:` dumps)
-/// or libtest success/section lines whose names happen to contain a marker
-/// word. With no usable line the step name alone is the signature — weaker,
-/// but stable, and still scoped by workflow and job.
+/// ANSI styling, and paths under a run-specific temp directory. Normalizing
+/// those away is what lets an hourly sweep recognize the same root cause
+/// instead of filing it again every hour.
+///
+/// Preference order, so a generic wrapper cannot fragment one evidenced
+/// failure or collapse distinct ones:
+/// 1. A coded compiler diagnostic (`error[E0062]: …`).
+/// 2. A concrete test/panic identity (`thread '…' panicked`, `test … FAILED`,
+///    nextest `FAIL […]`, a name listed after libtest `failures:`).
+/// 3. A specific `##[error]` annotation.
+/// 4. Any remaining marker diagnostic (compiler `error:`, `assertion failed`).
+/// 5. The nearest unannotated content line before a generic trailer.
+/// 6. The failing step name, labelled as a fallback — used when the excerpt
+///    only has wrappers, bookkeeping, or assertion payload.
+///
+/// Generic trailers include GitHub's process-completed / `The process '…'
+/// failed with exit code` / action-failed annotations, cargo's
+/// `test failed, to rerun pass` wrappers, and nextest cancellation/summary
+/// lines. Assertion `left:`/`right:` dumps are not signatures even when they
+/// contain marker words. Raw excerpt bytes stay in the filed description;
+/// ANSI is stripped only for classification and the normalized signature.
 fn error_signature(log_excerpt: &str, step: &str) -> ErrorSignature {
     let lines = classify_log_lines(log_excerpt);
-    for (kind, line) in &lines {
-        if *kind == LineKind::ErrorAnnotated {
-            return ErrorSignature {
-                text: normalize_signature(&log_payload(line).to_ascii_lowercase()),
-                step_fallback: false,
-            };
-        }
-    }
-    for (kind, line) in &lines {
-        if *kind == LineKind::Marker {
-            return ErrorSignature {
-                text: normalize_signature(&log_payload(line).to_ascii_lowercase()),
-                step_fallback: false,
-            };
-        }
-    }
-    for (index, (kind, _)) in lines.iter().enumerate() {
-        if *kind != LineKind::RunnerCompletion {
-            continue;
-        }
-        if let Some((_, line)) = lines[..index]
-            .iter()
-            .rev()
-            .find(|(kind, line)| *kind == LineKind::Content && is_diagnostic_content(line))
-        {
-            return ErrorSignature {
-                text: normalize_signature(&log_payload(line).to_ascii_lowercase()),
-                step_fallback: false,
-            };
-        }
-    }
-    for (kind, line) in &lines {
-        if *kind == LineKind::RunnerCompletion {
-            return ErrorSignature {
-                text: normalize_signature(&log_payload(line).to_ascii_lowercase()),
-                step_fallback: false,
-            };
-        }
+    if let Some(index) = diagnostic_anchor(&lines) {
+        return ErrorSignature {
+            text: normalize_signature(&signature_payload(lines[index].1)),
+            step_fallback: false,
+        };
     }
     ErrorSignature {
         text: normalize_signature(&step.to_ascii_lowercase()),
         step_fallback: true,
     }
+}
+
+/// Signature and display must agree on the strongest diagnostic, independent
+/// of where setup output or a process-exit wrapper appears in the command.
+fn diagnostic_anchor(lines: &[(LineKind, &str)]) -> Option<usize> {
+    for wanted in [
+        LineKind::CompilerDiagnostic,
+        LineKind::ConcreteDiagnostic,
+        LineKind::ErrorAnnotated,
+        LineKind::Marker,
+    ] {
+        if let Some(index) = lines.iter().position(|(kind, _)| *kind == wanted) {
+            return Some(index);
+        }
+    }
+    for (index, (kind, _)) in lines.iter().enumerate() {
+        if *kind == LineKind::GenericTrailer
+            && let Some(previous) = lines[..index]
+                .iter()
+                .rposition(|(kind, line)| *kind == LineKind::Content && is_diagnostic_content(line))
+        {
+            return Some(previous);
+        }
+    }
+    None
+}
+
+/// Preserve the shipped signature algorithm only for looking up existing tags.
+fn legacy_signature(lines: &[(LineKind, &str)], step: &str) -> String {
+    let legacy: Vec<_> = lines
+        .iter()
+        .map(|(kind, line)| {
+            let kind = match kind {
+                LineKind::CompilerDiagnostic | LineKind::CargoStatus => {
+                    if signature_payload(line).contains("##[error]") {
+                        LineKind::ErrorAnnotated
+                    } else if is_error_marker_line(signature_payload(line).trim()) {
+                        LineKind::Marker
+                    } else {
+                        LineKind::Content
+                    }
+                }
+                other => *other,
+            };
+            (kind, *line)
+        })
+        .collect();
+    diagnostic_anchor(&legacy)
+        .map(|index| normalize_signature(&signature_payload(legacy[index].1)))
+        .unwrap_or_else(|| normalize_signature(&step.to_ascii_lowercase()))
+}
+
+fn is_compiler_diagnostic(payload: &str) -> bool {
+    let payload = payload.strip_prefix("##[error]").unwrap_or(payload).trim();
+    let Some(rest) = payload.strip_prefix("error[e") else {
+        return false;
+    };
+    let Some((code, message)) = rest.split_once("]:") else {
+        return false;
+    };
+    code.len() == 4 && code.bytes().all(|byte| byte.is_ascii_digit()) && !message.trim().is_empty()
+}
+
+fn is_cargo_status(payload: &str) -> bool {
+    [
+        "compiling ",
+        "checking ",
+        "downloading ",
+        "downloaded ",
+        "fresh ",
+        "error: could not compile ",
+        "warning: build failed",
+        "for more information about this error",
+    ]
+    .iter()
+    .any(|prefix| payload.starts_with(prefix))
+}
+
+/// A conservative proof for cross-job merging. Preserve diagnostic operands
+/// and line/column numbers: display normalization deliberately erases numbers
+/// and truncates text, so it is not strong enough for a compiler cause key.
+fn compiler_cause(log: &str) -> Option<String> {
+    let lines = classify_log_lines(log);
+    let mut causes = BTreeSet::new();
+    for (index, (kind, line)) in lines.iter().enumerate() {
+        if *kind != LineKind::CompilerDiagnostic {
+            continue;
+        }
+        let diagnostic = strip_ansi_sequences(log_payload(line));
+        let diagnostic = diagnostic
+            .trim()
+            .strip_prefix("##[error]")
+            .unwrap_or(diagnostic.trim())
+            .trim();
+        let location = lines
+            .get(index + 1)
+            .map(|(_, line)| strip_ansi_sequences(log_payload(line)))?;
+        let location = location.trim().strip_prefix("-->")?.trim();
+        let (path_line, column) = location.rsplit_once(':')?;
+        let (path, line_number) = path_line.rsplit_once(':')?;
+        if path.starts_with('/')
+            || path.contains("..")
+            || !path.ends_with(".rs")
+            || line_number.parse::<u64>().is_err()
+            || column.parse::<u64>().is_err()
+        {
+            return None;
+        }
+        causes.insert(format!("{diagnostic} @ {location}"));
+    }
+    (!causes.is_empty()).then(|| causes.into_iter().collect::<Vec<_>>().join("; "))
 }
 
 struct ErrorSignature {
@@ -1267,8 +2037,11 @@ enum LineKind {
     RunCommand,
     ParamDump,
     EndGroup,
+    CompilerDiagnostic,
+    CargoStatus,
+    ConcreteDiagnostic,
     ErrorAnnotated,
-    RunnerCompletion,
+    GenericTrailer,
     Marker,
     Bookkeeping,
     Content,
@@ -1276,7 +2049,10 @@ enum LineKind {
 
 impl LineKind {
     fn skip_from_excerpt(self) -> bool {
-        matches!(self, Self::ParamDump | Self::EndGroup | Self::Bookkeeping)
+        matches!(
+            self,
+            Self::ParamDump | Self::EndGroup | Self::Bookkeeping | Self::CargoStatus
+        )
     }
 }
 
@@ -1287,11 +2063,11 @@ struct FailedStepExcerpt {
 
 /// Command line plus the failure region, never a head-biased env dump.
 ///
-/// The `##[group]Run …` line is the command the runner executed and is the
-/// most actionable fact in the log. The `env:` / `with:` dump that follows it
-/// is never the evidence. The rest of the block is a bounded window around
-/// an error anchor, capped at `max_bytes` on that region rather than the
-/// log head.
+/// The `##[group]Run …` line is useful reproduction context. The selected diagnostic and its following
+/// source location take precedence over oversized wrapper arguments. The
+/// `env:` / `with:` dump that follows the command is never the evidence.
+/// The remaining block is a bounded window around the diagnostic, capped at
+/// `max_bytes` on that region rather than the log head.
 fn render_failed_step_excerpt(log: &str, max_bytes: usize) -> FailedStepExcerpt {
     let lines = classify_log_lines(log);
     let command = lines
@@ -1299,10 +2075,11 @@ fn render_failed_step_excerpt(log: &str, max_bytes: usize) -> FailedStepExcerpt 
         .find(|(kind, _)| *kind == LineKind::RunCommand)
         .map(|(_, line)| *line);
 
-    let anchor = lines
-        .iter()
-        .position(|(kind, _)| matches!(kind, LineKind::ErrorAnnotated | LineKind::RunnerCompletion))
-        .or_else(|| lines.iter().position(|(kind, _)| *kind == LineKind::Marker));
+    let anchor = diagnostic_anchor(&lines).or_else(|| {
+        lines
+            .iter()
+            .position(|(kind, _)| *kind == LineKind::GenericTrailer)
+    });
 
     let Some(anchor_idx) = anchor else {
         return FailedStepExcerpt {
@@ -1337,13 +2114,13 @@ fn render_failed_step_excerpt(log: &str, max_bytes: usize) -> FailedStepExcerpt 
 
 fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
     let mut in_param_block = false;
+    let mut after_failures_header = false;
     let mut out = Vec::new();
     for line in log.lines() {
-        let payload = log_payload(line);
-        let trimmed = payload.trim();
-        let lowered = trimmed.to_ascii_lowercase();
+        let payload = signature_payload(line);
+        let lowered = payload.trim();
         let indented = payload.starts_with(' ') || payload.starts_with('\t');
-        let kind = if is_run_command_payload(trimmed) {
+        let kind = if is_run_command_payload(lowered) {
             in_param_block = false;
             LineKind::RunCommand
         } else if lowered.contains("##[endgroup]") {
@@ -1352,25 +2129,46 @@ fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
         } else if lowered == "env:" || lowered == "with:" {
             in_param_block = true;
             LineKind::ParamDump
-        } else if in_param_block && (indented || trimmed.is_empty()) {
+        } else if in_param_block && (indented || lowered.is_empty()) {
             LineKind::ParamDump
         } else {
             in_param_block = false;
-            if is_generic_runner_completion(&lowered) {
-                LineKind::RunnerCompletion
+            if is_generic_trailer(lowered) {
+                LineKind::GenericTrailer
+            } else if is_compiler_diagnostic(lowered) {
+                LineKind::CompilerDiagnostic
+            } else if is_cargo_status(lowered) {
+                LineKind::CargoStatus
             } else if lowered.contains("##[error]") {
                 LineKind::ErrorAnnotated
-            } else if is_runner_bookkeeping(&lowered) || lowered.contains("##[group]") {
+            } else if is_runner_bookkeeping(lowered) || lowered.contains("##[group]") {
                 LineKind::Bookkeeping
-            } else if is_error_marker_line(&lowered) {
+            } else if is_concrete_diagnostic(&payload, lowered, after_failures_header) {
+                LineKind::ConcreteDiagnostic
+            } else if is_error_marker_line(lowered) && !is_assertion_payload(lowered) {
                 LineKind::Marker
             } else {
                 LineKind::Content
             }
         };
+        if lowered == "failures:" || lowered == "errors:" {
+            after_failures_header = true;
+        } else if is_libtest_stdout_header(lowered) || lowered.starts_with("test result:") {
+            after_failures_header = false;
+        }
         out.push((kind, line));
     }
     out
+}
+
+fn is_generic_trailer(lowered: &str) -> bool {
+    is_generic_runner_completion(lowered)
+        || is_generic_process_failed(lowered)
+        || is_generic_action_failed(lowered)
+        || is_cargo_test_wrapper(lowered)
+        || is_nextest_cancellation(lowered)
+        || is_nextest_summary(lowered)
+        || lowered.contains("tests were not run due to test failure")
 }
 
 fn is_generic_runner_completion(lowered: &str) -> bool {
@@ -1387,9 +2185,117 @@ fn is_generic_runner_completion(lowered: &str) -> bool {
     !exit_code.is_empty() && exit_code.chars().all(|ch| ch.is_ascii_digit())
 }
 
+fn is_generic_process_failed(lowered: &str) -> bool {
+    let Some(message) = lowered.trim().strip_prefix("##[error]") else {
+        return false;
+    };
+    let message = message.trim().trim_end_matches('.');
+    let Some(rest) = message.strip_prefix("the process ") else {
+        return false;
+    };
+    rest.contains(" failed with exit code ")
+}
+
+fn is_generic_action_failed(lowered: &str) -> bool {
+    let Some(message) = lowered.trim().strip_prefix("##[error]") else {
+        return false;
+    };
+    let message = message
+        .trim()
+        .trim_start_matches(|ch: char| !ch.is_ascii_alphabetic());
+    message == "action failed"
+}
+
+fn is_cargo_test_wrapper(lowered: &str) -> bool {
+    let message = lowered
+        .trim()
+        .strip_prefix("error:")
+        .map(str::trim)
+        .unwrap_or_else(|| lowered.trim());
+    message.starts_with("test failed, to rerun pass")
+        || message == "test run failed"
+        || message.starts_with("process didn't exit successfully:")
+}
+
+fn is_nextest_cancellation(lowered: &str) -> bool {
+    lowered
+        .trim()
+        .trim_end_matches(':')
+        .trim()
+        .starts_with("cancelling due to test failure")
+}
+
+fn is_nextest_summary(lowered: &str) -> bool {
+    let trimmed = lowered.trim();
+    trimmed.starts_with("summary [") && trimmed.contains("tests run:")
+}
+
+fn is_concrete_diagnostic(payload: &str, lowered: &str, after_failures_header: bool) -> bool {
+    is_panic_line(lowered)
+        || is_failed_test_result(lowered)
+        || is_nextest_fail_line(lowered)
+        || is_libtest_listed_failure_name(payload, after_failures_header)
+}
+
+fn is_panic_line(lowered: &str) -> bool {
+    lowered.contains("panicked at")
+        && (lowered.contains("thread '") || lowered.contains("thread \""))
+}
+
+fn is_failed_test_result(lowered: &str) -> bool {
+    let Some(rest) = lowered.strip_prefix("test ") else {
+        return false;
+    };
+    let Some((_, status)) = rest.rsplit_once(" ... ") else {
+        return false;
+    };
+    let status = status.trim();
+    status == "failed" || status.starts_with("failed ")
+}
+
+fn is_nextest_fail_line(lowered: &str) -> bool {
+    let Some(rest) = lowered.trim().strip_prefix("fail") else {
+        return false;
+    };
+    rest.trim_start().starts_with('[')
+}
+
+fn is_libtest_stdout_header(lowered: &str) -> bool {
+    let trimmed = lowered.trim();
+    trimmed.starts_with("---- ")
+        && (trimmed.ends_with(" stdout ----") || trimmed.ends_with(" stderr ----"))
+}
+
+fn is_libtest_listed_failure_name(payload: &str, after_failures_header: bool) -> bool {
+    if !after_failures_header {
+        return false;
+    }
+    let indented = payload.starts_with(' ') || payload.starts_with('\t');
+    if !indented {
+        return false;
+    }
+    let trimmed = payload.trim();
+    !trimmed.is_empty()
+        && !trimmed.contains(' ')
+        && !trimmed.starts_with("----")
+        && !trimmed.starts_with("thread")
+        && !trimmed.starts_with("error")
+        && !trimmed.starts_with("note:")
+        && !trimmed.starts_with("assertion")
+}
+
+fn is_assertion_payload(lowered: &str) -> bool {
+    let trimmed = lowered.trim_start();
+    trimmed.starts_with("left:")
+        || trimmed.starts_with("right:")
+        || trimmed.starts_with("left =")
+        || trimmed.starts_with("right =")
+}
+
 fn is_diagnostic_content(line: &str) -> bool {
-    let payload = log_payload(line).trim();
-    !payload.is_empty() && !payload.starts_with("##[")
+    let payload = signature_payload(line);
+    let trimmed = payload.trim();
+    !trimmed.is_empty() && !trimmed.starts_with("##[")
 }
 
 fn is_run_command_payload(payload: &str) -> bool {
@@ -1446,10 +2352,10 @@ fn cap_bytes_around_line(text: &str, anchor_line: &str, max_bytes: usize) -> Str
         return truncate_bytes(anchor_line, max_bytes);
     }
     let extra = max_bytes - anchor_len;
-    let want_before = extra * 2 / 3;
+    let want_before = extra / 3;
     let mut start = anchor_start.saturating_sub(want_before);
-    while start > 0 && !text.is_char_boundary(start) {
-        start -= 1;
+    while start < anchor_start && !text.is_char_boundary(start) {
+        start += 1;
     }
     if start > 0
         && let Some(newline) = text[start..anchor_start].find('\n')
@@ -1464,8 +2370,8 @@ fn cap_bytes_around_line(text: &str, anchor_line: &str, max_bytes: usize) -> Str
             start -= 1;
         }
     }
-    while end < text.len() && !text.is_char_boundary(end) {
-        end += 1;
+    while end > anchor_start + anchor_len && !text.is_char_boundary(end) {
+        end -= 1;
     }
     if end < text.len()
         && let Some(newline) = text[anchor_start + anchor_len..end].rfind('\n')
@@ -1523,7 +2429,17 @@ fn log_payload(line: &str) -> &str {
     }
 }
 
-/// Collapse the parts of a log line that vary between identical failures.
+/// Payload used for classification and the normalized signature: runner
+/// columns removed, ANSI styling stripped, lowercased. The filed excerpt keeps
+/// the raw line so evidence is not discarded.
+fn signature_payload(line: &str) -> String {
+    strip_ansi_sequences(log_payload(line)).to_ascii_lowercase()
+}
+
+/// Collapse the parts of a log line that vary between identical failures:
+/// bare numbers, long hex blobs, and measurements whose unit is the only
+/// stable part (nextest's `FAIL [ 1.399s]` is a different duration on every
+/// rerun of the same failing test).
 fn normalize_signature(lowered: &str) -> String {
     let mut out = String::with_capacity(lowered.len());
     let mut chars = lowered.chars().peekable();
@@ -1534,14 +2450,19 @@ fn normalize_signature(lowered: &str) -> String {
             while chars.peek().is_some_and(char::is_ascii_alphanumeric) {
                 token.push(chars.next().unwrap_or_default());
             }
-            let replacement = if token.chars().all(|c| c.is_ascii_digit()) {
-                "<n>"
+            // The token is ASCII alphanumeric, so a digit count indexes it directly.
+            let digits = token.chars().take_while(char::is_ascii_digit).count();
+            if digits == token.len() {
+                out.push_str("<n>");
             } else if token.len() >= 7 && token.chars().all(|c| c.is_ascii_hexdigit()) {
-                "<hex>"
+                out.push_str("<hex>");
+            } else if digits > 0 && token[digits..].chars().all(|c| c.is_ascii_alphabetic()) {
+                // A measurement such as `399s` or `250ms`: keep the unit, drop the count.
+                out.push_str("<n>");
+                out.push_str(&token[digits..]);
             } else {
-                token.as_str()
-            };
-            out.push_str(replacement);
+                out.push_str(&token);
+            }
             last_was_space = false;
             continue;
         }

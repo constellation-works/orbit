@@ -5,11 +5,117 @@ use crate::{ShipMode, WorkspaceRuntimeBinding};
 use chrono::Utc;
 use orbit_engine::DispatchError;
 use orbit_engine::RuntimeHost;
+use orbit_store::TaskStoreBackend;
 use orbit_tools::ToolContext;
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{DeterministicAction, PipelineState};
 use serde_json::json;
 use tempfile::tempdir;
+
+struct CountingTaskStore {
+    inner: std::sync::Arc<dyn TaskStoreBackend>,
+    list_tasks_calls: std::sync::atomic::AtomicUsize,
+}
+
+impl CountingTaskStore {
+    fn new(inner: std::sync::Arc<dyn TaskStoreBackend>) -> Self {
+        Self {
+            inner,
+            list_tasks_calls: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn list_tasks_calls(&self) -> usize {
+        self.list_tasks_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl TaskStoreBackend for CountingTaskStore {
+    fn task_candidates(
+        &self,
+        filter: &orbit_store::contracts::TaskListFilter,
+        limit: usize,
+    ) -> Result<orbit_store::contracts::TaskCandidates, orbit_common::OrbitError> {
+        self.inner.task_candidates(filter, limit)
+    }
+
+    fn query_task_rows(
+        &self,
+        filter: &orbit_store::contracts::TaskListFilter,
+        limit: usize,
+        residual: orbit_store::contracts::TaskResidualFilter<'_>,
+    ) -> Result<orbit_store::contracts::TaskPage, orbit_common::OrbitError> {
+        self.inner.query_task_rows(filter, limit, residual)
+    }
+
+    fn get_task_row(
+        &self,
+        id: &str,
+        list_read: bool,
+    ) -> Result<Option<orbit_store::contracts::TaskRow>, orbit_common::OrbitError> {
+        self.inner.get_task_row(id, list_read)
+    }
+
+    fn create_task(
+        &self,
+        params: orbit_store::TaskCreateParams,
+    ) -> Result<orbit_types::task::Task, orbit_common::OrbitError> {
+        self.inner.create_task(params)
+    }
+
+    fn list_tasks(&self) -> Result<Vec<orbit_types::task::Task>, orbit_common::OrbitError> {
+        self.list_tasks_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.list_tasks()
+    }
+
+    fn task_status_index(
+        &self,
+    ) -> Result<
+        std::collections::BTreeMap<String, orbit_types::task::TaskStatus>,
+        orbit_common::OrbitError,
+    > {
+        self.inner.task_status_index()
+    }
+
+    fn list_tasks_filtered(
+        &self,
+        status: Option<orbit_types::task::TaskStatus>,
+        priority: Option<orbit_types::task::TaskPriority>,
+        parent_id: Option<&str>,
+        job_run_id: Option<&str>,
+        external_ref: Option<&orbit_types::task::ExternalRef>,
+        has_external_ref_system: Option<&str>,
+    ) -> Result<Vec<orbit_types::task::Task>, orbit_common::OrbitError> {
+        self.inner.list_tasks_filtered(
+            status,
+            priority,
+            parent_id,
+            job_run_id,
+            external_ref,
+            has_external_ref_system,
+        )
+    }
+
+    fn get_task(
+        &self,
+        id: &str,
+    ) -> Result<Option<orbit_types::task::Task>, orbit_common::OrbitError> {
+        self.inner.get_task(id)
+    }
+
+    fn search_tasks(
+        &self,
+        query: &str,
+    ) -> Result<Vec<orbit_types::task::Task>, orbit_common::OrbitError> {
+        self.inner.search_tasks(query)
+    }
+
+    fn delete_task(&self, id: &str) -> Result<bool, orbit_common::OrbitError> {
+        self.inner.delete_task(id)
+    }
+}
 
 fn dispatch_declared_action(
     runtime: &OrbitRuntime,
@@ -244,8 +350,10 @@ fn workspace_ship_input_prefers_the_registry_neutral_runtime_binding() {
         WorkspaceRuntimeBinding {
             logical_workspace_id: "ws_bound".to_string(),
             workspace_id: "ws_bound".to_string(),
+            owner_machine_id: None,
             repo_root: repo,
             ship_mode: ShipMode::Pr,
+            base_branch: None,
         },
     )
     .expect("bound runtime");
@@ -549,6 +657,28 @@ fn reserve_locks_publishes_empty_waiting_on_deps_when_dependencies_are_met() {
     assert_eq!(output["reserved"], json!(true));
 }
 
+#[test]
+fn reserve_locks_loads_the_task_store_once_per_poll() {
+    let mut runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let ready = seed_task(&runtime, "Ready", TaskStatus::Backlog, Vec::new());
+    let counting_store = std::sync::Arc::new(CountingTaskStore::new(
+        runtime.context.task_store_for_test(),
+    ));
+    runtime
+        .context
+        .replace_task_store_for_test(counting_store.clone());
+
+    let (_, result) = reserve_locks_for(&runtime, vec![ready]);
+    let output = result.expect("reserve locks");
+
+    assert_eq!(output["reserved"], json!(true));
+    assert_eq!(
+        counting_store.list_tasks_calls(),
+        1,
+        "one ReserveLocks poll must load its lock index once"
+    );
+}
+
 /// ORB-11349: admission loads every task, so one unrelated task's lifecycle
 /// write used to decide whether this gate ran. A transition is a multi-file
 /// publication held under that task's bundle lock; a gate that read through it
@@ -615,4 +745,209 @@ fn waiting_locks_from_reserve_output_extracts_unique_conflict_files() {
             "file:src/lib.rs".to_string()
         ]
     );
+}
+
+fn seed_run_with_state(runtime: &OrbitRuntime) -> String {
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_gate_pipeline", 1, Utc::now(), Some(json!({})), None)
+        .expect("insert run");
+    runtime
+        .stores()
+        .jobs()
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({})),
+        )
+        .expect("write state");
+    run.run_id
+}
+
+fn apply_competing_admissions_stop(runtime: &OrbitRuntime, run_id: &str) {
+    runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            state.set_drain_admissions_stop(
+                "operator".to_string(),
+                Some("drain closed".to_string()),
+            );
+            Ok(())
+        })
+        .expect("competing admissions stop");
+}
+
+/// Prior waiting-reason writer: read the document, then write it back whole.
+/// `between_read_and_write` is the lost-update window a concurrent control
+/// used to occupy.
+fn update_run_waiting_reasons_read_then_write(
+    runtime: &OrbitRuntime,
+    input: &serde_json::Value,
+    waiting_on_deps: Option<Vec<String>>,
+    waiting_on_locks: Option<Vec<String>>,
+    action: &str,
+    between_read_and_write: impl FnOnce(),
+) -> Result<(), DispatchError> {
+    let Some(run_id) = input.get("run_id").and_then(serde_json::Value::as_str) else {
+        return Ok(());
+    };
+    let Some(mut state) =
+        runtime
+            .read_run_state(run_id)
+            .map_err(|err| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: format!("{err}"),
+            })?
+    else {
+        return Ok(());
+    };
+    between_read_and_write();
+    state.set_waiting_reasons(waiting_on_deps, waiting_on_locks);
+    runtime.write_run_state(run_id, &state).map_err(|err| {
+        DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("{err}"),
+        }
+    })
+}
+
+#[test]
+fn read_then_write_waiting_reasons_drop_a_competing_admissions_stop() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = seed_run_with_state(&runtime);
+
+    update_run_waiting_reasons_read_then_write(
+        &runtime,
+        &json!({ "run_id": run_id }),
+        Some(vec!["ORB-1".to_string()]),
+        None,
+        "reserve_locks",
+        || apply_competing_admissions_stop(&runtime, &run_id),
+    )
+    .expect("prior writer");
+
+    let state = runtime
+        .read_run_state(&run_id)
+        .expect("read run state")
+        .expect("state exists");
+    assert_eq!(state.waiting_on_deps, Some(vec!["ORB-1".to_string()]));
+    assert!(
+        !state.admissions_stopped(),
+        "the stale whole-document write must drop the stop that landed in between"
+    );
+}
+
+#[test]
+fn update_run_waiting_reasons_preserves_a_competing_admissions_stop() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = seed_run_with_state(&runtime);
+
+    // Same competing control the prior writer lost, applied as its own
+    // transactional update. The repaired writer must merge waiting reasons
+    // onto the current document rather than replacing it.
+    apply_competing_admissions_stop(&runtime, &run_id);
+    update_run_waiting_reasons(
+        &runtime,
+        &json!({ "run_id": run_id }),
+        Some(vec!["ORB-1".to_string()]),
+        Some(vec!["file:src/lib.rs".to_string()]),
+        "reserve_locks",
+    )
+    .expect("transactional writer");
+
+    let state = runtime
+        .read_run_state(&run_id)
+        .expect("read run state")
+        .expect("state exists");
+    assert!(state.admissions_stopped(), "control data must survive");
+    assert_eq!(state.waiting_on_deps, Some(vec!["ORB-1".to_string()]));
+    assert_eq!(
+        state.waiting_on_locks,
+        Some(vec!["file:src/lib.rs".to_string()])
+    );
+}
+
+#[test]
+fn update_run_waiting_reasons_is_a_noop_without_run_id_run_or_state() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+    update_run_waiting_reasons(
+        &runtime,
+        &json!({}),
+        Some(vec!["ORB-1".to_string()]),
+        None,
+        "reserve_locks",
+    )
+    .expect("missing run_id is a no-op");
+
+    update_run_waiting_reasons(
+        &runtime,
+        &json!({ "run_id": "jrun-missing" }),
+        Some(vec!["ORB-1".to_string()]),
+        None,
+        "reserve_locks",
+    )
+    .expect("missing run is a no-op");
+
+    let pending = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_gate_pipeline", 1, Utc::now(), Some(json!({})), None)
+        .expect("insert run without state");
+    update_run_waiting_reasons(
+        &runtime,
+        &json!({ "run_id": pending.run_id }),
+        Some(vec!["ORB-1".to_string()]),
+        None,
+        "reserve_locks",
+    )
+    .expect("missing pipeline state is a no-op");
+    assert!(
+        runtime
+            .read_run_state(&pending.run_id)
+            .expect("read run state")
+            .is_none(),
+        "a stateless run must not grow a document just to record waiting reasons"
+    );
+}
+
+#[test]
+fn reserve_locks_records_waiting_on_locks_in_run_state() {
+    let (_root, runtime, repo_root) = super::super::test_support::runtime_with_workspace_layout();
+    super::super::test_support::write_workspace_file(&repo_root, "src/lib.rs");
+    let holder = crate::adapter::tool_host::test_support::create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::InProgress,
+        &["file:src/lib.rs"],
+    );
+    let waiting = crate::adapter::tool_host::test_support::create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::Backlog,
+        &["file:src/lib.rs"],
+    );
+
+    let (run_id, result) = reserve_locks_for(&runtime, vec![waiting.id.clone()]);
+    let output = result.expect("lock conflict is a wait, not a dispatch error");
+
+    assert_eq!(output["reserved"], json!(false));
+    assert_eq!(
+        output["conflicts"],
+        json!([{
+            "file": "file:src/lib.rs",
+            "held_by": "task",
+            "held_by_id": holder.id,
+        }])
+    );
+    let state = runtime
+        .read_run_state(&run_id)
+        .expect("read run state")
+        .expect("state exists");
+    assert_eq!(
+        state.waiting_on_locks,
+        Some(vec!["file:src/lib.rs".to_string()])
+    );
+    assert_eq!(state.waiting_on_deps, None);
 }

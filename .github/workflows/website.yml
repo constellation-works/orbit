@@ -44,6 +44,18 @@ jobs:
       - name: Build website
         run: npm run build
 
+      - name: Validate security.txt
+        run: |
+          npm run validate:security-txt -- public/.well-known/security.txt
+          npm run validate:security-txt -- dist/.well-known/security.txt
+
+      - name: Check transport-security policy
+        run: |
+          set -euo pipefail
+          test -f dist/_headers
+          # ORB-11461 / e2454bcb0: Cloudflare emits the policy with indentation.
+          grep -E '^[[:space:]]*Strict-Transport-Security: max-age=31536000$' dist/_headers
+
       - name: Attach publication provenance
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
@@ -155,3 +167,55 @@ jobs:
           test -n "$DEPLOYMENT_URL"
           verify_site "$DEPLOYMENT_URL"
           verify_site "$PUBLIC_URL"
+
+          verify_security_txt() {
+            local base_url="${1%/}"
+            local body
+            local headers
+            local status
+
+            body="$(mktemp)"
+            headers="$(mktemp)"
+            status="$(curl --silent --show-error --max-time 20 \
+              --dump-header "$headers" --output "$body" --write-out '%{http_code}' \
+              "$base_url/.well-known/security.txt")"
+            test "$status" = 200
+            grep -Eiq '^content-type:[[:space:]]*text/plain(?:;|$)' "$headers"
+            node website/scripts/validate-security-txt.mjs "$body"
+            rm -f "$body" "$headers"
+          }
+
+          verify_security_txt "$DEPLOYMENT_URL"
+          verify_security_txt "$PUBLIC_URL"
+
+          verify_hsts() {
+            local url="$1"
+            local expected_status="$2"
+            local headers
+            local status
+
+            headers="$(mktemp)"
+            status="$(curl --silent --show-error --max-time 20 \
+              --dump-header "$headers" --output /dev/null --write-out '%{http_code}' "$url")"
+            test "$status" = "$expected_status"
+            grep -Eiq '^strict-transport-security:[[:space:]]*max-age=31536000[[:space:]]*$' "$headers"
+            rm -f "$headers"
+          }
+
+          verify_http_redirect() {
+            local headers
+            local status
+
+            headers="$(mktemp)"
+            status="$(curl --silent --show-error --max-time 20 \
+              --dump-header "$headers" --output /dev/null --write-out '%{http_code}' http://orbit-cli.com/)"
+            test "$status" -ge 301
+            test "$status" -le 399
+            grep -Eiq '^location:[[:space:]]*https://orbit-cli\.com/' "$headers"
+            rm -f "$headers"
+          }
+
+          verify_hsts "$PUBLIC_URL/" 200
+          verify_hsts "$PUBLIC_URL/getting-started/install/" 200
+          verify_hsts "$PUBLIC_URL/hsts-verification-missing-route" 404
+          verify_http_redirect

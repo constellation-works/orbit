@@ -2,7 +2,7 @@
 type: design
 summary: "Glossary: Policy & Sandboxing"
 tags: ["policy-sandbox"]
-last_validated: 2026-08-15
+last_validated: 2026-09-07
 ---
 
 # Glossary: Policy & Sandboxing

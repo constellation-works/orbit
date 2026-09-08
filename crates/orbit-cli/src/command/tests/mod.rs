@@ -10,6 +10,7 @@ mod locks;
 mod operation;
 mod operation_args;
 mod operation_mode;
+mod search;
 mod sweep;
 
 use std::path::Path;
@@ -70,6 +71,14 @@ fn assert_help_tree_has_no_concrete_artifact_ids(command: &Command) {
 #[test]
 fn recursive_cli_help_uses_only_placeholder_artifact_ids() {
     assert_help_tree_has_no_concrete_artifact_ids(&Cli::command());
+}
+
+#[test]
+fn cli_command_tree_debug_assert_rejects_duplicate_long_flags() {
+    // Clap only panics on colliding long names during command build. Keep an
+    // explicit whole-tree check so a new global/subcommand overlap fails here
+    // instead of in an unrelated parser or help snapshot [ORB-11765].
+    Cli::command().debug_assert();
 }
 
 #[test]

@@ -174,6 +174,15 @@ pub(super) struct RawDocFrontmatter {
     pub(crate) related_artifacts: Vec<ArtifactRef>,
 }
 
+/// One doc as produced by a single walk: its record plus the body parsed out
+/// of the same read. Callers that need the text — search scoring, embeddings,
+/// related-doc excerpts — consume this instead of re-reading the file.
+#[derive(Debug)]
+pub(super) struct WalkedDoc {
+    pub(crate) record: DocRecord,
+    pub(crate) body: String,
+}
+
 #[derive(Debug)]
 pub(super) struct ParsedDoc {
     pub(crate) frontmatter: DocFrontmatter,

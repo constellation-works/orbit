@@ -1,8 +1,11 @@
 //! Unit tests for `bm25` — sibling layout under vector/query/tests/.
 
+use rusqlite::Connection;
+
 use super::super::bm25::{bm25_top_k, fts_terms_query, snippet_for_hit};
 
 use crate::NoopEmbedder;
+use crate::vector::store::schema::SEMANTIC_INDEX_LAYOUT_INCOMPATIBLE;
 use crate::vector::{EmbeddingField, VectorStore};
 
 #[test]
@@ -25,7 +28,7 @@ fn bm25_top_k_ranks_lexical_matches() {
             .unwrap();
     }
 
-    let hits = bm25_top_k(&store, "neutrino", Some("task"), 3).unwrap();
+    let hits = bm25_top_k(&store, "neutrino", Some("task"), None, 3).unwrap();
 
     assert_eq!(hits[0].source_id, "T2");
     assert_eq!(hits[0].field, "purpose");
@@ -55,8 +58,8 @@ fn bm25_top_k_filters_by_source_kind() {
         )
         .unwrap();
 
-    let task_hits = bm25_top_k(&store, "neutrino", Some("task"), 10).unwrap();
-    let all_hits = bm25_top_k(&store, "neutrino", None, 10).unwrap();
+    let task_hits = bm25_top_k(&store, "neutrino", Some("task"), None, 10).unwrap();
+    let all_hits = bm25_top_k(&store, "neutrino", None, None, 10).unwrap();
 
     assert_eq!(task_hits.len(), 1);
     assert_eq!(task_hits[0].source_kind, "task");
@@ -98,7 +101,7 @@ fn bm25_multi_word_query_matches_non_adjacent_terms() {
             .unwrap();
     }
 
-    let hits = bm25_top_k(&store, "neutrino decay", Some("task"), 5).unwrap();
+    let hits = bm25_top_k(&store, "neutrino decay", Some("task"), None, 5).unwrap();
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert_eq!(hits[0].source_id, "T1");
 }
@@ -109,13 +112,13 @@ fn snippet_lookup_preserves_chunk_order() {
     let conn = store.connection();
     let conn = conn.lock().unwrap();
     conn.execute(
-        "INSERT INTO corpus_fts(source_kind, source_id, field, content) VALUES (?1, ?2, ?3, ?4)",
-        ("task", "T1", "purpose", "first chunk"),
+        "INSERT INTO chunks(source_kind, source_id, field, chunk_idx, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+        ("task", "T1", "purpose", 0, "first chunk"),
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO corpus_fts(source_kind, source_id, field, content) VALUES (?1, ?2, ?3, ?4)",
-        ("task", "T1", "purpose", "second chunk"),
+        "INSERT INTO chunks(source_kind, source_id, field, chunk_idx, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+        ("task", "T1", "purpose", 1, "second chunk"),
     )
     .unwrap();
     drop(conn);
@@ -123,4 +126,72 @@ fn snippet_lookup_preserves_chunk_order() {
     let snippet = snippet_for_hit(&store, "task", "T1", "purpose", Some(1), None).unwrap();
 
     assert_eq!(snippet.as_deref(), Some("second chunk"));
+}
+
+/// Opening a pre-[ORB-11695] inline `corpus_fts` through the current runtime
+/// migrates in place; BM25 and snippets then read `chunks`, and the migrated
+/// rows stay put. This is not a dual-read shim for older binaries.
+#[test]
+fn bm25_and_snippets_survive_inline_to_external_content_migration() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("semantic.db");
+    {
+        let conn = Connection::open(&path).expect("seed db");
+        conn.execute_batch(
+            r#"
+                CREATE VIRTUAL TABLE corpus_fts USING fts5(
+                    source_kind UNINDEXED,
+                    source_id UNINDEXED,
+                    field UNINDEXED,
+                    content,
+                    tokenize = 'porter unicode61 remove_diacritics 2'
+                );
+                INSERT INTO corpus_fts(source_kind, source_id, field, content)
+                VALUES
+                    ('task', 'T1', 'purpose', 'gamma neutrino'),
+                    ('doc', 'docs/a.md', 'body', 'unrelated');
+            "#,
+        )
+        .expect("seed inline corpus");
+    }
+
+    let store = VectorStore::open(&path).expect("open migrates layout");
+    let hits = bm25_top_k(&store, "neutrino", Some("task"), None, 5).expect("current bm25");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].source_kind, "task");
+    assert_eq!(hits[0].source_id, "T1");
+    assert_eq!(hits[0].field, "purpose");
+
+    let snippet = snippet_for_hit(&store, "task", "T1", "purpose", Some(0), None)
+        .expect("snippet")
+        .expect("migrated chunk text");
+    assert_eq!(snippet, "gamma neutrino");
+
+    let conn = store.connection();
+    let conn = conn.lock().expect("lock");
+    let leftover_inline: i64 = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('corpus_fts') WHERE name = 'source_kind')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("pragma");
+    assert_eq!(
+        leftover_inline, 0,
+        "migration must not restore inline columns"
+    );
+    let chunks: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
+        .expect("chunk count");
+    assert_eq!(chunks, 2);
+
+    let mismatch =
+        crate::vector::store::schema::evaluate_legacy_inline_reader(&conn, "neutrino", "task")
+            .expect_err("old inline reader against migrated store");
+    let message = mismatch.to_string();
+    assert!(
+        message.contains(SEMANTIC_INDEX_LAYOUT_INCOMPATIBLE),
+        "{message}"
+    );
+    assert!(!message.to_ascii_lowercase().contains("no such column"));
 }

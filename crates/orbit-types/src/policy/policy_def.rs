@@ -5,13 +5,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::policy::PolicyError;
-use crate::policy::glob::{compile_glob_regex, match_glob, normalize_glob_path};
+use crate::policy::fs_rules::CompiledFsRules;
+use crate::policy::glob::compile_glob_regex;
 use crate::resource::validate_resource_name;
 
 pub const DEFAULT_POLICY_NAME: &str = "default";
 pub const UNRESTRICTED_FS_PROFILE: &str = "unrestricted";
-const NO_MATCHING_RULE: &str = "<no matching rule>";
-const EMPTY_RULESET: &str = "[]";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -29,10 +28,10 @@ pub struct PolicyDef {
         skip_serializing_if = "HashMap::is_empty"
     )]
     pub fs_profiles: HashMap<String, FsProfile>,
-    #[serde(default = "chrono::Utc::now")]
-    pub created_at: DateTime<Utc>,
-    #[serde(default = "chrono::Utc::now")]
-    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -49,6 +48,21 @@ pub struct ResolvedFsProfile {
     pub name: String,
     pub read: Vec<String>,
     pub modify: Vec<String>,
+}
+
+impl ResolvedFsProfile {
+    /// Compile this profile's rules for `operation` so a caller can decide
+    /// many paths against one rule set.
+    pub fn compile(&self, operation: FsOperation) -> Result<CompiledFsRules, PolicyError> {
+        let rules = match operation {
+            FsOperation::Read => &self.read,
+            FsOperation::Modify => &self.modify,
+        };
+        CompiledFsRules::compile(
+            rules,
+            &format!("fsProfile `{}` {}", self.name, operation.as_str()),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -164,12 +178,8 @@ impl PolicyDef {
             deny_read,
             deny_modify,
             fs_profiles,
-            created_at: global.created_at,
-            updated_at: if workspace.updated_at > global.updated_at {
-                workspace.updated_at
-            } else {
-                global.updated_at
-            },
+            created_at: global.created_at.or(workspace.created_at),
+            updated_at: workspace.updated_at.max(global.updated_at),
         };
         merged.validate()?;
         Ok(merged)
@@ -220,46 +230,7 @@ impl PolicyDef {
         path: &str,
     ) -> Result<FsCheckResult, PolicyError> {
         let profile = self.effective_profile(profile_name)?;
-        let normalized_path = normalize_glob_path(path)?;
-        let rules = match operation {
-            FsOperation::Read => &profile.read,
-            FsOperation::Modify => &profile.modify,
-        };
-
-        if rules.is_empty() {
-            return Ok(FsCheckResult {
-                allowed: false,
-                matched_rule: EMPTY_RULESET.to_string(),
-            });
-        }
-
-        let mut saw_positive_rule = false;
-        let mut decision = None;
-        for rule in rules {
-            let (negated, pattern) = split_rule(rule);
-            if !negated {
-                saw_positive_rule = true;
-            }
-            if match_glob(pattern, &normalized_path)? {
-                decision = Some(FsCheckResult {
-                    allowed: !negated,
-                    matched_rule: if negated {
-                        pattern.to_string()
-                    } else {
-                        rule.clone()
-                    },
-                });
-            }
-        }
-
-        Ok(decision.unwrap_or_else(|| FsCheckResult {
-            allowed: false,
-            matched_rule: if saw_positive_rule {
-                NO_MATCHING_RULE.to_string()
-            } else {
-                EMPTY_RULESET.to_string()
-            },
-        }))
+        profile.compile(operation)?.evaluate(path)
     }
 }
 

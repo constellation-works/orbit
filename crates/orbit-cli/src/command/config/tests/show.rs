@@ -44,3 +44,49 @@ sandbox = "danger-full-access"
         global_root.join("config.toml").to_string_lossy().as_ref()
     );
 }
+
+#[test]
+fn effective_json_includes_configured_crew_effort_and_omits_unconfigured() {
+    let (_root, runtime, global_root, workspace_root) = test_runtime();
+    fs::write(
+        global_root.join("config.toml"),
+        r#"
+[workflow]
+default_crew = "sol"
+
+[crews.sol]
+model = "gpt-5.6-sol"
+provider = "codex"
+effort = "medium"
+
+[crews.opus]
+model = "opus"
+provider = "claude"
+"#,
+    )
+    .expect("write global config");
+    fs::write(
+        workspace_root.join("config.toml"),
+        "[crews.sol]\neffort = \"high\"\n",
+    )
+    .expect("write workspace override");
+
+    let effective = load_effective_config(&ConfigRoots::new(&global_root, &workspace_root))
+        .expect("load effective layered config");
+    let json = effective_json(&runtime, effective.values());
+
+    assert_eq!(json["settings"]["crews.sol.effort"], "high");
+    assert_eq!(json["provenance"]["crews.sol.effort"]["scope"], "workspace");
+    assert_eq!(
+        json["provenance"]["crews.sol.effort"]["path"],
+        workspace_root
+            .join("config.toml")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert!(
+        json["settings"].get("crews.opus.effort").is_none(),
+        "omitted effort must not appear in settings: {}",
+        json["settings"]
+    );
+}

@@ -1,13 +1,9 @@
-use std::thread;
-
 use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::resolve_query_model;
 use crate::vector::VectorStore;
-use crate::vector::query::{
-    FusedCandidate, bm25_top_k, reciprocal_rank_fusion, rollup_to_tasks, snippet_for_hit,
-};
+use crate::vector::query::{bm25_top_k, reciprocal_rank_fusion, rollup_to_tasks, snippet_for_hit};
 use crate::{Embedder, SubprocessEmbedder};
 
 const DEFAULT_LIMIT: usize = 10;
@@ -88,35 +84,18 @@ pub(crate) fn run_with_embedder(
     let retriever_limit = limit.saturating_mul(RETRIEVER_OVERFETCH).max(limit);
     let kind = params.kind.as_deref();
     let model_id = embedder.model_id().to_string();
-    let query_for_bm25 = query.to_string();
-    let cosine_store = vector_store.clone();
-    let bm25_store = vector_store.clone();
-    let cosine_model_id = model_id.clone();
-    let cosine_kind = kind.map(ToOwned::to_owned);
+    let field = params.field.as_deref();
+    let cosine = crate::vector::query::cosine_top_k(
+        vector_store,
+        &query_vector,
+        &model_id,
+        retriever_limit,
+        kind,
+        field,
+    )?;
+    let bm25 = bm25_top_k(vector_store, query, kind, field, retriever_limit)?;
 
-    let (cosine, bm25) = thread::scope(|scope| {
-        let cosine_handle = scope.spawn(|| {
-            crate::vector::query::cosine_top_k(
-                &cosine_store,
-                &query_vector,
-                &cosine_model_id,
-                retriever_limit,
-                cosine_kind.as_deref(),
-            )
-        });
-        let bm25_handle =
-            scope.spawn(|| bm25_top_k(&bm25_store, &query_for_bm25, kind, retriever_limit));
-        let cosine = cosine_handle
-            .join()
-            .map_err(|_| OrbitError::Execution("cosine retriever panicked".to_string()))?;
-        let bm25 = bm25_handle
-            .join()
-            .map_err(|_| OrbitError::Execution("bm25 retriever panicked".to_string()))?;
-        Ok::<_, OrbitError>((cosine?, bm25?))
-    })?;
-
-    let mut candidates = reciprocal_rank_fusion(&cosine, &bm25);
-    apply_candidate_filters(&mut candidates, params.field.as_deref(), kind);
+    let candidates = reciprocal_rank_fusion(&cosine, &bm25);
     let task_hits = rollup_to_tasks(candidates, limit);
     let results = task_hits
         .into_iter()
@@ -146,17 +125,6 @@ pub(crate) fn run_with_embedder(
         .collect::<Result<Vec<_>, OrbitError>>()?;
 
     Ok(SemanticSearchResult { results, model_id })
-}
-
-pub(crate) fn apply_candidate_filters(
-    candidates: &mut Vec<FusedCandidate>,
-    field: Option<&str>,
-    kind: Option<&str>,
-) {
-    candidates.retain(|candidate| {
-        field.is_none_or(|field| candidate.field == field)
-            && kind.is_none_or(|kind| candidate.source_kind == kind)
-    });
 }
 
 pub(crate) fn truncate_snippet(snippet: &str) -> String {

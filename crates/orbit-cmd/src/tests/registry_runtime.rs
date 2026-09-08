@@ -52,8 +52,13 @@ fn binding_preserves_logical_and_runtime_ids_and_ship_mode() {
     assert_eq!(resolved.logical_workspace_id, "logical-abc123");
     assert_eq!(resolved.runtime.logical_workspace_id, "logical-abc123");
     assert_eq!(resolved.runtime.workspace_id, "ws_runtime_config");
+    assert_eq!(
+        resolved.runtime.owner_machine_id.as_deref(),
+        Some("hm_owner")
+    );
     assert_eq!(resolved.runtime.repo_root, repo);
     assert_eq!(resolved.runtime.ship_mode.as_input_value(), "pr");
+    assert_eq!(resolved.runtime.base_branch.as_deref(), Some("agent-main"));
 
     let direct = workspace_runtime_binding(&workspace, &checkout).expect("core binding");
     assert_eq!(direct, resolved.runtime);
@@ -91,6 +96,11 @@ fn registered_checkout_opens_a_bound_runtime() {
     assert_eq!(binding.workspace_id, "ws_runtime");
     assert_eq!(binding.repo_root, repo);
     assert_eq!(binding.ship_mode.as_input_value(), "local");
+    assert_eq!(
+        binding.owner_machine_id.as_deref(),
+        Some("hm_owner"),
+        "delivery automation resolves its default owner from this registry fact"
+    );
 
     assert!(matches!(
         runtime.run_tool("orbit.workspace.list", json!({})),
@@ -1031,4 +1041,90 @@ fn unpinned_root_resolution_still_binds_the_registered_checkout() {
         .expect("shared-root fallback must bind the registered checkout");
     assert_eq!(from_worktree.workspace.id, "ws_managed");
     assert_eq!(from_worktree.checkout.repo_root, fixture.repo_root);
+}
+
+struct CollidingIdNameFixture {
+    _root: tempfile::TempDir,
+    global: PathBuf,
+    alpha_repo: PathBuf,
+    alpha_orbit_dir: PathBuf,
+}
+
+fn colliding_id_name_fixture() -> CollidingIdNameFixture {
+    let root = tempfile::tempdir().expect("root");
+    let global = root.path().join("global");
+    std::fs::create_dir_all(&global).expect("global");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_collision\"\nhost_id = \"collision\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("host identity");
+
+    let (ws_alpha, checkout_alpha) =
+        registered_workspace(root.path(), "ws_alpha", "alpha", "hm_collision");
+    let (ws_shadow, checkout_shadow) =
+        registered_workspace(root.path(), "ws_ws_alpha", "ws_alpha", "hm_collision");
+    save_registry_to(
+        &WorkspaceRegistry {
+            workspaces: vec![ws_alpha, ws_shadow],
+            checkouts: vec![checkout_alpha.clone(), checkout_shadow],
+            ..Default::default()
+        },
+        &registry_path_for(&global),
+    )
+    .expect("workspace registry");
+
+    CollidingIdNameFixture {
+        _root: root,
+        global,
+        alpha_repo: checkout_alpha.repo_root,
+        alpha_orbit_dir: checkout_alpha.orbit_dir,
+    }
+}
+
+#[test]
+fn cwd_and_absolute_path_select_a_workspace_whose_id_collides_with_another_name() {
+    let fixture = colliding_id_name_fixture();
+    let roots = OrbitRuntimeRoots {
+        global_root: fixture.global.clone(),
+        shared_root: fixture.alpha_orbit_dir.clone(),
+        local_root: fixture.alpha_orbit_dir.clone(),
+    };
+
+    let from_cwd = select_workspace_for_cwd_and_roots(&fixture.alpha_repo, &roots)
+        .expect("cwd selection must not treat the checkout id as an ambiguous selector")
+        .expect("alpha checkout must bind");
+    assert_eq!(from_cwd.workspace.id, "ws_alpha");
+    assert_eq!(from_cwd.workspace.name, "alpha");
+    assert_eq!(from_cwd.checkout.repo_root, fixture.alpha_repo);
+
+    let alpha_path = fixture.alpha_repo.to_str().expect("utf8 checkout path");
+    let from_path = RegisteredRuntimeFactory::initialize_with_overrides(
+        Some(&fixture.global),
+        Some(alpha_path),
+    )
+    .expect("absolute checkout path must bind alpha");
+    let binding = from_path
+        .workspace_runtime_binding()
+        .expect("path-selected runtime is bound");
+    assert_eq!(binding.logical_workspace_id, "ws_alpha");
+    assert_eq!(binding.repo_root, fixture.alpha_repo);
+
+    let ambiguous = match RegisteredRuntimeFactory::initialize_with_overrides(
+        Some(&fixture.global),
+        Some("ws_alpha"),
+    ) {
+        Ok(_) => panic!("a directly entered colliding selector must fail closed"),
+        Err(error) => error,
+    };
+    match ambiguous {
+        OrbitError::InvalidInput(message) => {
+            assert!(message.contains("ws_alpha"), "{message}");
+            assert!(
+                message.contains("ambiguous workspace selector"),
+                "{message}"
+            );
+        }
+        other => panic!("expected InvalidInput, got {other}"),
+    }
 }

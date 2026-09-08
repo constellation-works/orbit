@@ -6,15 +6,16 @@ use std::time::Instant;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_TOGGLE, OPERATOR_OVERRIDE_ENV,
+    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_TOGGLE,
 };
 use orbit_core::OrbitRuntime;
+use orbit_core::application::auto_tasks::schedule::next_scheduled_slot;
 use orbit_core::application::auto_tasks::{
-    collect_auto_tasks, cursor_state_path, load_cursor_state,
+    AutoTaskCursor, collect_auto_tasks, cursor_state_path, load_cursor_state,
 };
-use orbit_core::application::routines::parse_cron;
+use orbit_core::application::routines::ScheduleDisplayState;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag,
@@ -22,10 +23,12 @@ use orbit_types::workflow::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::blocking;
 use super::map_runtime_error;
 use super::routines::{
-    OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
-    named_entity_not_found, record_operation_audit, selection_conflict,
+    OperationsQuery, action_capability, authorization_denied, authorized_caller,
+    explicit_workspace, named_entity_not_found, next_evaluation_json, record_operation_audit,
+    selection_conflict,
 };
 use crate::state::DashboardState;
 
@@ -114,7 +117,13 @@ pub(super) async fn toggle_auto_task(
         }
     };
     let started = Instant::now();
-    let current = match runtime.auto_task_show(&body.name) {
+    let name = body.name.clone();
+    let current = match blocking("auto-task show", {
+        let runtime = runtime.clone();
+        move || runtime.auto_task_show(&name)
+    })
+    .await
+    {
         Ok(Some(definition)) => definition,
         Ok(None) => {
             return named_entity_not_found(
@@ -122,7 +131,7 @@ pub(super) async fn toggle_auto_task(
                 format!("auto-task '{}' was not found", body.name),
             );
         }
-        Err(error) => return map_runtime_error(error),
+        Err(response) => return *response,
     };
     if current.enabled != body.expected_enabled {
         return (
@@ -144,9 +153,16 @@ pub(super) async fn toggle_auto_task(
         }))
         .into_response();
     }
-    let updated = match runtime.auto_task_toggle(&body.name, body.enabled) {
-        Ok(updated) => updated,
-        Err(error) => {
+    let updated = match blocking("auto-task toggle", {
+        let runtime = runtime.clone();
+        let name = body.name.clone();
+        let enabled = body.enabled;
+        move || Ok(runtime.auto_task_toggle(&name, enabled))
+    })
+    .await
+    {
+        Ok(Ok(updated)) => updated,
+        Ok(Err(error)) => {
             let error_message = error.to_string();
             record_operation_audit(
                 &runtime,
@@ -162,6 +178,7 @@ pub(super) async fn toggle_auto_task(
             );
             return map_runtime_error(error);
         }
+        Err(response) => return *response,
     };
     record_operation_audit(
         &runtime,
@@ -229,9 +246,15 @@ pub(super) async fn mint_auto_task(
         }
     };
     let started = Instant::now();
-    let minted = match runtime.auto_task_mint(&body.name) {
-        Ok(task) => task,
-        Err(error) => {
+    let minted = match blocking("auto-task mint", {
+        let runtime = runtime.clone();
+        let name = body.name.clone();
+        move || Ok(runtime.auto_task_mint(&name))
+    })
+    .await
+    {
+        Ok(Ok(task)) => task,
+        Ok(Err(error)) => {
             let error_message = error.to_string();
             record_operation_audit(
                 &runtime,
@@ -247,6 +270,7 @@ pub(super) async fn mint_auto_task(
             );
             return map_runtime_error(error);
         }
+        Err(response) => return *response,
     };
     record_operation_audit(
         &runtime,
@@ -299,9 +323,14 @@ fn read_only_envelope(generated_at: DateTime<Utc>, workspace: Option<&str>, reas
         "generated_at": generated_at.to_rfc3339(),
         "workspace": workspace,
         "controls_authorized": false,
+        "capabilities": {
+            "auto_task_toggle": {"authorized": false, "reason": reason},
+            "auto_task_mint": {"authorized": false, "reason": reason},
+        },
         "read_only_reason": reason,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "definitions": [],
+        "cursor_state_error": null,
         "load_errors": [],
     })
 }
@@ -313,7 +342,9 @@ fn list_json(
     generated_at: DateTime<Utc>,
 ) -> Value {
     let collection = collect_auto_tasks(&runtime.paths().local_dir);
-    let cursors = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir));
+    let cursor_load = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir));
+    let cursor_state_error = cursor_load.as_ref().err().map(ToString::to_string);
+    let cursors = cursor_load.as_ref().ok();
     let now = Utc::now();
     let definitions = collection
         .definitions
@@ -322,7 +353,8 @@ fn list_json(
             definition_json(
                 runtime,
                 &loaded.definition,
-                cursors.definitions.get(&loaded.definition.name),
+                cursors.and_then(|state| state.definitions.get(&loaded.definition.name)),
+                cursor_state_error.is_some(),
                 now,
             )
         })
@@ -334,15 +366,14 @@ fn list_json(
         "workspace": workspace,
         "workspace_name": workspace_name,
         "controls_authorized": controls_authorized,
-        "read_only_reason": if controls_authorized {
-            Value::Null
-        } else {
-            Value::String(format!(
-                "Controls require an authorized operator session (set {OPERATOR_OVERRIDE_ENV} or use an interactive operator terminal)."
-            ))
+        "capabilities": {
+            "auto_task_toggle": action_capability(&DASHBOARD_AUTO_TASK_TOGGLE),
+            "auto_task_mint": action_capability(&DASHBOARD_AUTO_TASK_MINT),
         },
+        "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "definitions": definitions,
+        "cursor_state_error": cursor_state_error,
         "load_errors": collection.errors.iter().map(|error| json!({
             "path": error.path.as_ref().map(|path| path.display().to_string()),
             "message": error.message,
@@ -354,6 +385,7 @@ fn definition_json(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     cursor: Option<&orbit_core::application::auto_tasks::AutoTaskCursor>,
+    cursor_state_unavailable: bool,
     now: DateTime<Utc>,
 ) -> Value {
     let automation = match &definition.schedule {
@@ -399,10 +431,21 @@ fn definition_json(
             "last_slot": cursor.last_slot,
             "last_fired_at": cursor.last_fired_at,
             "last_task_id": cursor.last_task_id,
+            "pending": cursor.pending.as_ref().map(|pending| json!({
+                "slot": pending.slot,
+                "task_id": pending.task_id,
+            })),
         })),
         "last_minted_task_id": last_minted_task_id,
         "last_minted_task_status": last_minted_task_status,
-        "next_evaluation": next_evaluation(&definition.schedule, cursor, now),
+        "next_evaluation": next_evaluation_projection(
+            definition.enabled,
+            &definition.schedule,
+            cursor,
+            cursor_state_unavailable,
+            automation.as_ref(),
+            now,
+        ),
         "open_duplicate": open_duplicate,
         "may_create_open_duplicate": open_duplicate,
     })
@@ -428,7 +471,7 @@ fn schedule_summary(schedule: &AutoTaskSchedule) -> String {
         AutoTaskSchedule::Deliveries {
             deliveries_landed: t,
         } => format!(
-            "{} deliveries on {} ({:?})",
+            "{} deliveries on {} ({})",
             t.threshold, t.branch, t.coverage
         ),
         AutoTaskSchedule::Cron { cron } => format!("cron {cron}"),
@@ -456,59 +499,70 @@ fn template_summary(template: &AutoTaskTemplate) -> String {
     parts.join(" · ")
 }
 
-fn next_evaluation(
+fn next_evaluation_projection(
+    enabled: bool,
     schedule: &AutoTaskSchedule,
-    cursor: Option<&orbit_core::application::auto_tasks::AutoTaskCursor>,
+    cursor: Option<&AutoTaskCursor>,
+    cursor_state_unavailable: bool,
+    automation: Option<&Value>,
     now: DateTime<Utc>,
-) -> Option<String> {
-    let cursor = cursor?;
+) -> Value {
+    if !enabled {
+        return next_evaluation_json(
+            ScheduleDisplayState::Disabled,
+            projected_next_slot(schedule, cursor, now),
+        );
+    }
+    if cursor_state_unavailable || automation_unavailable(automation) {
+        return next_evaluation_json(ScheduleDisplayState::Unavailable, None);
+    }
     match schedule {
-        AutoTaskSchedule::Deliveries { .. } => None,
-        AutoTaskSchedule::Cron { cron } => {
-            let parsed = parse_cron(cron).ok()?;
-            let now_local = now.with_timezone(&Local);
-            parsed
-                .find_next_occurrence(&now_local, false)
-                .ok()
-                .map(|slot| slot.with_timezone(&Utc).to_rfc3339())
+        AutoTaskSchedule::Deliveries { .. } => {
+            next_evaluation_json(ScheduleDisplayState::Waiting, None)
         }
-        AutoTaskSchedule::Interval { every_minutes } => {
-            next_interval(*every_minutes, cursor, now).map(|slot| slot.to_rfc3339())
+        AutoTaskSchedule::Cron { .. } | AutoTaskSchedule::Interval { .. } => {
+            if cursor.is_none() {
+                return next_evaluation_json(ScheduleDisplayState::NeverObserved, None);
+            }
+            match projected_next_slot(schedule, cursor, now) {
+                Some(at) => next_evaluation_json(ScheduleDisplayState::Scheduled, Some(at)),
+                None => next_evaluation_json(ScheduleDisplayState::Unavailable, None),
+            }
         }
     }
 }
 
-fn next_interval(
-    every_minutes: u64,
-    cursor: &orbit_core::application::auto_tasks::AutoTaskCursor,
+fn automation_unavailable(automation: Option<&Value>) -> bool {
+    automation
+        .and_then(|value| value.get("reason"))
+        .and_then(Value::as_str)
+        .is_some_and(|reason| reason == "source_unavailable" || reason == "state_unavailable")
+}
+
+/// The schedule's next occurrence, rendered for the dashboard.
+///
+/// This is the next scheduled arrival, never catch-up eligibility: a definition
+/// with a missed slot pending is due for that earlier slot while this points
+/// forward. The arithmetic belongs to the auto-task scheduler, so this only
+/// adapts the cursor and renders the result; a schedule that cannot be
+/// projected (unparseable cron, interval with no anchor) yields `None` and the
+/// caller labels the row.
+fn projected_next_slot(
+    schedule: &AutoTaskSchedule,
+    cursor: Option<&AutoTaskCursor>,
     now: DateTime<Utc>,
-) -> Option<DateTime<Utc>> {
-    if every_minutes == 0 {
-        return None;
-    }
-    let baseline = DateTime::parse_from_rfc3339(&cursor.baseline_at)
-        .ok()?
-        .with_timezone(&Utc);
-    let last_slot = cursor
-        .last_slot
-        .as_deref()
-        .and_then(|slot| DateTime::parse_from_rfc3339(slot).ok())
-        .map(|slot| slot.with_timezone(&Utc));
-    let interval = Duration::minutes(i64::try_from(every_minutes).ok()?);
-    let floor = last_slot.unwrap_or(baseline);
-    if now < baseline {
-        return Some(baseline + interval);
-    }
-    let elapsed = now.signed_duration_since(baseline).num_minutes();
-    let period = i64::try_from(every_minutes).ok()?;
-    let mut periods = elapsed / period;
-    let mut next = baseline + Duration::minutes(period * periods);
-    if next <= floor || next <= now {
-        periods += 1;
-        next = baseline + Duration::minutes(period * periods);
-    }
-    if next <= now {
-        next += interval;
-    }
-    Some(next)
+) -> Option<String> {
+    let baseline = cursor.and_then(cursor_baseline);
+
+    next_scheduled_slot(schedule, baseline, now)
+        .ok()
+        .flatten()
+        .map(|slot| slot.to_rfc3339())
+}
+
+/// The cursor's first-observed slot, which anchors interval projections.
+fn cursor_baseline(cursor: &AutoTaskCursor) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(&cursor.baseline_at)
+        .ok()
+        .map(|baseline| baseline.with_timezone(&Utc))
 }

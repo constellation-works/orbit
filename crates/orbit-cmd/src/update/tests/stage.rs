@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::update::stage::{restore_backup, restore_backup_with_rename};
+use crate::update::stage::restore_backup_with_rename;
 
 #[test]
 fn a_failed_atomic_restore_keeps_both_complete_files_and_cleans_staging() {
@@ -58,6 +58,7 @@ fn a_failed_atomic_restore_keeps_both_complete_files_and_cleans_staging() {
 #[cfg(target_os = "linux")]
 #[test]
 fn rollback_replaces_a_running_executable_atomically() {
+    use crate::update::stage::restore_backup;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
     use std::time::{Duration, Instant};

@@ -15,6 +15,7 @@ workspace = true
 clap = ["orbit-types/clap"]
 
 [dependencies]
+getrandom.workspace = true
 orbit-automation = { path = "../orbit-automation" }
 base64.workspace = true
 chrono.workspace = true
@@ -43,4 +44,5 @@ libc.workspace = true
 
 [dev-dependencies]
 orbit-common = { path = "../orbit-common", features = ["test-util"] }
+orbit-engine = { path = "../orbit-engine", features = ["test-support"] }
 orbit-exec = { path = "../orbit-exec" }

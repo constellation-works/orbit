@@ -138,7 +138,8 @@ pub(super) fn migrated_default_executor_for_platform(
 
     // Linux shipped without an OS wrapper before ORB-10552, so an installed
     // default commonly has `None` rather than a mismatched concrete kind.
-    // Upgrade that old shipped state to Bubblewrap on the next seed.
+    // Upgrade that old shipped state to Bubblewrap on the next seed. Explicit
+    // `off` is a distinct, platform-independent choice and never enters here.
     if existing.sandbox.is_none()
         && seeded.sandbox == Some(ExecutorSandboxKind::LinuxBwrap)
         && target_os == "linux"

@@ -13,8 +13,8 @@ use orbit_common::governance::authorization::{
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::application::routines::{
-    ClockStatus, RoutineStatus, RoutineStatusReport, RoutineToggleOutcome, clock_status,
-    set_clock_cadence, set_clock_enabled, set_routine_enabled,
+    ClockStatus, RoutineStatus, RoutineStatusReport, RoutineToggleOutcome, ScheduleDisplayState,
+    clock_status, set_clock_cadence, set_clock_enabled, set_routine_enabled,
 };
 use orbit_core::{AuditEventInsertParams, OrbitRuntime, RoutineFireRecord, RoutineFireState};
 use orbit_types::telemetry::AuditEventStatus;
@@ -336,6 +336,16 @@ pub(super) fn report_json(
         "host_id": report.host_id,
         "machine_id": report.machine_id,
         "controls_authorized": authorized_caller(&DASHBOARD_ROUTINE_TOGGLE).is_ok(),
+        "capabilities": {
+            "routine_toggle": action_capability(&DASHBOARD_ROUTINE_TOGGLE),
+            "clock_service": action_capability(&DASHBOARD_CLOCK_SERVICE),
+            "clock_cadence": action_capability(&DASHBOARD_CLOCK_CADENCE),
+        },
+        "session_explanation": if authorized_caller(&DASHBOARD_ROUTINE_TOGGLE).is_ok() {
+            "Session access: this dashboard server has operator authority. Actions also check workspace and host selection. Mint creates a task without starting delivery; bounded-window submission has separate permissions."
+        } else {
+            "Session access comes from the dashboard server. For deliberate operator access, restart it with ORBIT_OPERATOR=1 orbit web serve and its existing options, then reload this page. Opening a terminal does not authorize a running server. Bounded-window submission has separate permissions."
+        },
         "clock": clock_json(clock),
         "routines": report.statuses.iter().map(status_json).collect::<Vec<_>>(),
         "load_errors": report.load_errors.iter().map(|e| json!({
@@ -364,7 +374,23 @@ fn status_json(status: &RoutineStatus) -> Value {
         "first_observed_at": status.first_observed_at,
         "last_evaluated_slot": status.last_evaluated_slot,
         "next_due": status.next_due,
+        "next_evaluation": next_evaluation_json(
+            status.schedule_display_state(),
+            status.next_due.clone(),
+        ),
         "last_fire": status.last_fire.as_ref().map(fire_json),
+    })
+}
+
+pub(super) fn next_evaluation_json(state: ScheduleDisplayState, at: Option<String>) -> Value {
+    json!({
+        "state": state.as_str(),
+        "at": if state == ScheduleDisplayState::Waiting {
+            None
+        } else {
+            at
+        },
+        "hypothetical": state.is_hypothetical(),
     })
 }
 
@@ -410,6 +436,17 @@ pub(super) fn authorized_caller(
     ));
     authorize(operation, &caller)?;
     Ok(caller)
+}
+
+/// Project the same authorization decision enforced by the mutation endpoint.
+pub(super) fn action_capability(operation: &'static GovernedOperation) -> Value {
+    match authorized_caller(operation) {
+        Ok(_) => json!({"authorized": true, "reason": null}),
+        Err(denial) => json!({
+            "authorized": false,
+            "reason": denial.to_string(),
+        }),
+    }
 }
 
 pub(super) fn authorization_denied(denial: AuthorizationDenial) -> Response {

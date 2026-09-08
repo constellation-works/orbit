@@ -15,13 +15,51 @@ pub(super) fn recover_or_return_original(
     };
 
     if attempt_recovery_activity(step, ctx, &recovery, &original_err, attempt, max_attempts) {
-        match run_step_body(step, ctx) {
-            Ok(outcome) if outcome.success => return Ok(outcome),
-            Ok(_) | Err(_) => {}
-        }
+        return post_recovery_attempt(step, ctx, &recovery, original_err);
     }
 
     Err(original_err)
+}
+
+fn post_recovery_attempt(
+    step: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+    recovery: &ResolvedRecoveryActivity,
+    original_err: DispatchError,
+) -> Result<StepOutcome, DispatchError> {
+    let reattempt = run_step_body(step, ctx);
+    let (outcome, error_message) = match &reattempt {
+        Ok(outcome) if outcome.success => ("success", None),
+        Ok(outcome) => (
+            "failed",
+            Some(
+                outcome
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "step completed with success=false".to_string()),
+            ),
+        ),
+        Err(error) => ("error", Some(error.to_string())),
+    };
+    let error_message = error_message.map(|message| redacted_recovery_diagnostic(&message));
+    emit_job_event_lossy(
+        &ctx.audit,
+        ctx.task_id(),
+        V2AuditEventKind::StepPostRecoveryAttempt {
+            step_id: step.id.clone(),
+            recovery_activity: recovery.name.clone(),
+            outcome: outcome.to_string(),
+            error_message: error_message.clone(),
+        },
+    );
+
+    match reattempt {
+        Ok(outcome) if outcome.success => Ok(outcome),
+        Ok(_) | Err(_) => Err(DispatchError::JobExecution(format!(
+            "post-recovery attempt {outcome}: {}; original error before recovery: {original_err}",
+            error_message.unwrap_or_else(|| "no diagnostic".to_string()),
+        ))),
+    }
 }
 
 pub(super) fn recovery_activity_for_step(
@@ -55,45 +93,61 @@ pub(super) fn attempt_recovery_activity(
         return false;
     }
 
-    // [ORB-11332] Reserve the aggregate recovery episode before any worker
-    // exists. A denial keeps the original error authoritative; the host has
-    // already recorded the escalation on the task.
     let recovery_started = std::time::Instant::now();
-    match ctx.host.authorize_step_recovery(&ctx.run_id, &step.id) {
-        Ok(StepRecoveryAdmission::Allowed | StepRecoveryAdmission::Reserved { .. }) => {}
-        Ok(StepRecoveryAdmission::Denied { reason }) => {
-            tracing::warn!(
-                target: "orbit.engine.job_executor",
-                run_id = %ctx.run_id,
-                failed_step_id = %step.id,
-                recovery_activity = %recovery.name,
-                reason = %reason,
-                "step recovery denied by the operation-mode recovery budget; preserving original step outcome"
-            );
-            emit_job_event_lossy(
-                &ctx.audit,
-                ctx.task_id(),
-                V2AuditEventKind::StepRecoveryAttempted {
-                    step_id: step.id.clone(),
-                    recovery_activity: recovery.name.clone(),
-                    recovery_succeeded: false,
-                },
-            );
-            return false;
+    let result = match ctx.host.authorize_step_recovery(&ctx.run_id, &step.id) {
+        Ok(StepRecoveryAdmission::Allowed | StepRecoveryAdmission::Reserved { .. }) => {
+            let result =
+                dispatch_recovery(step, ctx, recovery, original_err, attempt, max_attempts);
+            // Preparation failures spend the reserved episode too.
+            if let Err(error) = ctx.host.settle_step_recovery(
+                &ctx.run_id,
+                &step.id,
+                recovery_started.elapsed().as_secs(),
+            ) {
+                tracing::warn!(
+                    target: "orbit.engine.job_executor",
+                    run_id = %ctx.run_id,
+                    failed_step_id = %step.id,
+                    error = %error,
+                    "step recovery settlement failed"
+                );
+            }
+            result
         }
-        Err(error) => {
-            tracing::warn!(
-                target: "orbit.engine.job_executor",
-                run_id = %ctx.run_id,
-                failed_step_id = %step.id,
-                recovery_activity = %recovery.name,
-                error = %error,
-                "step recovery authorization failed; preserving original step outcome"
-            );
-            return false;
-        }
-    }
+        Ok(StepRecoveryAdmission::Denied { reason }) => Err(("authorization", reason)),
+        Err(error) => Err(("authorization", error.to_string())),
+    };
 
+    let (recovery_succeeded, failure_phase, error_message) = match result {
+        Ok(()) => (true, None, None),
+        Err((phase, message)) => (
+            false,
+            Some(phase.to_string()),
+            Some(redacted_recovery_diagnostic(&message)),
+        ),
+    };
+    emit_job_event_lossy(
+        &ctx.audit,
+        ctx.task_id(),
+        V2AuditEventKind::StepRecoveryAttempted {
+            step_id: step.id.clone(),
+            recovery_activity: recovery.name.clone(),
+            recovery_succeeded,
+            failure_phase,
+            error_message,
+        },
+    );
+    recovery_succeeded
+}
+
+fn dispatch_recovery(
+    step: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+    recovery: &ResolvedRecoveryActivity,
+    original_err: &DispatchError,
+    attempt: u32,
+    max_attempts: u32,
+) -> Result<(), (&'static str, String)> {
     let mut input = serde_json::json!({
         "failed_step_id": step.id,
         "activity_name": step_activity_name(step),
@@ -138,56 +192,17 @@ pub(super) fn attempt_recovery_activity(
     if matches!(
         recovery.name.as_str(),
         "step_failure_recovery" | PR_CONFLICT_RECOVERY_ACTIVITY
-    ) && let Some(object) = input.as_object_mut()
-    {
-        object.insert("system_crew".to_string(), Value::Bool(true));
+    ) {
+        if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY {
+            bind_recovery_context(step, ctx, &mut input)
+                .map_err(|error| ("input", error.to_string()))?;
+        }
+        input["system_crew"] = Value::Bool(true);
     }
-    let input = match inject_system_crew_input(ctx.host, &input) {
-        Ok(input) => input,
-        Err(error) => {
-            tracing::warn!(
-                target: "orbit.engine.job_executor",
-                run_id = %ctx.run_id,
-                failed_step_id = %step.id,
-                recovery_activity = %recovery.name,
-                error = %error,
-                "step recovery crew resolution failed; preserving original step outcome"
-            );
-            emit_job_event_lossy(
-                &ctx.audit,
-                ctx.task_id(),
-                V2AuditEventKind::StepRecoveryAttempted {
-                    step_id: step.id.clone(),
-                    recovery_activity: recovery.name.clone(),
-                    recovery_succeeded: false,
-                },
-            );
-            return false;
-        }
-    };
-    let crew_overridden_spec = match crew_overridden_recovery_spec(recovery, ctx, &input) {
-        Ok(spec) => spec,
-        Err(error) => {
-            tracing::warn!(
-                target: "orbit.engine.job_executor",
-                run_id = %ctx.run_id,
-                failed_step_id = %step.id,
-                recovery_activity = %recovery.name,
-                error = %error,
-                "step recovery crew resolution failed; preserving original step outcome"
-            );
-            emit_job_event_lossy(
-                &ctx.audit,
-                ctx.task_id(),
-                V2AuditEventKind::StepRecoveryAttempted {
-                    step_id: step.id.clone(),
-                    recovery_activity: recovery.name.clone(),
-                    recovery_succeeded: false,
-                },
-            );
-            return false;
-        }
-    };
+    let input =
+        inject_system_crew_input(ctx.host, &input).map_err(|error| ("crew", error.to_string()))?;
+    let crew_overridden_spec = crew_overridden_recovery_spec(recovery, ctx, &input)
+        .map_err(|error| ("crew", error.to_string()))?;
     let spec = crew_overridden_spec.as_ref().unwrap_or(&recovery.spec);
     let dispatch = dispatch_v2_activity_without_run_id_injection(V2DispatchInput {
         activity_name: &recovery.name,
@@ -199,49 +214,75 @@ pub(super) fn attempt_recovery_activity(
         host: Some(ctx.host),
     });
 
-    // Wall time counts whether or not the hook succeeded; a crash or timeout
-    // spends the allowance like any other attempt.
-    if let Err(error) =
-        ctx.host
-            .settle_step_recovery(&ctx.run_id, &step.id, recovery_started.elapsed().as_secs())
-    {
-        tracing::warn!(
-            target: "orbit.engine.job_executor",
-            run_id = %ctx.run_id,
-            failed_step_id = %step.id,
-            error = %error,
-            "step recovery settlement failed"
-        );
-    }
-
-    let recovery_succeeded = match dispatch {
-        Ok(dispatch) if dispatch.success => {
-            // [ORB-00414] Best-effort dispatch-invocation persistence (a DB
-            // record, not an audit-envelope write); a failure here is
-            // intentionally non-fatal and does not affect recovery outcome. The
-            // audit trail of the recovery attempt is emitted separately below.
-            persist_dispatch_invocation(ctx, &recovery.name, &input, &dispatch);
-            true
-        }
+    match dispatch {
         Ok(dispatch) => {
-            // [ORB-00414] See above: non-audit DB persistence, non-fatal.
             persist_dispatch_invocation(ctx, &recovery.name, &input, &dispatch);
-            false
+            if dispatch.success {
+                Ok(())
+            } else {
+                let message = dispatch.message.unwrap_or_else(|| {
+                    "recovery activity returned an unsuccessful outcome without a diagnostic"
+                        .to_string()
+                });
+                Err(("activity", message))
+            }
         }
-        Err(_) => false,
+        Err(error) => Err(("dispatch", error.to_string())),
+    }
+}
+
+/// Project only execution context from the failed target. Its rendered input
+/// retains candidate/PR checkpoints without forwarding unrelated job outputs.
+/// Custom recovery activities keep their existing input contract.
+fn bind_recovery_context(
+    step: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+    input: &mut Value,
+) -> Result<(), DispatchError> {
+    let failed_input = match &step.body {
+        JobV2StepBody::Target(target) => render_input(
+            target.default_input.as_ref(),
+            &ctx.input,
+            &ctx.template_ctx(),
+            target.input_schema_json.as_ref(),
+        )?,
+        _ => Value::Null,
     };
+    for key in ["task_id", "task_ids", "workspace_path", "repo_root"] {
+        if let Some(value) = failed_input.get(key) {
+            input[key] = value.clone();
+        }
+    }
+    if input.get("task_id").is_none() && input.get("task_ids").is_none() {
+        if let Some(ids) = failed_input
+            .get("completed_task_ids")
+            .or_else(|| ctx.input.get("task_ids"))
+        {
+            input["task_ids"] = ids.clone();
+        } else if let Some(id) = ctx.input.get("task_id") {
+            input["task_id"] = id.clone();
+        }
+    }
+    if input.get("repo_root").is_none()
+        && let Some(workspace) = input.get("workspace_path").cloned()
+    {
+        input["repo_root"] = workspace;
+    }
+    input["run_id"] = Value::String(ctx.run_id.clone());
+    input["failed_step_input"] = failed_input;
+    Ok(())
+}
 
-    emit_job_event_lossy(
-        &ctx.audit,
-        ctx.task_id(),
-        V2AuditEventKind::StepRecoveryAttempted {
-            step_id: step.id.clone(),
-            recovery_activity: recovery.name.clone(),
-            recovery_succeeded,
-        },
-    );
+fn redacted_recovery_diagnostic(message: &str) -> String {
+    use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_text};
 
-    recovery_succeeded
+    let redacted =
+        PatternRedactor::with_argv_secrets().apply_str(&redact_sensitive_env_text(message));
+    let mut bounded: String = redacted.chars().take(4096).collect();
+    if bounded.len() < redacted.len() {
+        bounded.push('…');
+    }
+    bounded
 }
 
 /// Invoke the job's terminal failure hook once, preserving the original step

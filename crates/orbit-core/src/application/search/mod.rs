@@ -20,6 +20,7 @@ mod types;
 mod tests;
 
 pub use path_match::task_selectors_contain_path;
+pub(crate) use types::empty_whitespace_query_note;
 pub use types::{
     GlobalSearchHit, GlobalSearchKind, GlobalSearchMode, GlobalSearchParams, GlobalSearchResponse,
     HitWorkspace, WorkspaceSearchReport,
@@ -187,6 +188,12 @@ impl OrbitRuntime {
         }
 
         let results = merge_round_robin(branches, limit);
+        if results.is_empty()
+            && let Some(query) = query_owned.as_deref()
+            && let Some(note) = empty_whitespace_query_note(query)
+        {
+            notes.push(note);
+        }
         let mode = if params.hybrid
             && results
                 .iter()

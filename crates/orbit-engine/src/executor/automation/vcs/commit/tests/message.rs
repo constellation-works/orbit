@@ -1,7 +1,7 @@
 use chrono::Utc;
 use orbit_types::task::{ExternalRef, Task, TaskPriority, TaskStatus, TaskType};
 
-use super::super::message::batch_commit_message;
+use super::super::message::{batch_commit_message, finalize_commit_message, task_commit_message};
 
 #[test]
 fn batch_commit_subject_uses_task_type() {
@@ -147,6 +147,89 @@ fn batch_commit_trailers_omit_missing_fields() {
     assert_eq!(
         batch_commit_message(&neither),
         "refactor: No trailers [ORB-00107]"
+    );
+}
+
+#[test]
+fn orchestration_trailer_preserves_an_explicit_model_shaped_orchestrator() {
+    let mut task = task_with_type(TaskType::Feature, "Attribute orchestration");
+    task.orchestrator = Some("gpt-5.6-sol".to_string());
+    task.created_by = Some("gpt-5.6-terra".to_string());
+    task.implemented_by = Some("gpt-5.6-terra".to_string());
+
+    assert_eq!(
+        batch_commit_message(&task),
+        "feat: Attribute orchestration [ORB-00107]\n\nImplemented-By: gpt-5.6-terra\nOrchestrated-By: gpt-5.6-sol"
+    );
+}
+
+#[test]
+fn orchestration_trailer_uses_the_explicit_alias_after_pre_execution_reassignment() {
+    let mut task = task_with_type(TaskType::Feature, "Respect reassigned orchestration");
+    task.created_by = Some("gpt-5.6-sol".to_string());
+    task.orchestrator = Some("terra".to_string());
+
+    assert_eq!(
+        batch_commit_message(&task),
+        "feat: Respect reassigned orchestration [ORB-00107]\n\nOrchestrated-By: terra"
+    );
+}
+
+#[test]
+fn orchestration_trailer_uses_alias_without_a_model_and_omits_unattributed_tasks() {
+    let mut alias_only = task_with_type(TaskType::Feature, "Keep legacy attribution truthful");
+    alias_only.orchestrator = Some("terra".to_string());
+    alias_only.created_by = Some("codex".to_string());
+
+    assert_eq!(
+        batch_commit_message(&alias_only),
+        "feat: Keep legacy attribution truthful [ORB-00107]\n\nOrchestrated-By: terra"
+    );
+
+    let mut no_orchestration = task_with_type(TaskType::Feature, "Do not infer orchestration");
+    no_orchestration.created_by = Some("gpt-5.6-sol".to_string());
+    assert_eq!(
+        batch_commit_message(&no_orchestration),
+        "feat: Do not infer orchestration [ORB-00107]"
+    );
+}
+
+#[test]
+fn orchestration_trailers_are_deterministic_and_preserved_on_task_and_finalize_messages() {
+    let mut first = task_with_type(TaskType::Feature, "First task");
+    first.id = "ORB-00108".to_string();
+    first.orchestrator = Some("sol".to_string());
+    first.created_by = Some("gpt-5.6-sol".to_string());
+
+    let mut second = task_with_type(TaskType::Feature, "Second task");
+    second.id = "ORB-00109".to_string();
+    second.orchestrator = Some("terra".to_string());
+    second.created_by = Some("gpt-5.6-terra".to_string());
+
+    let mut duplicate = task_with_type(TaskType::Feature, "Duplicate orchestrator");
+    duplicate.id = "ORB-00110".to_string();
+    duplicate.orchestrator = Some("another-sol-alias".to_string());
+    duplicate.created_by = Some("gpt-5.6-sol".to_string());
+
+    assert_eq!(
+        task_commit_message(&first),
+        "[ORB-00108] First task\n\nOrchestrated-By: sol"
+    );
+    assert_eq!(
+        finalize_commit_message(&[second.clone(), duplicate, first]),
+        "fix: finalize ship batch [ORB-00109, ORB-00110, ORB-00108]\n\n- ORB-00109: Second task\n- ORB-00110: Duplicate orchestrator\n- ORB-00108: First task\n\nOrchestrated-By: another-sol-alias, sol, terra"
+    );
+}
+
+#[test]
+fn orchestration_trailer_never_allows_a_recorded_value_to_add_a_new_trailer_line() {
+    let mut task = task_with_type(TaskType::Feature, "Protect trailer formatting");
+    task.orchestrator = Some("terra\nInjected-By: attacker".to_string());
+    task.created_by = Some("gpt-5.6-sol\nInjected-By: attacker".to_string());
+
+    assert_eq!(
+        batch_commit_message(&task),
+        "feat: Protect trailer formatting [ORB-00107]"
     );
 }
 

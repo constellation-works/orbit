@@ -148,6 +148,45 @@ pub struct RemoteCallerGrant {
     /// How [`Self::caller_machine_id`] was established [ORB-11053].
     #[serde(default)]
     pub identity: CallerIdentityProof,
+    /// Whether the destination explicitly permits this caller to submit the
+    /// trusted-host agent-invocation operation in the resolved workspace.
+    ///
+    /// This stays separate from `operator`: ordinary operator capability does
+    /// not imply permission to start an unsandboxed provider process remotely.
+    #[serde(default)]
+    pub agent_invoke: bool,
+    /// Destination-selected trust mode for [`Self::agent_invoke`]. `None`
+    /// preserves the original strict key-bound behavior for older envelopes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_invoke_mode: Option<RemoteAgentInvokeMode>,
+}
+
+/// Trust model a destination selected for remote trusted-host invocation.
+///
+/// This is operation-specific rather than a property of the whole caller row:
+/// ordinary remote operator operations keep their existing authorization, and
+/// enabling the cooperative mode does not make a self-asserted identity
+/// key-bound.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteAgentInvokeMode {
+    /// Require the destination-issued forced-command identity introduced with
+    /// the original remote agent-invocation grant.
+    #[default]
+    KeyBound,
+    /// Trust the existing SSH OS-account/operator channel while recording the
+    /// caller machine ID as self-asserted. This is an accident-prevention
+    /// boundary between cooperating users of the same account, not isolation.
+    Cooperative,
+}
+
+impl Display for RemoteAgentInvokeMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::KeyBound => "key-bound",
+            Self::Cooperative => "cooperative",
+        })
+    }
 }
 
 /// How a destination established the caller identity it resolved a grant for.
@@ -359,6 +398,8 @@ pub struct StoredTool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionResult {
     pub success: bool,
+    /// Whether the process supervisor terminated the child after its deadline.
+    pub timed_out: bool,
     pub stdout: String,
     pub stderr: String,
     pub exit_code: Option<i32>,

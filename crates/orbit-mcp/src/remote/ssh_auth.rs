@@ -437,7 +437,13 @@ pub fn auth_info_fingerprints(contents: &str) -> Vec<String> {
 /// An unreadable file reads as "not observable" rather than as an error: sshd
 /// owns that file's lifetime, and refusing a session because a temporary file
 /// was already cleaned up would refuse sessions no policy meant to refuse.
-fn read_auth_info(path: &Path) -> Option<ObservedKeys> {
+///
+/// A file that *was* read is an observation even when it names no key. A
+/// session that authenticated by password or keyboard-interactive is one this
+/// destination positively saw authenticate without a key, and reporting that
+/// as "not observable" would serve a pinned row's grant to anyone holding the
+/// account password.
+pub(super) fn read_auth_info(path: &Path) -> Option<ObservedKeys> {
     let contents = std::fs::read_to_string(path)
         .inspect_err(|error| {
             tracing::debug!(
@@ -448,9 +454,9 @@ fn read_auth_info(path: &Path) -> Option<ObservedKeys> {
             );
         })
         .ok()?;
-    let fingerprints = auth_info_fingerprints(&contents);
-    (!fingerprints.is_empty()).then_some(ObservedKeys {
-        fingerprints,
+
+    Some(ObservedKeys {
+        fingerprints: auth_info_fingerprints(&contents),
         observation: KeyObservation::AuthInfoFile,
     })
 }

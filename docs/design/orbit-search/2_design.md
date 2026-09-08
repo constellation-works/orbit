@@ -72,7 +72,7 @@ Lifecycle:
 
 - `SubprocessEmbedder::new()` resolves the companion path under `~/.orbit/embed/bin/orbit-search-companion-<platform>` and starts the subprocess. ~100–300ms cold-start latency for ORT init.
 - The subprocess stays alive for the duration of the parent process or until explicitly dropped. Callers that retain the embedder, including the background indexing worker, reuse the same subprocess.
-- On process exit, the parent sends an `exit` RPC, reads the response, and waits for the child to exit.
+- On process exit, the parent sends an `exit` RPC, closes stdin, and waits a short bounded interval for the companion to leave; a still-running child is killed (its Unix process group) and reaped. Each RPC read waits only up to a payload-scaled deadline; a timeout is a transient transport failure and respawns the companion.
 
 ### 2.3 RPC protocol
 
@@ -164,13 +164,17 @@ At 30k vectors × 384d, the full scan is ~50ms in pure Rust on a modern laptop a
 
 ### 3.3 Write path
 
-A single `upsert_embeddings` API takes `(source_kind, source_id, fields: Vec<(field, text)>)`. For each field:
+A single `upsert_embeddings` API takes `(source_kind, source_id, fields)` as the **complete** current field set (not a partial patch). Previously indexed fields absent from that set are removed.
 
-1. Compute `content_hash = BLAKE3(text)`.
-2. If a row already exists with the same `(source_kind, source_id, field, chunk_idx, model_id)` and matching `content_hash`, skip.
-3. Otherwise embed and upsert.
+The write is split so companion inference does not hold the store mutex or a SQLite write transaction:
+
+1. Brief mutex read: snapshot the source's field names and active-model `content_hash` values. Unchanged fields (`BLAKE3(text)` still matches) skip inference; empty fields are scheduled for deletion.
+2. Chunk and embed the remaining fields with no store lock held. A failed embed returns here, so the previously committed source is unchanged — including fields that would have been removed.
+3. Brief mutex + `BEGIN IMMEDIATE`: reload the source. If the snapshot fingerprint changed, abort with a store error and write nothing. Otherwise delete stale/empty fields and insert the prepared rows in that one transaction.
 
 This makes "reindex everything" idempotent and cheap when nothing has changed. Re-embedding only happens on real text changes or model changes.
+
+**Same-source concurrency.** The first complete write (`upsert_embeddings` or `delete_source`) that commits after a snapshot wins. An in-flight upsert whose snapshot no longer matches does not write: it cannot mix field revisions, overwrite a later accepted source, or resurrect a deleted source. A hash recheck of only the fields this call prepared is not the commit gate. Unrelated sources and readers are not blocked during inference (mutex released; WAL).
 
 ---
 
@@ -207,19 +211,34 @@ Token counting uses fastembed-rs's tokenizer for the active model — exact, not
 
 ### 5.1 FTS5 virtual table
 
-A virtual table mirrors corpus content for lexical search:
+Chunk text lives in an ordinary table, addressed the same way embeddings are, and a virtual table indexes it for lexical search:
 
 ```sql
+CREATE TABLE chunks (
+    id INTEGER PRIMARY KEY,
+    source_kind TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    field TEXT NOT NULL,
+    chunk_idx INTEGER NOT NULL,
+    content TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX chunks_by_address
+ON chunks(source_kind, source_id, field, chunk_idx);
+
 CREATE VIRTUAL TABLE corpus_fts USING fts5(
-    source_kind UNINDEXED,
-    source_id UNINDEXED,
-    field UNINDEXED,
     content,
+    content = 'chunks',
+    content_rowid = 'id',
     tokenize = 'porter unicode61 remove_diacritics 2'
 );
 ```
 
-Populated from the same per-field text as the embedding indexer. FTS5 ships with BM25 ranking built in — no implementation needed beyond the virtual table.
+`chunks` is populated from the same per-field text as the embedding indexer; insert/delete/update triggers keep `corpus_fts` in step with it. FTS5 ships with BM25 ranking built in — no implementation needed beyond the virtual table.
+
+The external-content split is what keeps reindexing linear. Everything the writer does outside a `MATCH` — pruning a source, replacing one field, resolving a snippet, asking which fields a source already has indexed — addresses rows by `(source_kind, source_id, field, chunk_idx)` or by rowid. Holding that metadata inside the FTS5 table made each of those a full corpus scan, so a no-op reindex of a few thousand sources cost tens of seconds of pure scanning.
+
+This layout is forward-only. Older Orbit binaries that selected `source_kind` from `corpus_fts` itself cannot read a migrated `semantic.db`. Mixed installed runtimes during an upgrade must restart every process that opens the index onto a current binary; the index is not dual-written for the old reader and is not downgraded. See [Upgrade Orbit Safely](../../runbooks/upgrades.md#mixed-binaries-and-the-workspace-semantic-index).
 
 ### 5.2 Reciprocal Rank Fusion
 
@@ -251,7 +270,7 @@ Either retriever alone has a failure mode the other doesn't. RRF resolves both a
 orbit semantic install   [--model bge-small | minilm-l6 | nomic-v1.5] [--force]
 orbit semantic uninstall [--model MODEL] [--all]
 orbit search <query> [--hybrid] [--kind task|doc|friction|all] [--limit N]
-                     [--workspace SELECTOR]... [--all-workspaces]
+                     [--workspaces SELECTOR]... [--all-workspaces]
 orbit search similar <task-id> [--limit N]
 orbit search path <path> [--kind task|doc|friction|all] [--limit N]
 orbit semantic index     [--force] [--model MODEL] [--kind tasks|docs|all]
@@ -263,17 +282,19 @@ orbit semantic stats
 
 `uninstall` removes the companion binary and (by default) the currently active model. `--model M` removes only model M. `--all` removes the companion plus every installed model.
 
-`orbit search` defaults to lexical matching across tasks and docs; ADR content participates through indexed design docs. `--hybrid` blends lexical scoring with cosine over the selected corpus; `orbit search similar <task-id>` embeds the target task and runs cosine-neighbor lookup against other tasks; `orbit search path <path>` performs applicability lookup over path-scoped artifacts. `orbit semantic index` rebuilds the selected corpus (`tasks` by default, or `docs` and `all` via `--kind`); `orbit docs index` is the docs-specific alias and sweeps stale doc paths. `--force` ignores `content_hash` and re-embeds everything. `stats` reports row counts, model distribution, stale-row count, and companion-install status. The retired `learning` kind is rejected.
+`orbit search` defaults to lexical matching across tasks and docs; ADR content participates through indexed design docs. `--hybrid` blends lexical scoring with cosine over the selected corpus; `orbit search similar <task-id>` embeds the target task and runs cosine-neighbor lookup against other tasks; `orbit search path <path>` performs applicability lookup over path-scoped artifacts. `orbit semantic index` rebuilds the selected corpus (`tasks` by default, or `docs` and `all` via `--kind`) and sweeps the sources that corpus no longer contains; `orbit docs index` is the docs-specific alias. Both report the swept sources as `stale_sources` in `--json` output (`tasks_stale_sources` / `docs_stale_sources` under `--kind all`), which is how the stale-row count reported by `stats` gets back to zero. `--force` ignores `content_hash` and re-embeds everything. `stats` reports row counts, model distribution, stale-row count, and companion-install status. The retired `learning` kind is rejected.
 
 If the companion is not installed, `orbit search similar <task-id>`, `orbit semantic index`, and `orbit docs index` exit non-zero with: `"Semantic search not enabled. Run \`orbit semantic install\` to download the inference companion."` Hybrid task and doc search are softer: they emit a warning/note and fall back to lexical results.
 
-`--workspace` and `--all-workspaces` select the federated scope described in [§6.4](#64-cross-workspace-federated-search). They apply to the free-text form only; `similar` and `path` are single-workspace by construction.
+`--workspaces` and `--all-workspaces` select the federated scope described in [§6.4](#64-cross-workspace-federated-search). They apply to the free-text form only; `similar` and `path` are single-workspace by construction. `--workspaces` is deliberately distinct from the global `orbit --workspace` routing selector.
 
 ### 6.2 MCP tools
 
 - `orbit.search` — `(query?, hybrid?, semantic?, kind?, limit?, tag?, all?, status?, path?, workspaces?, all_workspaces?)` → ranked results with snippets.
 - `orbit.semantic.install`, `orbit.semantic.uninstall`, `orbit.semantic.stats`, `orbit.semantic.index` — companion lifecycle.
 - `orbit.docs.index` — docs-corpus embedding build and stale-source sweep.
+
+Both indexing tools return `stale_sources`: the source IDs dropped because the live corpus no longer contains them.
 
 `orbit.search` is read-only. Task indexing is implicit (on task mutation) or explicit (`orbit semantic index` / `orbit.semantic.index`); docs indexing is explicit (`orbit docs index` / `orbit.docs.index`).
 
@@ -360,11 +381,13 @@ Vectors and FTS rows stay workspace-local ([§3](#3-vector-storage)); only the *
 
 ### 7.2 Backfill and migration
 
-`orbit semantic index` walks the task store and embeds anything not present (or whose `content_hash` differs). A model migration (`--model`) writes new rows under the new `model_id`; the old `model_id` rows can be deleted in a follow-up `orbit semantic prune --model OLD`.
+`orbit semantic index` walks the task store and embeds anything not present (or whose `content_hash` differs), then deletes the `task` sources the store no longer lists. A model migration (`--model`) writes new rows under the new `model_id`; the old `model_id` rows can be deleted in a follow-up `orbit semantic prune --model OLD`.
 
 ### 7.3 Deletion
 
 `task.delete` cascades to `DELETE FROM embeddings WHERE source_kind = 'task' AND source_id = ?`. Tombstoned tasks (in the v2 task-sync sense, see [docs/design/_archive/task-sync/](../_archive/task-sync/1_overview.md)) are not embedded.
+
+The cascade only runs when the deletion goes through a runtime holding a writable index, so deletions taken while `semantic.db` was read-only or unopened, restored state, and failed cascades all leave rows behind. `orbit semantic index` is the recovery: its sweep is what `stats` counts as `stale_rows` and the doctor's `semantic-index` check tells the user to clear.
 
 ---
 

@@ -14,6 +14,10 @@
 //! - **Stale** — the file is a managed copy of an *older* release of a default
 //!   this binary still ships, or an untracked file colliding with a bundled
 //!   default name.
+//! - **Missing** — the managed catalog was previously reconciled, and a primary
+//!   shipped default this binary still embeds is absent from disk. Warm opens
+//!   skip reconciliation when the defaults stamp matches, so this state can
+//!   persist until `orbit init` or `orbit workspace sync` restores the file.
 //!
 //! Provenance judgements are made from the per-kind managed manifest written by
 //! [`super::reconcile_managed_assets`]. Residual skill directories are the one
@@ -59,7 +63,7 @@ use super::{
 };
 use crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES;
 use crate::application::routine::DEFAULT_ROUTINE_FILES;
-use crate::bootstrap::activity::DEFAULT_ACTIVITY_FILES;
+use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 /// The five definition-artifact kinds Orbit ships defaults for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +136,8 @@ pub enum ArtifactCondition {
     Deprecated,
     /// Drifted from the current release, or colliding with a bundled name.
     Stale,
+    /// A primary shipped default this binary still embeds is not on disk.
+    Missing,
 }
 
 impl ArtifactCondition {
@@ -141,6 +147,7 @@ impl ArtifactCondition {
             Self::Residual => "residual",
             Self::Deprecated => "deprecated",
             Self::Stale => "stale",
+            Self::Missing => "missing",
         }
     }
 }
@@ -182,10 +189,16 @@ pub struct ArtifactFinding {
 impl ArtifactFinding {
     /// A shipped default that no longer loads is a broken install rather than
     /// a workspace authoring mistake, and is the only artifact fault that
-    /// escalates `orbit doctor` to a nonzero exit.
+    /// escalates `orbit doctor` to a nonzero exit. That includes a managed
+    /// file that is simply gone: dispatch cannot load what is not on disk.
     pub fn is_unloadable_shipped_default(&self) -> bool {
-        self.condition == ArtifactCondition::Faulty
-            && self.provenance != ArtifactProvenance::UserAuthored
+        match self.condition {
+            ArtifactCondition::Faulty => self.provenance != ArtifactProvenance::UserAuthored,
+            ArtifactCondition::Missing => true,
+            ArtifactCondition::Residual
+            | ArtifactCondition::Deprecated
+            | ArtifactCondition::Stale => false,
+        }
     }
 }
 
@@ -487,7 +500,51 @@ fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> Artifac
         }
     }
 
+    // Missing: a previously reconciled catalog no longer has a primary shipped
+    // default on disk. The stale loop above skips absent files, and loaders
+    // only inspect what remains, so without this check a deleted default is
+    // invisible — including after a warm open that trusted the defaults stamp.
+    if manifest.is_some() {
+        for name in &catalog.shipped {
+            if !is_primary_shipped_asset(kind, name) {
+                continue;
+            }
+            let path = catalog.path_of(name);
+            if path.is_file() {
+                continue;
+            }
+            findings.push(ArtifactFinding {
+                kind,
+                name: name.clone(),
+                path,
+                condition: ArtifactCondition::Missing,
+                provenance: ArtifactProvenance::OrbitWritten,
+                detail: format!(
+                    "`{name}` is a shipped {} default this Orbit still embeds, but the managed \
+                     file is absent",
+                    kind.singular()
+                ),
+                remediation: format!("Run `{}`.", init_command(kind)),
+            });
+        }
+    }
+
     finish_catalog_health(runtime, catalog, findings, &tracked)
+}
+
+/// The catalog entry dispatch actually loads: a YAML stem, or a skill's
+/// `SKILL.md`. Reference files under a skill tree are not independent
+/// definitions, so a missing one is not reported here.
+fn is_primary_shipped_asset(kind: ArtifactKind, name: &str) -> bool {
+    match kind {
+        ArtifactKind::Skill => Path::new(name)
+            .file_name()
+            .is_some_and(|file_name| file_name == "SKILL.md"),
+        ArtifactKind::Job
+        | ArtifactKind::Activity
+        | ArtifactKind::AutoTask
+        | ArtifactKind::Routine => true,
+    }
 }
 
 fn finish_catalog_health(

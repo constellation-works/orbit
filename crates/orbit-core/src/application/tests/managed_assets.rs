@@ -13,6 +13,7 @@ use super::super::job::seed_default_jobs;
 use crate::OrbitRuntime;
 use crate::application::job::JobCatalogFilter;
 use crate::bootstrap::activity::seed_default_activities;
+use crate::bootstrap::global_defaults::stamp_path;
 use crate::bootstrap::init::{InitOptions, InitResult, init_workspace_at_root};
 use crate::runtime::OrbitRuntimeRoots;
 use orbit_config::ConfigSeed;
@@ -28,6 +29,13 @@ fn init_global(root: &Path) -> InitResult {
         },
     )
     .expect("initialize global defaults")
+}
+
+/// Make `root` look like it was last reconciled by an earlier release, so an
+/// implicit bootstrap reconciles its managed assets instead of trusting the
+/// stamp this test's own seeding just wrote.
+fn drop_global_defaults_stamp(root: &Path) {
+    std::fs::remove_file(stamp_path(root)).expect("drop the global defaults stamp");
 }
 
 fn sha256(content: &str) -> String {
@@ -227,6 +235,7 @@ fn runtime_bootstrap_refreshes_orbit_written_stale_activity_before_catalog_load(
     assert_ne!(stale, current, "fixture must contain the retired tool");
     std::fs::write(&path, &stale).expect("write stale activity");
     add_managed_manifest_entry(&activities_dir, "agent_implement", &stale);
+    drop_global_defaults_stamp(&global_root);
 
     let runtime = OrbitRuntime::initialize_from_resolved_roots(
         OrbitRuntimeRoots {
@@ -260,6 +269,7 @@ fn runtime_bootstrap_preserves_locally_modified_stale_managed_activity() {
     let locally_modified = format!("{stale}# operator edit\n");
     std::fs::write(&path, &locally_modified).expect("write locally modified stale activity");
     add_managed_manifest_entry(&activities_dir, "agent_implement", &stale);
+    drop_global_defaults_stamp(&global_root);
 
     OrbitRuntime::initialize_from_resolved_roots(
         OrbitRuntimeRoots {

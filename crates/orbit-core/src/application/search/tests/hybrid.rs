@@ -111,6 +111,56 @@ fn global_search_task_hybrid_falls_back_without_install_remediation() {
 }
 
 #[test]
+fn global_search_task_hybrid_layout_incompatibility_is_lexical_fallback_not_hybrid_success() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let id = add_task_with_status(&runtime, "layout mismatch needle", TaskStatus::Backlog);
+
+    let response = with_task_semantic_override(
+        Err(OrbitError::Store(
+            "semantic index layout is incompatible with this Orbit runtime: \
+             corpus_fts is an external-content FTS5 table over chunks and has no \
+             source_kind column. Upgrade and restart every Orbit process that \
+             opens this workspace's .orbit/state/semantic.db, including Homebrew \
+             installs and MCP servers."
+                .to_string(),
+        )),
+        || {
+            runtime
+                .global_search(GlobalSearchParams {
+                    query: Some("layout mismatch needle".to_string()),
+                    hybrid: true,
+                    kind: GlobalSearchKind::Task,
+                    limit: 3,
+                    ..Default::default()
+                })
+                .expect("layout mismatch should keep lexical search")
+        },
+    );
+
+    assert_eq!(
+        response.mode,
+        GlobalSearchMode::Lexical,
+        "layout mismatch is lexical fallback, not hybrid success: notes={:?}",
+        response.notes
+    );
+    assert!(response.notes.iter().any(|note| {
+        note.contains("falling back to lexical task search")
+            && note.contains("semantic index layout is incompatible with this Orbit runtime")
+            && note.contains("Upgrade and restart every Orbit process")
+    }));
+    assert!(
+        response
+            .notes
+            .iter()
+            .all(|note| !note.to_ascii_lowercase().contains("no such column")),
+        "fallback notes must not leak the unexplained SQL-column error: {:?}",
+        response.notes
+    );
+    assert_eq!(response.results[0].source, "lexical");
+    assert_eq!(response.results[0].id.as_deref(), Some(id.as_str()));
+}
+
+#[test]
 fn global_search_doc_hybrid_uses_docs_semantic_weight() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
     add_doc_with_tags(&runtime, "docs/z-lexical.md", "Literal primary", &["foo"]);

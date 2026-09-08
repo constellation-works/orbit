@@ -185,9 +185,7 @@ migration surfaced a cost the ADR does not already name, name it.
    want it to appear in `--help`.
 3. Add the `spec()` arm.
 4. Add the handler and its `dispatch` arm.
-5. If the hub coordination executor matches on this noun, state whether it can
-   serve the verb.
-6. Add a route only if the verb should be reachable over HTTP.
+5. Add a route only if the verb should be reachable over HTTP.
 
 Steps 1–4 are the whole cost for CLI and MCP. No surface file is edited: the
 subcommand, its flags, its `--help`, its tool schema, its MCP exposure, its audit

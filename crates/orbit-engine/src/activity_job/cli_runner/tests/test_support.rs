@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use orbit_common::test_fixtures::TEST_CODEX_MODEL;
+use orbit_common::{OrbitError, test_fixtures::TEST_CODEX_MODEL};
 
-use crate::context::{CrewConfig, ResolvedActivityTools};
+use crate::context::{CrewConfig, ResolvedActivityTools, StepRecoveryAdmission};
 use orbit_agent::loop_engine::audit::{AuditSink, LoopAuditEvent};
 use orbit_common::observability::logging::RedactingFields;
 #[cfg(target_os = "macos")]
@@ -52,6 +52,16 @@ pub(in crate::activity_job::cli_runner) fn capture_events<F, T>(f: F) -> (T, Vec
 where
     F: FnOnce() -> T,
 {
+    let (result, log) = capture_events_live(f);
+    (result, log.snapshot())
+}
+
+/// Captures tracing events and keeps the subscriber alive so a test can
+/// observe emissions after the producing call returns.
+pub(in crate::activity_job::cli_runner) fn capture_events_live<F, T>(f: F) -> (T, EventLog)
+where
+    F: FnOnce() -> T,
+{
     let events = Arc::new(Mutex::new(Vec::new()));
     let subscriber = CaptureSubscriber {
         events: Arc::clone(&events),
@@ -59,8 +69,24 @@ where
     };
     let dispatch = tracing::Dispatch::new(subscriber);
     let result = tracing::dispatcher::with_default(&dispatch, f);
-    let events = events.lock().expect("events lock").clone();
-    (result, events)
+    (
+        result,
+        EventLog {
+            events,
+            _dispatch: dispatch,
+        },
+    )
+}
+
+pub(in crate::activity_job::cli_runner) struct EventLog {
+    events: Arc<Mutex<Vec<CapturedEvent>>>,
+    _dispatch: tracing::Dispatch,
+}
+
+impl EventLog {
+    pub(in crate::activity_job::cli_runner) fn snapshot(&self) -> Vec<CapturedEvent> {
+        self.events.lock().expect("events lock").clone()
+    }
 }
 
 pub(in crate::activity_job::cli_runner) fn capture_redacted_tracing_output<F>(
@@ -261,6 +287,29 @@ impl TestHost {
 }
 
 impl RuntimeHost for TestHost {
+    fn checkpoint_rebase_recovery(
+        &self,
+        _run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        if self
+            .task_context
+            .as_ref()
+            .is_some_and(|context| context["checkpoint_denied"] == true)
+        {
+            return Err(DispatchError::JobExecution(
+                "checkpoint storage unavailable".to_string(),
+            ));
+        }
+        fs::write(
+            Path::new(&self.command).with_extension(format!("{step_id}.json")),
+            serde_json::to_vec(output).unwrap(),
+        )
+        .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+        Ok(())
+    }
+
     fn run_deterministic(
         &self,
         _action: &str,
@@ -293,6 +342,42 @@ impl RuntimeHost for TestHost {
 
     fn task_context_for_agent_input(&self, _input: &Value) -> Result<Option<Value>, DispatchError> {
         Ok(self.task_context.clone())
+    }
+
+    fn validate_step_recovery_mutation(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _task_ids: &[String],
+        _workspace_path: &Path,
+    ) -> Result<(), OrbitError> {
+        match self
+            .task_context
+            .as_ref()
+            .and_then(|context| context.get("recovery_mutation_denied"))
+            .and_then(Value::as_str)
+        {
+            Some(reason) => Err(OrbitError::Execution(reason.to_string())),
+            None => Ok(()),
+        }
+    }
+
+    fn authorize_step_recovery(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+    ) -> Result<StepRecoveryAdmission, OrbitError> {
+        match self
+            .task_context
+            .as_ref()
+            .and_then(|context| context.get("recovery_authorization_denied"))
+            .and_then(Value::as_str)
+        {
+            Some(reason) => Ok(StepRecoveryAdmission::Denied {
+                reason: reason.to_string(),
+            }),
+            None => Ok(StepRecoveryAdmission::Allowed),
+        }
     }
 
     fn resolve_activity_tools(

@@ -11,8 +11,9 @@ Commands:
   revoke   Hard-revoke a grant (admitted work loses privileged actions)
 
 Options:
-      --root <ROOT>  Override the Orbit root directory (highest precedence)
-  -h, --help         Print help
+      --root <ROOT>           Override the Orbit root directory (highest precedence)
+      --workspace <SELECTOR>  Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory
+  -h, --help                  Print help
 
 Preferences live under `[operation]` in config.toml and authorize nothing by
 themselves. `orbit operation enable` records the one durable grant: a finite

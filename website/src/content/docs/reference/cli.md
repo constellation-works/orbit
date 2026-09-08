@@ -29,7 +29,7 @@ Global options go **before** the subcommand: `orbit --workspace ws_x task list`.
 | `orbit workspace remove` \| `teardown` | Deregister a workspace, or remove Orbit artifacts from it. |
 | `orbit host show` \| `rename` | Inspect or rename this machine's local host identity. |
 | `orbit config show` \| `get` \| `set` \| `keys` \| `path` | Read and write configuration. See [Configuration](../config/). |
-| `orbit semantic install` \| `uninstall` \| `stats` \| `index` | Manage the local embedding companion used for semantic search. |
+| `orbit semantic install` \| `uninstall` \| `stats` \| `index` | Manage the local embedding companion. CLI task mutations do not auto-index; run `orbit semantic index` to refresh. |
 | `orbit migrate` | Inspect pending `.orbit` layout and store migrations; `--confirm` applies them. |
 | `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. |
 
@@ -86,7 +86,7 @@ See [Delivery Workflows](../../getting-started/workflows/).
 
 | Command | Purpose |
 |---|---|
-| `orbit search <query>` | Search tasks, docs, and frictions. `--hybrid` adds vector ranking; `orbit search similar <id>` finds task neighbors; `orbit search path <path>` does applicability lookup. |
+| `orbit search <query>` | Search tasks, docs, and frictions. `--hybrid` adds vector ranking; `--workspaces <SELECTOR>` (repeatable) federates across registered checkouts and is distinct from the global `--workspace` routing selector; `orbit search similar <id>` finds task neighbors; `orbit search path <path>` does applicability lookup. |
 | `orbit audit list` \| `show` \| `prune` \| `export` \| `stats` | Query the audit event log. |
 | `orbit run history` | Recent job runs. `-j <job_id>` filters to one job. |
 | `orbit run show [run_id]` | State and step summary for a run; defaults to the most recent. `-s <step_id>`. |
@@ -129,4 +129,4 @@ See [Schedule Recurring Work](../../how-to/recurring-work/).
 | `orbit web serve` | Serve the Orbit dashboard. Serves the registry under the resolved root, so `orbit --root <ROOT> web serve` exposes only `<ROOT>`'s workspaces. `--workspace <SELECTOR>` preselects one of them. |
 | `orbit web connect` | Open a remote workspace's dashboard over an SSH tunnel. `--workspace <SELECTOR>` preselects the remote workspace; it takes no `--root`. |
 
-See [Set Up MCP](../../how-to/mcp-integration/).
+See [Use the Dashboard](../../how-to/dashboard/) for connection, workspace scope, Operations controls, and authorization. See [Set Up MCP](../../how-to/mcp-integration/) for the agent tool surface.

@@ -1,7 +1,26 @@
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use crate::OrbitError;
+
+use super::io::with_exclusive_file_lock;
+
+/// Lock file inside the git common directory that serializes Orbit-owned
+/// updates of remote-tracking refs.
+///
+/// ORB-11269/ORB-11256 locked only task-pilot (`orbit-task-pilot-fetch`).
+/// Delivery `fetch_remote_base` was a second writer of the same
+/// `refs/remotes/origin/*` refs, so a linked worktree fetch and
+/// `prepare_task_pilot` could CAS-fail each other. One common-dir lock
+/// covers every Orbit fetch; do not add a second pilot-only lock.
+pub const GIT_FETCH_LOCK_NAME: &str = "orbit-git-fetch";
+
+/// Bounded attempts for a single Orbit-owned fetch, including the first try.
+pub const GIT_FETCH_CAS_ATTEMPTS: u32 = 3;
+
+const GIT_FETCH_CAS_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CurrentBranchStatus {
@@ -116,6 +135,73 @@ fn local_branches(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned)
         .collect())
+}
+
+pub fn git_common_dir(workspace_path: &Path) -> Result<PathBuf, OrbitError> {
+    let output = run_git(
+        workspace_path,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    if !output.success {
+        return Err(OrbitError::Execution(format!(
+            "unable to locate shared Git directory in '{}': {}",
+            workspace_path.display(),
+            output.stderr.trim()
+        )));
+    }
+    let raw = output.stdout.trim();
+    if raw.is_empty() {
+        return Err(OrbitError::Execution(format!(
+            "unable to locate shared Git directory in '{}'",
+            workspace_path.display()
+        )));
+    }
+    Ok(PathBuf::from(raw))
+}
+
+pub fn git_fetch_lock_target(git_common_dir: &Path) -> PathBuf {
+    git_common_dir.join(GIT_FETCH_LOCK_NAME)
+}
+
+/// Run `op` while holding the exclusive lock that serializes Orbit-owned
+/// remote-tracking-ref updates across linked checkouts.
+pub fn with_git_fetch_lock<T, E, F>(workspace: &Path, op: F) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    let common = git_common_dir(workspace).map_err(|error| io::Error::other(error.to_string()))?;
+    with_exclusive_file_lock(&git_fetch_lock_target(&common), "git fetch", op)
+}
+
+/// True when git refused a ref update because another process raced the same
+/// remote-tracking ref. Auth and network failures stay false so callers do
+/// not retry them.
+pub fn is_git_ref_update_contention(stderr: &str) -> bool {
+    let text = stderr.to_ascii_lowercase();
+    if looks_like_remote_auth_or_network_failure(&text) {
+        return false;
+    }
+    text.contains("cannot lock ref") || text.contains("unable to update local ref")
+}
+
+pub fn should_retry_git_ref_cas(attempt: u32, stderr: &str) -> bool {
+    attempt + 1 < GIT_FETCH_CAS_ATTEMPTS && is_git_ref_update_contention(stderr)
+}
+
+pub fn git_fetch_cas_retry_delay() -> Duration {
+    GIT_FETCH_CAS_RETRY_DELAY
+}
+
+fn looks_like_remote_auth_or_network_failure(stderr_lower: &str) -> bool {
+    stderr_lower.contains("authentication failed")
+        || stderr_lower.contains("could not resolve host")
+        || stderr_lower.contains("unable to access")
+        || stderr_lower.contains("terminal prompts disabled")
+        || stderr_lower.contains("could not read username")
+        || stderr_lower.contains("permission denied (publickey)")
+        || stderr_lower.contains("the requested url returned error: 401")
+        || stderr_lower.contains("the requested url returned error: 403")
 }
 
 pub fn run_git(workspace_path: &Path, args: &[&str]) -> Result<GitCommandOutput, OrbitError> {

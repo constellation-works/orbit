@@ -21,8 +21,11 @@
 //! `--remote-caller-machine-id` is a label the caller chooses, so a caller that
 //! can reach this destination can also name a different row. That is an
 //! accident guard, in keeping with the governance kernel's doctrine — strictly
-//! stronger than a caller-authored grant, and not a boundary anything may be
-//! relaxed against.
+//! stronger than a caller-authored grant, and not an authenticated boundary.
+//! The only trusted-host exception is a destination owner's explicit
+//! operation-specific `cooperative` mode, which accepts that limitation for
+//! operators already sharing the destination OS account and records it
+//! candidly.
 //!
 //! Under Tier 2 [ORB-11053] the destination pins the identity to a key in its
 //! own `authorized_keys`, sshd authenticates that key, and the forced command
@@ -38,7 +41,9 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::protocol::toml::escape_basic_string;
 use orbit_types::identity::validate_machine_id;
-use orbit_types::tool::{CallerIdentityProof, McpCapability, RemoteCallerGrant};
+use orbit_types::tool::{
+    CallerIdentityProof, McpCapability, RemoteAgentInvokeMode, RemoteCallerGrant,
+};
 use serde::Deserialize;
 
 use super::identity::McpSessionAuthority;
@@ -97,6 +102,19 @@ pub struct CallerRow {
     /// not evidence of a mismatch.
     #[serde(default)]
     pub ssh_key_fingerprint: Option<String>,
+    /// Explicitly admits `orbit.agent.invoke` for this caller on its
+    /// operation-specific workspace scope. When the independent scope is
+    /// absent, `workspaces` remains the legacy invocation scope.
+    #[serde(default)]
+    pub agent_invoke: bool,
+    /// Narrows `agent_invoke` without narrowing ordinary capabilities.
+    #[serde(default)]
+    pub agent_invoke_workspaces: Option<Vec<String>>,
+    /// Trust model for `agent_invoke`. Omission preserves strict key-bound
+    /// admission; `cooperative` deliberately accepts the self-asserted caller
+    /// label on the existing SSH operator channel.
+    #[serde(default)]
+    pub agent_invoke_mode: Option<RemoteAgentInvokeMode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
@@ -156,30 +174,13 @@ fn validate_callers(file: &CallersFile, path: &Path) -> Result<(), OrbitError> {
             )
         })?;
         parse_capabilities(row, path)?;
-        if let Some(workspaces) = &row.workspaces {
-            if workspaces.is_empty() {
-                return Err(invalid(
-                    path,
-                    format!(
-                        "caller '{}' has an empty `workspaces` list; omit the key to grant every \
-                         workspace on this destination",
-                        row.machine_id
-                    ),
-                ));
-            }
-            for workspace in workspaces {
-                if !workspace.starts_with("ws_") {
-                    return Err(invalid(
-                        path,
-                        format!(
-                            "caller '{}' narrows to '{workspace}', which is not a logical \
-                             workspace ID; `workspaces` takes `ws_*` IDs",
-                            row.machine_id
-                        ),
-                    ));
-                }
-            }
-        }
+        validate_workspace_scope(row, row.workspaces.as_deref(), "workspaces", path)?;
+        validate_workspace_scope(
+            row,
+            row.agent_invoke_workspaces.as_deref(),
+            "agent_invoke_workspaces",
+            path,
+        )?;
         if let Some(defect) = row
             .ssh_key_fingerprint
             .as_deref()
@@ -189,6 +190,82 @@ fn validate_callers(file: &CallersFile, path: &Path) -> Result<(), OrbitError> {
                 path,
                 format!(
                     "caller '{}' pins a key fingerprint that {defect}",
+                    row.machine_id
+                ),
+            ));
+        }
+        if row.agent_invoke {
+            if !row.capabilities.iter().any(|value| value == "operator") {
+                return Err(invalid(
+                    path,
+                    format!(
+                        "caller '{}' enables `agent_invoke` without the `operator` capability",
+                        row.machine_id
+                    ),
+                ));
+            }
+            if row.workspaces.is_none() && row.agent_invoke_workspaces.is_none() {
+                return Err(invalid(
+                    path,
+                    format!(
+                        "caller '{}' enables `agent_invoke` without a workspace scope; set \
+                         `agent_invoke_workspaces` or the legacy `workspaces` narrowing",
+                        row.machine_id
+                    ),
+                ));
+            }
+            if row.agent_invoke_mode.unwrap_or_default() == RemoteAgentInvokeMode::KeyBound
+                && row.ssh_key_fingerprint.is_none()
+            {
+                return Err(invalid(
+                    path,
+                    format!(
+                        "caller '{}' enables `agent_invoke` without `ssh_key_fingerprint`; \
+                         remote trusted-host execution requires a key-bound caller identity",
+                        row.machine_id
+                    ),
+                ));
+            }
+        } else if row.agent_invoke_mode.is_some() || row.agent_invoke_workspaces.is_some() {
+            return Err(invalid(
+                path,
+                format!(
+                    "caller '{}' sets an agent-invocation option without enabling `agent_invoke`; \
+                     those options only qualify that operation-specific grant",
+                    row.machine_id
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_workspace_scope(
+    row: &CallerRow,
+    workspaces: Option<&[String]>,
+    field: &str,
+    path: &Path,
+) -> Result<(), OrbitError> {
+    let Some(workspaces) = workspaces else {
+        return Ok(());
+    };
+    if workspaces.is_empty() {
+        return Err(invalid(
+            path,
+            format!(
+                "caller '{}' has an empty `{field}` list; omit the key rather than granting no \
+                 workspaces",
+                row.machine_id
+            ),
+        ));
+    }
+    for workspace in workspaces {
+        if !workspace.starts_with("ws_") {
+            return Err(invalid(
+                path,
+                format!(
+                    "caller '{}' narrows `{field}` to '{workspace}', which is not a logical \
+                     workspace ID; workspace scopes take `ws_*` IDs",
                     row.machine_id
                 ),
             ));
@@ -304,6 +381,12 @@ pub struct ResolvedCallerGrant {
     /// The `ws_*` IDs [`Self::granted`] applies to. `None` means every
     /// workspace on this destination.
     pub workspaces: Option<BTreeSet<String>>,
+    /// Whether the matched row explicitly admits trusted-host agent invocation.
+    pub agent_invoke: bool,
+    /// The `ws_*` IDs the explicit agent-invocation grant applies to.
+    pub agent_invoke_workspaces: Option<BTreeSet<String>>,
+    /// Trust mode selected for agent invocation, when it is enabled.
+    pub agent_invoke_mode: Option<RemoteAgentInvokeMode>,
     /// Whether a row matched, or the file default answered.
     pub matched: bool,
 }
@@ -324,6 +407,24 @@ impl ResolvedCallerGrant {
             }
             _ => self.granted.clone(),
         }
+    }
+
+    /// Whether the explicit agent-invocation grant covers `workspace_id`.
+    pub fn agent_invoke_for_workspace(&self, workspace_id: Option<&str>) -> bool {
+        self.agent_invoke
+            && match (&self.agent_invoke_workspaces, workspace_id) {
+                (Some(covered), Some(workspace_id)) => covered.contains(workspace_id),
+                (Some(_), None) | (None, _) => false,
+            }
+    }
+
+    /// The selected trust mode when the operation grant covers `workspace_id`.
+    pub fn agent_invoke_mode_for_workspace(
+        &self,
+        workspace_id: Option<&str>,
+    ) -> Option<RemoteAgentInvokeMode> {
+        self.agent_invoke_for_workspace(workspace_id)
+            .then_some(self.agent_invoke_mode.unwrap_or_default())
     }
 }
 
@@ -349,6 +450,9 @@ impl CallersFile {
                 granted: default.clone(),
                 elsewhere: default,
                 workspaces: None,
+                agent_invoke: false,
+                agent_invoke_workspaces: None,
+                agent_invoke_mode: None,
                 matched: false,
             };
         };
@@ -371,6 +475,15 @@ impl CallersFile {
                 .workspaces
                 .as_ref()
                 .map(|workspaces| workspaces.iter().cloned().collect()),
+            agent_invoke: row.agent_invoke,
+            agent_invoke_workspaces: row
+                .agent_invoke_workspaces
+                .as_ref()
+                .or(row.workspaces.as_ref())
+                .map(|workspaces| workspaces.iter().cloned().collect()),
+            agent_invoke_mode: row
+                .agent_invoke
+                .then_some(row.agent_invoke_mode.unwrap_or_default()),
             matched: true,
         }
     }
@@ -519,6 +632,8 @@ impl SessionCapabilityPolicy {
             granted_capabilities: grant.for_workspace(workspace_id),
             source: CALLERS_FILE_DISPLAY.to_string(),
             identity: grant.identity,
+            agent_invoke: grant.agent_invoke_for_workspace(workspace_id),
+            agent_invoke_mode: grant.agent_invoke_mode_for_workspace(workspace_id),
         })
     }
 
@@ -551,6 +666,10 @@ impl SessionCapabilityPolicy {
 /// refusal. `ExposeAuthInfo` is off in a stock `sshd_config`, and there is no
 /// evidence of a mismatch in the absence of evidence; the session is served
 /// and the gap is announced once, where an operator will see it.
+///
+/// Observing that *no* key authenticated is evidence, not the absence of it. A
+/// password or keyboard-interactive login under a pinned row is the plainest
+/// mismatch that row can have, and it is refused like any other.
 fn enforce_key_binding(
     grant: &ResolvedCallerGrant,
     identity: &RemoteCallerIdentity,
@@ -572,12 +691,21 @@ fn enforce_key_binding(
     if observed.matches(pinned) {
         return Ok(());
     }
+
+    let source = observed.observation.label();
+    let mismatch = if observed.fingerprints.is_empty() {
+        format!("this session authenticated without a public key (seen through {source})")
+    } else {
+        format!(
+            "the key that authenticated this session is {keys} (seen through {source})",
+            keys = observed.label(),
+        )
+    };
+
     Err(OrbitError::UnauthorizedCaller(format!(
         "caller '{caller}' is pinned to {pinned} by {CALLERS_FILE_DISPLAY} on this machine, but \
-         the key that authenticated this session is {observed} (seen through {source})",
+         {mismatch}",
         caller = identity.machine_id,
-        observed = observed.label(),
-        source = observed.observation.label(),
     )))
 }
 

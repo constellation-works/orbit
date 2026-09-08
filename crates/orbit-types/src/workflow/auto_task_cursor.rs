@@ -28,4 +28,18 @@ pub struct AutoTaskCursor {
     /// Task id minted by the last fire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_task_id: Option<String>,
+    /// Durable in-flight slot claim. Present between claim and a successful
+    /// consumed-slot checkpoint so a retry can reconcile or refuse to remint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<AutoTaskPendingClaim>,
+}
+
+/// In-flight admission evidence for one scheduled slot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoTaskPendingClaim {
+    /// Slot this host has claimed (RFC 3339, UTC).
+    pub slot: String,
+    /// Task id when mint succeeded but the consumed-slot checkpoint has not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
 }

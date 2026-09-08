@@ -12,9 +12,10 @@ mod direct;
 pub(crate) mod incidents;
 mod inspect;
 pub(crate) mod members;
+mod ownership;
 pub(crate) mod preparation;
 mod provider;
-mod source;
+pub(crate) mod source;
 mod task;
 #[cfg(test)]
 mod tests;
@@ -44,26 +45,24 @@ pub fn evaluate_auto_task(
     now: DateTime<Utc>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
     let AutoTaskSchedule::Deliveries {
-        deliveries_landed: trigger,
+        deliveries_landed: declared,
     } = &definition.schedule
     else {
         return Err(OrbitError::InvalidInput("not a delivery definition".into()));
     };
 
-    let epoch = delivery::definition_epoch(&(
-        &definition.schedule,
-        &definition.template,
-        definition.dedupe,
-    ))
-    .map_err(automation_error_to_orbit)?;
+    let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
+    let trigger = ownership::with_resolved_owner(declared, &ownership);
+    let epoch = ownership::auto_task_epoch(definition, &trigger)?;
 
     evaluate(
         runtime,
         Action::Task(definition),
+        ownership,
         delivery::Evaluation {
             consumer: &consumer_key(runtime, "auto-task", &definition.name)?,
             epoch: &epoch,
-            trigger,
+            trigger: &trigger,
             enabled: definition.enabled,
             dry_run,
             now,
@@ -81,23 +80,23 @@ pub fn evaluate_routine(
         return members::evaluate(runtime, definition, dry_run, now);
     }
 
-    let trigger = definition
+    let declared = definition
         .trigger
         .deliveries_landed
         .as_ref()
         .ok_or_else(|| OrbitError::InvalidInput("not a delivery routine".into()))?;
 
-    // The routine's retry policy caps whatever the trigger asks for.
-    let mut effective_trigger = trigger.clone();
-    effective_trigger.retries = effective_trigger.retries.min(definition.policy.retries.max);
+    let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
+    let mut effective_trigger = ownership::with_resolved_owner(declared, &ownership);
+    let epoch = ownership::routine_epoch(definition, &effective_trigger)?;
 
-    let epoch =
-        delivery::definition_epoch(&(&definition.trigger, &definition.target, &definition.policy))
-            .map_err(automation_error_to_orbit)?;
+    // The routine's retry policy caps whatever the trigger asks for.
+    effective_trigger.retries = effective_trigger.retries.min(definition.policy.retries.max);
 
     evaluate(
         runtime,
         Action::Job(definition),
+        ownership,
         delivery::Evaluation {
             consumer: &consumer_key(runtime, "routine", &definition.name)?,
             epoch: &epoch,
@@ -112,18 +111,15 @@ pub fn evaluate_routine(
 fn evaluate(
     runtime: &OrbitRuntime,
     action: Action<'_>,
+    ownership: DeliveryOwnership,
     mut request: delivery::Evaluation<'_>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
-    let owner = request.trigger.owner_machine.as_deref();
-    let owned_here =
-        owner.is_some_and(|owner| Some(owner) == runtime.automation_machine_identity());
-    let owned_elsewhere =
-        owner.is_some_and(|owner| Some(owner) != runtime.automation_machine_identity());
-    // Disable admission on another owner, but reconcile previously admitted work.
-    // Preview remains read-only and exposes the actual consumer/baseline.
-    request.enabled &= owned_here;
+    let configured_enabled = request.enabled;
+    // Only the owner admits new work; any other host still reconciles what it
+    // already admitted. Preview remains read-only and exposes the actual
+    // consumer/baseline.
+    request.enabled &= ownership.owned_here;
 
-    let dry_run = request.dry_run;
     let store = runtime.automation_store()?;
     let host = Host {
         runtime,
@@ -134,9 +130,16 @@ fn evaluate(
     let mut diagnostic =
         delivery::evaluate(store.as_ref(), &host, request).map_err(automation_error_to_orbit)?;
 
-    if owned_elsewhere && !dry_run {
-        diagnostic.reason = "owned_elsewhere".into();
+    // An enabled definition this host cannot admit for reports why, so
+    // `disabled` keeps meaning the operator disabled it. Preview reports the
+    // same refusal rather than promising an admission that cannot happen.
+    if configured_enabled
+        && diagnostic.reason != delivery::DEFINITION_CHANGED
+        && let Some(refusal) = ownership.refusal()
+    {
+        diagnostic.reason = refusal.into();
     }
+    diagnostic.ownership = Some(ownership);
 
     Ok(diagnostic)
 }
@@ -177,6 +180,10 @@ impl DeliveryHost for Host<'_> {
             state,
             &mut page,
         )?;
+        // [ORB-11333] Accepted before-PR certificates become exclusions only
+        // after the shared rule proves the landed trees; the evaluator then
+        // applies them for review consumers alone.
+        crate::application::review::exclusions(self.runtime, &self.source, state, &mut page)?;
 
         Ok(page)
     }

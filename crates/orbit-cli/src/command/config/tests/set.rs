@@ -136,3 +136,107 @@ fn set_rejects_unknown_key() {
         .expect_err("unknown key must be rejected");
     assert!(error.did_you_mean().is_some());
 }
+
+fn write_sol_crew(path: &std::path::Path) {
+    fs::write(
+        path,
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\nprovider = \"codex\"\n# hand-authored comment\n",
+    )
+    .expect("write sol crew config");
+}
+
+#[test]
+fn set_crew_effort_on_existing_sol_crew_round_trips() {
+    let (_root, runtime, _global_root, workspace_root) = test_runtime();
+    write_sol_crew(&workspace_root.join("config.toml"));
+
+    set_args("crews.sol.effort", "high", false, false, false)
+        .execute(&runtime)
+        .expect("set sol effort succeeds");
+
+    let saved =
+        fs::read_to_string(workspace_root.join("config.toml")).expect("read workspace config");
+    assert!(saved.contains("effort = \"high\""), "{saved}");
+    assert!(saved.contains("# hand-authored comment"), "{saved}");
+    assert!(saved.contains("model = \"gpt-5.6-sol\""), "{saved}");
+}
+
+#[test]
+fn set_crew_effort_rejects_invalid_value_without_writing() {
+    let (_root, runtime, _global_root, workspace_root) = test_runtime();
+    write_sol_crew(&workspace_root.join("config.toml"));
+    let original = fs::read(workspace_root.join("config.toml")).expect("read original");
+
+    let error = set_args("crews.sol.effort", "medium-low", false, false, false)
+        .execute(&runtime)
+        .expect_err("invalid effort must be rejected");
+    assert!(error.to_string().contains("expected one of"), "{error}");
+
+    let after = fs::read(workspace_root.join("config.toml")).expect("read after failed set");
+    assert_eq!(after, original);
+}
+
+#[test]
+fn set_crew_effort_rejects_unsupported_provider_without_writing() {
+    let (_root, runtime, _global_root, workspace_root) = test_runtime();
+    fs::write(
+        workspace_root.join("config.toml"),
+        "[workflow]\ndefault_crew = \"gemini\"\n\n[crews.gemini]\nmodel = \"gemini\"\nprovider = \"gemini\"\n",
+    )
+    .expect("write gemini crew");
+    let original = fs::read(workspace_root.join("config.toml")).expect("read original");
+
+    let error = set_args("crews.gemini.effort", "high", false, false, false)
+        .execute(&runtime)
+        .expect_err("unsupported provider must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("does not support configured reasoning effort"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read(workspace_root.join("config.toml")).expect("read after failed set"),
+        original
+    );
+}
+
+#[test]
+fn set_rejects_misspelled_crew_field_without_writing() {
+    let (_root, runtime, _global_root, workspace_root) = test_runtime();
+    write_sol_crew(&workspace_root.join("config.toml"));
+    let original = fs::read(workspace_root.join("config.toml")).expect("read original");
+
+    let error = set_args("crews.sol.effrot", "high", false, false, false)
+        .execute(&runtime)
+        .expect_err("misspelled crew field must be rejected");
+    assert!(error.to_string().contains("effrot"), "{error}");
+    assert!(
+        error
+            .did_you_mean()
+            .is_some_and(|suggestions| suggestions.iter().any(|key| key == "crews.sol.effort")),
+        "{error:?}"
+    );
+    assert_eq!(
+        fs::read(workspace_root.join("config.toml")).expect("read after failed set"),
+        original
+    );
+}
+
+#[test]
+fn set_claude_crew_effort_accepts_supported_value() {
+    let (_root, runtime, _global_root, workspace_root) = test_runtime();
+    fs::write(
+        workspace_root.join("config.toml"),
+        "[workflow]\ndefault_crew = \"opus\"\n\n[crews.opus]\nmodel = \"opus\"\nprovider = \"claude\"\n",
+    )
+    .expect("write opus crew");
+
+    set_args("crews.opus.effort", "max", false, false, false)
+        .execute(&runtime)
+        .expect("set claude effort succeeds");
+
+    let saved =
+        fs::read_to_string(workspace_root.join("config.toml")).expect("read workspace config");
+    assert!(saved.contains("effort = \"max\""), "{saved}");
+}

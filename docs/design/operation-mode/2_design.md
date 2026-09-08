@@ -175,11 +175,13 @@ This inspection reads source and checked-in resources, not live host telemetry.
 It establishes extension seams, not that enabling a preset is already safe.
 General grant enforcement, exact preparation freshness at promotion, the
 admission policy snapshot, and cross-retry budgets shipped in [ORB-11332];
-provider cost accounting and review coverage did not. Scheduler
+the before-PR review gate, lineage review budgets, and exact-tree delivery
+coverage shipped in [ORB-11333] ([Operations §10](./5_operations.md));
+provider cost accounting did not. Scheduler
 timing depends on the external sweep clock, host role/pin, and capacity.
 Current numeric defaults describe this revision and may change independently.
-Neither the inspected PR job nor the auto-task scheduler enforces the proposed
-review policy, repair budget, or revision-specific exclusion from later sweeps.
+This inspection predates [ORB-11333]; the PR job now carries the review gate
+and the delivery evaluator consumes certificate-backed exclusions.
 
 ## Task References
 
