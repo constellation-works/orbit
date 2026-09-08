@@ -18,6 +18,7 @@ use orbit_types::{
     },
 };
 use serde_json::{Value, json};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 pub(crate) fn evaluate(
@@ -55,10 +56,7 @@ pub(crate) fn evaluate(
 
     members::evaluate(
         runtime.automation_store()?.as_ref(),
-        &Host {
-            runtime,
-            trigger: &effective,
-        },
+        &Host::new(runtime, &effective),
         MemberEvaluation {
             consumer: &consumer,
             epoch: &epoch,
@@ -72,9 +70,25 @@ pub(crate) fn evaluate(
     .map_err(automation_error_to_orbit)
 }
 
-struct Host<'a> {
+pub(crate) struct Host<'a> {
     runtime: &'a OrbitRuntime,
     trigger: &'a StateTrigger,
+    incidents: RefCell<super::incidents::IncidentSession>,
+}
+
+impl<'a> Host<'a> {
+    pub(crate) fn new(runtime: &'a OrbitRuntime, trigger: &'a StateTrigger) -> Self {
+        Self {
+            runtime,
+            trigger,
+            incidents: RefCell::new(super::incidents::IncidentSession::new()),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn incident_work_stats(&self) -> super::incidents::IncidentWorkStats {
+        self.incidents.borrow().stats()
+    }
 }
 
 impl MemberHost for Host<'_> {
@@ -160,9 +174,12 @@ impl MemberHost for Host<'_> {
                                 continue;
                             }
 
-                            // The full cohort is hydrated at most once per page.
+                            // The full cohort is hydrated at most once per page
+                            // and reused across later admissions in this Host
+                            // after a freshness check.
                             if incident_inventory.is_none() {
-                                incident_inventory = Some(super::incidents::members(self.runtime)?);
+                                incident_inventory =
+                                    Some(self.incidents.borrow_mut().inventory(self.runtime)?);
                             }
 
                             let task_ids = incident_inventory
@@ -208,7 +225,12 @@ impl MemberHost for Host<'_> {
 
     fn admission(&self, member: &StateMember) -> Result<MemberAdmission, AutomationError> {
         if self.trigger.kind == StateTriggerKind::ExecutionFailed
-            && super::incidents::members(self.runtime)?.get(&member.key) != Some(&member.task_ids)
+            && self
+                .incidents
+                .borrow_mut()
+                .inventory(self.runtime)?
+                .get(&member.key)
+                != Some(&member.task_ids)
         {
             return Ok(MemberAdmission::Retire(
                 "incident_membership_or_recovery_changed".into(),
