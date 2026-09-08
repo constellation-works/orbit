@@ -26,6 +26,7 @@ import {
   setActiveRunDetail,
   getActiveRunEvents,
   setActiveRunEvents,
+  setActiveRunEventsError,
   getActiveRunLogs,
   setActiveRunLogs,
   getActiveRunSubtab,
@@ -70,10 +71,8 @@ const $ = (id) => document.getElementById(id);
 let searchQuery = "";
 let activeStatuses = new Set(DEFAULT_ACTIVE_STATUSES);
 let lastTasks = [];
-// ORB-10874: paging metadata from the single-workspace `/api/tasks` envelope
-// (`{ items, total, limit, truncated }`) so the count can state a shown/total/
-// server-limit fact instead of an ambiguous `N/50`. Null for the aggregate
-// `/api/tasks/all` view, which answers a bare array with no such metadata.
+// ORB-10874: paging metadata from task-list envelopes so the count can state a
+// shown/total/server-limit fact instead of an ambiguous `N/50`.
 let lastTasksMeta = null;
 let lastRuns = [];
 let lastRunsMeta = null;
@@ -1093,11 +1092,10 @@ function fetchAndRenderTasks() {
     fetchJson(path),
     crews,
   ]).then(([payload]) => {
-    // /api/tasks answers `{ items, total, limit, truncated }` (ORB-10400);
-    // /api/tasks/all a bare array with no paging metadata.
+    // Both task-list endpoints answer `{ items, total, limit, truncated }`.
     const tasks = listItems(payload);
     lastTasks = tasks;
-    lastTasksMeta = !aggregate && payload && !Array.isArray(payload)
+    lastTasksMeta = payload && !Array.isArray(payload)
       ? { total: payload.total, limit: payload.limit, truncated: payload.truncated }
       : null;
     renderTasks(tasks, taskContext());
@@ -1421,9 +1419,10 @@ function fetchAndRenderRunEvents() {
     setActiveRunEvents(events);
     renderRunEvents();
     renderRunGantt();
-  }).catch(() => {
-    // Missing v2 events file is non-fatal — run detail still renders.
+  }).catch((error) => {
     setActiveRunEvents([]);
+    if (error.status !== 404) setActiveRunEventsError(error.message);
+    renderRunEvents();
     renderRunGantt();
   });
 }

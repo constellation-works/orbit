@@ -29,6 +29,7 @@ fn spawn_test_request<'a>(
         trace,
         output_capture_limit: None,
         on_spawn: None,
+        wait: None,
     }
 }
 
@@ -148,6 +149,42 @@ fn spawn_with_timeout_reports_the_child_pid_while_the_child_is_still_running() {
         Some(true),
         "the pid must be reported while the child is still running"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn spawn_with_timeout_cleans_process_group_when_wait_fails() {
+    use std::cell::Cell;
+    use std::io;
+
+    let args = sh_args("sleep 30");
+    let child_pid = Cell::new(0u32);
+    let on_spawn = |pid: u32| child_pid.set(pid);
+    let wait = |_child: &mut std::process::Child| Err(io::Error::other("injected wait failure"));
+    let mut request = spawn_test_request(
+        "/bin/sh",
+        &args,
+        None,
+        Duration::from_secs(5),
+        SpawnTraceContext {
+            provider: "codex",
+            job_run_id: "job-wait-error",
+            task_id: Some("TWAIT"),
+            cwd: None,
+        },
+    );
+    request.on_spawn = Some(&on_spawn);
+    request.wait = Some(&wait);
+
+    let error = spawn_with_timeout(request).expect_err("injected wait failure");
+    assert!(!error.permanent);
+    assert!(error.message.contains("injected wait failure"));
+
+    let pid = child_pid.get();
+    assert_ne!(pid, 0);
+    let result = unsafe { libc::killpg(pid as libc::pid_t, 0) };
+    assert_eq!(result, -1);
+    assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
 }
 
 #[test]

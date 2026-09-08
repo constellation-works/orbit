@@ -327,8 +327,9 @@ where
 /// the window (previously indistinguishable, because the handler answered a bare
 /// truncated array with no metadata).
 ///
-/// The cross-workspace `/api/tasks/all` aggregate still answers a bare array; it
-/// takes no filters and is bounded by the same default limit.
+/// The cross-workspace `/api/tasks/all` aggregate uses the same envelope. It
+/// takes no filters and its `total` sums the untruncated candidate counts from
+/// active workspaces.
 pub(super) async fn list_tasks(Ws(runtime): Ws, RawQuery(query): RawQuery) -> Response {
     let query = match TaskListQuery::parse(query.as_deref()) {
         Ok(query) => query,

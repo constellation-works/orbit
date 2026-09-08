@@ -253,16 +253,26 @@ export function stateCell(state) {
 
 export function fetchJson(path) {
   return fetch(withWorkspace(path), { headers: { accept: "application/json" } })
-    .then(res => {
-      if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+    .then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text();
+        let message = `${path}: HTTP ${res.status}`;
+        try {
+          const body = JSON.parse(text);
+          if (body && body.error) message = body.error;
+        } catch (_) {}
+        const error = new Error(message);
+        error.status = res.status;
+        throw error;
+      }
       return res.json();
     });
 }
 
-// ORB-10400: /api/tasks answers a paginated envelope
+// ORB-10400: task-list endpoints answer a paginated envelope
 // `{ items, total, limit, truncated }` so a client can tell an empty result from
-// a truncated window, while the /api/tasks/all aggregate still answers a bare
-// array. Accept either shape rather than teaching each call site the difference.
+// a truncated window. Accept either shape for compatibility with non-task list
+// call sites that use this helper.
 export function listItems(payload) {
   if (Array.isArray(payload)) return payload;
   if (payload && Array.isArray(payload.items)) return payload.items;

@@ -118,6 +118,67 @@ pub struct RunProviderProcess {
     pub liveness: ProcessLiveness,
 }
 
+impl RunProviderProcess {
+    /// The operator-facing projection of one provider child.
+    ///
+    /// Shared by the CLI and the registered/MCP run-show surfaces so both
+    /// readers name the same process with the same keys; a child that is alive
+    /// in one and absent from the other is the failure this projection exists
+    /// to prevent. `run_id` is omitted: every caller already knows the run it
+    /// asked about.
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({
+            "event_id": self.event_id,
+            "ts": self.ts.map(|ts| ts.to_rfc3339()),
+            "step_id": self.step_id,
+            "step_index": self.step_index,
+            "provider": self.provider,
+            "pid": self.pid,
+            "pid_start_time": self.pid_start_time,
+            "finished": self.finished,
+            "liveness": self.liveness.as_str(),
+            "exit_code": self.exit_code,
+            "timed_out": self.timed_out,
+            "duration_ms": self.duration_ms,
+        })
+    }
+}
+
+/// [ORB-11752] What a run is doing *right now*: the activity step that is open
+/// and the provider children it spawned, each with a liveness verdict.
+///
+/// This is the evidence that separates a healthy implementation agent from an
+/// abandoned wrapper. `state` is `observed` when the run has a v2 audit trail
+/// and `unavailable` when it has none — a legacy run, or one whose trail was
+/// never written. An `observed` progress with no active step and no open child
+/// is a run between steps, which is a different fact from having no evidence.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunExecutionProgress {
+    pub state: &'static str,
+    pub active_step: Option<RunAuditStep>,
+    pub provider_processes: Vec<RunProviderProcess>,
+    pub limit: usize,
+    pub truncated: bool,
+}
+
+impl RunExecutionProgress {
+    /// The empty projection: no v2 audit trail, or one this reader could not
+    /// open. Never confused with "nothing is running".
+    pub fn unavailable() -> Self {
+        Self {
+            state: "unavailable",
+            active_step: None,
+            provider_processes: Vec::new(),
+            limit: MAX_PROVIDER_PROCESSES,
+            truncated: false,
+        }
+    }
+}
+
+/// Provider children carried on the progress projection. A run spawns a
+/// handful per step; the budget only bites on a long retry history.
+const MAX_PROVIDER_PROCESSES: usize = 8;
+
 impl OrbitRuntime {
     /// Provider subprocesses recorded for a run, oldest first, each with a
     /// liveness verdict for the ones that have not reported an exit.
@@ -145,94 +206,63 @@ impl OrbitRuntime {
         P: Fn(u32, Option<&str>) -> ProcessLiveness,
     {
         let events = self.collect_run_audit_events(run_id)?;
-        let step_index_by_id = self
-            .collect_run_audit_steps(run_id)?
-            .into_iter()
-            .map(|step| (step.step_id, step.step_index))
-            .collect::<HashMap<_, _>>();
-        let mut records: Vec<RunProviderProcess> = Vec::new();
-        // The direct parent of a provider process / completion event is the
-        // invocation that emitted it. Keep that correlation private to this
-        // reconstruction rather than projecting it as a new API field.
-        let mut invocation_parent_by_process_event = HashMap::<String, String>::new();
+        let steps = audit_steps_from_events(&events);
+        Ok(provider_processes_from_events(
+            run_id,
+            events,
+            &step_index_by_id(&steps),
+            probe,
+        ))
+    }
 
-        for event in events {
-            match event.body_kind.as_deref() {
-                Some("cli_invocation_process") => {
-                    let Some(pid) = event
-                        .raw
-                        .get("pid")
-                        .and_then(Value::as_u64)
-                        .and_then(|pid| u32::try_from(pid).ok())
-                    else {
-                        continue;
-                    };
-                    let step_index = event
-                        .step_id
-                        .as_ref()
-                        .and_then(|step_id| step_index_by_id.get(step_id).copied());
-                    if let Some(parent_event_id) = &event.parent_event_id {
-                        invocation_parent_by_process_event
-                            .insert(event.event_id.clone(), parent_event_id.clone());
-                    }
-                    records.push(RunProviderProcess {
-                        run_id: event
-                            .raw
-                            .get("run_id")
-                            .and_then(Value::as_str)
-                            .unwrap_or(run_id)
-                            .to_string(),
-                        event_id: event.event_id,
-                        ts: event.timestamp,
-                        step_index,
-                        step_id: event.step_id,
-                        provider: event
-                            .raw
-                            .get("provider")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        pid,
-                        pid_start_time: event
-                            .raw
-                            .get("pid_start_time")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        finished: false,
-                        exit_code: None,
-                        timed_out: false,
-                        duration_ms: None,
-                        // Overwritten below; only unfinished records are probed.
-                        liveness: ProcessLiveness::Exited,
-                    });
-                }
-                Some("cli_invocation_finished") => {
-                    let Some(record) = matching_provider_process_for_completion(
-                        &mut records,
-                        &invocation_parent_by_process_event,
-                        &event,
-                    ) else {
-                        continue;
-                    };
-                    record.finished = true;
-                    record.exit_code = event.raw.get("exit_code").and_then(Value::as_i64);
-                    record.timed_out = event
-                        .raw
-                        .get("timed_out")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    record.duration_ms = event.raw.get("duration_ms").and_then(Value::as_u64);
-                }
-                _ => {}
-            }
+    /// [ORB-11752] The run's live progress: open activity step plus a bounded,
+    /// liveness-probed view of the provider children it spawned.
+    ///
+    /// One audit scan answers both halves, so an observer asking "is my
+    /// implementation agent still there" pays for a single read rather than
+    /// three overlapping ones.
+    pub fn collect_run_execution_progress(
+        &self,
+        run_id: &str,
+    ) -> Result<RunExecutionProgress, OrbitError> {
+        self.collect_run_execution_progress_with(run_id, probe_process_liveness)
+    }
+
+    /// Inner, testable form of [`Self::collect_run_execution_progress`] with the
+    /// liveness probe injected.
+    pub(crate) fn collect_run_execution_progress_with<P>(
+        &self,
+        run_id: &str,
+        probe: P,
+    ) -> Result<RunExecutionProgress, OrbitError>
+    where
+        P: Fn(u32, Option<&str>) -> ProcessLiveness,
+    {
+        let events = self.collect_run_audit_events(run_id)?;
+        if events.is_empty() {
+            return Ok(RunExecutionProgress::unavailable());
         }
 
-        for record in &mut records {
-            if !record.finished {
-                record.liveness = probe(record.pid, record.pid_start_time.as_deref());
-            }
-        }
+        let steps = audit_steps_from_events(&events);
+        // Parallel activities can leave several steps open at once; the newest
+        // one is what "what is it doing now" means to an operator.
+        let active_step = steps
+            .iter()
+            .rev()
+            .find(|step| step.finished_at.is_none())
+            .cloned();
+        let records =
+            provider_processes_from_events(run_id, events, &step_index_by_id(&steps), probe);
+        let (provider_processes, truncated) =
+            bound_provider_processes(records, MAX_PROVIDER_PROCESSES);
 
-        Ok(records)
+        Ok(RunExecutionProgress {
+            state: "observed",
+            active_step,
+            provider_processes,
+            limit: MAX_PROVIDER_PROCESSES,
+            truncated,
+        })
     }
 
     pub fn collect_run_audit_events(&self, run_id: &str) -> Result<Vec<RunAuditEvent>, OrbitError> {
@@ -290,82 +320,9 @@ impl OrbitRuntime {
     }
 
     pub fn collect_run_audit_steps(&self, run_id: &str) -> Result<Vec<RunAuditStep>, OrbitError> {
-        let events = self.collect_run_audit_events(run_id)?;
-        let mut steps = Vec::<RunAuditStep>::new();
-        let mut index_by_id = HashMap::<String, usize>::new();
-
-        for event in events {
-            match event.body_kind.as_deref() {
-                Some("step_started") => {
-                    let Some(step_id) = event.raw.get("step_id").and_then(Value::as_str) else {
-                        continue;
-                    };
-                    if index_by_id.contains_key(step_id) {
-                        continue;
-                    }
-                    let index = steps.len();
-                    index_by_id.insert(step_id.to_string(), index);
-                    steps.push(RunAuditStep {
-                        step_index: index as u32,
-                        step_id: step_id.to_string(),
-                        started_at: event.timestamp,
-                        finished_at: None,
-                        state: None,
-                        outcome: None,
-                        error_message: None,
-                    });
-                }
-                Some("step_finished") | Some("step_skipped") | Some("step_denied") => {
-                    let Some(step_id) = event.raw.get("step_id").and_then(Value::as_str) else {
-                        continue;
-                    };
-                    let Some(index) = index_by_id.get(step_id).copied() else {
-                        continue;
-                    };
-                    let step = &mut steps[index];
-                    step.finished_at = event.timestamp;
-                    match event.body_kind.as_deref() {
-                        Some("step_finished") => {
-                            let outcome = event
-                                .raw
-                                .get("outcome")
-                                .and_then(Value::as_str)
-                                .unwrap_or("finished")
-                                .to_string();
-                            step.state = Some(outcome.clone());
-                            step.outcome = Some(outcome);
-                            step.error_message = event
-                                .raw
-                                .get("error_message")
-                                .and_then(Value::as_str)
-                                .map(str::to_string);
-                        }
-                        Some("step_skipped") => {
-                            step.state = Some("skipped".to_string());
-                            step.outcome = Some("skipped".to_string());
-                            step.error_message = event
-                                .raw
-                                .get("reason")
-                                .and_then(Value::as_str)
-                                .map(str::to_string);
-                        }
-                        Some("step_denied") => {
-                            step.state = Some("failed".to_string());
-                            step.outcome = Some("denied".to_string());
-                            step.error_message = event
-                                .raw
-                                .get("reason")
-                                .and_then(Value::as_str)
-                                .map(str::to_string);
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        Ok(steps)
+        Ok(audit_steps_from_events(
+            &self.collect_run_audit_events(run_id)?,
+        ))
     }
 
     /// Recover the most recent bounded recovery-attempt evidence for a run.
@@ -483,6 +440,230 @@ impl OrbitRuntime {
     fn v2_audit_blob_root(&self) -> PathBuf {
         self.data_root().join("state").join("audit").join("blobs")
     }
+}
+
+/// Reconstruct a run's activity steps from an already-read audit trail, in
+/// first-started order.
+fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditStep> {
+    let mut steps = Vec::<RunAuditStep>::new();
+    let mut index_by_id = HashMap::<String, usize>::new();
+
+    for event in events {
+        match event.body_kind.as_deref() {
+            Some("step_started") => {
+                let Some(step_id) = event.raw.get("step_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if index_by_id.contains_key(step_id) {
+                    continue;
+                }
+                let index = steps.len();
+                index_by_id.insert(step_id.to_string(), index);
+                steps.push(RunAuditStep {
+                    step_index: index as u32,
+                    step_id: step_id.to_string(),
+                    started_at: event.timestamp,
+                    finished_at: None,
+                    state: None,
+                    outcome: None,
+                    error_message: None,
+                });
+            }
+            Some("step_finished") | Some("step_skipped") | Some("step_denied") => {
+                let Some(step_id) = event.raw.get("step_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(index) = index_by_id.get(step_id).copied() else {
+                    continue;
+                };
+                let step = &mut steps[index];
+                step.finished_at = event.timestamp;
+                match event.body_kind.as_deref() {
+                    Some("step_finished") => {
+                        let outcome = event
+                            .raw
+                            .get("outcome")
+                            .and_then(Value::as_str)
+                            .unwrap_or("finished")
+                            .to_string();
+                        step.state = Some(outcome.clone());
+                        step.outcome = Some(outcome);
+                        step.error_message = event
+                            .raw
+                            .get("error_message")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                    }
+                    Some("step_skipped") => {
+                        step.state = Some("skipped".to_string());
+                        step.outcome = Some("skipped".to_string());
+                        step.error_message = event
+                            .raw
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                    }
+                    Some("step_denied") => {
+                        step.state = Some("failed".to_string());
+                        step.outcome = Some("denied".to_string());
+                        step.error_message = event
+                            .raw
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    steps
+}
+
+/// Index each activity step by id so a provider process can name its position
+/// in the run as well as its step.
+fn step_index_by_id(steps: &[RunAuditStep]) -> HashMap<String, u32> {
+    steps
+        .iter()
+        .map(|step| (step.step_id.clone(), step.step_index))
+        .collect()
+}
+
+/// Reconstruct the run's provider subprocesses from an already-read audit
+/// trail, pairing each spawn with the completion that closes it and probing the
+/// liveness of whatever is still open.
+fn provider_processes_from_events<P>(
+    run_id: &str,
+    events: Vec<RunAuditEvent>,
+    step_index_by_id: &HashMap<String, u32>,
+    probe: P,
+) -> Vec<RunProviderProcess>
+where
+    P: Fn(u32, Option<&str>) -> ProcessLiveness,
+{
+    let mut records: Vec<RunProviderProcess> = Vec::new();
+    // The direct parent of a provider process / completion event is the
+    // invocation that emitted it. Keep that correlation private to this
+    // reconstruction rather than projecting it as a new API field.
+    let mut invocation_parent_by_process_event = HashMap::<String, String>::new();
+
+    for event in events {
+        match event.body_kind.as_deref() {
+            Some("cli_invocation_process") => {
+                let Some(pid) = event
+                    .raw
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .and_then(|pid| u32::try_from(pid).ok())
+                else {
+                    continue;
+                };
+                let step_index = event
+                    .step_id
+                    .as_ref()
+                    .and_then(|step_id| step_index_by_id.get(step_id).copied());
+                if let Some(parent_event_id) = &event.parent_event_id {
+                    invocation_parent_by_process_event
+                        .insert(event.event_id.clone(), parent_event_id.clone());
+                }
+                records.push(RunProviderProcess {
+                    run_id: event
+                        .raw
+                        .get("run_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or(run_id)
+                        .to_string(),
+                    event_id: event.event_id,
+                    ts: event.timestamp,
+                    step_index,
+                    step_id: event.step_id,
+                    provider: event
+                        .raw
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    pid,
+                    pid_start_time: event
+                        .raw
+                        .get("pid_start_time")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    finished: false,
+                    exit_code: None,
+                    timed_out: false,
+                    duration_ms: None,
+                    // Overwritten below; only unfinished records are probed.
+                    liveness: ProcessLiveness::Exited,
+                });
+            }
+            Some("cli_invocation_finished") => {
+                let Some(record) = matching_provider_process_for_completion(
+                    &mut records,
+                    &invocation_parent_by_process_event,
+                    &event,
+                ) else {
+                    continue;
+                };
+                record.finished = true;
+                record.exit_code = event.raw.get("exit_code").and_then(Value::as_i64);
+                record.timed_out = event
+                    .raw
+                    .get("timed_out")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                record.duration_ms = event.raw.get("duration_ms").and_then(Value::as_u64);
+            }
+            _ => {}
+        }
+    }
+
+    for record in &mut records {
+        if !record.finished {
+            record.liveness = probe(record.pid, record.pid_start_time.as_deref());
+        }
+    }
+
+    records
+}
+
+/// Keep the newest `limit` provider children, preferring the ones still open.
+///
+/// A run with a long retry history can spawn more children than the budget
+/// carries. Dropping an open invocation would hide exactly the child this
+/// projection exists to report, so open records claim the budget first and the
+/// newest finished ones fill what is left. Survivors stay in trail order.
+fn bound_provider_processes(
+    records: Vec<RunProviderProcess>,
+    limit: usize,
+) -> (Vec<RunProviderProcess>, bool) {
+    if records.len() <= limit {
+        return (records, false);
+    }
+
+    let mut keep = vec![false; records.len()];
+    let mut budget = limit;
+    for keeping_open in [true, false] {
+        for (index, record) in records.iter().enumerate().rev() {
+            if budget == 0 {
+                break;
+            }
+            if record.finished == keeping_open {
+                continue;
+            }
+            keep[index] = true;
+            budget -= 1;
+        }
+    }
+
+    let kept = records
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(record, keep)| keep.then_some(record))
+        .collect::<Vec<_>>();
+    // Only reachable past the early return above, so something was dropped.
+    (kept, true)
 }
 
 /// Find the open provider process that a completion can honestly close.

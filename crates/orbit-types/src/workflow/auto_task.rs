@@ -12,13 +12,18 @@
 //! is provider-neutral: the template carries crew / priority / type only —
 //! there are no turn-based budget knobs anywhere in the definition.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::error::WorkflowError;
 use crate::task::{TaskPriority, TaskStatus, TaskType};
 
 /// Auto-task YAML schema version this binary reads and writes.
 pub const AUTO_TASK_SCHEMA_VERSION: u32 = 1;
+
+/// Longest supported auto-task interval: one year in minutes. This keeps an
+/// operator mistake from becoming a practically inert schedule while remaining
+/// well within the scheduler's signed duration representation.
+pub const MAX_AUTO_TASK_INTERVAL_MINUTES: u64 = 365 * 24 * 60;
 
 /// Tag prefix stamped on every task an auto-task definition creates. The
 /// suffix is the definition name, so `skip_if_open` dedupe and provenance
@@ -69,8 +74,8 @@ pub struct AutoTaskDefinition {
 
 /// When a definition is due. Exactly one form is present per definition; the
 /// scheduler's due-math (orbit-core) collapses catch-up fires either way.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged, deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
 pub enum AutoTaskSchedule {
     /// Verified landings, independent of task completion.
     Deliveries {
@@ -80,6 +85,50 @@ pub enum AutoTaskSchedule {
     Cron { cron: String },
     /// Fire every N minutes, anchored at the definition's first-observed slot.
     Interval { every_minutes: u64 },
+}
+
+/// Wire representation used to preserve field-specific errors while enforcing
+/// the schedule's one-form invariant.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSchedule {
+    cron: Option<String>,
+    every_minutes: Option<u64>,
+    deliveries_landed: Option<super::automation::DeliveryTrigger>,
+}
+
+impl<'de> Deserialize<'de> for AutoTaskSchedule {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawSchedule::deserialize(deserializer)?;
+        let mut forms = Vec::new();
+
+        if raw.cron.is_some() {
+            forms.push("cron");
+        }
+        if raw.every_minutes.is_some() {
+            forms.push("every_minutes");
+        }
+        if raw.deliveries_landed.is_some() {
+            forms.push("deliveries_landed");
+        }
+
+        match (raw.cron, raw.every_minutes, raw.deliveries_landed) {
+            (Some(cron), None, None) => Ok(Self::Cron { cron }),
+            (None, Some(every_minutes), None) => Ok(Self::Interval { every_minutes }),
+            (None, None, Some(deliveries_landed)) => Ok(Self::Deliveries { deliveries_landed }),
+            _ => Err(<D::Error as serde::de::Error>::custom(format!(
+                "schedule must have exactly one of cron, every_minutes, deliveries_landed; found: {}",
+                if forms.is_empty() {
+                    "none".to_string()
+                } else {
+                    forms.join(", ")
+                }
+            ))),
+        }
+    }
 }
 
 /// The task template instantiated on each fire. Provider-neutral (ADR-0217):
@@ -170,9 +219,11 @@ impl AutoTaskDefinition {
                     self.name
                 )));
             }
-            AutoTaskSchedule::Interval { every_minutes } if *every_minutes == 0 => {
+            AutoTaskSchedule::Interval { every_minutes }
+                if *every_minutes == 0 || *every_minutes > MAX_AUTO_TASK_INTERVAL_MINUTES =>
+            {
                 return Err(WorkflowError::Invalid(format!(
-                    "auto-task '{}' schedule.every_minutes must be at least 1",
+                    "auto-task '{}' schedule.every_minutes must be between 1 and {MAX_AUTO_TASK_INTERVAL_MINUTES}",
                     self.name
                 )));
             }

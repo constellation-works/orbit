@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -11,6 +12,9 @@ const MAX_LIVE_PROCESS_GROUPS: usize = 256;
 static HANDLER_INSTALL: OnceLock<Mutex<HandlerInstall>> = OnceLock::new();
 static LAST_SIGNAL: AtomicI32 = AtomicI32::new(0);
 static SIGNAL_GEN: AtomicU64 = AtomicU64::new(0);
+/// Signal to re-raise after the last waiter restores the previous disposition.
+/// Written only from the async-signal-safe handler; swapped to `0` on last drop.
+static PENDING_FORWARD: AtomicI32 = AtomicI32::new(0);
 static LIVE_PGIDS: [AtomicU32; MAX_LIVE_PROCESS_GROUPS] =
     [const { AtomicU32::new(0) }; MAX_LIVE_PROCESS_GROUPS];
 
@@ -26,9 +30,11 @@ struct PreviousHandlers {
 
 /// Process-wide SIGINT/SIGTERM intercept for the duration of one supervised
 /// wait. Install is refcounted: the first live guard swaps in the handlers,
-/// and the last drop restores the previous dispositions. The install mutex
-/// is held only for that refcount/sigaction critical section — never across
-/// the child's lifetime — so concurrent supervisors overlap.
+/// and the last drop restores the previous dispositions and re-raises the
+/// captured signal so a long-running server's original handler (tokio
+/// `ctrl_c` / SIGTERM, or SIG_DFL) still runs. The install mutex is held
+/// only for that refcount/sigaction critical section — never across the
+/// child's lifetime or across `raise` — so concurrent supervisors overlap.
 pub(super) struct SignalHandlerGuard {
     start_gen: u64,
     slot: Option<usize>,
@@ -100,20 +106,81 @@ fn acquire_handlers() -> Result<u64, OrbitError> {
 }
 
 fn release_handlers() {
-    let Ok(mut state) = handler_install().lock() else {
-        return;
-    };
-    if state.refcount == 0 {
-        return;
-    }
-    state.refcount -= 1;
-    if state.refcount > 0 {
-        return;
-    }
-    if let Some(previous) = state.previous.take() {
+    let pending_raise = {
+        let Ok(mut state) = handler_install().lock() else {
+            return;
+        };
+        if state.refcount == 0 {
+            return;
+        }
+        state.refcount -= 1;
+        if state.refcount > 0 {
+            return;
+        }
+        let Some(previous) = state.previous.take() else {
+            return;
+        };
         restore_signal_handler(libc::SIGINT, &previous.sigint);
         restore_signal_handler(libc::SIGTERM, &previous.sigterm);
+        let pending = PENDING_FORWARD.swap(0, Ordering::SeqCst);
+        pending_forward_action(&previous, pending)
+    };
+
+    // Raise with the install mutex released: the previous handler (tokio's
+    // pipe write, or SIG_DFL terminate) must not re-enter this lock.
+    if let Some((signal, announce)) = pending_raise {
+        if announce {
+            announce_default_termination(signal);
+        }
+        // Safety: previous disposition is restored; `raise` delivers `signal`
+        // to this process so the original handler or default action runs.
+        let _ = unsafe { libc::raise(signal) };
     }
+}
+
+enum PreviousDisposition {
+    Default,
+    Ignore,
+    Custom,
+}
+
+fn previous_disposition(action: &libc::sigaction) -> PreviousDisposition {
+    if action.sa_flags & libc::SA_SIGINFO != 0 {
+        return PreviousDisposition::Custom;
+    }
+    if action.sa_sigaction == libc::SIG_IGN {
+        PreviousDisposition::Ignore
+    } else if action.sa_sigaction == libc::SIG_DFL {
+        PreviousDisposition::Default
+    } else {
+        PreviousDisposition::Custom
+    }
+}
+
+fn pending_forward_action(previous: &PreviousHandlers, pending: i32) -> Option<(i32, bool)> {
+    if pending == 0 {
+        return None;
+    }
+    let action = match pending {
+        libc::SIGINT => &previous.sigint,
+        libc::SIGTERM => &previous.sigterm,
+        _ => return None,
+    };
+    match previous_disposition(action) {
+        PreviousDisposition::Ignore => None,
+        PreviousDisposition::Default => Some((pending, true)),
+        PreviousDisposition::Custom => Some((pending, false)),
+    }
+}
+
+fn announce_default_termination(signal: i32) {
+    // SIG_DFL terminates this process, so the wait-result stderr annotation
+    // never reaches the CLI. Write the same text to the process stderr first.
+    let message = signal_message(signal);
+    let mut stderr = io::stderr();
+    let _ = stderr.write_all(message.as_bytes());
+    let _ = stderr.write_all(b"\n");
+    let _ = stderr.flush();
 }
 
 fn handler_install() -> &'static Mutex<HandlerInstall> {
@@ -149,6 +216,7 @@ fn unregister_pgid(slot: Option<usize>) {
 unsafe extern "C" fn termination_signal_handler(signal: libc::c_int) {
     LAST_SIGNAL.store(signal, Ordering::SeqCst);
     SIGNAL_GEN.fetch_add(1, Ordering::SeqCst);
+    PENDING_FORWARD.store(signal, Ordering::SeqCst);
     for slot in &LIVE_PGIDS {
         let pgid = slot.load(Ordering::Relaxed);
         if pgid != 0 {

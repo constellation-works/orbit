@@ -25,6 +25,7 @@ const RUN_EVENTS_LIMIT = positiveIntParam("events", 100);  // re-export for app 
 let activeRunId = null;
 let activeRunDetail = null;
 let activeRunEvents = [];
+let activeRunEventsError = null;
 let activeRunLogs = [];
 let activeRunSubtab = "steps";
 let expandedStepIndices = new Set();
@@ -99,7 +100,12 @@ export function getActiveRunDetail() { return activeRunDetail; }
 export function setActiveRunDetail(v) { activeRunDetail = v; }
 
 export function getActiveRunEvents() { return activeRunEvents; }
-export function setActiveRunEvents(v) { activeRunEvents = v || []; }
+export function setActiveRunEvents(v) {
+  activeRunEvents = v || [];
+  activeRunEventsError = null;
+}
+
+export function setActiveRunEventsError(v) { activeRunEventsError = v || null; }
 
 export function getActiveRunLogs() { return activeRunLogs; }
 export function setActiveRunLogs(v) { activeRunLogs = v || []; }
@@ -572,6 +578,14 @@ const RUN_EVENT_COLUMNS = [
 export function renderRunEvents() {
   const body = $("run-events-body");
   if (!body) return;
+  if (activeRunEventsError) {
+    syncNodes(body, [el("div", { class: "empty-state" }, [
+      el("div", { class: "icon", text: "!" }),
+      el("div", { class: "text", text: activeRunEventsError }),
+      el("div", { class: "text", text: "Try narrowing the kind filter to reduce the scan." }),
+    ])]);
+    return;
+  }
   const events = activeRunEvents || [];
   if (events.length === 0) {
     syncNodes(body, [el("div", { class: "empty-state" }, [
@@ -635,4 +649,3 @@ function summarizeEvent(ev) {
   const text = parts.join(" ");
   return { text: truncate(text, 200), title: text };
 }
-

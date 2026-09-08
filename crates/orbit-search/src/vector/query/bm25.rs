@@ -29,6 +29,8 @@ pub fn bm25_top_k(
     let conn = conn
         .lock()
         .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
+    let fts_err =
+        |error| crate::vector::store::schema::translate_corpus_fts_sql_error(&conn, error);
     let mut hits = Vec::new();
     if let Some(kind) = kind {
         let mut stmt = conn
@@ -47,10 +49,10 @@ pub fn bm25_top_k(
                     LIMIT ?3
                 "#,
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(fts_err)?;
         let mut rows = stmt
             .query(params![match_query, kind, limit as i64])
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(fts_err)?;
         collect_hits(&mut rows, &mut hits)?;
     } else {
         let mut stmt = conn
@@ -69,10 +71,10 @@ pub fn bm25_top_k(
                     LIMIT ?2
                 "#,
             )
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(fts_err)?;
         let mut rows = stmt
             .query(params![match_query, limit as i64])
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+            .map_err(fts_err)?;
         collect_hits(&mut rows, &mut hits)?;
     }
     Ok(hits)
@@ -132,7 +134,7 @@ fn snippet_by_rowid(store: &VectorStore, rowid: i64) -> Result<Option<String>, O
     .map(Some)
     .or_else(|error| match error {
         rusqlite::Error::QueryReturnedNoRows => Ok(None),
-        other => Err(OrbitError::Store(other.to_string())),
+        other => Err(crate::vector::store::schema::translate_corpus_fts_sql_error(&conn, other)),
     })
 }
 
@@ -159,7 +161,7 @@ fn snippet_by_chunk_idx(
     .map(Some)
     .or_else(|error| match error {
         rusqlite::Error::QueryReturnedNoRows => Ok(None),
-        other => Err(OrbitError::Store(other.to_string())),
+        other => Err(crate::vector::store::schema::translate_corpus_fts_sql_error(&conn, other)),
     })
 }
 

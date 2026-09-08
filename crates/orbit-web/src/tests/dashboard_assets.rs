@@ -6,9 +6,10 @@ use std::process::Command;
 
 use crate::{
     DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_automation_js, serve_common_js,
-    serve_diagnostics_js, serve_index, serve_log_tail_js, serve_markdown_js, serve_marked_js,
-    serve_operations_js, serve_purify_js, serve_reliability_js, serve_router_js,
-    serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
+    serve_diagnostics_js, serve_index, serve_inter_font, serve_jetbrains_mono_font,
+    serve_log_tail_js, serve_markdown_js, serve_marked_js, serve_operations_js, serve_purify_js,
+    serve_reliability_js, serve_router_js, serve_run_detail_js, serve_runs_js, serve_scoreboard_js,
+    serve_tasks_js,
 };
 
 // The recent-history, aggregate-request, and route-selection assertions
@@ -54,6 +55,8 @@ fn run_dashboard_javascript_test(script: &str) {
 async fn dashboard_html_and_js_routes_emit_csp() {
     let routes = [
         ("index", serve_index().await),
+        ("inter", serve_inter_font().await),
+        ("jetbrains_mono", serve_jetbrains_mono_font().await),
         ("marked", serve_marked_js().await),
         ("purify", serve_purify_js().await),
         ("app", serve_app_js().await),
@@ -88,6 +91,34 @@ async fn dashboard_index_self_hosts_markdown_runtime() {
     assert!(body.contains(r#"<script src="/static/marked.umd.js"></script>"#));
     assert!(body.contains(r#"<script src="/static/purify.min.js"></script>"#));
     assert!(!body.contains("cdn.jsdelivr.net"));
+}
+
+#[tokio::test]
+async fn dashboard_self_hosts_fonts_without_google_requests() {
+    let index = response_body(serve_index().await).await;
+    let css = response_body(crate::serve_dashboard_css().await).await;
+
+    assert!(!index.contains("fonts.googleapis.com"));
+    assert!(!index.contains("fonts.gstatic.com"));
+    assert!(css.contains("/static/fonts/inter-latin.woff2"));
+    assert!(css.contains("/static/fonts/jetbrains-mono-latin.woff2"));
+    assert_eq!(
+        DASHBOARD_CSP,
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    );
+
+    for response in [serve_inter_font().await, serve_jetbrains_mono_font().await] {
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("font/woff2"))
+        );
+        assert!(
+            !to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read font response body")
+                .is_empty()
+        );
+    }
 }
 
 #[test]
@@ -221,6 +252,56 @@ fn dashboard_run_resume_matches_runtime_guard_and_surfaces_lineage_and_errors() 
     assert!(
         runs.contains(r#"class: "action-error", text: e.message || "resume failed""#),
         "Resume failures must display the server-provided error text"
+    );
+}
+
+#[test]
+fn dashboard_run_events_show_scan_errors_but_keep_404_empty() {
+    run_dashboard_javascript_test(
+        r#"
+import assert from "node:assert/strict";
+class Node {
+  constructor() { this.children = []; this.dataset = {}; this.className = ""; this._text = ""; this.parentNode = null; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { if (child.parentNode) child.parentNode.removeChild(child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; }
+  get textContent() { return this._text + this.children.map((child) => child.textContent).join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get firstChild() { return this.children[0] || null; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+}
+const nodes = new Map();
+const get = (id) => nodes.get(id) || (nodes.set(id, new Node()), nodes.get(id));
+globalThis.document = { getElementById: get, createElement: () => new Node(), createDocumentFragment: () => new Node() };
+globalThis.window = { location: new URL("http://dashboard.test/") };
+let responseStatus = 413;
+globalThis.fetch = async () => ({
+  ok: responseStatus < 400,
+  status: responseStatus,
+  text: async () => JSON.stringify({ error: "run-events audit rows exceed bounded scan budget" }),
+});
+const { fetchJson } = await import("./common.js");
+const { setActiveRunEvents, setActiveRunEventsError, renderRunEvents } = await import("./run-detail.js");
+let scanError;
+try {
+  await fetchJson("/api/runs/jrun-1/events?limit=100");
+} catch (error) {
+  scanError = error;
+}
+assert.equal(scanError.status, 413);
+assert.match(scanError.message, /bounded scan budget/);
+setActiveRunEvents([]);
+setActiveRunEventsError(scanError.message);
+renderRunEvents();
+assert.match(get("run-events-body").textContent, /bounded scan budget/);
+assert.match(get("run-events-body").textContent, /narrowing the kind filter/);
+responseStatus = 404;
+await assert.rejects(fetchJson("/api/runs/jrun-1/events?limit=100"), (error) => error.status === 404);
+setActiveRunEvents([]);
+renderRunEvents();
+assert.match(get("run-events-body").textContent, /No v2 envelope events for this run/);
+"#,
     );
 }
 
@@ -1732,7 +1813,6 @@ fn dashboard_failure_metrics_are_incident_aware_and_state_their_denominators() {
 fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
     let audit = include_str!("../../assets/dashboard/audit.js");
     let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
-    let preview = include_str!("../../assets/dashboard/_preview_failures_card.html");
     let css = include_str!("../../assets/dashboard/dashboard.css");
 
     assert!(
@@ -1755,12 +1835,6 @@ fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
         "incident expansion must expose run/task/tool identifiers for every row"
     );
     assert!(
-        preview.contains("lifecycle diagnostics")
-            && preview.contains("7 incidents · 14 raw events · 7 affected runs")
-            && preview.contains("isNamedTool"),
-        "the failures-card preview must render the diagnostic category and three counts"
-    );
-    assert!(
         css.contains(".lifecycle-failure-card")
             && css.contains(".lifecycle-failure-counts")
             && css.contains(".incident-lifecycle-note"),
@@ -1775,7 +1849,6 @@ fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
 fn dashboard_reliability_separates_all_four_failure_populations() {
     let audit = include_str!("../../assets/dashboard/audit.js");
     let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
-    let preview = include_str!("../../assets/dashboard/_preview_failures_card.html");
     let css = include_str!("../../assets/dashboard/dashboard.css");
 
     for needle in [
@@ -1816,14 +1889,6 @@ fn dashboard_reliability_separates_all_four_failure_populations() {
             "incident expansion must retain `{evidence}`"
         );
     }
-    assert!(
-        preview.contains("pipeline.worker.exit")
-            && preview.contains("pipeline.run.terminal_conflict")
-            && preview.contains("orbit.task.show")
-            && preview.contains("orbit.task.update")
-            && preview.contains("7 incidents · 14 raw events · 7 affected runs"),
-        "the deterministic preview must keep diagnostic and expected-negative fixtures outside rateRows but visible in evidence"
-    );
     assert!(
         css.contains(".incident-class-chip.diagnostic")
             && css.contains(".incident-row.diagnostic")

@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::Child;
+use std::process::{Child, ExitStatus};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -26,6 +26,7 @@ const DEFAULT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
 const OUTPUT_LINE_EVENT_LIMIT_BYTES: usize = 64 * 1024;
 
 type SharedOutputCapture = Arc<Mutex<RollingOutputCapture>>;
+type WaitHook<'a> = &'a dyn Fn(&mut Child) -> std::io::Result<Option<ExitStatus>>;
 
 #[derive(Debug)]
 pub(super) struct CapturedOutput {
@@ -159,6 +160,9 @@ pub(super) struct SpawnWithTimeoutRequest<'a> {
     /// inside this module (process-group cleanup), so a long-running provider
     /// child has no observable identity while it runs.
     pub(super) on_spawn: Option<&'a dyn Fn(u32)>,
+    /// Test seam for exercising wait failures without depending on another
+    /// thread reaping the child between `try_wait` calls.
+    pub(super) wait: Option<WaitHook<'a>>,
 }
 
 struct OutputReaderContext {
@@ -189,6 +193,7 @@ pub(super) fn spawn_with_timeout(
         trace,
         output_capture_limit,
         on_spawn,
+        wait,
     } = request;
 
     let started = Instant::now();
@@ -251,30 +256,36 @@ pub(super) fn spawn_with_timeout(
 
     let mut timed_out = false;
     let deadline = started + timeout;
-    let exit_status;
-    loop {
-        match child.try_wait() {
+    let wait_result = loop {
+        let result = match wait {
+            Some(wait) => wait(&mut child),
+            None => child.try_wait(),
+        };
+        match result {
             Ok(Some(status)) => {
-                cleanup_child_process_group(child.id());
-                exit_status = Some(status);
-                break;
+                break Ok(Some(status));
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    kill_child_process_tree(&mut child);
                     timed_out = true;
-                    exit_status = None;
-                    break;
+                    break Ok(None);
                 }
                 thread::sleep(Duration::from_millis(25));
             }
             Err(err) => {
-                // `wait` failures are host-side and not clearly deterministic
-                // — leave them retryable.
-                return Err(SpawnError::transient(format!("wait {program}: {err}")));
+                break Err(err);
             }
         }
-    }
+    };
+
+    let (exit_status, wait_error) = match wait_result {
+        Ok(exit_status) => (exit_status, None),
+        // `wait` failures are host-side and not clearly deterministic — leave
+        // them retryable after the common cleanup below.
+        Err(err) => (None, Some(err)),
+    };
+
+    kill_child_process_tree(&mut child);
 
     // The join is bounded on every exit path, not only after a timeout. A
     // reader returns when the last writer closes the pipe, and a helper the
@@ -288,6 +299,10 @@ pub(super) fn spawn_with_timeout(
     }
     if let Some(h) = stderr_reader {
         join_output_reader(h, reader_join_deadline);
+    }
+
+    if let Some(err) = wait_error {
+        return Err(SpawnError::transient(format!("wait {program}: {err}")));
     }
 
     let stdout = stdout_buf
@@ -403,14 +418,6 @@ fn kill_child_process_tree(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
-
-#[cfg(unix)]
-fn cleanup_child_process_group(child_id: u32) {
-    let _ = signal_child_process_group(child_id, libc::SIGKILL);
-}
-
-#[cfg(not(unix))]
-fn cleanup_child_process_group(_child_id: u32) {}
 
 #[cfg(unix)]
 fn signal_child_process_group(child_id: u32, signal: libc::c_int) -> std::io::Result<()> {
