@@ -50,6 +50,8 @@ impl SemanticIndexParams {
 pub struct TaskIndexResult {
     pub model_id: String,
     pub report: UpsertReport,
+    /// Task sources dropped because they are no longer in the live corpus.
+    pub stale_sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,6 +60,7 @@ pub enum SemanticIndexResult {
     Tasks {
         model_id: String,
         report: UpsertReport,
+        stale_sources: Vec<String>,
     },
     Docs {
         model_id: String,
@@ -76,6 +79,7 @@ impl From<TaskIndexResult> for SemanticIndexResult {
         Self::Tasks {
             model_id: result.model_id,
             report: result.report,
+            stale_sources: result.stale_sources,
         }
     }
 }
@@ -101,9 +105,19 @@ pub fn run(
 ) -> Result<TaskIndexResult, OrbitError> {
     let model = parse_model(params.model.as_deref())?;
     let embedder = SubprocessEmbedder::with_model(model.alias)?;
-    let report = vector_store.reindex_tasks(tasks, &embedder, params.force)?;
+    run_with_embedder(vector_store, tasks, &embedder, params.force)
+}
+
+pub(crate) fn run_with_embedder(
+    vector_store: &VectorStore,
+    tasks: &[Task],
+    embedder: &dyn Embedder,
+    force: bool,
+) -> Result<TaskIndexResult, OrbitError> {
+    let report = vector_store.reindex_tasks(tasks, embedder, force)?;
     Ok(TaskIndexResult {
         model_id: embedder.model_id().to_string(),
-        report,
+        report: report.upsert,
+        stale_sources: report.stale_sources,
     })
 }
