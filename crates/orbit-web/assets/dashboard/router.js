@@ -13,7 +13,8 @@
 // The public exports (setActiveTab, navigateToRun, initTabs) are thin wrappers over
 // impls that close over the injected ctx (set once via initRouter).
 // No behavior change: every prior hash route, subtab click, back/forward, and the
-// 30s setInterval(refreshDashboard) continue to work identically.
+// dashboard polling is scheduled here so it can pause while a tab is hidden
+// and retry failed refreshes without competing with active dashboard use.
 //
 // Also exports parseHashRoute for symmetry (used only internally today).
 
@@ -50,6 +51,8 @@ const DIAG_FULL_WIDTH_MAINS = {
 };
 const RUN_DETAIL_SUBTABS = ["steps", "events"];
 const KNOWLEDGE_SUBTABS = ["frictions"];
+const REFRESH_INTERVAL_MS = 30_000;
+const MAX_REFRESH_INTERVAL_MS = 5 * 60_000;
 
 function parseHashRoute(raw) {
   const trimmed = String(raw || "").replace(/^#/, "");
@@ -309,6 +312,53 @@ function navigateToRunImpl(ctx, runId, workspaceId = null) {
   setActiveTabImpl(ctx, `runs/${encodeURIComponent(runId)}`);
 }
 
+// A one-shot timer avoids overlapping refreshes: the next poll is scheduled
+// only after the current refresh settles. Hidden tabs have no pending timer;
+// becoming visible starts exactly one refresh and resumes the normal cadence.
+function startDashboardPolling(ctx) {
+  let timer = null;
+  let interval = REFRESH_INTERVAL_MS;
+
+  const clearScheduledRefresh = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  const scheduleRefresh = () => {
+    if (document.hidden || timer !== null) return;
+    timer = setTimeout(runRefresh, interval);
+    // Node-based dashboard tests should not be kept alive by a browser poll.
+    // Browsers return a numeric timer handle, so this is a no-op in production.
+    if (typeof timer === "object" && typeof timer.unref === "function") timer.unref();
+  };
+
+  const runRefresh = () => {
+    timer = null;
+    if (document.hidden) return;
+    Promise.resolve(ctx.refreshDashboard())
+      .then((succeeded) => {
+        if (succeeded === true) interval = REFRESH_INTERVAL_MS;
+        if (succeeded === false) interval = Math.min(interval * 2, MAX_REFRESH_INTERVAL_MS);
+      })
+      .catch(() => {
+        interval = Math.min(interval * 2, MAX_REFRESH_INTERVAL_MS);
+      })
+      .finally(scheduleRefresh);
+  };
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      clearScheduledRefresh();
+      return;
+    }
+    runRefresh();
+  });
+
+  runRefresh();
+}
+
 function initTabsImpl(ctx) {
   for (const tab of document.querySelectorAll(".tab")) {
     tab.addEventListener("click", () => setActiveTabImpl(ctx, tab.dataset.tab, { refresh: false }));
@@ -355,8 +405,7 @@ function initTabsImpl(ctx) {
     refresh: false,
     updateHash: false,
   });
-  ctx.refreshDashboard();
-  setInterval(ctx.refreshDashboard, 30000);
+  startDashboardPolling(ctx);
 }
 
 // Public named exports (the stable import surface for app.js and future modules).

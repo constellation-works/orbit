@@ -6,6 +6,7 @@ use orbit_common::OrbitError;
 use orbit_config::{ConfigRoots, ResolvedConfig};
 use orbit_store::compose::global_policy_def_store;
 
+use crate::bootstrap::global_defaults::global_defaults_are_current;
 use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::task_migration::apply_configured_id_start;
@@ -263,17 +264,25 @@ fn prepare_resolved_config(
             return Err(error);
         }
     }
-    let global_policy_store = global_policy_def_store(resolved.persistence.policy_dir.clone());
-    if let Err(error) = seed_default_policies(global_policy_store.as_ref(), false) {
-        if error.is_readonly_or_access_failure() {
-            tracing::warn!(
-                target: "orbit.core.bootstrap",
-                root = %global_root.display(),
-                error = %error,
-                "skipped incidental default-policy persistence"
-            );
-        } else {
-            return Err(error);
+    // Not every runtime open bootstraps its global root: opening a registered
+    // checkout or an observation-only runtime goes straight to composition, so
+    // the shipped default policy is seeded here. `policy_dir` is derived from
+    // the global root and cannot be relocated by config, so the same stamp that
+    // lets bootstrap skip reconciliation settles this seed too — a root already
+    // reconciled by this binary carries the policy.
+    if !global_defaults_are_current(global_root) {
+        let global_policy_store = global_policy_def_store(resolved.persistence.policy_dir.clone());
+        if let Err(error) = seed_default_policies(global_policy_store.as_ref(), false) {
+            if error.is_readonly_or_access_failure() {
+                tracing::warn!(
+                    target: "orbit.core.bootstrap",
+                    root = %global_root.display(),
+                    error = %error,
+                    "skipped incidental default-policy persistence"
+                );
+            } else {
+                return Err(error);
+            }
         }
     }
     Ok(resolved)

@@ -140,6 +140,7 @@ metricsError = false;
 refresh(); await settle();
 check(node('conn-status').className.includes('green'), 'connection recovers');
 const realTimeout = globalThis.setTimeout;
+const realFetch = globalThis.fetch;
 globalThis.setTimeout = (fn, ms, ...args) => realTimeout(fn, ms === 30000 ? 1 : ms, ...args);
 globalThis.fetch = (_path, options) => new Promise((_resolve, reject) => {
   options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
@@ -148,5 +149,49 @@ refresh(); await settle();
 check(busy('diag-body') === 'false' && text('diag-body').includes('timed out'), 'hung request times out and clears busy state');
 check(!node('refresh-btn').disabled, 'timeout leaves retry available');
 globalThis.setTimeout = realTimeout;
+globalThis.fetch = realFetch;
+const realClearTimeout = globalThis.clearTimeout;
+const scheduledPolls = [];
+globalThis.setTimeout = (fn, ms, ...args) => {
+  if (ms === 0) return realTimeout(fn, ms, ...args);
+  const handle = { cancelled: false, unref: () => {} };
+  scheduledPolls.push({ fn, ms, args, handle });
+  return handle;
+};
+globalThis.clearTimeout = (handle) => {
+  if (typeof handle === 'object') handle.cancelled = true;
+  else realClearTimeout(handle);
+};
+const activePoll = () => scheduledPolls.filter(entry => !entry.handle.cancelled).at(-1);
+const runPoll = async () => {
+  const poll = activePoll();
+  check(poll, 'refresh poll must be scheduled');
+  poll.handle.cancelled = true;
+  poll.fn(...poll.args);
+  await settle();
+};
+
+// Pausing a dashboard removes its pending poll. Returning to it refreshes once,
+// then failed polls double their delay and a successful retry restores 30s.
+document.hidden = true;
+documentListeners.visibilitychange();
+const hiddenSummaryReads = summaryReads;
+await settle();
+check(summaryReads === hiddenSummaryReads, 'hidden dashboard makes no audit-summary request');
+document.hidden = false;
+documentListeners.visibilitychange();
+await settle();
+check(summaryReads === hiddenSummaryReads + 1, 'visible dashboard refreshes exactly once');
+check(activePoll().ms === 30000, 'successful refresh schedules the normal 30s interval');
+networkDown = true;
+await runPoll();
+check(activePoll().ms === 60000, 'first failed refresh doubles the interval');
+await runPoll();
+check(activePoll().ms === 120000, 'consecutive failures continue exponential backoff');
+networkDown = false;
+await runPoll();
+check(activePoll().ms === 30000, 'successful retry restores the 30s interval');
+globalThis.setTimeout = realTimeout;
+globalThis.clearTimeout = realClearTimeout;
 globalThis.loadingTestsPassed = true;
 console.log('Dashboard loading, ordering, empty, error and recovery scenarios passed.');
