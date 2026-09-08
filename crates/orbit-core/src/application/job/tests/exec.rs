@@ -1083,6 +1083,9 @@ fn task_gate_noops_done_task_and_releases_reservation() {
     seed_default_catalogs(&global_root);
     let task_id = seed_gate_task(&runtime, &repo_root, TaskStatus::Done);
 
+    // The production retry path uses the run ID as a jitter salt. Reuse the
+    // store-generated fixture task ID here so the test does not feed a
+    // hard-coded value into that cryptographic data flow.
     let outcome = execute_gate_job(
         &runtime,
         &repo_root,
@@ -1091,7 +1094,7 @@ fn task_gate_noops_done_task_and_releases_reservation() {
             "task_ids": [task_id.clone()],
             "mode": "pr",
         }),
-        "jrun-gate-done-stale",
+        task_id.as_str(),
     );
 
     assert!(outcome.success);
