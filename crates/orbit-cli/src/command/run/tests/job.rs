@@ -185,8 +185,27 @@ fn submission_output_names_the_run_state_and_how_to_inspect_it() {
 /// a successful submission always exits zero.
 #[test]
 fn submission_without_wait_succeeds() {
-    render_submission(&invoke_result(false), false).expect("submission renders and exits zero");
-    render_submission(&invoke_result(true), true).expect("queued submission exits zero too");
+    render_submission(&invoke_result(false)).expect("submission renders and exits zero");
+    render_submission(&invoke_result(true)).expect("queued submission exits zero too");
+}
+
+#[test]
+fn submission_payload_is_a_json_document_with_a_human_view() {
+    let output = render_submission(&invoke_result(false)).expect("submission payload");
+    let crate::command::CommandOutput::Payload(payload) = output else {
+        panic!("submission must not return Silent, got {output:?}");
+    };
+    let (doc, view) = payload.into_view();
+    assert_eq!(doc["run_id"], "jrun-20260815-0001");
+    assert_eq!(doc["job_id"], "task_pilot_pipeline");
+    assert_eq!(doc["waited"], false);
+    let crate::output::payload::View::Blocks(blocks) = view else {
+        panic!("submission must keep a human view");
+    };
+    let crate::output::payload::Block::Text(text) = &blocks[0] else {
+        panic!("submission human view is prose");
+    };
+    assert!(text.contains("Run ID: jrun-20260815-0001"), "{text}");
 }
 
 /// `--wait` is the only mode that reports the run's own outcome, and it maps
@@ -196,28 +215,35 @@ fn wait_exits_nonzero_for_every_failing_terminal_state() {
     for status in ["failed", "timeout", "cancelled", "interrupted"] {
         let invoke = invoke_result(false);
         let entry = wait_entry(status, Some("step_failed: implement blew up"));
-        let error = render_wait(&invoke, &entry, false)
-            .expect_err("a failing terminal state must fail the command");
-        let message = error.to_string();
-        assert!(
-            message.contains(status),
-            "exit must name the state: {message}"
-        );
-        assert!(
-            message.contains("jrun-20260815-0001"),
-            "exit must name the run: {message}"
-        );
-        assert!(
-            message.contains("implement blew up"),
-            "exit must carry the diagnostic: {message}"
-        );
+        let output = render_wait(&invoke, &entry).expect("a failing wait still renders");
+        let crate::command::CommandOutput::Payload(payload) = output else {
+            panic!("failing wait must return a payload, got {output:?}");
+        };
+        assert_eq!(payload.exit_code(), 1, "failing wait must exit nonzero");
+        let (doc, view) = payload.into_view();
+        assert_eq!(doc["state"], status);
+        assert_eq!(doc["run_id"], "jrun-20260815-0001");
+        assert_eq!(doc["error"], "step_failed: implement blew up");
+        let crate::output::payload::View::Blocks(blocks) = view else {
+            panic!("failing wait must keep a human view");
+        };
+        let crate::output::payload::Block::Text(text) = &blocks[0] else {
+            panic!("failing wait human view is prose");
+        };
+        assert!(text.contains(status), "{text}");
+        assert!(text.contains("jrun-20260815-0001"), "{text}");
+        assert!(text.contains("implement blew up"), "{text}");
     }
 }
 
 #[test]
 fn wait_exits_zero_when_the_run_succeeded() {
-    render_wait(&invoke_result(false), &wait_entry("succeeded", None), false)
+    let output = render_wait(&invoke_result(false), &wait_entry("succeeded", None))
         .expect("a successful run must exit zero");
+    let crate::command::CommandOutput::Payload(payload) = output else {
+        panic!("successful wait must return a payload, got {output:?}");
+    };
+    assert_eq!(payload.exit_code(), 0);
 }
 
 /// Both text and the structured payload expose the terminal state and its

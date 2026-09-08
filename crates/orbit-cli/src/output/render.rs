@@ -26,9 +26,10 @@ pub fn emit(output: CommandOutput, sink: &OutputSink) -> Result<(), OrbitError> 
     };
     let (doc, view) = payload.into_view();
 
-    // A stream renders itself in every mode: it exists because its records
-    // cannot be collected before the first one is written, which is exactly
-    // what a `json` document would require.
+    // A stream renders itself: its records cannot be collected before the
+    // first write, which is what a `json` document would require. The closure
+    // reads `sink.mode()` (and `color_allowed()`) so `--format json|ndjson`
+    // still selects machine-readable lines.
     if let View::Stream(stream) = view {
         let mut stdout = std::io::stdout().lock();
         return stream(sink, &mut stdout);

@@ -143,3 +143,15 @@ fn complexity_pools_set_get_show_agree_and_invalid_edits_do_not_write() {
         );
     }
 }
+
+#[test]
+fn get_without_json_flag_still_returns_a_payload() {
+    let (_root, runtime, _global_root, _workspace_root) = test_runtime();
+    let output = get_args("workflow.base_branch", false)
+        .execute(&runtime)
+        .expect("effective get");
+    let document = json_value(output);
+    assert_eq!(document["key"], "workflow.base_branch");
+    assert_eq!(document["scope"], "effective");
+    assert!(document.get("value").is_some(), "{document}");
+}

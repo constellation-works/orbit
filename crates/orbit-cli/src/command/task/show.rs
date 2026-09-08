@@ -4,10 +4,10 @@ use orbit_core::{OrbitError, OrbitRuntime, TaskRelatedDoc};
 use orbit_types::task::is_task_show_projection_field;
 use serde_json::{Value, json};
 
-use crate::command::{Block, CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{Block, CommandOut, Execute, Payload};
 
 use super::output::{
-    is_human_visible_history_event, print_task_fields, task_fields_to_json,
+    format_task_fields, is_human_visible_history_event, task_fields_to_json,
     task_to_json_for_runtime,
 };
 
@@ -51,19 +51,9 @@ impl Execute for TaskShowArgs {
                     "`--with-context` cannot be combined with `--fields`".to_string(),
                 ));
             }
-            if self.json {
-                return Ok(Payload::document(task_fields_to_json(
-                    runtime,
-                    &task,
-                    &fields,
-                    Some(&status_by_id),
-                )?)
-                .into());
-            }
-            return {
-                print_task_fields(runtime, &task, &fields, Some(&status_by_id))?;
-                Ok(CommandOutput::Silent)
-            };
+            let doc = task_fields_to_json(runtime, &task, &fields, Some(&status_by_id))?;
+            let text = format_task_fields(runtime, &task, &fields, Some(&status_by_id))?;
+            return Ok(Payload::detail(doc, text).into());
         }
 
         let related_docs = if self.with_context {

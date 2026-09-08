@@ -4,7 +4,7 @@ use orbit_core::{
     ExternalRef, OrbitRuntime, TaskComplexity, TaskCreateStatus, TaskPriority, TaskType,
 };
 
-use crate::command::{CommandOut, CommandOutput, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::output::task_to_json_for_runtime;
 
@@ -119,11 +119,6 @@ impl Execute for TaskAddArgs {
             model,
         )?;
 
-        if self.json {
-            Ok(Payload::document(task_to_json_for_runtime(runtime, &task)?).into())
-        } else {
-            println!("{}", task.id);
-            Ok(CommandOutput::Silent)
-        }
+        Ok(Payload::detail(task_to_json_for_runtime(runtime, &task)?, task.id).into())
     }
 }
