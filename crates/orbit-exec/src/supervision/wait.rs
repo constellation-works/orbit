@@ -69,6 +69,8 @@ pub(super) fn wait_with_timeout_and_output_limit(
         .take()
         .map(|err| spawn_stderr_drain(err, debug, output_limit, output_limit_tx));
 
+    // Last drop restores the previous SIGINT/SIGTERM disposition and
+    // re-raises a captured signal so daemons still shut down.
     #[cfg(unix)]
     let signal_guard = SignalHandlerGuard::install(child.id())?;
 

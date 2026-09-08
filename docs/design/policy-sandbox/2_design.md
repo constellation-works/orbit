@@ -3,8 +3,8 @@ summary: "Policy & Sandboxing — Design"
 type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
-last_updated: 2026-09-06
-last_validated: 2026-09-07
+last_updated: 2026-09-08
+last_validated: 2026-09-08
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -278,7 +278,7 @@ requires no new ADR.
 
 `process_group_is_alive` uses `killpg(pid, 0)`, treats `ESRCH` as "all gone," and treats other errno values as "still alive" so cleanup errs toward SIGKILL.
 
-`SignalHandlerGuard` is RAII and refcounted: the first live waiter installs SIGINT/SIGTERM handlers and snapshots the previous `sigaction` structs; the last drop restores them. A process-wide mutex covers only that install/drop critical section, so concurrent `run_process` waits overlap. Each waiter registers its child's pgid in a lock-free table and snapshots a signal generation counter. The handler is async-signal-safe: it stores the signal, increments the generation, and `killpg`s every registered group. Waiters that miss a slot still observe the generation counter on the next poll and run the ordinary termination path.
+`SignalHandlerGuard` is RAII and refcounted: the first live waiter installs SIGINT/SIGTERM handlers and snapshots the previous `sigaction` structs; the last drop restores them and re-raises a captured signal so a long-running server's original handler (tokio `ctrl_c` / SIGTERM, or SIG_DFL) still runs. `SIG_IGN` is not re-raised. When the previous disposition is SIG_DFL, the process stderr is annotated with `process interrupted by signal SIG…` before `raise`, because the wait result is discarded as the process terminates. A process-wide mutex covers only that install/drop critical section — never `raise` — so concurrent `run_process` waits overlap. Each waiter registers its child's pgid in a lock-free table and snapshots a signal generation counter. The handler is async-signal-safe: it stores the signal, increments the generation, records a pending forward, and `killpg`s every registered group. Waiters that miss a slot still observe the generation counter on the next poll and run the ordinary termination path.
 
 Non-Unix builds use a fallback `terminate_process_group` that just calls `child.kill().ok(); child.wait().ok();` — process-group semantics do not apply on Windows, so orphan reaping is best-effort.
 
