@@ -31,7 +31,7 @@ pub struct WorkspaceInitArgs {
     /// Workspace name (defaults to directory name)
     #[arg(long)]
     pub name: Option<String>,
-    /// Base branch for this workspace (default: main)
+    /// Base branch for this workspace (default: the checked-out branch, or main)
     ///
     /// Kept optional so re-initializing an existing workspace can distinguish
     /// an omitted value from an explicit request to reset it to `main`.
@@ -159,6 +159,7 @@ impl WorkspaceInitArgs {
         let name = self.name.unwrap_or_else(|| dir_name_or_fallback(cwd));
         let id = canonical_workspace_id(&name);
         let git_remote = detect_git_remote(cwd);
+        let default_base_branch = checked_out_branch(cwd);
         // Every read of the registry below feeds the write at the end; the lock
         // keeps a concurrent sweep or init from saving over this registration.
         let (reconciling_existing, registered_shared_root) =
@@ -276,7 +277,7 @@ impl WorkspaceInitArgs {
                         owner_machine_id: None,
                         git_remote,
                         ship_mode: self.ship_mode,
-                        base_branch: self.base_branch.unwrap_or_else(|| "main".to_string()),
+                        base_branch: self.base_branch.unwrap_or(default_base_branch),
                         status: WorkspaceStatus::Active,
                         created_at: now,
                         updated_at: now,
@@ -365,6 +366,25 @@ impl WorkspaceInitArgs {
             task_prefix,
         })
     }
+}
+
+/// Returns the current local branch for a newly registered checkout.
+///
+/// An explicit `--base-branch` always wins. Repositories without a checked-out
+/// branch retain the long-standing `main` fallback.
+pub(crate) fn checked_out_branch(cwd: &Path) -> String {
+    let output = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(cwd)
+        .output();
+
+    output
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|branch| branch.trim().to_string())
+        .filter(|branch| !branch.is_empty())
+        .unwrap_or_else(|| "main".to_string())
 }
 
 pub(super) fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> String {
