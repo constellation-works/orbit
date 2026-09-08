@@ -10,8 +10,11 @@ use orbit_exec::EnvironmentMode;
 use serde_json::json;
 
 use super::super::git::{
-    BaseSyncMode, GitTimeoutBudget, fetch_remote_base, git_request, resolve_worktree_start_point,
+    BaseSyncMode, GitTimeoutBudget, fetch_remote_base, git_command_success, git_request, git_run,
+    resolve_worktree_start_point,
 };
+#[cfg(unix)]
+use super::with_fake_git;
 
 #[test]
 fn remote_mode_fetches_origin_base_when_local_base_is_stale() {
@@ -242,6 +245,48 @@ fn git_timeout_budget_rejects_invalid_and_extreme_values() {
             "expected '{needle}' in {error} for {input}"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn git_command_success_treats_stderr_timeout_phrase_as_ordinary_failure() {
+    if !with_fake_git(
+        module_path!(),
+        "git_command_success_treats_stderr_timeout_phrase_as_ordinary_failure",
+        &[("ORBIT_TEST_GIT_PHRASE_FAIL", "show-ref".to_string())],
+    ) {
+        return;
+    }
+
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, "base.txt", "v1");
+
+    let outcome = git_run(
+        &repo,
+        &["show-ref", "--verify", "--quiet", "refs/heads/agent-main"],
+    )
+    .unwrap();
+    assert!(
+        !outcome.timed_out,
+        "stderr phrase must not classify as a supervisor timeout: {outcome:?}"
+    );
+    assert!(!outcome.success, "injected probe must fail: {outcome:?}");
+    assert!(
+        outcome.stderr.contains("process timed out"),
+        "fixture must print the misleading phrase: {outcome:?}"
+    );
+
+    let success = git_command_success(
+        &repo,
+        &["show-ref", "--verify", "--quiet", "refs/heads/agent-main"],
+    )
+    .expect("ordinary Git failure is Ok(false), not a timeout error");
+    assert!(
+        !success,
+        "failed probe with timeout prose must stay a boolean no"
+    );
 }
 
 #[test]
