@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::glob::compile_glob_regex;
-use orbit_types::policy::ResolvedFsProfile;
+use orbit_types::policy::{ResolvedFsProfile, compile_glob_regex};
 
 const TRUSTED_BWRAP_PATH: &str = "/usr/bin/bwrap";
 

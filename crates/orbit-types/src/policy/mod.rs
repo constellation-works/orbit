@@ -14,3 +14,6 @@ pub use policy_def::{
     UNRESTRICTED_FS_PROFILE,
 };
 pub use role::Role;
+
+#[cfg(test)]
+mod tests;

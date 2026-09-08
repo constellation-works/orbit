@@ -1,5 +1,4 @@
 pub mod git;
-pub mod glob;
 pub mod io;
 pub mod path;
 pub mod selector;

@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::glob::{match_glob, normalize_glob_path};
 use orbit_common::fs::selector::anchor_path;
 use orbit_search::{DocEmbeddingSource, DocSearchSource};
+use orbit_types::policy::{match_glob, normalize_glob_path};
 
 use super::config::DocsRoot;
 use super::frontmatter::parse_doc_tolerant;
