@@ -1,5 +1,4 @@
-use super::super::catalog::JobCatalogFilter;
-
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -10,70 +9,11 @@ use orbit_types::workflow::{
     ActivityV2Spec, JobRunState, JobV2, JobV2Step, JobV2StepBody, PipelineState,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
 use tempfile::tempdir;
 
+use super::super::catalog::{DEFAULT_JOB_FILES, JobCatalogFilter, seed_default_jobs};
 use crate::OrbitRuntime;
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
-
-const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
-    (
-        "agent_invoke_pipeline",
-        include_str!("../../../../assets/jobs/agent_invoke_pipeline.yaml"),
-    ),
-    (
-        "auto_task_scheduler_pipeline",
-        include_str!("../../../../assets/jobs/auto_task_scheduler_pipeline.yaml"),
-    ),
-    (
-        "ci_failure_sweep_pipeline",
-        include_str!("../../../../assets/jobs/ci_failure_sweep_pipeline.yaml"),
-    ),
-    (
-        "dependabot_alert_sweep_pipeline",
-        include_str!("../../../../assets/jobs/dependabot_alert_sweep_pipeline.yaml"),
-    ),
-    (
-        "epic_pipeline",
-        include_str!("../../../../assets/jobs/epic_pipeline.yaml"),
-    ),
-    (
-        "task_auto_pipeline",
-        include_str!("../../../../assets/jobs/task_auto_pipeline.yaml"),
-    ),
-    (
-        "task_gate_pipeline",
-        include_str!("../../../../assets/jobs/task_gate_pipeline.yaml"),
-    ),
-    (
-        "task_local_pipeline",
-        include_str!("../../../../assets/jobs/task_local_pipeline.yaml"),
-    ),
-    (
-        "task_pilot_pipeline",
-        include_str!("../../../../assets/jobs/task_pilot_pipeline.yaml"),
-    ),
-    (
-        "task_pr_pipeline",
-        include_str!("../../../../assets/jobs/task_pr_pipeline.yaml"),
-    ),
-    (
-        "task_triage_pipeline",
-        include_str!("../../../../assets/jobs/task_triage_pipeline.yaml"),
-    ),
-    (
-        "workspace_ship_pipeline",
-        include_str!("../../../../assets/jobs/workspace_ship_pipeline.yaml"),
-    ),
-    (
-        "workspace_auto_pipeline",
-        include_str!("../../../../assets/jobs/workspace_auto_pipeline.yaml"),
-    ),
-    (
-        "worktree_gc_pipeline",
-        include_str!("../../../../assets/jobs/worktree_gc_pipeline.yaml"),
-    ),
-];
 
 fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathBuf) {
     let root = tempdir().expect("create tempdir");
@@ -152,6 +92,57 @@ spec:
     );
     std::fs::create_dir_all(path.parent().expect("job path has parent")).expect("create job dir");
     std::fs::write(path, yaml).expect("write job yaml");
+}
+
+#[test]
+fn fresh_job_seeding_copies_every_canonical_asset() {
+    let root = tempdir().expect("create tempdir");
+    let jobs_dir = root.path().join("resources/jobs");
+    seed_default_jobs(&jobs_dir, false).expect("seed canonical jobs");
+
+    for (name, yaml) in DEFAULT_JOB_FILES {
+        let seeded = std::fs::read_to_string(jobs_dir.join(format!("{name}.yaml")))
+            .expect("read seeded job");
+        assert_eq!(
+            seeded, *yaml,
+            "freshly seeded {name} must match its canonical asset"
+        );
+        load_job_asset(&seeded).expect("seeded canonical job must parse");
+    }
+}
+
+#[test]
+fn job_reseeding_preserves_local_concurrency_override() {
+    let root = tempdir().expect("create tempdir");
+    let jobs_dir = root.path().join("resources/jobs");
+    seed_default_jobs(&jobs_dir, false).expect("seed canonical jobs");
+
+    let path = jobs_dir.join("task_gate_pipeline.yaml");
+    let seeded = std::fs::read_to_string(&path).expect("read seeded gate job");
+    let original_limit = load_job_asset(&seeded)
+        .expect("parse gate job")
+        .spec
+        .max_active_runs;
+    let override_limit = original_limit + 5;
+    let modified = seeded.replacen(
+        &format!("  max_active_runs: {original_limit}\n"),
+        &format!("  max_active_runs: {override_limit}\n"),
+        1,
+    );
+    assert_eq!(
+        load_job_asset(&modified)
+            .expect("parse modified gate job")
+            .spec
+            .max_active_runs,
+        override_limit
+    );
+    std::fs::write(&path, &modified).expect("write local override");
+
+    seed_default_jobs(&jobs_dir, false).expect("reseed jobs without overwriting overrides");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read preserved override"),
+        modified
+    );
 }
 
 #[test]
@@ -891,11 +882,6 @@ fn local_task_pipeline_commits_before_merge_and_reconciles_with_local_base() {
         .iter()
         .find_map(|(name, yaml)| (*name == "task_local_pipeline").then_some(*yaml))
         .expect("task local pipeline default exists");
-    assert_eq!(
-        yaml,
-        include_str!("../../../../../../.orbit/resources/jobs/task_local_pipeline.yaml"),
-        "shipped and workspace task_local_pipeline resources must remain byte-identical"
-    );
     let asset = load_job_asset(yaml).expect("parse task local pipeline");
     let root_step_ids = asset
         .spec
@@ -1133,11 +1119,6 @@ fn gate_pipeline_releases_reservation_before_child_success_guard() {
         .iter()
         .find_map(|(name, yaml)| (*name == "task_gate_pipeline").then_some(*yaml))
         .expect("task gate pipeline default exists");
-    assert_eq!(
-        yaml,
-        include_str!("../../../../../../.orbit/resources/jobs/task_gate_pipeline.yaml"),
-        "shipped and workspace task_gate_pipeline resources must remain byte-identical"
-    );
     let asset = load_job_asset(yaml).expect("parse task gate pipeline");
     let root_step_ids = asset
         .spec
@@ -1468,11 +1449,6 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
         .iter()
         .find_map(|(name, yaml)| (*name == "workspace_auto_pipeline").then_some(*yaml))
         .expect("workspace auto pipeline exists");
-    assert_eq!(
-        yaml,
-        include_str!("../../../../../../.orbit/resources/jobs/workspace_auto_pipeline.yaml"),
-        "shipped and workspace workspace_auto_pipeline resources must remain byte-identical"
-    );
     let asset = load_job_asset(yaml).expect("workspace auto pipeline parses");
     assert_eq!(asset.spec.max_active_runs, 1);
     assert_eq!(asset.spec.steps[0].id, "resolve_ship_input");
@@ -1756,11 +1732,6 @@ fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
         .iter()
         .find_map(|(name, yaml)| (*name == "epic_pipeline").then_some(*yaml))
         .expect("epic pipeline exists");
-    assert_eq!(
-        yaml,
-        include_str!("../../../../../../.orbit/resources/jobs/epic_pipeline.yaml"),
-        "shipped and workspace epic_pipeline resources must remain byte-identical"
-    );
     let asset = load_job_asset(yaml).expect("epic pipeline parses");
     assert_eq!(asset.spec.max_active_runs, 1);
     // ORB-11187 added the two authorized PR completion steps; ORB-11333 added
