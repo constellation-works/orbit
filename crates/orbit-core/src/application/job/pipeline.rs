@@ -1442,7 +1442,7 @@ impl OrbitRuntime {
         let mut claimed = false;
         loop {
             #[cfg(test)]
-            worker_observer_read_counter::record(run_id);
+            worker_observer_read_counter::record(self, run_id);
             let run = self
                 .get_job_run_backend(run_id)?
                 .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
@@ -1488,7 +1488,7 @@ impl OrbitRuntime {
                 // ownership, cancellation, and terminal outcomes stay
                 // authoritative.
                 #[cfg(test)]
-                worker_observer_read_counter::record(run_id);
+                worker_observer_read_counter::record(self, run_id);
                 let run = self.get_job_run_backend(run_id)?.ok_or_else(|| {
                     OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string())
                 })?;
@@ -2144,30 +2144,43 @@ pub(crate) mod worker_command_override {
 #[cfg(test)]
 pub(crate) mod worker_observer_read_counter {
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::{LazyLock, Mutex};
 
-    static COUNTS: LazyLock<Mutex<HashMap<String, usize>>> =
+    use crate::OrbitRuntime;
+
+    type StoreRun = (PathBuf, String);
+
+    static COUNTS: LazyLock<Mutex<HashMap<StoreRun, usize>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 
     pub(crate) struct Counter {
-        run_id: String,
+        key: StoreRun,
     }
 
-    pub(crate) fn track(run_id: &str) -> Counter {
+    fn key(runtime: &OrbitRuntime, run_id: &str) -> StoreRun {
+        // Run IDs are local to a database. Its resolved path remains stable
+        // across runtime clones while isolating independent temporary stores.
+        (
+            runtime.context.persistence().audit_db.clone(),
+            run_id.to_string(),
+        )
+    }
+
+    pub(crate) fn track(runtime: &OrbitRuntime, run_id: &str) -> Counter {
+        let key = key(runtime, run_id);
         COUNTS
             .lock()
             .expect("test observer counters are not poisoned")
-            .insert(run_id.to_string(), 0);
-        Counter {
-            run_id: run_id.to_string(),
-        }
+            .insert(key.clone(), 0);
+        Counter { key }
     }
 
-    pub(crate) fn record(run_id: &str) {
+    pub(crate) fn record(runtime: &OrbitRuntime, run_id: &str) {
         if let Some(count) = COUNTS
             .lock()
             .expect("test observer counters are not poisoned")
-            .get_mut(run_id)
+            .get_mut(&key(runtime, run_id))
         {
             *count += 1;
         }
@@ -2178,7 +2191,7 @@ pub(crate) mod worker_observer_read_counter {
             *COUNTS
                 .lock()
                 .expect("test observer counters are not poisoned")
-                .get(&self.run_id)
+                .get(&self.key)
                 .expect("tracked observer counter exists")
         }
     }
@@ -2188,7 +2201,7 @@ pub(crate) mod worker_observer_read_counter {
             COUNTS
                 .lock()
                 .expect("test observer counters are not poisoned")
-                .remove(&self.run_id);
+                .remove(&self.key);
         }
     }
 }
