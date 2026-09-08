@@ -1,3 +1,19 @@
+      @font-face {
+        font-family: "Inter";
+        font-style: normal;
+        font-weight: 400 600;
+        font-display: swap;
+        src: url("/static/fonts/inter-latin.woff2") format("woff2");
+      }
+
+      @font-face {
+        font-family: "JetBrains Mono";
+        font-style: normal;
+        font-weight: 400 500;
+        font-display: swap;
+        src: url("/static/fonts/jetbrains-mono-latin.woff2") format("woff2");
+      }
+
       :root {
         --font-sans: Inter, "Geist Sans", ui-sans-serif, system-ui, sans-serif;
         --font-mono: "Geist Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;

@@ -6,9 +6,10 @@ use std::process::Command;
 
 use crate::{
     DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_automation_js, serve_common_js,
-    serve_diagnostics_js, serve_index, serve_log_tail_js, serve_markdown_js, serve_marked_js,
-    serve_operations_js, serve_purify_js, serve_reliability_js, serve_router_js,
-    serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
+    serve_diagnostics_js, serve_index, serve_inter_font, serve_jetbrains_mono_font,
+    serve_log_tail_js, serve_markdown_js, serve_marked_js, serve_operations_js, serve_purify_js,
+    serve_reliability_js, serve_router_js, serve_run_detail_js, serve_runs_js, serve_scoreboard_js,
+    serve_tasks_js,
 };
 
 // The recent-history, aggregate-request, and route-selection assertions
@@ -54,6 +55,8 @@ fn run_dashboard_javascript_test(script: &str) {
 async fn dashboard_html_and_js_routes_emit_csp() {
     let routes = [
         ("index", serve_index().await),
+        ("inter", serve_inter_font().await),
+        ("jetbrains_mono", serve_jetbrains_mono_font().await),
         ("marked", serve_marked_js().await),
         ("purify", serve_purify_js().await),
         ("app", serve_app_js().await),
@@ -88,6 +91,34 @@ async fn dashboard_index_self_hosts_markdown_runtime() {
     assert!(body.contains(r#"<script src="/static/marked.umd.js"></script>"#));
     assert!(body.contains(r#"<script src="/static/purify.min.js"></script>"#));
     assert!(!body.contains("cdn.jsdelivr.net"));
+}
+
+#[tokio::test]
+async fn dashboard_self_hosts_fonts_without_google_requests() {
+    let index = response_body(serve_index().await).await;
+    let css = response_body(crate::serve_dashboard_css().await).await;
+
+    assert!(!index.contains("fonts.googleapis.com"));
+    assert!(!index.contains("fonts.gstatic.com"));
+    assert!(css.contains("/static/fonts/inter-latin.woff2"));
+    assert!(css.contains("/static/fonts/jetbrains-mono-latin.woff2"));
+    assert_eq!(
+        DASHBOARD_CSP,
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    );
+
+    for response in [serve_inter_font().await, serve_jetbrains_mono_font().await] {
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("font/woff2"))
+        );
+        assert!(
+            !to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read font response body")
+                .is_empty()
+        );
+    }
 }
 
 #[test]
