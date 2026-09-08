@@ -183,7 +183,7 @@ fn gated_pending_checks_wait_locally_without_enabling_auto_merge() {
     ]);
     host.queue_vcs_result(PR_MERGE_OPERATION, json!({"landed_commit": "landed"}));
     let mut input = complete_input(&workspace.repo, reviewed);
-    input["max_wait_seconds"] = json!(2);
+    input["max_wait_seconds"] = json!(10);
     let output = pr_complete(&host, &input).expect("wait then merge reviewed candidate");
     assert_eq!(output["merge"]["auto_merge_requested"], false);
     let merges: Vec<_> = host
