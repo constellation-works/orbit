@@ -7,8 +7,8 @@ use orbit_core::{
     resolve_task_relations,
 };
 use orbit_types::task::{
-    ArtifactManifestFileV2, TaskArtifact, task_show_record_field_json,
-    unknown_task_show_field_message,
+    ArtifactManifestFileV2, TaskArtifact, TaskComment, TaskHistoryEntry,
+    task_show_record_field_json, unknown_task_show_field_message,
 };
 use serde_json::{Value, json};
 
@@ -74,27 +74,33 @@ pub(crate) fn task_to_json_for_runtime(
     task: &orbit_core::Task,
 ) -> Result<Value, OrbitError> {
     let status_by_id = runtime.task_status_index()?;
-    task_to_json_with_sidecars(runtime, task, &status_by_id)
+    Ok(task_to_json_with_sidecars(runtime, task, &status_by_id)?.doc)
+}
+
+pub(crate) struct TaskJsonWithSidecars {
+    pub(crate) doc: Value,
+    pub(crate) comments: Vec<TaskComment>,
+    pub(crate) history: Vec<TaskHistoryEntry>,
 }
 
 pub(crate) fn task_to_json_with_sidecars(
     runtime: &OrbitRuntime,
     task: &orbit_core::Task,
     status_by_id: &BTreeMap<String, TaskStatus>,
-) -> Result<Value, OrbitError> {
+) -> Result<TaskJsonWithSidecars, OrbitError> {
     let mut value = task_to_json(task, status_by_id);
     let object = value.as_object_mut().ok_or_else(|| {
         OrbitError::Execution("task JSON projection did not produce an object".to_string())
     })?;
+    let comments = runtime.get_task_comments(&task.id)?;
+    let history = runtime.get_task_history(&task.id)?;
     object.insert(
         "comments".to_string(),
-        serde_json::to_value(runtime.get_task_comments(&task.id)?)
-            .map_err(|e| OrbitError::Io(e.to_string()))?,
+        serde_json::to_value(&comments).map_err(|e| OrbitError::Io(e.to_string()))?,
     );
     object.insert(
         "history".to_string(),
-        serde_json::to_value(runtime.get_task_history(&task.id)?)
-            .map_err(|e| OrbitError::Io(e.to_string()))?,
+        serde_json::to_value(&history).map_err(|e| OrbitError::Io(e.to_string()))?,
     );
     let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
     object.insert(
@@ -133,7 +139,11 @@ pub(crate) fn task_to_json_with_sidecars(
             );
         }
     }
-    Ok(value)
+    Ok(TaskJsonWithSidecars {
+        doc: value,
+        comments,
+        history,
+    })
 }
 
 /// Which columns the caller filtered on, and so must keep even when the filter
