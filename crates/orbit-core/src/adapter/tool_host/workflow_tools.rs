@@ -229,8 +229,12 @@ fn parse_limit(input: &Value) -> Result<usize, OrbitError> {
             "`limit` must be at least 1".to_string(),
         ));
     }
-    usize::try_from(limit.min(MAX_RUN_LIST_LIMIT as u64))
-        .map_err(|_| OrbitError::InvalidInput("`limit` is too large".to_string()))
+    if limit > MAX_RUN_LIST_LIMIT as u64 {
+        return Err(OrbitError::InvalidInput(format!(
+            "`limit` must be at most {MAX_RUN_LIST_LIMIT}"
+        )));
+    }
+    usize::try_from(limit).map_err(|_| OrbitError::InvalidInput("`limit` is too large".to_string()))
 }
 
 fn run_json(run: &JobRun) -> Result<Value, OrbitError> {

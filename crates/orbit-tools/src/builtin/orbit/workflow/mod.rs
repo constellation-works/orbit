@@ -120,7 +120,9 @@ impl Tool for OrbitWorkflowRunListTool {
             parameters: vec![
                 ToolParam {
                     name: "limit".to_string(),
-                    description: "Maximum runs to return (default 25, maximum 200).".to_string(),
+                    description:
+                        "Maximum runs to return (default 25; values above 200 are rejected)."
+                            .to_string(),
                     param_type: "integer".to_string(),
                     required: false,
                 },

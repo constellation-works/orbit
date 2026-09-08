@@ -52,8 +52,8 @@ fn add(runtime: &OrbitRuntime, input: Value, model: Option<String>) -> Result<Va
         .map(|raw| normalize_title(&raw))
         .transpose()?;
     let tags = optional_csv_or_string_list_alias(&input, &["tags", "tag"])?.unwrap_or_default();
-    let during_task = optional_string(&input, "during_task")?
-        .or_else(|| optional_string(&input, "task_id").ok().flatten());
+    let during_task =
+        optional_string(&input, "during_task")?.or(optional_string(&input, "task_id")?);
     let model = model
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
