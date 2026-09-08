@@ -98,8 +98,8 @@ pub use orbit_store::{
 };
 pub use orbit_types::task::{
     DEFAULT_TASK_LIST_LIMIT, ExternalRef, Task, TaskComplexity, TaskCreateStatus, TaskPriority,
-    TaskStatus, TaskType, resolve_task_dependencies, resolve_task_relations,
-    task_dependencies_ready,
+    TaskReferenceIndex, TaskStatus, TaskType, resolve_task_dependencies, resolve_task_relations,
+    task_dependencies_ready, task_dependencies_ready_with_index,
 };
 pub use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
 pub use orbit_types::workflow::{

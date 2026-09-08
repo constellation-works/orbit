@@ -7,7 +7,8 @@ use orbit_engine::DispatchError;
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
 use orbit_types::task::{
-    UnsatisfiableTaskDependency, unmet_task_dependencies, unsatisfiable_task_dependencies,
+    TaskReferenceIndex, UnsatisfiableTaskDependency, unmet_task_dependencies_with_index,
+    unsatisfiable_task_dependencies_with_index,
 };
 use orbit_types::tool::McpCapability;
 use orbit_types::workflow::{CoreDeterministicAction, DeterministicAction};
@@ -534,16 +535,19 @@ fn dependency_admission_for_input(
     };
     let task_ids = parse_task_ids(&serde_json::json!({ "task_ids": raw_task_ids }))?;
     let status_by_id = runtime.task_status_index()?;
+    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let mut waiting_on = BTreeSet::new();
     let mut unsatisfiable = Vec::new();
     for task_id in task_ids {
         let task = runtime.get_task(&task_id)?;
-        let dead_ends = unsatisfiable_task_dependencies(&task, &status_by_id);
+        let dead_ends =
+            unsatisfiable_task_dependencies_with_index(&task, &status_by_id, &reference_index);
         let dead_end_ids = dead_ends
             .iter()
             .map(|dependency| dependency.dependency_id.clone())
             .collect::<BTreeSet<_>>();
-        for dependency in unmet_task_dependencies(&task, &status_by_id) {
+        for dependency in unmet_task_dependencies_with_index(&task, &status_by_id, &reference_index)
+        {
             if !dead_end_ids.contains(&dependency.id) {
                 waiting_on.insert(dependency.id);
             }

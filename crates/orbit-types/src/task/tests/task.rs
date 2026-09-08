@@ -224,9 +224,12 @@ updated_at: 2026-01-01T00:00:00Z
 
 mod dependency_satisfaction {
     use crate::task::{
-        DependencyDeadEnd, TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task, TaskStatus,
-        resolve_task_dependencies, task_dependencies_ready, unmet_task_dependencies,
-        unsatisfiable_task_dependencies,
+        DependencyDeadEnd, TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task, TaskReferenceIndex,
+        TaskStatus, resolve_task_dependencies, resolve_task_dependencies_with_index,
+        resolve_task_relations_with_index, task_dependencies_ready,
+        task_dependencies_ready_with_index, unmet_task_dependencies,
+        unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
+        unsatisfiable_task_dependencies_with_index,
     };
     use std::collections::BTreeMap;
 
@@ -367,6 +370,155 @@ relations:
         assert!(task_dependencies_ready(&task, &statuses));
         assert!(unmet_task_dependencies(&task, &statuses).is_empty());
         assert!(unsatisfiable_task_dependencies(&task, &statuses).is_empty());
+    }
+
+    #[test]
+    fn shared_reference_index_preserves_reference_classification_across_helpers() {
+        let task = task_with_dependencies(
+            "ORB-9000",
+            &[
+                "ORB-1",
+                "ORB-404",
+                "LEGACY-404",
+                "OTHER-404",
+                "not-a-task-id",
+            ],
+        );
+        let statuses = status_index(&[
+            ("ORB-1", TaskStatus::Done),
+            ("LEGACY-1", TaskStatus::Backlog),
+        ]);
+        let reference_index = TaskReferenceIndex::from_status_index(&statuses);
+
+        assert_eq!(reference_index.indexed_task_count(), statuses.len());
+        assert_eq!(
+            resolve_task_dependencies_with_index(&task, &statuses, &reference_index)
+                .into_iter()
+                .map(|dependency| dependency.status)
+                .collect::<Vec<_>>(),
+            vec![
+                "missing".to_string(),
+                "done".to_string(),
+                "missing".to_string(),
+                TASK_REFERENCE_NOT_VERIFIABLE_HERE.to_string(),
+                "missing".to_string(),
+            ]
+        );
+        assert_eq!(
+            resolve_task_relations_with_index(&task, &statuses, &reference_index)
+                .into_iter()
+                .filter_map(|relation| relation.verification)
+                .collect::<Vec<_>>(),
+            vec![TASK_REFERENCE_NOT_VERIFIABLE_HERE.to_string()]
+        );
+        assert!(!task_dependencies_ready_with_index(
+            &task,
+            &statuses,
+            &reference_index
+        ));
+        assert_eq!(
+            unmet_task_dependencies_with_index(&task, &statuses, &reference_index).len(),
+            3
+        );
+        assert_eq!(
+            unsatisfiable_task_dependencies_with_index(&task, &statuses, &reference_index).len(),
+            3
+        );
+    }
+
+    #[test]
+    fn shared_reference_index_scans_a_snapshot_once_for_large_mixed_batches() {
+        const INDEXED_TASKS: usize = 1_000;
+        const UNRESOLVED_REFERENCES: usize = 2_000;
+
+        let statuses = (0..INDEXED_TASKS)
+            .map(|number| (format!("ORB-{number}"), TaskStatus::Done))
+            .collect::<BTreeMap<_, _>>();
+        let dependencies = (0..UNRESOLVED_REFERENCES)
+            .map(|number| {
+                if number % 10 == 0 {
+                    format!("ORB-{}", INDEXED_TASKS + number)
+                } else {
+                    format!("EXT-{number}")
+                }
+            })
+            .collect::<Vec<_>>();
+        let dependency_refs = dependencies.iter().map(String::as_str).collect::<Vec<_>>();
+        let task = task_with_dependencies("ORB-9000", &dependency_refs);
+
+        let reference_index = TaskReferenceIndex::from_status_index(&statuses);
+        let resolved = resolve_task_dependencies_with_index(&task, &statuses, &reference_index);
+
+        // The old path rebuilt this set for every unresolved valid reference:
+        // 2,000,000 key examinations here. This snapshot indexes 1,000 keys
+        // once, independent of the 2,000 relation checks below.
+        assert_eq!(reference_index.indexed_task_count(), INDEXED_TASKS);
+        assert_eq!(resolved.len(), UNRESOLVED_REFERENCES);
+        assert_eq!(
+            resolved
+                .iter()
+                .filter(|dependency| dependency.status == "missing")
+                .count(),
+            UNRESOLVED_REFERENCES / 10
+        );
+        assert_eq!(
+            resolved
+                .iter()
+                .filter(|dependency| dependency.status == TASK_REFERENCE_NOT_VERIFIABLE_HERE)
+                .count(),
+            UNRESOLVED_REFERENCES - (UNRESOLVED_REFERENCES / 10)
+        );
+    }
+
+    #[test]
+    fn shared_reference_index_has_bounded_work_for_mostly_resolved_batches() {
+        const INDEXED_TASKS: usize = 1_000;
+        const RESOLVED_REFERENCES: usize = 900;
+        const LOCAL_MISSING_REFERENCES: usize = 50;
+        const FOREIGN_REFERENCES: usize = 50;
+
+        let statuses = (0..INDEXED_TASKS)
+            .map(|number| (format!("ORB-{number}"), TaskStatus::Done))
+            .collect::<BTreeMap<_, _>>();
+        let dependencies = (0..RESOLVED_REFERENCES)
+            .map(|number| format!("ORB-{number}"))
+            .chain(
+                (0..LOCAL_MISSING_REFERENCES)
+                    .map(|number| format!("ORB-{}", INDEXED_TASKS + number)),
+            )
+            .chain((0..FOREIGN_REFERENCES).map(|number| format!("EXT-{number}")))
+            .collect::<Vec<_>>();
+        let dependency_refs = dependencies.iter().map(String::as_str).collect::<Vec<_>>();
+        let task = task_with_dependencies("ORB-9000", &dependency_refs);
+
+        let reference_index = TaskReferenceIndex::from_status_index(&statuses);
+        let resolved = resolve_task_dependencies_with_index(&task, &statuses, &reference_index);
+
+        // Before: the 100 unresolved valid references would examine 100,000
+        // keys. After: this bounded snapshot examines 1,000 keys once; the
+        // 900 known targets retain their status-map fast path.
+        assert_eq!(reference_index.indexed_task_count(), INDEXED_TASKS);
+        assert_eq!(
+            resolved
+                .iter()
+                .filter(|dependency| dependency.status == "done")
+                .count(),
+            RESOLVED_REFERENCES
+        );
+        assert_eq!(
+            resolved
+                .iter()
+                .filter(|dependency| dependency.status == "missing")
+                .count(),
+            LOCAL_MISSING_REFERENCES
+        );
+        assert_eq!(
+            resolved
+                .iter()
+                .filter(|dependency| dependency.status == TASK_REFERENCE_NOT_VERIFIABLE_HERE)
+                .count(),
+            FOREIGN_REFERENCES
+        );
     }
 
     #[test]

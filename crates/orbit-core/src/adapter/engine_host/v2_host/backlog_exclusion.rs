@@ -3,7 +3,10 @@ use std::path::Path;
 
 use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType, task_dependencies_ready};
+use orbit_types::task::{
+    Task, TaskPriority, TaskReferenceIndex, TaskStatus, TaskType,
+    task_dependencies_ready_with_index,
+};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -246,6 +249,7 @@ pub(super) fn backlog_snapshot(
                 action: action.to_string(),
                 message: format!("load global task status projection: {err}"),
             })?;
+    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let workspace_root = runtime.paths().repo_root.as_path();
     let lock_holders = active_task_lock_holders(&task_lookup, workspace_root);
     // `task_lookup` iterates in task-ID order rather than the store's
@@ -254,7 +258,8 @@ pub(super) fn backlog_snapshot(
     let mut backlog: Vec<Task> = task_lookup
         .values()
         .filter(|task| {
-            task.status == TaskStatus::Backlog && task_dependencies_ready(task, &status_by_id)
+            task.status == TaskStatus::Backlog
+                && task_dependencies_ready_with_index(task, &status_by_id, &reference_index)
         })
         .cloned()
         .collect();
