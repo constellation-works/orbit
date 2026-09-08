@@ -1128,6 +1128,10 @@ fn task_gate_dispatches_child_for_admissible_task() {
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedGateHost::new(&runtime, "succeeded");
+    let run_id = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_default()
+        .to_string();
 
     let outcome = execute_gate_job(
         &runtime,
@@ -1137,7 +1141,7 @@ fn task_gate_dispatches_child_for_admissible_task() {
             "task_ids": ["ORB-SCRIPTED"],
             "mode": "pr",
         }),
-        "jrun-gate-admissible",
+        &run_id,
     );
 
     assert!(outcome.success);
