@@ -130,3 +130,48 @@ fn search_runs_both_retrievers_and_rolls_up_fields() {
     assert!(breakdown.bm25_rank.is_some());
     assert!(breakdown.cosine_rank.is_some());
 }
+
+#[test]
+fn field_filter_retrieves_title_hits_before_fusion() {
+    let store = VectorStore::open_in_memory().unwrap();
+    let embedder = KeywordEmbedder;
+
+    store
+        .index_task(
+            &task("BEST", "semantic design", "unrelated", "unrelated"),
+            &embedder,
+            false,
+        )
+        .unwrap();
+    for index in 0..50 {
+        store
+            .index_task(
+                &task(
+                    &format!("WEAK-{index}"),
+                    "semantic notes",
+                    "semantic design",
+                    "unrelated",
+                ),
+                &embedder,
+                false,
+            )
+            .unwrap();
+    }
+
+    let result = run_with_embedder(
+        &store,
+        &embedder,
+        SemanticSearchParams {
+            query: "semantic design".to_string(),
+            limit: 1,
+            field: Some("title".to_string()),
+            kind: Some("task".to_string()),
+            model: None,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.results.len(), 1);
+    assert_eq!(result.results[0].source_id, "BEST");
+    assert_eq!(result.results[0].best_field, "title");
+}

@@ -28,7 +28,7 @@ fn bm25_top_k_ranks_lexical_matches() {
             .unwrap();
     }
 
-    let hits = bm25_top_k(&store, "neutrino", Some("task"), 3).unwrap();
+    let hits = bm25_top_k(&store, "neutrino", Some("task"), None, 3).unwrap();
 
     assert_eq!(hits[0].source_id, "T2");
     assert_eq!(hits[0].field, "purpose");
@@ -58,8 +58,8 @@ fn bm25_top_k_filters_by_source_kind() {
         )
         .unwrap();
 
-    let task_hits = bm25_top_k(&store, "neutrino", Some("task"), 10).unwrap();
-    let all_hits = bm25_top_k(&store, "neutrino", None, 10).unwrap();
+    let task_hits = bm25_top_k(&store, "neutrino", Some("task"), None, 10).unwrap();
+    let all_hits = bm25_top_k(&store, "neutrino", None, None, 10).unwrap();
 
     assert_eq!(task_hits.len(), 1);
     assert_eq!(task_hits[0].source_kind, "task");
@@ -101,7 +101,7 @@ fn bm25_multi_word_query_matches_non_adjacent_terms() {
             .unwrap();
     }
 
-    let hits = bm25_top_k(&store, "neutrino decay", Some("task"), 5).unwrap();
+    let hits = bm25_top_k(&store, "neutrino decay", Some("task"), None, 5).unwrap();
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert_eq!(hits[0].source_id, "T1");
 }
@@ -156,7 +156,7 @@ fn bm25_and_snippets_survive_inline_to_external_content_migration() {
     }
 
     let store = VectorStore::open(&path).expect("open migrates layout");
-    let hits = bm25_top_k(&store, "neutrino", Some("task"), 5).expect("current bm25");
+    let hits = bm25_top_k(&store, "neutrino", Some("task"), None, 5).expect("current bm25");
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert_eq!(hits[0].source_kind, "task");
     assert_eq!(hits[0].source_id, "T1");
