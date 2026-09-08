@@ -18,6 +18,9 @@ use crate::application::workspace_sync::{
     ManagedArtifactOutcome, reconcile_workspace_managed_artifacts,
 };
 use crate::bootstrap::activity::seed_default_activities;
+use crate::bootstrap::global_defaults::{
+    global_defaults_are_current, record_global_defaults_reconciled,
+};
 use crate::bootstrap::policy::seed_default_policies;
 use orbit_common::fs::io::{create_dir_symlink, remove_path_if_exists};
 
@@ -89,18 +92,27 @@ impl OrbitRuntime {
 /// filesystem scan. A config seeded this way carries no `[crews]` table, so it
 /// resolves to the built-in crew registry until an explicit `orbit init`
 /// freezes the host's detected families. [ORB-10885]
+///
+/// Seeding the global defaults renders, hashes, and re-reads every managed
+/// asset, which is worth paying for exactly once per asset set. A warm open
+/// therefore skips it entirely once the root carries this binary's stamp; see
+/// [`crate::bootstrap::global_defaults`] for what that stamp does and does not
+/// claim. The workspace side stays unconditional: it only creates directories
+/// and reaps skill trees that older releases seeded into a workspace root.
 pub(crate) fn ensure_orbit_root_initialized(
     global_root: &Path,
     workspace_root: &Path,
 ) -> Result<(), OrbitError> {
-    let global_init = init_workspace_at_root(
-        global_root,
-        InitOptions {
-            global_only: true,
-            ..Default::default()
-        },
-    );
-    ignore_denied_implicit_bootstrap_write("global defaults", global_root, global_init)?;
+    if !global_defaults_are_current(global_root) {
+        let global_init = init_workspace_at_root(
+            global_root,
+            InitOptions {
+                global_only: true,
+                ..Default::default()
+            },
+        );
+        ignore_denied_implicit_bootstrap_write("global defaults", global_root, global_init)?;
+    }
 
     let workspace_layout = prepare_workspace_root_layout(workspace_root, global_root);
     ignore_denied_implicit_bootstrap_write("workspace layout", workspace_root, workspace_layout)?;
@@ -330,6 +342,15 @@ pub fn init_workspace_at_root(
     }
     if !options.global_only {
         friction_store::ensure_default_tag_taxonomy(&orbit_root.join("frictions"))?;
+    }
+    // Every globally scoped default has now landed, so later runtime opens may
+    // skip the reconciliation pass until this binary's asset set changes. The
+    // stamp is bookkeeping, not a default: an immutable global root that needs
+    // no writes must still complete init, so a denied write only costs the next
+    // open another reconciliation.
+    if options.global_only {
+        let stamp = record_global_defaults_reconciled(&orbit_root);
+        ignore_denied_implicit_bootstrap_write("global defaults stamp", &orbit_root, stamp)?;
     }
 
     Ok(InitResult {

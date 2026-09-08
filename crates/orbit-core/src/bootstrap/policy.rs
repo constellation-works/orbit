@@ -5,7 +5,7 @@ use orbit_store::contracts::PolicyDefStoreBackend;
 use orbit_types::policy::{DEFAULT_POLICY_NAME, PolicyDef};
 use orbit_types::resource::ResourceKind;
 
-const DEFAULT_POLICY_FILES: &[(&str, &str)] = &[(
+pub(crate) const DEFAULT_POLICY_FILES: &[(&str, &str)] = &[(
     DEFAULT_POLICY_NAME,
     include_str!("../../assets/policies/default.yaml"),
 )];
