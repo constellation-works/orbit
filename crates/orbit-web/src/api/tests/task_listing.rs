@@ -109,7 +109,7 @@ async fn aggregate_selects_global_newest_rows_before_reading_off_page_workspace_
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let values = body_json(response).await;
-    let rows = values.as_array().unwrap();
+    let rows = values["items"].as_array().unwrap();
     assert_eq!(rows.len(), 50);
     assert!(
         rows.iter()

@@ -269,10 +269,10 @@ export function fetchJson(path) {
     });
 }
 
-// ORB-10400: /api/tasks answers a paginated envelope
+// ORB-10400: task-list endpoints answer a paginated envelope
 // `{ items, total, limit, truncated }` so a client can tell an empty result from
-// a truncated window, while the /api/tasks/all aggregate still answers a bare
-// array. Accept either shape rather than teaching each call site the difference.
+// a truncated window. Accept either shape for compatibility with non-task list
+// call sites that use this helper.
 export function listItems(payload) {
   if (Array.isArray(payload)) return payload;
   if (payload && Array.isArray(payload.items)) return payload.items;
