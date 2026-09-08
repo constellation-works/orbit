@@ -115,6 +115,61 @@ fn owned_rebase_timeout_aborts_and_retry_is_not_permanently_wedged() {
     assert!(workspace.repo.join("BASE_ADVANCE.md").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn rebase_stderr_timeout_phrase_is_ordinary_failure_not_timeout_recovery() {
+    if !with_fake_git(
+        module_path!(),
+        "rebase_stderr_timeout_phrase_is_ordinary_failure_not_timeout_recovery",
+        &[("ORBIT_TEST_GIT_PHRASE_FAIL", "rebase".to_string())],
+    ) {
+        return;
+    }
+
+    let workspace = pr_workspace();
+    advance_base(&workspace.repo);
+    let task_id = "ORB-11802-REBASE-PHRASE";
+    let host = PrOpenTestHost::new(
+        vec![batch_task(
+            task_id,
+            "Phrase rebase",
+            "Outcome: success\nChanges:\n- Candidate remains mergeable.",
+        )],
+        workspace.repo.clone(),
+    );
+    let common = json!({
+        "workspace_path": workspace.repo,
+        "job_run_id": "batch-1",
+        "completed_task_ids": [task_id],
+        "base": "agent-main",
+        "base_sync": "local",
+    });
+    let prepared = prepare_pr_handoff(&host, &common).expect("prepare");
+    let error = rebase_pr_branch(&host, &rebase_input(&common, &prepared))
+        .expect_err("injected stderr phrase must fail as ordinary Git");
+    let message = error.to_string();
+    assert!(
+        message.contains("failed in"),
+        "expected ordinary Git failure, got {message}"
+    );
+    assert!(
+        !message.contains("timed out after"),
+        "stderr phrase must not be a deadline error: {message}"
+    );
+    assert!(
+        !message.contains("timeout recovery") && !message.contains("Timeout recovery"),
+        "timeout recovery must not run: {message}"
+    );
+    assert!(
+        !matches!(error, OrbitError::RecoverableVcsConflict(_)),
+        "phrase failure is not a conflict: {error}"
+    );
+    assert!(
+        !rebase_in_progress(&workspace.repo),
+        "ordinary rebase failure must not leave timeout-aborted rebase state"
+    );
+}
+
 #[test]
 fn pre_existing_rebase_without_conflicts_is_refused_and_left_intact() {
     let workspace = pr_workspace();

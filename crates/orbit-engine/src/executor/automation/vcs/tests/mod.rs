@@ -83,12 +83,18 @@ pub(crate) fn with_fake_git(module: &str, test: &str, extra_env: &[(&str, String
         .find(|(key, _)| *key == "ORBIT_TEST_GIT_REBASE_ONCE")
         .map(|(_, value)| value.as_str())
         .unwrap_or("");
+    let phrase_fail = extra_env
+        .iter()
+        .find(|(key, _)| *key == "ORBIT_TEST_GIT_PHRASE_FAIL")
+        .map(|(_, value)| value.as_str())
+        .unwrap_or("");
     let script = format!(
         r#"#!/bin/bash
 set -eu
 real={real}
 worktree_once={worktree_once}
 rebase_once={rebase_once}
+phrase_fail={phrase_fail}
 cmd=""
 sub=""
 skip=0
@@ -108,6 +114,19 @@ for arg in "$@"; do
     sub="$arg"
   fi
 done
+
+if [ -n "$phrase_fail" ] && [ "$cmd" = "$phrase_fail" ]; then
+  if [ "$cmd" = "rebase" ]; then
+    case "$sub" in
+      --abort|--continue|--skip|--quit) exec "$real" "$@" ;;
+    esac
+  fi
+  if [ "$cmd" = "worktree" ] && [ "$sub" != "add" ]; then
+    exec "$real" "$@"
+  fi
+  echo "process timed out" >&2
+  exit 1
+fi
 
 if [ "$cmd" = "worktree" ] && [ "$sub" = "add" ]; then
   if [ -n "$worktree_once" ] && [ ! -f "$worktree_once" ]; then
@@ -151,7 +170,8 @@ exec "$real" "$@"
 "#,
         real = quote(&real_git),
         worktree_once = quote(worktree_once),
-        rebase_once = quote(rebase_once)
+        rebase_once = quote(rebase_once),
+        phrase_fail = quote(phrase_fail)
     );
 
     let bin = tempfile::tempdir().expect("fake git directory");

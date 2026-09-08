@@ -137,10 +137,6 @@ pub(crate) struct GitOutcome {
     pub timeout_ms: u64,
 }
 
-pub(crate) fn git_process_timed_out(stderr: &str) -> bool {
-    stderr.contains("process timed out")
-}
-
 pub(crate) fn git_timeout_error(
     current_dir: &Path,
     args: &[&str],
@@ -166,14 +162,16 @@ pub(crate) fn git_failure_error(current_dir: &Path, args: &[&str], stderr: &str)
 
 /// Run Git under the current budget. Callers that recover from timeout must
 /// inspect [`GitOutcome::timed_out`] instead of treating it as a Git exit.
+/// That flag is the supervisor's deadline verdict, not a match against
+/// captured stderr.
 pub(crate) fn git_run(current_dir: &Path, args: &[&str]) -> Result<GitOutcome, OrbitError> {
     let timeout_ms = GitTimeoutBudget::current().timeout_for(args);
     let result = run_process(&git_request(current_dir, args, timeout_ms), &NoSandbox)?;
     Ok(GitOutcome {
         stdout: result.stdout,
-        stderr: result.stderr.clone(),
+        stderr: result.stderr,
         success: result.success,
-        timed_out: git_process_timed_out(&result.stderr),
+        timed_out: result.timed_out,
         timeout_ms,
     })
 }

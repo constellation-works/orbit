@@ -402,6 +402,52 @@ fn worktree_add_timeout_after_registration_is_not_admitted_on_retry() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn worktree_add_stderr_timeout_phrase_is_ordinary_failure_not_timeout_recovery() {
+    if !with_fake_git(
+        module_path!(),
+        "worktree_add_stderr_timeout_phrase_is_ordinary_failure_not_timeout_recovery",
+        &[("ORBIT_TEST_GIT_PHRASE_FAIL", "worktree".to_string())],
+    ) {
+        return;
+    }
+
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, "base.txt", "v1");
+    let host = FakeHost::new(&repo, &["ORB-11802"]);
+    let run_id = "jrun-phrase-worktree";
+    let input = json!({
+        "task_ids": ["ORB-11802"],
+        "run_id": run_id,
+        "base": "agent-main",
+        "base_sync": "local",
+        "dependency_delivery": "ignore",
+    });
+
+    let error = setup_worktree(&host, &input)
+        .expect_err("injected stderr phrase must fail as ordinary Git");
+    let message = error.to_string();
+    assert!(
+        message.contains("failed in"),
+        "expected ordinary Git failure, got {message}"
+    );
+    assert!(
+        !message.contains("timed out after"),
+        "stderr phrase must not be a deadline error: {message}"
+    );
+    assert!(
+        !message.contains("timeout recovery") && !message.contains("Timeout recovery"),
+        "timeout recovery must not run: {message}"
+    );
+    assert!(
+        host.admitted().is_empty(),
+        "ordinary worktree add failure must not admit the task"
+    );
+}
+
 #[test]
 fn setup_worktree_refuses_stale_registered_checkout_before_admission() {
     let temp = tempdir().unwrap();
