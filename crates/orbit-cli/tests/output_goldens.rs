@@ -429,9 +429,10 @@ fn no_ansi_escapes_under_any_color_configuration() {
     }
 }
 
-/// Inventory of record-output conversions in this change, and the two
-/// separately owned bypasses that must not be treated as omissions here:
-/// `orbit doctor --fix-*` ([ORB-11597]) and `orbit workspace init` ([ORB-11622]).
+/// Inventory of record-output conversions in this change, and the remaining
+/// separately owned bypass that must not be treated as an omission here:
+/// `orbit doctor --fix-*` ([ORB-11597]). `orbit workspace init` now returns a
+/// payload through the renderer ([ORB-11622]).
 /// Converted families: task add/update/show `--fields`/artifact, tool run
 /// (including dry-run), config get, run job helpers, log tail, plus other
 /// json/Silent forks without a separate owner (config keys, skill link/unlink,
