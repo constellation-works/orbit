@@ -475,7 +475,7 @@ fn resolve_cli_workspace_path<'a>(
     if let Some(checkout) = find_checkout_for_canonical_path(registry, &canonical)
         .or_else(|| find_checkout_for_git_common_dir(registry, &canonical))
     {
-        let workspace = workspace_registry::find_workspace(registry, &checkout.workspace_id)?
+        let workspace = workspace_registry::find_workspace_by_id(registry, &checkout.workspace_id)
             .ok_or_else(|| unsupported_cli_workspace(selector))?;
         return Ok(CliWorkspaceTarget::Checkout {
             workspace,
@@ -677,7 +677,7 @@ pub(crate) fn select_workspace_for_cwd_and_roots(
     if let Some(checkout) = workspace_registry::find_checkout_by_path(&registry, cwd)
         && canonical_or_original(&checkout.orbit_dir) == shared
         && let Some(workspace) =
-            workspace_registry::find_workspace(&registry, &checkout.workspace_id)?
+            workspace_registry::find_workspace_by_id(&registry, &checkout.workspace_id)
     {
         return Ok(Some(ResolvedWorkspaceSelection {
             workspace: workspace.clone(),

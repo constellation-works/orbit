@@ -11,10 +11,10 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use crate::workspace_registry::{
-    assign_checkout_role, find_checkout_by_path, find_workspace, find_workspace_by_path,
-    load_registry_from, load_registry_from_with_writer, register_checkout, remove_workspace,
-    rename_local_owner_host_id, resolve_logical_workspace, save_registry_to, set_path_override,
-    validate_workspaces,
+    assign_checkout_role, find_checkout_by_path, find_workspace, find_workspace_by_id,
+    find_workspace_by_path, load_registry_from, load_registry_from_with_writer, register_checkout,
+    remove_workspace, rename_local_owner_host_id, resolve_logical_workspace, save_registry_to,
+    set_path_override, validate_workspaces,
 };
 
 fn timestamp() -> chrono::DateTime<Utc> {
@@ -568,6 +568,78 @@ fn mutation_helpers_reject_a_name_that_matches_another_workspace_id() {
     let assigned = assign_checkout_role(
         &mut registry,
         "ws_1",
+        WorkspaceCheckoutRole::Owner,
+        None,
+        None,
+    )
+    .expect_err("role assignment must reject an ambiguous selector")
+    .to_string();
+    assert!(
+        assigned.contains("ambiguous workspace selector"),
+        "{assigned}"
+    );
+    assert_eq!(registry, before);
+}
+
+#[test]
+fn exact_id_lookup_survives_a_name_that_matches_another_workspace_id() {
+    let mut registry = WorkspaceRegistry {
+        workspaces: vec![
+            logical_workspace("ws_alpha", None),
+            logical_workspace("ws_ws_alpha", None),
+        ],
+        checkouts: vec![
+            WorkspaceCheckout::owner(
+                "ws_alpha".to_string(),
+                PathBuf::from("/repos/alpha"),
+                PathBuf::from("/repos/alpha/.orbit"),
+            ),
+            WorkspaceCheckout::owner(
+                "ws_ws_alpha".to_string(),
+                PathBuf::from("/repos/ws_alpha"),
+                PathBuf::from("/repos/ws_alpha/.orbit"),
+            ),
+        ],
+        ..Default::default()
+    };
+    registry.workspaces[0].name = "alpha".to_string();
+    registry.workspaces[1].name = "ws_alpha".to_string();
+    let before = registry.clone();
+
+    assert_eq!(
+        find_workspace_by_id(&registry, "ws_alpha").map(|workspace| workspace.name.as_str()),
+        Some("alpha")
+    );
+    assert_eq!(
+        find_workspace_by_id(&registry, "ws_ws_alpha").map(|workspace| workspace.name.as_str()),
+        Some("ws_alpha")
+    );
+    assert_eq!(
+        find_workspace_by_path(&registry, Path::new("/repos/alpha/src"))
+            .map(|workspace| workspace.id.as_str()),
+        Some("ws_alpha")
+    );
+
+    let ambiguous = find_workspace(&registry, "ws_alpha")
+        .expect_err("id-or-name selector must stay fail-closed")
+        .to_string();
+    assert!(
+        ambiguous.contains("ambiguous workspace selector"),
+        "{ambiguous}"
+    );
+
+    let removed = remove_workspace(&mut registry, "ws_alpha")
+        .expect_err("removal must reject an ambiguous selector")
+        .to_string();
+    assert!(
+        removed.contains("ambiguous workspace selector"),
+        "{removed}"
+    );
+    assert_eq!(registry, before);
+
+    let assigned = assign_checkout_role(
+        &mut registry,
+        "ws_alpha",
         WorkspaceCheckoutRole::Owner,
         None,
         None,

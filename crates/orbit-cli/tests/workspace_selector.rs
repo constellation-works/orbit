@@ -228,6 +228,120 @@ fn global_workspace_flag_fails_closed_on_unknown_selector() {
     );
 }
 
+/// A workspace whose ID equals another workspace's name must still be reachable
+/// from its checkout and by absolute path. The colliding token stays fail-closed
+/// only when the operator types it as an id-or-name selector [ORB-11805].
+#[test]
+fn checkout_path_and_cwd_resolve_an_id_that_collides_with_another_workspace_name() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let alpha_repo = temp.path().join("alpha");
+    let shadow_repo = temp.path().join("ws-alpha");
+    let elsewhere = temp.path().join("elsewhere");
+    fs::create_dir_all(&home).expect("home");
+    fs::create_dir_all(&elsewhere).expect("elsewhere");
+
+    init_git_repo(&alpha_repo);
+    init_git_repo(&shadow_repo);
+
+    run_orbit(
+        &alpha_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--host-name",
+            "selector-host",
+            "--task-prefix",
+            "SEL",
+        ],
+    )
+    .success();
+    run_orbit(
+        &alpha_repo,
+        &home,
+        &["workspace", "init", "--name", "alpha"],
+    )
+    .success();
+    run_orbit(
+        &shadow_repo,
+        &home,
+        &["workspace", "init", "--name", "ws_alpha"],
+    )
+    .success();
+
+    let shown = run_orbit_json(
+        &alpha_repo,
+        &home,
+        &["--format", "json", "workspace", "show"],
+    );
+    assert_eq!(shown["workspace"]["id"], "ws_alpha");
+    assert_eq!(shown["workspace"]["name"], "alpha");
+
+    let listed = run_orbit_json(
+        &alpha_repo,
+        &home,
+        &["--format", "json", "task", "list", "--limit", "10"],
+    );
+    assert!(
+        listed.as_array().is_some() || listed.get("tasks").and_then(Value::as_array).is_some(),
+        "task list from the id-owning checkout must succeed: {listed}"
+    );
+
+    let by_path = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "--workspace",
+            alpha_repo.to_str().expect("utf8"),
+            "--format",
+            "json",
+            "workspace",
+            "show",
+        ],
+    );
+    assert_eq!(by_path["workspace"]["id"], "ws_alpha");
+    assert_eq!(by_path["workspace"]["name"], "alpha");
+
+    let path_list = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "--workspace",
+            alpha_repo.to_str().expect("utf8"),
+            "--format",
+            "json",
+            "task",
+            "list",
+            "--limit",
+            "10",
+        ],
+    );
+    assert!(
+        path_list.as_array().is_some()
+            || path_list.get("tasks").and_then(Value::as_array).is_some(),
+        "absolute checkout path must list the id-owning workspace: {path_list}"
+    );
+
+    for args in [
+        ["workspace", "remove", "ws_alpha"].as_slice(),
+        ["workspace", "role", "ws_alpha", "owner"].as_slice(),
+    ] {
+        let assert = run_orbit(&alpha_repo, &home, args).failure();
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+        let combined = format!("{stdout}{stderr}");
+        assert!(
+            combined.contains("ws_alpha"),
+            "ambiguous selector must be named for {args:?}: {combined}"
+        );
+        assert!(
+            combined.contains("ambiguous workspace selector"),
+            "typed selector {args:?} must fail closed: {combined}"
+        );
+    }
+}
+
 /// `task show` is the one verb whose target is a machine-global primary key, so
 /// omitting `--workspace` follows the ID instead of the cwd [ORB-10797].
 #[test]
