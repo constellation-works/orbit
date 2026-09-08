@@ -6,6 +6,13 @@ use crate::contracts::TaskListFilter;
 use crate::driver::file::task_bundle::take_artifact_payload_reads;
 use crate::workflow::task::reindex_workspace;
 
+/// Metadata probes charged to the envelope freshness scan since the previous
+/// call. Paired with [`reads`], this separates stamping an envelope file from
+/// parsing it.
+pub(super) fn probes(store: &TaskV2Store) -> usize {
+    store.envelope_cache.take_stat_calls()
+}
+
 pub(super) fn reads(store: &TaskV2Store) -> (usize, usize) {
     (
         store.bundle_store.bundle_reads.swap(0, Ordering::Relaxed),
@@ -50,9 +57,11 @@ fn bounded_queries_load_only_selected_bundles_as_the_corpus_grows() {
             tags: vec!["selective".to_string()],
             ..Default::default()
         };
+        // The freshness scan already parsed every envelope above, so the
+        // second query pays metadata probes and no envelope parse.
         let page = store.query_task_rows(&filter, 50, None).unwrap();
         assert_eq!(page.total, count / 10);
-        assert_eq!(reads(&store), ((count / 10).min(50), count));
+        assert_eq!(reads(&store), ((count / 10).min(50), 0));
         assert!(
             page.items
                 .iter()
@@ -141,6 +150,12 @@ fn bounded_integrity_is_selected_only_but_direct_unbounded_and_fallback_reads_ar
 fn missing_and_stale_indexes_rebuild_then_return_to_bounded_reads() {
     let temp = TempDir::new().unwrap();
     let store = corpus(&temp, 10);
+    // Parse every envelope once up front, so each iteration below measures the
+    // rebuild itself rather than the first freshness scan's parses.
+    store
+        .query_task_rows(&TaskListFilter::default(), 2, None)
+        .unwrap();
+    reads(&store);
     let conn = rusqlite::Connection::open(task_registry_path(temp.path())).unwrap();
     for sql in [
         "DELETE FROM task_bundle_index",
@@ -156,7 +171,7 @@ fn missing_and_stale_indexes_rebuild_then_return_to_bounded_reads() {
         store
             .query_task_rows(&TaskListFilter::default(), 2, None)
             .unwrap();
-        assert_eq!(reads(&store), (2, 10));
+        assert_eq!(reads(&store), (2, 0));
     }
 }
 

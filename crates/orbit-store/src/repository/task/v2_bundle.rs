@@ -83,6 +83,12 @@ impl TaskBundleStoreV2 {
             .canonical_task_bundle_path(&self.workspace_id, task_id)
     }
 
+    /// The single file [`Self::read_envelope_if_settled`] parses, for callers
+    /// that decide whether that parse is still needed.
+    pub(crate) fn envelope_path(&self, task_id: &str) -> Result<PathBuf, OrbitError> {
+        Ok(self.bundle_path(task_id)?.join(TASK_ENVELOPE_FILE_NAME))
+    }
+
     /// Run `op` while holding this task's exclusive bundle lock.
     ///
     /// A lifecycle write spans more than one file — a transition appends to
@@ -397,10 +403,7 @@ impl TaskBundleStoreV2 {
             )));
         }
         envelope.validate()?;
-        publish_envelope(
-            &self.bundle_path(task_id)?.join(TASK_ENVELOPE_FILE_NAME),
-            envelope,
-        )
+        publish_envelope(&self.envelope_path(task_id)?, envelope)
     }
 
     pub(crate) fn rewrite_artifact_manifest(

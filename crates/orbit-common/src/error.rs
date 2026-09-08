@@ -246,6 +246,11 @@ pub enum OrbitError {
         path: String,
         reason: String,
     },
+    /// A bounded advisory file-lock acquisition exhausted its deadline.
+    /// Structured lock and holder fields let callers diagnose contention
+    /// without parsing the display message.
+    #[error("{0}")]
+    FileLockTimeout(Box<crate::fs::io::FileLockTimeout>),
     #[error("store error: {0}")]
     Store(String),
     #[error("invalid task status transition: {0}")]
@@ -428,6 +433,13 @@ impl OrbitError {
         }
     }
 
+    pub fn file_lock_timeout(&self) -> Option<&crate::fs::io::FileLockTimeout> {
+        match self {
+            Self::FileLockTimeout(timeout) => Some(timeout),
+            _ => None,
+        }
+    }
+
     /// Translate a filesystem write failure.
     ///
     /// EROFS/EACCES name `path` and hint that this is likely a sandbox or
@@ -462,6 +474,12 @@ impl OrbitError {
 
 impl From<std::io::Error> for OrbitError {
     fn from(err: std::io::Error) -> Self {
+        if let Some(timeout) = err
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<crate::fs::io::FileLockTimeout>())
+        {
+            return OrbitError::FileLockTimeout(Box::new(timeout.clone()));
+        }
         OrbitError::Io(err.to_string())
     }
 }

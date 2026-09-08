@@ -1,7 +1,7 @@
 // Orbit dashboard audit-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, fetchJson, syncNodes, positiveIntParam, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -906,7 +906,10 @@ function renderAudit(events, ctx) {
     const cmd = ev.subcommand ? `${ev.command} ${ev.subcommand}` : ev.command;
     const tr = el("tr", { class: "audit-row", title: `event ${ev.id}` });
     tr.dataset.key = `audit-${ev.id}`;
-    tr.dataset.hash = `${ev.id}-${ev.status}-${exit}`;
+    // Expansion is part of the row's identity: without it the keyed diff reuses
+    // the collapsed node and drops the `expanded` class and `aria-expanded`
+    // the toggle just set.
+    tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}`;
     tr.appendChild(el("td", { text: fmtTimestampValue(ctx, ev.timestamp) }));
     tr.appendChild(el("td", { text: ev.role || "-" }));
     tr.appendChild(el("td", { text: tool }));
@@ -918,10 +921,16 @@ function renderAudit(events, ctx) {
     tr.appendChild(el("td", { class: exitClass, text: exit == null ? "-" : String(exit) }));
     tr.appendChild(el("td", { class: "num", text: fmtDurationValue(ctx, ev.duration_ms) }));
     if (expandedAuditIds.has(ev.id)) tr.classList.add("expanded");
-    tr.addEventListener("click", () => {
-      if (expandedAuditIds.has(ev.id)) expandedAuditIds.delete(ev.id);
-      else expandedAuditIds.add(ev.id);
-      renderAudit(lastAudit, ctx);
+    makeToggleRow(tr, {
+      expanded: expandedAuditIds.has(ev.id),
+      // The detail row only exists while the event is open, so the IDREF is
+      // only published while it actually resolves.
+      controls: expandedAuditIds.has(ev.id) ? `audit-detail-${ev.id}` : null,
+      onToggle: () => {
+        if (expandedAuditIds.has(ev.id)) expandedAuditIds.delete(ev.id);
+        else expandedAuditIds.add(ev.id);
+        renderAudit(lastAudit, ctx);
+      },
     });
     frag.appendChild(tr);
 
@@ -935,6 +944,8 @@ function renderAudit(events, ctx) {
 function buildAuditDetailRow(ev, ctx) {
   const tr = el("tr", { class: "audit-detail-row" });
   tr.dataset.key = `audit-detail-${ev.id}`;
+  // The event row's `aria-controls` points here, so the detail needs a real id.
+  tr.id = `audit-detail-${ev.id}`;
   tr.dataset.hash = JSON.stringify(ev);
   const td = el("td");
   td.colSpan = AUDIT_COLUMNS.length;
