@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Fallback and enablement tests for scripts/rustc-compiler-cache.sh [ORB-11259] [ORB-11755].
+# Fallback and enablement tests for scripts/rustc-compiler-cache.sh [ORB-11259] [ORB-11755] [ORB-11767].
 # No full crate compile: the wrapper is a rustc argv passthrough.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WRAPPER="$ROOT/scripts/rustc-compiler-cache.sh"
-HOST_PATH="$PATH"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -300,11 +299,30 @@ if [[ -e /tmp/orbit-workspace/Cargo.toml && -e "$ROOT/Cargo.toml" ]] \
   unset CARGO_TARGET_DIR
 fi
 
-# Live mount-namespace regression lives in a sibling script so this file stays
-# a wrapper-argv unit test. Nested sandboxes that cannot create user
-# namespaces skip that script instead of failing ci-fast.
-if [[ -x "$ROOT/scripts/test-compiler-cache-namespaces.sh" ]]; then
-  PATH="$HOST_PATH" "$ROOT/scripts/test-compiler-cache-namespaces.sh"
-fi
+# The live sibling must refuse fixture env before any bwrap skip, so a nested
+# call cannot pass by skipping namespaces.
+set +e
+FAKE_RUSTC_LOG="$TMP/leaked-rustc.log" \
+  "$ROOT/scripts/test-compiler-cache-namespaces.sh" \
+  >"$TMP/guard.out" 2>"$TMP/guard.err"
+guard_status=$?
+set -e
+[[ "$guard_status" -ne 0 ]] || fail "live suite must reject fixture FAKE_* vars"
+grep -F -q 'unit-test fixture environment leaked' "$TMP/guard.err" \
+  || fail "live suite should name the fixture leak, got: $(tr '\n' ' ' <"$TMP/guard.err")"
+
+set +e
+FAKE_RUSTC_LOG= FAKE_SCCACHE_LOG= \
+  ORBIT_COMPILER_CACHE_BIN="$TMP/sccache" \
+  "$ROOT/scripts/test-compiler-cache-namespaces.sh" \
+  >"$TMP/guard-bin.out" 2>"$TMP/guard-bin.err"
+guard_bin_status=$?
+set -e
+[[ "$guard_bin_status" -ne 0 ]] || fail "live suite must reject the fixture sccache binary"
+grep -F -q 'unit-test fake sccache' "$TMP/guard-bin.err" \
+  || fail "live suite should reject fixture sccache, got: $(tr '\n' ' ' <"$TMP/guard-bin.err")"
+
+# Live mount-namespace compile lives in the sibling script and is invoked as
+# a separate CI process after this unit process exits.
 
 printf 'test-compiler-cache: ok\n'
