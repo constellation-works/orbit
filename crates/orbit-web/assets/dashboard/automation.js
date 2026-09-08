@@ -1,5 +1,5 @@
 // Persisted delivery observations and accepted coverage, shared by both consumers.
-import { el, withWorkspace } from './common.js';
+import { detailsPanel, el, withWorkspace } from './common.js';
 
 const field = (label, value) => el('div', { class: 'operation-field' }, [
   el('span', { class: 'operation-field-label', text: label }),
@@ -22,9 +22,11 @@ const ownershipBlocker = ownership => {
   }
 };
 
-export function renderAutomation(diagnostic) {
+// `key` identifies this diagnostic's disclosure across refreshes; the caller
+// owns it because the same consumer can be shown under different cards.
+export function renderAutomation(diagnostic, key) {
   if (!diagnostic) return null;
-  const panel = el('details', { class: 'automation-diagnostic' });
+  const panel = detailsPanel(key, { class: 'automation-diagnostic' });
   panel.appendChild(el('summary', { text: `${diagnostic.state?.members ? 'State automation' : 'Delivery coverage'} · ${diagnostic.reason || 'unknown'}` }));
   if (diagnostic.error) panel.appendChild(el('p', { text: diagnostic.error }));
   const blocker = ownershipBlocker(diagnostic.ownership);

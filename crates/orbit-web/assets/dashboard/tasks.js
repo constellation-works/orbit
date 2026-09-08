@@ -1124,6 +1124,7 @@ async function shipTask(task, detail, btnNode, context) {
 function showCommentForm(task, detail, actions, context) {
   const form = el("div", { class: "comment-form" });
   form.addEventListener("click", (e) => e.stopPropagation());
+  detail.dataset.draft = "comment";
   const ta = el("textarea");
   ta.placeholder = "comment";
   const buttons = el("div", { class: "actions" });
@@ -1142,6 +1143,9 @@ function showCommentForm(task, detail, actions, context) {
     cancel.disabled = true;
     try {
       await postJson(`/api/tasks/${encodeURIComponent(task.id)}/comments`, { message });
+      // The draft is spent: let the next render rebuild the detail so the
+      // posted comment appears.
+      delete detail.dataset.draft;
       await refreshTasks(context);
     } catch (error) {
       submit.disabled = false;
@@ -1156,6 +1160,7 @@ function showCommentForm(task, detail, actions, context) {
   });
   cancel.addEventListener("click", (e) => {
     e.stopPropagation();
+    delete detail.dataset.draft;
     form.replaceWith(actions);
   });
   buttons.appendChild(submit);
@@ -1169,6 +1174,7 @@ function showCommentForm(task, detail, actions, context) {
 function showRejectForm(task, detail, actions, context) {
   const form = el("div", { class: "reject-form" });
   form.addEventListener("click", (e) => e.stopPropagation());
+  detail.dataset.draft = "reject";
   const ta = el("textarea");
   ta.placeholder = "reason for rejection";
   const buttons = el("div", { class: "actions" });
@@ -1185,6 +1191,7 @@ function showRejectForm(task, detail, actions, context) {
   });
   cancel.addEventListener("click", (e) => {
     e.stopPropagation();
+    delete detail.dataset.draft;
     form.replaceWith(actions);
   });
   buttons.appendChild(submit);
@@ -1245,6 +1252,59 @@ function takeTaskActionNotice() {
   return notice;
 }
 
+// The pinned global-resolver result: a task outside the active filter, shown
+// above the list with its own dismiss control.
+function buildPinnedTask(ptask, context) {
+  const row = el("div", {
+    class: "row pinned-external",
+    title: `${ptask.title} (global resolver; status ${ptask.status})`
+  }, [
+    el("span", { class: "id mono", text: ptask.id }),
+    el("span", { class: "title", text: ptask.title }),
+    buildStatusUpdateControl(ptask, context),
+    buildCrewUpdateControl(ptask, context),
+  ]);
+  row.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (navigator.clipboard) navigator.clipboard.writeText(ptask.id).catch(() => {});
+  });
+  row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, ptask.id)}-${feedbackSignature(crewFeedback, ptask.id)}`;
+
+  const detail = buildTaskDetail(ptask, context);
+  const dismiss = el("button", { class: "action", text: "Close" });
+  dismiss.title = "Dismiss global task detail";
+  dismiss.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    pinnedExternalTask = null;
+    renderTasks(taskList(context), context);
+  });
+  let actions = detail.querySelector(".actions");
+  if (!actions) {
+    actions = el("div", { class: "actions" });
+    detail.appendChild(actions);
+  }
+  actions.appendChild(dismiss);
+
+  const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
+  wrap.dataset.key = `pinned-${ptask.id}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}`;
+  return wrap;
+}
+
+/* ORB-11655: a comment or reject form holds text the operator is still typing,
+   so the 30 s refresh must not rebuild the detail node that contains it — not
+   even when the task itself changed. Collect the live top-level nodes holding
+   an open form, keyed the way syncNodes keys them, and reuse them verbatim.
+   The detail resumes tracking task data as soon as the form is closed. */
+function openDraftNodes(body) {
+  const drafts = new Map();
+  for (const node of Array.from(body.children)) {
+    if (!node.dataset.key) continue;
+    if (node.dataset.draft || node.querySelector?.("[data-draft]")) drafts.set(node.dataset.key, node);
+  }
+  return drafts;
+}
+
 export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
@@ -1265,45 +1325,18 @@ export function renderTasks(tasks, context) {
     }
   }
 
-  const frag = document.createDocumentFragment();
+  // Collected as a plain array rather than a document fragment: a fragment
+  // would detach every reused node from the panel, and moving a node is what
+  // costs an open draft its caret. syncNodes leaves a node it already holds in
+  // place.
+  const nodes = [];
+  const drafts = openDraftNodes(body);
   const notice = takeTaskActionNotice();
 
   // Render pinned external task detail (for statuses outside active filter) at top.
   if (pinnedExternalTask && pinnedExternalTask.task) {
     const ptask = pinnedExternalTask.task;
-    const pRow = el("div", {
-      class: "row pinned-external",
-      title: `${ptask.title} (global resolver; status ${ptask.status})`
-    }, [
-      el("span", { class: "id mono", text: ptask.id }),
-      el("span", { class: "title", text: ptask.title }),
-      buildStatusUpdateControl(ptask, context),
-      buildCrewUpdateControl(ptask, context),
-    ]);
-    pRow.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (navigator.clipboard) navigator.clipboard.writeText(ptask.id).catch(() => {});
-    });
-    pRow.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, ptask.id)}-${feedbackSignature(crewFeedback, ptask.id)}`;
-    const pDetail = buildTaskDetail(ptask, context);
-    // Dismiss button to close the global detail without affecting chips
-    const dismiss = el("button", { class: "action", text: "Close" });
-    dismiss.title = "Dismiss global task detail";
-    dismiss.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      pinnedExternalTask = null;
-      renderTasks(taskList(context), context);
-    });
-    let acts = pDetail.querySelector(".actions");
-    if (!acts) {
-      acts = el("div", { class: "actions" });
-      pDetail.appendChild(acts);
-    }
-    acts.appendChild(dismiss);
-    const pWrap = el("div", { class: "pinned-task-wrap" }, [pRow, pDetail]);
-    pWrap.dataset.key = `pinned-${ptask.id}`;
-    pWrap.dataset.hash = `${pRow.dataset.hash}-${JSON.stringify(ptask)}`;
-    frag.appendChild(pWrap);
+    nodes.push(drafts.get(`pinned-${ptask.id}`) || buildPinnedTask(ptask, context));
   }
 
   const filtered = filterTasks(tasks, context);
@@ -1313,7 +1346,7 @@ export function renderTasks(tasks, context) {
   const railCount = document.getElementById("rail-count-tasks");
   if (railCount) railCount.textContent = String(filtered.length);
   renderFilterSummary(context);
-  if (filtered.length === 0 && frag.children.length === 0) {
+  if (filtered.length === 0 && nodes.length === 0) {
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
     const emptyState = el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
@@ -1323,7 +1356,7 @@ export function renderTasks(tasks, context) {
     return;
   }
   const groups = new Map();
-  if (notice) frag.appendChild(notice);
+  if (notice) nodes.push(notice);
 
   // Column header strip (once, before first group-header). Uses .row.header so grid
   // (and all @media overrides) are identical to data rows; labels sit over ID/Title/Status/Crew.
@@ -1334,7 +1367,7 @@ export function renderTasks(tasks, context) {
     el("span", { class: "crew-cell", text: "Crew" }),
   ]);
   colHeader.dataset.key = "task-col-header";
-  frag.appendChild(colHeader);
+  nodes.push(colHeader);
 
   for (const t of filtered) {
     if (!groups.has(t.status)) groups.set(t.status, []);
@@ -1352,7 +1385,7 @@ export function renderTasks(tasks, context) {
     ]);
     header.dataset.key = `header-${status}`;
     header.dataset.hash = `${status}-${group.length}`;
-    frag.appendChild(header);
+    nodes.push(header);
     for (const t of group) {
       const idSpan = el("span", { class: "id mono", text: t.id, title: "Click to copy ID" });
       idSpan.addEventListener("click", (e) => {
@@ -1397,15 +1430,21 @@ export function renderTasks(tasks, context) {
         }
       });
       if (expandedTaskIds.has(t.id)) row.classList.add("expanded");
-      frag.appendChild(row);
+      nodes.push(row);
       if (expandedTaskIds.has(t.id)) {
-        const detail = buildTaskDetail(t, context);
-        detail.dataset.key = `detail-${t.id}`;
-        // Diff by full task object stringified
-        detail.dataset.hash = JSON.stringify(t);
-        frag.appendChild(detail);
+        const key = `detail-${t.id}`;
+        const draft = drafts.get(key);
+        if (draft) {
+          nodes.push(draft);
+        } else {
+          const detail = buildTaskDetail(t, context);
+          detail.dataset.key = key;
+          // Diff by full task object stringified
+          detail.dataset.hash = JSON.stringify(t);
+          nodes.push(detail);
+        }
       }
     }
   }
-  syncNodes(body, Array.from(frag.children));
+  syncNodes(body, nodes);
 }
