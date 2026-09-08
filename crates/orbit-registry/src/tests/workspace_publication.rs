@@ -398,3 +398,69 @@ fn rejected_bind_leaves_persisted_registry_byte_identical() {
         "failed rebind must not persist"
     );
 }
+
+#[test]
+fn record_publication_success_is_idempotent_across_commit_hex_case() {
+    const UPPER: &str = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+    const LOWER: &str = "abcdef0123456789abcdef0123456789abcdef01";
+
+    let mut upper_then_lower = owner_registry();
+    bind_publication(
+        &mut upper_then_lower,
+        "ws_orbit",
+        "git@github.com:example/tasks.git",
+        "main",
+        "tp_orbit_tasks",
+        Some("hm_owner"),
+    )
+    .expect("bind");
+    let first = record_publication_success(
+        &mut upper_then_lower,
+        "ws_orbit",
+        3,
+        UPPER,
+        Some("hm_owner"),
+    )
+    .expect("record uppercase");
+    let second = record_publication_success(
+        &mut upper_then_lower,
+        "ws_orbit",
+        3,
+        LOWER,
+        Some("hm_owner"),
+    )
+    .expect("retry lowercase");
+    assert_eq!(first, second);
+    assert_eq!(first.last_success_generation, Some(3));
+    assert_eq!(first.last_success_commit.as_deref(), Some(LOWER));
+
+    let mut lower_then_upper = owner_registry();
+    bind_publication(
+        &mut lower_then_upper,
+        "ws_orbit",
+        "git@github.com:example/tasks.git",
+        "main",
+        "tp_orbit_tasks",
+        Some("hm_owner"),
+    )
+    .expect("bind");
+    let first = record_publication_success(
+        &mut lower_then_upper,
+        "ws_orbit",
+        3,
+        LOWER,
+        Some("hm_owner"),
+    )
+    .expect("record lowercase");
+    let second = record_publication_success(
+        &mut lower_then_upper,
+        "ws_orbit",
+        3,
+        UPPER,
+        Some("hm_owner"),
+    )
+    .expect("retry uppercase");
+    assert_eq!(first, second);
+    assert_eq!(first.last_success_generation, Some(3));
+    assert_eq!(first.last_success_commit.as_deref(), Some(LOWER));
+}

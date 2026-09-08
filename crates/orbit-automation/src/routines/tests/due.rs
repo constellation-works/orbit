@@ -3,7 +3,7 @@ use chrono_tz::Europe::Berlin;
 
 use super::super::due::{
     DueDecision, NATURAL_SLOT_GRACE_SECONDS, due_decision, due_decision_with_grace,
-    natural_slot_grace_for_cadence, parse_cron, truncate_to_minute,
+    natural_slot_grace_for_cadence, next_occurrence, parse_cron, truncate_to_minute,
 };
 use orbit_types::workflow::MissedRunPolicy;
 
@@ -270,4 +270,68 @@ fn baseline_in_the_future_of_all_slots_suppresses_firing() {
     let decision =
         due_decision(&cron, MissedRunPolicy::CatchUpOnce, &baseline, &now).expect("decision");
     assert_eq!(decision, DueDecision::NotDue);
+}
+
+#[test]
+fn next_occurrence_is_minute_pinned_and_strictly_after_a_sub_minute_now() {
+    let cron = parse_cron("* * * * *").expect("cron");
+    let now = at(2026, 7, 2, 22, 0, 42) + Duration::nanoseconds(785_766_897);
+
+    let next = next_occurrence(&cron, &now).expect("projection");
+
+    assert_eq!(next, at(2026, 7, 2, 22, 1, 0));
+    assert!(
+        next > now,
+        "pinning the occurrence to its minute must not pull it back to now"
+    );
+}
+
+#[test]
+fn next_occurrence_is_stable_across_polls_within_one_minute() {
+    let cron = parse_cron("0 22 * * *").expect("cron");
+    let first = next_occurrence(&cron, &at(2026, 7, 2, 10, 0, 3)).expect("first poll");
+    let second = next_occurrence(&cron, &at(2026, 7, 2, 10, 0, 47)).expect("second poll");
+
+    assert_eq!(first, at(2026, 7, 2, 22, 0, 0));
+    assert_eq!(first, second);
+}
+
+#[test]
+fn next_occurrence_looks_forward_while_a_missed_slot_is_still_due() {
+    let cron = parse_cron("0 22 * * *").expect("cron");
+    // A week of laptop sleep after the July 1 fire.
+    let lower = at(2026, 7, 1, 22, 0, 0);
+    let now = at(2026, 7, 8, 9, 30, 0);
+
+    let due = due_decision(&cron, MissedRunPolicy::CatchUpOnce, &lower, &now).expect("decision");
+    let projected = next_occurrence(&cron, &now).expect("projection");
+
+    // Catch-up eligibility names the latest missed slot, already in the past.
+    assert_eq!(
+        due,
+        DueDecision::Fire {
+            slot: at(2026, 7, 7, 22, 0, 0),
+            is_catch_up: true,
+        }
+    );
+    // The projection names the schedule's next arrival, always ahead of now.
+    assert_eq!(projected, at(2026, 7, 8, 22, 0, 0));
+    assert!(projected > now);
+}
+
+#[test]
+fn next_occurrence_reports_the_same_upcoming_slot_under_either_missed_run_policy() {
+    let cron = parse_cron("0 22 * * *").expect("cron");
+    let lower = at(2026, 7, 1, 22, 0, 0);
+    let now = at(2026, 7, 8, 9, 30, 0);
+
+    // `skip` declines the missed slot entirely; the projection is unchanged,
+    // because a projection is not a policy decision.
+    let skipped = due_decision(&cron, MissedRunPolicy::Skip, &lower, &now).expect("decision");
+
+    assert_eq!(skipped, DueDecision::NotDue);
+    assert_eq!(
+        next_occurrence(&cron, &now).expect("projection"),
+        at(2026, 7, 8, 22, 0, 0)
+    );
 }

@@ -59,6 +59,27 @@ interval math jumps straight to the most recent boundary
 `baseline + floor((now-baseline)/interval)·interval`. Either way a downtime gap
 collapses to **one** fire, never one per missed slot.
 
+## 2b. Catch-up eligibility is not the next scheduled occurrence
+
+`decide_due` answers **catch-up eligibility**: is there an unconsumed slot this
+pass may fire? After downtime that answer is a slot *already in the past* — a
+fire the scheduler still owes. `schedule::next_scheduled_slot(schedule,
+baseline, now)` answers a different question: when does the schedule **next
+come around**? It is always strictly after `now`, and it is what operator
+surfaces render as next evaluation. The two disagree exactly while a missed
+slot is pending, and that disagreement is correct — neither output is a check
+on the other.
+
+Both derive every slot from one place so the two views stay anchored
+identically. `routines::due::next_occurrence` is the cron owner: it pins each
+occurrence to its minute, as the due path does, so a slot is stable across
+polls within one minute. Interval slots share one anchoring rule
+(`baseline + n·interval`), one range check, and checked date arithmetic — an
+out-of-range interval or an extreme cursor baseline is an error, never a
+wrapped slot the scheduler would mistake for a due boundary. Interval
+projections need the cursor's baseline to anchor to; cron projections are
+absolute and need no cursor.
+
 ## 3. Cursor state
 
 `state.rs` stores one cursor per definition in
@@ -206,10 +227,13 @@ The dashboard Operations tab exposes the same CRUD/mint runtime rather than a
 second scheduler. `#operations/auto-tasks` lists the selected workspace's
 definitions (name, enabled, schedule, template summary, dedupe, last
 scheduler evaluation, last minted task id, and a structured next-evaluation
-state). Next evaluation is never an unqualified future timestamp: disabled
-rows show `Disabled` (a theoretical slot is labeled hypothetical), delivery
-rows show waiting-for-deliveries, a missing cursor is never observed, and
-inspect failures are unavailable. Last scheduler evaluation is the host-local
+state). Next evaluation is the schedule's next occurrence (§2b) computed by
+the scheduler's own arithmetic, never catch-up eligibility: a definition owed
+a make-up fire still shows the upcoming slot, not the owed one. It is also
+never an unqualified future timestamp: disabled rows show `Disabled` (a
+theoretical slot is labeled hypothetical), delivery rows show
+waiting-for-deliveries, a missing cursor is never observed, and inspect
+failures are unavailable. Last scheduler evaluation is the host-local
 cursor; last minted task is the newest tagged instance and is labeled a
 manual mint when the two ids differ. Enable/disable writes `enabled` through `auto_task_toggle`
 with `expected_enabled` compare-and-swap, operator authorization

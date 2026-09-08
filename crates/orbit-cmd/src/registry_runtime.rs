@@ -676,15 +676,13 @@ pub(crate) fn select_workspace_for_cwd_and_roots(
 
     if let Some(checkout) = workspace_registry::find_checkout_by_path(&registry, cwd)
         && canonical_or_original(&checkout.orbit_dir) == shared
-    {
-        if let Some(workspace) =
+        && let Some(workspace) =
             workspace_registry::find_workspace(&registry, &checkout.workspace_id)?
-        {
-            return Ok(Some(ResolvedWorkspaceSelection {
-                workspace: workspace.clone(),
-                checkout: checkout.clone(),
-            }));
-        }
+    {
+        return Ok(Some(ResolvedWorkspaceSelection {
+            workspace: workspace.clone(),
+            checkout: checkout.clone(),
+        }));
     }
 
     // An explicit --root pins global_root to shared_root. In that mode an

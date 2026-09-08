@@ -322,6 +322,111 @@ async fn list_labels_disabled_next_evaluation_as_hypothetical() {
     assert!(item["next_evaluation"]["at"].as_str().is_some(), "{item}");
 }
 
+/// A cursor whose baseline and last consumed slot are both far in the past, so
+/// the scheduler still owes a catch-up fire the moment it next runs.
+fn write_stale_cursor(runtime: &OrbitRuntime, name: &str) {
+    let path = cursor_state_path(&runtime.paths().state_dir);
+    std::fs::create_dir_all(path.parent().expect("state dir")).expect("mkdir");
+    let doc = serde_json::json!({"definitions": {name: {
+        "baseline_at": "2020-01-01T00:00:00+00:00",
+        "last_slot": "2020-01-01T01:00:00+00:00",
+        "last_fired_at": "2020-01-01T01:00:05+00:00",
+        "last_task_id": "ORB-00001"
+    }}});
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(&doc).expect("serialize cursor"),
+    )
+    .expect("write cursor");
+}
+
+#[tokio::test]
+async fn list_projects_the_next_interval_slot_not_the_owed_catch_up_slot() {
+    let runtime = runtime();
+    runtime.auto_task_add(chore_params("stale")).expect("add");
+    write_stale_cursor(&runtime, "stale");
+
+    let (state, runtime) = state(runtime);
+    let json =
+        body_json(send(state, Method::GET, "/auto-tasks?workspace=default", None).await).await;
+    let item = &json["definitions"].as_array().expect("definitions")[0];
+
+    let now = chrono::Utc::now();
+    let baseline = chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00+00:00")
+        .expect("baseline")
+        .with_timezone(&chrono::Utc);
+    let projected = chrono::DateTime::parse_from_rfc3339(
+        item["next_evaluation"]["at"]
+            .as_str()
+            .expect("projected slot"),
+    )
+    .expect("rfc3339 projection")
+    .with_timezone(&chrono::Utc);
+
+    assert_eq!(item["next_evaluation"]["state"], "scheduled");
+    assert!(
+        projected > now,
+        "the dashboard projects the schedule's next arrival: {item}"
+    );
+
+    // The scheduler, meanwhile, still owes a fire for a boundary years in the
+    // past. The two answers are different by design, so the row must not claim
+    // the owed slot as its next evaluation.
+    let owed = orbit_core::application::auto_tasks::schedule::decide_due(
+        &runtime
+            .auto_task_show("stale")
+            .expect("show")
+            .expect("definition")
+            .schedule,
+        baseline,
+        Some(baseline + chrono::Duration::hours(1)),
+        now,
+    )
+    .expect("due decision");
+    let orbit_core::application::auto_tasks::AutoTaskDueDecision::Fire { slot: owed_slot } = owed
+    else {
+        panic!("a years-old cursor must still owe a catch-up fire");
+    };
+    let owed_slot = chrono::DateTime::parse_from_rfc3339(&owed_slot)
+        .expect("rfc3339 owed slot")
+        .with_timezone(&chrono::Utc);
+    assert!(owed_slot <= now, "an owed catch-up slot is in the past");
+    assert_ne!(projected, owed_slot);
+
+    // Both answers come from the same anchored arithmetic: consecutive
+    // 60-minute boundaries off the recorded baseline.
+    assert_eq!(projected, owed_slot + chrono::Duration::minutes(60));
+}
+
+#[tokio::test]
+async fn list_projects_cron_definitions_pinned_to_the_minute() {
+    let runtime = runtime();
+    let mut params = chore_params("minutely");
+    params.schedule = AutoTaskSchedule::Cron {
+        cron: "* * * * *".to_string(),
+    };
+    runtime.auto_task_add(params).expect("add");
+    write_cursor(&runtime, "minutely", "ORB-00001");
+
+    let (state, _) = state(runtime);
+    let json =
+        body_json(send(state, Method::GET, "/auto-tasks?workspace=default", None).await).await;
+    let item = &json["definitions"].as_array().expect("definitions")[0];
+    let projected = chrono::DateTime::parse_from_rfc3339(
+        item["next_evaluation"]["at"]
+            .as_str()
+            .expect("projected slot"),
+    )
+    .expect("rfc3339 projection");
+
+    assert_eq!(item["next_evaluation"]["state"], "scheduled");
+    // The canonical cron projection pins every occurrence to its minute, so the
+    // rendered slot never carries the poll's sub-minute component.
+    assert_eq!(chrono::Timelike::second(&projected), 0, "{item}");
+    assert_eq!(chrono::Timelike::nanosecond(&projected), 0, "{item}");
+    assert!(projected.with_timezone(&chrono::Utc) > chrono::Utc::now());
+}
+
 #[tokio::test]
 async fn list_reports_never_observed_when_the_cursor_is_missing() {
     let runtime = runtime();

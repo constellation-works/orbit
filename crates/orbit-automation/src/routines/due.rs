@@ -6,6 +6,14 @@
 //! `now`, compared against the cursor — never an iteration over every slot
 //! in a gap, so a week of downtime against a minutely cron costs the same
 //! as one minute.
+//!
+//! Two different questions live here and must not be conflated. [`due_decision`]
+//! answers *catch-up eligibility*: "is there an unconsumed slot this sweep may
+//! fire?", and under `catch_up_once` that answer is a slot already in the past.
+//! [`next_occurrence`] answers *the next scheduled occurrence*: "when does this
+//! cron next come around?", always strictly ahead of `now`. Operator surfaces
+//! render the second; the scheduler acts on the first. They disagree exactly
+//! when a missed slot is pending, and that disagreement is correct.
 
 use chrono::{DateTime, Duration, TimeZone, Timelike};
 use croner::Cron;
@@ -67,6 +75,28 @@ pub fn parse_cron(expression: &str) -> Result<Cron, OrbitError> {
     expression.parse::<Cron>().map_err(|error| {
         OrbitError::InvalidInput(format!("invalid cron expression '{expression}': {error}"))
     })
+}
+
+/// The next scheduled occurrence strictly after `now`, pinned to its minute.
+///
+/// This projects the schedule forward; it is not a due decision. A routine
+/// carrying a missed slot is still due for that earlier slot under
+/// `catch_up_once` ([`due_decision`]) while this reports the upcoming one, so
+/// callers rendering both must not expect them to agree.
+pub fn next_occurrence<Tz: TimeZone>(
+    cron: &Cron,
+    now: &DateTime<Tz>,
+) -> Result<DateTime<Tz>, OrbitError> {
+    let next = cron
+        .find_next_occurrence(now, false)
+        .map_err(|error| OrbitError::InvalidInput(format!("cron evaluation failed: {error}")))?;
+
+    // croner carries `now`'s sub-minute component into the occurrence it
+    // returns, which would move the projection on every poll within the same
+    // minute. Pinning is safe here as well as in the due path: the occurrence
+    // already lies in a later minute than `now`, so dropping its sub-minute
+    // component cannot pull it back to or before `now`.
+    Ok(truncate_to_minute(next))
 }
 
 /// Decide whether a routine is due.

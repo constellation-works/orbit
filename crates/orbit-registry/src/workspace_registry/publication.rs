@@ -115,6 +115,7 @@ pub fn record_publication_success(
     commit: &str,
     local_machine_id: Option<&str>,
 ) -> Result<WorkspacePublicationBinding, OrbitError> {
+    let commit = commit.to_ascii_lowercase();
     let workspace_id = bindable_workspace(registry, id_or_name, local_machine_id)?.id;
     let binding = registry
         .publication_bindings
@@ -132,7 +133,7 @@ pub fn record_publication_success(
             )));
         }
         if generation == previous {
-            if binding.last_success_commit.as_deref() == Some(commit) {
+            if binding.last_success_commit.as_deref() == Some(commit.as_str()) {
                 return Ok(binding.clone());
             }
             return Err(publication_error(format!(
@@ -148,7 +149,7 @@ pub fn record_publication_success(
         publication_id: binding.publication_id.clone(),
         authority_machine_id: binding.authority_machine_id.clone(),
         last_success_generation: Some(generation),
-        last_success_commit: Some(commit.to_ascii_lowercase()),
+        last_success_commit: Some(commit),
     }
     .validated()
     .map_err(workspace_error)?;

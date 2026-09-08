@@ -49,7 +49,11 @@ The dashboard Operations view projects the same typed status and control functio
 `enabled` value; the host clock remains one independent host-scoped card.
 Next evaluation uses schedule display state (`scheduled`, `disabled`, `paused`,
 `waiting`, `never_observed`, `unavailable`) so a disabled or paused routine
-does not look armed; a theoretical next slot is labeled hypothetical.
+does not look armed; a theoretical next slot is labeled hypothetical. The time
+itself is `due::next_occurrence` — the cron's next scheduled occurrence,
+strictly ahead of now and pinned to its minute — not the sweep's catch-up
+eligibility. A routine holding a missed slot under `catch_up_once` is due for
+that earlier slot while the row still points forward, which is correct.
 Clock last/next tick are wall-clock times; systemd `NextElapseUSecMonotonic`
 is used only for schedulability, never as a displayed next tick. Cadence is a
 duration. A routine

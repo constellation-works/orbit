@@ -26,7 +26,9 @@ pub enum SemanticSubcommand {
     /// Rebuild semantic embeddings
     ///
     /// CLI task mutations do not index in the background; run this after
-    /// installs or bulk edits.
+    /// installs or bulk edits. Sources the corpus no longer contains are
+    /// dropped and reported as stale_sources, clearing the stale rows
+    /// `orbit semantic stats` counts.
     Index(SemanticIndexArgs),
 }
 
@@ -165,10 +167,17 @@ impl Execute for SemanticIndexArgs {
 
 fn semantic_index_text(result: SemanticIndexResult) -> String {
     match result {
-        SemanticIndexResult::Tasks { model_id, report } => {
+        SemanticIndexResult::Tasks {
+            model_id,
+            report,
+            stale_sources,
+        } => {
             format!(
-                "Indexed semantic search: model={} embedded_chunks={} skipped_fields={}",
-                model_id, report.embedded_chunks, report.skipped_fields
+                "Indexed semantic search: model={} embedded_chunks={} skipped_fields={} stale_sources={}",
+                model_id,
+                report.embedded_chunks,
+                report.skipped_fields,
+                stale_sources.len()
             )
         }
         SemanticIndexResult::Docs {
@@ -188,10 +197,11 @@ fn semantic_index_text(result: SemanticIndexResult) -> String {
         }
         SemanticIndexResult::All { tasks, docs } => {
             format!(
-                "Indexed semantic search: tasks_model={} tasks_embedded_chunks={} tasks_skipped_fields={} docs_model={} docs_indexed_sources={} docs_embedded_chunks={} docs_skipped_fields={} docs_stale_sources={}",
+                "Indexed semantic search: tasks_model={} tasks_embedded_chunks={} tasks_skipped_fields={} tasks_stale_sources={} docs_model={} docs_indexed_sources={} docs_embedded_chunks={} docs_skipped_fields={} docs_stale_sources={}",
                 tasks.model_id,
                 tasks.report.embedded_chunks,
                 tasks.report.skipped_fields,
+                tasks.stale_sources.len(),
                 docs.model_id,
                 docs.indexed_sources,
                 docs.report.embedded_chunks,
