@@ -8,13 +8,13 @@ use tempfile::tempdir;
 
 use super::super::super::dispatcher::ResolvedSandbox;
 use super::super::spawn::{
-    SpawnError, SpawnedChild, linux_bwrap_failed_write_diagnostic,
+    SUPPORTED_SYSTEM_BIN_DIRS, SpawnError, SpawnedChild, linux_bwrap_failed_write_diagnostic,
     macos_keychain_auth_diagnostic_with, orbit_tool_env_with,
     prepare_linux_sandbox_for_dispatch_with_probe, prepare_macos_codex_ca_environment_with,
-    reject_unsatisfiable_managed_grants, resolve_provider_launcher_with, spawn_bare,
-    spawn_macos_sandboxed_with,
+    reject_unsatisfiable_managed_grants, resolve_provider_launcher_with,
+    resolve_provider_launcher_with_extra_dirs, spawn_bare, spawn_macos_sandboxed_with,
 };
-use super::test_support::{sandbox_for_test, sh_args};
+use super::test_support::{sandbox_for_test, sh_args, write_executable};
 
 /// A profile shaped like a managed-worktree implementer: the worktree is
 /// writable, its `.orbit` store is not.
@@ -611,7 +611,7 @@ fn provider_launcher_resolution_falls_back_to_temp_home_with_scrubbed_path() {
     std::fs::create_dir_all(&fake_path).expect("create fake PATH");
     std::fs::create_dir_all(&provider_bin).expect("create provider bin");
     let launcher = provider_bin.join("claude");
-    std::fs::write(&launcher, "#!/bin/sh\nexit 0\n").expect("write fake provider launcher");
+    write_executable(&launcher, "#!/bin/sh\nexit 0\n");
 
     let resolved = resolve_provider_launcher_with(
         "claude",
@@ -654,6 +654,8 @@ fn missing_provider_launcher_error_names_provider_and_searched_locations() {
         home.join(".orbit/bin/claude"),
         home.join(".cargo/bin/claude"),
         home.join("bin/claude"),
+        std::path::PathBuf::from("/opt/homebrew/bin/claude"),
+        std::path::PathBuf::from("/usr/local/bin/claude"),
     ] {
         assert!(
             error.message.contains(&searched.display().to_string()),
@@ -662,6 +664,10 @@ fn missing_provider_launcher_error_names_provider_and_searched_locations() {
             error.message
         );
     }
+    assert_eq!(
+        SUPPORTED_SYSTEM_BIN_DIRS,
+        &["/opt/homebrew/bin", "/usr/local/bin"]
+    );
 }
 
 #[test]
@@ -694,6 +700,8 @@ fn agent_tool_environment_prefers_dispatching_orbit_over_stale_path_entry() {
             std::path::PathBuf::from("/home/test/.orbit/bin"),
             std::path::PathBuf::from("/home/test/.cargo/bin"),
             std::path::PathBuf::from("/usr/bin"),
+            std::path::PathBuf::from("/opt/homebrew/bin"),
+            std::path::PathBuf::from("/usr/local/bin"),
         ]
     );
 }
@@ -721,6 +729,8 @@ fn configured_orbit_bin_wins_and_its_path_entry_is_deduplicated() {
             std::path::PathBuf::from("/opt/orbit/bin"),
             std::path::PathBuf::from("/home/test/.cargo/bin"),
             std::path::PathBuf::from("/usr/bin"),
+            std::path::PathBuf::from("/opt/homebrew/bin"),
+            std::path::PathBuf::from("/usr/local/bin"),
         ]
     );
 }
@@ -750,7 +760,186 @@ fn agent_tool_environment_backfills_conventional_home_bin_dirs_missing_from_path
             std::path::PathBuf::from("/home/test/.local/bin"),
             std::path::PathBuf::from("/home/test/.cargo/bin"),
             std::path::PathBuf::from("/home/test/bin"),
+            std::path::PathBuf::from("/opt/homebrew/bin"),
+            std::path::PathBuf::from("/usr/local/bin"),
         ]
+    );
+}
+
+/// launchd's default PATH on macOS. Drain, pilot, and shipment share
+/// `resolve_provider_launcher`; this is the scheduled-worker environment
+/// that failed to find `/opt/homebrew/bin/codex` on the live Mac cargo
+/// binary `/Users/daniel/.cargo/bin/orbit` (0.19.2). Source HEAD at
+/// pickup: `bca1cddc99987506c96e0ea626902f537d53572b`. [ORB-11808]
+const MACOS_LAUNCHD_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+fn homebrew_style_prefix(root: &std::path::Path) -> std::path::PathBuf {
+    root.join("opt").join("homebrew").join("bin")
+}
+
+fn launch_resolved_provider(program: &str) -> String {
+    let spawned = spawn_bare(
+        program,
+        &[],
+        &[("PATH".to_string(), MACOS_LAUNCHD_PATH.to_string())],
+        None,
+    )
+    .expect("spawn resolved provider launcher");
+    let output = spawned
+        .child
+        .wait_with_output()
+        .expect("wait for resolved provider");
+    assert!(
+        output.status.success(),
+        "resolved launcher must exit 0: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[cfg(unix)]
+#[test]
+fn minimal_macos_path_resolves_homebrew_style_provider_for_scheduled_and_interactive_launch() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let prefix = homebrew_style_prefix(temp.path());
+    std::fs::create_dir_all(&home).expect("create fake HOME");
+    std::fs::create_dir_all(&prefix).expect("create Homebrew-style prefix");
+    let launcher = prefix.join("codex");
+    write_executable(&launcher, "#!/bin/sh\nprintf 'codex-fixture-0.153.4\\n'\n");
+
+    let scheduled = resolve_provider_launcher_with_extra_dirs(
+        "codex",
+        "codex",
+        Some(std::ffi::OsStr::new(MACOS_LAUNCHD_PATH)),
+        Some(&home),
+        None,
+        [prefix.clone()],
+    )
+    .expect("scheduled drain PATH must resolve Homebrew-style launcher");
+    let interactive_path = format!("{MACOS_LAUNCHD_PATH}:{}", prefix.display());
+    let interactive = resolve_provider_launcher_with_extra_dirs(
+        "codex",
+        "codex",
+        Some(std::ffi::OsStr::new(&interactive_path)),
+        Some(&home),
+        None,
+        [prefix.clone()],
+    )
+    .expect("interactive PATH must resolve Homebrew-style launcher");
+    let pilot = resolve_provider_launcher_with_extra_dirs(
+        "codex",
+        "codex",
+        Some(std::ffi::OsStr::new(MACOS_LAUNCHD_PATH)),
+        Some(&home),
+        None,
+        [prefix],
+    )
+    .expect("pilot PATH must resolve Homebrew-style launcher");
+
+    assert_eq!(scheduled, launcher.to_string_lossy());
+    assert_eq!(interactive, scheduled);
+    assert_eq!(pilot, scheduled);
+
+    let scheduled_out = launch_resolved_provider(&scheduled);
+    let interactive_out = launch_resolved_provider(&interactive);
+    assert_eq!(scheduled_out, "codex-fixture-0.153.4\n");
+    assert_eq!(interactive_out, scheduled_out);
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_launcher_path_wins_over_homebrew_style_prefix() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let prefix = homebrew_style_prefix(temp.path());
+    let override_dir = temp.path().join("override");
+    std::fs::create_dir_all(&home).expect("create fake HOME");
+    std::fs::create_dir_all(&prefix).expect("create Homebrew-style prefix");
+    std::fs::create_dir_all(&override_dir).expect("create override dir");
+    write_executable(&prefix.join("codex"), "#!/bin/sh\nprintf 'homebrew\\n'\n");
+    let override_launcher = override_dir.join("codex");
+    write_executable(&override_launcher, "#!/bin/sh\nprintf 'override\\n'\n");
+
+    let resolved = resolve_provider_launcher_with_extra_dirs(
+        "codex",
+        override_launcher.to_str().expect("utf-8 override path"),
+        Some(std::ffi::OsStr::new(MACOS_LAUNCHD_PATH)),
+        Some(&home),
+        None,
+        [prefix],
+    )
+    .expect("explicit path must be preserved");
+
+    assert_eq!(resolved, override_launcher.to_string_lossy());
+    assert_eq!(launch_resolved_provider(&resolved), "override\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn path_executable_wins_over_homebrew_style_fallback() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let prefix = homebrew_style_prefix(temp.path());
+    let path_dir = temp.path().join("path-bin");
+    std::fs::create_dir_all(&home).expect("create fake HOME");
+    std::fs::create_dir_all(&prefix).expect("create Homebrew-style prefix");
+    std::fs::create_dir_all(&path_dir).expect("create PATH dir");
+    write_executable(&prefix.join("codex"), "#!/bin/sh\nprintf 'homebrew\\n'\n");
+    let path_launcher = path_dir.join("codex");
+    write_executable(&path_launcher, "#!/bin/sh\nprintf 'path\\n'\n");
+
+    let resolved = resolve_provider_launcher_with_extra_dirs(
+        "codex",
+        "codex",
+        Some(path_dir.as_os_str()),
+        Some(&home),
+        None,
+        [prefix],
+    )
+    .expect("PATH must beat Homebrew-style fallback");
+
+    assert_eq!(resolved, path_launcher.to_string_lossy());
+    assert_eq!(launch_resolved_provider(&resolved), "path\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn non_executable_homebrew_style_file_is_skipped_and_absent_launcher_stays_permanent() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let prefix = homebrew_style_prefix(temp.path());
+    std::fs::create_dir_all(&home).expect("create fake HOME");
+    std::fs::create_dir_all(&prefix).expect("create Homebrew-style prefix");
+    let stub = prefix.join("codex");
+    std::fs::write(&stub, "#!/bin/sh\nprintf 'not-executable\\n'\n")
+        .expect("write non-executable stub");
+
+    let error = resolve_provider_launcher_with_extra_dirs(
+        "codex",
+        "codex",
+        Some(std::ffi::OsStr::new(MACOS_LAUNCHD_PATH)),
+        Some(&home),
+        None,
+        [prefix.clone()],
+    )
+    .expect_err("non-executable stub must not resolve");
+
+    assert!(error.permanent, "missing launcher must remain permanent");
+    assert!(
+        error.message.contains("provider `codex`"),
+        "error should name the provider: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains(&stub.display().to_string()),
+        "error should name the non-executable candidate: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains("was not found"),
+        "error should stay a missing-launcher diagnostic: {}",
+        error.message
     );
 }
 

@@ -28,6 +28,14 @@ const DEFAULT_MACOS_CA_CERTIFICATE: &str = "/etc/ssl/cert.pem";
 /// and child-env construction cannot drift. [ORB-10909]
 const CONVENTIONAL_HOME_BIN_DIRS: &[&str] = &[".local/bin", ".orbit/bin", ".cargo/bin", "bin"];
 
+/// Portable supported-launcher prefixes searched after `PATH` and `$HOME`
+/// bins, and backfilled into the spawned agent `PATH`. These are OS package
+/// prefixes, not user directories: Apple Silicon Homebrew, then the Intel
+/// Homebrew / `/usr/local` prefix. launchd's default `PATH` omits both, which
+/// is why a scheduled Mac drain cannot find `/opt/homebrew/bin/codex` while
+/// an interactive shell can. [ORB-11808]
+pub(crate) const SUPPORTED_SYSTEM_BIN_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
+
 /// Typed spawn failure with a retryability classification (ORB-10006).
 ///
 /// `permanent: true` marks failures that retrying cannot fix — the step
@@ -262,14 +270,20 @@ pub(crate) fn orbit_tool_env_with(
         }
     }
     // Service/routine dispatch often inherits a PATH that omits cargo and
-    // other login-shell bins. Backfill the same conventional home dirs
-    // `resolve_provider_launcher_with` already searches so `cargo test`
-    // inside the spawned agent is not "command not found". [ORB-10909]
+    // other login-shell bins. Backfill the same conventional home dirs and
+    // supported system prefixes `resolve_provider_launcher_with` already
+    // searches so `cargo test` and Homebrew-installed tools inside the
+    // spawned agent are not "command not found". [ORB-10909] [ORB-11808]
     if let Some(home) = home {
         for dir in conventional_home_bin_dirs(home) {
             if seen.insert(dir.clone()) {
                 path_entries.push(dir);
             }
+        }
+    }
+    for dir in supported_system_bin_dirs() {
+        if seen.insert(dir.clone()) {
+            path_entries.push(dir);
         }
     }
     let pinned_path = std::env::join_paths(path_entries)
@@ -299,6 +313,28 @@ fn conventional_home_bin_dirs(home: &Path) -> impl Iterator<Item = PathBuf> + '_
         .map(|relative| home.join(relative))
 }
 
+fn supported_system_bin_dirs() -> impl Iterator<Item = PathBuf> {
+    SUPPORTED_SYSTEM_BIN_DIRS.iter().map(PathBuf::from)
+}
+
+fn is_launchable_file(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 // pub(crate) widened for sibling tests under the repository's enforced test layout.
 pub(crate) fn resolve_provider_launcher_with(
     provider: &str,
@@ -306,6 +342,28 @@ pub(crate) fn resolve_provider_launcher_with(
     path: Option<&OsStr>,
     home: Option<&Path>,
     cwd: Option<&Path>,
+) -> Result<String, SpawnError> {
+    resolve_provider_launcher_with_extra_dirs(
+        provider,
+        program,
+        path,
+        home,
+        cwd,
+        supported_system_bin_dirs(),
+    )
+}
+
+/// Test-injectable resolver: production calls
+/// [`resolve_provider_launcher_with`], which supplies the supported system
+/// prefixes. Tests pass a temporary Homebrew-style prefix rather than
+/// writing into `/opt/homebrew/bin`.
+pub(crate) fn resolve_provider_launcher_with_extra_dirs(
+    provider: &str,
+    program: &str,
+    path: Option<&OsStr>,
+    home: Option<&Path>,
+    cwd: Option<&Path>,
+    extra_bin_dirs: impl IntoIterator<Item = PathBuf>,
 ) -> Result<String, SpawnError> {
     let configured = Path::new(program);
     if configured.components().count() > 1 {
@@ -333,12 +391,17 @@ pub(crate) fn resolve_provider_launcher_with(
             }
         }
     }
+    for dir in extra_bin_dirs {
+        if seen.insert(dir.clone()) {
+            search_dirs.push(dir);
+        }
+    }
 
     let mut searched = Vec::with_capacity(search_dirs.len());
     for dir in search_dirs {
         let candidate = dir.join(program);
         searched.push(candidate.clone());
-        if candidate.is_file() {
+        if is_launchable_file(&candidate) {
             return Ok(candidate.to_string_lossy().into_owned());
         }
         #[cfg(windows)]
@@ -346,7 +409,7 @@ pub(crate) fn resolve_provider_launcher_with(
             for extension in windows_executable_extensions() {
                 let candidate = dir.join(format!("{program}{extension}"));
                 searched.push(candidate.clone());
-                if candidate.is_file() {
+                if is_launchable_file(&candidate) {
                     return Ok(candidate.to_string_lossy().into_owned());
                 }
             }

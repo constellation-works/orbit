@@ -589,11 +589,15 @@ After [ORB-10456], every bare provider launcher is resolved before audit and
 spawn at the shared `orbit-engine` CLI boundary ([Provider launchers resolve at the shared CLI spawn boundary](./4_decisions.md#provider-launchers-resolve-at-the-shared-cli-spawn-boundary)). Lookup preserves
 configured paths verbatim; bare names search the process `PATH` first, then
 portable user-local directories derived from `HOME` (`.local/bin`,
-`.orbit/bin`, `.cargo/bin`, and `bin`). Dashboard Ship, routine sweep,
-`orbit run ship`, and direct job execution all converge on this boundary, so
-none depends solely on the environment inherited by its entry process. A
-missing launcher remains a permanent failure, but the diagnostic names the
-provider and every path Orbit searched.
+`.orbit/bin`, `.cargo/bin`, and `bin`), then portable supported system
+prefixes (`/opt/homebrew/bin`, `/usr/local/bin`) so a launchd-minimal Mac
+`PATH` still finds Homebrew-installed provider CLIs ([ORB-11808]). Searched
+candidates must be regular files with execute permission on Unix; explicit
+overrides skip that search. Dashboard Ship, routine sweep, `orbit run ship`,
+and direct job execution all converge on this boundary, so none depends solely
+on the environment inherited by its entry process. A missing launcher remains
+a permanent failure, but the diagnostic names the provider and every path
+Orbit searched.
 
 After [T20260430-15], the CLI stdin envelope carries rendered activity input and durable `run_id` beside instruction, prompt, tools, and model. [ORB-11069] defines `tools` there as the computed effective list and adds the task's requested `required_tools`; the child also receives the effective list in `ORBIT_ACTIVITY_TOOLS`. When input identifies one task, orbit-core embeds a canonical task snapshot with `input.workspace_path` / `input.repo_root` taking precedence over stored paths. After [T20260508-8], agent dispatch also uses a shared workspace resolver for subprocess cwd: `input.workspace_path`, then `task.workspace_path`, then best-effort `ToolContext.workspace_root`. Declared input/task paths must already be directories; stale worktrees fail as `CliInvocationFailed` before `CliInvocationStarted` is emitted. After [T20260505-10], Orbit-managed CLI subprocesses receive `ORBIT_RUN_ID` plus an Orbit-managed run-context marker; `orbit tool run` requires both before it populates `ToolContext` reservation ownership. Direct manual CLI tool calls, including calls with only `ORBIT_RUN_ID`, remain unowned.
 
@@ -1021,6 +1025,7 @@ Read-only history does not need the same dependencies as live execution. [T20260
 - **[ORB-10414]** — Make HTTP replay an explicit default-off cargo feature and keep replay environment variables inert in default builds.
 - **[ORB-10434]** — Extend the replay opt-in to orbit-core (`orbit-core/replay`) so its fixture-backed v2_host test keeps running hermetically instead of demanding a live credential.
 - **[ORB-10456]** — Resolve provider launchers at the shared CLI spawn boundary and report provider-aware searched-location diagnostics.
+- **[ORB-11808]** — Search portable Homebrew `/opt/homebrew/bin` and `/usr/local/bin` prefixes after `PATH` and `$HOME` bins so scheduled Mac drains resolve the same launcher as interactive launches.
 - **[ORB-10461]** — Persist detached pipeline-worker output by run id and terminalize pre-claim exits with the captured startup diagnostic.
 - **[ORB-10464]** — Verify that done dependencies are delivered into the pinned base before a worktree is created.
 - **[ORB-10499]** — Identify the bounded post-recovery attempt as the duplicate implement invocation, and let a re-dispatched attempt exit on a write-gated task.
