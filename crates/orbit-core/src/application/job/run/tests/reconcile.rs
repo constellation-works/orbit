@@ -264,6 +264,8 @@ fn concurrent_terminal_outcomes_win_before_stale_interruption_revalidation() {
             .get_job_run_backend(&run.run_id)
             .expect("read stale snapshot")
             .expect("stale run exists");
+        reserve_for_run(&runtime, &run.run_id, "file:src/reconcile-race.rs");
+        reserve_for_run(&runtime, "jrun-unrelated", "file:src/unrelated.rs");
 
         let reconciled = runtime
             .reconcile_stale_job_run_after_classification(&stale_snapshot, || {
@@ -283,6 +285,15 @@ fn concurrent_terminal_outcomes_win_before_stale_interruption_revalidation() {
             step.state != JobRunState::Interrupted
                 && step.error_code.as_deref() != Some(TERMINAL_OUTCOME_CONFLICT_CODE)
         }));
+        let owners = active_reservation_owners(&runtime);
+        assert!(
+            owners.iter().any(|owner| owner == &run.run_id),
+            "{terminal_state} winner must keep its reservation"
+        );
+        assert!(
+            owners.iter().any(|owner| owner == "jrun-unrelated"),
+            "unrelated reservations must stay"
+        );
     }
 }
 
@@ -495,4 +506,190 @@ fn list_job_runs_reconciles_before_state_filtering() {
             .iter()
             .any(|candidate| candidate.run_id == run.run_id)
     );
+}
+
+/// [ORB-11603] A worker may replace the recorded owner after the sweep
+/// classified a stale snapshot. The freshness reread must observe the new
+/// owner and must not interrupt or release reservations.
+#[cfg(unix)]
+#[test]
+fn concurrent_owner_change_after_stale_classification_is_not_interrupted() {
+    use orbit_common::process::identity::process_start_identity_token;
+
+    let (_root, runtime) = test_runtime();
+    let run = insert_pending_run(&runtime, "qa_reconcile_owner_race");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now() - Duration::seconds(3), 999_999)
+        .expect("mark stale running");
+    let stale_snapshot = runtime
+        .get_job_run_backend(&run.run_id)
+        .expect("read stale snapshot")
+        .expect("stale run exists");
+    reserve_for_run(&runtime, &run.run_id, "file:src/owner-race.rs");
+    reserve_for_run(&runtime, "jrun-unrelated", "file:src/unrelated.rs");
+
+    let pid = std::process::id();
+    let Some(token) = process_start_identity_token(pid) else {
+        return;
+    };
+
+    let reconciled = runtime
+        .reconcile_stale_job_run_after_classification(&stale_snapshot, || {
+            set_run_owner(&runtime, &run, pid, Some(token.as_str()));
+        })
+        .expect("reconcile after owner change");
+
+    assert!(
+        !reconciled,
+        "a live replacement owner must prevent interruption"
+    );
+    let stored = runtime
+        .get_job_run_backend(&run.run_id)
+        .expect("read winner")
+        .expect("run exists");
+    assert_eq!(stored.state, JobRunState::Running);
+    assert!(stored.finished_at.is_none());
+    let owners = active_reservation_owners(&runtime);
+    assert!(
+        owners.iter().any(|owner| owner == &run.run_id),
+        "live replacement owner must keep its reservation"
+    );
+    assert!(
+        owners.iter().any(|owner| owner == "jrun-unrelated"),
+        "unrelated reservations must stay"
+    );
+}
+
+/// [ORB-11603] List and history repair incomplete terminal timing on the
+/// second pass without requiring a stale-owner classification.
+#[test]
+fn list_and_history_repair_terminal_run_missing_timing() {
+    let (_root, runtime) = test_runtime();
+    let run = insert_pending_run(&runtime, "qa_list_terminal");
+    let started_at = Utc::now() - Duration::seconds(8);
+    let finished_at = started_at + Duration::seconds(5);
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, started_at, std::process::id())
+        .expect("mark running");
+    runtime
+        .stores()
+        .jobs()
+        .finalize_job_run(&run.run_id, JobRunState::Success, finished_at, Some(5_000))
+        .expect("finalize success");
+    let finalized = runtime
+        .get_job_run_backend(&run.run_id)
+        .expect("read finalized")
+        .expect("run exists");
+    strip_run_timing(&runtime, &finalized);
+    write_run_finished_audit(&runtime, &run.run_id, finished_at);
+
+    let listed = runtime
+        .list_job_runs(JobRunListParams {
+            job_id: Some("qa_list_terminal".to_string()),
+            ..JobRunListParams::default()
+        })
+        .expect("list repaired");
+    let listed_run = listed
+        .iter()
+        .find(|candidate| candidate.run_id == run.run_id)
+        .expect("listed repaired run");
+    assert_eq!(listed_run.state, JobRunState::Success);
+    assert_eq!(listed_run.finished_at, Some(finished_at));
+    assert_eq!(listed_run.duration_ms, Some(5_000));
+
+    strip_run_timing(&runtime, listed_run);
+    let history = runtime
+        .job_history("qa_list_terminal")
+        .expect("history repaired");
+    let history_run = history
+        .iter()
+        .find(|candidate| candidate.run_id == run.run_id)
+        .expect("history repaired run");
+    assert_eq!(history_run.state, JobRunState::Success);
+    assert_eq!(history_run.finished_at, Some(finished_at));
+    assert_eq!(history_run.duration_ms, Some(5_000));
+}
+
+/// [ORB-11603] Unchanged healthy pending/running owners are classified once
+/// per list/history call. A later call classifies again (pass-local reuse
+/// does not cross calls). Stale finalization may probe again after rereading
+/// and is covered separately by the race fixtures.
+#[cfg(unix)]
+#[test]
+fn list_and_history_classify_unchanged_healthy_owners_once() {
+    use super::super::owner::reset_classify_owner_snapshots;
+    use orbit_common::process::identity::process_start_identity_token;
+
+    let pid = std::process::id();
+    if process_start_identity_token(pid).is_none() {
+        return;
+    }
+
+    let (_root, runtime) = test_runtime();
+    let pending = insert_pending_run(&runtime, "qa_probe_pending");
+    assert!(
+        runtime
+            .stores()
+            .jobs()
+            .claim_pending_job_run_owner(&pending.run_id, pid)
+            .expect("claim pending")
+    );
+    let running = insert_pending_run(&runtime, "qa_probe_running");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&running.run_id, Utc::now(), pid)
+        .expect("mark running");
+
+    reset_classify_owner_snapshots();
+    let listed = runtime
+        .list_job_runs(JobRunListParams::default())
+        .expect("list healthy owners");
+    assert!(listed.iter().any(|candidate| {
+        candidate.run_id == pending.run_id && candidate.state == JobRunState::Pending
+    }));
+    assert!(listed.iter().any(|candidate| {
+        candidate.run_id == running.run_id && candidate.state == JobRunState::Running
+    }));
+    assert_one_classification_per_run(&[pending.run_id.as_str(), running.run_id.as_str()]);
+
+    reset_classify_owner_snapshots();
+    let history = runtime
+        .job_history("qa_probe_pending")
+        .expect("history healthy pending");
+    assert!(
+        history
+            .iter()
+            .any(|candidate| candidate.run_id == pending.run_id)
+    );
+    assert_one_classification_per_run(&[pending.run_id.as_str()]);
+
+    reset_classify_owner_snapshots();
+    runtime
+        .list_job_runs(JobRunListParams::default())
+        .expect("list healthy owners again");
+    assert_one_classification_per_run(&[pending.run_id.as_str(), running.run_id.as_str()]);
+}
+
+#[cfg(unix)]
+fn assert_one_classification_per_run(run_ids: &[&str]) {
+    use super::super::owner::classify_owner_snapshots;
+
+    let snapshots = classify_owner_snapshots();
+    for run_id in run_ids {
+        let matches: Vec<_> = snapshots
+            .iter()
+            .filter(|snapshot| snapshot.run_id == *run_id)
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "run {run_id} classified {} times in one list/history operation: {matches:?}; all={snapshots:?}",
+            matches.len()
+        );
+    }
 }
