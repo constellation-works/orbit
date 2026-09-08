@@ -20,6 +20,9 @@ use std::thread;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(all(test, unix))]
+use std::cell::RefCell;
+
 #[cfg(unix)]
 pub(super) const RUN_OWNER_TERMINATION_GRACE: Duration = Duration::from_secs(2);
 #[cfg(unix)]
@@ -354,6 +357,8 @@ pub(super) enum OwnerIdentity {
 
 #[cfg(unix)]
 pub(super) fn classify_run_owner(run: &JobRun) -> OwnerIdentity {
+    #[cfg(test)]
+    record_classify_owner_snapshot(run);
     classify_run_owner_with_probes(
         run.pid,
         run.pid_start_time.as_deref(),
@@ -525,4 +530,44 @@ pub(super) fn stale_job_run_message(run: &JobRun, _reason: Option<()>) -> String
             .unwrap_or_else(|| "-".to_string()),
         run.pid_start_time.as_deref().unwrap_or("-")
     )
+}
+
+/// One `classify_run_owner` observation, used by list/history counting fixtures
+/// to prove a single list/history call classifies an unchanged owner snapshot
+/// at most once. Stale finalization may classify again after rereading.
+#[cfg(all(test, unix))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ClassifyOwnerSnapshot {
+    pub run_id: String,
+    pub state: JobRunState,
+    pub pid: Option<u32>,
+    pub pid_start_time: Option<String>,
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    static CLASSIFY_OWNER_SNAPSHOTS: RefCell<Vec<ClassifyOwnerSnapshot>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(all(test, unix))]
+fn record_classify_owner_snapshot(run: &JobRun) {
+    CLASSIFY_OWNER_SNAPSHOTS.with(|snapshots| {
+        snapshots.borrow_mut().push(ClassifyOwnerSnapshot {
+            run_id: run.run_id.clone(),
+            state: run.state,
+            pid: run.pid,
+            pid_start_time: run.pid_start_time.clone(),
+        });
+    });
+}
+
+#[cfg(all(test, unix))]
+pub(super) fn reset_classify_owner_snapshots() {
+    CLASSIFY_OWNER_SNAPSHOTS.with(|snapshots| snapshots.borrow_mut().clear());
+}
+
+#[cfg(all(test, unix))]
+pub(super) fn classify_owner_snapshots() -> Vec<ClassifyOwnerSnapshot> {
+    CLASSIFY_OWNER_SNAPSHOTS.with(|snapshots| snapshots.borrow().clone())
 }
