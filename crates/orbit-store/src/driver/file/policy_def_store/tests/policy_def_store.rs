@@ -12,8 +12,8 @@ fn baseline_def(name: &str) -> PolicyDef {
         deny_read: Vec::new(),
         deny_modify: Vec::new(),
         fs_profiles: HashMap::new(),
-        created_at: now,
-        updated_at: now,
+        created_at: Some(now),
+        updated_at: Some(now),
     }
 }
 

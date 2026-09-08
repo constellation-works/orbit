@@ -142,8 +142,8 @@ fn seed_local_shell_executor(runtime: &OrbitRuntime, name: &str, executor_type: 
             )]),
             sandbox: None,
             allow_fallback: false,
-            created_at: now,
-            updated_at: now,
+            created_at: Some(now),
+            updated_at: Some(now),
         })
         .expect("seed local shell executor");
 }
