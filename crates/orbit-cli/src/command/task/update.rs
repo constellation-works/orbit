@@ -17,12 +17,12 @@ pub struct TaskUpdateArgs {
     /// New description (empty string clears)
     #[arg(long)]
     pub description: Option<String>,
-    /// Acceptance criteria. Repeat the flag for multiple criteria.
+    /// Replacement acceptance criteria. Repeat the flag for multiple criteria.
     #[arg(long = "acceptance-criteria")]
     pub acceptance_criteria: Vec<String>,
-    /// Comma-separated dependency task IDs (empty string clears)
-    #[arg(long, alias = "dependency")]
-    pub dependencies: Option<String>,
+    /// Replacement dependency task IDs. Repeat or comma-separate for multiple dependencies (empty string clears).
+    #[arg(long, alias = "dependency", action = ArgAction::Append, value_delimiter = ',')]
+    pub dependencies: Vec<String>,
     /// Replacement task tags. Repeat or comma-separate for multiple tags.
     #[arg(long = "tag", action = ArgAction::Append, value_delimiter = ',')]
     pub tags: Vec<String>,
@@ -62,10 +62,10 @@ pub struct TaskUpdateArgs {
     /// Named crew responsible for orchestration attribution (empty string clears)
     #[arg(long)]
     pub orchestrator: Option<String>,
-    /// Comma-separated task context selectors (empty string clears). Prefer
-    /// `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded.
-    #[arg(long = "context", alias = "context-files")]
-    pub context_files: Option<String>,
+    /// Replacement task context selectors. Repeat or comma-separate for multiple selectors (empty string clears).
+    /// Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded.
+    #[arg(long = "context", alias = "context-files", action = ArgAction::Append, value_delimiter = ',')]
+    pub context_files: Vec<String>,
     /// Task artifact write in `path=content` form. Repeat for multiple artifacts.
     #[arg(long = "artifact")]
     pub artifacts: Vec<String>,
@@ -194,7 +194,7 @@ impl Execute for TaskUpdateArgs {
             }
         });
         let acceptance_criteria = (!acceptance_criteria.is_empty()).then_some(acceptance_criteria);
-        let dependencies = dependencies.map(|value| crate::parse::csv_to_vec(&value));
+        let dependencies = parse_replacement_list(dependencies);
         let tags = (!tags.is_empty()).then_some(tags);
         let upsert_artifacts = parse_artifact_args(&artifacts)?;
         let (agent, model) = super::mutation_identity(model);
@@ -219,7 +219,7 @@ impl Execute for TaskUpdateArgs {
                 job_run_id,
                 crew,
                 orchestrator,
-                context_files: context_files.map(|c| crate::parse::csv_to_vec(&c)),
+                context_files: parse_replacement_list(context_files),
                 upsert_artifacts,
                 ..Default::default()
             },
@@ -233,6 +233,15 @@ impl Execute for TaskUpdateArgs {
         )
         .into())
     }
+}
+
+fn parse_replacement_list(values: Vec<String>) -> Option<Vec<String>> {
+    (!values.is_empty()).then(|| {
+        values
+            .into_iter()
+            .flat_map(|value| crate::parse::csv_to_vec(&value))
+            .collect()
+    })
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
