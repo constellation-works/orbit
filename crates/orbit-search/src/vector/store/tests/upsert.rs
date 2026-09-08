@@ -398,6 +398,10 @@ impl Embedder for BarrierEmbedder {
     fn token_count(&self, text: &str) -> Result<usize, OrbitError> {
         self.inner.token_count(text)
     }
+
+    fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError> {
+        self.inner.token_boundaries(text)
+    }
 }
 
 struct FailingEmbedder {
@@ -423,5 +427,9 @@ impl Embedder for FailingEmbedder {
 
     fn token_count(&self, text: &str) -> Result<usize, OrbitError> {
         self.inner.token_count(text)
+    }
+
+    fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError> {
+        self.inner.token_boundaries(text)
     }
 }
