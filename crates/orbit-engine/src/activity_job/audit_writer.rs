@@ -45,7 +45,9 @@ pub struct V2AuditWriter {
     workspace_path: Option<String>,
     inner: Arc<dyn AuditSink>,
     envelope_sink: Option<Arc<dyn EnvelopeSink>>,
+    #[cfg(any(test, feature = "test-support"))]
     events: Mutex<Vec<V2AuditEvent>>,
+    emitted_event_count: AtomicU64,
     event_counter: Mutex<u64>,
     parent_stacks: Mutex<HashMap<ThreadId, Vec<String>>>,
     /// [ORB-00414] Count of audit-write failures observed this run. Non-fatal
@@ -82,7 +84,9 @@ impl V2AuditWriter {
             workspace_path: None,
             inner,
             envelope_sink: None,
+            #[cfg(any(test, feature = "test-support"))]
             events: Mutex::new(Vec::new()),
+            emitted_event_count: AtomicU64::new(0),
             event_counter: Mutex::new(0),
             parent_stacks: Mutex::new(HashMap::new()),
             audit_failures: AtomicU64::new(0),
@@ -176,13 +180,17 @@ impl V2AuditWriter {
             // [ORB-00414] SQLite persistence failures should not crash the run,
             // but must be observable: record the failure (counter + tracing
             // error) instead of swallowing it. Emitting the event to the
-            // in-memory snapshot below is still the load-bearing path.
+            // Event emission is still counted below, so run results reflect
+            // the complete set of attempted envelope writes.
             self.note_audit_failure(event.envelope.event_type.as_str(), &error);
         }
+        #[cfg(any(test, feature = "test-support"))]
         self.events
             .lock()
             .map_err(|_| WriteError::Poisoned)?
             .push(event);
+
+        self.emitted_event_count.fetch_add(1, Ordering::Relaxed);
         Ok(event_id)
     }
 
@@ -342,7 +350,14 @@ impl V2AuditWriter {
         })
     }
 
-    /// Snapshot of emitted events (for smoke verification).
+    /// Number of envelope events emitted during this run.
+    pub fn emitted_event_count(&self) -> u64 {
+        self.emitted_event_count.load(Ordering::Relaxed)
+    }
+
+    /// Snapshot of emitted events, retained only for tests that inspect
+    /// envelope contents.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn events_snapshot(&self) -> Result<Vec<V2AuditEvent>, WriteError> {
         Ok(self
             .events
