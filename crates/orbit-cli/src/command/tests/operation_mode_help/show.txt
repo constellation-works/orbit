@@ -6,6 +6,7 @@ Arguments:
   <ID>  Grant ID, as printed by `orbit operation list`
 
 Options:
-      --json         Output as JSON
-      --root <ROOT>  Override the Orbit root directory (highest precedence)
-  -h, --help         Print help
+      --json                  Output as JSON
+      --root <ROOT>           Override the Orbit root directory (highest precedence)
+      --workspace <SELECTOR>  Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory
+  -h, --help                  Print help

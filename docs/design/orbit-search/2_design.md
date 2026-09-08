@@ -270,7 +270,7 @@ Either retriever alone has a failure mode the other doesn't. RRF resolves both a
 orbit semantic install   [--model bge-small | minilm-l6 | nomic-v1.5] [--force]
 orbit semantic uninstall [--model MODEL] [--all]
 orbit search <query> [--hybrid] [--kind task|doc|friction|all] [--limit N]
-                     [--workspace SELECTOR]... [--all-workspaces]
+                     [--workspaces SELECTOR]... [--all-workspaces]
 orbit search similar <task-id> [--limit N]
 orbit search path <path> [--kind task|doc|friction|all] [--limit N]
 orbit semantic index     [--force] [--model MODEL] [--kind tasks|docs|all]
@@ -286,7 +286,7 @@ orbit semantic stats
 
 If the companion is not installed, `orbit search similar <task-id>`, `orbit semantic index`, and `orbit docs index` exit non-zero with: `"Semantic search not enabled. Run \`orbit semantic install\` to download the inference companion."` Hybrid task and doc search are softer: they emit a warning/note and fall back to lexical results.
 
-`--workspace` and `--all-workspaces` select the federated scope described in [§6.4](#64-cross-workspace-federated-search). They apply to the free-text form only; `similar` and `path` are single-workspace by construction.
+`--workspaces` and `--all-workspaces` select the federated scope described in [§6.4](#64-cross-workspace-federated-search). They apply to the free-text form only; `similar` and `path` are single-workspace by construction. `--workspaces` is deliberately distinct from the global `orbit --workspace` routing selector.
 
 ### 6.2 MCP tools
 

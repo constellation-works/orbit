@@ -45,10 +45,10 @@ pub struct SearchCommand {
     /// came from. Accepts a registered name, a `ws_*` ID, or an absolute
     /// checkout path. Distinct from the top-level `orbit --workspace`, which
     /// binds the whole invocation to one checkout.
-    #[arg(long = "workspace", action = ArgAction::Append, value_delimiter = ',', value_name = "SELECTOR")]
+    #[arg(long, action = ArgAction::Append, value_delimiter = ',', value_name = "SELECTOR")]
     pub workspaces: Vec<String>,
     /// Search every active workspace registered on this machine. Overrides
-    /// `--workspace`.
+    /// `--workspaces`.
     #[arg(long)]
     pub all_workspaces: bool,
     /// Output as JSON.
