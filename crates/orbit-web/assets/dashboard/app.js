@@ -26,6 +26,7 @@ import {
   setActiveRunDetail,
   getActiveRunEvents,
   setActiveRunEvents,
+  setActiveRunEventsError,
   getActiveRunLogs,
   setActiveRunLogs,
   getActiveRunSubtab,
@@ -1421,9 +1422,10 @@ function fetchAndRenderRunEvents() {
     setActiveRunEvents(events);
     renderRunEvents();
     renderRunGantt();
-  }).catch(() => {
-    // Missing v2 events file is non-fatal — run detail still renders.
+  }).catch((error) => {
     setActiveRunEvents([]);
+    if (error.status !== 404) setActiveRunEventsError(error.message);
+    renderRunEvents();
     renderRunGantt();
   });
 }

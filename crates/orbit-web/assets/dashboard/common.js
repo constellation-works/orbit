@@ -253,8 +253,18 @@ export function stateCell(state) {
 
 export function fetchJson(path) {
   return fetch(withWorkspace(path), { headers: { accept: "application/json" } })
-    .then(res => {
-      if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+    .then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text();
+        let message = `${path}: HTTP ${res.status}`;
+        try {
+          const body = JSON.parse(text);
+          if (body && body.error) message = body.error;
+        } catch (_) {}
+        const error = new Error(message);
+        error.status = res.status;
+        throw error;
+      }
       return res.json();
     });
 }
