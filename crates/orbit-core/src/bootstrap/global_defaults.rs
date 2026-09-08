@@ -13,8 +13,11 @@
 //! The stamp answers exactly one question: *did this binary already reconcile
 //! this root?* It deliberately says nothing about what the root looks like now.
 //! Repairing a root whose managed files were edited or deleted by hand belongs
-//! to the explicit paths — `orbit init`, `orbit workspace sync`, and
-//! `orbit doctor` — which never consult the stamp.
+//! to the explicit paths — `orbit init` and `orbit workspace sync` — which
+//! never consult the stamp. `orbit doctor` also never consults the stamp: it
+//! compares each previously reconciled managed catalog against the embedded
+//! default set and reports a missing shipped default instead of calling the
+//! root healthy. Restoration remains `orbit init` / `orbit workspace sync`.
 
 use std::fs;
 use std::path::{Path, PathBuf};

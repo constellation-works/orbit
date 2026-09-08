@@ -4,8 +4,8 @@ summary: Check Orbit workspace, database, dashboard, log-sink, job-run, and rout
 tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
-related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986]
-last_validated: 2026-08-31
+related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791]
+last_validated: 2026-09-08
 ---
 
 # Check Orbit Health
@@ -28,7 +28,7 @@ Every check degrades to a row rather than aborting unless the store itself canno
 | `job-runs` | orphaned `pending` or `running` runs with no live worker process |
 | `task-reservations` | active reservations whose owner run or terminal task association proves the reservation stale |
 | `task-relations` | unresolved relation/dependency targets that would block a task-index rebuild |
-| `artifacts-*` | skills, jobs, activities, auto-tasks, and routines on disk: stale, deprecated, residual, or catalog-invalid |
+| `artifacts-*` | skills, jobs, activities, auto-tasks, and routines on disk: stale, deprecated, residual, catalog-invalid, or a previously reconciled shipped default that is missing |
 
 Example:
 
@@ -83,13 +83,15 @@ recovery, job cancellation, graph cleanup, id-allocation retirement, filesystem 
 task-reservation release, and retired activity-backend cleanup have different evidence and
 safety gates, so each repair remains explicit and safety-scoped.
 
-For definition convergence after installing a new Orbit binary, use `orbit workspace sync`
-rather than a doctor repair. Sync uses managed manifests to create newly shipped definitions,
-refresh or retire only provably unedited Orbit-written instances, migrate legacy routine
-provenance, and preserve operator content. `orbit workspace sync --check` is the read-only fleet
-inspection form. Doctor continues to diagnose invalid/stale artifacts and perform only the
-specific repair named by an individual flag; neither command upgrades the binary or pulls a
-remote repository.
+For definition convergence after installing a new Orbit binary, or to restore a shipped
+default that was deleted by hand, use `orbit workspace sync` rather than a doctor repair.
+Sync uses managed manifests to create newly shipped definitions, refresh or retire only
+provably unedited Orbit-written instances, migrate legacy routine provenance, and preserve
+operator content. `orbit workspace sync --check` is the read-only fleet inspection form.
+Doctor reports a missing shipped default as an `artifacts-*` error (it does not consult the
+warm-open defaults stamp, and it does not rewrite the file); run `orbit init` or
+`orbit workspace sync` to restore it. Doctor performs only the specific repair named by an
+individual flag; neither command upgrades the binary or pulls a remote repository.
 
 ### Repair retired activity backends
 
