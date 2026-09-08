@@ -56,6 +56,37 @@ fn parallel_join_all_fails_when_any_branch_fails() {
 }
 
 #[test]
+fn parallel_panic_is_recorded_as_a_failed_branch() {
+    let host = ScriptedHost::new([
+        ("a", vec![Action::Ok(json!({"a": true}))]),
+        ("b", vec![Action::Panic]),
+    ]);
+    let job = job_with_steps(vec![parallel_step(
+        "fan",
+        JoinMode::All,
+        vec![target_step("br_a", "a"), target_step("br_b", "b")],
+    )]);
+    let writer = std::sync::Arc::new(test_writer("run-par-panic"));
+    let err = execute_job(&job, Value::Null, "run-par-panic", writer.clone(), &host)
+        .expect_err("a panicked branch must fail the block without panicking the job thread");
+
+    assert!(
+        matches!(err, DispatchError::JobExecution(message) if message.contains("branch thread panicked"))
+    );
+    let events = writer.events_snapshot().expect("audit");
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        V2AuditEventKind::StepJoin { branch_outcomes, .. }
+            if branch_outcomes.iter().any(|branch| branch.branch_id == "br_b" && branch.outcome == "error")
+    )));
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        V2AuditEventKind::StepFinished { step_id, outcome, .. }
+            if step_id == "fan" && outcome == "error"
+    )));
+}
+
+#[test]
 fn parallel_join_any_succeeds_with_one_branch_success() {
     let host = ScriptedHost::new([
         (

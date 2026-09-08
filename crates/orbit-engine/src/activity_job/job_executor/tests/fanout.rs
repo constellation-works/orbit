@@ -208,6 +208,57 @@ fn fanout_first_error_surfaces_when_join_unsatisfied() {
 }
 
 #[test]
+fn fanout_panic_is_collected_as_a_failed_worker() {
+    let host = ScriptedHost::new([(
+        "w",
+        vec![Action::PanicOnInputIteration {
+            field: "worker_index",
+            iteration: 1,
+        }],
+    )]);
+    let mut worker = target_step("worker", "w");
+    match &mut worker.body {
+        JobV2StepBody::Target(target) => {
+            target.default_input = Some(json!({"worker_index": "{{ input.iteration }}"}));
+        }
+        _ => unreachable!("target_step must build a target body"),
+    }
+    let job = job_with_steps(vec![fanout_step(
+        "scatter",
+        "{{ input.items }}",
+        3,
+        worker,
+        JoinMode::All,
+        None,
+    )]);
+    let writer = std::sync::Arc::new(test_writer("run-fanout-panic"));
+    let outcome = execute_job(
+        &job,
+        json!({"items": [0, 1, 2]}),
+        "run-fanout-panic",
+        writer.clone(),
+        &host,
+    )
+    .expect("a panicked worker becomes a failed fan-out outcome");
+
+    assert!(!outcome.success);
+    let pipeline = outcome.pipeline.as_object().expect("pipeline obj");
+    assert_eq!(
+        pipeline.get("scatter"),
+        Some(&json!([{"action": "w"}, null, {"action": "w"}]))
+    );
+    let events = writer.events_snapshot().expect("audit");
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        V2AuditEventKind::FaninJoined {
+            collected: 2,
+            failed: 1,
+            ..
+        }
+    )));
+}
+
+#[test]
 fn fanout_collect_alias_writes_collected_value_under_collect_key() {
     // Invariant: when `fan_in.collect = "results"`, the collected_value is
     // stored under both `pipeline["results"]` and `pipeline[step.id]`.
