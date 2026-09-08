@@ -199,10 +199,84 @@ export const AGGREGATE_PANEL_PLACEHOLDER = "Select a workspace to view this pane
 export function renderPanelPlaceholder(bodyId) {
   const body = document.getElementById(bodyId);
   if (!body) return;
+  panelRequests.delete(bodyId);
+  body.setAttribute("aria-busy", "false");
   const note = el("div", { class: "panel-placeholder", text: AGGREGATE_PANEL_PLACEHOLDER });
   note.dataset.key = "aggregate-placeholder";
   note.dataset.hash = "aggregate-placeholder";
   syncNodes(body, [note]);
+}
+
+// One state per rendered panel. Revision plus request identity rejects A→B→A
+// responses and overlapping refreshes, even when their URLs happen to match.
+const panelRequests = new Map();
+
+function panelMessage(bodyId, state) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
+  body.setAttribute("aria-busy", state.pending ? "true" : "false");
+  let note = Array.from(body.children).find(node => node.dataset.panelStatus);
+  if (!note) {
+    note = el("div", { class: "panel-placeholder" });
+    note.dataset.panelStatus = "true";
+    note.setAttribute("role", "status");
+    note.setAttribute("aria-live", "polite");
+    body.insertBefore(note, body.children[0] || null);
+  }
+  note.className = state.error ? "panel-placeholder action-error" : "panel-placeholder";
+  if (state.error) {
+    const label = state.loaded ? "Refresh failed; showing stale data" : "Unable to load";
+    note.textContent = `${label}: ${state.error.message}. Use Refresh to retry.`;
+  } else if (state.pending) {
+    note.textContent = state.loaded ? "Refreshing… showing previous data." : "Loading…";
+  } else {
+    note.textContent = "Updated.";
+  }
+}
+
+export function panelCanRender(bodyId) {
+  const state = panelRequests.get(bodyId);
+  return !state || state.loaded;
+}
+
+export function resetPanel(bodyId, countId) {
+  const state = { loaded: false, pending: true, countId };
+  panelRequests.set(bodyId, state);
+  const body = document.getElementById(bodyId);
+  if (body) body.textContent = "";
+  const count = document.getElementById(countId);
+  if (count) count.textContent = "—";
+  panelMessage(bodyId, state);
+}
+
+onWorkspaceChange(() => {
+  for (const [bodyId, state] of panelRequests) resetPanel(bodyId, state.countId);
+});
+
+export async function requestPanel(bodyId, scope, request, render, countId) {
+  const revision = getWorkspaceRevision();
+  const previous = panelRequests.get(bodyId);
+  if (!previous || previous.scope !== scope) resetPanel(bodyId, countId);
+  const state = { ...panelRequests.get(bodyId), scope, pending: true, error: null };
+  panelRequests.set(bodyId, state);
+  panelMessage(bodyId, state);
+  const current = () => revision === getWorkspaceRevision() && panelRequests.get(bodyId) === state;
+  try {
+    const payload = await request();
+    if (!current()) return;
+    state.loaded = true;
+    state.pending = false;
+    render(payload);
+  } catch (error) {
+    if (!current()) return;
+    state.error = error;
+    throw error;
+  } finally {
+    if (current()) {
+      state.pending = false;
+      panelMessage(bodyId, state);
+    }
+  }
 }
 
 // Append the selected workspace to an API path, unless one is already present
@@ -251,22 +325,32 @@ export function stateCell(state) {
   return node;
 }
 
-export function fetchJson(path) {
-  return fetch(withWorkspace(path), { headers: { accept: "application/json" } })
-    .then(async (res) => {
-      if (!res.ok) {
-        const text = await res.text();
-        let message = `${path}: HTTP ${res.status}`;
-        try {
-          const body = JSON.parse(text);
-          if (body && body.error) message = body.error;
-        } catch (_) {}
-        const error = new Error(message);
-        error.status = res.status;
-        throw error;
-      }
-      return res.json();
-    });
+export async function fetchJson(path) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const res = await fetch(withWorkspace(path), { headers: { accept: "application/json" }, signal: controller.signal });
+    if (!res.ok) {
+      const text = await res.text();
+      let message = `${path}: HTTP ${res.status}`;
+      try {
+        const body = JSON.parse(text);
+        if (body && body.error) message = body.error;
+      } catch (_) {}
+      const error = new Error(message);
+      error.status = res.status;
+      throw error;
+    }
+    return await res.json();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("Request timed out after 30 seconds");
+    // Fetch and response-body transport failures are TypeErrors; HTTP and JSON
+    // errors describe an available server and must stay local to the panel.
+    error.networkFailure = error instanceof TypeError;
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ORB-10400: task-list endpoints answer a paginated envelope
@@ -308,6 +392,12 @@ export function patchJson(path, body) {
 }
 
 export function syncNodes(container, newNodesArr) {
+  const state = panelRequests.get(container.id);
+  if (state) {
+    panelMessage(container.id, state);
+    const note = Array.from(container.children).find(node => node.dataset.panelStatus);
+    newNodesArr = [note, ...newNodesArr];
+  }
   const oldNodes = Array.from(container.children);
   const oldMap = new Map();
   for (const node of oldNodes) {
@@ -342,4 +432,5 @@ export function syncNodes(container, newNodesArr) {
   while (container.children.length > newNodesArr.length) {
     container.removeChild(container.lastElementChild);
   }
+  if (state) panelMessage(container.id, state);
 }

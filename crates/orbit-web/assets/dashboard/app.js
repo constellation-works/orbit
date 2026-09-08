@@ -1,13 +1,13 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './common.js';
+import { requestPanel, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './audit.js';
 import { renderScoreboard } from './scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './reliability.js';
 import { initLogTail, fitLogPanelToViewport } from './log-tail.js';
-import { renderDiagnostics } from './diagnostics.js';
+import { renderDiagnosticsSideCard, renderDiagnostics } from './diagnostics.js';
 import { renderMarkdown } from './markdown.js';
 import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './router.js';
 import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
@@ -78,13 +78,13 @@ let lastRuns = [];
 let lastRunsMeta = null;
 let lastRunsLoading = true;
 let lastRunSourcesUnavailable = [];
-let lastDiagnostics = { metrics: [], errors: [], incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] };
+let lastDiagnostics = { metrics: null, errors: null, incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] };
 let lastFrictionPayload = { stats: {}, tags: [], items: [] };
 let activeTab = "tasks";
 let activeDiagSubtab = "runs";
 let activeKnowledgeSubtab = "frictions";
 let activeOperationsSubtab = "routines";
-let isRefreshing = false;
+let refreshSequence = 0;
 let activeFrictionId = null;
 let frictionSearchQuery = "";
 let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
@@ -1052,12 +1052,6 @@ function resetHealthStrip() {
   renderSparkline([]);
 }
 
-function fetchAndCacheCrews() {
-  return fetchJson("/api/crews").then((payload) => {
-    return cacheCrewPayload(payload);
-  });
-}
-
 // ORB-10874: the single-workspace list endpoint filters server-side, so the
 // active status chips are sent as `?status=a,b` instead of over-fetching every
 // status and filtering client-side. That keeps the `total`/`limit`/`truncated`
@@ -1087,11 +1081,11 @@ function fetchAndRenderTasks() {
   // previously-selected concrete workspace so the fallback is consistent (a
   // stale, still-enabled crew <select> would PATCH with no workspace).
   if (aggregate) cacheCrewPayload({ crews: [] });
-  const crews = aggregate ? Promise.resolve() : fetchAndCacheCrews();
-  return Promise.all([
+  return requestPanel("tasks-body", path, () => Promise.all([
     fetchJson(path),
-    crews,
-  ]).then(([payload]) => {
+    aggregate ? Promise.resolve({ crews: [] }) : fetchJson("/api/crews"),
+  ]), ([payload, crews]) => {
+    cacheCrewPayload(crews);
     // Both task-list endpoints answer `{ items, total, limit, truncated }`.
     const tasks = listItems(payload);
     lastTasks = tasks;
@@ -1099,7 +1093,7 @@ function fetchAndRenderTasks() {
       ? { total: payload.total, limit: payload.limit, truncated: payload.truncated }
       : null;
     renderTasks(tasks, taskContext());
-  });
+  }, "tasks-count");
 }
 
 // ORB-00030: discover servable workspaces and, in global mode, install a
@@ -1158,13 +1152,6 @@ function buildWorkspaceSelector() {
   select.addEventListener("change", () => {
     setWorkspace(select.value);
     persistScopeToUrl();
-    // Clear the prior scope synchronously. A slower request from that scope is
-    // also discarded in fetchAndRenderRuns, so it cannot repaint stale rows.
-    lastRuns = [];
-    lastRunsMeta = null;
-    lastRunsLoading = true;
-    lastRunSourcesUnavailable = [];
-    renderRuns(lastRuns);
     refreshDashboard();
   });
 
@@ -1296,107 +1283,57 @@ function activeRefreshJobs() {
     }
     if (activeDiagSubtab === "runs") {
       jobs.push(fetchAndRenderRuns());
-    } else if (activeDiagSubtab === "metrics") {
-      jobs.push(
-        fetchJson(`/api/diagnostics/metrics?limit=${DIAG_LIMIT}`).then((rows) => {
-          lastDiagnostics.metrics = rows;
-          renderDiagnostics(diagnosticsContext());
-        })
-      );
-    } else if (activeDiagSubtab === "errors") {
-      jobs.push(
-        fetchJson(`/api/diagnostics/errors?limit=${DIAG_LIMIT}`).then((rows) => {
-          lastDiagnostics.errors = rows;
-          renderDiagnostics(diagnosticsContext());
-        })
-      );
-    } else if (activeDiagSubtab === "incidents") {
-      // ORB-10871: grouped failure incidents. Scoped to the shared dashboard
-      // window so the incident count and the raw failed-event count it states
-      // its denominator against are read off the same cutoff.
+    } else {
+      const subtab = activeDiagSubtab;
       const selectedWindow = getWindow();
-      jobs.push(
-        fetchJson(`/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`).then((payload) => {
-          lastDiagnostics.incidents = payload;
-          renderDiagnostics(diagnosticsContext());
-        })
-      );
+      const path = subtab === "incidents"
+        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`
+        : `/api/diagnostics/${subtab}?limit=${DIAG_LIMIT}`;
+      jobs.push(requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
+        lastDiagnostics[subtab] = payload;
+        if (activeDiagSubtab === subtab && getWindow() === selectedWindow) renderDiagnostics(diagnosticsContext());
+      }, "diag-count"));
     }
 
     jobs.push(
-      Promise.all([
+      requestPanel("diag-implement-one-body", "implement-one", () => Promise.all([
         fetchJson(`/api/diagnostics/implement_one`),
-        fetchJson(`/api/tasks/completion-by-complexity`).catch((e) => {
-          console.error("Failed to fetch completion-by-complexity", e);
-          return { by_complexity: [] };
-        }),
-      ])
-        .then(([implOne, completion]) => {
-          lastDiagnostics.implement_one = implOne.implement_one_by_actor || [];
-          lastDiagnostics.implement_one_by_complexity = implOne.implement_one_by_complexity || [];
-          lastDiagnostics.completion_by_complexity = completion.by_complexity || [];
-          if ($("diagnostics-side-panel")) {
-            renderDiagnostics(diagnosticsContext());
-          }
-        })
-        .catch(e => console.error("Failed to fetch implement_one metrics", e))
+        fetchJson(`/api/tasks/completion-by-complexity`),
+      ]), ([implOne, completion]) => {
+        lastDiagnostics.implement_one = implOne.implement_one_by_actor || [];
+        lastDiagnostics.implement_one_by_complexity = implOne.implement_one_by_complexity || [];
+        lastDiagnostics.completion_by_complexity = completion.by_complexity || [];
+        renderDiagnosticsSideCard(lastDiagnostics, diagnosticsContext());
+      })
     );
   }
   return jobs;
 }
 
 function fetchAndRenderRuns() {
-  const requestedWorkspace = getWorkspace();
   const requestedAggregate = isAggregateView();
   const runFilter = getRunFilter();
-  lastRunsLoading = true;
-  const scopeIsCurrent = () =>
-    requestedWorkspace === getWorkspace() &&
-    requestedAggregate === isAggregateView() &&
-    runFilter === getRunFilter();
-  const request = requestedAggregate
+  return requestPanel("runs-body", runFilter, () => requestedAggregate
     ? fetchJson(`/api/job-runs/all?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`).then((payload) => ({
-        runs: listItems(payload),
-        frictionRows: [],
-        meta: payload,
+        runs: listItems(payload), frictionRows: [], meta: payload,
         unavailable: Array.isArray(payload && payload.unavailable) ? payload.unavailable : [],
       }))
     : Promise.all([
         fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`),
         fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`),
       ]).then(([payload, frictionRows]) => ({
-        runs: listItems(payload),
-        frictionRows,
-        meta: payload,
-        unavailable: [],
-      }));
-
-  return request.then(({ runs, frictionRows, meta, unavailable }) => {
-    if (!scopeIsCurrent()) return;
+        runs: listItems(payload), frictionRows, meta: payload, unavailable: [],
+      })), ({ runs, frictionRows, meta, unavailable }) => {
     lastRuns = mergeRunsWithFriction(runs, frictionRows);
     lastRunsMeta = meta;
     lastRunsLoading = false;
     lastRunSourcesUnavailable = unavailable;
     renderRuns(lastRuns);
-  }).catch((error) => {
-    if (scopeIsCurrent()) {
-      const workspace = dashboardWorkspaces.find((entry) => entry.id === requestedWorkspace);
-      lastRuns = [];
-      lastRunsMeta = null;
-      lastRunsLoading = false;
-      lastRunSourcesUnavailable = [{
-        workspace_id: requestedWorkspace,
-        workspace_name: requestedAggregate ? "All workspaces" : (workspace && workspace.name) || requestedWorkspace || "workspace",
-        error: error.message || "run query failed",
-      }];
-      renderRuns(lastRuns);
-    }
-    throw error;
-  });
+  }, "diag-count");
 }
 
 function fetchAndRenderTaskLocks() {
-  return fetchJson("/api/tasks/locks").then(renderLocksPanel);
+  return requestPanel("locks-body", "locks", () => fetchJson("/api/tasks/locks"), renderLocksPanel, "locks-count");
 }
 
 function fetchAndRenderRunDetail() {
@@ -1439,7 +1376,7 @@ function fetchAndRenderRunLogs() {
 }
 
 function fetchAndRenderSummary() {
-  return fetchJson(`/api/audit/summary?since=24h`).then((data) => {
+  return requestPanel("audit-summary-body", "summary", () => fetchJson(`/api/audit/summary?since=24h`), (data) => {
     lastSummary = data;
     renderHealthStrip(data);
     renderAuditSummary(data, auditContext());
@@ -1463,10 +1400,10 @@ function fetchAndRenderFrictions() {
     if (frictionSearchQuery) sp.set("q", frictionSearchQuery);
     return fetchJson(`/api/frictions?${sp.toString()}`);
   });
-  return Promise.all([
+  return requestPanel("frictions-body", `${frictionStatusFilter}:${frictionSearchQuery}`, () => Promise.all([
     Promise.all(listRequests),
     fetchJson("/api/frictions/stats"),
-  ]).then(([payloads, stats]) => {
+  ]), ([payloads, stats]) => {
     const items = payloads
       .flatMap((payload) => Array.isArray(payload && payload.items) ? payload.items : [])
       .sort((a, b) => {
@@ -1571,36 +1508,41 @@ function refreshLabel() {
 
 
 async function refreshDashboard() {
-  if (isRefreshing) return;
-  isRefreshing = true;
-  const now = new Date();
-  $("meta-text").textContent = `fetching...`;
+  const sequence = ++refreshSequence;
+  const revision = getWorkspaceRevision();
+  $("meta-text").textContent = "fetching…";
   $("conn-status").className = "status-dot orange";
-  const btn = $("refresh-btn");
-  if (btn) btn.disabled = true;
-  
-  let hasErrors = false;
-  
-  await Promise.all(
-    activeRefreshJobs().map((job) =>
-      job.catch((e) => {
-        hasErrors = true;
-        console.error(e);
-      }),
-    ),
-  );
-  
-  if (hasErrors) {
-    $("conn-status").className = "status-dot red";
-    $("meta-text").textContent = `offline · ${now.toLocaleTimeString()}`;
-  } else {
-    $("conn-status").className = "status-dot green";
-    $("meta-text").textContent = `refreshed ${refreshLabel()} · ${now.toLocaleTimeString()}`;
-  }
-  if (btn) btn.disabled = false;
-  isRefreshing = false;
+  // Refresh stays available so a slow request never locks navigation or retry.
+  const results = await Promise.allSettled(activeRefreshJobs());
+  if (sequence !== refreshSequence || revision !== getWorkspaceRevision()) return;
+  const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
+  const offline = errors.some(error => error.networkFailure);
+  for (const error of errors) console.error(error);
+  $("conn-status").className = `status-dot ${offline ? "red" : "green"}`;
+  const label = offline ? "offline" : errors.length ? "panel update failed" : `refreshed ${refreshLabel()}`;
+  $("meta-text").textContent = `${label} · ${new Date().toLocaleTimeString()}`;
   if (activeTab === "tasks") fitLogPanelToViewport();
 }
+
+// Invalidate caches at the scope boundary, including programmatic selections.
+// Panel state is reset synchronously by common.js before another frame paints.
+onWorkspaceChange(() => {
+  lastTasks = [];
+  lastTasksMeta = null;
+  cacheCrewPayload({ crews: [] });
+  lastRuns = [];
+  lastRunsMeta = null;
+  lastRunsLoading = true;
+  lastRunSourcesUnavailable = [];
+  lastDiagnostics = { metrics: null, errors: null, incidents: null };
+  for (const id of ["tasks-count", "diag-count", "task-filter-summary"]) {
+    if ($(id)) $(id).textContent = "—";
+  }
+  resetHealthStrip();
+});
+resetPanel("tasks-body", "tasks-count");
+resetPanel("runs-body", "diag-count");
+resetPanel("diag-body", "diag-count");
 
 const tasksContext = taskContext();
 buildChips(tasksContext);

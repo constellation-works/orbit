@@ -15,10 +15,10 @@
 // (preserving the ?step= query for run-detail pre-expansion) rather than
 // navigateToRun to ensure identical behavior to before the split.
 //
-// No behavior change. All original column shapes, truncation, click wiring,
-// and side-card rendering preserved exactly.
+// Main-table and side-card requests render independently so a side-card
+// completion cannot replace the main panel's loading or failure feedback.
 
-import { el, syncNodes, getWindow } from './common.js';
+import { panelCanRender, resetPanel, el, syncNodes, getWindow } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -416,6 +416,12 @@ function renderDiagnostics(ctx = {}) {
   const sub = ctx.getActiveDiagSubtab ? ctx.getActiveDiagSubtab() : "metrics";
   const last = ctx.getLastDiagnostics ? ctx.getLastDiagnostics() : { metrics: [], errors: [], incidents: null, implement_one: [], implement_one_by_complexity: [], completion_by_complexity: [] };
 
+  if (!panelCanRender("diag-body")) return;
+  if (ctx.getLastDiagnostics && last[sub] == null) {
+    resetPanel("diag-body", "diag-count");
+    return;
+  }
+
   if (sub === "incidents") {
     const payload = last.incidents || {};
     // Both counts in the header: grouped incidents, and the raw failed events
@@ -423,7 +429,6 @@ function renderDiagnostics(ctx = {}) {
     $("diag-count").textContent =
       `${asCount(payload.failure_categories && payload.failure_categories.unexpected && payload.failure_categories.unexpected.incidents)} unexpected / ${asCount(payload.incident_count)} all incidents / ${asCount(payload.raw_failed_events)} failed events`;
     renderIncidents(payload, ctx);
-    renderDiagnosticsSideCard(last, ctx);
     return;
   }
 
@@ -448,11 +453,9 @@ function renderDiagnostics(ctx = {}) {
       ? "No error events this month (step/event failures, not job-run states)."
       : "No metric entries this month.",
   );
-
-  renderDiagnosticsSideCard(last, ctx);
 }
 
-function renderDiagnosticsSideCard(last, ctx) {
+export function renderDiagnosticsSideCard(last, ctx) {
   const container = $("diag-implement-one-body");
   if (!container) return;
   container.innerHTML = "";
