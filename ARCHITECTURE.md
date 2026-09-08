@@ -243,4 +243,5 @@ parent-authorized admission path. Older binaries ignore both tables.
 | Command Audit   | GlobalOnly         | Single authoritative SQLite event trail          |
 | Semantic Index  | WorkspaceOnly      | Task-derived embeddings stay with the workspace  |
 | Run Traces      | WorkspaceOnly      | Per-repo activity/job JSONL and blob artifacts   |
+| Global Defaults Stamp | GlobalOnly   | `<global root>/resources/.orbit-global-defaults.json` names the embedded default set last reconciled into that root, so a warm runtime open skips re-reading and re-hashing the managed catalogs |
 | ADR/Learning IDs | Shared allocator + worktree-local bodies | ID rows live in shared `.orbit/state/semantic.db`; body files live in the current worktree so they can be staged with code |
