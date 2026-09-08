@@ -1,4 +1,4 @@
-use clap::{Args, ValueEnum};
+use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_cmd::task_owner::bound_workspace_identity;
 use orbit_common::observability::audit_id::audit_execution_id;
@@ -8,13 +8,6 @@ use orbit_types::tool::{McpTransport, ToolSessionContext};
 use serde_json::{Map, Value};
 
 use crate::command::{CommandOut, Execute, Payload};
-
-#[derive(Clone, ValueEnum, Default)]
-pub enum OutputFormat {
-    #[default]
-    Json,
-    Text,
-}
 
 #[derive(Args)]
 pub struct ToolRunArgs {
@@ -32,9 +25,6 @@ pub struct ToolRunArgs {
     /// Exact agent model for provenance attribution (overrides ORBIT_AGENT_MODEL)
     #[arg(long)]
     pub model: Option<String>,
-    /// Execution timeout (e.g. "30s", "5000ms")
-    #[arg(long)]
-    pub timeout: Option<String>,
     /// Validate without executing
     #[arg(long)]
     pub dry_run: bool,
@@ -44,12 +34,9 @@ pub struct ToolRunArgs {
     /// Return the tool's full unfiltered JSON output
     #[arg(long)]
     pub full: bool,
-    /// Pretty-print JSON output for human debugging
-    #[arg(long)]
+    /// Compatibility alias for pretty-printing JSON error output
+    #[arg(long, hide = true)]
     pub pretty: bool,
-    /// Output format
-    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
-    pub output: OutputFormat,
 }
 
 impl ToolRunArgs {
@@ -138,13 +125,7 @@ impl Execute for ToolRunArgs {
         )?;
         let output = shape_tool_output(&self.name, &input, output, self.full, &self.fields);
 
-        // Local `--output`/`--pretty` stay accepted (ORB-11618 owns removing
-        // them). `--format` still wins: a Text human view is ignored when the
-        // sink is json/ndjson, and Json always hands the document to render.
-        match self.output {
-            OutputFormat::Json => Ok(Payload::document(output).into()),
-            OutputFormat::Text => Ok(Payload::detail(output.clone(), output.to_string()).into()),
-        }
+        Ok(Payload::document(output).into())
     }
 }
 

@@ -12,7 +12,7 @@ mod show;
 mod support;
 
 pub use command::{ToolCommand, ToolSubcommand};
-pub use run::{OutputFormat, ToolRunArgs};
+pub use run::ToolRunArgs;
 
 #[cfg(test)]
 mod tests;

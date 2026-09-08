@@ -751,7 +751,7 @@ impl Commands {
                 )
             }
             Commands::Tool(command) => {
-                use super::tool::{OutputFormat, ToolSubcommand};
+                use super::tool::ToolSubcommand;
                 let (subcommand, tool_name, target_type, target_id, role, json_output) =
                     match &command.command {
                         ToolSubcommand::Run(args) => (
@@ -760,7 +760,7 @@ impl Commands {
                             Some("tool".to_string()),
                             Some(args.name.clone()),
                             tool_run_actor_role(args),
-                            matches!(args.output, OutputFormat::Json).then_some(args.pretty),
+                            Some(args.pretty),
                         ),
                         ToolSubcommand::List(_) => {
                             ("list", None, None, None, "admin".to_string(), None)
