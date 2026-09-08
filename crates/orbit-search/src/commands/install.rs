@@ -602,7 +602,7 @@ pub(crate) fn write_companion_integrity(path: &Path, checksum: &str) -> Result<(
     fs::write(manifest_path, content).map_err(|error| OrbitError::Io(error.to_string()))
 }
 
-fn companion_integrity_path(path: &Path) -> Option<std::path::PathBuf> {
+pub(crate) fn companion_integrity_path(path: &Path) -> Option<std::path::PathBuf> {
     let file_name = path.file_name()?.to_string_lossy();
     Some(path.with_file_name(format!("{file_name}.sha256")))
 }
