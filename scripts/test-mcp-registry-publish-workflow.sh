@@ -58,8 +58,8 @@ if ! grep --fixed-strings --quiet -- '"$role" != "admin"' "$preflight"; then
   exit 1
 fi
 
-preflight_line="$(grep --line-number --fixed-strings -- 'Require an active constellation-works administrator membership' "$workflow" | cut --delimiter=: --fields=1)"
-publisher_login_line="$(grep --line-number --fixed-strings -- './mcp-publisher login github --token "$MCP_REGISTRY_PAT_TOKEN"' "$workflow" | cut --delimiter=: --fields=1)"
+preflight_line="$(grep --line-number --fixed-strings -- 'Require an active constellation-works administrator membership' "$workflow" | cut -d: -f1)"
+publisher_login_line="$(grep --line-number --fixed-strings -- './mcp-publisher login github --token "$MCP_REGISTRY_PAT_TOKEN"' "$workflow" | cut -d: -f1)"
 if [[ "$preflight_line" -ge "$publisher_login_line" ]]; then
   echo "membership preflight must run before publisher login" >&2
   exit 1
