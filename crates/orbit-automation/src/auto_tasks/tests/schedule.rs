@@ -99,7 +99,7 @@ fn cron_fires_for_the_latest_slot_after_the_lower_bound() {
 }
 
 #[test]
-fn validate_schedule_rejects_bad_cron_and_zero_interval() {
+fn validate_schedule_rejects_bad_cron_and_out_of_range_intervals() {
     assert!(
         validate_schedule(&AutoTaskSchedule::Cron {
             cron: "not a cron".to_string(),
@@ -107,5 +107,21 @@ fn validate_schedule_rejects_bad_cron_and_zero_interval() {
         .is_err()
     );
     assert!(validate_schedule(&interval(0)).is_err());
+    assert!(validate_schedule(&interval(u64::MAX)).is_err());
     assert!(validate_schedule(&interval(30)).is_ok());
+}
+
+#[test]
+fn interval_decision_rejects_values_outside_signed_duration_range() {
+    let baseline = at(2026, 1, 1, 0, 0);
+
+    assert!(
+        decide_due(
+            &interval(u64::MAX),
+            baseline,
+            None,
+            baseline + Duration::minutes(1),
+        )
+        .is_err()
+    );
 }

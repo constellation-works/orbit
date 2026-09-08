@@ -20,6 +20,11 @@ use crate::task::{TaskPriority, TaskStatus, TaskType};
 /// Auto-task YAML schema version this binary reads and writes.
 pub const AUTO_TASK_SCHEMA_VERSION: u32 = 1;
 
+/// Longest supported auto-task interval: one year in minutes. This keeps an
+/// operator mistake from becoming a practically inert schedule while remaining
+/// well within the scheduler's signed duration representation.
+pub const MAX_AUTO_TASK_INTERVAL_MINUTES: u64 = 365 * 24 * 60;
+
 /// Tag prefix stamped on every task an auto-task definition creates. The
 /// suffix is the definition name, so `skip_if_open` dedupe and provenance
 /// both key off `auto-task:<name>`.
@@ -170,9 +175,11 @@ impl AutoTaskDefinition {
                     self.name
                 )));
             }
-            AutoTaskSchedule::Interval { every_minutes } if *every_minutes == 0 => {
+            AutoTaskSchedule::Interval { every_minutes }
+                if *every_minutes == 0 || *every_minutes > MAX_AUTO_TASK_INTERVAL_MINUTES =>
+            {
                 return Err(WorkflowError::Invalid(format!(
-                    "auto-task '{}' schedule.every_minutes must be at least 1",
+                    "auto-task '{}' schedule.every_minutes must be between 1 and {MAX_AUTO_TASK_INTERVAL_MINUTES}",
                     self.name
                 )));
             }
