@@ -31,10 +31,13 @@ tokens are rejected because statuses collide across corpora.
 
 **Index coverage:** lexical covers all three corpora. Vector search covers task
 fields and docs once `orbit semantic index --kind <kind>` has run; frictions are
-never embedded, so they stay lexical even under `--hybrid`. Missing vectors under
-`--hybrid` fall back to lexical with a note rather than failing — and if the
-companion isn't installed at all, fall back to lexical and continue. Never run
-`orbit semantic install` without operator consent.
+never embedded, so they stay lexical even under `--hybrid`. CLI task add/update
+does not spawn a background embedder — re-run `orbit semantic index` after CLI
+mutations. Long-lived hosts (MCP serve, the dashboard) still index mutations
+incrementally. Missing vectors under `--hybrid` fall back to lexical with a note
+rather than failing — and if the companion isn't installed at all, fall back to
+lexical and continue. A missing install does not start or retry a companion.
+Never run `orbit semantic install` without operator consent.
 
 ## Two different dedupe checks
 

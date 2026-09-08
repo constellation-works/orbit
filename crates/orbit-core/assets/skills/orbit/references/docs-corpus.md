@@ -42,6 +42,6 @@ Agents retrieve through `orbit.search`; these are human and admin workflows.
 |---------|------|
 | Install / remove | `orbit semantic install [--model M] [--force]` / `orbit semantic uninstall [--model M] [--all]` |
 | Status | `orbit semantic stats` |
-| Rebuild embeddings | `orbit semantic index --kind tasks\|docs\|all [--model M] [--force]` |
+| Rebuild embeddings | `orbit semantic index --kind tasks\|docs\|all [--model M] [--force]` — the CLI refresh path; task add/update does not background-index |
 
 Supported on macOS arm64 and Linux x86_64/aarch64 with glibc ≥ 2.38. There is no x86_64-apple-darwin asset. Don't install without operator consent.

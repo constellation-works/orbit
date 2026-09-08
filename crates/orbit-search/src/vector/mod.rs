@@ -5,8 +5,9 @@
 //! - [`store`] — [`VectorStore`], the SQLite-backed index. Entry point.
 //! - [`chunker`] — paragraph-boundary chunker for fields exceeding the
 //!   model's context window.
-//! - [`worker`] — background indexer that drains task-mutation events into
-//!   the store via a `SubprocessEmbedder`.
+//! - [`worker`] — optional background indexer for long-lived hosts. Short-lived
+//!   CLI runtimes leave it disabled; mutations refresh through
+//!   `orbit semantic index`.
 //! - [`query`] — brute-force cosine, FTS5 BM25, RRF, and task-result rollup.
 //! - [`task_fields`] — extracts the per-field rows that get embedded for a
 //!   `Task`.

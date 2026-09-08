@@ -13,54 +13,58 @@ use tempfile::{TempDir, tempdir};
 
 #[test]
 #[cfg(unix)]
-fn tool_run_task_update_with_noisy_background_companion_has_clean_stderr() {
+fn cli_task_mutation_does_not_launch_background_companion() {
     let workspace = TestWorkspace::new();
-    workspace.write_noisy_companion();
+    workspace.write_instrumented_companion();
     let task = workspace.add_task_without_companion();
     let task_id = task["id"].as_str().expect("task id");
 
-    let mut saw_companion_invocation = false;
-    for attempt in 0..8 {
-        let input = json!({
-            "id": task_id,
-            "comment": format!("background semantic indexing attempt {attempt}"),
-            "model": "gpt-5"
-        })
-        .to_string();
-        let output = workspace.run_with_companion(
-            &[
-                "tool",
-                "run",
-                "orbit.task.update",
-                "--input",
-                &input,
-                "--full",
-            ],
-            "tool run task update",
-        );
-        assert_stderr_lacks_broken_pipe(&output);
-
-        if workspace.companion_invoked() {
-            saw_companion_invocation = true;
-            break;
-        }
-    }
-
+    let input = json!({
+        "id": task_id,
+        "comment": "cli mutation must not spawn a detached companion",
+        "model": "gpt-5"
+    })
+    .to_string();
+    let output = workspace.run_with_companion(
+        &[
+            "tool",
+            "run",
+            "orbit.task.update",
+            "--input",
+            &input,
+            "--full",
+        ],
+        "tool run task update",
+    );
+    assert_stderr_lacks_broken_pipe(&output);
     assert!(
-        saw_companion_invocation,
-        "mock companion was not invoked by background task indexing"
+        !workspace.companion_invoked(),
+        "CLI task mutation launched a background companion; launch log should stay empty"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn explicit_semantic_index_launches_companion() {
+    let workspace = TestWorkspace::new();
+    workspace.write_instrumented_companion();
+    workspace.add_task_without_companion();
+
+    workspace.run_with_companion(&["semantic", "index", "--json"], "semantic index");
+    assert!(
+        workspace.companion_invoked(),
+        "explicit `orbit semantic index` must launch the companion; launch log was empty"
     );
 }
 
 /// Foreground search runs the companion with inherited stderr, so a broken
 /// companion's diagnostics reach the operator. Contrast with
-/// [`tool_run_task_update_with_noisy_background_companion_has_clean_stderr`],
-/// where background indexing suppresses companion stderr.
+/// [`cli_task_mutation_does_not_launch_background_companion`],
+/// where short-lived CLI mutations do not start a background companion.
 ///
-/// ADR-0244 (ORB-10304) made the task branch degrade to lexical instead of
-/// failing the command when hybrid infrastructure is unavailable, so the
-/// command now exits 0. The degradation must stay *visible*: the companion's
-/// own stderr plus an explicit fallback note (ORB-10350).
+/// Hybrid search degrades to lexical instead of failing when infrastructure
+/// is unavailable (ORB-10304). The degradation must stay visible: companion
+/// stderr plus an explicit fallback note (ORB-10350).
 #[test]
 #[cfg(unix)]
 fn direct_search_semantic_command_surfaces_companion_stderr() {
@@ -197,7 +201,7 @@ impl TestWorkspace {
     }
 
     #[cfg(unix)]
-    fn write_noisy_companion(&self) {
+    fn write_instrumented_companion(&self) {
         let script = format!(
             r#"#!/bin/sh
 printf '%s\n' 'execution failed: Broken pipe (os error 32)' >&2

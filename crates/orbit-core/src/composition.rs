@@ -11,7 +11,7 @@ use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::task_migration::apply_configured_id_start;
 use crate::runtime::run_input::managed_run_context_from_env;
 use crate::runtime::{
-    OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint,
+    HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint,
     WorkspaceRuntimeBinding, resolve_bootstrap_roots, resolve_bootstrap_roots_with_hint,
     resolve_global_root, resolve_initialize_roots, resolve_initialize_roots_with_hint,
 };
@@ -38,6 +38,7 @@ impl OrbitRuntime {
             &roots.local_root,
             binding,
             true,
+            HostLifetime::ShortLived,
         )
     }
 
@@ -53,6 +54,7 @@ impl OrbitRuntime {
             &roots.local_root,
             binding,
             false,
+            HostLifetime::ShortLived,
         )
     }
 
@@ -107,7 +109,27 @@ impl OrbitRuntime {
         workspace_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<Self, OrbitError> {
-        Self::from_resolved_roots_with_binding(global_root, workspace_root, workspace_root, binding)
+        Self::from_roots_with_binding_for(
+            global_root,
+            workspace_root,
+            binding,
+            HostLifetime::ShortLived,
+        )
+    }
+
+    pub fn from_roots_with_binding_for(
+        global_root: &Path,
+        workspace_root: &Path,
+        binding: WorkspaceRuntimeBinding,
+        host_lifetime: HostLifetime,
+    ) -> Result<Self, OrbitError> {
+        Self::from_resolved_roots_with_binding_for(
+            global_root,
+            workspace_root,
+            workspace_root,
+            binding,
+            host_lifetime,
+        )
     }
 
     pub fn from_resolved_roots(
@@ -115,7 +137,14 @@ impl OrbitRuntime {
         shared_root: &Path,
         local_root: &Path,
     ) -> Result<Self, OrbitError> {
-        build_runtime(global_root, shared_root, local_root, None, true)
+        build_runtime(
+            global_root,
+            shared_root,
+            local_root,
+            None,
+            true,
+            HostLifetime::ShortLived,
+        )
     }
 
     pub fn from_resolved_roots_with_binding(
@@ -124,7 +153,31 @@ impl OrbitRuntime {
         local_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<Self, OrbitError> {
-        build_runtime(global_root, shared_root, local_root, Some(binding), true)
+        Self::from_resolved_roots_with_binding_for(
+            global_root,
+            shared_root,
+            local_root,
+            binding,
+            HostLifetime::ShortLived,
+        )
+    }
+
+    /// Open a runtime whose embed worker matches the constructing host's lifetime.
+    pub fn from_resolved_roots_with_binding_for(
+        global_root: &Path,
+        shared_root: &Path,
+        local_root: &Path,
+        binding: WorkspaceRuntimeBinding,
+        host_lifetime: HostLifetime,
+    ) -> Result<Self, OrbitError> {
+        build_runtime(
+            global_root,
+            shared_root,
+            local_root,
+            Some(binding),
+            true,
+            host_lifetime,
+        )
     }
 
     pub fn from_resolved_roots_read_only_with_binding(
@@ -133,7 +186,14 @@ impl OrbitRuntime {
         local_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<Self, OrbitError> {
-        build_runtime(global_root, shared_root, local_root, Some(binding), false)
+        build_runtime(
+            global_root,
+            shared_root,
+            local_root,
+            Some(binding),
+            false,
+            HostLifetime::ShortLived,
+        )
     }
 
     pub fn in_memory() -> Result<Self, OrbitError> {
@@ -153,6 +213,7 @@ fn build_runtime(
     local_root: &Path,
     binding: Option<WorkspaceRuntimeBinding>,
     reconcile_stale_runs: bool,
+    host_lifetime: HostLifetime,
 ) -> Result<OrbitRuntime, OrbitError> {
     let layout_report = match orbit_store::workflow::layout::upgrade_workspace_layout(shared_root) {
         Ok(report) => report,
@@ -175,6 +236,7 @@ fn build_runtime(
         binding,
         &runtime_config,
         layout_report,
+        host_lifetime,
     )?;
     if reconcile_stale_runs && !managed_run_context_from_env() {
         runtime.reconcile_stale_job_runs_on_open();

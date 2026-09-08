@@ -104,6 +104,18 @@ pub struct OrbitRuntimeRoots {
     pub local_root: PathBuf,
 }
 
+/// Whether the constructing process retains this runtime past a single command.
+///
+/// Short-lived CLI mutations must not spawn a detached embed worker: process
+/// exit can interrupt queued indexing, and a missing companion must not add
+/// startup or retry work. Long-lived hosts (MCP serve, the dashboard) keep
+/// incremental indexing on [`orbit_search::EmbedWorker`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostLifetime {
+    ShortLived,
+    LongLived,
+}
+
 /// Registry-neutral metadata supplied by a higher-level workspace catalog.
 ///
 /// `orbit-core` can construct a runtime without this binding for standalone
@@ -152,6 +164,7 @@ impl OrbitRuntime {
         binding: Option<WorkspaceRuntimeBinding>,
         runtime_config: &orbit_config::ResolvedConfig,
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        host_lifetime: HostLifetime,
     ) -> Result<Self, OrbitError> {
         let context = builder::build_context_from_roots(
             global_root,
@@ -159,6 +172,7 @@ impl OrbitRuntime {
             local_root,
             binding.as_ref(),
             runtime_config,
+            host_lifetime,
         )?;
         Ok(Self {
             context,
@@ -196,6 +210,7 @@ impl OrbitRuntime {
             data_root,
             Some(&binding),
             runtime_config,
+            HostLifetime::ShortLived,
         )?;
         Ok(Self {
             context,

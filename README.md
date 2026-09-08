@@ -103,7 +103,7 @@ Cloning gives you a framework to mold to your team's conventions; everything und
 
 ```bash
 orbit semantic install    # one-time: companion + default model (bge-small)
-orbit semantic index      # backfill existing tasks; later task writes embed automatically
+orbit semantic index      # backfill tasks; CLI mutations do not auto-index — re-run after edits
 orbit docs index          # backfill docs for --kind doc --hybrid
 orbit search "race in the scheduler when locks overlap" --hybrid --kind task
 ```

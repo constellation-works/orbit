@@ -27,7 +27,7 @@ use crate::context::OrbitContext;
 use crate::context::{
     ActorIdentity, OrbitExecutionAssets, OrbitPolicyContext, OrbitRuntimeSettings, OrbitStores,
 };
-use crate::runtime::WorkspaceRuntimeBinding;
+use crate::runtime::{HostLifetime, WorkspaceRuntimeBinding};
 use crate::skill_catalog::SkillCatalog;
 
 /// Job-run partition used when an explicit `--root` data directory is opened
@@ -44,6 +44,7 @@ pub(crate) fn build_context_from_roots(
     local_root: &Path,
     binding: Option<&WorkspaceRuntimeBinding>,
     runtime_config: &ResolvedConfig,
+    host_lifetime: HostLifetime,
 ) -> Result<OrbitContext, OrbitError> {
     let persistence = &runtime_config.persistence;
 
@@ -105,7 +106,10 @@ pub(crate) fn build_context_from_roots(
         );
     }
     let semantic_vector_store = Arc::new(VectorStore::open(&persistence.semantic_db)?);
-    let semantic_worker = Arc::new(EmbedWorker::start((*semantic_vector_store).clone()));
+    let semantic_worker = match host_lifetime {
+        HostLifetime::LongLived => Arc::new(EmbedWorker::start((*semantic_vector_store).clone())),
+        HostLifetime::ShortLived => Arc::new(EmbedWorker::disabled()),
+    };
     let job_run_store = workspace_job_run_store(store.clone(), workspace_id);
 
     // Executors and policies are global-only. Jobs always persist run state
