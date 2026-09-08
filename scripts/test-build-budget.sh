@@ -6,14 +6,25 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WRAPPER="$ROOT/scripts/build-budget.py"
 TMP="$(mktemp -d)"
 BACKGROUND_PIDS=()
+TEST_COMPLETE=0
+
 cleanup() {
+  local status=$?
   local pid
+
+  # Bash 3.2 can report success after a nounset error inside a function.
+  # Cleanup must not turn an incomplete assertion run into a passing gate.
+  if [[ "$status" == 0 && "$TEST_COMPLETE" != 1 ]]; then
+    status=1
+  fi
+
   if ((${#BACKGROUND_PIDS[@]})); then
     for pid in "${BACKGROUND_PIDS[@]}"; do
       kill "$pid" 2>/dev/null || true
     done
   fi
   rm -rf "$TMP"
+  exit "$status"
 }
 trap cleanup EXIT
 
@@ -31,7 +42,12 @@ forget_pid() {
       remaining+=("$pid")
     fi
   done
-  BACKGROUND_PIDS=("${remaining[@]}")
+
+  BACKGROUND_PIDS=()
+  # Bash 3.2 treats an empty array expansion as unset under nounset.
+  if ((${#remaining[@]})); then
+    BACKGROUND_PIDS=("${remaining[@]}")
+  fi
 }
 
 wait_for() {
@@ -461,4 +477,5 @@ kill "$WATCH_MAKE_PID" 2>/dev/null || true
 wait "$WATCH_MAKE_PID" 2>/dev/null || true
 forget_pid "$WATCH_MAKE_PID"
 
+TEST_COMPLETE=1
 printf 'test-build-budget: ok\n'
