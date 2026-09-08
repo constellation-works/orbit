@@ -75,6 +75,6 @@ pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;
 
 mod auto_task_cursor;
-pub use auto_task_cursor::{AutoTaskCursor, AutoTaskCursorState};
+pub use auto_task_cursor::{AutoTaskCursor, AutoTaskCursorState, AutoTaskPendingClaim};
 
 pub mod automation;

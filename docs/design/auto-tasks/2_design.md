@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-08
+last_validated: 2026-09-08
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -11,7 +11,7 @@ summary: Current implementation of the auto-task record, due-math, host-local cu
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/operations.js"]
 related_features: [auto-tasks]
-related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315]
+related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730]
 ---
 
 # Auto-tasks — Design
@@ -63,29 +63,59 @@ collapses to **one** fire, never one per missed slot.
 
 `state.rs` stores one cursor per definition in
 `<orbit_dir>/state/auto-tasks.json` (`{ baseline_at, last_slot, last_fired_at,
-last_task_id }`), using a file-locked read-modify-write.
-This is workspace-local, gitignored runtime state (the scoreboard precedent,
-L-0041), so a scheduler fire never rewrites the git-versioned definition and a
-definition edit never races the scheduler.
+last_task_id, pending? }`). This is workspace-local, gitignored runtime state
+(the scoreboard precedent, L-0041), so a scheduler fire never rewrites the
+git-versioned definition and a definition edit never races the scheduler.
+
+Admission and persistence share one stable sidecar lock,
+`.auto-tasks.json.lock`. The JSON file is replaced by rename, so exclusion is
+not tied to the inode being replaced and a reader never observes truncated
+JSON. Updates re-read under that lock, so concurrent upserts for different
+definitions keep both cursors.
+
+A missing file is empty state and may baseline on first observation. An
+existing file that cannot be read or parsed is an explicit error; the bytes
+are left unchanged for investigation. The dashboard list surfaces that error
+instead of rendering a silent never-observed baseline.
+
+`pending` is durable in-flight evidence: `{ slot, task_id? }`. It is written
+before mint and cleared only after the consumed-slot checkpoint. It is not a
+cross-store exactly-once token.
 
 ## 4. The scheduler pass
 
-`scheduler::run_auto_task_scheduler_at` loads the workspace's definitions and
-cursors, then per enabled definition: on first sight it records a baseline and
-fires nothing; otherwise it evaluates due-math. On `Fire`, if `dedupe =
-skip_if_open` and a task tagged `auto-task:<name>` is still open, it skips
-**without advancing the cursor** — so the pending occurrence fires (once,
-collapsed) the moment the queue drains. Otherwise it mints a `system_created`
-task from the template (tagged for provenance, complexity `unassessed`)
-and advances the cursor. Every
-minted title is `[auto-task] ` followed by the template title; the prefix is
-applied at the shared template-to-task mapping, so definition YAML titles stay
-clean and an already-prefixed template is not double-prefixed.
+`scheduler::run_auto_task_scheduler_at` loads the workspace's definitions,
+then per enabled definition holds the sidecar lock, re-reads cursors, and
+either baselines, skips, or fires. Dry-run never writes. On first sight it
+records a baseline and fires nothing; otherwise it evaluates due-math. On
+`Fire`, if `dedupe = skip_if_open` and a task tagged `auto-task:<name>` is
+still open, it skips **without claiming or advancing the cursor** — so the
+pending occurrence fires (once, collapsed) the moment the queue drains.
+Otherwise it claims the slot, mints a `system_created` task from the template
+(tagged for provenance, complexity `unassessed`), and checkpoints
+`last_slot` / `last_task_id`. Every minted title is `[auto-task] ` followed
+by the template title; the prefix is applied at the shared template-to-task
+mapping, so definition YAML titles stay clean and an already-prefixed
+template is not double-prefixed.
+
+Recovery on the next locked pass:
+
+- Mint failure rolls the claim back; the slot is not consumed and a later
+  pass may fire it.
+- `pending.task_id` set: checkpoint the already-minted task, do not remint.
+- `pending` without `task_id`: report `unresolved_pending` and leave the
+  file alone. The scheduler will not silently consume an unminted slot or
+  remint an uncertain one. An operator inspects tagged tasks and
+  `auto-tasks.json`.
+- Checkpoint write failure reports `fired` with the task id and best-effort
+  mint evidence; retry reconciles from `pending.task_id` or stays
+  unresolved.
 
 The pass is the deterministic `run_auto_task_scheduler` action
 (`dispatch.rs`), wrapped in `auto_task_scheduler_pipeline` (`max_active_runs:
 1`), fired by the seeded `auto_task_scheduler` routine (`overlap: forbid`,
-minutely). Because it is a routine, its fires flow to `GET /api/routines`.
+minutely). Those job/routine knobs reduce overlap; they are not storage-level
+idempotency. Because it is a routine, its fires flow to `GET /api/routines`.
 
 ## 5. CRUD surfaces
 

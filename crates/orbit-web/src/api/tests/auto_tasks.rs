@@ -233,6 +233,47 @@ async fn list_reports_enabled_and_disabled_definitions() {
     assert_eq!(nightly["next_evaluation"]["state"], "disabled");
     assert_eq!(nightly["next_evaluation"]["hypothetical"], true);
     assert!(nightly["next_evaluation"]["at"].is_null(), "{nightly}");
+    assert!(json["cursor_state_error"].is_null(), "{json}");
+}
+
+#[tokio::test]
+async fn list_surfaces_malformed_cursor_state_instead_of_baselining() {
+    let runtime = runtime();
+    runtime.auto_task_add(chore_params("hourly")).expect("add");
+    let path = cursor_state_path(&runtime.paths().state_dir);
+    std::fs::create_dir_all(path.parent().expect("state dir")).expect("mkdir");
+    std::fs::write(&path, "{not json").expect("corrupt cursor");
+
+    let (dashboard, runtime) = state(runtime);
+    let response = send(
+        dashboard,
+        Method::GET,
+        "/auto-tasks?workspace=default",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert!(
+        json["cursor_state_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("malformed auto-task cursor state")),
+        "{json}"
+    );
+    let hourly = json["definitions"]
+        .as_array()
+        .expect("definitions")
+        .iter()
+        .find(|item| item["name"] == "hourly")
+        .expect("hourly");
+    assert_eq!(hourly["last_evaluation"], serde_json::Value::Null);
+    assert_eq!(hourly["next_evaluation"]["state"], "unavailable");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("raw"),
+        "{not json",
+        "list must not rewrite corrupt cursor evidence"
+    );
+    drop(runtime);
 }
 
 fn write_cursor(runtime: &OrbitRuntime, name: &str, last_task_id: &str) {

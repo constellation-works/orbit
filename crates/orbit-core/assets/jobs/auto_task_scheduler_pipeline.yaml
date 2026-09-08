@@ -11,10 +11,21 @@
 #   clean no-op, the same contract as `task_auto_pipeline` on an empty backlog.
 #
 # Overlap safety
-# - `max_active_runs: 1` makes the scheduler single-flight, and the seeded
-#   routine fires it with `policy.overlap: forbid`. The scheduler advances a
-#   per-definition cursor before returning, so even a racing pass cannot
-#   double-mint a slot.
+# - `max_active_runs: 1` and the seeded routine's `policy.overlap: forbid`
+#   reduce overlapping job runs. They are not a storage-level idempotency
+#   guarantee: a manual activity, a racing caller, or a crash between mint
+#   and cursor checkpoint can still overlap the scheduler.
+# - Slot admission is exclusive under `.auto-tasks.json.lock`, a sidecar that
+#   survives atomic replacement of `state/auto-tasks.json`. Two due passes
+#   for the same definition/slot mint one task. Missing cursor state may
+#   baseline; unreadable or malformed existing state fails closed and is
+#   left for investigation.
+# - Recovery: a mint failure rolls back the claim so the slot is not
+#   consumed. A persisted pending claim with a task id is checkpointed on
+#   retry without reminting. A pending claim without mint evidence is
+#   reported unresolved — the scheduler will not silently consume the slot
+#   or remint. An in-memory lock is host exclusion only; it is not
+#   exactly-once across the task store and the cursor file.
 
 schemaVersion: 2
 kind: Job
