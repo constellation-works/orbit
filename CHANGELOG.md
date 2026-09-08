@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.20.0
+
+### Breaking Changes
+
+- **Task workspace flags clarified**: `task add --workspace` now selects the target workspace; use `--workspace-path` for task workspace-path metadata. ([ORB-11598])
+- **Tool-run flags removed**: `orbit tool run` no longer accepts `--timeout` or `--output`; remove those flags from existing invocations. ([ORB-11618])
+- **Operation grants upgraded**: operation-policy version 2 introduces independent review and repair controls; replace version-1 grants before delivery. ([ORB-11333])
+- **Task-registry schema upgraded**: task action keys require schema version 6; older binaries that only support version 5 cannot open an upgraded registry. ([ORB-11529])
+- **Semantic-index layout migrated**: semantic search now uses chunk storage with external-content FTS5; coordinate runtime upgrades because older index layouts are incompatible. ([ORB-11695], [ORB-11753])
+
+### Highlights
+
+- **Independent delivery review**: configure review timing and repair budgets separately from implementation, with direct repairs and explicit delivery admission. ([ORB-11333])
+- **Flexible task lifecycle**: reopen completed work and make other explicitly authorized status transitions while retaining the audit trail. ([ORB-11449])
+- **Shared-root workspace isolation**: multiple repositories sharing an Orbit root keep task writes and bundles in the selected workspace. ([ORB-11807])
+- **Usable dashboard operations**: authorized sessions can mint and toggle automation, with compact controls that work on narrow screens. ([ORB-11557], [ORB-11559])
+- **Filesystem policy for child processes**: Linux `proc.spawn` applies the declared filesystem policy to indirect child-process access. ([ORB-11514])
+
 ## 0.19.0
 
 ### Breaking Changes
