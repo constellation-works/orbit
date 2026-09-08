@@ -3,7 +3,7 @@ type: runbook
 summary: Run Cargo builds within Orbit's host-wide cross-worktree admission and compiler-job budget.
 tags: [operations, performance, rust]
 paths: ["Makefile", "scripts/build-budget.py"]
-related_artifacts: [ORB-11754]
+related_artifacts: [ORB-11754, ORB-11760]
 last_validated: 2026-09-08
 ---
 
@@ -19,6 +19,12 @@ The repository's heavy Make targets enter the budget automatically: `build`, `re
 `run`, `check`, `test`, `clippy`, `ci`, `ci-lint`, `install`, and `watch`. `make ci` holds
 one slot around the complete CI script; its nested Cargo commands inherit that admission
 instead of reacquiring a slot. `dev` is covered through its `build` prerequisite.
+
+`make run` admits compilation of the CLI binary, then launches the resolved executable
+without holding a slot and without invoking `cargo run`. `make watch` does not occupy a
+slot while idle; each `check` and `test` iteration is admitted separately. Wrapping a
+whole `cargo run` or `cargo watch` process would starve other worktrees for as long as
+those processes live.
 
 Formatting, dependency inspection, supply-chain inspection, cleaning, release utilities,
 and individual guardrail scripts do not enter a build slot. CI workflow commands and
@@ -68,8 +74,9 @@ scripts/test-build-budget.sh
 ```
 
 It exercises separate worktree paths, a two-slot concurrency ceiling, progress after
-success, failure, and termination, nested admission, job-count precedence, bypass, and
-invalid settings.
+success, failure, and termination, nested admission, job-count precedence, bypass,
+invalid settings, `make run` releasing its slot before application runtime, and
+`make watch` admitting each check/test iteration without retaining a slot while idle.
 
 Run a bounded comparison with private targets outside the checkout:
 
