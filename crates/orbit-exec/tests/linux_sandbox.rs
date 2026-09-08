@@ -474,6 +474,14 @@ fn managed_worktree_argv_binds_stable_workspace_and_build_mounts() {
         )),
         "missing build bind in {joined}"
     );
+    assert!(
+        joined.contains(&format!("--chdir {}", cwd.display())),
+        "provider agent cwd must stay on the worktree, not the stable alias: {joined}"
+    );
+    assert!(
+        !joined.contains(&format!("--chdir {LINUX_STABLE_WORKSPACE_MOUNT}")),
+        "do not remap provider agent cwd onto the stable workspace mount: {joined}"
+    );
 }
 
 #[test]

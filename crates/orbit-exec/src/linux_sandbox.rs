@@ -641,6 +641,9 @@ pub fn compile_linux_bwrap_argv(
         if managed_worktree && cwd_is_writable_root(&cwd, &writable_roots) {
             append_stable_toolchain_mounts(&mut out, &cwd)?;
         }
+        // Keep the provider agent on the real worktree path. rustc cache-key
+        // cwd normalization belongs in scripts/rustc-compiler-cache.sh, which
+        // chdirs onto LINUX_STABLE_WORKSPACE_MOUNT only for compiler invocations.
         out.push("--chdir".to_string());
         out.push(cwd.display().to_string());
     }
