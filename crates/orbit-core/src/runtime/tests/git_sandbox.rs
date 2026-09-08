@@ -92,3 +92,98 @@ fn metadata_aliases_and_invalid_pointers_fail_closed() {
         assert_eq!(fs::read_to_string(outside).unwrap(), "host state");
     }
 }
+
+/// The task-pilot boundary [ORB-11756]. A source-inspection slot holds a
+/// checkout of ordinary tracked content, symlinks included. It lives in Orbit
+/// state beside the repository rather than under authoritative Git metadata,
+/// so protection admits the launch while every metadata leaf stays denied.
+/// Planting the same checkout back inside the metadata tree is still refused.
+#[cfg(target_os = "linux")]
+#[test]
+fn source_inspection_slot_launches_while_git_metadata_leaves_stay_denied() {
+    use std::fs;
+    use std::path::Path;
+
+    use super::append_linux_git_denies;
+    use orbit_common::fs::git::run_git;
+    use orbit_exec::linux_bwrap_write_grant_diagnostic;
+    use orbit_types::policy::ResolvedFsProfile;
+
+    fn git(root: &Path, args: &[&str]) -> String {
+        let output = run_git(root, args).unwrap();
+        assert!(output.success, "git {args:?}: {}", output.stderr);
+        output.stdout.trim().to_string()
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().canonicalize().unwrap().join("repo");
+    fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "--quiet"]);
+    git(&repo, &["config", "user.name", "Orbit Test"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(repo.join("CLAUDE.md"), "guide\n").unwrap();
+    std::os::unix::fs::symlink("CLAUDE.md", repo.join("AGENTS.md")).unwrap();
+    git(&repo, &["add", "CLAUDE.md", "AGENTS.md"]);
+    git(&repo, &["commit", "--quiet", "-m", "initial"]);
+    let revision = git(&repo, &["rev-parse", "HEAD"]);
+
+    // The slot layout the CLI runner materializes: a standalone repository in
+    // Orbit state, populated by fetch so no object arrives hard-linked.
+    let checkout = repo.join(".orbit/state/source-inspections-v1/0/checkout");
+    fs::create_dir_all(&checkout).unwrap();
+    git(&checkout, &["init", "--quiet", "--template="]);
+    git(
+        &checkout,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            repo.join(".git").to_str().unwrap(),
+            &revision,
+        ],
+    );
+    git(&checkout, &["checkout", "--quiet", "--detach", &revision]);
+    assert!(
+        fs::symlink_metadata(checkout.join("AGENTS.md"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    let mut profile = ResolvedFsProfile {
+        name: "test".to_string(),
+        read: vec!["/**".to_string()],
+        modify: vec![format!("{}/**", repo.display())],
+    };
+    append_linux_git_denies(&repo, &mut profile).unwrap();
+    append_linux_git_denies(&checkout, &mut profile).unwrap();
+
+    for denied in [
+        repo.join(".git/HEAD"),
+        repo.join(".git/refs/heads/protected"),
+        checkout.join(".git/HEAD"),
+    ] {
+        assert!(
+            linux_bwrap_write_grant_diagnostic(&profile, &denied)
+                .unwrap()
+                .is_some(),
+            "{} must stay write-denied",
+            denied.display()
+        );
+    }
+    assert!(
+        linux_bwrap_write_grant_diagnostic(&profile, &checkout.join("AGENTS.md"))
+            .unwrap()
+            .is_none(),
+        "the inspected tracked symlink is not Git metadata"
+    );
+
+    let planted = repo.join(".git/orbit-source-inspections-v1/0/checkout");
+    fs::create_dir_all(&planted).unwrap();
+    std::os::unix::fs::symlink("CLAUDE.md", planted.join("AGENTS.md")).unwrap();
+    let error = append_linux_git_denies(&repo, &mut profile).unwrap_err();
+    assert!(error.to_string().contains("metadata entry"), "{error}");
+}
