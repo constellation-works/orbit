@@ -44,11 +44,27 @@ function truncateValue(ctx, s, n = 220) {
   return hasCtx(ctx, "truncate") ? ctx.truncate(s, n) : String(s || "").slice(0, n);
 }
 
+// `actor_identity` is the persisted ActorIdentity enum: a flat label string,
+// or the tagged `{"human": "..."}` / `{"agent": {"model": "..."}}` shape used
+// for the labels a flat string cannot represent. Both render as one label.
+function actorIdentityLabel(v) {
+  if (v == null) return "";
+  if (typeof v !== "object") return String(v);
+  if (typeof v.human === "string") return v.human;
+  const agent = v.agent || {};
+  return agent.model || agent.name || "";
+}
+
 function getDiagMetricsColumns(ctx) {
   return [
     { key: "ts", label: "time", num: false, render: (v) => fmtRelativeValue(ctx, v) },
     { key: "step", label: "step", num: false },
-    { key: "actor_identity", label: "actor", num: false, render: (v) => v || "-" },
+    {
+      key: "actor_identity",
+      label: "actor",
+      num: false,
+      render: (v) => actorIdentityLabel(v) || "-",
+    },
     {
       key: "token_usage",
       label: "tokens",
@@ -142,7 +158,7 @@ function renderDiagnosticsTable(rows, columns, ctx, emptyText) {
       td.textContent = text;
       tr.appendChild(td);
     }
-    tr.dataset.key = `diag-${row.ts || ''}-${row.job_run || row.affiliation || ''}-${row.step || i}-${row.command || row.actor_identity || ''}`;
+    tr.dataset.key = `diag-${row.ts || ''}-${row.job_run || row.affiliation || ''}-${row.step || i}-${row.command || actorIdentityLabel(row.actor_identity) || ''}`;
     tr.dataset.hash = JSON.stringify(row);
     if (row.affiliation === "unaffiliated") {
       tr.classList.add("unaffiliated");

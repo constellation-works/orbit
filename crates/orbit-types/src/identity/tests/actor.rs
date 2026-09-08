@@ -31,3 +31,77 @@ mod mapping {
         assert_eq!(provider_from_model("unknown-model"), None);
     }
 }
+
+mod serde_round_trip {
+    use super::super::super::actor::ActorIdentity;
+
+    fn round_trip(actor: &ActorIdentity) -> ActorIdentity {
+        let encoded = serde_json::to_string(actor).expect("serialize actor");
+        serde_json::from_str(&encoded).expect("deserialize actor")
+    }
+
+    #[test]
+    fn every_variant_survives_a_round_trip() {
+        for actor in [
+            ActorIdentity::human("daniel"),
+            ActorIdentity::agent("claude / opus"),
+            ActorIdentity::agent("gpt-5"),
+            ActorIdentity::System,
+        ] {
+            assert_eq!(round_trip(&actor), actor, "round trip changed {actor:?}");
+        }
+    }
+
+    #[test]
+    fn unambiguous_agent_models_stay_flat_strings() {
+        let encoded = serde_json::to_string(&ActorIdentity::agent("gpt-5")).expect("serialize");
+        assert_eq!(encoded, r#""gpt-5""#);
+        assert_eq!(
+            serde_json::to_string(&ActorIdentity::System).expect("serialize"),
+            r#""system""#
+        );
+    }
+
+    #[test]
+    fn variants_the_flat_label_cannot_represent_use_the_tagged_form() {
+        assert_eq!(
+            serde_json::to_string(&ActorIdentity::human("daniel")).expect("serialize"),
+            r#"{"human":"daniel"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ActorIdentity::agent("claude / opus")).expect("serialize"),
+            r#"{"agent":{"model":"claude / opus"}}"#
+        );
+        // A model that collides with a reserved flat label must not read back
+        // as `System` or `Human`.
+        for model in ["system", "human"] {
+            assert_eq!(
+                round_trip(&ActorIdentity::agent(model)),
+                ActorIdentity::agent(model)
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_encodings_still_deserialize() {
+        let cases = [
+            (r#""system""#, ActorIdentity::System),
+            (r#""gpt-5""#, ActorIdentity::agent("gpt-5")),
+            (r#""claude / opus""#, ActorIdentity::agent("opus")),
+            (r#""human""#, ActorIdentity::human("human")),
+            (
+                r#"{"agent":{"name":"claude","model":"opus"}}"#,
+                ActorIdentity::agent("opus"),
+            ),
+            (
+                r#"{"agent":{"name":"claude"}}"#,
+                ActorIdentity::agent("claude"),
+            ),
+            (r#"{"human":"daniel"}"#, ActorIdentity::human("daniel")),
+        ];
+        for (encoded, expected) in cases {
+            let decoded: ActorIdentity = serde_json::from_str(encoded).expect("deserialize legacy");
+            assert_eq!(decoded, expected, "decoding {encoded}");
+        }
+    }
+}

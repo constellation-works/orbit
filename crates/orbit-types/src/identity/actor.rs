@@ -205,20 +205,63 @@ pub fn normalize_optional_attribution_label(
         .filter(|value| !value.is_empty())
 }
 
-/// Custom serialization: emits the flat display label string.
+/// Custom serialization: emits the flat display label when that label reads
+/// back as the same variant, and the tagged map form otherwise.
 ///
 /// - `System` → `"system"`
-/// - `Agent { model }` → `"model"`
-/// - `Human { label }` → `"label"`
+/// - `Agent { model }` → `"model"`, or `{"agent": {"model": "..."}}` when the
+///   bare label would be re-read as another variant (see
+///   [`agent_label_round_trips`])
+/// - `Human { label }` → `{"human": "label"}`, because a bare string only ever
+///   reads back as `Human` for the literal `"human"`
+///
+/// orbit-types is a stable tier, so the flat forms every earlier writer
+/// emitted — including bare-string agent labels — stay readable; only the
+/// variants that the flat form cannot represent move to the tagged shape.
 impl Serialize for ActorIdentity {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.label())
+        use serde::ser::SerializeMap;
+
+        match self {
+            Self::System => serializer.serialize_str("system"),
+            Self::Agent { model } if agent_label_round_trips(model) => {
+                serializer.serialize_str(model)
+            }
+            Self::Agent { model } => {
+                let fields = AgentFields {
+                    name: String::new(),
+                    model: model.clone(),
+                };
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("agent", &fields)?;
+                map.end()
+            }
+            Self::Human { label } => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("human", label)?;
+                map.end()
+            }
+        }
     }
 }
 
+/// Whether an agent model survives being written as a bare label string.
+///
+/// `visit_str` claims `"system"` and `"human"` for their own variants and
+/// keeps only the right-hand side of the legacy `"<family> / <model>"` form,
+/// so a model matching any of those must be written as a tagged map instead.
+fn agent_label_round_trips(model: &str) -> bool {
+    model != "system" && model != "human" && !model.contains(" / ")
+}
+
+/// Payload of the tagged `{"agent": {...}}` form.
+///
+/// `name` carried the agent family for writers that predate the model-only
+/// convention. It is still read as a fallback when `model` is absent, but it
+/// is no longer written, since the family is derived from the model.
 #[derive(Serialize, Deserialize)]
 struct AgentFields {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     name: String,
     #[serde(default)]
     model: String,
