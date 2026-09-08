@@ -1,5 +1,3 @@
-use std::thread;
-
 use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
 
@@ -86,35 +84,16 @@ pub(crate) fn run_with_embedder(
     let retriever_limit = limit.saturating_mul(RETRIEVER_OVERFETCH).max(limit);
     let kind = params.kind.as_deref();
     let model_id = embedder.model_id().to_string();
-    let query_for_bm25 = query.to_string();
-    let cosine_store = vector_store.clone();
-    let bm25_store = vector_store.clone();
-    let cosine_model_id = model_id.clone();
-    let cosine_kind = kind.map(ToOwned::to_owned);
     let field = params.field.as_deref();
-    let cosine_field = field.map(ToOwned::to_owned);
-
-    let (cosine, bm25) = thread::scope(|scope| {
-        let cosine_handle = scope.spawn(|| {
-            crate::vector::query::cosine_top_k(
-                &cosine_store,
-                &query_vector,
-                &cosine_model_id,
-                retriever_limit,
-                cosine_kind.as_deref(),
-                cosine_field.as_deref(),
-            )
-        });
-        let bm25_handle =
-            scope.spawn(|| bm25_top_k(&bm25_store, &query_for_bm25, kind, field, retriever_limit));
-        let cosine = cosine_handle
-            .join()
-            .map_err(|_| OrbitError::Execution("cosine retriever panicked".to_string()))?;
-        let bm25 = bm25_handle
-            .join()
-            .map_err(|_| OrbitError::Execution("bm25 retriever panicked".to_string()))?;
-        Ok::<_, OrbitError>((cosine?, bm25?))
-    })?;
+    let cosine = crate::vector::query::cosine_top_k(
+        vector_store,
+        &query_vector,
+        &model_id,
+        retriever_limit,
+        kind,
+        field,
+    )?;
+    let bm25 = bm25_top_k(vector_store, query, kind, field, retriever_limit)?;
 
     let candidates = reciprocal_rank_fusion(&cosine, &bm25);
     let task_hits = rollup_to_tasks(candidates, limit);
