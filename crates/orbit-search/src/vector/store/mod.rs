@@ -18,7 +18,7 @@
 
 mod docs;
 mod queries;
-mod schema;
+pub(crate) mod schema;
 mod tasks;
 mod upsert;
 

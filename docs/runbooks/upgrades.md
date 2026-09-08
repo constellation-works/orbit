@@ -4,8 +4,8 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344]
-last_validated: 2026-09-07
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753]
+last_validated: 2026-09-08
 ---
 
 # Upgrade Orbit Safely
@@ -219,6 +219,57 @@ than the newest version this orbit binary supports (1); upgrade orbit to open th
 The schema ledger has the same guard:
 `store database schema version N is newer than the newest version this orbit binary supports`.
 Upgrade the binary. Never hand-edit `layout.version` to force the workspace open.
+
+## Mixed binaries and the workspace semantic index
+
+`.orbit/state/semantic.db` is a **forward-only** layout, independent of the workspace-layout and store-schema ledgers above. A current Orbit binary migrates `corpus_fts` from inline metadata columns (`source_kind`, `source_id`, `field`) to an external-content FTS5 table over `chunks`. The migration is in place: it does not rewrite task or doc source records, and it does not rebuild embeddings.
+
+Older binaries still run the pre-migration BM25 projection:
+
+```sql
+SELECT source_kind, source_id, field, rowid, bm25(corpus_fts)
+FROM corpus_fts
+WHERE corpus_fts MATCH ?1 AND source_kind=?2
+```
+
+Against a migrated index that query fails with `no such column: source_kind`. Hybrid search on that older process then falls back to lexical ranking. Plain lexical task and doc lookup does not use `semantic.db` and is not broken.
+
+This mismatch is not a dual-read contract. Restoring the old FTS columns would let an older writer insert into `corpus_fts` without writing `chunks`, desynchronizing the index. Do not delete `semantic.db` to make the older binary work, and do not downgrade the schema.
+
+### Which process to upgrade or restart
+
+The binary that **already migrated** the file is current. Restart or upgrade every **other** Orbit process that still has the file open — typically a Homebrew or MCP install that is older than the cargo/`~/.orbit/bin` build:
+
+```sh
+type -a orbit
+/opt/homebrew/bin/orbit --version
+~/.cargo/bin/orbit --version
+~/.orbit/bin/orbit --version
+```
+
+On macOS, `lsof` on `.orbit/state/semantic.db` shows which process holds the migrated index. Align `PATH`, any explicit `ORBIT_BIN`, MCP client command paths, and long-lived dashboard/pipeline workers with the current binary, then restart those processes so they reopen the file. Building or running a newer cargo `orbit` does not upgrade Homebrew or change which executable an already-started MCP server is using.
+
+`orbit update` is the install-channel upgrade for Orbit-owned binaries; Homebrew packages upgrade through Homebrew. This runbook does not authorize replacing a global executable, restarting a host service, or rebuilding the live index as part of diagnosing the mismatch.
+
+### Distinguish lexical fallback from full hybrid success
+
+Ask the **same executable** the MCP client or agent is using, not a different `orbit` on `PATH`:
+
+```sh
+/path/to/suspect/orbit tool run orbit.search --input '{"query":"<term>","kind":"task","hybrid":true,"limit":2,"model":"codex"}'
+```
+
+Read `mode` and `notes` together:
+
+| Observation | Meaning |
+| --- | --- |
+| `mode` is `hybrid` and `notes` is empty | Full hybrid success on a current runtime. |
+| `mode` is `lexical` and a note contains `falling back to lexical` plus `semantic index layout is incompatible` | The answering process cannot read this `semantic.db` layout. Upgrade/restart **that** process. Lexical hits are not hybrid ranking. |
+| `mode` is `lexical` and a note contains `no such column` / `source_kind` | Same mismatch, reported by an older binary that does not yet translate the SQL error. Same remedy: upgrade/restart that process. |
+| `mode` is `lexical` with a companion/embeddings fallback note, no layout diagnostic | Hybrid was skipped for an unrelated reason (missing companion, empty embeddings). Layout is fine. |
+| Hybrid unset / `hybrid: false` | Lexical-only by request. Success here does not prove hybrid works. |
+
+A current binary on the same workspace answering `mode: hybrid` with empty notes, while an older MCP process on the same `semantic.db` falls back, is the mixed-runtime case — not a corrupt index.
 
 ## Verify the upgrade
 
