@@ -790,7 +790,7 @@ impl OrbitRuntime {
 
 /// Rejects an unqualified `resolves` friction ID that is missing locally
 /// but present in another workspace on this host.
-pub(crate) fn ensure_resolves_targets_are_workspace_local(
+fn ensure_resolves_targets_are_workspace_local(
     frictions: &dyn FrictionStoreBackend,
     workspace_id: &str,
     task: &Task,

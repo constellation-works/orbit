@@ -80,7 +80,7 @@ fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
 
 /// Translate the wire filter into the store filter, including the page, so
 /// SQLite decides which rows exist before any body is decoded.
-pub(super) fn list_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, OrbitError> {
+fn list_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, OrbitError> {
     let month_bounds = optional_string(&input, "month")?
         .map(|raw| parse_month_bounds(&raw))
         .transpose()?;
@@ -136,7 +136,7 @@ fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     )
 }
 
-pub(super) fn show_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, OrbitError> {
+fn show_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
     let Some(stored) = store.show(&id)? else {
         return Err(OrbitError::InvalidInput(format!(
