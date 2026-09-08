@@ -342,24 +342,21 @@ fn concurrent_explicit_edit_preserves_the_newer_status() {
     use std::sync::mpsc::sync_channel;
     use std::time::Duration;
 
-    let (root, runtime) = test_runtime();
+    let (_root, runtime) = test_runtime();
     let task = add_proposed_task(&runtime, "Guard under contention");
-    let lock_target = task_bundle_dir(root.path(), &task.id).join("task.yaml");
 
     let (locked_tx, locked_rx) = sync_channel::<()>(0);
     let (contender_tx, contender_rx) = sync_channel::<()>(0);
 
-    // `move` on the holder closure captures only the channel endpoints; the
-    // runtime and paths cross as shared references, which are `Copy`.
+    // Contend through the same store-owned lock used by task updates.
     let holder_runtime = &runtime;
-    let holder_lock_target = lock_target.as_path();
     let holder_id = task.id.clone();
     let contended = std::thread::scope(|scope| {
         scope.spawn(move || {
-            orbit_common::fs::io::with_exclusive_file_lock::<(), orbit_common::OrbitError, _>(
-                holder_lock_target,
-                "ORB-10988 regression",
-                || {
+            holder_runtime
+                .stores()
+                .tasks()
+                .with_task_write_lock(&holder_id, &mut || {
                     locked_tx.send(()).expect("announce the held lock");
                     contender_rx.recv().expect("await the contending update");
                     // Long enough that an update which reads before locking has
@@ -369,9 +366,8 @@ fn concurrent_explicit_edit_preserves_the_newer_status() {
                         .archive_task(&holder_id)
                         .expect("archive under the lock");
                     Ok(())
-                },
-            )
-            .expect("hold the task lock");
+                })
+                .expect("hold the task lock");
         });
 
         locked_rx.recv().expect("await the held lock");
@@ -395,25 +391,4 @@ fn concurrent_explicit_edit_preserves_the_newer_status() {
         reread.title, "renamed by the loser of the race",
         "the serialized edit must not restore its earlier status snapshot"
     );
-}
-
-/// Locate a task's bundle directory under a test runtime's roots. The store
-/// owns the layout; the test only needs *a* path to contend on.
-fn task_bundle_dir(root: &std::path::Path, id: &str) -> std::path::PathBuf {
-    fn walk(dir: &std::path::Path, id: &str) -> Option<std::path::PathBuf> {
-        for entry in std::fs::read_dir(dir).ok()?.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            if path.file_name().is_some_and(|name| name == id) && path.join("task.yaml").is_file() {
-                return Some(path);
-            }
-            if let Some(found) = walk(&path, id) {
-                return Some(found);
-            }
-        }
-        None
-    }
-    walk(root, id).unwrap_or_else(|| panic!("no bundle directory for {id} under {root:?}"))
 }
