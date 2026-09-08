@@ -61,9 +61,11 @@ pub(crate) fn run_show_payload(
     let doc = json!({
         "run": run_projection,
         "pipeline_state": state,
+        // The same projection the registered/MCP run-show surface emits, so
+        // both readers name a live child identically [ORB-11752].
         "provider_processes": provider_processes
             .iter()
-            .map(provider_process_to_json)
+            .map(RunProviderProcess::to_json)
             .collect::<Vec<_>>(),
     });
 
@@ -174,23 +176,6 @@ fn live_provider_process_lines(processes: &[RunProviderProcess]) -> String {
             )
         })
         .collect()
-}
-
-fn provider_process_to_json(process: &RunProviderProcess) -> Value {
-    json!({
-        "event_id": process.event_id,
-        "ts": process.ts.map(|ts| ts.to_rfc3339()),
-        "step_id": process.step_id,
-        "step_index": process.step_index,
-        "provider": process.provider,
-        "pid": process.pid,
-        "pid_start_time": process.pid_start_time,
-        "finished": process.finished,
-        "liveness": process.liveness.as_str(),
-        "exit_code": process.exit_code,
-        "timed_out": process.timed_out,
-        "duration_ms": process.duration_ms,
-    })
 }
 
 pub(crate) fn legacy_logs_summary_payload(

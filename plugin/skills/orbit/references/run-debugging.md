@@ -53,6 +53,29 @@ workflow failure. A recovery attempt is secondary evidence: `succeeded` does
 not rewrite that original failure, and a failed `authorization`, preparation,
 `dispatch`, or `activity` attempt explains why recovery did not complete.
 
+### Tell a working agent from an abandoned wrapper
+
+For a run that is still `running`, `orbit_workflow_run_show` carries
+`execution_progress`: the activity step that is open and the provider children
+it spawned. Only `show` carries it — `orbit_workflow_run_list` pages many runs
+and does not pay for an audit scan and a liveness probe per row.
+
+Its `state` is `observed` when the run has a v2 audit trail and `unavailable`
+when it has none, so an empty projection never has to be read as "nothing is
+running". `active_step` names the open `step_id` and `step_index`, and each
+`provider_processes.items` entry names the child's `pid`, `provider`, owning
+step, and a `liveness` of `alive`, `exited`, or `unknown`.
+
+`liveness` is judged against the identity token recorded with the PID, so a
+recycled PID reads `exited` rather than a false `alive`, and a PID recorded in
+another PID namespace reads `unknown` rather than a false `exited`. A child with
+`finished: true` carries its `exit_code` instead. `limit` and `truncated` say
+when a long retry history was bounded; open children are never the ones dropped.
+
+A `running` run whose open step has no `alive` child is the signature of an
+abandoned wrapper. `orbit run show <run_id> --json` reports the same
+`provider_processes` for the owning host.
+
 ### Verify model routing before reading logs
 
 `orbit run show <run_id> --json` separates three identities: `requested_crew`

@@ -2,6 +2,9 @@ use std::collections::BTreeSet;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::process::identity::{
+    STABLE_TOKEN_PREFIX, current_pid_namespace, process_start_identity_token,
+};
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
 use orbit_types::task::TaskStatus;
@@ -148,6 +151,70 @@ fn seed_recovery_attempt(
             payload_json: event.to_string(),
         })
         .expect("seed recovery attempt audit event");
+}
+
+/// Seed one v2 audit event for `run_id`. `body` supplies the event-specific
+/// fields; the envelope keys every reader needs are filled in here.
+fn seed_v2_event(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    event_id: &str,
+    ts: &str,
+    parent_event_id: Option<&str>,
+    body: Value,
+) {
+    let mut event = json!({
+        "schemaVersion": 1,
+        "event_type": "test.event",
+        "event_id": event_id,
+        "ts": ts,
+        "run_id": run_id,
+        "agent_identity": "codex",
+        "parent_event_id": parent_event_id,
+    });
+    let object = event.as_object_mut().expect("event object");
+    for (key, value) in body.as_object().expect("event body").clone() {
+        object.insert(key, value);
+    }
+    runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: runtime.workspace_id().expect("workspace id"),
+            event_id: event_id.to_string(),
+            source: "v2_envelope".to_string(),
+            schema_version: 1,
+            event_type: "test.event".to_string(),
+            ts: chrono::DateTime::parse_from_rfc3339(ts)
+                .expect("fixture timestamp")
+                .with_timezone(&Utc),
+            run_id: run_id.to_string(),
+            agent_identity: "codex".to_string(),
+            parent_event_id: parent_event_id.map(str::to_string),
+            workspace_path: None,
+            payload_json: event.to_string(),
+        })
+        .expect("seed v2 audit event");
+}
+
+fn seed_running_run(runtime: &OrbitRuntime) -> String {
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
+        .expect("insert run");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .expect("start run");
+    run.run_id
+}
+
+/// A PID this process can vouch for, with the identity token that proves the
+/// probe is looking at the same process. Deterministically alive: it is the
+/// test itself.
+fn live_pid_and_token() -> (u32, Option<String>) {
+    let pid = std::process::id();
+    (pid, process_start_identity_token(pid))
 }
 
 /// ORB-10540: the in-run denial, driven by the environment rather than by a
@@ -497,4 +564,367 @@ fn mcp_run_observation_carries_an_empty_lineage_for_a_run_without_children() {
     .expect("operator run show");
 
     assert_eq!(shown["child_dispatches"], json!([]));
+}
+
+/// [ORB-11752] The gap this task closes: a `running` run whose registered
+/// projection reported a wrapper PID and nothing about the implementation
+/// child. `execution_progress` names the open step and the live provider
+/// process, so an orchestrator can tell a working agent from an abandoned
+/// wrapper without falling back to an operator command.
+#[test]
+fn mcp_run_show_names_the_active_step_and_its_live_provider_child() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let run_id = seed_running_run(&runtime);
+    let (pid, pid_start_time) = live_pid_and_token();
+
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-prepare",
+        "2026-09-08T00:06:00Z",
+        None,
+        json!({"body_kind": "step_started", "step_id": "prepare_worktree"}),
+    );
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-prepare-done",
+        "2026-09-08T00:06:10Z",
+        None,
+        json!({"body_kind": "step_finished", "step_id": "prepare_worktree", "outcome": "success"}),
+    );
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-implement",
+        "2026-09-08T00:06:20Z",
+        None,
+        json!({"body_kind": "step_started", "step_id": "implement_one"}),
+    );
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-activity",
+        "2026-09-08T00:06:21Z",
+        Some("evt-implement"),
+        json!({"body_kind": "activity_started"}),
+    );
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-process",
+        "2026-09-08T00:06:22Z",
+        Some("evt-activity"),
+        json!({
+            "body_kind": "cli_invocation_process",
+            "provider": "codex",
+            "pid": pid,
+            "pid_start_time": pid_start_time,
+        }),
+    );
+
+    let shown = run_tool_as_operator(&runtime, "orbit.workflow.run.show", json!({"id": run_id}))
+        .expect("operator run show");
+
+    let progress = &shown["execution_progress"];
+    assert_eq!(progress["state"], json!("observed"));
+    assert_eq!(progress["active_step"]["step_id"], json!("implement_one"));
+    assert_eq!(progress["active_step"]["step_index"], json!(1));
+    assert_eq!(
+        progress["active_step"]["started_at"],
+        json!("2026-09-08T00:06:20+00:00")
+    );
+
+    let processes = &progress["provider_processes"];
+    assert_eq!(processes["truncated"], json!(false));
+    assert_eq!(processes["items"].as_array().expect("items").len(), 1);
+    let child = &processes["items"][0];
+    assert_eq!(child["pid"], json!(pid));
+    assert_eq!(child["provider"], json!("codex"));
+    assert_eq!(child["step_id"], json!("implement_one"));
+    assert_eq!(child["step_index"], json!(1));
+    assert_eq!(child["finished"], json!(false));
+    assert_eq!(child["liveness"], json!("alive"));
+
+    // The evidence is additive: everything the surface already answered is
+    // still on the same response.
+    assert_eq!(shown["run_id"], json!(run_id));
+    assert_eq!(shown["state"], json!("running"));
+    assert_eq!(shown["child_dispatches"], json!([]));
+    assert_eq!(shown["recovery_attempts"]["state"], json!("not_attempted"));
+    assert_eq!(shown["agent_invocation"], Value::Null);
+
+    // `list` pages up to 200 runs, so it does not pay for an audit scan and a
+    // liveness probe per row.
+    let listed = run_tool_as_operator(&runtime, "orbit.workflow.run.list", json!({}))
+        .expect("operator run list");
+    assert_eq!(listed["items"][0]["execution_progress"], Value::Null);
+}
+
+/// Retries and parallel invocations under one step stay separable: each spawn
+/// keeps its own exit evidence, and only the child that never reported an exit
+/// is probed for liveness.
+#[test]
+fn mcp_run_show_separates_a_finished_child_from_the_open_retry() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let run_id = seed_running_run(&runtime);
+    let (pid, pid_start_time) = live_pid_and_token();
+
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-step",
+        "2026-09-08T00:06:00Z",
+        None,
+        json!({"body_kind": "step_started", "step_id": "implement_one"}),
+    );
+    for (activity, process, spawned_pid) in [
+        ("evt-first", "evt-first-pid", 424_242_u32),
+        ("evt-second", "evt-second-pid", pid),
+    ] {
+        seed_v2_event(
+            &runtime,
+            &run_id,
+            activity,
+            "2026-09-08T00:06:01Z",
+            Some("evt-step"),
+            json!({"body_kind": "activity_started"}),
+        );
+        seed_v2_event(
+            &runtime,
+            &run_id,
+            process,
+            "2026-09-08T00:06:02Z",
+            Some(activity),
+            json!({
+                "body_kind": "cli_invocation_process",
+                "provider": "codex",
+                "pid": spawned_pid,
+                "pid_start_time": if spawned_pid == pid { json!(pid_start_time) } else { Value::Null },
+            }),
+        );
+    }
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-first-done",
+        "2026-09-08T00:06:30Z",
+        Some("evt-first"),
+        json!({"body_kind": "cli_invocation_finished", "exit_code": 137, "duration_ms": 28_000}),
+    );
+
+    let shown = run_tool_as_operator(&runtime, "orbit.workflow.run.show", json!({"id": run_id}))
+        .expect("operator run show");
+    let items = shown["execution_progress"]["provider_processes"]["items"]
+        .as_array()
+        .expect("items")
+        .clone();
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["pid"], json!(424_242));
+    assert_eq!(items[0]["finished"], json!(true));
+    assert_eq!(items[0]["exit_code"], json!(137));
+    assert_eq!(items[0]["duration_ms"], json!(28_000));
+    // A child that reported its exit is not probed: it is `exited` by record.
+    assert_eq!(items[0]["liveness"], json!("exited"));
+
+    assert_eq!(items[1]["pid"], json!(pid));
+    assert_eq!(items[1]["finished"], json!(false));
+    assert_eq!(items[1]["exit_code"], Value::Null);
+    assert_eq!(items[1]["liveness"], json!("alive"));
+}
+
+/// A recycled PID is not a live agent. The recorded identity token is what
+/// separates "my child is still running" from "some unrelated process now
+/// holds that number", and a PID recorded in a foreign PID namespace is
+/// `unknown` rather than a false `exited`.
+#[test]
+fn mcp_run_show_rejects_a_recycled_pid_and_refuses_to_judge_a_foreign_namespace() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let run_id = seed_running_run(&runtime);
+    let pid = std::process::id();
+
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-step",
+        "2026-09-08T00:06:00Z",
+        None,
+        json!({"body_kind": "step_started", "step_id": "implement_one"}),
+    );
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-recycled",
+        "2026-09-08T00:06:02Z",
+        Some("evt-step"),
+        json!({
+            "body_kind": "cli_invocation_process",
+            "provider": "codex",
+            "pid": pid,
+            // A live PID whose recorded start identity disagrees with the
+            // process holding it now.
+            "pid_start_time": format!(
+                "{}pidns={}:Thu Jan  1 00:00:00 1970",
+                STABLE_TOKEN_PREFIX,
+                current_pid_namespace().unwrap_or("-"),
+            ),
+        }),
+    );
+
+    let shown = run_tool_as_operator(&runtime, "orbit.workflow.run.show", json!({"id": run_id}))
+        .expect("operator run show");
+    assert_eq!(
+        shown["execution_progress"]["provider_processes"]["items"][0]["liveness"],
+        json!("exited")
+    );
+
+    // Only Linux reports a PID namespace, so only there can a reader stand
+    // outside the one a PID was recorded in.
+    #[cfg(target_os = "linux")]
+    {
+        let foreign_run_id = seed_running_run(&runtime);
+        seed_v2_event(
+            &runtime,
+            &foreign_run_id,
+            "evt-foreign-step",
+            "2026-09-08T00:06:00Z",
+            None,
+            json!({"body_kind": "step_started", "step_id": "implement_one"}),
+        );
+        seed_v2_event(
+            &runtime,
+            &foreign_run_id,
+            "evt-foreign",
+            "2026-09-08T00:06:02Z",
+            Some("evt-foreign-step"),
+            json!({
+                "body_kind": "cli_invocation_process",
+                "provider": "codex",
+                "pid": pid,
+                "pid_start_time": format!("{STABLE_TOKEN_PREFIX}pidns=1:Thu Jan  1 00:00:00 1970"),
+            }),
+        );
+
+        let foreign = run_tool_as_operator(
+            &runtime,
+            "orbit.workflow.run.show",
+            json!({"id": foreign_run_id}),
+        )
+        .expect("operator run show");
+        assert_eq!(
+            foreign["execution_progress"]["provider_processes"]["items"][0]["liveness"],
+            json!("unknown")
+        );
+    }
+}
+
+/// A run with no v2 audit trail — a legacy run, or one whose trail was never
+/// written — reports `unavailable`, which is not the same claim as "nothing is
+/// running". A long retry history is bounded, and the open child keeps its
+/// place in the budget.
+#[test]
+fn mcp_run_show_marks_a_missing_trail_unavailable_and_bounds_a_long_history() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let legacy_run_id = seed_running_run(&runtime);
+
+    let legacy = run_tool_as_operator(
+        &runtime,
+        "orbit.workflow.run.show",
+        json!({"id": legacy_run_id}),
+    )
+    .expect("operator run show");
+    let progress = &legacy["execution_progress"];
+    assert_eq!(progress["state"], json!("unavailable"));
+    assert_eq!(progress["active_step"], Value::Null);
+    assert_eq!(progress["provider_processes"]["items"], json!([]));
+    assert_eq!(progress["provider_processes"]["limit"], json!(8));
+    assert_eq!(progress["provider_processes"]["truncated"], json!(false));
+
+    let busy_run_id = seed_running_run(&runtime);
+    seed_v2_event(
+        &runtime,
+        &busy_run_id,
+        "evt-step",
+        "2026-09-08T00:06:00Z",
+        None,
+        json!({"body_kind": "step_started", "step_id": "implement_one"}),
+    );
+    // One open child spawned first, then more finished retries than the budget
+    // carries: the open one must survive the truncation.
+    let (pid, pid_start_time) = live_pid_and_token();
+    seed_v2_event(
+        &runtime,
+        &busy_run_id,
+        "evt-open-activity",
+        "2026-09-08T00:06:01Z",
+        Some("evt-step"),
+        json!({"body_kind": "activity_started"}),
+    );
+    seed_v2_event(
+        &runtime,
+        &busy_run_id,
+        "evt-open-pid",
+        "2026-09-08T00:06:02Z",
+        Some("evt-open-activity"),
+        json!({
+            "body_kind": "cli_invocation_process",
+            "provider": "codex",
+            "pid": pid,
+            "pid_start_time": pid_start_time,
+        }),
+    );
+    for retry in 0..12u32 {
+        let activity = format!("evt-retry-{retry}-activity");
+        seed_v2_event(
+            &runtime,
+            &busy_run_id,
+            &activity,
+            &format!("2026-09-08T00:07:{retry:02}Z"),
+            Some("evt-step"),
+            json!({"body_kind": "activity_started"}),
+        );
+        seed_v2_event(
+            &runtime,
+            &busy_run_id,
+            &format!("evt-retry-{retry}-pid"),
+            &format!("2026-09-08T00:08:{retry:02}Z"),
+            Some(&activity),
+            json!({
+                "body_kind": "cli_invocation_process",
+                "provider": "codex",
+                "pid": 500_000 + retry,
+            }),
+        );
+        seed_v2_event(
+            &runtime,
+            &busy_run_id,
+            &format!("evt-retry-{retry}-done"),
+            &format!("2026-09-08T00:09:{retry:02}Z"),
+            Some(&activity),
+            json!({"body_kind": "cli_invocation_finished", "exit_code": 1}),
+        );
+    }
+
+    let busy = run_tool_as_operator(
+        &runtime,
+        "orbit.workflow.run.show",
+        json!({"id": busy_run_id}),
+    )
+    .expect("operator run show");
+    let processes = &busy["execution_progress"]["provider_processes"];
+    let items = processes["items"].as_array().expect("items");
+    assert_eq!(processes["truncated"], json!(true));
+    assert_eq!(items.len(), 8);
+    assert_eq!(items[0]["pid"], json!(pid), "the open child must survive");
+    assert_eq!(items[0]["liveness"], json!("alive"));
+    assert_eq!(
+        items
+            .iter()
+            .skip(1)
+            .map(|item| item["pid"].as_u64().expect("pid"))
+            .collect::<Vec<_>>(),
+        (500_005_u64..=500_011).collect::<Vec<_>>(),
+        "the newest finished retries fill the rest of the budget"
+    );
 }
