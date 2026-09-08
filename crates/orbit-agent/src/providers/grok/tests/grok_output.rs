@@ -18,6 +18,7 @@ fn projected(stdout: &str) -> String {
 fn exec_result(stdout: String, exit_code: i32) -> ExecutionResult {
     ExecutionResult {
         success: exit_code == 0,
+        timed_out: false,
         stdout,
         stderr: String::new(),
         exit_code: Some(exit_code),
@@ -77,7 +78,7 @@ fn grok_final_timeout_overrides_success_shaped_metadata() {
     })
     .to_string();
     let mut execution = exec_result(projected(&stdout), 1);
-    execution.stderr = "process timed out".to_string();
+    execution.timed_out = true;
 
     let (envelope, status, _) =
         parse_and_validate_response(&execution).expect("final timeout parses");

@@ -11,12 +11,26 @@ mod parse {
     fn exec(stdout: &str, stderr: &str, exit_code: Option<i32>, success: bool) -> ExecutionResult {
         ExecutionResult {
             success,
+            timed_out: false,
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             exit_code,
             duration_ms: 1234,
             output: None,
         }
+    }
+
+    #[test]
+    fn stderr_timeout_phrase_without_supervisor_verdict_is_invocation_failure() {
+        let exec = exec("", "tool: process timed out", Some(1), false);
+
+        let (envelope, status, _) = synthesize_response(&exec).expect("failure is synthesized");
+
+        assert_eq!(status, AgentResponseStatus::Failed);
+        assert_eq!(
+            envelope.error.expect("failure error").code,
+            "AGENT_INVOCATION_FAILED"
+        );
     }
 
     #[test]
@@ -731,6 +745,7 @@ mod structured_output {
     fn exec(stdout: &str, stderr: &str, exit_code: Option<i32>, success: bool) -> ExecutionResult {
         ExecutionResult {
             success,
+            timed_out: false,
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             exit_code,

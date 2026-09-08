@@ -60,6 +60,7 @@ pub(super) fn parse_cli_invocation_trace(
 ) -> Option<InvocationTrace> {
     let exec_result = ExecutionResult {
         success,
+        timed_out: false,
         stdout: String::from_utf8_lossy(stdout).into_owned(),
         stderr: String::from_utf8_lossy(stderr).into_owned(),
         exit_code,
@@ -89,6 +90,7 @@ pub(super) fn parse_cli_response_result(
 ) -> Result<serde_json::Map<String, Value>, String> {
     let exec_result = ExecutionResult {
         success,
+        timed_out: false,
         stdout: String::from_utf8_lossy(stdout).into_owned(),
         stderr: String::from_utf8_lossy(stderr).into_owned(),
         exit_code,

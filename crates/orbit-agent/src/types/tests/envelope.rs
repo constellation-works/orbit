@@ -9,6 +9,7 @@ use super::super::response::envelope::*;
 fn exec(stdout: &str, exit_code: Option<i32>) -> ExecutionResult {
     ExecutionResult {
         success: exit_code == Some(0),
+        timed_out: false,
         stdout: stdout.to_string(),
         stderr: String::new(),
         exit_code,
