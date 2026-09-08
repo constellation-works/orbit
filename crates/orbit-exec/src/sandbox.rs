@@ -1,9 +1,21 @@
+use std::process::Child;
+
 use orbit_common::OrbitError;
 
 use crate::runner::ExecRequest;
 
 pub trait Sandbox {
     fn validate(&self, req: &ExecRequest) -> Result<(), OrbitError>;
+
+    /// Create the child once [`Self::validate`] has accepted the request.
+    ///
+    /// This is the seam a strategy overrides to confine the process itself.
+    /// Argv rewriting cannot express a read boundary, because an allowed
+    /// program decides for itself what to open; a strategy that must enforce
+    /// one applies it here, between `fork` and `exec`.
+    fn spawn(&self, req: &ExecRequest) -> Result<Child, OrbitError> {
+        crate::process::spawn(req)
+    }
 }
 
 /// A sandbox strategy that adds no Orbit-specific validation or containment.

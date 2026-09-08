@@ -72,7 +72,7 @@ pub fn run_process(
     sandbox.validate(req)?;
 
     let started = Instant::now();
-    let child = crate::process::spawn(req)?;
+    let child = sandbox.spawn(req)?;
     let stdin_payload = match &req.stdin_mode {
         StdinMode::Bytes(bytes) => Some(bytes.clone()),
         StdinMode::Inherit | StdinMode::Null => None,
@@ -160,7 +160,7 @@ where
     sandbox.validate(req)?;
 
     let started = Instant::now();
-    let mut child = crate::process::spawn(req)?;
+    let mut child = sandbox.spawn(req)?;
     let stdout = child
         .stdout
         .take()
