@@ -11,7 +11,7 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::{parse_local_routine_yaml, parse_routine_yaml};
 use orbit_store::contracts::RoutineFireRecord;
 
-use super::due::{parse_cron, truncate_to_minute};
+use super::due::{next_occurrence, parse_cron};
 use super::loader::{LoadedRoutine, RoutineLoadError, RoutineWorkspaceProvider, collect_routines};
 use super::validation::{
     RoutinePinValidation, RoutinePlacementProjection, RoutinePlacementProvider,
@@ -159,11 +159,7 @@ pub fn routine_statuses_with_providers(
 
     let mut statuses = Vec::with_capacity(collection.routines.len());
     for routine in collection.routines {
-        let next_due = parse_cron(&routine.definition.trigger.cron)
-            .ok()
-            .and_then(|cron| cron.find_next_occurrence(&now, false).ok())
-            .map(truncate_to_minute)
-            .map(|slot| slot.to_rfc3339());
+        let next_due = next_scheduled_occurrence(&routine.definition.trigger.cron, &now);
         let last_fire = store.routine_latest_fire(&routine.definition.name)?;
         let cursor = store.routine_cursor(&routine.definition.name)?;
         let paused_at = pauses
@@ -199,6 +195,21 @@ pub fn routine_statuses_with_providers(
         statuses,
         load_errors,
     })
+}
+
+/// The routine's next scheduled occurrence, rendered host-local.
+///
+/// This is the schedule coming around again, not the sweep's catch-up
+/// eligibility: a routine holding a missed slot under `catch_up_once` is due
+/// for that earlier slot while this still points forward. The projection comes
+/// from the shared cron owner so routine status and auto-task status pin slots
+/// to the minute identically. An unparseable cron projects nothing; the display
+/// state reports why.
+pub(crate) fn next_scheduled_occurrence(cron: &str, now: &DateTime<Local>) -> Option<String> {
+    parse_cron(cron)
+        .and_then(|cron| next_occurrence(&cron, now))
+        .ok()
+        .map(|slot| slot.to_rfc3339())
 }
 
 /// Optimistic outcome for a versioned routine-definition toggle.

@@ -6,15 +6,16 @@ use std::time::Instant;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_TOGGLE,
 };
 use orbit_core::OrbitRuntime;
+use orbit_core::application::auto_tasks::schedule::next_scheduled_slot;
 use orbit_core::application::auto_tasks::{
     AutoTaskCursor, collect_auto_tasks, cursor_state_path, load_cursor_state,
 };
-use orbit_core::application::routines::{ScheduleDisplayState, parse_cron};
+use orbit_core::application::routines::ScheduleDisplayState;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag,
@@ -509,7 +510,7 @@ fn next_evaluation_projection(
     if !enabled {
         return next_evaluation_json(
             ScheduleDisplayState::Disabled,
-            theoretical_next(schedule, cursor, now),
+            projected_next_slot(schedule, cursor, now),
         );
     }
     if cursor_state_unavailable || automation_unavailable(automation) {
@@ -523,7 +524,7 @@ fn next_evaluation_projection(
             if cursor.is_none() {
                 return next_evaluation_json(ScheduleDisplayState::NeverObserved, None);
             }
-            match theoretical_next(schedule, cursor, now) {
+            match projected_next_slot(schedule, cursor, now) {
                 Some(at) => next_evaluation_json(ScheduleDisplayState::Scheduled, Some(at)),
                 None => next_evaluation_json(ScheduleDisplayState::Unavailable, None),
             }
@@ -538,58 +539,30 @@ fn automation_unavailable(automation: Option<&Value>) -> bool {
         .is_some_and(|reason| reason == "source_unavailable" || reason == "state_unavailable")
 }
 
-fn theoretical_next(
+/// The schedule's next occurrence, rendered for the dashboard.
+///
+/// This is the next scheduled arrival, never catch-up eligibility: a definition
+/// with a missed slot pending is due for that earlier slot while this points
+/// forward. The arithmetic belongs to the auto-task scheduler, so this only
+/// adapts the cursor and renders the result; a schedule that cannot be
+/// projected (unparseable cron, interval with no anchor) yields `None` and the
+/// caller labels the row.
+fn projected_next_slot(
     schedule: &AutoTaskSchedule,
     cursor: Option<&AutoTaskCursor>,
     now: DateTime<Utc>,
 ) -> Option<String> {
-    match schedule {
-        AutoTaskSchedule::Deliveries { .. } => None,
-        AutoTaskSchedule::Cron { cron } => {
-            let parsed = parse_cron(cron).ok()?;
-            let now_local = now.with_timezone(&Local);
-            parsed
-                .find_next_occurrence(&now_local, false)
-                .ok()
-                .map(|slot| slot.to_rfc3339())
-        }
-        AutoTaskSchedule::Interval { every_minutes } => {
-            next_interval(*every_minutes, cursor?, now).map(|slot| slot.to_rfc3339())
-        }
-    }
+    let baseline = cursor.and_then(cursor_baseline);
+
+    next_scheduled_slot(schedule, baseline, now)
+        .ok()
+        .flatten()
+        .map(|slot| slot.to_rfc3339())
 }
 
-fn next_interval(
-    every_minutes: u64,
-    cursor: &AutoTaskCursor,
-    now: DateTime<Utc>,
-) -> Option<DateTime<Utc>> {
-    if every_minutes == 0 {
-        return None;
-    }
-    let baseline = DateTime::parse_from_rfc3339(&cursor.baseline_at)
-        .ok()?
-        .with_timezone(&Utc);
-    let last_slot = cursor
-        .last_slot
-        .as_deref()
-        .and_then(|slot| DateTime::parse_from_rfc3339(slot).ok())
-        .map(|slot| slot.with_timezone(&Utc));
-    let interval = Duration::minutes(i64::try_from(every_minutes).ok()?);
-    let floor = last_slot.unwrap_or(baseline);
-    if now < baseline {
-        return Some(baseline + interval);
-    }
-    let elapsed = now.signed_duration_since(baseline).num_minutes();
-    let period = i64::try_from(every_minutes).ok()?;
-    let mut periods = elapsed / period;
-    let mut next = baseline + Duration::minutes(period * periods);
-    if next <= floor || next <= now {
-        periods += 1;
-        next = baseline + Duration::minutes(period * periods);
-    }
-    if next <= now {
-        next += interval;
-    }
-    Some(next)
+/// The cursor's first-observed slot, which anchors interval projections.
+fn cursor_baseline(cursor: &AutoTaskCursor) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(&cursor.baseline_at)
+        .ok()
+        .map(|baseline| baseline.with_timezone(&Utc))
 }
