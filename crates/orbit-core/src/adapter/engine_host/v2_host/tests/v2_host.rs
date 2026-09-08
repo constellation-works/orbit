@@ -154,6 +154,30 @@ fn persist_invocation_trace_prefers_provider_model_over_requested_alias() {
     assert_eq!(records[0].model.as_deref(), Some("claude-fable-5"));
 }
 
+#[test]
+fn persist_invocation_trace_defers_token_scoreboard_refresh_to_the_sweep() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let run_id = seed_running_job_run(&runtime, "deferred_scoreboard_job");
+
+    RuntimeHost::persist_invocation_trace(
+        &runtime,
+        &run_id,
+        "implement_one",
+        "codex",
+        Some("gpt-test"),
+        &serde_json::json!({}),
+        &InvocationTrace::default(),
+    )
+    .expect("persist invocation trace");
+
+    assert!(
+        !repo_root
+            .join(".orbit/state/scoreboard/tokens.json")
+            .exists(),
+        "trace persistence must not synchronously refresh the scoreboard"
+    );
+}
+
 fn persist_test_trace(runtime: &OrbitRuntime, run_id: &str, trace: &InvocationTrace) {
     RuntimeHost::persist_invocation_trace(
         runtime,

@@ -21,11 +21,27 @@ pub use orbit_automation::routines::sweep::{
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::{self, LogRotationConfig};
 use orbit_types::workflow::JobRunState;
+use orbit_types::workspace::Workspace;
 use serde_json::json;
 
 /// Production dispatch over the per-workspace runtimes discovered this pass.
 pub(crate) struct RuntimeDispatch<'a> {
     runtimes: BTreeMap<PathBuf, &'a OrbitRuntime>,
+}
+
+/// Refresh each discovered workspace's read-side token projection once per
+/// successful sweep. A stale projection must not stop routine evaluation.
+pub(crate) fn refresh_discovered_token_scoreboards(workspaces: &[(Workspace, OrbitRuntime)]) {
+    for (workspace, runtime) in workspaces {
+        if let Err(error) = runtime.refresh_token_scoreboard() {
+            tracing::warn!(
+                target: "orbit.core.scoreboard",
+                workspace = %workspace.name,
+                error = %error,
+                "failed to refresh tokens scoreboard during routine sweep",
+            );
+        }
+    }
 }
 
 impl RoutineDispatch for RuntimeDispatch<'_> {
@@ -146,6 +162,7 @@ pub fn run_sweep_at_with_providers(
 
     // One runtime per active workspace; discovery and dispatch share them.
     let discovered = workspace_provider.discover_workspaces(global_root)?;
+    refresh_discovered_token_scoreboards(&discovered.entries);
     let mut load_errors: Vec<RoutineLoadError> = discovered.errors.clone();
 
     let mut collection = collect_routines(&discovered.entries, &local_host.host_id);

@@ -12,7 +12,6 @@ use orbit_store::contracts::{
     InvocationInsertParams, InvocationQuery, InvocationRecord, JobRunStepParams,
     TaskReservationReleaseReason,
 };
-use orbit_store::token_scoreboard;
 use orbit_tools::{FsAuditLogger, ReservationOwnerContext, ToolContext};
 use orbit_types::identity::AgentModelPair;
 use orbit_types::policy::{Role, UNRESTRICTED_FS_PROFILE};
@@ -708,32 +707,17 @@ impl RuntimeHost for OrbitRuntime {
             job_run_id,
             activity_id,
         );
-        let store = orbit_store::compose::invocation_store(&self.context.persistence().audit_db)
-            .map_err(|error| {
-                DispatchError::JobExecution(format!("open invocation store: {error}"))
-            })?;
-        store
-            .insert_invocation_trace_record(&InvocationInsertParams {
-                job_run_id: job_run_id.to_string(),
-                activity_id: activity_id.to_string(),
-                agent: agent.unwrap_or_else(|| provider.to_ascii_lowercase()),
-                model,
-                task_ids: task_context::associated_task_ids(input),
-                trace: trace.clone(),
-            })
-            .map_err(|error| {
-                DispatchError::JobExecution(format!("persist invocation trace: {error}"))
-            })?;
-
-        if let Err(error) =
-            token_scoreboard::write_token_scoreboard(&self.paths().scoreboard_dir, store.as_ref())
-        {
-            tracing::warn!(
-                target: "orbit.core.scoreboard",
-                error = %error,
-                "failed to refresh tokens scoreboard",
-            );
-        }
+        self.insert_invocation_trace_record(&InvocationInsertParams {
+            job_run_id: job_run_id.to_string(),
+            activity_id: activity_id.to_string(),
+            agent: agent.unwrap_or_else(|| provider.to_ascii_lowercase()),
+            model,
+            task_ids: task_context::associated_task_ids(input),
+            trace: trace.clone(),
+        })
+        .map_err(|error| {
+            DispatchError::JobExecution(format!("persist invocation trace: {error}"))
+        })?;
 
         let existing = self
             .get_job_run_backend(job_run_id)
