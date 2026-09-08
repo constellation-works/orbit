@@ -225,6 +225,56 @@ fn dashboard_run_resume_matches_runtime_guard_and_surfaces_lineage_and_errors() 
 }
 
 #[test]
+fn dashboard_run_events_show_scan_errors_but_keep_404_empty() {
+    run_dashboard_javascript_test(
+        r#"
+import assert from "node:assert/strict";
+class Node {
+  constructor() { this.children = []; this.dataset = {}; this.className = ""; this._text = ""; this.parentNode = null; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { if (child.parentNode) child.parentNode.removeChild(child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; }
+  get textContent() { return this._text + this.children.map((child) => child.textContent).join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get firstChild() { return this.children[0] || null; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+}
+const nodes = new Map();
+const get = (id) => nodes.get(id) || (nodes.set(id, new Node()), nodes.get(id));
+globalThis.document = { getElementById: get, createElement: () => new Node(), createDocumentFragment: () => new Node() };
+globalThis.window = { location: new URL("http://dashboard.test/") };
+let responseStatus = 413;
+globalThis.fetch = async () => ({
+  ok: responseStatus < 400,
+  status: responseStatus,
+  text: async () => JSON.stringify({ error: "run-events audit rows exceed bounded scan budget" }),
+});
+const { fetchJson } = await import("./common.js");
+const { setActiveRunEvents, setActiveRunEventsError, renderRunEvents } = await import("./run-detail.js");
+let scanError;
+try {
+  await fetchJson("/api/runs/jrun-1/events?limit=100");
+} catch (error) {
+  scanError = error;
+}
+assert.equal(scanError.status, 413);
+assert.match(scanError.message, /bounded scan budget/);
+setActiveRunEvents([]);
+setActiveRunEventsError(scanError.message);
+renderRunEvents();
+assert.match(get("run-events-body").textContent, /bounded scan budget/);
+assert.match(get("run-events-body").textContent, /narrowing the kind filter/);
+responseStatus = 404;
+await assert.rejects(fetchJson("/api/runs/jrun-1/events?limit=100"), (error) => error.status === 404);
+setActiveRunEvents([]);
+renderRunEvents();
+assert.match(get("run-events-body").textContent, /No v2 envelope events for this run/);
+"#,
+    );
+}
+
+#[test]
 fn dashboard_renders_complexity_as_its_own_dimension() {
     let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
     assert!(
