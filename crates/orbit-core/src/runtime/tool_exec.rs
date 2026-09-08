@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -36,12 +38,7 @@ impl OrbitRuntime {
                 .map(|cwd| cwd.to_string_lossy().into_owned());
         }
 
-        let resolved_task_id = match tool_context.orbit_host.as_ref() {
-            Some(host) => host.task_scope().task_id,
-            None => resolve_task_id_from_context(self, &tool_context)?,
-        };
-
-        populate_filesystem_policy_context(self, resolved_task_id.as_deref(), &mut tool_context)?;
+        populate_filesystem_policy_context(self, &mut tool_context)?;
 
         self.check_tool_enabled(name)?;
 
@@ -115,9 +112,7 @@ impl OrbitRuntime {
                 .map(|cwd| cwd.to_string_lossy().into_owned()),
             ..Default::default()
         };
-        let task_id = resolve_task_id_from_context(self, &tool_context)?;
-        tool_context.workspace_root =
-            resolve_workspace_root_from_context(self, task_id.as_deref(), &tool_context)?;
+        tool_context.workspace_root = resolve_workspace_root_from_context(self, &tool_context)?;
 
         // Validate required parameters are present
         let mut missing_params = Vec::new();
@@ -164,12 +159,10 @@ impl OrbitRuntime {
 /// handling when the managed envelope omitted `ORBIT_ACTIVITY_FS_PROFILE`.
 pub(crate) fn populate_filesystem_policy_context(
     runtime: &OrbitRuntime,
-    task_id: Option<&str>,
     tool_context: &mut ToolContext,
 ) -> Result<(), OrbitError> {
     if tool_context.workspace_root.is_none() {
-        tool_context.workspace_root =
-            resolve_workspace_root_from_context(runtime, task_id, tool_context)?;
+        tool_context.workspace_root = resolve_workspace_root_from_context(runtime, tool_context)?;
     }
     if tool_context.policy_engine.is_none() {
         tool_context.policy_engine = Some(Arc::new(runtime.policy_engine().clone()));
@@ -180,39 +173,23 @@ pub(crate) fn populate_filesystem_policy_context(
     Ok(())
 }
 
+/// Task scope is supplied by the caller (host or trusted run envelope).
+///
+/// Cwd-inside-repo is not a task selector: scanning the table and returning
+/// the first row was both arbitrary and unused by root resolution.
 pub(crate) fn resolve_task_id_from_context(
-    runtime: &OrbitRuntime,
-    tool_context: &ToolContext,
+    _runtime: &OrbitRuntime,
+    _tool_context: &ToolContext,
 ) -> Result<Option<String>, OrbitError> {
-    let Some(cwd) = tool_context.cwd.as_deref() else {
-        return Ok(None);
-    };
-    let canonical_cwd = match Path::new(cwd).canonicalize() {
-        Ok(path) => path,
-        Err(_) => PathBuf::from(cwd),
-    };
-    let canonical_repo_root = canonical_repo_root(runtime);
-    if !task_workspace_matches(&canonical_repo_root, &canonical_cwd) {
-        return Ok(None);
-    }
-
-    let tasks = runtime.stores().tasks().list_tasks()?;
-    Ok(tasks.into_iter().next().map(|task| task.id))
+    Ok(None)
 }
 
 fn resolve_workspace_root_from_context(
     runtime: &OrbitRuntime,
-    task_id: Option<&str>,
     tool_context: &ToolContext,
 ) -> Result<Option<PathBuf>, OrbitError> {
     let canonical_repo_root = canonical_repo_root(runtime);
     if let Some(workspace_root) = active_git_checkout_root(&canonical_repo_root, tool_context) {
-        return Ok(Some(workspace_root));
-    }
-
-    if let Some(task_id) = task_id
-        && let Some(workspace_root) = resolve_task_workspace_root(runtime, task_id)
-    {
         return Ok(Some(workspace_root));
     }
     Ok(Some(canonical_repo_root))
@@ -227,23 +204,28 @@ fn canonical_repo_root(runtime: &OrbitRuntime) -> PathBuf {
         .unwrap_or_else(|_| runtime.context.paths().repo_root.clone())
 }
 
-fn resolve_task_workspace_root(runtime: &OrbitRuntime, task_id: &str) -> Option<PathBuf> {
-    let repo_root = canonical_repo_root(runtime);
-    runtime.get_task(task_id).ok()?;
-    Some(repo_root)
-}
-
 fn active_git_checkout_root(
     canonical_repo_root: &Path,
     tool_context: &ToolContext,
 ) -> Option<PathBuf> {
     let cwd = tool_context.cwd.as_deref()?;
     let cwd = Path::new(cwd);
+    let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+
+    // Stable checkout fast path: the runtime's own tree does not need git
+    // probes. Linked worktrees and unrelated checkouts fall through.
+    if canonical_cwd.starts_with(canonical_repo_root) {
+        return Some(canonical_repo_root.to_path_buf());
+    }
+
     let checkout_root = git_checkout_root(cwd)?;
     same_git_common_dir(&checkout_root, canonical_repo_root).then_some(checkout_root)
 }
 
 fn git_checkout_root(path: &Path) -> Option<PathBuf> {
+    #[cfg(test)]
+    GIT_CHECKOUT_PROBES.with(|count| count.set(count.get() + 1));
+
     let output = Command::new("git")
         .arg("-C")
         .arg(path)
@@ -270,6 +252,9 @@ fn same_git_common_dir(left: &Path, right: &Path) -> bool {
 }
 
 fn git_common_dir(path: &Path) -> Option<PathBuf> {
+    #[cfg(test)]
+    GIT_COMMON_DIR_PROBES.with(|count| count.set(count.get() + 1));
+
     let output = Command::new("git")
         .arg("-C")
         .arg(path)
@@ -288,8 +273,30 @@ fn git_common_dir(path: &Path) -> Option<PathBuf> {
     Some(path.canonicalize().unwrap_or(path))
 }
 
-fn task_workspace_matches(canonical_workspace: &Path, canonical_cwd: &Path) -> bool {
-    canonical_cwd.starts_with(canonical_workspace)
+#[cfg(test)]
+thread_local! {
+    static GIT_CHECKOUT_PROBES: Cell<usize> = const { Cell::new(0) };
+    static GIT_COMMON_DIR_PROBES: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) struct ContextResolutionProbes;
+
+#[cfg(test)]
+impl ContextResolutionProbes {
+    pub(crate) fn capture() -> Self {
+        GIT_CHECKOUT_PROBES.with(|count| count.set(0));
+        GIT_COMMON_DIR_PROBES.with(|count| count.set(0));
+        Self
+    }
+
+    pub(crate) fn git_checkout_probes(&self) -> usize {
+        GIT_CHECKOUT_PROBES.with(Cell::get)
+    }
+
+    pub(crate) fn git_common_dir_probes(&self) -> usize {
+        GIT_COMMON_DIR_PROBES.with(Cell::get)
+    }
 }
 
 fn read_activity_fs_profile_from_env() -> Option<String> {

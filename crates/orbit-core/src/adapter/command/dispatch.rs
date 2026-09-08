@@ -279,7 +279,7 @@ impl OrbitRuntime {
                     ..Default::default()
                 };
                 if proc_spawn_activity_scoped {
-                    populate_filesystem_policy_context(self, None, &mut tool_context)?;
+                    populate_filesystem_policy_context(self, &mut tool_context)?;
                 }
                 let capability_enforcement = match entry_point {
                     ToolEntryPoint::Cli => CapabilityEnforcement::Enforce,
