@@ -11,7 +11,7 @@ impl Tool for OrbitSemanticIndexTool {
         ToolSchema {
             name: "orbit.semantic.index".to_string(),
             description:
-                "Rebuild semantic embeddings for tasks, docs, or all indexed corpora in the active workspace."
+                "Rebuild semantic embeddings for tasks, docs, or all indexed corpora in the active workspace. Reports the sources swept from the index as stale_sources."
                     .to_string(),
             parameters: vec![
                 ToolParam {
