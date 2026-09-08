@@ -39,11 +39,17 @@ pub(super) fn workspace_list_json(registry: &WorkspaceRegistry, include_replicas
             .iter()
             .filter(|workspace| {
                 include_replicas
-                    || workspace_registry::find_checkout(registry, &workspace.id)
+                    || registry
+                        .checkouts
+                        .iter()
+                        .find(|checkout| checkout.workspace_id == workspace.id)
                         .is_none_or(|checkout| checkout.role != Some(orbit_types::workspace::WorkspaceCheckoutRole::Replica))
             })
             .map(|workspace| {
-                let checkout = workspace_registry::find_checkout(registry, &workspace.id);
+                let checkout = registry
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.workspace_id == workspace.id);
                 json!({
                     "id": workspace.id,
                     "name": workspace.name,
@@ -67,12 +73,14 @@ pub(super) fn format_workspace_list(
         .iter()
         .filter(|workspace| {
             include_replicas
-                || workspace_registry::find_checkout(registry, &workspace.id).is_none_or(
-                    |checkout| {
+                || registry
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.workspace_id == workspace.id)
+                    .is_none_or(|checkout| {
                         checkout.role
                             != Some(orbit_types::workspace::WorkspaceCheckoutRole::Replica)
-                    },
-                )
+                    })
         })
         .collect();
     if workspaces.is_empty() {
@@ -96,7 +104,10 @@ pub(super) fn format_workspace_list(
         id_width = id_width
     );
     for workspace in workspaces {
-        let checkout = workspace_registry::find_checkout(registry, &workspace.id);
+        let checkout = registry
+            .checkouts
+            .iter()
+            .find(|checkout| checkout.workspace_id == workspace.id);
         let root = checkout
             .map(|checkout| checkout.repo_root.display().to_string())
             .unwrap_or_else(|| "-".to_string());

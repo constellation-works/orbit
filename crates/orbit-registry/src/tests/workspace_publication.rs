@@ -131,7 +131,9 @@ fn bind_round_trips_through_atomic_save_and_rebind_is_the_only_replace_path() {
     save_registry_to(&registry, &path).expect("save binding");
 
     let loaded = load_registry_from(&path).expect("reload");
-    let binding = find_publication_binding(&loaded, "orbit").expect("find by name");
+    let binding = find_publication_binding(&loaded, "orbit")
+        .expect("lookup by name")
+        .expect("find binding");
     assert_eq!(binding.publication_id, "tp_orbit_tasks");
     assert_eq!(binding.last_success_generation, Some(3));
 
@@ -157,7 +159,11 @@ fn bind_round_trips_through_atomic_save_and_rebind_is_the_only_replace_path() {
     assert_eq!(removed.publication_id, "tp_orbit_tasks_v2");
     save_registry_to(&unbound, &path).expect("save unbind");
     let empty = load_registry_from(&path).expect("reload empty");
-    assert!(find_publication_binding(&empty, "ws_orbit").is_none());
+    assert!(
+        find_publication_binding(&empty, "ws_orbit")
+            .expect("lookup empty registry")
+            .is_none()
+    );
     let persisted: Value =
         serde_json::from_slice(&fs::read(&path).expect("read")).expect("parse saved registry");
     assert!(persisted.get("publication_bindings").is_none());

@@ -62,7 +62,10 @@ pub(super) fn registered_workspace_for_repo_root<'a>(
             .iter()
             .find(|checkout| checkout.repo_root == repo_root)
     })?;
-    workspace_registry::find_workspace(registry, &checkout.workspace_id)
+    registry
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == checkout.workspace_id)
         .map(|workspace| (workspace, checkout))
 }
 

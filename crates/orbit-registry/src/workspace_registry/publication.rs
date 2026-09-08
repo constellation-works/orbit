@@ -16,12 +16,14 @@ use super::{WorkspaceRegistryHostContext, find_checkout, find_workspace};
 pub fn find_publication_binding<'a>(
     registry: &'a WorkspaceRegistry,
     id_or_name: &str,
-) -> Option<&'a WorkspacePublicationBinding> {
-    let workspace = find_workspace(registry, id_or_name)?;
-    registry
+) -> Result<Option<&'a WorkspacePublicationBinding>, OrbitError> {
+    let Some(workspace) = find_workspace(registry, id_or_name)? else {
+        return Ok(None);
+    };
+    Ok(registry
         .publication_bindings
         .iter()
-        .find(|binding| binding.workspace_id == workspace.id)
+        .find(|binding| binding.workspace_id == workspace.id))
 }
 
 /// Create a publication binding. Fails when one already exists; use
@@ -251,7 +253,7 @@ fn bindable_workspace(
     if let Some(machine_id) = local_machine_id {
         validate_machine_id(machine_id)?;
     }
-    let workspace = find_workspace(registry, id_or_name)
+    let workspace = find_workspace(registry, id_or_name)?
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
     publisher_allowed(registry, workspace, local_machine_id).map_err(publication_error)?;
     Ok(BindableWorkspace {
@@ -264,7 +266,9 @@ fn publisher_allowed(
     workspace: &Workspace,
     local_machine_id: Option<&str>,
 ) -> Result<(), String> {
-    if let Some(checkout) = find_checkout(registry, &workspace.id) {
+    if let Some(checkout) =
+        find_checkout(registry, &workspace.id).map_err(|error| error.to_string())?
+    {
         if checkout.role == Some(WorkspaceCheckoutRole::Replica) {
             return Err(format!(
                 "workspace '{}' is a replica checkout; only the declared owner can manage a publication binding",
@@ -301,7 +305,7 @@ fn build_binding(
     publication_branch: &str,
     publication_id: &str,
 ) -> Result<WorkspacePublicationBinding, OrbitError> {
-    let workspace = find_workspace(registry, workspace_id)
+    let workspace = find_workspace(registry, workspace_id)?
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, workspace_id.to_string()))?;
     let Some(fingerprint) = workspace.git_remote.as_deref() else {
         return Err(publication_error(format!(
