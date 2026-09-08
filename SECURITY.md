@@ -55,7 +55,24 @@ plus global `denyRead` / `denyModify` rules, evaluated by `orbit-policy`.
 
 For built-in Orbit tools that still consult `orbit-policy` (today `proc.*`
 program allowlists, not a shipped `fs.*` family), evaluation applies on every
-platform and is the sole in-process enforcement point for those tools.
+platform.
+
+**Activity-scoped `proc.spawn` is confined at the process boundary on Linux.**
+An allowed program decides for itself what to open — `bash`, `sh`, `python3`,
+and `git` shell aliases are all on shipped activity allowlists — so inspecting
+path-shaped arguments cannot scope reads. Orbit compiles the activity's
+resolved `fsProfile` into a Linux Landlock ruleset and applies it to the child
+between `fork` and `exec`, so the child and every descendant it spawns are held
+to it. Outside the workspace the child reads only a fixed table of runtime,
+resolver, and CA-trust paths plus the tool state directories its own
+environment names; `/etc`, `/proc`, `$HOME`, `~/.ssh`, and `~/.aws` are never
+granted as trees. A kernel without Landlock ABI 2 — or any non-Linux host —
+makes activity-scoped `proc.spawn` fail with a capability error rather than
+run the child unconfined. Landlock rules bind to inodes that exist at spawn, so
+a `denyRead` match created *after* the ruleset is compiled is readable by that
+child; existing denied files cannot be read, renamed out of reach, or relocated
+into a readable directory. See
+`docs/design/policy-sandbox/2_design.md` §7.3.
 
 For `backend: cli` agents (an agent CLI such as Codex/Claude/Gemini/Grok
 spawned as a subprocess, making its own syscalls outside Orbit's tool

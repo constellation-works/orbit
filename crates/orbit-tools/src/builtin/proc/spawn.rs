@@ -1,10 +1,15 @@
 use std::path::{Path, PathBuf};
+use std::process::Child;
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_common::tracing;
-use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, run_process};
-use orbit_types::policy::FsOperation;
+use orbit_exec::{
+    EnvironmentMode, ExecRequest, NoSandbox, Sandbox, StdinMode, run_process,
+    spawn_under_linux_landlock,
+};
+use orbit_policy::PolicyEngine;
+use orbit_types::policy::{FsOperation, ResolvedFsProfile};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
@@ -86,56 +91,88 @@ impl Tool for ProcSpawnTool {
             environment_mode: EnvironmentMode::ClearAndSet(env_pairs),
             debug: false,
         };
-        let sandbox = ActivityFsSandbox::new(ctx);
-        let exec_result = run_process(&request, &sandbox)?;
+        let exec_result = run_process(&request, &ActivityFsSandbox::new(ctx)?)?;
 
         serde_json::to_value(exec_result)
             .map_err(|e| OrbitError::Execution(format!("serialize exec result: {e}")))
     }
 }
 
-/// Request-time filesystem gate for activity-scoped subprocesses.
+/// Filesystem confinement for an activity-scoped subprocess.
 ///
-/// An allowed program does not grant access to a path that the owning
-/// activity cannot read. Existing path arguments (including `--key=path`)
-/// are resolved symlink-safely by the same policy engine used by filesystem
-/// tools before the child is created.
+/// Two layers, doing two different jobs. Explicit path arguments (including
+/// `--key=path`) are resolved symlink-safely by the same policy engine the
+/// filesystem tools use, so `git -C /etc` is refused before the child exists
+/// and the caller is told which rule refused it. That check cannot be the
+/// boundary, though: `bash`, `python3`, and `git` shell aliases all reach the
+/// filesystem from text that never looks like a path argument. The read
+/// boundary is therefore the ruleset applied to the child itself at spawn.
+///
+/// Outside an activity-scoped context there is no resolved profile to enforce,
+/// and `proc.spawn` keeps its unconfined behavior with the program allowlist as
+/// the only gate.
 pub(crate) struct ActivityFsSandbox<'a> {
-    ctx: &'a ToolContext,
+    scope: Option<ActivityScope<'a>>,
+}
+
+/// The resolved policy an activity-scoped child is confined to, read once so
+/// the request-time check and the enforced ruleset cannot disagree.
+struct ActivityScope<'a> {
+    policy: &'a PolicyEngine,
+    workspace_root: &'a Path,
+    profile_name: &'a str,
+    profile: ResolvedFsProfile,
 }
 
 impl<'a> ActivityFsSandbox<'a> {
-    pub(crate) fn new(ctx: &'a ToolContext) -> Self {
-        Self { ctx }
-    }
-}
-
-impl Sandbox for ActivityFsSandbox<'_> {
-    fn validate(&self, request: &ExecRequest) -> Result<(), OrbitError> {
-        if !self.ctx.proc_spawn_activity_scoped {
-            return Ok(());
+    /// Fails closed: an activity-scoped context without a resolved filesystem
+    /// policy cannot spawn anything.
+    pub(crate) fn new(ctx: &'a ToolContext) -> Result<Self, OrbitError> {
+        if !ctx.proc_spawn_activity_scoped {
+            return Ok(Self { scope: None });
         }
-        let (Some(policy), Some(profile), Some(workspace_root)) = (
-            self.ctx.policy_engine.as_ref(),
-            self.ctx.fs_profile.as_deref(),
-            self.ctx.workspace_root.as_deref(),
+        let (Some(policy), Some(profile_name), Some(workspace_root)) = (
+            ctx.policy_engine.as_deref(),
+            ctx.fs_profile.as_deref(),
+            ctx.workspace_root.as_deref(),
         ) else {
             return Err(OrbitError::PolicyDenied(
                 "activity-scoped proc.spawn is missing its resolved filesystem policy".to_string(),
             ));
         };
+        let profile = policy.def().effective_profile(profile_name)?;
+        Ok(Self {
+            scope: Some(ActivityScope {
+                policy,
+                workspace_root,
+                profile_name,
+                profile,
+            }),
+        })
+    }
+}
+
+impl Sandbox for ActivityFsSandbox<'_> {
+    fn validate(&self, request: &ExecRequest) -> Result<(), OrbitError> {
+        let Some(scope) = &self.scope else {
+            return Ok(());
+        };
         let cwd = request
             .current_dir
             .as_deref()
             .map(PathBuf::from)
-            .unwrap_or_else(|| workspace_root.to_path_buf());
+            .unwrap_or_else(|| scope.workspace_root.to_path_buf());
         for path in request
             .args
             .iter()
             .filter_map(|arg| path_argument(arg, &cwd))
         {
-            let evaluation =
-                policy.check_resolved(workspace_root, profile, FsOperation::Read, &path)?;
+            let evaluation = scope.policy.check_resolved(
+                scope.workspace_root,
+                scope.profile_name,
+                FsOperation::Read,
+                &path,
+            )?;
             if evaluation.allowed {
                 continue;
             }
@@ -152,6 +189,15 @@ impl Sandbox for ActivityFsSandbox<'_> {
             )));
         }
         Ok(())
+    }
+
+    fn spawn(&self, request: &ExecRequest) -> Result<Child, OrbitError> {
+        match &self.scope {
+            Some(scope) => {
+                spawn_under_linux_landlock(request, scope.workspace_root, &scope.profile)
+            }
+            None => NoSandbox.spawn(request),
+        }
     }
 }
 

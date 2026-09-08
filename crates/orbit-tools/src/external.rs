@@ -59,7 +59,7 @@ impl Tool for ExternalTool {
                 environment_mode,
                 debug: false,
             },
-            &ActivityFsSandbox::new(ctx),
+            &ActivityFsSandbox::new(ctx)?,
         )?;
 
         if !output.success {

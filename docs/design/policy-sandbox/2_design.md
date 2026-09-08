@@ -123,11 +123,33 @@ Legacy pipeline contexts are different. `crates/orbit-core/src/runtime/tool_exec
 - `EnvironmentMode::Inherit` or `ClearAndSet(Vec<(String, String)>)`; debug output redacts sensitive env values.
 - `StdinMode::Inherit` / `Null` / `Bytes(Vec<u8>)`.
 - `Sandbox::validate(req) -> Result<()>`; the default `NoSandbox` always returns `Ok`.
+- `Sandbox::spawn(req) -> Result<Child>`; the default creates an unconfined child. A strategy that confines the process overrides this seam.
 - `run_process(req, sandbox) -> ExecutionResult`.
 
-`run_process` calls `sandbox.validate`, then `process::spawn`, then `supervision::wait_with_optional_timeout`. Spawn applies the requested environment, pipes stdout/stderr, and on Unix calls `command.process_group(0)` so cleanup can kill orphan subprocesses.
+`run_process` calls `sandbox.validate`, then `sandbox.spawn`, then `supervision::wait_with_optional_timeout`. Spawn applies the requested environment, pipes stdout/stderr, and on Unix calls `command.process_group(0)` so cleanup can kill orphan subprocesses.
 
-Activity-scoped `proc.spawn` supplies a request-time `Sandbox` validator at this seam. The runtime passes the child environment already resolved from `[execution.env]`, the owning `fsProfile`, workspace root, and program allowlist into `ToolContext`; CLI-backed agents receive the same values in their trusted `ORBIT_*` envelope for nested `orbit tool run` calls. Missing activity policy data fails closed. The validator resolves existing path arguments symlink-safely and rejects reads denied by the profile before creating the process. [ORB-11031]
+Activity-scoped `proc.spawn` supplies `ActivityFsSandbox` at this seam. The runtime passes the child environment already resolved from `[execution.env]`, the owning `fsProfile`, workspace root, and program allowlist into `ToolContext`; CLI-backed agents receive the same values in their trusted `ORBIT_*` envelope for nested `orbit tool run` calls. Missing activity policy data fails closed. `validate` resolves existing path arguments symlink-safely and rejects reads denied by the profile before creating the process, and `spawn` confines the child itself. [ORB-11031]
+
+### 7.3 Linux Landlock read boundary for activity-scoped `proc.spawn`
+
+Argv inspection cannot be the read boundary: `bash`, `sh`, `python3`, and `git` are all on shipped activity allowlists, and every one interprets text handed to it on the command line. `git -c alias.x='!cat <path>' x` reaches any same-user file without a single path-shaped argument. `crates/orbit-exec/src/linux_landlock/` therefore compiles the resolved profile into a Landlock ruleset and applies it in the child between `fork` and `exec`, so the child and every descendant inherit it. The request-time argument check remains as an early, explainable deny; it is no longer the boundary. [ORB-11514]
+
+The ruleset handles `EXECUTE | READ_FILE | READ_DIR | REFER`. Writes stay with the Bubblewrap mount namespace in §7.1 — one write answer, in one place. `REFER` governs moving a file between directories, and Landlock refuses a move that would give a file *more* access at its destination; without handling it, a child could relocate a denied file into a fully readable sibling directory and read it there.
+
+Grants come from three places:
+
+- **Workspace.** The resolved `read` rules are compiled once (`CompiledFsRules`, §3) and the tree is walked once. A directory holding a denied path is granted list-only and its allowed children are granted individually, so the denied path keeps no readable ancestor.
+- **Host runtime, resolver, and trust.** A fixed table: system binaries and libraries, the loader and its cache, the character devices a process opens on startup, the world-readable resolver files (`/etc/hosts`, `/etc/nsswitch.conf`, `/etc/resolv.conf`, `/etc/passwd`, …), and the CA stores. `/etc` is never granted as a directory, and neither is `/proc` — a tree-wide `/proc` grant would expose any same-user process's `environ`, including the launching Orbit process's credentials.
+- **Tool state.** The directories on the child's own `PATH`, plus one directory per tool named by an environment variable the operator admitted into the child environment (`CARGO_HOME`, `RUSTUP_HOME`, `GH_CONFIG_DIR`, `TMPDIR`, `ORBIT_ROOT`, …) or by that tool's documented default under `$HOME`. `$HOME` itself is refused, as is any variable naming an ancestor of it, and publish tokens such as `$CARGO_HOME/credentials.toml` are carved back out.
+
+Availability is fail-closed. `REFER` arrived in Landlock ABI 2, so a kernel below that — or any non-Linux host — makes activity-scoped `proc.spawn` return a capability error naming the requirement. There is no unconfined fallback.
+
+**Known limits, all covered by tests.** Landlock rules bind to the inodes that exist when the ruleset is compiled:
+
+- A denied file present at spawn stays unreadable for the child's whole life, including after the child renames it within its directory, and it cannot be moved into a readable directory.
+- A file matching a deny rule that is *created* later under an already-granted directory is readable by that child. That discloses nothing the child could not already obtain — either the child wrote those bytes, or it copied them from somewhere the ruleset already allowed. A concurrent third party writing a new secret into the workspace during the child's lifetime is the residual race; `denyRead` is also enforced at request time for that reason.
+- Bytes already read into the child's memory cannot be withdrawn by any later filesystem rule; the boundary governs acquisition, not recall.
+- SSH-authenticated `git` does not work through a scoped spawn, because `~/.ssh` is not granted (use HTTPS or `gh`). A toolchain whose runtime files live outside the `bin` directory on `PATH` — an `nvm`-style install — needs its tree named by the tool's own environment variable.
 
 `ExecutionResult { success, stdout, stderr, exit_code, duration_ms, output }` is defined in `orbit-common`. Captured bytes use `String::from_utf8_lossy`, so non-UTF-8 output becomes replacement characters instead of failing the call.
 
@@ -350,6 +372,17 @@ Risk-weighted regression tests sit beside the implementations they guard
   modify checks ([T20260509-27]). The same surface proves host modify
   exceptions intersect profile authority, workspace exceptions cannot exceed
   the host surface, and later workspace denies still win ([ORB-10560]).
+- `crates/orbit-exec/src/linux_landlock/tests/` and
+  `crates/orbit-exec/tests/linux_landlock.rs` — grant compilation decides the
+  workspace and host tables without applying a ruleset, while the integration
+  suite applies the real ruleset to real children: a host sentinel and a
+  `denyRead` match are withheld from a `git` shell alias, a denied file survives
+  neither an in-place rename nor a move into a readable directory, a generated
+  file stays readable, another process's `environ` is not, declared tool state
+  is readable while its publish token is not, and `git` / `rg` / `cargo` /
+  `make` / `gh` still run. `crates/orbit-tools/tests/proc_spawn_lockdown.rs`
+  reproduces the same alias bypass through the tool itself and pins the
+  request-time `/etc` denial ([ORB-11514]).
 - `crates/orbit-exec/src/macos_sandbox/compile.rs#tests` and
   `crates/orbit-exec/src/macos_sandbox/tests/provider_dirs.rs` — trusted wrapper
   resolution ignores `PATH`, including a macOS runtime test that places a fake
@@ -394,13 +427,14 @@ asserts 100 collision-free dense IDs per artifact kind ([ORB-10596]).
 5. **macOS provenance syscall allowances are private.** `vnguard` and `Sandbox`/67 mirror current Codex startup needs and may require review after OS changes.
 6. **Legacy contexts can leave `fs_profile = None`.** Non-activity callers retain that compatibility shape. Activity-scoped `proc.spawn` rejects a missing profile, and CLI-backed activities export `ORBIT_ACTIVITY_FS_PROFILE` so nested tool calls reconstruct the owning profile.
 7. **No in-process `fs.*` enforcement remains.** A revived harness would need to rebuild the retired helper (or move enforcement below the tool layer) rather than rely on leftover builtins.
-8. **Generic exec path admission is request-time.** Activity-scoped `proc.spawn` validates existing path arguments against the owning activity's resolved `fsProfile` before launch, while CLI-agent OS wrappers remain the kernel-level boundary. The program allowlist is mandatory rather than opt-in: asset load rejects an activity whose `tools` cover `proc.spawn` while `proc_allowed_programs` is absent, and the v2 activity tool context always marks `proc.spawn` activity-scoped, so a missing list denies every program instead of degrading to allow-all ([ORB-10959], [ORB-11031]).
+8. **Generic exec path admission has two layers.** Activity-scoped `proc.spawn` validates existing path arguments against the owning activity's resolved `fsProfile` before launch, and on Linux confines the child itself with Landlock (§7.3); CLI-agent OS wrappers remain the kernel-level boundary for `backend: cli` agents. The program allowlist is mandatory rather than opt-in: asset load rejects an activity whose `tools` cover `proc.spawn` while `proc_allowed_programs` is absent, and the v2 activity tool context always marks `proc.spawn` activity-scoped, so a missing list denies every program instead of degrading to allow-all ([ORB-10959], [ORB-11031]).
 9. **Symlink semantics are implicit.** `workspace_relative_path` follows symlinks and rejects out-of-workspace targets, but no spec states that invariant.
 10. **Glob syntax is narrow.** Character classes, brace expansion, and POSIX bracket expressions are unsupported.
 11. **Policy result shapes are parallel.** `PolicyDecision` and `FsPolicyEvaluation` have no bridge for future non-fs evaluators.
 12. **Empty rule sets are safe but opaque.** A profile with only deny rules reports `matched_rule = "[]"`, not the matching deny rule.
 13. **Signal handling is process-global.** SIGINT/SIGTERM dispositions are shared across concurrent waits (refcounted install, lock-free pgid fan-out). A waiter that cannot claim a pgid slot still terminates from the generation counter within one poll interval.
-14. **Workspace canonicalization errors collapse to denial.** A missing workspace root can surface as `PolicyDenied("path is outside workspace")` rather than a clearer root-missing error.
+14. **`denyRead` binds to inodes that exist at spawn.** The Landlock carve-out in §7.3 cannot name a file that does not exist yet, so a deny-matching file created under an already-granted directory after the ruleset is compiled is readable by that child. Relocation and rename of an existing denied file are closed; concurrent third-party creation is not.
+15. **Workspace canonicalization errors collapse to denial.** A missing workspace root can surface as `PolicyDenied("path is outside workspace")` rather than a clearer root-missing error.
 
 ---
 
