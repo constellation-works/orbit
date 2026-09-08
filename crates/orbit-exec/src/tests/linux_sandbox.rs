@@ -118,6 +118,44 @@ fn capture_watches_absent_exact_and_subtree_denies() {
     );
 }
 
+/// macOS commonly reaches `/private/var` through the `/var` symlink. The
+/// guard must match rules written through that spelling even though its walk
+/// canonicalizes the search root.
+#[cfg(unix)]
+#[test]
+fn capture_watches_absent_denies_through_a_symlinked_workspace_path() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let real_workspace = temp.path().join("real-workspace");
+    let workspace = temp.path().join("workspace-link");
+    fs::create_dir_all(&real_workspace).expect("real workspace");
+    symlink(&real_workspace, &workspace).expect("workspace symlink");
+
+    let secrets = workspace.join("secrets");
+    let lock = workspace.join("Cargo.lock");
+    let resolved = profile(vec![
+        format!("{}/**", workspace.display()),
+        format!("!{}/**", secrets.display()),
+        format!("!{}", lock.display()),
+    ]);
+
+    let guard = LinuxBwrapPostRunGuard::capture(&resolved)
+        .expect("capture")
+        .expect("absent exact/subtree denies must be guarded");
+    fs::create_dir_all(&secrets).expect("create secrets");
+    fs::write(secrets.join("x"), b"k").expect("write secret");
+    fs::write(&lock, b"k").expect("write lock");
+
+    let error = guard
+        .verify()
+        .expect_err("creating a deny root through a symlink must fail closed");
+    assert!(
+        matches!(error, OrbitError::PolicyDenied(_)),
+        "expected PolicyDenied, got {error}"
+    );
+}
+
 #[test]
 fn capture_skips_absent_deny_whose_nested_reallow_will_create_the_root() {
     let temp = tempfile::tempdir().expect("tempdir");
