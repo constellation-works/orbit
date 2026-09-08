@@ -1,4 +1,10 @@
+use chrono::Utc;
+use orbit_registry::workspace_registry::{registry_path_for, save_registry_to};
+use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
+use tempfile::tempdir;
+
 use crate::command::Execute;
+use crate::tests::env_isolation::EnvGuard;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
 use serde_json::json;
@@ -36,6 +42,70 @@ fn restricted_ship_args(
         allow_crew: crews.iter().map(|crew| (*crew).to_string()).collect(),
         ..ship_args(task_ids, mode, base)
     }
+}
+
+#[test]
+fn ship_mode_uses_selected_root_registry_when_home_registry_is_empty() {
+    let fixture = tempdir().expect("fixture tempdir");
+    let selected_root = fixture.path().join("selected-root");
+    let workspace_root = fixture.path().join("workspace-orbit");
+    let repo_root = fixture.path().join("repo");
+    let home = fixture.path().join("empty-home");
+    let home_registry_root = home.join(".orbit");
+    for directory in [
+        &selected_root,
+        &workspace_root,
+        &repo_root,
+        &home_registry_root,
+    ] {
+        std::fs::create_dir_all(directory).expect("fixture directory");
+    }
+
+    let runtime = OrbitRuntime::from_roots(&selected_root, &workspace_root)
+        .expect("build selected-root runtime");
+    let workspace = Workspace {
+        id: "ws_ship_mode".to_string(),
+        name: "ship-mode-test".to_string(),
+        owner_machine_id: None,
+        git_remote: None,
+        ship_mode: Some("local".to_string()),
+        base_branch: "agent-main".to_string(),
+        status: WorkspaceStatus::Active,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let checkout =
+        WorkspaceCheckout::owner(workspace.id.clone(), repo_root, workspace_root.clone());
+    let mut registry = WorkspaceRegistry::default();
+    orbit_registry::workspace_registry::register_workspace(&mut registry, workspace)
+        .expect("register workspace");
+    orbit_registry::workspace_registry::register_checkout(&mut registry, checkout)
+        .expect("register checkout");
+    save_registry_to(&registry, &registry_path_for(&selected_root))
+        .expect("save selected-root registry");
+    save_registry_to(
+        &WorkspaceRegistry::default(),
+        &registry_path_for(&home_registry_root),
+    )
+    .expect("save empty home registry");
+
+    let _env = EnvGuard::acquire().home(&home);
+    assert_eq!(
+        resolve_ship_mode(
+            &ShipCommand {
+                task_ids: Vec::new(),
+                mode: None,
+                base: None,
+                complete: false,
+                allow_crew: Vec::new(),
+                json: false,
+                claim_token: None,
+            },
+            &runtime,
+        )
+        .expect("resolve ship mode"),
+        orbit_core::ShipMode::Local
+    );
 }
 
 /// Build a ship plan from test args, threading the args' explicit mode through
