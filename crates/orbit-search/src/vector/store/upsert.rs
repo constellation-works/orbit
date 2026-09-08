@@ -1,16 +1,17 @@
 //! BLAKE3-deduped per-field write path.
 //!
-//! `upsert_embeddings` is the canonical entry: it transactionally chunks each
-//! field's text, embeds the chunks, and writes the resulting rows into both
-//! `embeddings` (vector storage) and `chunks` (the FTS5 content table, which
-//! its triggers mirror into `corpus_fts`). Unchanged fields short-circuit via
-//! `content_hash`.
+//! `upsert_embeddings` is the canonical entry: it snapshots the stored source,
+//! chunks and embeds changed fields with no store lock held, then writes the
+//! complete field set in one short transaction. Unchanged fields short-circuit
+//! via `content_hash`. Concurrent same-source writers follow the conflict
+//! policy documented on [`VectorStore::upsert_embeddings`].
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 
 use super::VectorStore;
 use crate::Embedder;
@@ -25,6 +26,21 @@ impl VectorStore {
     ///
     /// `fields` is the complete current field set, not a partial patch; rows
     /// for previously indexed fields absent from this slice are removed.
+    ///
+    /// Chunking and companion inference run **without** the connection mutex
+    /// or a SQLite write transaction. Only the snapshot and the final commit
+    /// take the mutex; the commit uses `BEGIN IMMEDIATE` so a second
+    /// connection cannot interleave mid-write.
+    ///
+    /// # Concurrency
+    ///
+    /// The first complete same-source write (another `upsert_embeddings` or
+    /// `delete_source`) that commits after this call's snapshot wins. Commit
+    /// reloads the source's field names and active-model content hashes and
+    /// aborts with [`OrbitError::Store`] unless that fingerprint is unchanged.
+    /// The abort does not write, so it cannot mix field revisions, overwrite a
+    /// later accepted source, or resurrect a deleted source. A hash recheck of
+    /// only the fields this call prepared is not the commit gate.
     pub fn upsert_embeddings(
         &self,
         source_kind: &str,
@@ -33,50 +49,73 @@ impl VectorStore {
         embedder: &dyn Embedder,
         force: bool,
     ) -> Result<UpsertReport, OrbitError> {
-        let mut report = UpsertReport::default();
-        let conn = self.connection();
-        let mut conn = conn
-            .lock()
-            .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
-        let tx = conn
-            .transaction()
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let snapshot = {
+            let conn = self.connection();
+            let conn = lock_connection(&conn)?;
+            StoredSource::load(&conn, source_kind, source_id, embedder.model_id())?
+        };
 
-        let stored = StoredSource::load(&tx, source_kind, source_id, embedder.model_id())?;
         let expected_fields = fields
             .iter()
             .map(|field| field.field.as_str())
             .collect::<BTreeSet<_>>();
-        for field in stored.fields_outside(&expected_fields) {
-            delete_field_rows(&tx, source_kind, source_id, field, None)?;
-        }
+        let stale_fields = snapshot
+            .fields_outside(&expected_fields)
+            .map(str::to_string)
+            .collect::<Vec<_>>();
 
+        let mut report = UpsertReport::default();
+        let mut empty_fields = Vec::new();
+        let mut prepared = Vec::new();
         for field in fields {
             if field.text.trim().is_empty() {
-                delete_field_rows(
-                    &tx,
-                    source_kind,
-                    source_id,
-                    &field.field,
-                    Some(embedder.model_id()),
-                )?;
+                empty_fields.push(field.field.as_str());
                 continue;
             }
             let field_hash = content_hash(&field.text);
-            if !force && stored.content_hash_matches(&field.field, &field_hash) {
+            if !force && snapshot.content_hash_matches(&field.field, &field_hash) {
                 report.skipped_fields += 1;
                 continue;
             }
+            prepared.push(prepare_field_chunks(field, &field_hash, embedder)?);
+        }
 
+        if prepared.is_empty() && empty_fields.is_empty() && stale_fields.is_empty() {
+            return Ok(report);
+        }
+
+        let conn = self.connection();
+        let mut conn = lock_connection(&conn)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let current = StoredSource::load(&tx, source_kind, source_id, embedder.model_id())?;
+        if current != snapshot {
+            return Err(source_changed_during_embed(source_kind, source_id));
+        }
+
+        for field in &stale_fields {
+            delete_field_rows(&tx, source_kind, source_id, field, None)?;
+        }
+        for field in empty_fields {
             delete_field_rows(
                 &tx,
                 source_kind,
                 source_id,
-                &field.field,
+                field,
+                Some(embedder.model_id()),
+            )?;
+        }
+        for field in &prepared {
+            delete_field_rows(
+                &tx,
+                source_kind,
+                source_id,
+                &field.name,
                 Some(embedder.model_id()),
             )?;
             report.embedded_chunks +=
-                write_field_chunks(&tx, source_kind, source_id, field, &field_hash, embedder)?;
+                insert_field_chunks(&tx, source_kind, source_id, field, embedder)?;
         }
 
         tx.commit()
@@ -85,16 +124,25 @@ impl VectorStore {
     }
 }
 
-/// Chunk, embed and store one field's text, returning the number of chunks
-/// written. The caller has already removed the field's previous rows.
-fn write_field_chunks(
-    conn: &Connection,
-    source_kind: &str,
-    source_id: &str,
+fn lock_connection(
+    conn: &Arc<Mutex<Connection>>,
+) -> Result<MutexGuard<'_, Connection>, OrbitError> {
+    conn.lock()
+        .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))
+}
+
+fn source_changed_during_embed(source_kind: &str, source_id: &str) -> OrbitError {
+    OrbitError::Store(format!(
+        "source {source_kind}:{source_id} changed during embedding; upsert aborted"
+    ))
+}
+
+/// Chunk and embed one field's text with no store access.
+fn prepare_field_chunks(
     field: &EmbeddingField,
     field_hash: &str,
     embedder: &dyn Embedder,
-) -> Result<usize, OrbitError> {
+) -> Result<PreparedField, OrbitError> {
     let chunks = chunk_text(
         &field.text,
         embedder,
@@ -110,8 +158,7 @@ fn write_field_chunks(
             chunks.len()
         )));
     }
-
-    for (idx, (chunk, vector)) in chunks.iter().zip(vectors.iter()).enumerate() {
+    for vector in &vectors {
         if vector.len() != embedder.dim() {
             return Err(OrbitError::Execution(format!(
                 "embedder returned dim {} but advertised {}",
@@ -119,6 +166,32 @@ fn write_field_chunks(
                 embedder.dim()
             )));
         }
+    }
+    Ok(PreparedField {
+        name: field.field.clone(),
+        hash: field_hash.to_string(),
+        chunks,
+        vectors,
+    })
+}
+
+struct PreparedField {
+    name: String,
+    hash: String,
+    chunks: Vec<String>,
+    vectors: Vec<Vec<f32>>,
+}
+
+/// Store one already-embedded field. The caller has already removed the
+/// field's previous rows.
+fn insert_field_chunks(
+    conn: &Connection,
+    source_kind: &str,
+    source_id: &str,
+    field: &PreparedField,
+    embedder: &dyn Embedder,
+) -> Result<usize, OrbitError> {
+    for (idx, (chunk, vector)) in field.chunks.iter().zip(field.vectors.iter()).enumerate() {
         conn.prepare_cached(
             r#"
                 INSERT INTO embeddings(
@@ -138,9 +211,9 @@ fn write_field_chunks(
         .execute(params![
             source_kind,
             source_id,
-            field.field,
+            field.name,
             idx as i64,
-            field_hash,
+            field.hash,
             embedder.model_id(),
             embedder.dim() as i64,
             encode_f32_blob(vector),
@@ -159,13 +232,13 @@ fn write_field_chunks(
         .execute(params![
             source_kind,
             source_id,
-            field.field,
+            field.name,
             idx as i64,
             chunk
         ])
         .map_err(|error| OrbitError::Store(error.to_string()))?;
     }
-    Ok(chunks.len())
+    Ok(field.chunks.len())
 }
 
 /// What one source already has indexed, read once per `upsert_embeddings`.
@@ -175,6 +248,7 @@ fn write_field_chunks(
 /// nothing changed — asks these questions for every source; the
 /// pre-[ORB-11695] layout answered them with a scan of the whole corpus, which
 /// made a reindex quadratic in corpus size.
+#[derive(PartialEq, Eq)]
 struct StoredSource {
     /// Fields with rows in `embeddings` (under any model) or in `chunks`. The
     /// two can differ: the legacy FTS migration backfills chunk text for
@@ -232,6 +306,9 @@ impl StoredSource {
                     .push(content_hash);
             }
             stored.fields.insert(field);
+        }
+        for hashes in stored.hashes.values_mut() {
+            hashes.sort();
         }
         Ok(stored)
     }

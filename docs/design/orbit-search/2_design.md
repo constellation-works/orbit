@@ -164,13 +164,17 @@ At 30k vectors × 384d, the full scan is ~50ms in pure Rust on a modern laptop a
 
 ### 3.3 Write path
 
-A single `upsert_embeddings` API takes `(source_kind, source_id, fields: Vec<(field, text)>)`. For each field:
+A single `upsert_embeddings` API takes `(source_kind, source_id, fields)` as the **complete** current field set (not a partial patch). Previously indexed fields absent from that set are removed.
 
-1. Compute `content_hash = BLAKE3(text)`.
-2. If a row already exists with the same `(source_kind, source_id, field, chunk_idx, model_id)` and matching `content_hash`, skip.
-3. Otherwise embed and upsert.
+The write is split so companion inference does not hold the store mutex or a SQLite write transaction:
+
+1. Brief mutex read: snapshot the source's field names and active-model `content_hash` values. Unchanged fields (`BLAKE3(text)` still matches) skip inference; empty fields are scheduled for deletion.
+2. Chunk and embed the remaining fields with no store lock held. A failed embed returns here, so the previously committed source is unchanged — including fields that would have been removed.
+3. Brief mutex + `BEGIN IMMEDIATE`: reload the source. If the snapshot fingerprint changed, abort with a store error and write nothing. Otherwise delete stale/empty fields and insert the prepared rows in that one transaction.
 
 This makes "reindex everything" idempotent and cheap when nothing has changed. Re-embedding only happens on real text changes or model changes.
+
+**Same-source concurrency.** The first complete write (`upsert_embeddings` or `delete_source`) that commits after a snapshot wins. An in-flight upsert whose snapshot no longer matches does not write: it cannot mix field revisions, overwrite a later accepted source, or resurrect a deleted source. A hash recheck of only the fields this call prepared is not the commit gate. Unrelated sources and readers are not blocked during inference (mutex released; WAL).
 
 ---
 
