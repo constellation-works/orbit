@@ -80,6 +80,38 @@ fn task_update_complexity_roundtrips_through_a_real_task_record() {
 }
 
 #[test]
+fn task_update_repeats_dependencies_and_clears_context() {
+    let workspace = TestWorkspace::new();
+    let dependency_a = workspace.add_task("First dependency");
+    let dependency_b = workspace.add_task("Second dependency");
+    let id = workspace.add_task("List update");
+
+    workspace.run(
+        &[
+            "task",
+            "update",
+            &id,
+            "--dependencies",
+            &dependency_a,
+            "--dependencies",
+            &dependency_b,
+            "--context",
+            "file:one.rs",
+        ],
+        "update repeated dependencies and context",
+    );
+
+    let dependencies =
+        workspace.task_json(&["task", "show", &id, "--fields", "dependencies", "--json"]);
+    assert_eq!(dependencies, json!([dependency_a, dependency_b]));
+
+    workspace.run(&["task", "update", &id, "--context", ""], "clear context");
+    let context =
+        workspace.task_json(&["task", "show", &id, "--fields", "context_files", "--json"]);
+    assert_eq!(context, json!([]));
+}
+
+#[test]
 fn locks_list_projects_files_held_by_active_tasks() {
     let workspace = TestWorkspace::new();
     fs::write(workspace.work.join("held.rs"), "// held\n").expect("write held file");
