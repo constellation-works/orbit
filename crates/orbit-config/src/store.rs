@@ -160,12 +160,27 @@ impl ConfigStore {
     /// never touches disk.
     pub fn set_value(&mut self, key: &str, raw_value: &str) -> Result<(), OrbitError> {
         registry::admit_config_key(key)?;
+        self.set_document_value(key, raw_value)
+    }
+
+    /// Set a value in a configuration section that is parsed by a subsystem
+    /// outside the runtime-key registry.
+    ///
+    /// The registry intentionally admits only runtime-owned keys, while the
+    /// same `config.toml` also contains independently owned sections such as
+    /// `[docs]`. Those owners still use this method so their edits preserve
+    /// comments and share [`Self::save`]'s atomic persistence.
+    pub fn set_document_value(&mut self, key: &str, raw_value: &str) -> Result<(), OrbitError> {
+        if key.split('.').any(str::is_empty) {
+            return Err(OrbitError::InvalidInput(
+                "config key must contain non-empty dot-separated segments".to_string(),
+            ));
+        }
         let value = parse_value_literal(raw_value);
         let segments: Vec<&str> = key.split('.').collect();
-        // `admit_config_key` above already rejects `key` unless it is a
-        // dotted registry or crew-field path, so `split_last` is always
-        // `Some` here; handled as an error rather than `expect()` since
-        // this is reachable from user input, not a purely local invariant.
+        // The non-empty segment check above makes `split_last` always `Some`;
+        // still handle it as an error rather than `expect()` because this is
+        // reachable from user input, not a purely local invariant.
         let (last, ancestors) = segments.split_last().ok_or_else(|| {
             OrbitError::InvalidInput(format!("config key '{key}' must not be empty"))
         })?;
