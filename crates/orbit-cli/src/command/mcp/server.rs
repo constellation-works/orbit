@@ -15,7 +15,7 @@ use orbit_common::protocol::tool_input::required_string;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{ToolEntryPoint, execute_global_in_process_tool_dispatch};
-use orbit_core::runtime::resolve_global_root;
+use orbit_core::runtime::{HostLifetime, resolve_global_root};
 use orbit_mcp::federated;
 use orbit_mcp::{
     ListenerExposure, McpHost, McpListener, McpSessionAuthority, SessionCapabilityPolicy,
@@ -324,10 +324,11 @@ impl ServerMcpHost {
         context: &ToolSessionContext,
     ) -> Result<(OrbitRuntime, ResolvedWorkspaceSelection), OrbitError> {
         let selected = self.workspace_selection(name, input, context)?;
-        let runtime = RegisteredRuntimeFactory::open_registered_checkout(
+        let runtime = RegisteredRuntimeFactory::open_registered_checkout_for(
             &self.global_root,
             &selected.workspace,
             &selected.checkout,
+            HostLifetime::LongLived,
         )?;
         Ok((runtime, selected))
     }

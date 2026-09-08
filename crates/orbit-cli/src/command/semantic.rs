@@ -24,6 +24,9 @@ pub enum SemanticSubcommand {
     /// Show orbit-search index and companion status
     Stats(SemanticStatsArgs),
     /// Rebuild semantic embeddings
+    ///
+    /// CLI task mutations do not index in the background; run this after
+    /// installs or bulk edits.
     Index(SemanticIndexArgs),
 }
 

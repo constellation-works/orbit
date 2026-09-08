@@ -29,7 +29,7 @@ Global options go **before** the subcommand: `orbit --workspace ws_x task list`.
 | `orbit workspace remove` \| `teardown` | Deregister a workspace, or remove Orbit artifacts from it. |
 | `orbit host show` \| `rename` | Inspect or rename this machine's local host identity. |
 | `orbit config show` \| `get` \| `set` \| `keys` \| `path` | Read and write configuration. See [Configuration](../config/). |
-| `orbit semantic install` \| `uninstall` \| `stats` \| `index` | Manage the local embedding companion used for semantic search. |
+| `orbit semantic install` \| `uninstall` \| `stats` \| `index` | Manage the local embedding companion. CLI task mutations do not auto-index; run `orbit semantic index` to refresh. |
 | `orbit migrate` | Inspect pending `.orbit` layout and store migrations; `--confirm` applies them. |
 | `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. |
 
