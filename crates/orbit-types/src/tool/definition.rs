@@ -398,6 +398,8 @@ pub struct StoredTool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionResult {
     pub success: bool,
+    /// Whether the process supervisor terminated the child after its deadline.
+    pub timed_out: bool,
     pub stdout: String,
     pub stderr: String,
     pub exit_code: Option<i32>,

@@ -14,6 +14,7 @@ const ORBIT_SUCCESS: &str =
 fn exec_result(stdout: &str, stderr: &str, exit_code: i32) -> ExecutionResult {
     ExecutionResult {
         success: exit_code == 0,
+        timed_out: false,
         stdout: String::from_utf8(
             normalize_cli_stdout("antigravity", stdout.as_bytes()).into_owned(),
         )

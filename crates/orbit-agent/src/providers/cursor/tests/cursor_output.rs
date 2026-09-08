@@ -31,6 +31,7 @@ fn cursor_result(result: serde_json::Value) -> String {
 fn exec_result(stdout: &str, stderr: &str, exit_code: i32) -> ExecutionResult {
     ExecutionResult {
         success: exit_code == 0,
+        timed_out: false,
         stdout: String::from_utf8(normalize_cli_stdout("cursor", stdout.as_bytes()).into_owned())
             .expect("utf8 normalized stdout"),
         stderr: stderr.to_string(),

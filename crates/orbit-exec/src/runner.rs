@@ -86,6 +86,7 @@ pub fn run_process(
 
     Ok(ExecutionResult {
         success: result.exit_success,
+        timed_out: result.timed_out,
         stdout: String::from_utf8_lossy(&result.stdout).to_string(),
         stderr: String::from_utf8_lossy(&result.stderr).to_string(),
         exit_code: result.exit_code,
@@ -96,9 +97,8 @@ pub fn run_process(
 
 /// Outcome of supervising a child Orbit did not spawn itself.
 ///
-/// [`ExecutionResult`] cannot say *why* a run produced no exit code, so the
-/// deadline verdict travels alongside it rather than being re-derived from
-/// stderr text.
+/// The deadline verdict is retained separately for callers that need it
+/// alongside the complete process result.
 #[derive(Debug, Clone)]
 pub struct SupervisedOutcome {
     pub result: ExecutionResult,
@@ -132,6 +132,7 @@ pub fn supervise_child(
     Ok(SupervisedOutcome {
         result: ExecutionResult {
             success: result.exit_success,
+            timed_out: result.timed_out,
             stdout: String::from_utf8_lossy(&result.stdout).to_string(),
             stderr: String::from_utf8_lossy(&result.stderr).to_string(),
             exit_code: result.exit_code,
@@ -185,6 +186,7 @@ where
     Ok((
         ExecutionResult {
             success: result.exit_success,
+            timed_out: result.timed_out,
             stdout: String::new(),
             stderr: String::from_utf8_lossy(&result.stderr).to_string(),
             exit_code: result.exit_code,

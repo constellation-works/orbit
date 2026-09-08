@@ -23,7 +23,7 @@ pub fn parse_and_validate_response(exec_result: &ExecutionResult) -> ResponsePar
 }
 
 pub fn is_timeout(exec_result: &ExecutionResult) -> bool {
-    !exec_result.success && exec_result.stderr.contains("process timed out")
+    exec_result.timed_out
 }
 
 /// Best-effort lookup of an embedded Orbit response envelope's `status` field

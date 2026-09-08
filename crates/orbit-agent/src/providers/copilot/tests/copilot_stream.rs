@@ -47,6 +47,7 @@ fn projected(stdout: &str) -> String {
 fn exec_result(stdout: &str, stderr: &str, exit_code: i32) -> ExecutionResult {
     ExecutionResult {
         success: exit_code == 0,
+        timed_out: false,
         stdout: normalized(stdout),
         stderr: stderr.to_string(),
         exit_code: Some(exit_code),
