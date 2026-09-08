@@ -19,15 +19,14 @@ use super::queries::{
 use super::schema::{
     apply_schema, assert_registry_user_version, ensure_compatible_schema, registry_user_version,
 };
-use super::util::{
-    normalize_path, now_string, parse_relation_type_name, path_to_string, relation_type_name,
-};
+use super::util::{now_string, parse_relation_type_name, path_to_string, relation_type_name};
 use super::workspace_id::{next_workspace_id_candidate, sanitize_slug, validate_workspace_id};
 use crate::contracts::{
     AllocatorSeedOutcome, BindWorkspaceParams, DanglingRelationTarget, RegisterWorkspaceParams,
     TaskBundleBinding, TaskCompletionByComplexity, TaskIndexFilter, WorkspaceBinding,
     WorkspaceCheckoutBinding,
 };
+use crate::fs::path_safety::normalize_path;
 
 #[derive(Clone)]
 pub struct TaskRegistryStore {

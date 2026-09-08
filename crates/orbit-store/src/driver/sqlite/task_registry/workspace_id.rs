@@ -4,7 +4,8 @@ use orbit_common::OrbitError;
 use rusqlite::Connection;
 
 use super::queries::{workspace_by_id, workspace_checkout_by_id};
-use super::util::normalize_path;
+use crate::fs::path_safety::normalize_path;
+pub(super) use crate::fs::path_safety::validate_workspace_id;
 
 /// Allocate an unused logical workspace id for `slug` + `path`.
 ///
@@ -58,48 +59,4 @@ pub(super) fn sanitize_slug(raw: &str) -> String {
     } else {
         out
     }
-}
-
-pub(super) fn validate_workspace_id(raw: &str) -> Result<String, OrbitError> {
-    let trimmed = raw.trim();
-    if is_valid_logical_workspace_id(trimmed) {
-        return Ok(trimmed.to_string());
-    }
-    let Some((slug, suffix)) = trimmed.rsplit_once('-') else {
-        return Err(OrbitError::InvalidInput(format!(
-            "workspace_id '{trimmed}' must use canonical ws_<name> or legacy <slug>-<6char> form"
-        )));
-    };
-    if !is_valid_workspace_slug(slug)
-        || suffix.len() != 6
-        || !suffix
-            .as_bytes()
-            .iter()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-    {
-        return Err(OrbitError::InvalidInput(format!(
-            "workspace_id '{trimmed}' must use canonical ws_<name> or legacy <slug>-<6char> form"
-        )));
-    }
-    Ok(trimmed.to_string())
-}
-
-fn is_valid_logical_workspace_id(value: &str) -> bool {
-    let Some(name) = value.strip_prefix("ws_") else {
-        return false;
-    };
-    !name.is_empty()
-        && name
-            .as_bytes()
-            .iter()
-            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_'))
-}
-
-fn is_valid_workspace_slug(slug: &str) -> bool {
-    if slug.is_empty() || slug.starts_with('-') || slug.ends_with('-') || slug.contains("--") {
-        return false;
-    }
-    slug.as_bytes()
-        .iter()
-        .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'))
 }
