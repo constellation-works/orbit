@@ -37,47 +37,71 @@ pub struct DoctorCommand {
 
 impl Execute for DoctorCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let mut results = Vec::new();
         if self.fix_stale_locks {
             let removed = runtime.remove_stale_lock_files()?;
-            if !self.json {
-                println!("Removed {removed} stale lock file(s).");
-            }
+            eprintln!("Removed {removed} stale lock file(s).");
+            results.push(WorkspaceDoctorResult {
+                check_name: "fix-stale-locks".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
+                message: format!("Removed {removed} stale lock file(s)."),
+                remediation: None,
+            });
         }
         if self.fix_stale_task_locks {
             let released = runtime.clear_stale_task_reservations()?;
-            if !self.json {
-                println!("Released {released} stale task reservation(s).");
-            }
+            eprintln!("Released {released} stale task reservation(s).");
+            results.push(WorkspaceDoctorResult {
+                check_name: "fix-stale-task-locks".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
+                message: format!("Released {released} stale task reservation(s)."),
+                remediation: None,
+            });
         }
         if self.remove_graph {
             let removed = runtime.remove_retired_graph_state()?;
-            if !self.json {
-                println!("Removed {removed} retired graph location(s).");
-            }
+            eprintln!("Removed {removed} retired graph location(s).");
+            results.push(WorkspaceDoctorResult {
+                check_name: "remove-graph".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
+                message: format!("Removed {removed} retired graph location(s)."),
+                remediation: None,
+            });
         }
         if self.fix_stale_artifacts {
             let removed = runtime.remove_stale_definition_artifacts()?;
-            if !self.json {
-                println!("Retired {removed} deprecated definition artifact(s).");
-            }
+            eprintln!("Retired {removed} deprecated definition artifact(s).");
+            results.push(WorkspaceDoctorResult {
+                check_name: "fix-stale-artifacts".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
+                message: format!("Retired {removed} deprecated definition artifact(s)."),
+                remediation: None,
+            });
         }
         if self.fix_retired_activity_backends {
             let report = runtime.repair_retired_activity_backends()?;
-            if !self.json {
-                println!(
+            eprintln!(
+                "Removed retired spec.backend from {} activity file(s).",
+                report.repaired.len()
+            );
+            for skipped in &report.skipped {
+                eprintln!(
+                    "Left untouched {}: {}",
+                    skipped.path.display(),
+                    skipped.reason
+                );
+            }
+            results.push(WorkspaceDoctorResult {
+                check_name: "fix-retired-activity-backends".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
+                message: format!(
                     "Removed retired spec.backend from {} activity file(s).",
                     report.repaired.len()
-                );
-                for skipped in &report.skipped {
-                    println!(
-                        "Left untouched {}: {}",
-                        skipped.path.display(),
-                        skipped.reason
-                    );
-                }
-            }
+                ),
+                remediation: None,
+            });
         }
-        let mut results = runtime.doctor_workspace()?;
+        results.extend(runtime.doctor_workspace()?);
         // Machine-global rows, composed here rather than in `doctor_workspace`:
         // `orbit-cmd` does not know about MCP and must not learn, and this is
         // the one crate that already assembles both [ORB-11053].
