@@ -355,9 +355,15 @@ fn workspace_auto_keeps_dispatching_while_earlier_leaves_are_still_running() {
 /// detached leaf.
 #[test]
 fn workspace_auto_fails_promptly_when_leaf_dispatch_has_no_durable_child() {
-    let (_root, runtime, repo_root, global_root) = test_runtime();
+    let (root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::DispatchFailure);
+    let run_id = root
+        .path()
+        .file_name()
+        .expect("test tempdir has a final path component")
+        .to_string_lossy()
+        .into_owned();
 
     let err = try_execute_named_job(
         &runtime,
@@ -365,7 +371,7 @@ fn workspace_auto_fails_promptly_when_leaf_dispatch_has_no_durable_child() {
         &host,
         "workspace_auto_pipeline",
         json!({"max_tasks": 50, "for_seconds": 0, "idle_sleep_seconds": 0}),
-        "jrun-workspace-auto-dispatch-failure",
+        &run_id,
     )
     .expect_err("pre-link dispatch failure must fail the workspace drain");
 
