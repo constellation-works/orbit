@@ -275,7 +275,7 @@ fn inspect_registered_worktree(
     )
     .unwrap_or(true);
     let evidence = format!(
-        "HEAD={}, branch={}, gitdir={}, index={}, status={}, unique_commits={unique_commits}. Completeness does not treat deleted tracked files as an incomplete checkout (they may be intended edits). Timeout recovery is not conflict or failure-handoff recovery; stale-branch provenance is owned by ORB-11639.",
+        "HEAD={}, branch={}, gitdir={}, index={}, status={}, unique_commits={unique_commits}. Completeness does not treat deleted tracked files as an incomplete checkout (they may be intended edits). Timeout recovery is not conflict or failure-handoff recovery; stale-branch provenance is recorded separately.",
         head.as_deref().unwrap_or("missing"),
         branch.as_deref().unwrap_or("missing"),
         git_dir.as_deref().unwrap_or("missing"),
