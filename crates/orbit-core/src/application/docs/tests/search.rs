@@ -1,12 +1,15 @@
-//! Search result shape and related_docs matching tests migrated for ORB-00250.
+//! Search result shape, doc-read accounting, and related_docs matching tests
+//! (originally migrated for ORB-00250).
 
 use std::fs;
 
 use tempfile::tempdir;
 
 use super::super::config::DocsRoot;
+use super::super::frontmatter::{doc_file_reads, reset_doc_file_reads};
 use super::super::search::related_docs_for_context;
 use super::super::types::DocType;
+use crate::OrbitRuntime;
 
 use orbit_search::{DocSearchResult, DocSearchSource, SearchResult};
 use serde_json::json;
@@ -97,4 +100,37 @@ fn related_docs_match_task_features_against_doc_related_features() {
     assert_eq!(related.len(), 1);
     assert_eq!(related[0].path, "docs/orbit-docs.md");
     assert_eq!(related[0].matched_by, vec!["feature:orbit-docs"]);
+}
+
+#[test]
+fn search_docs_reads_each_doc_once() {
+    const DOC_COUNT: usize = 5;
+
+    let dir = tempdir().expect("tempdir");
+    let global_root = dir.path().join("global");
+    let repo_root = dir.path().join("repo");
+    let workspace_root = repo_root.join(".orbit");
+    fs::create_dir_all(&global_root).expect("global root");
+    fs::create_dir_all(&workspace_root).expect("workspace root");
+    fs::create_dir_all(repo_root.join("docs")).expect("docs dir");
+    for index in 0..DOC_COUNT {
+        fs::write(
+            repo_root.join(format!("docs/doc-{index}.md")),
+            format!("---\ntype: context\nsummary: Doc {index}\n---\nindexable body\n"),
+        )
+        .expect("write doc");
+    }
+    let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build runtime");
+
+    reset_doc_file_reads();
+    let results = runtime
+        .search_docs("indexable", Some(DOC_COUNT), true)
+        .expect("search docs");
+
+    assert_eq!(results.len(), DOC_COUNT, "every doc should match the query");
+    assert_eq!(
+        doc_file_reads(),
+        DOC_COUNT,
+        "search_docs must read each doc exactly once"
+    );
 }
