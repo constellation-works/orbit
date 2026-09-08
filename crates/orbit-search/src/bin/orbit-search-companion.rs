@@ -15,7 +15,9 @@ use std::path::PathBuf;
 use clap::Parser;
 use fastembed::{EmbeddingModel, ModelTrait, TextEmbedding, TextInitOptions};
 use orbit_common::OrbitError;
-use orbit_search::{CompanionPaths, ModelSpec, RpcError, RpcRequest, RpcResponse, RpcResult};
+use orbit_search::{
+    CompanionPaths, ModelSpec, RpcError, RpcRequest, RpcResponse, RpcResult, unparsed_request_id,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "orbit-search-companion")]
@@ -165,7 +167,14 @@ fn run() -> Result<(), OrbitError> {
                 }
                 continue;
             }
-            Err(error) => error_response(0, "invalid_request", error.to_string()),
+            // Echo the caller's own id when the line is trustworthy enough to
+            // carry one, so a client can correlate the rejection instead of
+            // reading it as a desynchronized stream.
+            Err(error) => error_response(
+                unparsed_request_id(&line),
+                "invalid_request",
+                error.to_string(),
+            ),
         };
         write_json_line(&response)?;
     }

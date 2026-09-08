@@ -28,11 +28,41 @@ impl RpcRequest {
     }
 }
 
+/// Response id used when a malformed request line carries no trustworthy id.
+///
+/// Clients number their requests from 1, so `0` can never collide with an
+/// in-flight request and such a response reads as uncorrelated.
+pub const UNCORRELATED_REQUEST_ID: u64 = 0;
+
+/// Best-effort correlation id for a line that failed to parse as an
+/// [`RpcRequest`].
+///
+/// A line is trustworthy only when it is a JSON object whose `id` member is an
+/// unsigned integer — enough to answer the right caller without treating
+/// arbitrary malformed input as a valid request. Anything else (non-JSON, a
+/// JSON array or scalar, a missing/negative/fractional/string `id`) yields
+/// [`UNCORRELATED_REQUEST_ID`].
+pub fn unparsed_request_id(line: &str) -> u64 {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|value| value.get("id")?.as_u64())
+        .unwrap_or(UNCORRELATED_REQUEST_ID)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum RpcResponse {
     Result { id: u64, result: RpcResult },
     Error { id: u64, error: RpcError },
+}
+
+impl RpcResponse {
+    /// The request id this response claims to answer.
+    pub fn id(&self) -> u64 {
+        match self {
+            Self::Result { id, .. } | Self::Error { id, .. } => *id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
