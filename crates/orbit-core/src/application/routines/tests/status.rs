@@ -1,13 +1,15 @@
 use std::fs;
 use std::path::PathBuf;
 
+use chrono::{Duration, Local, TimeZone, Timelike, Utc};
 use orbit_automation::routines::validation::RoutinePinValidation;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use tempfile::tempdir;
 
 use super::super::loader::{LoadedRoutine, RoutineOrigin};
 use super::super::status::{
-    RoutineStatus, RoutineToggleOutcome, ScheduleDisplayState, set_routine_enabled,
+    RoutineStatus, RoutineToggleOutcome, ScheduleDisplayState, next_scheduled_occurrence,
+    set_routine_enabled,
 };
 
 fn loaded(path: std::path::PathBuf) -> LoadedRoutine {
@@ -177,4 +179,36 @@ fn schedule_display_state_distinguishes_paused_disabled_waiting_and_unobserved()
         .schedule_display_state(),
         ScheduleDisplayState::Unavailable
     );
+}
+
+#[test]
+fn next_scheduled_occurrence_is_minute_pinned_and_ahead_of_a_sub_minute_now() {
+    // The routine projection uses the shared cron owner, so a poll carrying
+    // seconds and nanos still yields a stable minute-pinned slot.
+    let now = Utc
+        .with_ymd_and_hms(2026, 7, 2, 22, 0, 42)
+        .single()
+        .expect("valid ts")
+        + Duration::nanoseconds(785_766_897);
+    let now = now.with_timezone(&Local);
+
+    let projected = next_scheduled_occurrence("* * * * *", &now).expect("every-minute cron");
+    let parsed = chrono::DateTime::parse_from_rfc3339(&projected).expect("rfc3339 slot");
+
+    assert_eq!(parsed.second(), 0, "slot must be pinned to its minute");
+    assert_eq!(parsed.nanosecond(), 0, "slot must be pinned to its minute");
+    assert!(parsed.with_timezone(&Utc) > now.with_timezone(&Utc));
+}
+
+#[test]
+fn next_scheduled_occurrence_is_absent_for_an_unparseable_cron() {
+    let now = Utc
+        .with_ymd_and_hms(2026, 7, 2, 22, 0, 0)
+        .single()
+        .expect("valid ts")
+        .with_timezone(&Local);
+
+    // A malformed trigger projects nothing; the display state, not a fabricated
+    // timestamp, tells the operator why.
+    assert_eq!(next_scheduled_occurrence("not a cron", &now), None);
 }
