@@ -89,13 +89,20 @@ impl OrbitRuntime {
 }
 
 /// Seed the task-id allocator so the next allocated id is `start`. Used by
-/// `orbit workspace init --task-id-start N` before a runtime exists; the counter
-/// only moves forward, so a value below the current position is refused.
+/// `orbit workspace init --task-id-start N` before a runtime exists. When a
+/// host identity supplies a prefix, adopt it before advancing the counter; the
+/// counter only moves forward, so a value below the current position is refused.
 pub fn seed_task_id_start(
     global_root: &Path,
+    task_prefix: Option<&str>,
     start: u32,
 ) -> Result<AllocatorSeedOutcome, OrbitError> {
     let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
+
+    if let Some(task_prefix) = task_prefix {
+        registry.set_task_prefix(task_prefix)?;
+    }
+
     registry.seed_allocator_start(start)
 }
 

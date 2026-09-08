@@ -638,8 +638,11 @@ fn collect_init_report(
 
     let allocator = match task_id_start {
         Some(start) => {
-            let outcome =
-                orbit_core::bootstrap::task_migration::seed_task_id_start(global_root, start)?;
+            let outcome = orbit_core::bootstrap::task_migration::seed_task_id_start(
+                global_root,
+                init_result.task_prefix.as_deref(),
+                start,
+            )?;
             AllocatorOutcome::Ran {
                 next: render_task_id_start(init_result.task_prefix.as_deref(), outcome.next),
                 changed: outcome.changed,
