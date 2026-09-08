@@ -48,6 +48,7 @@ fi
 "$repo_root/scripts/generate-doc-indexes.sh" --check
 "$repo_root/scripts/check-installer-pubkey.sh"
 "$repo_root/scripts/test-installer-security.sh"
+"$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
 "$repo_root/scripts/check-dependency-direction.sh"
 "$repo_root/scripts/test-ci-fast-guards.py"
 "$repo_root/scripts/check-cli-imports.sh"
