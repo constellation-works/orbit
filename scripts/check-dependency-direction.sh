@@ -71,6 +71,17 @@ allowed_internal_deps() {
   esac
 }
 
+allowed_dev_only_deps() {
+  case "$1" in
+    orbit-core)
+      echo "orbit-exec"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
 contains_word() {
   local haystack="$1"
   local needle="$2"
@@ -101,12 +112,37 @@ for crate, manifest_path in workspace_crates:
 '
 }
 
+load_workspace_dependencies() {
+  cargo metadata --format-version 1 --no-deps --manifest-path "$repo_root/Cargo.toml" |
+    python3 -c '
+import json
+import sys
+
+metadata = json.load(sys.stdin)
+workspace_members = set(metadata["workspace_members"])
+workspace_crates = {
+    package["name"]: package
+    for package in metadata["packages"]
+    if package["id"] in workspace_members
+    and package["name"].startswith("orbit-")
+}
+for crate in sorted(workspace_crates):
+    for dependency in workspace_crates[crate]["dependencies"]:
+        dependency_name = dependency["name"]
+        if dependency_name.startswith("orbit-"):
+            kind = dependency["kind"] or "normal"
+            print(f"{crate}\t{dependency_name}\t{kind}")
+'
+}
+
 workspace_crates=()
 workspace_manifests=()
+declare -A workspace_manifest_by_crate=()
 while IFS=$'\t' read -r crate manifest; do
   if [[ -n "$crate" ]]; then
     workspace_crates+=("$crate")
     workspace_manifests+=("$manifest")
+    workspace_manifest_by_crate["$crate"]="$manifest"
   fi
 done < <(load_workspace_crates)
 
@@ -124,23 +160,27 @@ for index in "${!workspace_crates[@]}"; do
     continue
   fi
 
-  if ! allowed="$(allowed_internal_deps "$crate")"; then
+  if ! allowed_internal_deps "$crate" >/dev/null; then
     echo "missing dependency direction policy for workspace crate '${crate}'"
     fail=1
-    continue
+  fi
+done
+
+while IFS=$'\t' read -r crate dependency kind; do
+  manifest="${workspace_manifest_by_crate[$crate]}"
+  allowed="$(allowed_internal_deps "$crate")"
+
+  if contains_word "$(allowed_dev_only_deps "$crate")" "$dependency" && [[ "$kind" != "dev" ]]; then
+    echo "dependency '${dependency}' in ${manifest} must remain dev-only (kind: ${kind})"
+    fail=1
   fi
 
-  while IFS= read -r dep; do
-    if [[ -n "$dep" ]] && ! contains_word "$allowed" "$dep"; then
-      echo "forbidden dependency '${dep}' found in ${manifest}"
-      echo "  allowed internal deps for ${crate}: ${allowed:-<none>}"
-      fail=1
-    fi
-  done < <(
-    rg -o "^[[:space:]]*orbit-[a-z-]+[[:space:]]*=" "$manifest" |
-      sed -E 's/^[[:space:]]*(orbit-[a-z-]+)[[:space:]]*=.*/\1/'
-  )
-done
+  if [[ -n "$dependency" ]] && ! contains_word "$allowed" "$dependency"; then
+    echo "forbidden dependency '${dependency}' found in ${manifest}"
+    echo "  allowed internal deps for ${crate}: ${allowed:-<none>}"
+    fail=1
+  fi
+done < <(load_workspace_dependencies)
 
 # orbit-core is one crate, but its internal boundaries are directional too.
 # Keep the runtime kernel independent from use cases and protocol adapters;
