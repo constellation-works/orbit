@@ -101,6 +101,7 @@ impl TaskV2Store {
         self.task_from_bundle(bundle)
     }
 
+    /// Materialize tasks on the lightweight bundle path: no artifact hashing.
     pub(crate) fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
         if let Some(tasks) = self.indexed_tasks(TaskIndexFilter {
             status: None,
@@ -201,6 +202,8 @@ impl TaskV2Store {
         query: &str,
         tags: &[String],
     ) -> Result<Vec<Task>, OrbitError> {
+        // Candidate materialization is lightweight; artifact content search
+        // below may still open matching text blobs on demand.
         let lowered = query.to_lowercase();
         let bundles = self.candidate_bundles_by_tags(tags)?;
         self.search_bundles(bundles, &lowered)

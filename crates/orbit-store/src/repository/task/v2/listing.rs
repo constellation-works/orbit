@@ -10,8 +10,10 @@ impl TaskV2Store {
         let envelopes = match self.validated_envelopes()? {
             Some(envelopes) => envelopes,
             None => {
-                // Rebuild/fallback deliberately validates every encountered bundle.
-                // Never swallow a content error while repairing a generated index.
+                // Rebuild/fallback validates task fields on every encountered
+                // bundle (envelope, bodies, events, event/envelope status).
+                // Artifact payload hashing is deferred; never swallow a
+                // task-field error while repairing a generated index.
                 let envelopes = self
                     .bundle_store
                     .list_bundles()?

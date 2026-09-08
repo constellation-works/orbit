@@ -111,8 +111,11 @@ impl TaskV2Store {
     }
 
     /// Rebuild the generated index from the bundles, degrading to `false` (use
-    /// the bundle scan instead) on any failure. Every caller reaches this from
-    /// a *read*, so a rebuild that cannot run must not fail that read.
+    /// the bundle scan instead) on any failure. Listing-triggered rebuild uses
+    /// the lightweight bundle read (task fields only); explicit
+    /// `reindex_workspace` still hashes artifact payloads. Every caller
+    /// reaches this from a *read*, so a rebuild that cannot run must not fail
+    /// that read.
     fn rebuild_index_best_effort(&self, reason: &str) -> Result<bool, OrbitError> {
         let rebuilt = self.bundle_store.list_bundles().and_then(|bundles| {
             let envelopes = bundles

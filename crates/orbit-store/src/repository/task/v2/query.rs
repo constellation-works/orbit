@@ -2,8 +2,9 @@ use super::*;
 
 impl TaskV2Store {
     /// Search over the bundles the candidate listing already read, so a
-    /// query costs one bundle read per task instead of three (each of which
-    /// re-hashed every artifact blob) plus a fourth read of the blobs.
+    /// query costs one lightweight bundle read per task. Materialization does
+    /// not hash artifact payloads; a later on-demand read may open a text
+    /// blob only when in-memory fields and comments did not already match.
     pub(super) fn search_bundles(
         &self,
         bundles: Vec<TaskBundleV2>,
