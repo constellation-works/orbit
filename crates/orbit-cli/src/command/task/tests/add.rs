@@ -120,6 +120,34 @@ fn task_add_acceptance_criteria_does_not_split_on_commas() {
 }
 
 #[test]
+fn task_add_separates_global_workspace_selector_from_task_workspace_path() {
+    let cli = Cli::parse_from([
+        "orbit",
+        "task",
+        "add",
+        "--title",
+        "Workspace-scoped task",
+        "--complexity",
+        "low",
+        "--workspace",
+        "ws_nebula",
+        "--workspace-path",
+        "packages/orbit",
+    ]);
+
+    assert_eq!(cli.workspace.as_deref(), Some("ws_nebula"));
+
+    let Commands::Task(task) = cli.command else {
+        panic!("expected task command");
+    };
+    let TaskSubcommand::Add(args) = task.command else {
+        panic!("expected task add command");
+    };
+
+    assert_eq!(args.workspace_path.as_deref(), Some("packages/orbit"));
+}
+
+#[test]
 fn task_add_status_only_advertises_creation_legal_values() {
     assert!(
         Cli::try_parse_from([
