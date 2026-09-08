@@ -161,6 +161,9 @@ fn revoked_key_fails_closed_even_before_its_expiry() {
 
 #[test]
 fn signature_from_an_untrusted_key_never_matches_the_shipped_trust_set() {
+    assert_eq!(TRUSTED_RELEASE_KEYS.len(), 1);
+    assert_eq!(TRUSTED_RELEASE_KEYS[0].id, "orbit-release-key-3");
+
     let error = verify_checksum_signature(
         TEST_MANIFEST.as_bytes(),
         &decode_hex(TEST_SIGNATURE_HEX),

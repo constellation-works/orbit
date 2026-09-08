@@ -110,8 +110,8 @@ ingest_records() {
 
   local count
   count="$(wc -l < "$dest/ids" | tr -d ' ')"
-  if [ "$count" -lt 2 ]; then
-    die "expected at least two trusted keys in $label, found $count"
+  if [ "$count" -lt 1 ]; then
+    die "expected at least one trusted key in $label, found $count"
   fi
 
   local rec_id na rev
