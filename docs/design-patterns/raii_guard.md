@@ -112,7 +112,7 @@ impl Drop for SignalHandlerGuard {
 }
 ```
 
-`acquire_handlers` takes a process-wide `Mutex` only for the refcount/`sigaction` critical section. The first waiter snapshots the previous SIGINT/SIGTERM dispositions and installs a handler that stores a generation counter and `killpg`s every registered child; the last drop restores those dispositions. Concurrent waits overlap.
+`acquire_handlers` takes a process-wide `Mutex` only for the refcount/`sigaction` critical section. The first waiter snapshots the previous SIGINT/SIGTERM dispositions and installs a handler that stores a generation counter, records a pending forward, and `killpg`s every registered child; the last drop restores those dispositions and re-raises a captured signal (except `SIG_IGN`) with the mutex released. Concurrent waits overlap.
 
 Patterns to copy:
 
