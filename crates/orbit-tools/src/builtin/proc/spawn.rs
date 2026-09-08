@@ -13,7 +13,7 @@ use orbit_types::policy::{FsOperation, ResolvedFsProfile};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
-use crate::{TIMEOUT_DEFAULT_MS, Tool, ToolContext};
+use crate::{TIMEOUT_DEFAULT_MS, TIMEOUT_LONG_MS, Tool, ToolContext};
 
 pub struct ProcSpawnTool;
 
@@ -37,7 +37,9 @@ impl Tool for ProcSpawnTool {
                 },
                 ToolParam {
                     name: "timeout_ms".to_string(),
-                    description: "Execution timeout in milliseconds".to_string(),
+                    description: format!(
+                        "Execution timeout in milliseconds (default {TIMEOUT_DEFAULT_MS}; larger values are clamped to {MAX_TIMEOUT_MS})"
+                    ),
                     param_type: "u64".to_string(),
                     required: false,
                 },
@@ -66,35 +68,51 @@ impl Tool for ProcSpawnTool {
             })
             .unwrap_or_default();
 
-        let timeout_ms = proc_spawn_timeout_ms(&input);
-
-        // The runtime resolves `[execution.env]` once and hands the complete
-        // child environment to this authoritative spawn boundary. Contexts
-        // without a configuration layer receive Orbit's credential-free
-        // baseline rather than falling back to ambient inheritance.
-        let env_pairs = ctx
-            .proc_spawn_environment
-            .clone()
-            .unwrap_or_else(|| allowlisted_child_env(&[], &[]));
-
-        let current_dir = ctx
-            .workspace_root
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned());
-
-        let request = ExecRequest {
-            program,
-            args,
-            current_dir,
-            timeout_ms: Some(timeout_ms),
-            stdin_mode: StdinMode::Inherit,
-            environment_mode: EnvironmentMode::ClearAndSet(env_pairs),
-            debug: false,
-        };
+        let request = spawn_request(ctx, program, args, proc_spawn_timeout_ms(&input));
         let exec_result = run_process(&request, &ActivityFsSandbox::new(ctx)?)?;
 
         serde_json::to_value(exec_result)
             .map_err(|e| OrbitError::Execution(format!("serialize exec result: {e}")))
+    }
+}
+
+/// Assemble the child's execution request.
+///
+/// Two properties of this request are the tool's contract rather than caller
+/// choices: the child environment and its stdin.
+///
+/// The runtime resolves `[execution.env]` once and hands the complete child
+/// environment to this authoritative spawn boundary. Contexts without a
+/// configuration layer receive Orbit's credential-free baseline rather than
+/// falling back to ambient inheritance.
+///
+/// Stdin is closed, matching the engine's `local_shell` step and the other
+/// process-spawning builtins. A `proc.spawn` child is non-interactive: with an
+/// inherited stdin, a program that reads it (`cat`, a confirmation prompt) would
+/// only ever end at the deadline, and until then it would consume the
+/// operator's terminal keystrokes.
+fn spawn_request(
+    ctx: &ToolContext,
+    program: String,
+    args: Vec<String>,
+    timeout_ms: u64,
+) -> ExecRequest {
+    let env_pairs = ctx
+        .proc_spawn_environment
+        .clone()
+        .unwrap_or_else(|| allowlisted_child_env(&[], &[]));
+
+    ExecRequest {
+        program,
+        args,
+        current_dir: ctx
+            .workspace_root
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        timeout_ms: Some(timeout_ms),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::ClearAndSet(env_pairs),
+        debug: false,
     }
 }
 
@@ -222,11 +240,29 @@ fn path_argument(argument: &str, cwd: &Path) -> Option<PathBuf> {
     .then_some(resolved)
 }
 
+/// Ceiling for a caller-supplied `timeout_ms`.
+///
+/// The supervisor deadline is the only thing that ends a child that never
+/// exits on its own, and `proc.spawn` reads that deadline straight from tool
+/// input — so an asset asking for `u64::MAX` would otherwise disable it. The
+/// ceiling is the longest timeout this crate defines, well above the read-only
+/// commands the shipped activities grant `proc.spawn`.
+const MAX_TIMEOUT_MS: u64 = TIMEOUT_LONG_MS;
+
 fn proc_spawn_timeout_ms(input: &Value) -> u64 {
-    input
-        .get("timeout_ms")
-        .and_then(Value::as_u64)
-        .unwrap_or(TIMEOUT_DEFAULT_MS)
+    let Some(requested) = input.get("timeout_ms").and_then(Value::as_u64) else {
+        return TIMEOUT_DEFAULT_MS;
+    };
+    if requested > MAX_TIMEOUT_MS {
+        tracing::warn!(
+            target: "orbit.tool.proc_spawn",
+            requested_timeout_ms = requested,
+            timeout_ms = MAX_TIMEOUT_MS,
+            "proc.spawn timeout exceeds the supervisor maximum and was clamped",
+        );
+        return MAX_TIMEOUT_MS;
+    }
+    requested
 }
 
 pub(crate) fn enforce_program_allowlist(
