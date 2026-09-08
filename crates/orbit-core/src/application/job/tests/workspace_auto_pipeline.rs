@@ -385,9 +385,15 @@ fn workspace_auto_fails_promptly_when_leaf_dispatch_has_no_durable_child() {
 
 #[test]
 fn workspace_auto_preserves_concrete_workspace_step_failure() {
-    let (_root, runtime, repo_root, global_root) = test_runtime();
+    let (root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::ClassifierFailure);
+    let run_id = root
+        .path()
+        .file_name()
+        .expect("test tempdir has a final path component")
+        .to_string_lossy()
+        .into_owned();
 
     let err = try_execute_named_job(
         &runtime,
@@ -395,7 +401,7 @@ fn workspace_auto_preserves_concrete_workspace_step_failure() {
         &host,
         "workspace_auto_pipeline",
         json!({"max_tasks": 50, "for_seconds": 0, "idle_sleep_seconds": 0}),
-        "jrun-workspace-auto-classifier-failure",
+        &run_id,
     )
     .expect_err("workspace-level deterministic failure must fail the drain");
 
