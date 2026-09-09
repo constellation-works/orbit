@@ -888,6 +888,62 @@ mod copilot_state_roots {
 }
 
 #[cfg(target_os = "linux")]
+mod provider_state_root_validation {
+    use std::path::Path;
+
+    use crate::adapter::engine_host::v2_host::sandbox::{
+        ensure_linux_provider_directory, validated_linux_provider_state_root,
+    };
+
+    #[test]
+    fn rejects_root_and_home_wide_targets() {
+        let home = tempfile::tempdir().expect("home");
+
+        assert!(validated_linux_provider_state_root(Path::new("/"), Some(home.path())).is_err());
+        assert!(validated_linux_provider_state_root(home.path(), Some(home.path())).is_err());
+        assert!(
+            validated_linux_provider_state_root(
+                home.path().parent().expect("home parent"),
+                Some(home.path()),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn accepts_absolute_custom_root_beneath_an_existing_parent() {
+        let parent = tempfile::tempdir().expect("parent");
+        let custom = parent.path().join("provider").join("state");
+
+        let validated = validated_linux_provider_state_root(&custom, Some(parent.path()))
+            .expect("validate custom provider root");
+
+        assert_eq!(validated, custom);
+    }
+
+    #[test]
+    fn creates_a_validated_custom_root() {
+        let parent = tempfile::tempdir().expect("parent");
+        let custom = parent.path().join("provider").join("state");
+
+        let created = ensure_linux_provider_directory(&custom, Some(parent.path()))
+            .expect("create custom provider root");
+
+        assert!(custom.is_dir());
+        assert_eq!(
+            created,
+            custom.canonicalize().expect("canonical custom root")
+        );
+    }
+
+    #[test]
+    fn rejects_relative_and_traversal_paths() {
+        assert!(validated_linux_provider_state_root(Path::new("provider/state"), None).is_err());
+        assert!(validated_linux_provider_state_root(Path::new("/tmp/../provider"), None).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
 mod cursor_state_roots {
     use std::path::{Path, PathBuf};
 

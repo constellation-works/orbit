@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -378,24 +380,131 @@ fn append_linux_provider_state_roots(
     }
     // [ORB-10946] Copilot's roots are appended only when Copilot is the
     // provider being dispatched. This mirrors the macOS gate, and it matters
-    // more here than on macOS: every entry in this list is *created* by
-    // `ensure_owned_directory` below, so an unconditional entry would mkdir a
-    // `~/.copilot` on hosts that have never installed the CLI.
+    // more here than on macOS: every entry in this list is *created* by the
+    // validated provider-root path below, so an unconditional entry would
+    // mkdir a `~/.copilot` on hosts that have never installed the CLI.
     directories.extend(linux_copilot_state_roots(provider, home.as_deref()));
     directories.extend(linux_cursor_state_roots_with(provider, home.as_deref()));
     directories.extend(linux_pi_state_roots(provider, home.as_deref()));
     directories.extend(linux_opencode_state_roots(provider, home.as_deref()));
     for directory in directories {
-        ensure_owned_directory(&directory)?;
-        let canonical = directory.canonicalize().map_err(|error| {
-            DispatchError::CliInvocationPermanent(format!(
-                "canonicalize Linux provider state root `{}`: {error}",
-                directory.display()
-            ))
-        })?;
+        let canonical = ensure_linux_provider_directory(&directory, home.as_deref())?;
         append_unique_modify_root(resolved, canonical.display().to_string());
     }
     Ok(())
+}
+
+/// Resolve a provider state root before creating it on behalf of a child.
+///
+/// Provider-specific environment variables are operator-configurable, but
+/// they must not turn sandbox preparation into an arbitrary path creator.
+/// Reject relative paths, path traversal, root/home-wide targets, and symlink
+/// components. The returned path has an existing canonical ancestor and only
+/// the validated missing suffix, so the caller can safely materialize it.
+#[cfg(target_os = "linux")]
+pub(super) fn validated_linux_provider_state_root(
+    path: &Path,
+    home: Option<&Path>,
+) -> Result<PathBuf, DispatchError> {
+    if !path.is_absolute() {
+        return Err(DispatchError::CliInvocationPermanent(format!(
+            "Linux provider state root `{}` must be absolute",
+            path.display()
+        )));
+    }
+    if path.parent().is_none() {
+        return Err(DispatchError::CliInvocationPermanent(
+            "Linux provider state root must not be the filesystem root".to_string(),
+        ));
+    }
+    if home.is_some_and(|home| {
+        let canonical_home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+        path == canonical_home || canonical_home.starts_with(path)
+    }) {
+        return Err(DispatchError::CliInvocationPermanent(format!(
+            "Linux provider state root `{}` is broader than the user's home directory",
+            path.display()
+        )));
+    }
+
+    let mut prefix = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::RootDir => prefix.push(component),
+            std::path::Component::Normal(name) => {
+                prefix.push(name);
+                match std::fs::symlink_metadata(&prefix) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        return Err(DispatchError::CliInvocationPermanent(format!(
+                            "Linux provider state root `{}` must not contain symlink `{}`",
+                            path.display(),
+                            prefix.display()
+                        )));
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(error) => {
+                        return Err(DispatchError::CliInvocationPermanent(format!(
+                            "inspect Linux provider state root `{}`: {error}",
+                            path.display()
+                        )));
+                    }
+                }
+            }
+            _ => {
+                return Err(DispatchError::CliInvocationPermanent(format!(
+                    "Linux provider state root `{}` must not contain traversal components",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    let mut existing = path.to_path_buf();
+    let mut missing = Vec::<OsString>::new();
+    while !existing.exists() {
+        let Some(name) = existing.file_name() else {
+            return Err(DispatchError::CliInvocationPermanent(format!(
+                "Linux provider state root `{}` has no existing ancestor",
+                path.display()
+            )));
+        };
+        missing.push(name.to_os_string());
+        existing.pop();
+    }
+
+    let canonical_existing = existing.canonicalize().map_err(|error| {
+        DispatchError::CliInvocationPermanent(format!(
+            "canonicalize Linux provider state root ancestor `{}`: {error}",
+            existing.display()
+        ))
+    })?;
+    let mut validated = canonical_existing;
+    for component in missing.iter().rev() {
+        validated.push(component);
+    }
+
+    Ok(validated)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn ensure_linux_provider_directory(
+    path: &Path,
+    home: Option<&Path>,
+) -> Result<PathBuf, DispatchError> {
+    let validated = validated_linux_provider_state_root(path, home)?;
+    std::fs::create_dir_all(&validated).map_err(|error| {
+        DispatchError::CliInvocationPermanent(format!(
+            "create Linux provider state root `{}`: {error}",
+            validated.display()
+        ))
+    })?;
+    validated.canonicalize().map_err(|error| {
+        DispatchError::CliInvocationPermanent(format!(
+            "canonicalize Linux provider state root `{}`: {error}",
+            validated.display()
+        ))
+    })
 }
 
 /// Writable state root for an active Cursor executor on Linux. The CLI stores
