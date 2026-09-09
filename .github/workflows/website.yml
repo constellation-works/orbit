@@ -149,7 +149,7 @@ jobs:
               homepage="$(curl --fail --silent --show-error --max-time 20 "$base_url/")" || true
               metadata="$(curl --fail --silent --show-error "$base_url/deployment.json")" || true
               if grep -Fq 'Run coding agents as tracked, reviewable tasks.' <<<"$homepage" \
-                && grep -Fq 'Choose a delivery mode' <<<"$homepage" \
+                && grep -Fq 'Other delivery modes' <<<"$homepage" \
                 && curl --fail --silent --show-error --max-time 20 \
                   "$base_url/getting-started/install/" >/dev/null \
                 && METADATA="$metadata" node --input-type=module --eval \
