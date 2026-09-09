@@ -149,6 +149,7 @@ impl StagedTextFile {
     where
         F: FnOnce(&mut File) -> io::Result<()>,
     {
+        let file_name = validated_atomic_file_name(target_path)?;
         let parent = target_path.parent().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -156,12 +157,28 @@ impl StagedTextFile {
             )
         })?;
         create_private_dir_all(parent)?;
+        let parent_for_resolution = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+        let canonical_parent = fs::canonicalize(parent_for_resolution)?;
+        let canonical_target = canonical_parent.join(file_name);
+        if !canonical_target.starts_with(&canonical_parent) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "atomic write target escapes its parent: {}",
+                    target_path.display()
+                ),
+            ));
+        }
 
-        let temp_path = temp_path_for(target_path);
+        let temp_path = temp_path_for(&canonical_target);
         let mut file = create_new_private_file(&temp_path)?;
         let mut cleanup = TempFileCleanup::new(temp_path.clone());
 
-        if preserve_existing_permissions && let Ok(metadata) = fs::metadata(target_path) {
+        if preserve_existing_permissions && let Ok(metadata) = fs::metadata(&canonical_target) {
             fs::set_permissions(&temp_path, metadata.permissions())?;
         }
 
@@ -171,12 +188,12 @@ impl StagedTextFile {
         }
         drop(file);
 
-        let parent_dir = durable.then(|| File::open(parent)).transpose()?;
+        let parent_dir = durable.then(|| File::open(&canonical_parent)).transpose()?;
 
         cleanup.disarm();
 
         Ok(Self {
-            target_path: target_path.to_path_buf(),
+            target_path: canonical_target,
             temp_path,
             parent_dir,
             sync_parent: durable,
@@ -205,6 +222,28 @@ impl StagedTextFile {
         }
         Ok(())
     }
+}
+
+/// Return the only component that an atomic write may replace.
+///
+/// The parent is resolved separately in [`StagedTextFile::stage_with`], where
+/// it becomes the containment root for the final rename. Rejecting the dot
+/// components before creating a staging file also prevents a path such as
+/// `parent/..` from being interpreted as the parent directory itself.
+fn validated_atomic_file_name(path: &Path) -> io::Result<&std::ffi::OsStr> {
+    let Some(file_name) = path.file_name() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("atomic write path has no file name: {}", path.display()),
+        ));
+    };
+    if file_name == "." || file_name == ".." {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("atomic write path must name a file: {}", path.display()),
+        ));
+    }
+    Ok(file_name)
 }
 
 /// Removes a newly-created staging file if setup or writing fails before the
