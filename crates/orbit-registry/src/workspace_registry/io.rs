@@ -37,6 +37,14 @@ pub fn with_registry_lock<T>(
     path: &Path,
     op: impl FnOnce() -> Result<T, OrbitError>,
 ) -> Result<T, OrbitError> {
+    let parent = registry_parent(path)?;
+    std::fs::create_dir_all(parent).map_err(|error| {
+        OrbitError::Io(format!(
+            "create workspace registry directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+
     let path = validated_registry_path(path)?;
     with_exclusive_file_lock(&path, "workspace registry", op)
 }
@@ -85,19 +93,7 @@ pub fn save_registry_to(registry: &WorkspaceRegistry, path: &Path) -> Result<(),
 /// and inspecting the final component without following it rejects a registry
 /// symlink that would redirect reads or writes outside the selected root.
 fn validated_registry_path(path: &Path) -> Result<PathBuf, OrbitError> {
-    if path.file_name() != Some(OsStr::new(REGISTRY_FILE_NAME)) {
-        return Err(OrbitError::WorkspaceError(format!(
-            "workspace registry path must name '{REGISTRY_FILE_NAME}': {}",
-            path.display()
-        )));
-    }
-
-    let parent = path.parent().ok_or_else(|| {
-        OrbitError::WorkspaceError(format!(
-            "workspace registry path '{}' has no parent directory",
-            path.display()
-        ))
-    })?;
+    let parent = registry_parent(path)?;
     let canonical_parent = parent
         .canonicalize()
         .map_err(|error| OrbitError::Io(format!("canonicalize {}: {error}", parent.display())))?;
@@ -127,6 +123,24 @@ fn validated_registry_path(path: &Path) -> Result<PathBuf, OrbitError> {
     }
 
     Ok(canonical_path)
+}
+
+fn registry_parent(path: &Path) -> Result<&Path, OrbitError> {
+    if path.file_name() != Some(OsStr::new(REGISTRY_FILE_NAME)) {
+        return Err(OrbitError::WorkspaceError(format!(
+            "workspace registry path must name '{REGISTRY_FILE_NAME}': {}",
+            path.display()
+        )));
+    }
+
+    let parent = path.parent().ok_or_else(|| {
+        OrbitError::WorkspaceError(format!(
+            "workspace registry path '{}' has no parent directory",
+            path.display()
+        ))
+    })?;
+
+    Ok(parent)
 }
 
 fn registry_host_context(path: &Path) -> Result<WorkspaceRegistryHostContext, OrbitError> {
