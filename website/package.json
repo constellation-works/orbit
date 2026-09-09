@@ -25,7 +25,7 @@
   "overrides": {
     "yaml": "2.8.3",
     "esbuild": "0.28.1",
-    "js-yaml": ">=4.3.1",
+    "js-yaml": "4.3.2",
     "fast-uri": ">=4.1.3"
   }
 }
