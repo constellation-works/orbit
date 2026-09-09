@@ -60,14 +60,16 @@ pub fn clock_settings_path(global_root: &Path) -> PathBuf {
 }
 
 pub fn load_clock_settings(global_root: &Path) -> Result<ClockSettings, OrbitError> {
-    let requested_path = clock_settings_path(global_root);
-    if !requested_path.exists() {
-        return Ok(ClockSettings::default());
-    }
-
     let path = validated_clock_settings_path(global_root)?;
-    let raw = fs::read_to_string(&path)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ClockSettings::default());
+        }
+        Err(error) => {
+            return Err(OrbitError::Io(format!("read {}: {error}", path.display())));
+        }
+    };
     toml::from_str::<ClockSettings>(&raw)
         .map_err(|error| {
             OrbitError::InvalidInput(format!(
@@ -103,16 +105,18 @@ fn validated_clock_settings_path(global_root: &Path) -> Result<PathBuf, OrbitErr
     })?;
     let expected_path = canonical_root.join(CLOCK_SETTINGS_FILE);
 
-    if !expected_path.exists() {
-        return Ok(expected_path);
-    }
-
-    let canonical_path = fs::canonicalize(&expected_path).map_err(|error| {
-        OrbitError::Io(format!(
-            "resolve clock configuration {}: {error}",
-            expected_path.display()
-        ))
-    })?;
+    let canonical_path = match fs::canonicalize(&expected_path) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(expected_path);
+        }
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "resolve clock configuration {}: {error}",
+                expected_path.display()
+            )));
+        }
+    };
     if canonical_path != expected_path || !canonical_path.is_file() {
         return Err(OrbitError::InvalidInput(format!(
             "clock configuration must be a regular {CLOCK_SETTINGS_FILE} directly under {}",
