@@ -6,7 +6,7 @@ use tempfile::tempdir;
 
 use super::super::config::DocsRoot;
 use super::super::walk::{
-    git_check_ignore_invocations, reset_git_check_ignore_invocations, walk_docs_roots,
+    expand_root, git_check_ignore_invocations, reset_git_check_ignore_invocations, walk_docs_roots,
 };
 
 fn init_git_repo(root: &std::path::Path) {
@@ -40,6 +40,43 @@ fn walker_skips_dot_orbit_even_when_root_points_above_it() {
             .map(|record| record.path.as_str())
             .collect::<Vec<_>>(),
         vec!["docs/good.md"]
+    );
+}
+
+#[test]
+fn wildcard_root_expands_workspace_relative_directories() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+    fs::create_dir_all(root.join("apps/example/docs")).expect("docs dir");
+    fs::write(
+        root.join("apps/example/docs/guide.md"),
+        "---\ntype: context\nsummary: Guide\n---\nbody\n",
+    )
+    .expect("write guide");
+
+    let records = walk_docs_roots(root, &[DocsRoot::new("apps/*/docs/")]).expect("walk docs");
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].path, "apps/example/docs/guide.md");
+}
+
+#[test]
+fn wildcard_root_rejects_paths_outside_the_workspace() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().join("repo");
+    let outside = dir.path().join("outside");
+    fs::create_dir_all(&root).expect("repo dir");
+    fs::create_dir_all(outside.join("docs")).expect("outside docs dir");
+
+    assert!(
+        expand_root(&root, "../outside/*")
+            .expect("expand traversal")
+            .is_empty()
+    );
+    assert!(
+        expand_root(&root, &format!("{}/*", outside.display()))
+            .expect("expand absolute path")
+            .is_empty()
     );
 }
 
