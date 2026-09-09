@@ -26,6 +26,7 @@ pub use highlights::{
 
 const SUMMARY_FILENAME: &str = "summary.json";
 const PR_SCOREBOARD_FILENAME: &str = "pr.json";
+const TOKEN_SCOREBOARD_FILENAME: &str = "tokens.json";
 // v2 adds `task_review.threads`; v3 adds tasks_created/tasks_planned,
 // per-(role, surface) tool call counts, top-level workflows_run, and a
 // recent_7d window block. v5 adds per-agent `friction.reported`
@@ -664,7 +665,7 @@ pub fn summary_path(scoreboard_dir: &Path) -> std::path::PathBuf {
 }
 
 fn read_model_scoreboard(scoreboard_dir: &Path) -> Result<FamilyScoreboard, OrbitError> {
-    let Some(path) = validated_pr_scoreboard_path(scoreboard_dir)? else {
+    let Some(path) = validated_scoreboard_file_path(scoreboard_dir, ScoreboardFile::Pr)? else {
         return Ok(FamilyScoreboard::new());
     };
     let raw = fs::read_to_string(&path)
@@ -677,13 +678,32 @@ fn read_model_scoreboard(scoreboard_dir: &Path) -> Result<FamilyScoreboard, Orbi
     normalize_model_scoreboard(parsed)
 }
 
-/// Resolve the fixed PR scoreboard file beneath the selected scoreboard root.
+/// The fixed snapshot files are selected by the store, never by a caller.
+#[derive(Clone, Copy)]
+enum ScoreboardFile {
+    Pr,
+    Tokens,
+}
+
+impl ScoreboardFile {
+    fn filename(self) -> &'static str {
+        match self {
+            Self::Pr => PR_SCOREBOARD_FILENAME,
+            Self::Tokens => TOKEN_SCOREBOARD_FILENAME,
+        }
+    }
+}
+
+/// Resolve a fixed scoreboard file beneath the selected scoreboard root.
 ///
 /// The root is selected by the workspace configuration, but the file read by
-/// this summary is fixed. Canonicalizing the root and rejecting a symlink or
-/// non-regular target prevents a path component from redirecting this read to
-/// an unrelated file.
-fn validated_pr_scoreboard_path(scoreboard_dir: &Path) -> Result<Option<PathBuf>, OrbitError> {
+/// this summary is fixed. Canonicalizing the root, checking containment, and
+/// rejecting a symlink or non-regular target prevents a path component from
+/// redirecting this read to an unrelated file.
+fn validated_scoreboard_file_path(
+    scoreboard_dir: &Path,
+    file: ScoreboardFile,
+) -> Result<Option<PathBuf>, OrbitError> {
     let canonical_dir = match fs::canonicalize(scoreboard_dir) {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -701,7 +721,14 @@ fn validated_pr_scoreboard_path(scoreboard_dir: &Path) -> Result<Option<PathBuf>
         )));
     }
 
-    let path = canonical_dir.join(PR_SCOREBOARD_FILENAME);
+    let path = canonical_dir.join(file.filename());
+    if !path.starts_with(&canonical_dir) {
+        return Err(OrbitError::InvalidInput(format!(
+            "scoreboard file must remain within the scoreboard directory: {}",
+            path.display()
+        )));
+    }
+
     match fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(OrbitError::InvalidInput(
             format!("scoreboard file must not be a symlink: {}", path.display()),
@@ -720,10 +747,9 @@ fn validated_pr_scoreboard_path(scoreboard_dir: &Path) -> Result<Option<PathBuf>
 }
 
 fn read_token_agents(scoreboard_dir: &Path) -> Result<Vec<TokenAgentEntry>, OrbitError> {
-    let path = scoreboard_dir.join("tokens.json");
-    if !path.exists() {
+    let Some(path) = validated_scoreboard_file_path(scoreboard_dir, ScoreboardFile::Tokens)? else {
         return Ok(Vec::new());
-    }
+    };
     let raw =
         fs::read_to_string(&path).map_err(|e| OrbitError::Io(format!("read tokens.json: {e}")))?;
     if raw.trim().is_empty() {
