@@ -5,8 +5,17 @@ on:
     branches: [main, agent-main]
   pull_request:
     branches: [main, agent-main]
+  # Scheduled runs are always dispatched from the default branch (main), so the
+  # branch to analyze has to be selected explicitly -- otherwise the weekly scan
+  # reports against main while all work lands on agent-main.
   schedule:
     - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to analyze
+        required: false
+        default: agent-main
 
 permissions:
   security-events: write
@@ -22,7 +31,37 @@ jobs:
       matrix:
         language: [actions, javascript-typescript, python, rust]
     steps:
+      - name: Select ref to analyze
+        id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ inputs.branch || 'agent-main' }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "schedule" ] || [ "$EVENT" = "workflow_dispatch" ]; then
+            # Override: check out and report against $BRANCH.
+            echo "checkout=$BRANCH" >> "$GITHUB_OUTPUT"
+            echo "ref=refs/heads/$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            # Push / pull_request: the triggering ref is already correct, and
+            # leaving ref+sha empty lets the action use GITHUB_REF / GITHUB_SHA.
+            echo "checkout=" >> "$GITHUB_OUTPUT"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.checkout }}
+
+      - name: Resolve analyzed sha
+        id: head
+        run: |
+          set -euo pipefail
+          if [ -n "${{ steps.target.outputs.ref }}" ]; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
@@ -35,3 +74,5 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"
+          ref: ${{ steps.target.outputs.ref }}
+          sha: ${{ steps.head.outputs.sha }}
