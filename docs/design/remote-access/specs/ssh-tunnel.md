@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web SSH Local Forward"
-last_validated: 2026-08-15
+last_validated: 2026-09-09
 tags: [remote-access]
 ---
 
