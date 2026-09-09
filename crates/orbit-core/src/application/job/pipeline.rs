@@ -1370,8 +1370,13 @@ impl OrbitRuntime {
         run_id: &str,
         actor: Option<&str>,
         mut command: Command,
-        worker_log: PathBuf,
+        worker_log: PipelineWorkerLog,
     ) -> Result<u32, OrbitError> {
+        let PipelineWorkerLog {
+            path: worker_log,
+            reader: worker_log_reader,
+        } = worker_log;
+
         #[cfg(unix)]
         unsafe {
             command.pre_exec(|| {
@@ -1406,6 +1411,7 @@ impl OrbitRuntime {
                     child,
                     &workspace_for_observer,
                     &worker_log_for_observer,
+                    worker_log_reader,
                     actor_for_observer.as_deref(),
                 ) {
                     tracing::error!(
@@ -1436,6 +1442,7 @@ impl OrbitRuntime {
         mut child: Child,
         workspace: &Path,
         worker_log: &Path,
+        mut worker_log_reader: File,
         actor: Option<&str>,
     ) -> Result<(), OrbitError> {
         let child_pid = child.id();
@@ -1492,7 +1499,7 @@ impl OrbitRuntime {
                 let run = self.get_job_run_backend(run_id)?.ok_or_else(|| {
                     OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string())
                 })?;
-                let output = read_pipeline_worker_log_tail(worker_log);
+                let output = read_pipeline_worker_log_tail(&mut worker_log_reader);
                 let output_detail = output
                     .as_deref()
                     .filter(|value| !value.is_empty())
@@ -1911,7 +1918,7 @@ pub(crate) fn configure_pipeline_worker_stdio(
     command: &mut Command,
     logs_dir: &Path,
     run_id: &str,
-) -> Result<PathBuf, OrbitError> {
+) -> Result<PipelineWorkerLog, OrbitError> {
     std::fs::create_dir_all(logs_dir).map_err(|error| {
         OrbitError::Io(format!(
             "create pipeline worker log directory '{}': {error}",
@@ -1922,7 +1929,7 @@ pub(crate) fn configure_pipeline_worker_stdio(
 
     let log_path = pipeline_worker_log_path(logs_dir, run_id);
     let mut options = OpenOptions::new();
-    options.create(true).append(true);
+    options.create(true).append(true).read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -1943,6 +1950,12 @@ pub(crate) fn configure_pipeline_worker_stdio(
         command.env("LLVM_PROFILE_FILE", profile);
     }
     write_pipeline_worker_spawn_banner(&log_path, command);
+    let reader = log.try_clone().map_err(|error| {
+        OrbitError::Io(format!(
+            "clone pipeline worker log reader '{}': {error}",
+            log_path.display()
+        ))
+    })?;
     let stdout = log.try_clone().map_err(|error| {
         OrbitError::Io(format!(
             "clone pipeline worker log '{}': {error}",
@@ -1950,7 +1963,22 @@ pub(crate) fn configure_pipeline_worker_stdio(
         ))
     })?;
     command.stdout(Stdio::from(stdout)).stderr(Stdio::from(log));
-    Ok(log_path)
+    Ok(PipelineWorkerLog {
+        path: log_path,
+        reader,
+    })
+}
+
+pub(crate) struct PipelineWorkerLog {
+    path: PathBuf,
+    reader: File,
+}
+
+impl PipelineWorkerLog {
+    #[cfg(test)]
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 fn write_pipeline_worker_spawn_banner(log_path: &Path, command: &Command) {
@@ -1974,8 +2002,7 @@ fn write_pipeline_worker_spawn_banner(log_path: &Path, command: &Command) {
     );
 }
 
-fn read_pipeline_worker_log_tail(path: &Path) -> Option<String> {
-    let mut file = File::open(path).ok()?;
+fn read_pipeline_worker_log_tail(file: &mut File) -> Option<String> {
     let len = file.metadata().ok()?.len();
     let start = len.saturating_sub(PIPELINE_WORKER_LOG_TAIL_BYTES);
     file.seek(SeekFrom::Start(start)).ok()?;
