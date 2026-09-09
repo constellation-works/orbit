@@ -1310,13 +1310,13 @@ async fn healthz_answers_within_one_second_while_sixteen_ships_wait_on_bundle_lo
         })
         .expect("seed task")
         .id;
-    let lock_path = find_bundle_lock(&runtime.data_root(), &task_id)
-        .or_else(|| find_bundle_lock(&runtime.shared_root(), &task_id))
+    let lock_path = find_bundle_lock(&runtime.global_root(), &task_id)
+        .or_else(|| find_bundle_lock(&runtime.data_root(), &task_id))
         .unwrap_or_else(|| {
             panic!(
                 "missing .{task_id}.bundle.lock under {} or {}",
-                runtime.data_root().display(),
-                runtime.shared_root().display()
+                runtime.global_root().display(),
+                runtime.data_root().display()
             )
         });
     let _guard = hold_exclusive_bundle_lock(&lock_path);
