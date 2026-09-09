@@ -512,7 +512,7 @@ backend = "cli"
                     Some(&["rg".to_string()][..])
                 );
             }
-            other => panic!("expected agent_loop activity, got {other:?}"),
+            _ => panic!("expected agent_loop activity"),
         }
     }
 
