@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -5,6 +6,7 @@ use serde::Deserialize;
 use orbit_common::OrbitError;
 
 const DEFAULT_DOC_ROOT: &str = "docs/";
+const CONFIG_FILE_NAME: &str = "config.toml";
 
 #[derive(Debug, Deserialize)]
 struct DocsConfigFile {
@@ -135,34 +137,67 @@ pub fn parse_docs_search_config_from_config_toml(
 }
 
 pub(super) fn read_docs_roots_from_config_path(path: &Path) -> Result<Vec<DocsRoot>, OrbitError> {
-    if !path.exists() {
+    let Some(raw) = read_config_contents(path)? else {
         return Ok(default_doc_roots());
-    }
-    let raw = std::fs::read_to_string(path)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+    };
     parse_docs_roots_from_config_toml(&raw)
 }
 
 pub(super) fn read_docs_search_config_from_config_path(
     path: &Path,
 ) -> Result<DocsSearchConfig, OrbitError> {
-    if !path.exists() {
+    let Some(raw) = read_config_contents(path)? else {
         return Ok(DocsSearchConfig::default());
-    }
-    let raw = std::fs::read_to_string(path)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+    };
     parse_docs_search_config_from_config_toml(&raw)
 }
 
 pub(super) fn read_task_context_docs_roots_from_config_path(
     path: &Path,
 ) -> Result<Vec<DocsRoot>, OrbitError> {
-    if !path.exists() {
+    let Some(raw) = read_config_contents(path)? else {
         return Ok(default_doc_roots());
-    }
-    let raw = std::fs::read_to_string(path)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+    };
     parse_task_context_docs_roots_from_config_toml(&raw)
+}
+
+fn read_config_contents(path: &Path) -> Result<Option<String>, OrbitError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let parent = path.parent().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "invalid config path without parent: {}",
+            path.display()
+        ))
+    })?;
+    let canonical_parent = parent.canonicalize().map_err(|error| {
+        OrbitError::Io(format!(
+            "canonicalize config directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    let canonical_path = path.canonicalize().map_err(|error| {
+        OrbitError::Io(format!(
+            "canonicalize config path {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !canonical_path.starts_with(&canonical_parent)
+        || canonical_path.file_name() != Some(OsStr::new(CONFIG_FILE_NAME))
+        || !canonical_path.is_file()
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "docs config path must be a regular {CONFIG_FILE_NAME} file: {}",
+            path.display()
+        )));
+    }
+
+    let safe_path = canonical_parent.join(CONFIG_FILE_NAME);
+    let raw = std::fs::read_to_string(&safe_path)
+        .map_err(|error| OrbitError::Io(format!("read {}: {error}", safe_path.display())))?;
+    Ok(Some(raw))
 }
 
 /// Parse the task-context docs roots (used by related_docs_for_task and its tests).
