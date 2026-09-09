@@ -303,6 +303,63 @@ pub fn sweep_log_path(global_root: &Path) -> PathBuf {
     global_root.join("logs").join("sweep.log")
 }
 
+/// Resolve the launchd log beneath the canonical global root.
+///
+/// The root can come from an explicit runtime override, but the launchd log
+/// location is fixed. Requiring the existing `logs` directory and log file to
+/// resolve to their expected locations prevents a symlink from redirecting
+/// launchd output outside the selected Orbit root.
+pub(super) fn validated_sweep_log_path(global_root: &Path) -> Result<PathBuf, OrbitError> {
+    let canonical_root = fs::canonicalize(global_root).map_err(|error| {
+        OrbitError::Io(format!(
+            "resolve sweep log root {}: {error}",
+            global_root.display()
+        ))
+    })?;
+    let expected_parent = canonical_root.join("logs");
+    let expected_path = expected_parent.join("sweep.log");
+
+    let canonical_parent = match fs::canonicalize(&expected_parent) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(expected_path);
+        }
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "resolve sweep log directory {}: {error}",
+                expected_parent.display()
+            )));
+        }
+    };
+    if canonical_parent != expected_parent || !canonical_parent.is_dir() {
+        return Err(OrbitError::InvalidInput(format!(
+            "sweep log directory must be a regular directory directly under {}",
+            canonical_root.display()
+        )));
+    }
+
+    let canonical_path = match fs::canonicalize(&expected_path) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(expected_path);
+        }
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "resolve sweep log {}: {error}",
+                expected_path.display()
+            )));
+        }
+    };
+    if canonical_path != expected_path || !canonical_path.is_file() {
+        return Err(OrbitError::InvalidInput(format!(
+            "sweep log must be a regular file directly under {}",
+            expected_parent.display()
+        )));
+    }
+
+    Ok(canonical_path)
+}
+
 /// What an installation attempt did: files written, plus either a successful
 /// activation or the commands the user must run themselves.
 #[derive(Debug)]
@@ -358,10 +415,14 @@ fn install_launchd(
     runner: &dyn ClockCommandRunner,
     home: &Path,
 ) -> Result<ClockInstallReport, OrbitError> {
-    let log_path = sweep_log_path(global_root);
-    if let Some(parent) = log_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| OrbitError::Io(error.to_string()))?;
-    }
+    let log_path = validated_sweep_log_path(global_root)?;
+    let log_parent = log_path.parent().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "sweep log path has no parent directory: {}",
+            log_path.display()
+        ))
+    })?;
+    fs::create_dir_all(log_parent).map_err(|error| OrbitError::Io(error.to_string()))?;
     let plist = LAUNCHD_PLIST_TEMPLATE
         .replace("{{ORBIT_BIN}}", orbit_bin)
         .replace("{{CADENCE_SECONDS}}", &settings.cadence_seconds.to_string())
