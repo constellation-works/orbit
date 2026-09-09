@@ -721,7 +721,42 @@ fn validated_scoreboard_file_path(
         )));
     }
 
-    let path = canonical_dir.join(file.filename());
+    let candidate = canonical_dir.join(file.filename());
+    let metadata = match fs::symlink_metadata(&candidate) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "inspect scoreboard file {}: {error}",
+                candidate.display()
+            )));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(OrbitError::InvalidInput(format!(
+            "scoreboard file must not be a symlink: {}",
+            candidate.display()
+        )));
+    }
+    if !metadata.is_file() {
+        return Err(OrbitError::InvalidInput(format!(
+            "scoreboard file must be a regular file: {}",
+            candidate.display()
+        )));
+    }
+
+    // Read only the canonical file path. This removes aliases and symlink
+    // components from the path passed to the filesystem read.
+    let path = match fs::canonicalize(&candidate) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "canonicalize scoreboard file {}: {error}",
+                candidate.display()
+            )));
+        }
+    };
     if !path.starts_with(&canonical_dir) {
         return Err(OrbitError::InvalidInput(format!(
             "scoreboard file must remain within the scoreboard directory: {}",
@@ -729,21 +764,7 @@ fn validated_scoreboard_file_path(
         )));
     }
 
-    match fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(OrbitError::InvalidInput(
-            format!("scoreboard file must not be a symlink: {}", path.display()),
-        )),
-        Ok(metadata) if !metadata.is_file() => Err(OrbitError::InvalidInput(format!(
-            "scoreboard file must be a regular file: {}",
-            path.display()
-        ))),
-        Ok(_) => Ok(Some(path)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(OrbitError::Io(format!(
-            "inspect scoreboard file {}: {error}",
-            path.display()
-        ))),
-    }
+    Ok(Some(path))
 }
 
 fn read_token_agents(scoreboard_dir: &Path) -> Result<Vec<TokenAgentEntry>, OrbitError> {
