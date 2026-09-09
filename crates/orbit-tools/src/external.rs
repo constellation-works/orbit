@@ -2,11 +2,11 @@ use std::env;
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
-use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode, run_process};
+use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
-use crate::builtin::proc::spawn::{ActivityFsSandbox, enforce_program_allowlist};
+use crate::builtin::proc::spawn::enforce_program_allowlist;
 use crate::{TIMEOUT_DEFAULT_MS, Tool, ToolContext};
 
 const EXTERNAL_TOOL_TIMEOUT_OVERRIDE_ENV: &str = "ORBIT_EXTERNAL_TOOL_TIMEOUT_MS";
@@ -49,6 +49,14 @@ impl Tool for ExternalTool {
         let environment_mode =
             EnvironmentMode::ClearAndSet(runtime_environment(ctx, &self.name, &cwd));
 
+        // External tools stay unconfined at the process boundary. Landlock is a
+        // `proc.spawn` rule (`ActivityFsSandbox::spawn`): it fails closed off
+        // Linux and compiles grants from the workspace read profile plus a host
+        // table curated for `proc.spawn`. An external tool is already gated by
+        // the program allowlist above; it runs with `current_dir = ctx.cwd`,
+        // which need not equal `workspace_root`. Inheriting that override would
+        // either refuse the child outright (macOS / Linux below Landlock ABI 2)
+        // or confine it to a ruleset it was not designed for.
         let output = run_process(
             &ExecRequest {
                 program: self.path.clone(),
@@ -59,7 +67,7 @@ impl Tool for ExternalTool {
                 environment_mode,
                 debug: false,
             },
-            &ActivityFsSandbox::new(ctx)?,
+            &NoSandbox,
         )?;
 
         if !output.success {
