@@ -48,6 +48,33 @@ fn send_turn_sends_api_key_header_without_key_query_param() {
 }
 
 #[test]
+fn send_turn_network_failures_use_a_secret_free_message() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
+    let addr = listener.local_addr().expect("listener address");
+    drop(listener);
+
+    let transport = GeminiHttpTransport::new(GEMINI_API_KEY, "gemini-test", None)
+        .expect("transport")
+        .with_base_url(format!("http://{addr}"));
+    let messages = [Message::user_text("hello")];
+    let req = TurnRequest {
+        system: None,
+        messages: &messages,
+        tools: &[],
+        cache_hint: CacheHint::None,
+        max_response_tokens: 0,
+    };
+
+    let TransportError::Network(message) = transport.send_turn(&req).expect_err("request fails")
+    else {
+        panic!("expected network error");
+    };
+
+    assert_eq!(message, "Gemini request failed");
+    assert!(!message.contains(GEMINI_API_KEY));
+}
+
+#[test]
 fn endpoint_builders_do_not_include_api_key_query_params() {
     let transport =
         GeminiHttpTransport::new(GEMINI_API_KEY, "gemini-test", None).expect("transport");
