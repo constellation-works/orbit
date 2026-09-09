@@ -1284,6 +1284,46 @@ fn workspace_config_optional_distinguishes_missing_file() {
 }
 
 #[test]
+fn workspace_config_reads_from_a_normalized_orbit_directory() {
+    let temp = TempDir::new().expect("tempdir");
+    let orbit_dir = temp.path().join(".orbit");
+    write_workspace_config(
+        &orbit_dir,
+        &WorkspaceConfig {
+            schema_version: 1,
+            workspace_id: "ws-test-abcdef".into(),
+        },
+    )
+    .expect("write config");
+
+    let normalized_alias = orbit_dir.join("..").join(".orbit");
+    let config = read_workspace_config(&normalized_alias).expect("read config through alias");
+
+    assert_eq!(config.workspace_id, "ws-test-abcdef");
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_config_rejects_a_symlink_outside_the_orbit_directory() {
+    let temp = TempDir::new().expect("tempdir");
+    let orbit_dir = temp.path().join(".orbit");
+    fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+    let outside_config = temp.path().join("outside.yaml");
+    atomic_write_text(
+        &outside_config,
+        "schema_version: 1\nworkspace_id: ws-test-abcdef\n",
+    )
+    .expect("write outside config");
+    std::os::unix::fs::symlink(&outside_config, workspace_config_path(&orbit_dir))
+        .expect("link outside config");
+
+    assert!(matches!(
+        read_workspace_config_optional(&orbit_dir),
+        Err(OrbitError::InvalidInput(_))
+    ));
+}
+
+#[test]
 fn workspace_id_for_orbit_dir_returns_id_from_config() {
     let temp = TempDir::new().expect("tempdir");
     let orbit_dir = temp.path().join(".orbit");
