@@ -39,3 +39,9 @@ extensions:
           "path-injection",
           "manual",
         ]
+      - [
+          "orbit_common::fs::io::validated_atomic_target",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
