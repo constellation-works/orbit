@@ -28,7 +28,7 @@ pub(super) const GEMINI_API_KEY_HEADER: &str = "x-goog-api-key";
 pub struct GeminiHttpTransport {
     client: Client,
     base_url: String,
-    api_key: String,
+    api_key_header: HeaderValue,
     model: String,
     cache_content_threshold_turns: Option<usize>,
     custom_headers: Vec<(HeaderName, HeaderValue)>,
@@ -41,10 +41,16 @@ impl GeminiHttpTransport {
         cache_content_threshold_turns: Option<usize>,
     ) -> Result<Self, TransportError> {
         let client = build_client(Duration::from_secs(120))?;
+        let api_key = api_key.into();
+        let mut api_key_header = HeaderValue::from_str(&api_key).map_err(|e| {
+            TransportError::Other(format!("invalid Gemini API key header value: {e}"))
+        })?;
+        api_key_header.set_sensitive(true);
+
         Ok(Self {
             client,
             base_url: DEFAULT_BASE_URL.to_string(),
-            api_key: api_key.into(),
+            api_key_header,
             model: model.into(),
             cache_content_threshold_turns,
             custom_headers: Vec::new(),
@@ -87,7 +93,7 @@ impl GeminiHttpTransport {
             .client
             .post(endpoint)
             .header(CONTENT_TYPE, "application/json")
-            .header(GEMINI_API_KEY_HEADER, self.api_key_header_value()?);
+            .header(GEMINI_API_KEY_HEADER, self.api_key_header.clone());
 
         for (name, value) in &self.custom_headers {
             request = request.header(name.clone(), value.clone());
@@ -96,17 +102,9 @@ impl GeminiHttpTransport {
         Ok(request)
     }
 
-    // `pub(super)` widened for sibling test access.
-    pub(super) fn api_key_header_value(&self) -> Result<HeaderValue, TransportError> {
-        let mut header_value = HeaderValue::from_str(&self.api_key).map_err(|e| {
-            TransportError::Other(format!("invalid Gemini API key header value: {e}"))
-        })?;
-
-        // RequestBuilder's debug output includes header values unless they are
-        // explicitly marked sensitive. Keep the key usable on the wire while
-        // preventing accidental cleartext disclosure in diagnostics.
-        header_value.set_sensitive(true);
-        Ok(header_value)
+    #[cfg(test)]
+    pub(super) fn api_key_header_for_test(&self) -> &HeaderValue {
+        &self.api_key_header
     }
 
     fn try_create_cached_content(
