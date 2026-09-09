@@ -208,7 +208,7 @@ backend = "cli"
                     );
                 }
             }
-            other => panic!("expected agent_loop activity, got {other:?}"),
+            _ => panic!("expected agent_loop activity"),
         }
     }
 
