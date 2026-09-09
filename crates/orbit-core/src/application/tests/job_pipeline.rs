@@ -202,6 +202,41 @@ fn pipeline_worker_paths_preserve_safe_run_id_stems() {
 }
 
 #[test]
+fn configure_pipeline_worker_stdio_creates_missing_log_directory_after_validation() {
+    let root = TempDir::new().expect("tempdir");
+    let logs_dir = root.path().join("missing-logs");
+    let mut command = Command::new("true");
+
+    let worker_log = configure_pipeline_worker_stdio(&mut command, &logs_dir, "jrun-child")
+        .expect("missing log directory is created after validation");
+
+    assert!(logs_dir.is_dir());
+    assert_eq!(worker_log.path(), logs_dir.join("jrun-child.worker.log"));
+}
+
+#[cfg(unix)]
+#[test]
+fn configure_pipeline_worker_stdio_rejects_symlinked_log_directory() {
+    let root = TempDir::new().expect("tempdir");
+    let outside = root.path().join("outside");
+    let logs_dir = root.path().join("logs");
+    std::fs::create_dir(&outside).expect("create outside directory");
+    std::os::unix::fs::symlink(&outside, &logs_dir).expect("create log-directory symlink");
+    let mut command = Command::new("true");
+
+    let result = configure_pipeline_worker_stdio(&mut command, &logs_dir, "jrun-child");
+
+    assert!(
+        result.is_err(),
+        "symlinked log directories must fail closed"
+    );
+    assert!(
+        !outside.join("jrun-child.worker.log").exists(),
+        "worker setup must not follow a log-directory symlink"
+    );
+}
+
+#[test]
 fn pipeline_worker_root_override_is_none_in_the_default_split_root_layout() {
     let paths = WorkspacePaths::new(
         PathBuf::from("/repo"),
