@@ -281,7 +281,7 @@ backend = "cli"
                     spec.require_response_envelope, required,
                     "{name} response contract drifted"
                 ),
-                other => panic!("expected agent_loop {name} activity, got {other:?}"),
+                _ => panic!("expected agent_loop activity"),
             }
         }
     }
