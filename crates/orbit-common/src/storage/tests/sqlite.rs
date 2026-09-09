@@ -60,6 +60,38 @@ fn defaults_are_idempotent() {
     assert!(outcome.wal_active());
 }
 
+#[test]
+fn private_open_rejects_parent_directory_traversal() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("nested").join("..").join("escape.db");
+
+    let error = match super::super::sqlite::open_private(&path) {
+        Ok(_) => panic!("reject traversal"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("parent-directory traversal"));
+    assert!(!dir.path().join("nested").exists());
+    assert!(!dir.path().join("escape.db").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn private_open_rejects_symlink_database() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("target.db");
+    Connection::open(&target).expect("create target");
+    let link = dir.path().join("link.db");
+    std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+    let error = match super::super::sqlite::open_private(&link) {
+        Ok(_) => panic!("reject symlink database"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("must not be a symlink"));
+}
+
 #[cfg(unix)]
 #[test]
 fn private_open_repairs_existing_database_and_sidecars() {
