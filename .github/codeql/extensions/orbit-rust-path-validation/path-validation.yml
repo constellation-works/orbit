@@ -15,3 +15,9 @@ extensions:
           "path-injection",
           "manual",
         ]
+      - [
+          "orbit_core::application::routines::clock::validated_clock_settings_path",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
