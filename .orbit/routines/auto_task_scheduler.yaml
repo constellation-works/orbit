@@ -22,7 +22,7 @@ description: >
   `.orbit/auto_tasks` definition. Catch-up collapses and `skip_if_open`
   dedupe are enforced by the scheduler; each definition's own schedule
   governs its cadence.
-enabled: true
+enabled: false
 hosts:
   - dk-server-1
 trigger:
