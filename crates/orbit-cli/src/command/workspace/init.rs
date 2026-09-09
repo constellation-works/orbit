@@ -95,6 +95,17 @@ impl WorkspaceInitArgs {
         let roots = RegisteredRuntimeFactory::resolve_bootstrap_roots_for_cwd(&cwd, root_override)?;
         let orbit_dir = roots.shared_root;
         let global_root = roots.global_root;
+
+        // Registry path validation canonicalizes its parent before reading or
+        // locking the registry. Create a fresh global root here so first-time
+        // workspace initialization can reach that validation step.
+        std::fs::create_dir_all(&global_root).map_err(|error| {
+            OrbitError::Io(format!(
+                "create global Orbit root '{}': {error}",
+                global_root.display()
+            ))
+        })?;
+
         let registry_path = workspace_registry::registry_path_for(&global_root);
         let mcp = self.mcp;
         let inject_rules = self.inject_agent_rules;
