@@ -14,7 +14,7 @@ use crate::workspace_registry::{
     assign_checkout_role, find_checkout_by_path, find_workspace, find_workspace_by_id,
     find_workspace_by_path, load_registry_from, load_registry_from_with_writer, register_checkout,
     remove_workspace, rename_local_owner_host_id, resolve_logical_workspace, save_registry_to,
-    set_path_override, validate_workspaces,
+    set_path_override, validate_workspaces, with_registry_lock,
 };
 
 fn timestamp() -> chrono::DateTime<Utc> {
@@ -706,6 +706,17 @@ fn registry_io_rejects_a_symlinked_registry_file() {
         error.to_string().contains("must not be a symlink"),
         "unexpected: {error}"
     );
+}
+
+#[test]
+fn registry_lock_creates_a_missing_parent_directory() {
+    let root = tempdir().expect("tempdir");
+    let registry_dir = root.path().join("custom-orbit");
+    let path = registry_dir.join("workspaces.json");
+
+    with_registry_lock(&path, || Ok(())).expect("lock registry in a new root");
+
+    assert!(registry_dir.is_dir());
 }
 
 #[test]
