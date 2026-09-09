@@ -107,9 +107,9 @@ impl SkillCatalog {
         if self.global_root.is_none() {
             fs::create_dir_all(&self.root).map_err(|e| OrbitError::Io(e.to_string()))?;
         }
-        if let Some(ref global_root) = self.global_root {
-            fs::create_dir_all(global_root).map_err(|e| OrbitError::Io(e.to_string()))?;
-        }
+
+        // Layered catalogs read shipped global skills that bootstrap owns. Do
+        // not create a caller-selected global path while opening the catalog.
         Ok(())
     }
 
