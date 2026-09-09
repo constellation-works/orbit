@@ -21,12 +21,17 @@ fn admission() -> TrustedHostAdmission {
 #[test]
 fn only_the_builtin_activity_may_declare_trusted_host_execution() {
     assert!(validate_trusted_host_activity(TRUSTED_HOST_ACTIVITY, true).is_ok());
-    let error = validate_trusted_host_activity("agent_implement", true)
+    let error = validate_trusted_host_activity("operator-controlled-name", true)
         .expect_err("a second activity must not be able to claim the mode");
-    assert_eq!(error.activity, "agent_implement");
+    assert_eq!(error.activity, "<redacted>");
+    assert_eq!(
+        error.to_string(),
+        "an activity declares `trustedHostExecution: true`, which only the built-in `agent_invoke` activity may declare; an unsandboxed provider subprocess is admitted per invocation by an operator, never by an asset"
+    );
+    assert!(!format!("{error:?}").contains("operator-controlled-name"));
     assert!(
         error.to_string().contains("admitted per invocation"),
-        "the refusal must say where the mode actually comes from: {error}"
+        "the refusal must say where the mode actually comes from"
     );
 }
 
