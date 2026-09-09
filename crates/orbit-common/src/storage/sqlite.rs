@@ -10,7 +10,7 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 
@@ -39,38 +39,44 @@ pub struct OpenedConnection {
 /// is opened immutable. A database on a read-only filesystem is opened
 /// immutable before any directory creation or permission change is attempted.
 pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
-    match fs::metadata(path) {
+    let path = validated_sqlite_path(path)?;
+
+    match fs::metadata(&path) {
         Ok(metadata) => {
-            let filesystem_read_only = filesystem_is_read_only(path)?;
+            let filesystem_read_only = filesystem_is_read_only(&path)?;
             if filesystem_read_only || metadata.permissions().readonly() {
-                return open_private_read_only(path, filesystem_read_only);
+                return open_private_read_only(&path, filesystem_read_only);
             }
-            harden_sqlite_files(path)?;
+            harden_sqlite_files(&path)?;
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(sqlite_path_error("inspect", path, error)),
+        Err(error) => return Err(sqlite_path_error("inspect", &path, error)),
     }
 
-    if let Some(parent) = path.parent() {
-        create_private_dir_all(parent)?;
-    }
-    prepare_private_database_file(path)?;
+    prepare_private_database_file(&path)?;
 
-    let connection = Connection::open(path).map_err(|error| {
+    let connection = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|error| {
         OrbitError::Store(format!(
             "cannot open SQLite database '{}': {error}",
             path.display()
         ))
     })?;
     let pragmas = apply_default_pragmas(&connection)?;
-    if pragmas.write_denied || filesystem_is_read_only(path)? {
+    if pragmas.write_denied || filesystem_is_read_only(&path)? {
         drop(connection);
         return Ok(OpenedConnection {
-            connection: open_immutable(path)?,
+            connection: open_immutable(&path)?,
             read_only: true,
         });
     }
-    harden_sqlite_files(path)?;
+    harden_sqlite_files(&path)?;
 
     Ok(OpenedConnection {
         connection,
@@ -82,13 +88,81 @@ pub(super) fn open_private_read_only(
     path: &Path,
     filesystem_read_only: bool,
 ) -> Result<OpenedConnection, OrbitError> {
+    let path = validated_sqlite_path(path)?;
+
     if !filesystem_read_only {
-        harden_read_only_sqlite_files(path)?;
+        harden_read_only_sqlite_files(&path)?;
     }
     Ok(OpenedConnection {
-        connection: open_immutable(path)?,
+        connection: open_immutable(&path)?,
         read_only: true,
     })
+}
+
+/// Resolve a SQLite file path through its existing parent and reject traversal
+/// and final-component symlinks before any SQLite or database-file permission
+/// operation.
+///
+/// Orbit callers provide complete paths because the database may live in a
+/// caller-selected state root. The root remains caller-owned, but path
+/// traversal and symlink redirection are not part of that contract. Creating
+/// missing parents preserves the existing first-open behavior; once they exist,
+/// all subsequent operations use the canonical parent path.
+fn validated_sqlite_path(path: &Path) -> Result<PathBuf, OrbitError> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "SQLite path '{}' must not contain parent-directory traversal",
+            path.display()
+        )));
+    }
+
+    let file_name = path.file_name().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "SQLite path '{}' must name a database file",
+            path.display()
+        ))
+    })?;
+    let parent = path.parent().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "SQLite path '{}' must have a parent directory",
+            path.display()
+        ))
+    })?;
+
+    create_private_dir_all(parent)?;
+    let canonical_parent = fs::canonicalize(parent)
+        .map_err(|error| sqlite_path_error("resolve parent for", parent, error))?;
+    let canonical_path = canonical_parent.join(file_name);
+
+    if !canonical_path.starts_with(&canonical_parent) {
+        return Err(OrbitError::InvalidInput(format!(
+            "SQLite path '{}' escapes its parent directory",
+            path.display()
+        )));
+    }
+
+    match fs::symlink_metadata(&canonical_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(OrbitError::InvalidInput(format!(
+                "SQLite path must not be a symlink: {}",
+                path.display()
+            )));
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(OrbitError::InvalidInput(format!(
+                "SQLite path must be a regular file: {}",
+                path.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(sqlite_path_error("inspect", &canonical_path, error)),
+    }
+
+    Ok(canonical_path)
 }
 
 /// Create a sensitive SQLite-adjacent state directory.
@@ -253,6 +327,7 @@ pub fn open_immutable(path: &Path) -> Result<Connection, OrbitError> {
         uri.as_str(),
         OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW
             | OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|error| {
