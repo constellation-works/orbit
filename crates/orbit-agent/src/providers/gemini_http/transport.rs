@@ -96,9 +96,17 @@ impl GeminiHttpTransport {
         Ok(request)
     }
 
-    fn api_key_header_value(&self) -> Result<HeaderValue, TransportError> {
-        HeaderValue::from_str(&self.api_key)
-            .map_err(|e| TransportError::Other(format!("invalid Gemini API key header value: {e}")))
+    // `pub(super)` widened for sibling test access.
+    pub(super) fn api_key_header_value(&self) -> Result<HeaderValue, TransportError> {
+        let mut header_value = HeaderValue::from_str(&self.api_key).map_err(|e| {
+            TransportError::Other(format!("invalid Gemini API key header value: {e}"))
+        })?;
+
+        // RequestBuilder's debug output includes header values unless they are
+        // explicitly marked sensitive. Keep the key usable on the wire while
+        // preventing accidental cleartext disclosure in diagnostics.
+        header_value.set_sensitive(true);
+        Ok(header_value)
     }
 
     fn try_create_cached_content(

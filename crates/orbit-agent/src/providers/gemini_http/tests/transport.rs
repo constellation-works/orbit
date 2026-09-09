@@ -62,6 +62,18 @@ fn endpoint_builders_do_not_include_api_key_query_params() {
 }
 
 #[test]
+fn api_key_header_value_is_marked_sensitive_for_diagnostics() {
+    let transport =
+        GeminiHttpTransport::new(GEMINI_API_KEY, "gemini-test", None).expect("transport");
+
+    let header_value = transport.api_key_header_value().expect("header value");
+
+    assert!(header_value.is_sensitive());
+    assert_eq!(format!("{header_value:?}"), "Sensitive");
+    assert_eq!(header_value, GEMINI_API_KEY);
+}
+
+#[test]
 fn reqwest_transport_errors_strip_url_before_stringifying() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
     let addr = listener.local_addr().expect("listener address");
