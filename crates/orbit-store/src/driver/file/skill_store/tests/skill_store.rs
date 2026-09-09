@@ -51,6 +51,22 @@ fn layered_catalog_uses_merge_by_key_precedence() {
 }
 
 #[test]
+fn layered_catalog_does_not_create_missing_global_root() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let global = workspace.path().join("global-skills");
+    let catalog = SkillCatalog::layered(workspace.path().to_path_buf(), global.clone());
+
+    catalog
+        .ensure_layout()
+        .expect("ensure layered catalog layout");
+
+    assert!(
+        !global.exists(),
+        "catalog opening must not create global root"
+    );
+}
+
+#[test]
 fn doctor_reports_skill_directories_without_skill_markdown() {
     let root = tempdir().expect("catalog tempdir");
     write_skill(root.path(), "orbit", "healthy skill");
