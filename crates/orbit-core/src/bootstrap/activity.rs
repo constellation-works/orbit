@@ -159,7 +159,7 @@ backend = "cli"
                 ActivityV2Spec::Deterministic(spec) => {
                     assert_eq!(spec.action, action);
                 }
-                other => panic!("expected deterministic {name} activity, got {other:?}"),
+                _ => panic!("expected deterministic activity"),
             }
         }
     }
