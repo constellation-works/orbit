@@ -633,7 +633,7 @@ backend = "cli"
                     )
                 );
             }
-            other => panic!("expected agent_loop epic_orchestrator, got {other:?}"),
+            _ => panic!("expected agent_loop epic_orchestrator"),
         }
     }
 }
