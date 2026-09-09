@@ -116,7 +116,11 @@ fn spawn_request(
     }
 }
 
-/// Filesystem confinement for an activity-scoped subprocess.
+/// Filesystem confinement for activity-scoped `proc.spawn`.
+///
+/// This type is the `proc.spawn` sandbox, not a generic activity subprocess
+/// wrapper. Registered external tools share the program allowlist but stay on
+/// the unconfined `NoSandbox` path; see `crates/orbit-tools/src/external.rs`.
 ///
 /// Two layers, doing two different jobs. Explicit path arguments (including
 /// `--key=path`) are resolved symlink-safely by the same policy engine the

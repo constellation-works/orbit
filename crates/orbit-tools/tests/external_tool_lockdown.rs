@@ -86,4 +86,34 @@ printf '{"gh_token_present":%s,"name_present":%s,"cwd_present":%s,"root_present"
 
         assert!(matches!(error, OrbitError::PolicyDenied(_)));
     }
+
+    #[test]
+    fn activity_scoped_allowlisted_external_tool_runs() {
+        let directory = tempdir().expect("temporary directory");
+        let script_path = directory.path().join("print-ok.sh");
+        fs::write(
+            &script_path,
+            r##"#!/bin/sh
+cat >/dev/null
+printf '{"ok":true}'
+"##,
+        )
+        .expect("write activity-scoped script");
+        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o700))
+            .expect("make activity-scoped script executable");
+
+        let program = script_path.to_string_lossy().into_owned();
+        let context = ToolContext {
+            cwd: Some(directory.path().to_string_lossy().into_owned()),
+            proc_allowed_programs: vec![program.clone()],
+            proc_spawn_activity_scoped: true,
+            ..ToolContext::default()
+        };
+
+        let output = external_tool(&program)
+            .execute(&context, json!({}))
+            .expect("allowlisted activity-scoped external tool must run");
+
+        assert_eq!(output["ok"], true);
+    }
 }
