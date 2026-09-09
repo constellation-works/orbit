@@ -378,7 +378,7 @@ backend = "cli"
                 assert!(spec.instruction.contains("Never update a task"));
                 assert!(spec.instruction.contains("one to five"));
             }
-            other => panic!("expected agent_loop task_pilot activity, got {other:?}"),
+            _ => panic!("expected agent_loop task_pilot activity"),
         }
     }
 
