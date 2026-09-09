@@ -214,15 +214,23 @@ fn harden_read_only_sqlite_files(path: &Path) -> Result<(), OrbitError> {
 
 #[cfg(unix)]
 fn harden_existing_read_only_file(path: &Path) -> Result<(), OrbitError> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
+    let mut options = fs::OpenOptions::new();
+    options.read(true).custom_flags(libc::O_NOFOLLOW);
+    let file = match options.open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(sqlite_path_error("inspect", path, error)),
     };
-    let owner_only_mode = metadata.permissions().mode() & 0o700;
-    fs::set_permissions(path, fs::Permissions::from_mode(owner_only_mode))
+
+    let owner_only_mode = file
+        .metadata()
+        .map_err(|error| sqlite_path_error("inspect", path, error))?
+        .permissions()
+        .mode()
+        & 0o700;
+    file.set_permissions(fs::Permissions::from_mode(owner_only_mode))
         .map_err(|error| sqlite_path_error("harden", path, error))
 }
 
