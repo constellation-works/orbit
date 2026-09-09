@@ -1,4 +1,4 @@
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -204,15 +204,29 @@ fn create_staging_dir(bundle_dir: &Path) -> Result<PathBuf, OrbitError> {
 fn sync_staged_bundle_dirs(staging_dir: &Path) -> Result<(), OrbitError> {
     let artifact_dir = staging_dir.join(TASK_ARTIFACTS_DIR_NAME);
     let artifact_files_dir = artifact_dir.join(TASK_ARTIFACT_FILES_DIR_NAME);
-    sync_parent_dir(&artifact_files_dir)
-        .map_err(|err| OrbitError::from_write_io(&artifact_files_dir, err))?;
-    sync_parent_dir(&artifact_dir).map_err(|err| OrbitError::from_write_io(&artifact_dir, err))?;
-    sync_parent_dir(staging_dir).map_err(|err| OrbitError::from_write_io(staging_dir, err))
+    sync_path_parent(&artifact_files_dir)?;
+    sync_path_parent(&artifact_dir)?;
+    sync_path_parent(staging_dir)
+}
+
+fn sync_path_parent(path: &Path) -> Result<(), OrbitError> {
+    let parent = path.parent().ok_or_else(|| {
+        OrbitError::Store(format!("path has no parent directory: {}", path.display()))
+    })?;
+    let directory = File::open(parent).map_err(|err| OrbitError::from_write_io(path, err))?;
+    sync_parent_dir(&directory).map_err(|err| OrbitError::from_write_io(path, err))
 }
 
 fn publish_staged_bundle(staging_dir: &Path, bundle_dir: &Path) -> std::io::Result<()> {
     fs::rename(staging_dir, bundle_dir)?;
-    sync_parent_dir(bundle_dir)
+    let parent = bundle_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("no parent dir for {}", bundle_dir.display()),
+        )
+    })?;
+    let directory = File::open(parent)?;
+    sync_parent_dir(&directory)
 }
 
 /// Canonical full-bundle read: parse every sidecar and hash every artifact blob.

@@ -4,7 +4,7 @@
 //! held, a malformed unterminated final row is truncated so a torn append cannot
 //! wedge later list/resolve/append. Newline-terminated corrupt rows still fail.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -137,7 +137,16 @@ fn append_entry(path: &Path, entry: &SessionLogEntry) -> Result<(), OrbitError> 
     file.sync_data()
         .map_err(|error| OrbitError::Io(format!("sync {}: {error}", path.display())))?;
     if !existed {
-        sync_parent_dir(path).map_err(|error| {
+        let parent = path.parent().ok_or_else(|| {
+            OrbitError::Io(format!(
+                "sync parent for {}: no parent directory",
+                path.display()
+            ))
+        })?;
+        let parent_dir = File::open(parent).map_err(|error| {
+            OrbitError::Io(format!("sync parent for {}: {error}", path.display()))
+        })?;
+        sync_parent_dir(&parent_dir).map_err(|error| {
             OrbitError::Io(format!("sync parent for {}: {error}", path.display()))
         })?;
     }
