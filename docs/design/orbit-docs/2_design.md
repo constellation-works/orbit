@@ -1,24 +1,24 @@
 ---
 title: "Orbit Docs — Design"
 owner: claude
-last_updated: 2026-08-15
+last_updated: 2026-09-09
 status: Draft
 feature: orbit-docs
 doc_role: design
 type: design
 summary: "Orbit Docs — frontmatter schema, walker, doc embeddings index, hybrid search, and the `.orbit/` exclusion invariant."
 tags: [orbit-docs]
-paths: ["crates/orbit-core/src/command/docs/**", "crates/orbit-core/src/runtime/orbit_tool_host/docs_tools.rs", "crates/orbit-tools/src/builtin/orbit/docs.rs", "crates/orbit-mcp/src/remote/surface.rs", "crates/orbit-cli/src/command/mcp/server.rs", "crates/orbit-cli/src/command/docs.rs"]
+paths: ["crates/orbit-core/src/application/docs/**", "crates/orbit-core/src/adapter/tool_host/docs_tools.rs", "crates/orbit-tools/src/builtin/orbit/docs.rs", "crates/orbit-mcp/src/remote/surface.rs", "crates/orbit-cli/src/command/mcp/server.rs", "crates/orbit-cli/src/command/docs.rs"]
 related_features: [orbit-docs]
 related_artifacts: [ORB-00163, ORB-00206, ORB-10319]
-last_validated: 2026-08-15
+last_validated: 2026-09-09
 ---
 
 # Orbit Docs — Design
 
 This document specifies what [ORB-00163] and [ORB-00206] ship: the locked frontmatter schema, the strict-then-tolerant parser, the walker (including the `.orbit/` exclusion invariant), the CLI/admin doc verbs, unified agent MCP retrieval, doc-corpus embeddings, hybrid doc search, and the migration verb that backfills legacy docs. It also names the remaining limitations the follow-ups ([ORB-00164] through [ORB-00169]) address.
 
-The design lives in [crates/orbit-core/src/command/docs/](../../../crates/orbit-core/src/command/docs/) (parser + walker + verb implementations + tests) and [crates/orbit-cli/src/command/docs.rs](../../../crates/orbit-cli/src/command/docs.rs) (~250 lines, clap argument shapes + table rendering). The MCP twin lives in [crates/orbit-core/src/runtime/orbit_tool_host/docs_tools.rs](../../../crates/orbit-core/src/runtime/orbit_tool_host/docs_tools.rs).
+The design lives in [crates/orbit-core/src/application/docs/](../../../crates/orbit-core/src/application/docs/) (parser + walker + verb implementations + tests) and [crates/orbit-cli/src/command/docs.rs](../../../crates/orbit-cli/src/command/docs.rs) (clap argument shapes + table rendering). The MCP twin lives in [crates/orbit-core/src/adapter/tool_host/docs_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/docs_tools.rs).
 
 ---
 
@@ -82,7 +82,7 @@ The parser hard-errors on unknown prefixes. This is intentional: silent acceptan
 
 ## 2. Strict Parser
 
-Strict-mode parsing is the contract the `migrate` verb backfills toward, and the contract `orbit docs add`-ed roots are expected to honor. Strict mode is invoked by `parse_doc_frontmatter_strict` and is the inner workhorse of the tolerant `parse_doc_tolerant`.
+Strict-mode parsing is the contract the `migrate` verb backfills toward, and the contract `orbit docs add`-ed roots are expected to honor. Strict mode is invoked by `parse_doc_strict` and is the inner workhorse of the tolerant `parse_doc_tolerant`.
 
 ### 2.1 Frontmatter delimiter
 
@@ -107,7 +107,7 @@ A `DocFrontmatter` struct with the six fields, ready to serialize as JSON for th
 
 ## 3. Tolerant Indexer
 
-Strict mode is the canonical contract. Tolerant mode is what makes the corpus queryable on day one without a flag-day migration. It is the path most reads go through ([crates/orbit-core/src/command/docs/](../../../crates/orbit-core/src/command/docs/)).
+Strict mode is the canonical contract. Tolerant mode is what makes the corpus queryable on day one without a flag-day migration. It is the path most reads go through ([crates/orbit-core/src/application/docs/](../../../crates/orbit-core/src/application/docs/)).
 
 ### 3.1 Algorithm
 
@@ -159,7 +159,7 @@ A unit test (`walker_skips_dot_orbit_even_when_root_points_above_it`) pins the c
 ### 4.3 Other skips
 
 - `.git`, `node_modules`, `target` — hard-listed in `should_skip_dir`.
-- `.gitignore`-matched paths — `is_git_ignored` shells out to `git check-ignore -q` per file. This is slow at scale; [ORB-00164] tracks the fix (batched stdin or the `ignore` crate).
+- `.gitignore`-matched paths — the walker batches candidates into one `git check-ignore -z --stdin` call. If that check cannot run, candidates are left unfiltered.
 
 ### 4.4 Deterministic output
 
@@ -229,11 +229,11 @@ Walks configured docs roots, reads each Markdown body through the tolerant parse
 Scans `docs/design/<feature>/*.md` (relative depth 2) and `docs/design-patterns/*.md` (relative depth 1) for files that don't pass strict parsing. For each, runs tolerant inference and either:
 
 - If the file has no frontmatter: prepends a fresh `---` block with `type`, `summary`, and `tags`.
-- If the file has frontmatter that's missing locked fields: `upsert_yaml_scalar` line-edits in `type` and `summary`, and appends `tags` if absent.
+- If the file has frontmatter that's missing locked fields: the migrator parses the YAML mapping, inserts inferred `type` and `summary`, adds inferred `tags` when absent, and round-trips the block through `serde_yaml` while preserving other metadata.
 
 Idempotent: a second run reports `No docs need migration.` `--dry-run` prints planned diffs without writing. Never touches `.orbit/`.
 
-The line-based YAML editing is fragile against multi-line / quoted values — [ORB-00164] tracks the round-trip-through-`serde_yaml` fix.
+The migrator compares the complete before/after documents and round-trips frontmatter through `serde_yaml`, so migration reports are reviewable and existing metadata is retained.
 
 ---
 

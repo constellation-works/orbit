@@ -3,13 +3,13 @@ summary: "MCP Session Context — Vision"
 type: design
 title: "MCP Session Context — Vision"
 owner: codex
-last_updated: 2026-08-23
-last_validated: 2026-08-15
+last_updated: 2026-09-09
+last_validated: 2026-09-09
 status: Accepted
 feature: mcp-session-context
 doc_role: vision
 tags: ["mcp-session-context", "mcp", "workspace", "audit"]
-paths: ["crates/orbit-common/src/types/tool.rs", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/command/tool/**"]
+paths: ["crates/orbit-types/src/tool/**", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/adapter/tool_host/**"]
 related_features: ["mcp-session-context", "federated-mcp"]
 related_artifacts: [ORB-11009]
 ---
@@ -22,11 +22,11 @@ Session context should remain a small provenance and correlation envelope. Tool-
 
 ### Authorization
 
-Future authorization belongs behind Core dispatch. It needs an authenticated principal or grant source distinct from caller_machine_id, caller_ip, hostname, and SSH target. Existing audit labels must never silently become credentials.
+Authorization is enforced behind Core dispatch. Session capability policy comes from the accepting server and its local or destination-owned SSH policy; caller_machine_id, caller_ip, hostname, and SSH target remain audit evidence rather than credentials. Any future grant source must preserve that separation.
 
 ### Additional transports
 
-A new transport must construct process and transport facts at the accepting server, preserve raw MCP framing, isolate mutable session state, and create one trace per call. It must not reintroduce a shared unauthenticated TCP listener.
+The current TCP listener and federated SSH mux construct process and transport facts at their accepting boundaries, preserve MCP framing, isolate mutable session state, and create one trace per call. Any new transport must follow the same rules. Because the TCP listener authenticates no client, its safe default remains loopback-only; a non-loopback deployment must provide access control outside the listener.
 
 ### Additional context fields
 
@@ -39,17 +39,17 @@ Add a field only when all three are true:
 ## Stable principles
 
 - External workspace values address server state; they do not prove identity.
-  Addressing may later become host-qualified (`hm_…/ws_*`) under the proposed
-  federated MCP surface; v1 still resolves a local selector on the accepting
-  machine. See [federated-mcp](../federated-mcp/specs/federated-workspace-mcp.md).
+  Federated mode uses host-qualified (`hm_…/ws_*`) selectors, while v1 still
+  resolves a local selector on the accepting machine. See
+  [federated-mcp](../federated-mcp/specs/federated-workspace-mcp.md).
 - The accepting machine describes itself.
 - Caller machine and network labels are useful for audit correlation but remain fallible.
 - The MCP adapter owns call correlation.
 - Every tools/call, including an unknown raw name, crosses one Core audit boundary.
-- Core remains the execution, audit, and future authorization authority.
+- Core remains the execution, audit, and authorization authority.
 
 ## Task References
 
-- [ORB-11009] noted that addressing may become host-qualified under federated MCP without changing v1 overview claims
+- [ORB-11009] established the separation between v1 local addressing and the host-qualified federated selector.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

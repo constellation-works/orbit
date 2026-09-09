@@ -1,15 +1,15 @@
 ---
 title: Operations as Data — Design
 owner: claude
-last_updated: 2026-08-15
-last_validated: 2026-08-15
+last_updated: 2026-09-09
+last_validated: 2026-09-09
 status: Accepted
 feature: operations-as-data
 doc_role: design
 type: design
 summary: How the operation spec kernel, the split spec/handler table, and the MCP and CLI adapters work today on the friction noun.
 tags: [operations-as-data, architecture]
-paths: ["crates/orbit-common/src/operation.rs", "crates/orbit-common/src/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation_args.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation_args.rs"]
 related_features: [operations-as-data, orbit-core]
 related_artifacts: []
 ---
@@ -22,7 +22,7 @@ Forward-looking questions live in [3_vision.md](3_vision.md).
 
 ## 1. The kernel
 
-`orbit_common::operation` holds the vocabulary and nothing else — no clap types,
+`orbit_common::governance::operation` holds the vocabulary and nothing else — no clap types,
 no axum types, no `OrbitRuntime`. That is what lets it sit in the leaf crate
 every surface can already read, adding no dependency edge anywhere.
 
