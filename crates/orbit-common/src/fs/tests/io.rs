@@ -317,6 +317,38 @@ fn atomic_write_bytes_removes_its_temp_file_when_the_rename_fails() {
 }
 
 #[test]
+fn atomic_write_rejects_a_dot_component_as_the_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let parent = dir.path().join("parent");
+    std::fs::create_dir(&parent).expect("parent directory");
+
+    let error = super::super::io::atomic_write_text(&parent.join(".."), "payload")
+        .expect_err("atomic write must not replace a directory");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(parent.is_dir(), "the parent directory must remain intact");
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_write_preserves_a_symlinked_parent_route() {
+    let root = tempfile::tempdir().expect("root tempdir");
+    let real_dir = root.path().join("real");
+    std::fs::create_dir(&real_dir).expect("real directory");
+    let linked_dir = root.path().join("linked");
+    std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("parent symlink");
+
+    let path = linked_dir.join("config");
+    super::super::io::atomic_write_text(&path, "payload").expect("write through parent link");
+
+    assert_eq!(
+        std::fs::read_to_string(real_dir.join("config")).expect("read config"),
+        "payload"
+    );
+    assert!(!path.is_symlink(), "the final file must be a regular file");
+}
+
+#[test]
 fn staged_write_removes_partial_temp_file_when_writing_fails() {
     use std::io::Write;
 
