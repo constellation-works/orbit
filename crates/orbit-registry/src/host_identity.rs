@@ -12,6 +12,7 @@
 //! no silent fallback to the OS hostname. Routine `hosts:` pinning,
 //! the sweep, and status all resolve through [`HostIdentity::host_id`].
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -168,6 +169,38 @@ fn host_toml_path(global_root: &Path) -> PathBuf {
     global_root.join(HOST_TOML_FILE)
 }
 
+fn existing_host_toml_path(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let path = host_toml_path(global_root);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let canonical_root = global_root.canonicalize().map_err(|error| {
+        OrbitError::Io(format!(
+            "failed to canonicalize host identity directory '{}': {error}",
+            global_root.display()
+        ))
+    })?;
+    let canonical_path = path.canonicalize().map_err(|error| {
+        OrbitError::Io(format!(
+            "failed to canonicalize host identity '{}': {error}",
+            path.display()
+        ))
+    })?;
+    if !canonical_path.starts_with(&canonical_root)
+        || canonical_path.file_name() != Some(OsStr::new(HOST_TOML_FILE))
+        || !canonical_path.is_file()
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "host identity path must be a regular {HOST_TOML_FILE} file inside '{}': {}",
+            global_root.display(),
+            path.display()
+        )));
+    }
+
+    Ok(Some(canonical_root.join(HOST_TOML_FILE)))
+}
+
 fn non_blank(value: &Option<String>) -> Option<String> {
     value
         .as_deref()
@@ -181,10 +214,9 @@ fn non_blank(value: &Option<String>) -> Option<String> {
 /// for malformed, incomplete, blank, or future-schema files (fail closed —
 /// never rewrites the file).
 pub fn inspect_host_identity(global_root: &Path) -> Result<HostIdentityState, OrbitError> {
-    let path = host_toml_path(global_root);
-    if !path.exists() {
+    let Some(path) = existing_host_toml_path(global_root)? else {
         return Ok(HostIdentityState::Absent);
-    }
+    };
     let raw_text = std::fs::read_to_string(&path)
         .map_err(|error| OrbitError::Io(format!("failed to read '{}': {error}", path.display())))?;
     let parsed: RawHostToml = toml::from_str(&raw_text).map_err(|error| {
