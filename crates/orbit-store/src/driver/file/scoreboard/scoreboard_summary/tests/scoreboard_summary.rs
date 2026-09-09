@@ -2,6 +2,9 @@
 use super::super::*;
 use orbit_common::test_fixtures::{TEST_CLAUDE_MODEL, TEST_CODEX_MODEL, TEST_GROK_MODEL};
 
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+
 #[test]
 fn summary_overlays_audit_tool_call_counts_by_normalized_model() {
     let temp = tempfile::tempdir().expect("create tempdir");
@@ -158,6 +161,33 @@ fn summary_exposes_pr_comments() {
     assert_eq!(summary.schema_version, CURRENT_SCHEMA_VERSION);
     let reviewer = summary.agents.get("codex").expect("reviewer summary");
     assert_eq!(reviewer.pr.review_comments, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn summary_rejects_a_symlinked_pr_scoreboard() {
+    let root = tempfile::tempdir().expect("create scoreboard dir");
+    let outside = tempfile::tempdir().expect("create outside dir");
+    let outside_scoreboard = outside.path().join(PR_SCOREBOARD_FILENAME);
+    fs::write(
+        &outside_scoreboard,
+        r#"{"pr-review-comments":{"gpt-reviewer":1}}"#,
+    )
+    .expect("write outside scoreboard");
+    symlink(
+        &outside_scoreboard,
+        root.path().join(PR_SCOREBOARD_FILENAME),
+    )
+    .expect("create scoreboard symlink");
+
+    let error = generate_summary(root.path(), &[]).expect_err("reject symlinked scoreboard");
+
+    assert!(
+        error
+            .to_string()
+            .contains("scoreboard file must not be a symlink"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
