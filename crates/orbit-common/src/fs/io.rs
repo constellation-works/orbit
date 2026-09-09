@@ -513,10 +513,87 @@ fn lock_path_for(path: &Path) -> io::Result<PathBuf> {
 }
 
 pub(crate) fn open_private_file(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
+    let path = validated_private_file_path(path)?;
     apply_private_file_mode(options);
-    let file = options.open(path)?;
-    set_private_file_permissions(path)?;
+    apply_no_follow_final_component(options);
+    let file = options.open(&path)?;
+    set_private_file_permissions_for_open_file(&file)?;
     Ok(file)
+}
+
+/// Resolve a private file's parent before opening it and reject a final
+/// component that would redirect the operation through a symlink.
+///
+/// Callers intentionally use symlinked parent directories for checkout
+/// projections, so the parent is canonicalized rather than rejected. The
+/// final component is checked without following it, and the open below also
+/// uses `O_NOFOLLOW` on Unix so the check and open cannot be raced into a
+/// different file.
+fn validated_private_file_path(path: &Path) -> io::Result<PathBuf> {
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("path '{}' has no file name", path.display()),
+        )
+    })?;
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("path '{}' has no parent directory", path.display()),
+        )
+    })?;
+    let canonical_parent = fs::canonicalize(parent)?;
+    let canonical_path = canonical_parent.join(file_name);
+
+    match fs::symlink_metadata(&canonical_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "private file path must not be a symlink: {}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "private file path must be a regular file: {}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+
+    Ok(canonical_path)
+}
+
+#[cfg(unix)]
+fn apply_no_follow_final_component(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.custom_flags(libc::O_NOFOLLOW);
+}
+
+#[cfg(not(unix))]
+fn apply_no_follow_final_component(_options: &mut OpenOptions) {}
+
+fn set_private_file_permissions_for_open_file(file: &File) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        file.set_permissions(fs::Permissions::from_mode(PRIVATE_FILE_MODE))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
@@ -576,14 +653,14 @@ fn apply_private_file_mode(options: &mut OpenOptions) {
 #[cfg(not(unix))]
 fn apply_private_file_mode(_options: &mut OpenOptions) {}
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "sqlite"))]
 pub(crate) fn set_private_file_permissions(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), feature = "sqlite"))]
 pub(crate) fn set_private_file_permissions(_path: &Path) -> io::Result<()> {
     Ok(())
 }

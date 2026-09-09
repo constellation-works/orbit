@@ -101,6 +101,43 @@ fn exclusive_lock_open_on_readonly_dir_names_path_and_hints_sandbox() {
 
 #[cfg(unix)]
 #[test]
+fn private_append_rejects_a_final_symlink() {
+    let root = tempfile::tempdir().expect("root tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let outside_file = outside.path().join("outside.log");
+    std::fs::write(&outside_file, b"unchanged").expect("outside file");
+    let link = root.path().join("log");
+    std::os::unix::fs::symlink(&outside_file, &link).expect("symlink");
+
+    let error = super::super::io::append_private_file(&link)
+        .expect_err("private append must reject a symlink target");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(
+        std::fs::read(&outside_file).expect("outside file remains"),
+        b"unchanged"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn private_append_preserves_a_symlinked_parent_route() {
+    let root = tempfile::tempdir().expect("root tempdir");
+    let real_dir = root.path().join("real");
+    std::fs::create_dir(&real_dir).expect("real directory");
+    let linked_dir = root.path().join("linked");
+    std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("parent symlink");
+
+    let path = linked_dir.join("log");
+    let file = super::super::io::append_private_file(&path).expect("append through parent link");
+    drop(file);
+
+    assert!(real_dir.join("log").is_file());
+    assert!(!path.is_symlink(), "the final file must be a regular file");
+}
+
+#[cfg(unix)]
+#[test]
 fn remove_path_if_exists_unlinks_a_dangling_symlink() {
     let temp = TempDir::new().expect("tempdir");
     let link = temp.path().join("link");
