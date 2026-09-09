@@ -1,6 +1,9 @@
 use std::sync::Barrier;
 use std::thread;
 
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+
 use crate::HOST_IDENTITY_SCHEMA_VERSION;
 
 use crate::host_identity::{
@@ -205,6 +208,24 @@ fn malformed_toml_is_an_error_not_a_fallback() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("host.toml"), "host_id = [not toml").expect("write");
     inspect_host_identity(dir.path()).expect_err("invalid toml must fail closed");
+}
+
+#[cfg(unix)]
+#[test]
+fn host_identity_rejects_a_host_toml_symlink_outside_its_root() {
+    let root = tempfile::tempdir().expect("create root tempdir");
+    let outside = tempfile::tempdir().expect("create outside tempdir");
+    let outside_path = outside.path().join("host.toml");
+    std::fs::write(&outside_path, "host_id = \"outside\"\n").expect("write outside file");
+    symlink(&outside_path, root.path().join("host.toml")).expect("create host.toml symlink");
+
+    let error = inspect_host_identity(root.path())
+        .expect_err("host identity must reject a path escaping its root")
+        .to_string();
+    assert!(
+        error.contains("regular host.toml file"),
+        "unexpected: {error}"
+    );
 }
 
 #[test]
