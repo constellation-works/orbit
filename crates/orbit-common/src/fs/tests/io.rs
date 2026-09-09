@@ -1,9 +1,20 @@
+use std::fs::File;
 use std::io;
 
 use tempfile::TempDir;
 
 use crate::OrbitError;
-use crate::fs::io::{remove_path_if_exists, with_exclusive_file_lock};
+use crate::fs::io::{remove_path_if_exists, sync_parent_dir, with_exclusive_file_lock};
+
+#[test]
+fn sync_parent_dir_uses_a_preopened_directory_handle() {
+    let temp = TempDir::new().expect("tempdir");
+    let file = temp.path().join("file");
+    std::fs::write(&file, b"payload").expect("write file");
+    let parent = File::open(temp.path()).expect("open parent directory");
+
+    sync_parent_dir(&parent).expect("sync parent directory");
+}
 
 fn assert_sandbox_write_message(message: &str, path: &str) {
     assert!(

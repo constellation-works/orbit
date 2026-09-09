@@ -2,7 +2,7 @@
 //! checkout projections. Full-bundle reads and mutations share a persistent
 //! external lock; deletion publishes a recoverable rename before cleanup.
 
-use std::fs;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -28,6 +28,14 @@ use crate::fs::yaml::write_yaml_durable_with;
 use crate::repository::checkout_projection::{
     ensure_projection_entry_removable, remove_projection_entry,
 };
+
+fn sync_parent_path(path: &Path) -> Result<(), OrbitError> {
+    let parent = path.parent().ok_or_else(|| {
+        OrbitError::Store(format!("path has no parent directory: {}", path.display()))
+    })?;
+    let parent_dir = File::open(parent).map_err(|err| OrbitError::from_write_io(path, err))?;
+    sync_parent_dir(&parent_dir).map_err(|err| OrbitError::from_write_io(path, err))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TaskBundleCreateResult {
@@ -189,9 +197,7 @@ impl TaskBundleStoreV2 {
         // otherwise left in the page cache. Without fsyncing the parent, a power
         // loss in the creation window can orphan the whole bundle even though
         // every file inside was durably written.
-        if let Err(err) =
-            sync_parent_dir(bundle_dir).map_err(|err| OrbitError::from_write_io(bundle_dir, err))
-        {
+        if let Err(err) = sync_parent_path(bundle_dir) {
             cleanup_partial_bundle_best_effort(bundle_dir, "bundle dir fsync", &err);
             return Err(err);
         }
@@ -303,8 +309,7 @@ impl TaskBundleStoreV2 {
         }
         if exists || published {
             deletion_fault(DeletionFault::PublicationSync)?;
-            sync_parent_dir(&tombstone)
-                .map_err(|err| OrbitError::from_write_io(&tombstone, err))?;
+            sync_parent_path(&tombstone)?;
         }
         deletion_fault(DeletionFault::Registry)?;
         let unregistered = self
@@ -318,8 +323,7 @@ impl TaskBundleStoreV2 {
         if exists || published {
             fs::remove_dir_all(&tombstone)
                 .map_err(|err| OrbitError::from_write_io(&tombstone, err))?;
-            sync_parent_dir(&tombstone)
-                .map_err(|err| OrbitError::from_write_io(&tombstone, err))?;
+            sync_parent_path(&tombstone)?;
         }
         Ok(unregistered || exists || published || removed_projection)
     }
