@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
@@ -25,6 +25,7 @@ pub use highlights::{
 };
 
 const SUMMARY_FILENAME: &str = "summary.json";
+const PR_SCOREBOARD_FILENAME: &str = "pr.json";
 // v2 adds `task_review.threads`; v3 adds tasks_created/tasks_planned,
 // per-(role, surface) tool call counts, top-level workflows_run, and a
 // recent_7d window block. v5 adds per-agent `friction.reported`
@@ -447,7 +448,7 @@ pub fn generate_summary_with_inputs(
     // TODO(phase-3+): timestamped snapshot logs would unblock real
     // windowing of these columns.
     if !windowed {
-        let pr = read_model_scoreboard(scoreboard_dir, "pr.json")?;
+        let pr = read_model_scoreboard(scoreboard_dir)?;
         overlay_nested_metric(&mut agents, &pr, "pr-review-comments", |summary, value| {
             summary.pr.review_comments = summary.pr.review_comments.saturating_add(value);
         });
@@ -662,22 +663,60 @@ pub fn summary_path(scoreboard_dir: &Path) -> std::path::PathBuf {
     scoreboard_dir.join(SUMMARY_FILENAME)
 }
 
-fn read_model_scoreboard(
-    scoreboard_dir: &Path,
-    file_name: &str,
-) -> Result<FamilyScoreboard, OrbitError> {
-    let path = scoreboard_dir.join(file_name);
-    if !path.exists() {
+fn read_model_scoreboard(scoreboard_dir: &Path) -> Result<FamilyScoreboard, OrbitError> {
+    let Some(path) = validated_pr_scoreboard_path(scoreboard_dir)? else {
         return Ok(FamilyScoreboard::new());
-    }
-    let raw =
-        fs::read_to_string(&path).map_err(|e| OrbitError::Io(format!("read {file_name}: {e}")))?;
+    };
+    let raw = fs::read_to_string(&path)
+        .map_err(|e| OrbitError::Io(format!("read {PR_SCOREBOARD_FILENAME}: {e}")))?;
     if raw.trim().is_empty() {
         return Ok(FamilyScoreboard::new());
     }
     let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| OrbitError::Io(format!("parse {file_name}: {e}")))?;
+        .map_err(|e| OrbitError::Io(format!("parse {PR_SCOREBOARD_FILENAME}: {e}")))?;
     normalize_model_scoreboard(parsed)
+}
+
+/// Resolve the fixed PR scoreboard file beneath the selected scoreboard root.
+///
+/// The root is selected by the workspace configuration, but the file read by
+/// this summary is fixed. Canonicalizing the root and rejecting a symlink or
+/// non-regular target prevents a path component from redirecting this read to
+/// an unrelated file.
+fn validated_pr_scoreboard_path(scoreboard_dir: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let canonical_dir = match fs::canonicalize(scoreboard_dir) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "canonicalize scoreboard directory {}: {error}",
+                scoreboard_dir.display()
+            )));
+        }
+    };
+    if !canonical_dir.is_dir() {
+        return Err(OrbitError::InvalidInput(format!(
+            "scoreboard path must be a directory: {}",
+            scoreboard_dir.display()
+        )));
+    }
+
+    let path = canonical_dir.join(PR_SCOREBOARD_FILENAME);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(OrbitError::InvalidInput(
+            format!("scoreboard file must not be a symlink: {}", path.display()),
+        )),
+        Ok(metadata) if !metadata.is_file() => Err(OrbitError::InvalidInput(format!(
+            "scoreboard file must be a regular file: {}",
+            path.display()
+        ))),
+        Ok(_) => Ok(Some(path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(OrbitError::Io(format!(
+            "inspect scoreboard file {}: {error}",
+            path.display()
+        ))),
+    }
 }
 
 fn read_token_agents(scoreboard_dir: &Path) -> Result<Vec<TokenAgentEntry>, OrbitError> {
