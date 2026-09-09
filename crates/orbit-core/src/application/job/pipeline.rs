@@ -1971,7 +1971,7 @@ pub(crate) fn configure_pipeline_worker_stdio(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let log = options.open(&log_path).map_err(|error| {
+    let mut log = options.open(&log_path).map_err(|error| {
         OrbitError::Io(format!(
             "open pipeline worker log '{}': {error}",
             log_path.display()
@@ -1985,7 +1985,7 @@ pub(crate) fn configure_pipeline_worker_stdio(
     )? {
         command.env("LLVM_PROFILE_FILE", profile);
     }
-    write_pipeline_worker_spawn_banner(&log_path, command);
+    write_pipeline_worker_spawn_banner(&mut log, command);
     let reader = log.try_clone().map_err(|error| {
         OrbitError::Io(format!(
             "clone pipeline worker log reader '{}': {error}",
@@ -2017,11 +2017,7 @@ impl PipelineWorkerLog {
     }
 }
 
-fn write_pipeline_worker_spawn_banner(log_path: &Path, command: &Command) {
-    let mut file = match OpenOptions::new().create(true).append(true).open(log_path) {
-        Ok(file) => file,
-        Err(_) => return,
-    };
+fn write_pipeline_worker_spawn_banner(file: &mut File, command: &Command) {
     let args = command
         .get_args()
         .map(|arg| arg.to_string_lossy())
