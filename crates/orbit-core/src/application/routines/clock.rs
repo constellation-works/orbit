@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 const LAUNCHD_PLIST_TEMPLATE: &str = include_str!("../../../assets/clock/com.orbit.sweep.plist");
 const SYSTEMD_SERVICE_TEMPLATE: &str = include_str!("../../../assets/clock/orbit-sweep.service");
 const SYSTEMD_TIMER_TEMPLATE: &str = include_str!("../../../assets/clock/orbit-sweep.timer");
+const CLOCK_SETTINGS_FILE: &str = "clock.toml";
 
 /// launchd agent label (macOS).
 pub const LAUNCHD_LABEL: &str = "com.orbit.sweep";
@@ -55,14 +56,16 @@ impl ClockSettings {
 }
 
 pub fn clock_settings_path(global_root: &Path) -> PathBuf {
-    global_root.join("clock.toml")
+    global_root.join(CLOCK_SETTINGS_FILE)
 }
 
 pub fn load_clock_settings(global_root: &Path) -> Result<ClockSettings, OrbitError> {
-    let path = clock_settings_path(global_root);
-    if !path.exists() {
+    let requested_path = clock_settings_path(global_root);
+    if !requested_path.exists() {
         return Ok(ClockSettings::default());
     }
+
+    let path = validated_clock_settings_path(global_root)?;
     let raw = fs::read_to_string(&path)
         .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
     toml::from_str::<ClockSettings>(&raw)
@@ -80,8 +83,44 @@ pub fn save_clock_settings(global_root: &Path, settings: ClockSettings) -> Resul
     let rendered = toml::to_string(&settings).map_err(|error| {
         OrbitError::Execution(format!("serialize clock configuration: {error}"))
     })?;
-    atomic_write_text(&clock_settings_path(global_root), &rendered)
+    let path = validated_clock_settings_path(global_root)?;
+    atomic_write_text(&path, &rendered)
         .map_err(|error| OrbitError::Io(format!("write clock configuration: {error}")))
+}
+
+/// Resolve the clock settings file beneath the canonical global root.
+///
+/// The root may be selected through an explicit CLI override, but the clock
+/// settings path itself is fixed. Canonicalizing both components and requiring
+/// the exact expected file prevents a symlink or traversal from redirecting a
+/// settings read to another host file.
+fn validated_clock_settings_path(global_root: &Path) -> Result<PathBuf, OrbitError> {
+    let canonical_root = fs::canonicalize(global_root).map_err(|error| {
+        OrbitError::Io(format!(
+            "resolve clock configuration root {}: {error}",
+            global_root.display()
+        ))
+    })?;
+    let expected_path = canonical_root.join(CLOCK_SETTINGS_FILE);
+
+    if !expected_path.exists() {
+        return Ok(expected_path);
+    }
+
+    let canonical_path = fs::canonicalize(&expected_path).map_err(|error| {
+        OrbitError::Io(format!(
+            "resolve clock configuration {}: {error}",
+            expected_path.display()
+        ))
+    })?;
+    if canonical_path != expected_path || !canonical_path.is_file() {
+        return Err(OrbitError::InvalidInput(format!(
+            "clock configuration must be a regular {CLOCK_SETTINGS_FILE} directly under {}",
+            canonical_root.display()
+        )));
+    }
+
+    Ok(canonical_path)
 }
 
 /// Change cadence transactionally from the operator's perspective: the
