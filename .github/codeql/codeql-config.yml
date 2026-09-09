@@ -1,0 +1,20 @@
+name: orbit-codeql
+
+# Code scanning runs against production code only. Test fixtures, examples and
+# benches trip the Rust query pack constantly (literal strings reaching a
+# hasher, run/task ids reaching `tracing`, temp dirs reaching `PathBuf::join`)
+# without ever describing a reachable defect.
+paths-ignore:
+  - "**/tests/**"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "crates/**/examples/**"
+  - "**/benches/**"
+
+query-filters:
+  # SHA-256 here is content addressing -- blob store keys, task bundle ids,
+  # workspace ids -- never password or key derivation. The query reports every
+  # constant that reaches a hasher as a hard-coded salt, so all of its hits on
+  # this repository are false positives.
+  - exclude:
+      id: rust/hard-coded-cryptographic-value
