@@ -10,7 +10,7 @@ enabled: true
 hosts:
   - dk-server-1
 trigger:
-  cron: "25 3 * * *"
+  cron: "*/30 * * * *"
   missed_run: skip
 target: job:dependabot_alert_sweep_pipeline
 policy:

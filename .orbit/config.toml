@@ -15,7 +15,7 @@ sandbox = "danger-full-access"
 auto_ship = true
 base_branch = "agent-main"
 default_crew = "sol"
-system_crew = "terra"
+system_crew = "luna"
 
 [crews.opus]
 backend = "cli"
