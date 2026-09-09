@@ -235,8 +235,7 @@ backend = "cli"
             spec.tools
                 .iter()
                 .all(|tool| !tool.starts_with("github.") && !tool.contains("ceiling")),
-            "agent_implement must not widen to GitHub reads or grow a task ceiling: {:?}",
-            spec.tools
+            "agent_implement tool allowlist must not widen to GitHub reads or grow a task ceiling"
         );
     }
 
