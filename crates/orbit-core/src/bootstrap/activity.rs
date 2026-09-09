@@ -550,7 +550,7 @@ backend = "cli"
                         .contains("You are Orbit's step-failure recovery agent.")
                 );
             }
-            other => panic!("expected agent_loop activity, got {other:?}"),
+            _ => panic!("expected agent_loop activity"),
         }
     }
 
