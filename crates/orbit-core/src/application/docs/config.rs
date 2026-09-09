@@ -194,9 +194,11 @@ fn read_config_contents(path: &Path) -> Result<Option<String>, OrbitError> {
         )));
     }
 
-    let safe_path = canonical_parent.join(CONFIG_FILE_NAME);
-    let raw = std::fs::read_to_string(&safe_path)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", safe_path.display())))?;
+    // Read the path that passed the canonical-location and regular-file checks.
+    // Reconstructing the path from the untrusted parent after validation would
+    // reintroduce a symlink race between the check and the read.
+    let raw = std::fs::read_to_string(&canonical_path)
+        .map_err(|error| OrbitError::Io(format!("read {}: {error}", canonical_path.display())))?;
     Ok(Some(raw))
 }
 
