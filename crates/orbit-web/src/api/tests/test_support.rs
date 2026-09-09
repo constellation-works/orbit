@@ -16,7 +16,7 @@ pub(super) fn write_lines(path: &std::path::Path, lines: &[String]) {
 }
 
 pub(super) fn write_replay_job(runtime: &OrbitRuntime, name: &str) -> std::path::PathBuf {
-    write_replay_job_under(&runtime.data_root(), name)
+    write_replay_job_under(&runtime.global_root(), name)
 }
 
 /// Writes the stub sleep-workflow job asset into `<root>/resources/jobs`.
