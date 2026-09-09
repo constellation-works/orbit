@@ -89,11 +89,11 @@ fn endpoint_builders_do_not_include_api_key_query_params() {
 }
 
 #[test]
-fn api_key_header_value_is_marked_sensitive_for_diagnostics() {
+fn api_key_header_is_marked_sensitive_for_diagnostics() {
     let transport =
         GeminiHttpTransport::new(GEMINI_API_KEY, "gemini-test", None).expect("transport");
 
-    let header_value = transport.api_key_header_value().expect("header value");
+    let header_value = transport.api_key_header_for_test();
 
     assert!(header_value.is_sensitive());
     assert_eq!(format!("{header_value:?}"), "Sensitive");
