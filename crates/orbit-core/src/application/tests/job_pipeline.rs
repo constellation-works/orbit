@@ -18,7 +18,8 @@ use crate::application::job::JobRunListParams;
 use crate::application::job::pipeline::{
     configure_pipeline_worker_command, configure_pipeline_worker_stdio, pipeline_worker_log_path,
     pipeline_worker_profile_file, pipeline_worker_root_override,
-    resolve_pipeline_worker_executable, worker_command_override, worker_observer_read_counter,
+    resolve_pipeline_worker_executable, run_definition_snapshot_path, worker_command_override,
+    worker_observer_read_counter,
 };
 use crate::application::task::TaskAddParams;
 use crate::application::workflow::{CompletionPolicy, ShipMode};
@@ -144,11 +145,13 @@ fn pipeline_worker_command_forwards_explicit_root_to_the_detached_worker() {
 #[test]
 fn pipeline_worker_profile_file_is_none_without_inherited_coverage_env() {
     assert_eq!(
-        pipeline_worker_profile_file(Path::new("/tmp/logs"), "jrun-child", None),
+        pipeline_worker_profile_file(Path::new("/tmp/logs"), "jrun-child", None)
+            .expect("profile path validation"),
         None
     );
     assert_eq!(
-        pipeline_worker_profile_file(Path::new("/tmp/logs"), "jrun-child", Some(OsStr::new(""))),
+        pipeline_worker_profile_file(Path::new("/tmp/logs"), "jrun-child", Some(OsStr::new("")))
+            .expect("profile path validation"),
         None
     );
 }
@@ -160,8 +163,41 @@ fn pipeline_worker_profile_file_rewrites_inherited_coverage_dump_under_the_worke
             Path::new("/tmp/logs"),
             "jrun-child",
             Some(OsStr::new("target/llvm-cov-target/orbit-%p-%m.profraw")),
-        ),
+        )
+        .expect("profile path validation"),
         Some(PathBuf::from("/tmp/logs/jrun-child.%p.profraw"))
+    );
+}
+
+#[test]
+fn pipeline_worker_paths_reject_run_id_path_syntax() {
+    for run_id in ["../outside", r"nested\outside", ".", ""] {
+        assert!(
+            pipeline_worker_log_path(Path::new("/tmp/logs"), run_id).is_err(),
+            "run ID {run_id:?} must not become a worker-log path"
+        );
+        assert!(
+            pipeline_worker_profile_file(
+                Path::new("/tmp/logs"),
+                run_id,
+                Some(OsStr::new("coverage.profraw")),
+            )
+            .is_err(),
+            "run ID {run_id:?} must not become a profile path"
+        );
+        assert!(
+            run_definition_snapshot_path(Path::new("/tmp/job-runs"), run_id).is_err(),
+            "run ID {run_id:?} must not become a snapshot path"
+        );
+    }
+}
+
+#[test]
+fn pipeline_worker_paths_preserve_safe_run_id_stems() {
+    assert_eq!(
+        pipeline_worker_log_path(Path::new("/tmp/logs"), "jrun-child.1")
+            .expect("worker log path validation"),
+        PathBuf::from("/tmp/logs/jrun-child.1.worker.log")
     );
 }
 
@@ -240,6 +276,7 @@ fn worker_exit_before_claim_terminalizes_persisted_run_with_diagnostic() {
     assert_eq!(
         log_path,
         pipeline_worker_log_path(&runtime.paths().logs_dir, &run.run_id)
+            .expect("worker log path validation")
     );
     let durable_output = std::fs::read_to_string(&log_path).expect("read durable worker log");
     assert!(durable_output.contains("worker stdout context"));
@@ -302,6 +339,7 @@ fn routine_style_detached_worker_is_claimed_within_ownership_window() {
     assert_eq!(
         log_path,
         pipeline_worker_log_path(&runtime.paths().logs_dir, &run.run_id)
+            .expect("worker log path validation")
     );
     let durable_output = wait_for_log_contains(&log_path, "routine worker startup");
     assert!(durable_output.contains("routine worker startup"));

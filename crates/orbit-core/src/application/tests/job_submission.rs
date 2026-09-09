@@ -249,7 +249,8 @@ fn direct_path_submission_pins_the_validated_definition_against_later_edits() {
         )
         .expect("direct-path submission succeeds");
 
-    let snapshot = run_definition_snapshot_path(&runtime.paths().job_runs_dir, &invoke.run_id);
+    let snapshot = run_definition_snapshot_path(&runtime.paths().job_runs_dir, &invoke.run_id)
+        .expect("snapshot path validation");
     let pinned = std::fs::read_to_string(&snapshot).expect("definition snapshot is durable");
     assert_eq!(pinned, job_yaml("qa_direct", 1));
 

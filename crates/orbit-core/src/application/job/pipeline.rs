@@ -868,7 +868,7 @@ impl OrbitRuntime {
             if (action_key.is_none() || run.state == JobRunState::Pending)
                 && let Err(error) = self.spawn_pipeline_worker(&run.run_id, actor)
             {
-                let worker_log = pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id);
+                let worker_log = pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id)?;
                 let message = format!(
                     "pipeline worker for run '{}' could not start from registered workspace '{}': \
                      {error}; worker log: '{}'",
@@ -915,7 +915,7 @@ impl OrbitRuntime {
     /// Durably pin a submitted run's job definition next to the run record.
     fn write_run_definition_snapshot(&self, run_id: &str, yaml: &str) -> Result<(), OrbitError> {
         let dir = self.paths().job_runs_dir.clone();
-        let path = run_definition_snapshot_path(&dir, run_id);
+        let path = run_definition_snapshot_path(&dir, run_id)?;
         atomic_write_text(&path, yaml).map_err(|error| {
             OrbitError::Io(format!(
                 "write job run definition snapshot '{}': {error}",
@@ -930,7 +930,7 @@ impl OrbitRuntime {
         &self,
         run: &JobRun,
     ) -> Result<(PathBuf, JobV2), OrbitError> {
-        let snapshot = run_definition_snapshot_path(&self.paths().job_runs_dir, &run.run_id);
+        let snapshot = run_definition_snapshot_path(&self.paths().job_runs_dir, &run.run_id)?;
         if !snapshot.is_file() {
             return self.load_v2_job_asset_by_name(&run.job_id);
         }
@@ -1663,6 +1663,7 @@ impl OrbitRuntime {
                 state: state.to_string(),
             })?;
         }
+        let worker_log = pipeline_worker_log_path(&self.paths().logs_dir, &current.run_id)?;
         self.record_pipeline_audit(
             audit_name,
             Some(&current.run_id),
@@ -1671,7 +1672,7 @@ impl OrbitRuntime {
             json!({
                 "run_id": current.run_id,
                 "workspace": self.paths().repo_root,
-                "worker_log": pipeline_worker_log_path(&self.paths().logs_dir, &current.run_id),
+                "worker_log": worker_log,
             }),
             Some(message.to_string()),
         )
@@ -1714,6 +1715,7 @@ impl OrbitRuntime {
                 state: JobRunState::Interrupted.to_string(),
             })?;
         }
+        let worker_log = pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id)?;
         self.record_pipeline_audit(
             "pipeline.worker.startup",
             Some(&run.run_id),
@@ -1722,7 +1724,7 @@ impl OrbitRuntime {
             json!({
                 "run_id": run.run_id,
                 "workspace": self.paths().repo_root,
-                "worker_log": pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id),
+                "worker_log": worker_log,
             }),
             Some(message.to_string()),
         )
@@ -1899,19 +1901,52 @@ pub(crate) fn pipeline_worker_profile_file(
     logs_dir: &Path,
     run_id: &str,
     inherited: Option<&OsStr>,
-) -> Option<PathBuf> {
-    inherited
-        .filter(|value| !value.is_empty())
-        .map(|_| logs_dir.join(format!("{run_id}.%p.profraw")))
+) -> Result<Option<PathBuf>, OrbitError> {
+    let Some(_) = inherited.filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    Ok(Some(
+        logs_dir.join(pipeline_worker_file_name(run_id, ".%p.profraw")?),
+    ))
 }
 
 /// Where a submitted run's pinned job definition lives.
-pub(crate) fn run_definition_snapshot_path(job_runs_dir: &Path, run_id: &str) -> PathBuf {
-    job_runs_dir.join(format!("{run_id}.job.yaml"))
+pub(crate) fn run_definition_snapshot_path(
+    job_runs_dir: &Path,
+    run_id: &str,
+) -> Result<PathBuf, OrbitError> {
+    Ok(job_runs_dir.join(pipeline_worker_file_name(run_id, ".job.yaml")?))
 }
 
-pub(crate) fn pipeline_worker_log_path(logs_dir: &Path, run_id: &str) -> PathBuf {
-    logs_dir.join(format!("{run_id}.worker.log"))
+pub(crate) fn pipeline_worker_log_path(
+    logs_dir: &Path,
+    run_id: &str,
+) -> Result<PathBuf, OrbitError> {
+    Ok(logs_dir.join(pipeline_worker_file_name(run_id, ".worker.log")?))
+}
+
+/// Turn a persisted run ID into a filename only after rejecting path syntax.
+///
+/// Run IDs normally come from the store, but worker entry points also accept
+/// an ID from a process argument. Keeping this check at the shared filename
+/// boundary prevents either source from steering pipeline artifacts outside
+/// their owning directory.
+fn pipeline_worker_file_name(run_id: &str, suffix: &str) -> Result<String, OrbitError> {
+    let safe = !run_id.is_empty()
+        && run_id != "."
+        && run_id != ".."
+        && !run_id.contains(['/', '\\'])
+        && run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    if !safe {
+        return Err(OrbitError::InvalidInput(format!(
+            "job run id must be a safe filename stem: {run_id}"
+        )));
+    }
+
+    Ok(format!("{run_id}{suffix}"))
 }
 
 pub(crate) fn configure_pipeline_worker_stdio(
@@ -1919,6 +1954,8 @@ pub(crate) fn configure_pipeline_worker_stdio(
     logs_dir: &Path,
     run_id: &str,
 ) -> Result<PipelineWorkerLog, OrbitError> {
+    let log_path = pipeline_worker_log_path(logs_dir, run_id)?;
+
     std::fs::create_dir_all(logs_dir).map_err(|error| {
         OrbitError::Io(format!(
             "create pipeline worker log directory '{}': {error}",
@@ -1927,7 +1964,6 @@ pub(crate) fn configure_pipeline_worker_stdio(
     })?;
     restrict_pipeline_worker_log_directory(logs_dir)?;
 
-    let log_path = pipeline_worker_log_path(logs_dir, run_id);
     let mut options = OpenOptions::new();
     options.create(true).append(true).read(true);
     #[cfg(unix)]
@@ -1946,7 +1982,7 @@ pub(crate) fn configure_pipeline_worker_stdio(
         logs_dir,
         run_id,
         std::env::var_os("LLVM_PROFILE_FILE").as_deref(),
-    ) {
+    )? {
         command.env("LLVM_PROFILE_FILE", profile);
     }
     write_pipeline_worker_spawn_banner(&log_path, command);
