@@ -106,6 +106,7 @@ pub fn atomic_write_text_volatile(path: &Path, content: &str) -> io::Result<()> 
 pub struct StagedTextFile {
     target_path: PathBuf,
     temp_path: PathBuf,
+    parent_dir: Option<File>,
     sync_parent: bool,
     committed: bool,
 }
@@ -170,11 +171,14 @@ impl StagedTextFile {
         }
         drop(file);
 
+        let parent_dir = durable.then(|| File::open(parent)).transpose()?;
+
         cleanup.disarm();
 
         Ok(Self {
             target_path: target_path.to_path_buf(),
             temp_path,
+            parent_dir,
             sync_parent: durable,
             committed: false,
         })
@@ -192,7 +196,12 @@ impl StagedTextFile {
         fs::rename(&self.temp_path, &self.target_path)?;
         self.committed = true;
         if self.sync_parent {
-            sync_parent_dir(&self.target_path)?;
+            let Some(parent_dir) = self.parent_dir.as_ref() else {
+                return Err(io::Error::other(
+                    "durable staged file is missing its parent directory handle",
+                ));
+            };
+            sync_parent_dir(parent_dir)?;
         }
         Ok(())
     }
@@ -246,22 +255,18 @@ fn temp_path_for(target_path: &Path) -> PathBuf {
     target_path.with_file_name(temp_name)
 }
 
-/// fsync the parent directory of `target_path` so the directory entry that
-/// names `target_path` is durable.
+/// Fsync an already-open parent directory so its directory entries are durable.
 ///
 /// fsync on a file or directory persists that object's own data and inode, but
 /// not the entry in its *parent* that makes it reachable by path. After freshly
 /// creating a file, directory, or rename target, a crash can otherwise leave a
 /// fully-fsynced but unreferenced inode that recovery reclaims as an orphan.
-/// Call this on the newly created path to close that window.
-pub fn sync_parent_dir(target_path: &Path) -> io::Result<()> {
-    let parent = target_path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("no parent dir for {}", target_path.display()),
-        )
-    })?;
-    File::open(parent)?.sync_all()
+/// Call this with the directory handle for the parent of a newly created path
+/// to close that window. Taking a handle keeps path resolution at the caller's
+/// trusted filesystem boundary instead of resolving a caller-provided path in
+/// this synchronization primitive.
+pub fn sync_parent_dir(parent_dir: &File) -> io::Result<()> {
+    parent_dir.sync_all()
 }
 
 // ---------------------------------------------------------------------------
