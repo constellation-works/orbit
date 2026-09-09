@@ -129,7 +129,10 @@ impl GeminiHttpTransport {
         let endpoint = self.cached_contents_endpoint();
         let request = self.post_json_request(&endpoint)?;
 
-        let response = request.body(body_bytes).send().map_err(network_error)?;
+        let response = request
+            .body(body_bytes)
+            .send()
+            .map_err(network_request_error)?;
 
         let http_status = response.status().as_u16();
         let response_bytes = response
@@ -232,7 +235,7 @@ impl LoopTransport for GeminiHttpTransport {
         let response = request
             .body(body_bytes.clone())
             .send()
-            .map_err(network_error)?;
+            .map_err(network_request_error)?;
 
         let http_status = response.status().as_u16();
         let response_bytes = response
@@ -388,7 +391,15 @@ fn build_client(timeout: Duration) -> Result<Client, TransportError> {
         .map_err(|e| TransportError::Other(format!("reqwest build: {e}")))
 }
 
-// `pub(super)` widened for sibling test access.
+fn network_request_error(_: reqwest::Error) -> TransportError {
+    // Do not format the request-bound error: reqwest may retain request data,
+    // including the API-key header, in an error's diagnostic representation.
+    TransportError::Network("Gemini request failed".to_string())
+}
+
+// `pub(super)` widened for sibling test access; it is not part of production
+// error translation because request-bound errors may contain sensitive data.
+#[cfg(test)]
 pub(super) fn network_error(error: reqwest::Error) -> TransportError {
     TransportError::Network(reqwest_error_message(error))
 }
