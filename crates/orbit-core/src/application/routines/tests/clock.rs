@@ -9,7 +9,7 @@ use orbit_common::OrbitError;
 use super::super::clock::{
     ClockCommandRunner, ClockPlatform, ClockSettings, ManagerCommand, clock_status_with,
     install_clock_with, load_clock_settings, render_systemd_service, render_systemd_timer,
-    save_clock_settings, set_clock_cadence_with, set_clock_enabled_with,
+    save_clock_settings, set_clock_cadence_with, set_clock_enabled_with, validated_sweep_log_path,
 };
 
 struct MockRunner {
@@ -511,6 +511,45 @@ fn clock_settings_reject_symlink_escape() {
         error
             .to_string()
             .contains("clock configuration must be a regular clock.toml directly under")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sweep_log_path_rejects_symlinked_directory() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("create global root");
+    let outside = tempdir().expect("create outside root");
+    symlink(outside.path(), root.path().join("logs")).expect("create logs symlink");
+
+    let error = validated_sweep_log_path(root.path()).expect_err("reject escaped log directory");
+
+    assert!(
+        error
+            .to_string()
+            .contains("sweep log directory must be a regular directory directly under")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sweep_log_path_rejects_symlinked_file() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("create global root");
+    let outside = tempdir().expect("create outside root");
+    fs::create_dir(root.path().join("logs")).expect("create log directory");
+    let outside_log = outside.path().join("sweep.log");
+    fs::write(&outside_log, "redirected").expect("write outside log");
+    symlink(&outside_log, root.path().join("logs/sweep.log")).expect("create log symlink");
+
+    let error = validated_sweep_log_path(root.path()).expect_err("reject escaped log file");
+
+    assert!(
+        error
+            .to_string()
+            .contains("sweep log must be a regular file directly under")
     );
 }
 
