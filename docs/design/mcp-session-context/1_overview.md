@@ -3,13 +3,13 @@ summary: "MCP Session Context — Overview"
 type: design
 title: "MCP Session Context — Overview"
 owner: codex
-last_updated: 2026-08-15
-last_validated: 2026-08-15
+last_updated: 2026-09-09
+last_validated: 2026-09-09
 status: Accepted
 feature: mcp-session-context
 doc_role: overview
 tags: ["mcp-session-context", "mcp", "workspace", "audit"]
-paths: ["crates/orbit-common/src/types/tool.rs", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/command/tool/**"]
+paths: ["crates/orbit-types/src/tool/**", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/adapter/tool_host/**"]
 related_features: ["mcp-session-context"]
 related_artifacts: []
 ---
@@ -36,8 +36,8 @@ The external workspace value is addressing input, not a trusted workspace identi
 - process_machine_id and process_host_id describe the machine accepting and executing the call.
 - transport is local or ssh-mcp.
 
-## V1 boundary
+## Current boundary
 
-MCP v1 has one authoritative server host and stdio framing, either local or carried byte-for-byte through SSH. Tool definitions carry only global-versus-workspace-required scope. V1 has no TCP listener, broker, remote placement routing, capability authorization, leases, or Orbit-authenticated caller identity.
+MCP v1 still has one authoritative server host and stdio framing, either local or carried byte-for-byte through SSH. The current surface also has an explicit TCP listener transport and an opt-in federated stdio mux that routes to configured SSH destinations. Tool definitions carry global-versus-workspace-required scope; the accepting server and Core resolve capabilities and authorization. Caller machine and network labels remain audit evidence rather than authenticated principals, except where destination-owned SSH acceptance supplies key-bound caller evidence.
 
 See [2_design.md](./2_design.md) for the concrete path, [3_vision.md](./3_vision.md) for evolution gates, and [4_decisions.md](./4_decisions.md) for current design choices.
