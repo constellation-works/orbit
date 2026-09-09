@@ -655,11 +655,9 @@ fn exact_id_lookup_survives_a_name_that_matches_another_workspace_id() {
 
 #[test]
 fn malformed_and_future_registries_fail_without_rewriting() {
-    let root = tempdir().expect("tempdir");
-    for (name, bytes, expected) in [
-        ("malformed", b"{ not json".to_vec(), "malformed JSON"),
+    for (bytes, expected) in [
+        (b"{ not json".to_vec(), "malformed JSON"),
         (
-            "future",
             serde_json::to_vec_pretty(&json!({
                 "schema_version": WORKSPACE_REGISTRY_SCHEMA_VERSION + 1,
                 "workspaces": [],
@@ -669,12 +667,45 @@ fn malformed_and_future_registries_fail_without_rewriting() {
             "unsupported schema_version",
         ),
     ] {
-        let path = root.path().join(format!("{name}.json"));
+        let root = tempdir().expect("tempdir");
+        let path = root.path().join("workspaces.json");
         fs::write(&path, &bytes).expect("write invalid fixture");
         let error = load_registry_from(&path).expect_err("invalid registry must fail");
         assert!(error.to_string().contains(expected), "{error}");
         assert_eq!(fs::read(&path).expect("read unchanged fixture"), bytes);
     }
+}
+
+#[test]
+fn registry_io_rejects_a_non_registry_file_name() {
+    let root = tempdir().expect("tempdir");
+    let path = root.path().join("other.json");
+    fs::write(&path, b"not a registry").expect("write fixture");
+
+    let error = load_registry_from(&path).expect_err("alternate registry file must fail");
+
+    assert!(
+        error.to_string().contains("must name 'workspaces.json'"),
+        "unexpected: {error}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_io_rejects_a_symlinked_registry_file() {
+    let root = tempdir().expect("tempdir");
+    let outside = tempdir().expect("tempdir");
+    let target = outside.path().join("workspaces.json");
+    fs::write(&target, b"not a registry").expect("write target");
+    let path = root.path().join("workspaces.json");
+    std::os::unix::fs::symlink(&target, &path).expect("create registry symlink");
+
+    let error = load_registry_from(&path).expect_err("symlinked registry must fail");
+
+    assert!(
+        error.to_string().contains("must not be a symlink"),
+        "unexpected: {error}"
+    );
 }
 
 #[test]
