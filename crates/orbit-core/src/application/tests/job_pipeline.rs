@@ -204,12 +204,13 @@ fn worker_exit_before_claim_terminalizes_persisted_run_with_diagnostic() {
          printf 'action registration missing: routine_dispatch\\n' >&2; \
          exit 23",
     ]);
-    let log_path =
+    let worker_log =
         configure_pipeline_worker_stdio(&mut command, &runtime.paths().logs_dir, &run.run_id)
             .expect("configure worker log");
+    let log_path = worker_log.path().to_owned();
 
     runtime
-        .spawn_pipeline_worker_process(&run.run_id, Some("test"), command, log_path.clone())
+        .spawn_pipeline_worker_process(&run.run_id, Some("test"), command, worker_log)
         .expect("spawn detached failing worker fixture");
 
     let stored = wait_for_worker_ownership_outcome(&runtime, &run.run_id);
@@ -270,18 +271,14 @@ fn routine_style_detached_worker_is_claimed_within_ownership_window() {
         .expect("insert routine-dispatched run");
     let mut command = Command::new("sh");
     command.args(["-c", "printf 'routine worker startup\\n' >&2; sleep 0.25"]);
-    let log_path =
+    let worker_log =
         configure_pipeline_worker_stdio(&mut command, &runtime.paths().logs_dir, &run.run_id)
             .expect("configure routine worker log");
+    let log_path = worker_log.path().to_owned();
 
     let started = Instant::now();
     let worker_pid = runtime
-        .spawn_pipeline_worker_process(
-            &run.run_id,
-            Some("routine-sweep"),
-            command,
-            log_path.clone(),
-        )
+        .spawn_pipeline_worker_process(&run.run_id, Some("routine-sweep"), command, worker_log)
         .expect("spawn detached routine worker fixture");
     runtime
         .stores()
@@ -363,12 +360,14 @@ fn claimed_sleeping_worker_does_not_keep_polling_the_run_store() {
         .insert_job_run("task_gate_pipeline", 1, Utc::now(), None, None)
         .expect("insert pending run");
     let observer_reads = worker_observer_read_counter::track(&runtime, &run.run_id);
-    let command = worker_command_override::command(&runtime.paths().repo_root, &run.run_id)
+    let mut command = worker_command_override::command(&runtime.paths().repo_root, &run.run_id)
         .expect("build sleeping worker command");
-    let log_path = pipeline_worker_log_path(&runtime.paths().logs_dir, &run.run_id);
+    let worker_log =
+        configure_pipeline_worker_stdio(&mut command, &runtime.paths().logs_dir, &run.run_id)
+            .expect("configure sleeping worker log");
 
     let worker_pid = runtime
-        .spawn_pipeline_worker_process(&run.run_id, Some("test"), command, log_path)
+        .spawn_pipeline_worker_process(&run.run_id, Some("test"), command, worker_log)
         .expect("spawn detached sleeping worker");
     runtime
         .stores()
