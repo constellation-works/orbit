@@ -6,7 +6,7 @@ schedule:
   deliveries_landed:
     owner_machine: hm_9ca6004473492f06
     branch: agent-main
-    threshold: 3
+    threshold: 10
     max_wait_minutes: 360
     coverage: landed_code_review_v1
     max_items: 20

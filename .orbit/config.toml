@@ -72,5 +72,5 @@ task_url_template = "https://orbit-cli.com/tasks/{task_id}"
 roots = ["docs/"]
 
 [operation]
-review_crew = "grok"
-review_policy = "none"
+review_crew = "opus"
+review_policy = "after-landing"
