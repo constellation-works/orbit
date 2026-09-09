@@ -1,0 +1,9 @@
+name: constellation-works/orbit-rust-path-validation
+version: 0.0.1
+library: true
+
+extensionTargets:
+  codeql/rust-all: "*"
+
+dataExtensions:
+  - path-validation.yml
