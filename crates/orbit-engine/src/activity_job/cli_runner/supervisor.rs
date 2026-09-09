@@ -58,6 +58,7 @@ pub(super) const DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS: u64 = 300;
 pub(super) type SpawnOutput = (CapturedOutput, CapturedOutput, Option<i32>, Duration, bool);
 
 const OUTPUT_READER_JOIN_TIMEOUT: Duration = Duration::from_millis(500);
+const PROCESS_GROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 const CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_ENV: &str = "ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES";
 const DEFAULT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
 const OUTPUT_LINE_EVENT_LIMIT_BYTES: usize = 64 * 1024;
@@ -682,10 +683,38 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
 fn kill_child_process_tree(child: &mut Child) {
     #[cfg(unix)]
     {
-        let _ = signal_child_process_group(child.id(), libc::SIGKILL);
+        let child_id = child.id();
+        let _ = signal_child_process_group(child_id, libc::SIGKILL);
+        let _ = child.kill();
+        let _ = child.wait();
+        wait_for_process_group_exit(child_id);
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_process_group_exit(child_id: u32) {
+    let deadline = Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT;
+    while process_group_is_alive(child_id) {
+        let _ = signal_child_process_group(child_id, libc::SIGKILL);
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[cfg(unix)]
+fn process_group_is_alive(child_id: u32) -> bool {
+    if child_id == 0 || child_id > i32::MAX as u32 {
+        return false;
+    }
+    let rc = unsafe { libc::killpg(child_id as libc::pid_t, 0) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 #[cfg(unix)]
