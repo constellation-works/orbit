@@ -946,6 +946,7 @@ mod copilot_state_roots {
 
 #[cfg(target_os = "linux")]
 mod provider_state_root_validation {
+    use std::os::unix::fs::symlink;
     use std::path::Path;
 
     use crate::adapter::engine_host::v2_host::sandbox::{
@@ -975,7 +976,80 @@ mod provider_state_root_validation {
         let validated = validated_linux_provider_state_root(&custom, Some(parent.path()))
             .expect("validate custom provider root");
 
-        assert_eq!(validated, custom);
+        assert_eq!(
+            validated,
+            parent
+                .path()
+                .canonicalize()
+                .expect("canonical parent")
+                .join("provider")
+                .join("state")
+        );
+    }
+
+    /// OSTree hosts ship `/home -> /var/home`, so a symlinked ancestor is an
+    /// ordinary host layout rather than a redirected root. [ORB-11984]
+    #[test]
+    fn accepts_a_missing_root_beneath_a_symlinked_ancestor() {
+        let parent = tempfile::tempdir().expect("parent");
+        let real = parent.path().join("real");
+        std::fs::create_dir_all(&real).expect("create real ancestor");
+        let linked = parent.path().join("linked");
+        symlink(&real, &linked).expect("create ancestor symlink");
+        let custom = linked.join("provider").join("state");
+
+        let validated = validated_linux_provider_state_root(&custom, Some(parent.path()))
+            .expect("validate root beneath a symlinked ancestor");
+
+        assert_eq!(
+            validated,
+            real.canonicalize()
+                .expect("canonical real ancestor")
+                .join("provider")
+                .join("state")
+        );
+    }
+
+    /// Dotfile managers relocate provider directories through a symlink, so an
+    /// existing symlinked target resolves to its destination. [ORB-11984]
+    #[test]
+    fn resolves_a_symlinked_root_target_to_its_destination() {
+        let parent = tempfile::tempdir().expect("parent");
+        let target = parent.path().join("target");
+        std::fs::create_dir_all(&target).expect("create symlink target");
+        let symlinked_root = parent.path().join("symlink_root");
+        symlink(&target, &symlinked_root).expect("create root symlink");
+        let canonical_target = target.canonicalize().expect("canonical target");
+
+        assert_eq!(
+            validated_linux_provider_state_root(&symlinked_root, Some(parent.path()))
+                .expect("validate symlinked provider root"),
+            canonical_target
+        );
+        assert_eq!(
+            ensure_linux_provider_directory(&symlinked_root, Some(parent.path()))
+                .expect("create symlinked provider root"),
+            canonical_target
+        );
+    }
+
+    /// Following symlinks must not let one widen the grant: containment is
+    /// re-checked against the resolved destination. [ORB-11984]
+    #[test]
+    fn rejects_a_symlinked_root_that_resolves_into_the_home_directory() {
+        let parent = tempfile::tempdir().expect("parent");
+        let home = parent.path().join("home");
+        std::fs::create_dir_all(&home).expect("create home");
+        let escaping_root = home.join("provider");
+        symlink(&home, &escaping_root).expect("create escaping root symlink");
+
+        let error = validated_linux_provider_state_root(&escaping_root, Some(&home))
+            .expect_err("reject a symlink resolving onto home");
+
+        assert!(
+            error.to_string().contains("broader than the user's home"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -1020,15 +1094,31 @@ mod runtime_root_validation {
     }
 
     #[test]
-    fn rejects_missing_relative_and_symlinked_runtime_roots() {
+    fn rejects_missing_and_relative_runtime_roots() {
         let parent = tempfile::tempdir().expect("runtime parent");
         let missing = parent.path().join("missing");
-        let link = parent.path().join("link");
-        symlink(parent.path(), &link).expect("create runtime-root symlink");
 
         assert!(validated_linux_runtime_root(&missing).is_err());
         assert!(validated_linux_runtime_root(Path::new("runtime-root")).is_err());
-        assert!(validated_linux_runtime_root(&link).is_err());
+    }
+
+    /// Runtime roots live under `$HOME`, so they hit the same symlinked-ancestor
+    /// host layouts as provider state roots. [ORB-11984]
+    #[test]
+    fn resolves_a_symlinked_runtime_root_to_its_canonical_directory() {
+        let parent = tempfile::tempdir().expect("runtime parent");
+        let real = parent.path().join("real");
+        std::fs::create_dir_all(&real).expect("create runtime directory");
+        let link = parent.path().join("link");
+        symlink(&real, &link).expect("create runtime-root symlink");
+
+        let validated =
+            validated_linux_runtime_root(&link).expect("validate symlinked runtime root");
+
+        assert_eq!(
+            validated,
+            real.canonicalize().expect("canonical runtime root")
+        );
     }
 }
 

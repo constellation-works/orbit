@@ -428,13 +428,65 @@ fn append_linux_provider_state_roots(
     Ok(())
 }
 
+/// Reject a provider state root that would grant more than a provider directory.
+///
+/// `candidate` is the path being judged; `configured` is what the operator
+/// supplied. They differ once symlinks have been resolved, and naming both keeps
+/// a rejection traceable back to the setting that caused it.
+#[cfg(target_os = "linux")]
+fn reject_overbroad_linux_provider_state_root(
+    candidate: &Path,
+    configured: &Path,
+    home: Option<&Path>,
+) -> Result<(), DispatchError> {
+    let describe = || {
+        if candidate == configured {
+            format!("`{}`", configured.display())
+        } else {
+            format!(
+                "`{}` (resolved to `{}`)",
+                configured.display(),
+                candidate.display()
+            )
+        }
+    };
+
+    if candidate.parent().is_none() {
+        return Err(DispatchError::CliInvocationPermanent(format!(
+            "Linux provider state root {} must not be the filesystem root",
+            describe()
+        )));
+    }
+
+    if let Some(home) = home {
+        let canonical_home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+        if canonical_home.starts_with(candidate) {
+            return Err(DispatchError::CliInvocationPermanent(format!(
+                "Linux provider state root {} is broader than the user's home directory",
+                describe()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 /// Resolve a provider state root before creating it on behalf of a child.
 ///
 /// Provider-specific environment variables are operator-configurable, but
 /// they must not turn sandbox preparation into an arbitrary path creator.
-/// Reject relative paths, path traversal, root/home-wide targets, and symlink
-/// components. The returned path has an existing canonical ancestor and only
-/// the validated missing suffix, so the caller can safely materialize it.
+/// Reject relative paths, path traversal, and root/home-wide targets.
+///
+/// Symlinks are resolved rather than rejected. Hosts routinely reach `$HOME`
+/// through a symlinked ancestor (OSTree systems ship `/home -> /var/home`), and
+/// dotfile managers routinely make a provider directory itself a symlink; both
+/// are ordinary configurations, not attacks. [ORB-11984]
+///
+/// Following symlinks means the configured path no longer bounds the grant, so
+/// containment is enforced twice: once on what the operator supplied, and again
+/// on the resolved destination. The returned path has an existing canonical
+/// ancestor and only the validated missing suffix, so the caller can safely
+/// materialize it.
 #[cfg(target_os = "linux")]
 pub(super) fn validated_linux_provider_state_root(
     path: &Path,
@@ -446,54 +498,23 @@ pub(super) fn validated_linux_provider_state_root(
             path.display()
         )));
     }
-    if path.parent().is_none() {
-        return Err(DispatchError::CliInvocationPermanent(
-            "Linux provider state root must not be the filesystem root".to_string(),
-        ));
-    }
-    if home.is_some_and(|home| {
-        let canonical_home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
-        path == canonical_home || canonical_home.starts_with(path)
-    }) {
-        return Err(DispatchError::CliInvocationPermanent(format!(
-            "Linux provider state root `{}` is broader than the user's home directory",
-            path.display()
-        )));
-    }
 
-    let mut prefix = PathBuf::new();
     for component in path.components() {
-        match component {
-            std::path::Component::RootDir => prefix.push(component),
-            std::path::Component::Normal(name) => {
-                prefix.push(name);
-                match std::fs::symlink_metadata(&prefix) {
-                    Ok(metadata) if metadata.file_type().is_symlink() => {
-                        return Err(DispatchError::CliInvocationPermanent(format!(
-                            "Linux provider state root `{}` must not contain symlink `{}`",
-                            path.display(),
-                            prefix.display()
-                        )));
-                    }
-                    Ok(_) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
-                    Err(error) => {
-                        return Err(DispatchError::CliInvocationPermanent(format!(
-                            "inspect Linux provider state root `{}`: {error}",
-                            path.display()
-                        )));
-                    }
-                }
-            }
-            _ => {
-                return Err(DispatchError::CliInvocationPermanent(format!(
-                    "Linux provider state root `{}` must not contain traversal components",
-                    path.display()
-                )));
-            }
+        if !matches!(
+            component,
+            std::path::Component::RootDir | std::path::Component::Normal(_)
+        ) {
+            return Err(DispatchError::CliInvocationPermanent(format!(
+                "Linux provider state root `{}` must not contain traversal components",
+                path.display()
+            )));
         }
     }
+    reject_overbroad_linux_provider_state_root(path, path, home)?;
 
+    // Walk up to the deepest path that already exists. `exists` follows
+    // symlinks, so a provider directory that is itself a symlink to an existing
+    // directory counts as existing and canonicalizes to its real destination.
     let mut existing = path.to_path_buf();
     let mut missing = Vec::<OsString>::new();
     while !existing.exists() {
@@ -517,6 +538,8 @@ pub(super) fn validated_linux_provider_state_root(
     for component in missing.iter().rev() {
         validated.push(component);
     }
+
+    reject_overbroad_linux_provider_state_root(&validated, path, home)?;
 
     Ok(validated)
 }
