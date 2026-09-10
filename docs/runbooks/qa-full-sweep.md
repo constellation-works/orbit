@@ -48,13 +48,25 @@ installed binary without that build attestation intentionally makes provenance
 FAIL, even when `--version` exits zero. The harness constructs a clean child
 environment and disposable Orbit root and Git repositories for mutations.
 
-For the browser leg, pass the absolute Playwright module installed in the
-worker's own disposable namespace:
+For the browser leg, pass all three prepared capability inputs from the
+worker's own disposable namespace. The harness forwards only these browser
+paths to the dashboard process; it does not inherit the worker's Orbit or
+general host environment. The report records the launched Chromium version and
+retains screenshots plus `result.json` in the output-side evidence directory.
 
 ```bash
 ./scripts/qa-full-sweep.sh --build-candidate --run-commands \
-  --playwright-module /tmp/orbit-browser-check/node_modules/playwright/index.mjs
+  --playwright-module /tmp/orbit-browser-check/node_modules/playwright/index.mjs \
+  --playwright-browsers-path /tmp/orbit-browser-check/browsers \
+  --browser-ld-library-path /tmp/orbit-browser-check/sysroot/usr/lib/x86_64-linux-gnu \
+  --browser-evidence-dir /tmp/orbit-qa-evidence/browser
 ```
+
+Attach both the JSON report and its retained evidence directory (or its file
+hash manifest in `results[].retained_evidence`) to the task. If any prepared
+path is absent or Chromium cannot launch, the browser scenario remains
+`NOT_RUN` rather than passing; retain its capability probe in the report for
+operator-owned post-merge verification.
 
 Add `--website-build` only after preparing the website dependencies through
 the isolated procedure in [website validation](website-validation.md). It

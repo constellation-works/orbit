@@ -5,6 +5,9 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 output="$repo_root/qa-full-sweep-report.json"
 run_commands=0
 playwright_module=""
+playwright_browsers_path=""
+browser_ld_library_path=""
+browser_evidence_dir=""
 website_build=0
 build_candidate=0
 platform_evidence=()
@@ -16,6 +19,9 @@ while [[ $# -gt 0 ]]; do
     --orbit-bin) orbit_bin="$2"; shift 2 ;;
     --run-commands) run_commands=1; shift ;;
     --playwright-module) playwright_module="$2"; shift 2 ;;
+    --playwright-browsers-path) playwright_browsers_path="$2"; shift 2 ;;
+    --browser-ld-library-path) browser_ld_library_path="$2"; shift 2 ;;
+    --browser-evidence-dir) browser_evidence_dir="$2"; shift 2 ;;
     --website-build) website_build=1; shift ;;
     --build-candidate) build_candidate=1; shift ;;
     --platform-evidence) platform_evidence+=("$2"); shift 2 ;;
@@ -34,6 +40,15 @@ if [[ "$run_commands" == 1 ]]; then
 fi
 if [[ -n "$playwright_module" ]]; then
   extra_args+=(--playwright-module "$playwright_module")
+fi
+if [[ -n "$playwright_browsers_path" ]]; then
+  extra_args+=(--playwright-browsers-path "$playwright_browsers_path")
+fi
+if [[ -n "$browser_ld_library_path" ]]; then
+  extra_args+=(--browser-ld-library-path "$browser_ld_library_path")
+fi
+if [[ -n "$browser_evidence_dir" ]]; then
+  extra_args+=(--browser-evidence-dir "$browser_evidence_dir")
 fi
 if [[ "$website_build" == 1 ]]; then
   extra_args+=(--website-build)

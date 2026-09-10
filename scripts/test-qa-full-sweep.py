@@ -125,9 +125,14 @@ def candidate_source(repo: Path, excluded_paths=()):
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     diff = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=repo)
     status = subprocess.check_output(["git", "status", "--porcelain=v1"], cwd=repo, text=True)
-    excluded = {str(path) for path in excluded_paths}
+    excluded = tuple(str(path) for path in excluded_paths)
+
+    def is_excluded(path):
+        return any(path == excluded_path or path.startswith(f"{excluded_path}/")
+                   for excluded_path in excluded)
+
     status_lines = [line for line in status.splitlines()
-                    if (line[3:].split(" -> ")[-1] if len(line) > 3 else line) not in excluded]
+                    if not is_excluded(line[3:].split(" -> ")[-1] if len(line) > 3 else line)]
     untracked_output = subprocess.check_output(
         ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=repo)
     untracked = []
@@ -136,7 +141,7 @@ def candidate_source(repo: Path, excluded_paths=()):
             continue
         path = raw_path.decode()
         candidate = repo / path
-        if path not in excluded and candidate.is_file():
+        if not is_excluded(path) and candidate.is_file():
             untracked.append((path, hashlib.sha256(candidate.read_bytes()).hexdigest()))
     material = json.dumps({"head": head, "diff": hashlib.sha256(diff).hexdigest(),
                            "untracked": untracked}, sort_keys=True).encode()
@@ -187,17 +192,42 @@ def scenario_decision(inventory, results, candidate_id):
     return not failures, failures
 
 
-def isolated_environment(temp: Path):
+def isolated_environment(temp: Path, host_env=None):
     keep = ["PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "RUSTUP_TOOLCHAIN"]
-    env = {key: os.environ[key] for key in keep if key in os.environ}
+    host_env = os.environ if host_env is None else host_env
+    env = {key: host_env[key] for key in keep if key in host_env}
     user_home = Path.home()
     env.update({"HOME": str(temp / "home"), "USERPROFILE": str(temp / "home"),
                 "XDG_CONFIG_HOME": str(temp / "xdg"), "TMPDIR": str(temp / "tmp"),
-                "CARGO_HOME": os.environ.get("CARGO_HOME", str(user_home / ".cargo")),
-                "RUSTUP_HOME": os.environ.get("RUSTUP_HOME", str(user_home / ".rustup"))})
+                "CARGO_HOME": host_env.get("CARGO_HOME", str(user_home / ".cargo")),
+                "RUSTUP_HOME": host_env.get("RUSTUP_HOME", str(user_home / ".rustup"))})
     for path in (temp / "home", temp / "xdg", temp / "tmp"):
         path.mkdir(parents=True, exist_ok=True)
     return env
+
+
+def browser_environment(base: dict, playwright_browsers_path: Path | None,
+                        browser_ld_library_path: Path | None):
+    """Add only declared browser capability paths to the disposable child env."""
+    env = dict(base)
+    if playwright_browsers_path:
+        env["PLAYWRIGHT_BROWSERS_PATH"] = str(playwright_browsers_path)
+    if browser_ld_library_path:
+        env["LD_LIBRARY_PATH"] = str(browser_ld_library_path)
+    return env
+
+
+def inspect_browser_capability(playwright_module: Path, env: dict, repo: Path):
+    probe = run([
+        "node", "--input-type=module", "-e",
+        "import { pathToFileURL } from 'node:url'; "
+        "const { chromium } = await import(pathToFileURL(process.argv[1]).href); "
+        "const browser = await chromium.launch({ headless: true }); "
+        "console.log(browser.version()); await browser.close();",
+        str(playwright_module),
+    ], cwd=repo, env=env, timeout=180)
+    version = probe["stdout"].strip() if probe["exit_code"] == 0 else None
+    return probe, version
 
 
 def add_result(results, scenario, evidence):
@@ -768,6 +798,37 @@ def self_test():
             continue
         raise AssertionError(f"wrong or empty exit-zero output passed: {stdout!r}")
 
+    with tempfile.TemporaryDirectory(prefix="orbit-qa-browser-self-test-") as tmp:
+        temp = Path(tmp)
+        browser_cache = temp / "browsers"
+        browser_libs = temp / "sysroot"
+        browser_cache.mkdir()
+        browser_libs.mkdir()
+        isolated = isolated_environment(temp, {
+            "PATH": os.environ.get("PATH", ""), "ORBIT_ROOT": "must-not-leak",
+            "PLAYWRIGHT_BROWSERS_PATH": "/host/browser-cache",
+            "LD_LIBRARY_PATH": "/host/browser-libraries",
+        })
+        browser = browser_environment(isolated, browser_cache, browser_libs)
+        if browser.get("PLAYWRIGHT_BROWSERS_PATH") != str(browser_cache):
+            raise AssertionError("declared Playwright browser cache was dropped")
+        if browser.get("LD_LIBRARY_PATH") != str(browser_libs):
+            raise AssertionError("declared browser library path was dropped")
+        if "ORBIT_ROOT" in isolated:
+            raise AssertionError("isolated environment inherited host Orbit configuration")
+        observed = run(["python3", "-c", "import json, os; print(json.dumps({key: os.getenv(key) for key in ['PLAYWRIGHT_BROWSERS_PATH', 'LD_LIBRARY_PATH', 'ORBIT_ROOT']}))"],
+                       cwd=temp, env=browser)
+        child = parse_json(observed, "browser environment regression")
+        if child != {"PLAYWRIGHT_BROWSERS_PATH": str(browser_cache),
+                     "LD_LIBRARY_PATH": str(browser_libs), "ORBIT_ROOT": None}:
+            raise AssertionError(f"browser child environment is not bounded: {child!r}")
+        evidence = temp / "retained-evidence"
+        evidence.mkdir()
+        (evidence / "failure.png").write_bytes(b"failure evidence")
+        excluded = [str(evidence.relative_to(temp))]
+        if not any(str(evidence.relative_to(temp)).startswith(path) for path in excluded):
+            raise AssertionError("retained browser evidence is not excluded from candidate inputs")
+
     with tempfile.TemporaryDirectory(prefix="orbit-qa-platform-self-test-") as tmp:
         repo = Path(tmp)
         identity_paths = [
@@ -866,6 +927,9 @@ def main():
     parser.add_argument("--run-commands", action="store_true")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--playwright-module", type=Path)
+    parser.add_argument("--playwright-browsers-path", type=Path)
+    parser.add_argument("--browser-ld-library-path", type=Path)
+    parser.add_argument("--browser-evidence-dir", type=Path)
     parser.add_argument("--website-build", action="store_true")
     parser.add_argument("--build-candidate", action="store_true")
     parser.add_argument("--platform-evidence", action="append", type=Path, default=[])
@@ -887,9 +951,15 @@ def main():
         print("qa-full-sweep inventory: ok")
         return
     output = (args.output or repo / "qa-full-sweep-report.json").resolve()
+    browser_evidence_dir = (args.browser_evidence_dir or
+                            output.parent / f"{output.stem}.browser-evidence").resolve()
     excluded_paths = []
     try:
         excluded_paths.append(output.relative_to(repo))
+    except ValueError:
+        pass
+    try:
+        excluded_paths.append(browser_evidence_dir.relative_to(repo))
     except ValueError:
         pass
     candidate = candidate_source(repo, excluded_paths)
@@ -901,15 +971,37 @@ def main():
                 "candidate_id":candidate_id}]
 
     binary = None if args.build_candidate else (Path(args.orbit_bin).resolve() if args.orbit_bin else None)
+    browser_inputs_valid = bool(args.playwright_module and args.playwright_module.is_file()
+                                and args.playwright_browsers_path and args.playwright_browsers_path.is_dir()
+                                and args.browser_ld_library_path and args.browser_ld_library_path.is_dir())
     capabilities = {"local": bool(binary) or args.build_candidate,
-                    "browser": bool(args.playwright_module and args.playwright_module.is_file()),
+                    "browser": browser_inputs_valid,
                     "website-build": args.website_build,
                     "macos": platform.system() == "Darwin"}
     binary_record = {"path":str(binary) if binary else None, "version":None,
                      "sha256":hashlib.sha256(binary.read_bytes()).hexdigest() if binary else None}
+    browser_record = {
+        "playwright_module": str(args.playwright_module) if args.playwright_module else None,
+        "playwright_module_sha256": (hashlib.sha256(args.playwright_module.read_bytes()).hexdigest()
+                                      if args.playwright_module and args.playwright_module.is_file() else None),
+        "playwright_browsers_path": str(args.playwright_browsers_path) if args.playwright_browsers_path else None,
+        "browser_ld_library_path": str(args.browser_ld_library_path) if args.browser_ld_library_path else None,
+        "version": None,
+        "capability_probe": None,
+    }
     with tempfile.TemporaryDirectory(prefix="orbit-qa-full-") as tmp:
         temp = Path(tmp)
         env = isolated_environment(temp)
+        browser_env = browser_environment(env, args.playwright_browsers_path,
+                                          args.browser_ld_library_path)
+        if browser_inputs_valid:
+            probe, browser_record["version"] = inspect_browser_capability(
+                args.playwright_module, browser_env, repo)
+            browser_record["capability_probe"] = {
+                "command": probe["command"], "exit_code": probe["exit_code"],
+                "stdout": probe["stdout"], "stderr": probe["stderr"],
+            }
+            capabilities["browser"] = probe["exit_code"] == 0
         provenance = None
         if args.build_candidate and not errors:
             build = run(["cargo", "build", "--locked", "-p", "orbit-cli", "--bin", "orbit",
@@ -937,13 +1029,30 @@ def main():
                 continue
             if args.run_commands and capabilities.get(scenario["capability"], False):
                 command = [part.replace("{playwright_module}", str(args.playwright_module))
-                           .replace("{evidence_dir}", str(temp / "browser-evidence"))
+                           .replace("{evidence_dir}", str(browser_evidence_dir))
                            for part in scenario["command"]]
-                evidence = run(command, cwd=repo, env=env, timeout=1800)
+                scenario_env = browser_env if scenario["capability"] == "browser" else env
+                evidence = run(command, cwd=repo, env=scenario_env, timeout=1800)
+                if scenario["capability"] == "browser":
+                    browser_evidence_dir.mkdir(parents=True, exist_ok=True)
+                    (browser_evidence_dir / "harness-result.json").write_text(
+                        json.dumps({"command": command, "exit_code": evidence["exit_code"],
+                                    "stdout": evidence["stdout"], "stderr": evidence["stderr"],
+                                    "browser_version": browser_record["version"]}, indent=2) + "\n")
                 unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
                 failure = None if unchanged else "source candidate changed while the scenario ran"
-                results.append({"scenario":scenario["id"],
-                    **finalize_result(evidence, scenario["assertions"], candidate_id, failure)})
+                result = {"scenario":scenario["id"],
+                          **finalize_result(evidence, scenario["assertions"], candidate_id, failure)}
+                if scenario["capability"] == "browser":
+                    artifacts = []
+                    if browser_evidence_dir.is_dir():
+                        for path in sorted(browser_evidence_dir.rglob("*")):
+                            if path.is_file():
+                                artifacts.append({"path": str(path.relative_to(browser_evidence_dir)),
+                                                  "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+                    result["retained_evidence"] = {"directory": str(browser_evidence_dir),
+                                                   "files": artifacts}
+                results.append(result)
             else:
                 results.append({"scenario":scenario["id"], "command":scenario.get("command", []),
                                 "exit_code":None, "stdout":"", "stderr":f"capability or execution not enabled: {scenario['capability']}",
@@ -978,7 +1087,7 @@ def main():
         "candidate": {"id":candidate_id, "source_revision":candidate["head"]},
         "source_state": {"status": candidate["status"], "diff_sha256": candidate["diff_sha256"],
                          "changed_file_sha256": changed_hashes},
-        "binary": binary_record,
+        "binary": binary_record, "browser": browser_record,
         "managed_assets": {str(path.relative_to(repo)):hashlib.sha256(path.read_bytes()).hexdigest()
                            for path in repo.glob(".orbit/**/.orbit-managed-assets.json")},
         "environment": {"os":platform.system(), "release":platform.release(), "architecture":platform.machine(),
