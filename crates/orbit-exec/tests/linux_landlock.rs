@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_exec::{
-    EnvironmentMode, ExecRequest, StdinMode, linux_landlock_grants, probe_landlock,
+    EnvironmentMode, ExecRequest, StdinMode, linux_landlock_read_boundary, probe_landlock,
     spawn_under_linux_landlock,
 };
 use orbit_types::policy::ResolvedFsProfile;
@@ -82,6 +82,12 @@ impl Fixture {
     /// combined output. `sh` is on every shipped activity allowlist, so this is
     /// the shape of the bypass this change closes.
     fn run(&self, profile: &ResolvedFsProfile, script: &str) -> Output {
+        Output::of(self.spawn(profile, script))
+    }
+
+    /// Start the confined child without waiting for it, so a test can change
+    /// the workspace while the ruleset is already in force.
+    fn spawn(&self, profile: &ResolvedFsProfile, script: &str) -> std::process::Child {
         let request = ExecRequest {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), script.to_string()],
@@ -91,15 +97,7 @@ impl Fixture {
             environment_mode: EnvironmentMode::ClearAndSet(self.environment.clone()),
             debug: false,
         };
-        let output = spawn_under_linux_landlock(&request, &self.root(), profile)
-            .expect("spawn confined child")
-            .wait_with_output()
-            .expect("wait for confined child");
-        Output {
-            succeeded: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        }
+        spawn_under_linux_landlock(&request, &self.root(), profile).expect("spawn confined child")
     }
 }
 
@@ -110,6 +108,15 @@ struct Output {
 }
 
 impl Output {
+    fn of(child: std::process::Child) -> Self {
+        let output = child.wait_with_output().expect("wait for confined child");
+        Self {
+            succeeded: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+    }
+
     fn assert_withheld(&self, sentinel: &str) {
         assert!(
             !self.stdout.contains(sentinel),
@@ -131,8 +138,12 @@ impl Output {
 }
 
 fn profile(read: &[&str]) -> ResolvedFsProfile {
+    profile_denying(read, DEFAULT_DENY_READ)
+}
+
+fn profile_denying(read: &[&str], denies: &[&str]) -> ResolvedFsProfile {
     let mut rules: Vec<String> = read.iter().map(ToString::to_string).collect();
-    rules.extend(DEFAULT_DENY_READ.iter().map(|rule| format!("!{rule}")));
+    rules.extend(denies.iter().map(|rule| format!("!{rule}")));
     ResolvedFsProfile {
         name: "test".to_string(),
         read: rules,
@@ -364,13 +375,284 @@ fn a_profile_that_reads_nothing_grants_no_workspace_path() {
         modify: Vec::new(),
     };
 
-    let grants =
-        linux_landlock_grants(&fixture.root(), &profile, &fixture.environment).expect("grants");
+    let boundary = linux_landlock_read_boundary(&fixture.root(), &profile, &fixture.environment)
+        .expect("compile boundary");
     assert!(
-        !orbit_exec::grants_read(&grants, &fixture.root().join("visible.txt")),
-        "an empty read profile must not grant a workspace file: {grants:?}"
+        !orbit_exec::grants_read(&boundary.grants, &fixture.root().join("visible.txt")),
+        "an empty read profile must not grant a workspace file: {:?}",
+        boundary.grants
     );
     fixture
         .run(&profile, "cat visible.txt")
         .assert_withheld("PURE_COMPUTE_SENTINEL");
+}
+
+/// The fixture the dynamic-name tests share.
+///
+/// `vault/**` and `src/secret.key` are bounded exclusions: their own segments
+/// say which directories they can name into, so the ruleset can carve those
+/// directories out before the names exist. `build/` is out of reach, which is
+/// what keeps generated files readable.
+fn dynamic_fixture() -> (Fixture, ResolvedFsProfile) {
+    let fixture = Fixture::new();
+    fixture.write("src/main.rs", "ALLOWED_SENTINEL");
+    fs::create_dir(fixture.root().join("build")).expect("create build");
+    let profile = profile_denying(&["**"], &["vault/**", "src/secret.key"]);
+    (fixture, profile)
+}
+
+/// Criterion 1, and the gap this task closed. A third party writes a secret
+/// into the workspace *after* the child has been admitted, into a directory
+/// that did not exist when the ruleset was compiled. An indirect descendant —
+/// a grandchild, which is what request-time argv checks never see — must not
+/// be able to return it, and the run must still be able to read a file it
+/// generates itself. [F2026-09-054]
+#[test]
+fn a_secret_written_after_admission_is_withheld_from_an_indirect_descendant() {
+    if unenforceable() {
+        return;
+    }
+    let (fixture, profile) = dynamic_fixture();
+
+    // The child waits for the writer, then reads the secret through a
+    // grandchild and generates a file of its own through another.
+    let child = fixture.spawn(
+        &profile,
+        "n=0; while [ ! -e go ] && [ $n -lt 200 ]; do n=$((n+1)); sleep 0.05; done; \
+         sh -c 'cat vault/secret.txt' || echo DESCENDANT_REFUSED; \
+         printf GENERATED_SENTINEL > build/out.txt; \
+         sh -c 'cat build/out.txt'",
+    );
+
+    let secret = fixture.root().join("vault/secret.txt");
+    fs::create_dir(fixture.root().join("vault")).expect("concurrent writer creates vault");
+    fs::write(&secret, "LATE_SENTINEL").expect("concurrent writer writes secret");
+    fs::write(fixture.root().join("go"), "").expect("release the child");
+
+    // The test is only meaningful if the secret really is there to be read.
+    assert_eq!(
+        fs::read_to_string(&secret).expect("read secret outside the sandbox"),
+        "LATE_SENTINEL"
+    );
+
+    let output = Output::of(child);
+    output.assert_withheld("LATE_SENTINEL");
+    output.assert_returned("DESCENDANT_REFUSED");
+    output.assert_returned("GENERATED_SENTINEL");
+}
+
+/// Criterion 2, create/read/remove. A denied name the child creates itself is
+/// no more readable than one someone else creates: the boundary is the name's
+/// directory, not who wrote the bytes. Removing it still works, because this
+/// ruleset governs reads and leaves writes to the mount namespace.
+#[test]
+fn a_denied_name_can_be_created_and_removed_but_never_read_back() {
+    if unenforceable() {
+        return;
+    }
+    let (fixture, profile) = dynamic_fixture();
+
+    fixture
+        .run(
+            &profile,
+            "mkdir -p vault && printf SELF_WRITTEN_SENTINEL > vault/key; \
+             cat vault/key || echo READ_REFUSED; \
+             rm -f vault/key && echo REMOVED",
+        )
+        .assert_withheld("SELF_WRITTEN_SENTINEL");
+
+    fixture
+        .run(
+            &profile,
+            "mkdir -p vault && printf x > vault/key; rm -f vault/key && echo REMOVED",
+        )
+        .assert_returned("REMOVED");
+}
+
+/// Criterion 2, allowed-to-denied rename, stated as the acquisition rule it
+/// is. A grant binds to an inode the child could already read, so giving that
+/// inode a denied name afterwards does not take the bytes back — the child
+/// could have copied them before it renamed anything. What the boundary does
+/// guarantee is that no *new* inode arrives at a denied name with a readable
+/// ancestor.
+#[test]
+fn renaming_an_allowed_file_to_a_denied_name_does_not_withdraw_what_was_granted() {
+    if unenforceable() {
+        return;
+    }
+    let (fixture, profile) = dynamic_fixture();
+
+    fixture
+        .run(
+            &profile,
+            "mv src/main.rs src/secret.key && cat src/secret.key",
+        )
+        .assert_returned("ALLOWED_SENTINEL");
+
+    // The other direction is the one that matters, and it is closed: a file
+    // that arrives at the denied name without a grant of its own stays unread.
+    fixture
+        .run(
+            &profile,
+            "printf FRESH_SENTINEL > src/secret.key; cat src/secret.key || echo REFUSED",
+        )
+        .assert_withheld("FRESH_SENTINEL");
+}
+
+/// Criterion 2, hard links. A hard link is another name for an inode the
+/// ruleset already decided on, so it follows the same acquisition rule as a
+/// rename — and a link that would *gain* access at its destination is refused
+/// by `REFER`.
+#[test]
+fn a_hard_link_carries_the_access_its_inode_already_had() {
+    if unenforceable() {
+        return;
+    }
+    let (fixture, profile) = dynamic_fixture();
+
+    fixture
+        .run(
+            &profile,
+            "ln src/main.rs src/secret.key && cat src/secret.key",
+        )
+        .assert_returned("ALLOWED_SENTINEL");
+
+    fixture
+        .run(
+            &profile,
+            "mkdir -p vault && printf LINKED_SENTINEL > vault/key; \
+             ln vault/key build/laundered.txt 2>/dev/null; \
+             cat build/laundered.txt || echo LINK_REFUSED",
+        )
+        .assert_withheld("LINKED_SENTINEL");
+}
+
+/// Criterion 2, aliases. A symlink is resolved where it points, so pointing one
+/// from a readable directory at a denied path grants nothing.
+#[test]
+fn a_symlink_alias_does_not_launder_a_denied_path() {
+    if unenforceable() {
+        return;
+    }
+    let (fixture, profile) = dynamic_fixture();
+
+    fixture
+        .run(
+            &profile,
+            "mkdir -p vault && printf ALIASED_SENTINEL > vault/key; \
+             ln -s ../vault/key build/alias.txt; \
+             cat build/alias.txt || echo ALIAS_REFUSED",
+        )
+        .assert_withheld("ALIASED_SENTINEL");
+}
+
+/// Criterion 2, descriptors and mappings. Both are acquisitions: once the
+/// child holds one, no later filesystem rule can revoke it. Stating this is
+/// the point — a reader who expects a rename to close an open descriptor would
+/// expect the wrong contract.
+#[test]
+fn an_open_descriptor_and_a_mapping_survive_a_later_rename_to_a_denied_name() {
+    if unenforceable() {
+        return;
+    }
+    let (fixture, profile) = dynamic_fixture();
+
+    fixture
+        .run(
+            &profile,
+            "exec 3< src/main.rs; mv src/main.rs src/secret.key; cat <&3",
+        )
+        .assert_returned("ALLOWED_SENTINEL");
+
+    if !on_path("python3", &fixture.environment) {
+        println!("skipping the mapping half: python3 is not on the child PATH");
+        return;
+    }
+    // The descriptor half already consumed `src/main.rs`, so the mapping half
+    // brings its own file and its own sentinel.
+    fixture.write("src/mapped.rs", "MAPPED_SENTINEL");
+    fixture
+        .run(
+            &profile,
+            "python3 -c \"import mmap,os,sys\n\
+             f=open('src/mapped.rs','rb')\n\
+             m=mmap.mmap(f.fileno(),0,access=mmap.ACCESS_READ)\n\
+             os.rename('src/mapped.rs','src/secret.key')\n\
+             sys.stdout.write(m[:].decode())\"",
+        )
+        .assert_returned("MAPPED_SENTINEL");
+}
+
+/// Criterion 2, paired positive operations. Carving a directory out for a
+/// bounded exclusion must not cost the run the files it already had or the
+/// ones it produces where the rule cannot reach.
+#[test]
+fn the_carve_out_leaves_the_rest_of_the_workspace_usable() {
+    if unenforceable() {
+        return;
+    }
+    let (fixture, profile) = dynamic_fixture();
+    fixture.write("build/nested/input.txt", "NESTED_SENTINEL");
+
+    fixture
+        .run(&profile, "cat src/main.rs")
+        .assert_returned("ALLOWED_SENTINEL");
+    fixture
+        .run(&profile, "cat build/nested/input.txt")
+        .assert_returned("NESTED_SENTINEL");
+    fixture
+        .run(
+            &profile,
+            "mkdir -p build/deep && printf DEEP_SENTINEL > build/deep/out.txt; \
+             sh -c 'cat build/deep/out.txt'",
+        )
+        .assert_returned("DEEP_SENTINEL");
+}
+
+/// Criterion 3. An exclusion whose `**` crosses directories can name a path
+/// beneath every directory in the workspace; enforcing it ahead of time would
+/// leave nothing readable that the run itself produced. The compiler says so
+/// on the boundary rather than letting a caller believe the kernel is holding
+/// the whole profile.
+#[test]
+fn the_boundary_names_the_exclusions_the_kernel_is_not_holding() {
+    let fixture = Fixture::new();
+    fixture.write("src/main.rs", "code");
+
+    let boundary = linux_landlock_read_boundary(
+        &fixture.root(),
+        &profile_denying(&["**"], &["vault/**", "**/*.env"]),
+        &fixture.environment,
+    )
+    .expect("compile boundary");
+
+    assert_eq!(boundary.unenforced_exclusions, vec!["**/*.env".to_string()]);
+}
+
+/// Criterion 3. A profile the backend cannot compile is a capability failure,
+/// not a reason to run the child with no boundary at all.
+#[test]
+fn a_profile_that_cannot_be_compiled_refuses_to_spawn() {
+    if unenforceable() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let missing = fixture.root().join("not-a-workspace");
+
+    let request = ExecRequest {
+        program: "/bin/echo".to_string(),
+        args: vec!["MUST_NOT_RUN".to_string()],
+        current_dir: None,
+        timeout_ms: Some(1_000),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::ClearAndSet(fixture.environment.clone()),
+        debug: false,
+    };
+    let error = spawn_under_linux_landlock(&request, &missing, &profile(&["**"]))
+        .expect_err("a workspace that does not resolve must not spawn");
+
+    assert!(
+        error.to_string().contains("landlock workspace"),
+        "the error must name what it could not compile: {error}"
+    );
 }

@@ -60,7 +60,20 @@ impl CompiledFsRules {
     /// True when an exclusion could carve a denied path out of an allowed
     /// subtree. Without one, an allowed subtree needs no further inspection.
     pub fn has_exclusion(&self) -> bool {
-        self.rules.iter().any(|rule| rule.negated)
+        self.exclusions().next().is_some()
+    }
+
+    /// The exclusion patterns, normalized and in declaration order.
+    ///
+    /// [`Self::allows`] decides a path that exists. A caller compiling these
+    /// rules into a kernel ruleset also has to reason about paths that do not
+    /// exist yet, which needs the patterns themselves — see
+    /// [`GlobReach`](crate::policy::GlobReach).
+    pub fn exclusions(&self) -> impl Iterator<Item = &str> {
+        self.rules
+            .iter()
+            .filter(|rule| rule.negated)
+            .map(|rule| rule.pattern.as_str())
     }
 
     /// Decide `path`, reporting the rule that settled it.

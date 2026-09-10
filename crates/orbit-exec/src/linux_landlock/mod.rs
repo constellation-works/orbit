@@ -25,11 +25,22 @@
 //! move a denied file into a fully readable sibling directory and read it
 //! there. See [`workspace`] for how denied paths are carved out.
 //!
-//! # Limits
-//! Landlock rules bind to the inodes that exist when the ruleset is compiled.
-//! A file that appears *later* under an already-granted directory inherits
-//! that directory's access. See [`workspace::grant_read_tree`] for exactly
-//! what that does and does not expose.
+//! # What the ruleset does not cover
+//! Landlock rules bind to inodes, so the ruleset cannot single out a *name*
+//! that does not exist yet. The compiler answers that by asking what the
+//! profile's exclusions can name rather than what they currently match: a
+//! directory a bounded exclusion reaches into is granted list-only, so a name
+//! created there afterwards has no readable ancestor. An exclusion whose reach
+//! crosses directories (`**/.env`) reaches every directory in the workspace,
+//! and carving that out would leave the run unable to read the files it
+//! produces itself. Those rules are reported on
+//! [`LandlockReadBoundary::unenforced_exclusions`] instead of being enforced
+//! or quietly dropped. [`workspace`] carries the full reasoning.
+//!
+//! The boundary also governs acquisition rather than naming: an inode the
+//! ruleset already grants keeps that grant through a rename or hard link into
+//! a denied name, and bytes already read, mapped, or held on an open
+//! descriptor cannot be withdrawn by any later rule.
 
 mod host;
 mod workspace;
@@ -42,6 +53,7 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 
 use orbit_common::OrbitError;
+use orbit_common::tracing;
 use orbit_types::policy::ResolvedFsProfile;
 
 use crate::runner::{EnvironmentMode, ExecRequest};
@@ -153,17 +165,32 @@ pub fn landlock_unavailable_message(probe: &LandlockProbeOutcome) -> String {
     )
 }
 
+/// The compiled read boundary for one profile: what the child may read, and
+/// which of the profile's exclusions the kernel is not holding for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LandlockReadBoundary {
+    /// Every path grant the ruleset will carry.
+    pub grants: Vec<LandlockPathGrant>,
+    /// Read exclusions this backend cannot enforce for a path that does not
+    /// exist yet, as written in the profile.
+    ///
+    /// Reported rather than dropped so no layer describes the boundary as
+    /// whole-contract enforcement. These rules keep their full effect in the
+    /// request-time policy check, which decides a concrete path.
+    pub unenforced_exclusions: Vec<String>,
+}
+
 /// Compile every path grant a confined child needs: the host paths its own
 /// runtime requires, and the workspace paths the resolved profile allows.
 ///
 /// `environment` is the child's own environment, which is what names the tool
 /// state directories in [`HOST_READ_ENV_VARS`]. Nothing outside those grants
 /// is readable.
-pub fn linux_landlock_grants(
+pub fn linux_landlock_read_boundary(
     workspace_root: &Path,
     profile: &ResolvedFsProfile,
     environment: &[(String, String)],
-) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+) -> Result<LandlockReadBoundary, OrbitError> {
     let workspace_root = workspace_root.canonicalize().map_err(|error| {
         OrbitError::InvalidInput(format!(
             "landlock workspace `{}` must exist and resolve canonically: {error}",
@@ -171,9 +198,14 @@ pub fn linux_landlock_grants(
         ))
     })?;
 
+    let workspace = workspace::workspace_read_grants(&workspace_root, profile)?;
     let mut grants = host::host_read_grants(environment);
-    grants.extend(workspace::workspace_read_grants(&workspace_root, profile)?);
-    Ok(dedupe(grants))
+    grants.extend(workspace.grants);
+
+    Ok(LandlockReadBoundary {
+        grants: dedupe(grants),
+        unenforced_exclusions: workspace.unenforced_exclusions,
+    })
 }
 
 /// Spawn `req` with the child restricted to the compiled ruleset.
@@ -193,9 +225,30 @@ pub fn spawn_under_linux_landlock(
     }
 
     let environment = child_environment(req);
-    let mut grants = linux_landlock_grants(workspace_root, profile, &environment)?;
+    let boundary = linux_landlock_read_boundary(workspace_root, profile, &environment)?;
+    report_unenforced_exclusions(profile, &boundary);
+
+    let mut grants = boundary.grants;
     grants.extend(host::program_grants(&req.program, &environment));
     spawn_restricted(req, &dedupe(grants))
+}
+
+/// Record the part of the profile the kernel is not holding for this child.
+///
+/// A boundary that quietly enforces less than the profile asks for is the
+/// failure this module exists to avoid, so the gap is stated once per spawn
+/// where an operator reading the run can see it.
+fn report_unenforced_exclusions(profile: &ResolvedFsProfile, boundary: &LandlockReadBoundary) {
+    if boundary.unenforced_exclusions.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        target: "orbit.sandbox.landlock",
+        profile = profile.name.as_str(),
+        exclusions = boundary.unenforced_exclusions.join(" ").as_str(),
+        "landlock cannot enforce these read exclusions for paths that do not exist yet; \
+         they remain enforced at request time",
+    );
 }
 
 /// The environment the child will actually run with, which decides the tool

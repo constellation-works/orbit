@@ -3,8 +3,8 @@ summary: "Policy & Sandboxing — Design"
 type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
-last_updated: 2026-09-08
-last_validated: 2026-09-07
+last_updated: 2026-09-10
+last_validated: 2026-09-10
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -138,18 +138,36 @@ The ruleset handles `EXECUTE | READ_FILE | READ_DIR | REFER`. Writes stay with t
 
 Grants come from three places:
 
-- **Workspace.** The resolved `read` rules are compiled once (`CompiledFsRules`, §3) and the tree is walked once. A directory holding a denied path is granted list-only and its allowed children are granted individually, so the denied path keeps no readable ancestor.
+- **Workspace.** The resolved `read` rules are compiled once (`CompiledFsRules`, §3) and the tree is walked once. A directory is granted list-only — with its allowed children granted individually, so the denied path keeps no readable ancestor — when it holds a denied path *or* when an exclusion can still name a new path beneath it. The second condition is what makes the grant independent of timing; see the dynamic-name contract below. [ORB-11978]
 - **Host runtime, resolver, and trust.** A fixed table: system binaries and libraries, the loader and its cache, the character devices a process opens on startup, the world-readable resolver files (`/etc/hosts`, `/etc/nsswitch.conf`, `/etc/resolv.conf`, `/etc/passwd`, …), and the CA stores. `/etc` is never granted as a directory, and neither is `/proc` — a tree-wide `/proc` grant would expose any same-user process's `environ`, including the launching Orbit process's credentials.
 - **Tool state.** The directories on the child's own `PATH`, plus one directory per tool named by an environment variable the operator admitted into the child environment (`CARGO_HOME`, `RUSTUP_HOME`, `GH_CONFIG_DIR`, `TMPDIR`, `ORBIT_ROOT`, …) or by that tool's documented default under `$HOME`. `$HOME` itself is refused, as is any variable naming an ancestor of it, and publish tokens such as `$CARGO_HOME/credentials.toml` are carved back out.
 
 Availability is fail-closed. `REFER` arrived in Landlock ABI 2, so a kernel below that — or any non-Linux host — makes activity-scoped `proc.spawn` return a capability error naming the requirement. There is no unconfined fallback.
 
-**Known limits, all covered by tests.** Landlock rules bind to the inodes that exist when the ruleset is compiled:
+#### Dynamic denied names
 
-- A denied file present at spawn stays unreadable for the child's whole life, including after the child renames it within its directory, and it cannot be moved into a readable directory.
-- A file matching a deny rule that is *created* later under an already-granted directory is readable by that child. That discloses nothing the child could not already obtain — either the child wrote those bytes, or it copied them from somewhere the ruleset already allowed. A concurrent third party writing a new secret into the workspace during the child's lifetime is the residual race; `denyRead` is also enforced at request time for that reason.
-- Bytes already read into the child's memory cannot be withdrawn by any later filesystem rule; the boundary governs acquisition, not recall.
-- SSH-authenticated `git` does not work through a scoped spawn, because `~/.ssh` is not granted (use HTTPS or `gh`). A toolchain whose runtime files live outside the `bin` directory on `PATH` — an `nvm`-style install — needs its tree named by the tool's own environment variable.
+Landlock rules bind to inodes, so a ruleset cannot single out a *name* that does not exist yet. Compiling the carve-out from the denied paths a walk happens to find therefore made the boundary depend on timing: the same profile withheld a secret that already existed and disclosed the identical secret written a moment after the ruleset was compiled, to the child or to any descendant it spawned. F2026-09-054 measured that on Linux 6.8.0-139-generic / Landlock ABI 4, along with the two repairs that do not work — granting files individually blocks a legitimate generated file from being read back, and a post-run scan cannot recall bytes that already left. [ORB-11978]
+
+The compiler asks the exclusion **rules** what they can name instead of asking the tree what it currently holds. `GlobReach` (`crates/orbit-types/src/policy/glob.rs`) answers, per directory, whether a rule can name a path strictly beneath it, and every such directory is granted list-only. A name created there afterwards then has no readable ancestor, exactly as if it had been present all along, and the ruleset's shape no longer depends on when the write happened.
+
+That question has an answer only when the rule's own segments bound it:
+
+- **Bounded** — `secrets/**`, `.env`, `config/*.key`. The rule names the directories it can reach (`*` and `?` cannot cross a separator), so the carve-out costs exactly those directories and every other directory keeps its whole-tree grant. This is enforced.
+- **Unbounded** — `**/.env`, `**/*.env`, `a/**/b.key`. A `**` that crosses directories can name a path beneath *every* directory in the workspace, including directories that do not exist yet. Carving that out means granting no directory as a tree at all, which withdraws read access from every file the run produces itself: a compiler cannot read back the object it just wrote. Such a rule is **not enforced at the process boundary and not silently dropped**. It is returned on `LandlockReadBoundary::unenforced_exclusions`, logged once per spawn under `orbit.sandbox.landlock`, and keeps its full effect in the request-time policy check, which decides a concrete path and needs no ruleset.
+
+The shipped default policy's `denyRead` (`**/.env`, `**/.env.*`, `**/*.env`, `**/*.env.*`) is entirely in the unbounded class, so a profile resolved from it reports all four rules as unenforced at the process boundary and keeps its previous grant shape. An operator who needs a `denyRead` rule held by the kernel against names that do not exist yet must write it in a bounded form — `secrets/**` rather than `**/secrets/**`. Closing the unbounded case needs a name-enforcing backend, which Landlock is not; no snapshot, inode census, or post-run guard substitutes for one, and none is reported as if it did.
+
+**Acquisition, not naming.** The boundary decides which inodes a child may take bytes from, at the moment it takes them. Everything downstream of that follows and is covered by tests:
+
+- A denied path stays unreadable for the child's whole life whether it existed at spawn or appeared afterwards, including after a rename within its directory, and it cannot be moved or hard-linked into a readable directory — `REFER` refuses a relocation that would gain access.
+- An inode the ruleset already granted keeps that grant through a rename or hard link into a denied name. The child could read those bytes before it renamed anything, so the name change withdraws nothing. What stays closed is the direction that matters: a *new* inode arriving at a denied name gets no readable ancestor.
+- A symlink is resolved where it points, so aliasing a denied path from a readable directory grants nothing.
+- An open descriptor, an active mapping, and bytes already in the child's memory are beyond recall; no later filesystem rule revokes them.
+- Creating and removing a denied name still work. This ruleset governs reads; writes stay with the mount namespace in §7.1.
+
+**Other known limits.** SSH-authenticated `git` does not work through a scoped spawn, because `~/.ssh` is not granted (use HTTPS or `gh`). A toolchain whose runtime files live outside the `bin` directory on `PATH` — an `nvm`-style install — needs its tree named by the tool's own environment variable.
+
+**Evidence.** `crates/orbit-exec/tests/linux_landlock.rs` exercises the real kernel: a concurrent writer creates a secret in a directory that did not exist at spawn and an indirect descendant cannot return it, while a file the run generates stays readable. It runs only where the host offers Landlock ABI 2 or later and reports a skip otherwise; `crates/orbit-exec/src/linux_landlock/tests/` covers grant compilation deterministically on any platform.
 
 `ExecutionResult { success, stdout, stderr, exit_code, duration_ms, output }` is defined in `orbit-common`. Captured bytes use `String::from_utf8_lossy`, so non-UTF-8 output becomes replacement characters instead of failing the call.
 
