@@ -429,7 +429,11 @@ pub fn explain_workspace_auto_readiness(
     // [ORB-11973] Use the classifier's identical ordered prefix and admission
     // routine, so readiness explains the wave the drain would actually admit
     // rather than a second guess at it.
-    let candidate_pool_size = usize::try_from(DEFAULT_CANDIDATE_POOL).unwrap_or(usize::MAX);
+    let candidate_pool_size = match active_drain.as_ref() {
+        Some(drain) => candidate_pool_limit("explain_workspace_auto_readiness", &drain.input)
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?,
+        None => usize::try_from(DEFAULT_CANDIDATE_POOL).unwrap_or(usize::MAX),
+    };
     let examined = &pending[..pending.len().min(candidate_pool_size)];
     let workspace_root = runtime.paths().repo_root.as_path();
     let claimed = claimed_by_task.keys().cloned().collect::<BTreeSet<_>>();
@@ -716,6 +720,7 @@ fn live_admissions_stop(runtime: &OrbitRuntime, input: &Value) -> Option<DrainAd
 /// an operator has since set.
 struct ActiveDrain {
     run_id: String,
+    input: Value,
     submitted: u32,
     limit: Option<DrainWorkerLimit>,
     stop: Option<DrainAdmissionsStop>,
@@ -747,10 +752,9 @@ fn active_drain(runtime: &OrbitRuntime) -> Result<Option<ActiveDrain>, OrbitErro
     else {
         return Ok(None);
     };
-    let submitted = run
-        .input
-        .as_ref()
-        .and_then(|input| input.get("max_active_leaf_runs"))
+    let input = run.input.unwrap_or_else(|| json!({}));
+    let submitted = input
+        .get("max_active_leaf_runs")
         .and_then(json_u32)
         .unwrap_or(DEFAULT_MAX_ACTIVE_LEAF_RUNS as u32);
     let state = runtime
@@ -763,15 +767,10 @@ fn active_drain(runtime: &OrbitRuntime) -> Result<Option<ActiveDrain>, OrbitErro
         .as_ref()
         .and_then(|state| state.drain_worker_limit.clone());
     let stop = state.and_then(|state| state.drain_admissions_stop);
-    let operation = run
-        .input
-        .as_ref()
-        .map(OperationAdmission::from_run_input)
-        .transpose()
-        .map_err(OrbitError::InvalidInput)?
-        .flatten();
+    let operation = OperationAdmission::from_run_input(&input).map_err(OrbitError::InvalidInput)?;
     Ok(Some(ActiveDrain {
         run_id: run.run_id,
+        input,
         submitted,
         limit,
         stop,
