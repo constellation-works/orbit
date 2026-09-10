@@ -161,32 +161,114 @@ pub(crate) fn acquire_shared_file_lock(
 /// Read advisory holder metadata. Missing, empty, torn, and legacy files are
 /// intentionally reported as no metadata because the OS lock is authoritative.
 pub fn read_file_lock_holder(lock_path: &Path) -> Option<FileLockHolderInfo> {
-    let validated = validated_lock_holder_path(lock_path)?;
+    read_file_lock_holder_with_hook(lock_path, |_| {})
+}
+
+/// Test-only seam that runs `before_open` between path resolution and the
+/// no-follow open, so a test can deterministically swap the resolved final
+/// component for a symlink and prove the open still rejects it [ORB-12029].
+#[cfg(test)]
+pub(crate) fn read_file_lock_holder_after_resolve<F>(
+    lock_path: &Path,
+    before_open: F,
+) -> Option<FileLockHolderInfo>
+where
+    F: FnOnce(&Path),
+{
+    read_file_lock_holder_with_hook(lock_path, before_open)
+}
+
+fn read_file_lock_holder_with_hook(
+    lock_path: &Path,
+    before_open: impl FnOnce(&Path),
+) -> Option<FileLockHolderInfo> {
+    let mut file = open_lock_holder_file(lock_path, before_open)?;
     let mut raw = String::new();
-    File::open(validated).ok()?.read_to_string(&mut raw).ok()?;
+    file.read_to_string(&mut raw).ok()?;
     serde_json::from_str(&raw).ok()
 }
 
-/// Resolve `lock_path` through its canonical parent directory and require the
-/// final component to already exist as a regular, non-symlinked file.
+/// Resolve `lock_path`'s parent directory to its canonical form.
 ///
-/// `lock_path` reaches this function as a caller-selected value (a task lock,
-/// a store lock) with no upstream containment check, so canonicalizing the
-/// parent and rejecting a symlinked or non-regular final component keeps the
-/// read confined to the resolved parent directory instead of a planted
-/// symlink's target [ORB-11953]. `None` covers "nothing to read", matching
-/// this function's existing no-metadata-on-missing-file semantics.
-fn validated_lock_holder_path(lock_path: &Path) -> Option<PathBuf> {
+/// `lock_path` reaches this crate as a caller-selected value (a task lock, a
+/// store lock) with no upstream containment check. Canonicalizing only the
+/// parent — not the final component — keeps the read confined to the
+/// resolved parent directory while still accepting a trusted parent alias
+/// (for example a checkout projection symlink) [ORB-11953]. Deciding whether
+/// the final component itself is safe to read is [`open_lock_holder_file`]'s
+/// job, not this function's: resolving that here and handing back a path
+/// left a window between this check and the caller's open where the final
+/// component could be swapped for a symlink [ORB-12029].
+fn validated_lock_holder_parent(lock_path: &Path) -> Option<PathBuf> {
+    lock_path.parent()?.canonicalize().ok()
+}
+
+/// Open `lock_path`'s final component for a read-only diagnostic read
+/// without following a symlink planted there.
+///
+/// The pathname `symlink_metadata` check below is a fast rejection for the
+/// common case (missing file, directory, or already-a-symlink) so this
+/// avoids blocking on an exotic node such as a FIFO; it is *not* the security
+/// boundary. That boundary is the open immediately after: on Unix,
+/// `O_NOFOLLOW` makes the open itself fail if the final component is a
+/// symlink, and the follow-up `metadata()` call is an `fstat` on the
+/// already-open descriptor, re-checking the file that was actually opened
+/// rather than a path that could have changed again. Folding the check and
+/// the open into one function, with the open re-validating its own
+/// descriptor, closes the window a caller-visible "validated path" handed to
+/// a separate `File::open` left open [ORB-12029]. `None` covers "nothing to
+/// read", matching this function's existing no-metadata-on-missing/malformed
+/// -target semantics.
+///
+/// This secures only the final path component. [`validated_lock_holder_parent`]
+/// resolving the parent supports a trusted parent alias; it does not claim to
+/// stop a party who can write to that parent from renaming or replacing the
+/// lock file's directory entry through some other, ancestor-level race —
+/// only the leaf-symlink swap this closes.
+///
+/// The no-follow open is atomic against the leaf swap on Unix (`O_NOFOLLOW`)
+/// and on Windows (`FILE_FLAG_OPEN_REPARSE_POINT`, which opens a reparse
+/// point itself instead of its target). On any other platform the open
+/// follows a symlink normally, so the pathname pre-check above is the only
+/// protection and a swap landing between that check and the open is not
+/// covered there.
+fn open_lock_holder_file(lock_path: &Path, before_open: impl FnOnce(&Path)) -> Option<File> {
     let file_name = lock_path.file_name()?;
-    let parent = lock_path.parent()?;
-    let canonical_parent = parent.canonicalize().ok()?;
+    let canonical_parent = validated_lock_holder_parent(lock_path)?;
     let candidate = canonical_parent.join(file_name);
 
     match std::fs::symlink_metadata(&candidate) {
-        Ok(metadata) if metadata.is_file() => Some(candidate),
-        _ => None,
+        Ok(metadata) if metadata.is_file() => {}
+        _ => return None,
     }
+
+    before_open(&candidate);
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    apply_read_only_no_follow(&mut options);
+    let file = options.open(&candidate).ok()?;
+    let metadata = file.metadata().ok()?;
+    metadata.is_file().then_some(file)
 }
+
+#[cfg(unix)]
+fn apply_read_only_no_follow(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.custom_flags(libc::O_NOFOLLOW);
+}
+
+#[cfg(windows)]
+fn apply_read_only_no_follow(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn apply_read_only_no_follow(_options: &mut OpenOptions) {}
 
 fn open_lock_file(lock_path: &Path, label: &str) -> io::Result<File> {
     let mut options = OpenOptions::new();

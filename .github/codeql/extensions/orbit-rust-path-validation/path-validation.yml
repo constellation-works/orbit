@@ -160,7 +160,7 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_common::fs::file_lock::validated_lock_holder_path",
+          "orbit_common::fs::file_lock::validated_lock_holder_parent",
           "ReturnValue.Field[core::option::Option::Some(0)]",
           "path-injection",
           "manual",
