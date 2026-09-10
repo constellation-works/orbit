@@ -21,7 +21,9 @@ use orbit_common::OrbitError;
 use rusqlite::{Connection, TransactionBehavior};
 
 use crate::Store;
-use crate::driver::file::friction_store::{friction_record_paths, read_record_at, write_record_at};
+use crate::driver::file::friction_store::{
+    friction_record_paths, read_record_at, validated_friction_root, write_record_at,
+};
 
 use crate::contracts::{FrictionListFilter, StoredFrictionRecord};
 use crate::repository::friction::queries::upsert_record;
@@ -126,10 +128,15 @@ fn run_import(
     source_root: &Path,
     source_key: &str,
 ) -> Result<FrictionImportReport, OrbitError> {
-    let paths = if source_root.is_dir() {
-        friction_record_paths(source_root)?
-    } else {
-        Vec::new()
+    // `validated_friction_root` follows symlinks the same way `Path::is_dir`
+    // does, so a missing or non-directory source is "nothing to import" here
+    // exactly as it is for the caller that reports `report.discovered == 0`
+    // — not a hard error. A resolved root is kept so every record location
+    // below is checked against the same canonical path the walk used.
+    let canonical_root = validated_friction_root(source_root).ok();
+    let paths = match &canonical_root {
+        Some(root) => friction_record_paths(root)?,
+        None => Vec::new(),
     };
 
     let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -137,39 +144,43 @@ fn run_import(
     let mut skipped_existing = 0u64;
 
     // Streamed one record at a time: the whole corpus is never resident, only
-    // the ID set used to detect a collision inside this source tree.
-    for path in &paths {
-        let stored = read_record_at(path)?;
-        let record = stored.record;
-        let (month, seq) = split_friction_id(&record.id).ok_or_else(|| {
-            OrbitError::Store(format!(
-                "friction record '{}' declares malformed id '{}'",
-                path.display(),
-                record.id
-            ))
-        })?;
-        verify_record_location(path, source_root, &month, seq, &record.id)?;
-        if !seen.insert(record.id.clone()) {
-            return Err(OrbitError::Store(format!(
-                "friction id '{}' is claimed twice in source tree '{}' (at '{}')",
-                record.id,
-                source_root.display(),
-                path.display()
-            )));
+    // the ID set used to detect a collision inside this source tree. `paths`
+    // is only non-empty when `canonical_root` resolved, so the two stay in
+    // lockstep without an unreachable-error branch.
+    if let Some(corpus_root) = canonical_root.as_deref() {
+        for path in &paths {
+            let stored = read_record_at(path)?;
+            let record = stored.record;
+            let (month, seq) = split_friction_id(&record.id).ok_or_else(|| {
+                OrbitError::Store(format!(
+                    "friction record '{}' declares malformed id '{}'",
+                    path.display(),
+                    record.id
+                ))
+            })?;
+            verify_record_location(path, corpus_root, &month, seq, &record.id)?;
+            if !seen.insert(record.id.clone()) {
+                return Err(OrbitError::Store(format!(
+                    "friction id '{}' is claimed twice in source tree '{}' (at '{}')",
+                    record.id,
+                    source_root.display(),
+                    path.display()
+                )));
+            }
+            if record_exists(conn, workspace_id, &record.id)? {
+                skipped_existing += 1;
+                continue;
+            }
+            upsert_record(
+                conn,
+                workspace_id,
+                &record,
+                &month,
+                seq,
+                Some(&path.to_string_lossy()),
+            )?;
+            imported += 1;
         }
-        if record_exists(conn, workspace_id, &record.id)? {
-            skipped_existing += 1;
-            continue;
-        }
-        upsert_record(
-            conn,
-            workspace_id,
-            &record,
-            &month,
-            seq,
-            Some(&path.to_string_lossy()),
-        )?;
-        imported += 1;
     }
 
     let discovered = paths.len() as u64;
@@ -235,14 +246,18 @@ fn record_exists(
 /// The legacy layout addressed a record by its ID, so a record filed under a
 /// path its ID does not resolve to was unreachable through `friction show`.
 /// Importing it silently would change which record an ID refers to.
+///
+/// `corpus_root` must be the same canonical root `friction_record_paths`
+/// walked to produce `path`; comparing against the caller's raw, possibly
+/// symlinked `source_root` would report every record as misfiled.
 fn verify_record_location(
     path: &Path,
-    source_root: &Path,
+    corpus_root: &Path,
     month: &str,
     seq: u32,
     id: &str,
 ) -> Result<(), OrbitError> {
-    let expected = source_root.join(month).join(format!("F{seq:03}.md"));
+    let expected = corpus_root.join(month).join(format!("F{seq:03}.md"));
     if path != expected {
         return Err(OrbitError::Store(format!(
             "friction record '{}' declares id '{id}', which addresses '{}'",

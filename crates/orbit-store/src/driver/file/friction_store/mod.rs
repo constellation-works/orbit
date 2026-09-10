@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -359,10 +359,16 @@ fn split_frontmatter(raw: &str) -> Option<(&str, &str)> {
 
 /// Resolve the legacy corpus root before enumerating records.
 ///
-/// The root is selected by the workspace configuration, but it is still a
-/// path boundary for the importer. Rejecting a symlinked root and returning
-/// its canonical directory prevents a configured path from redirecting the
-/// import outside the selected legacy tree.
+/// A workspace-local legacy tree is Orbit's own configuration, not
+/// attacker-controlled input, and an ordinary layout may reach it through a
+/// symlinked ancestor (a symlinked `$HOME`, a relocated data dir, macOS's
+/// `/var` -> `/private/var`) or a symlinked root itself. Canonicalizing and
+/// accepting any directory the root resolves to — rather than rejecting a
+/// path that resolves through a symlink — matches the policy already applied
+/// to `canonical_pipeline_worker_log_parent` and
+/// `validated_linux_provider_state_root`. Containment against a corpus entry
+/// that escapes this root is enforced separately, by `friction_record_paths`
+/// refusing to follow any symlinked month or record entry during the walk.
 pub(crate) fn validated_friction_root(frictions_root: &Path) -> Result<PathBuf, OrbitError> {
     let canonical_root = fs::canonicalize(frictions_root).map_err(|error| {
         OrbitError::Io(format!(
@@ -371,52 +377,14 @@ pub(crate) fn validated_friction_root(frictions_root: &Path) -> Result<PathBuf, 
         ))
     })?;
 
-    // Compare the resolved path with a purely lexical absolute path. This
-    // rejects symlinked roots without sending the unvalidated path through a
-    // second filesystem operation.
-    let absolute_root = if frictions_root.is_absolute() {
-        frictions_root.to_path_buf()
-    } else {
-        let current_dir = std::env::current_dir()
-            .map_err(|error| OrbitError::Io(format!("resolve current directory: {error}")))?;
-        let canonical_current_dir = fs::canonicalize(&current_dir).map_err(|error| {
-            OrbitError::Io(format!(
-                "canonicalize current directory {}: {error}",
-                current_dir.display()
-            ))
-        })?;
-        canonical_current_dir.join(frictions_root)
-    };
-    let normalized_root = normalize_path_components(&absolute_root);
-    if canonical_root != normalized_root {
-        return Err(OrbitError::InvalidInput(format!(
-            "friction corpus root must be a regular directory and must not resolve through a symlink: {}",
-            frictions_root.display()
-        )));
-    }
-
     if !canonical_root.is_dir() {
         return Err(OrbitError::InvalidInput(format!(
-            "canonical friction corpus root must be a directory: {}",
+            "friction corpus root must be a directory: {}",
             canonical_root.display()
         )));
     }
 
     Ok(canonical_root)
-}
-
-fn normalize_path_components(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
 }
 
 pub(crate) fn friction_record_paths(frictions_root: &Path) -> Result<Vec<PathBuf>, OrbitError> {
@@ -426,6 +394,10 @@ pub(crate) fn friction_record_paths(frictions_root: &Path) -> Result<Vec<PathBuf
         .map_err(|error| OrbitError::Io(format!("read {}: {error}", frictions_root.display())))?
     {
         let month_entry = month_entry.map_err(|error| OrbitError::Io(error.to_string()))?;
+        // `DirEntry::file_type` reports the entry itself (it does not follow a
+        // symlink), so a month or record entry that is a symlink is neither
+        // `is_dir()` nor `is_file()` here and is skipped below — including one
+        // that resolves outside `frictions_root`.
         let month_type = month_entry
             .file_type()
             .map_err(|error| OrbitError::Io(error.to_string()))?;
