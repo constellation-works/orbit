@@ -236,6 +236,205 @@ fn pre_existing_rebase_without_conflicts_is_refused_and_left_intact() {
     );
 }
 
+/// Build the run-store checkpoint shape a `sync_base` rebase recovery writes,
+/// matching `prepared` and the worktree's actual `rewritten_head`. The
+/// `workspace_path` must be canonicalized the same way
+/// `load_handoff_context` canonicalizes it, or the checkpoint will never be
+/// treated as a candidate at all.
+fn uncertified_recovery_checkpoint(
+    task_id: &str,
+    repo: &std::path::Path,
+    prepared: &serde_json::Value,
+    rewritten_head: &str,
+) -> serde_json::Value {
+    json!({
+        "run_id": "batch-1",
+        "step_id": "sync_base",
+        "task_ids": [task_id],
+        "workspace_path": repo.canonicalize().expect("canonicalize workspace"),
+        "head": prepared["head"],
+        "head_sha_before": prepared["head_sha"],
+        "original_base_sha": prepared["base_sha"],
+        "base_ref": prepared["base_ref"],
+        "base_sha": prepared["base_sha"],
+        "remote_sha_before": prepared["remote_sha"],
+        "head_sha": rewritten_head,
+        "rewritten": true,
+    })
+}
+
+fn write_sync_base_checkpoint(host: &PrOpenTestHost, checkpoint: serde_json::Value) {
+    let mut state = orbit_types::workflow::PipelineState::new(
+        "batch-1".to_string(),
+        "task_pr_pipeline".to_string(),
+        json!({}),
+    );
+    state
+        .rebase_recovery_checkpoints
+        .insert("sync_base".to_string(), checkpoint);
+    host.write_run_state(state);
+}
+
+// ORB-12015: a `sync_base` rebase recovery checkpoint written before the
+// authority boundary (ORB-11977) existed carries no host certificate.
+// `verify_rebase_recovery` returns `false` for it exactly as it would for a
+// forged one, so it must never be inherited as a trusted HEAD — but the run
+// must still be able to make forward progress instead of hard-failing every
+// resume forever, per the doc comment on `recovered_head_checkpoint`.
+#[test]
+fn uncertified_pre_boundary_checkpoint_redoes_the_rebase_instead_of_failing_resume() {
+    let workspace = pr_workspace();
+    advance_base(&workspace.repo);
+    let task_id = "ORB-12015-UNCERTIFIED-REDO";
+    let host = PrOpenTestHost::new(
+        vec![batch_task(
+            task_id,
+            "Uncertified redo",
+            "Outcome: success\nChanges:\n- Candidate remains mergeable.",
+        )],
+        workspace.repo.clone(),
+    );
+    let common = json!({
+        "workspace_path": workspace.repo,
+        "job_run_id": "batch-1",
+        "completed_task_ids": [task_id],
+        "base": "agent-main",
+        "base_sync": "local",
+    });
+    let prepared = prepare_pr_handoff(&host, &common).expect("prepare");
+    assert_eq!(prepared["sync_required"], json!(true));
+
+    // Simulate a rebase that already completed (e.g. by an older binary,
+    // before the authority boundary existed): the branch already sits
+    // cleanly on top of the base, but its HEAD no longer matches the
+    // prepared pre-rewrite checkpoint.
+    git(&workspace.repo, &["rebase", "agent-main"]);
+    let rewritten_head = git(&workspace.repo, &["rev-parse", "HEAD"]);
+    assert_ne!(rewritten_head, prepared["head_sha"].as_str().unwrap());
+
+    // The row exists in the run store a leaf can write, but nothing ever
+    // certified it. That is the pre-boundary shape this task fixes; no
+    // manual runtime-store edit is used to unstick it.
+    write_sync_base_checkpoint(
+        &host,
+        uncertified_recovery_checkpoint(task_id, &workspace.repo, &prepared, &rewritten_head),
+    );
+
+    let result = rebase_pr_branch(&host, &rebase_input(&common, &prepared))
+        .expect("resume must make forward progress through a supported path");
+    assert_eq!(result["decision"], json!("performed"));
+    assert_eq!(result["rewritten"], json!(true));
+    assert!(workspace.repo.join("BASE_ADVANCE.md").exists());
+
+    // Repeating the resume must not loop on the same stale, uncertified
+    // entry: the branch is now genuinely fresh, so the next attempt takes
+    // the ordinary already-fresh path rather than revisiting recovery.
+    let reprepared = prepare_pr_handoff(&host, &common).expect("re-prepare after redo");
+    assert_eq!(reprepared["decision"], json!("already_fresh"));
+    let retried =
+        rebase_pr_branch(&host, &rebase_input(&common, &reprepared)).expect("retry after redo");
+    assert_eq!(retried["decision"], json!("skipped_current"));
+}
+
+// The redo is only automatic when it is safe: when the discarded rewrite
+// actually required conflict resolution, the redo hits the same conflicts
+// and falls into the existing supported conflict-recovery path (the same
+// typed error a first-time conflicted rebase produces) rather than silently
+// dropping work or hard-failing with no path forward.
+#[test]
+fn uncertified_recovery_redo_that_conflicts_uses_the_existing_conflict_recovery_path() {
+    let workspace = rebase_conflict_pr_workspace();
+    let task_id = "ORB-12015-UNCERTIFIED-CONFLICT";
+    let host = PrOpenTestHost::new(
+        vec![batch_task(
+            task_id,
+            "Uncertified redo with conflict",
+            "Outcome: success\nChanges:\n- Candidate is complete.",
+        )],
+        workspace.repo.clone(),
+    );
+    let common = json!({
+        "workspace_path": workspace.repo,
+        "job_run_id": "batch-1",
+        "completed_task_ids": [task_id],
+        "base": "agent-main",
+        "base_sync": "local",
+    });
+    let prepared = prepare_pr_handoff(&host, &common).expect("prepare");
+    assert_eq!(prepared["sync_required"], json!(true));
+
+    // Force the "already rewritten, but uncertified" shape onto a branch
+    // whose real rebase conflicts, without actually running the conflicting
+    // rebase: fast-forward-merge base into the branch so it looks fresh,
+    // then record an (uncertified) recovery checkpoint for that HEAD.
+    git(&workspace.repo, &["merge", "-X", "ours", "agent-main"]);
+    let rewritten_head = git(&workspace.repo, &["rev-parse", "HEAD"]);
+    assert_ne!(rewritten_head, prepared["head_sha"].as_str().unwrap());
+    write_sync_base_checkpoint(
+        &host,
+        uncertified_recovery_checkpoint(task_id, &workspace.repo, &prepared, &rewritten_head),
+    );
+
+    let error = rebase_pr_branch(&host, &rebase_input(&common, &prepared))
+        .expect_err("redo of a conflicting rebase must not silently succeed or hard-fail");
+    assert!(
+        matches!(error, OrbitError::RecoverableVcsConflict(_)),
+        "unsafe automatic redo must route to the supported conflict-recovery path, got {error}"
+    );
+    assert!(
+        rebase_in_progress(&workspace.repo),
+        "conflicted redo must not be aborted; conflict recovery remains retryable"
+    );
+}
+
+// A checkpoint that *is* certified but whose recorded provenance does not
+// match this attempt (a different base, task set, or pre-rewrite HEAD) stays
+// a hard refusal: the redo path only ever engages when there is no usable
+// certified evidence at all, never to paper over a genuine mismatch.
+#[test]
+fn certified_but_mismatched_recovery_checkpoint_remains_refused() {
+    let workspace = pr_workspace();
+    advance_base(&workspace.repo);
+    let task_id = "ORB-12015-MISMATCHED-CERT";
+    let host = PrOpenTestHost::new(
+        vec![batch_task(
+            task_id,
+            "Mismatched certificate",
+            "Outcome: success\nChanges:\n- Candidate remains mergeable.",
+        )],
+        workspace.repo.clone(),
+    );
+    let common = json!({
+        "workspace_path": workspace.repo,
+        "job_run_id": "batch-1",
+        "completed_task_ids": [task_id],
+        "base": "agent-main",
+        "base_sync": "local",
+    });
+    let prepared = prepare_pr_handoff(&host, &common).expect("prepare");
+    git(&workspace.repo, &["rebase", "agent-main"]);
+    let rewritten_head = git(&workspace.repo, &["rev-parse", "HEAD"]);
+
+    let mut checkpoint =
+        uncertified_recovery_checkpoint(task_id, &workspace.repo, &prepared, &rewritten_head);
+    checkpoint["task_ids"] = json!(["ORB-SOME-OTHER-TASK"]);
+    write_sync_base_checkpoint(&host, checkpoint.clone());
+    host.certify_recovery("batch-1", "sync_base", &checkpoint);
+
+    let error = rebase_pr_branch(&host, &rebase_input(&common, &prepared))
+        .expect_err("a certified but mismatched checkpoint must stay refused");
+    assert!(
+        !matches!(error, OrbitError::RecoverableVcsConflict(_)),
+        "a provenance mismatch is not a merge conflict: {error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("does not match the prepared rewrite checkpoint"),
+        "{error}"
+    );
+}
+
 #[test]
 fn conflicting_rebase_still_uses_conflict_recovery_not_timeout_abort() {
     let workspace = rebase_conflict_pr_workspace();
