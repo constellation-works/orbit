@@ -58,6 +58,12 @@ extensions:
           "manual",
         ]
       - [
+          "orbit_automation::auto_tasks::loader::validated_auto_tasks_dir",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
+      - [
           "orbit_common::fs::io::validated_atomic_target",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",
