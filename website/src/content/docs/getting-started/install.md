@@ -39,9 +39,12 @@ make install
 ### Pinned versions and custom install directory
 
 ```bash
-ORBIT_VERSION=v0.18.0 ./install.sh
+ORBIT_VERSION=vX.Y.Z ./install.sh
 ORBIT_INSTALL_DIR="$HOME/.local/bin" ./install.sh
 ```
+
+Replace `vX.Y.Z` with the release you intend to pin. Use the unpinned install
+command above when you want the latest published release.
 
 `ORBIT_VERSION`, `ORBIT_INSTALL_REPO`, and `ORBIT_INSTALL_BASE_URL` change the
 release source the installer trusts, so use them only for pinned releases,
