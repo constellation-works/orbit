@@ -63,7 +63,7 @@ impl WorkspacePublicationBindArgs {
         let registry_path = workspace_registry::registry_path_for(&global_root);
         let mut registry = workspace_registry::load_registry_from(&registry_path)?;
         let binding = if rebind {
-            workspace_registry::rebind_publication(
+            workspace_registry::rebind_publication_by_id(
                 &mut registry,
                 &workspace_id,
                 &self.remote,
@@ -72,7 +72,7 @@ impl WorkspacePublicationBindArgs {
                 Some(&machine_id),
             )?
         } else {
-            workspace_registry::bind_publication(
+            workspace_registry::bind_publication_by_id(
                 &mut registry,
                 &workspace_id,
                 &self.remote,
@@ -115,7 +115,7 @@ impl Execute for WorkspacePublicationShowArgs {
         let registry = workspace_registry::load_registry_from(
             &workspace_registry::registry_path_for(&runtime.global_root()),
         )?;
-        match workspace_registry::find_publication_binding(&registry, &workspace_id)? {
+        match workspace_registry::find_publication_binding_by_id(&registry, &workspace_id) {
             Some(binding) => {
                 Ok(Payload::detail(binding_json(binding, "shown"), format_binding(binding)).into())
             }
@@ -153,7 +153,7 @@ impl Execute for WorkspacePublicationRemoveArgs {
         let machine_id = load_host_identity(&global_root)?.machine_id;
         let registry_path = workspace_registry::registry_path_for(&global_root);
         let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-        let removed = workspace_registry::unbind_publication(
+        let removed = workspace_registry::unbind_publication_by_id(
             &mut registry,
             &workspace_id,
             Some(&machine_id),

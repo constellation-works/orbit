@@ -429,10 +429,23 @@ pub fn find_checkout<'a>(
     let Some(workspace) = find_workspace(registry, id_or_name)? else {
         return Ok(None);
     };
-    Ok(registry
+    Ok(find_checkout_by_id(registry, &workspace.id))
+}
+
+/// Finds the local checkout for an exact workspace ID.
+///
+/// Persisted relations and resolved bindings already store `workspace_id`.
+/// Those lookups must not reuse [`find_checkout`], which treats the argument
+/// as an id-or-name selector and fails closed when one workspace's ID equals
+/// another's name.
+pub fn find_checkout_by_id<'a>(
+    registry: &'a WorkspaceRegistry,
+    workspace_id: &str,
+) -> Option<&'a WorkspaceCheckout> {
+    registry
         .checkouts
         .iter()
-        .find(|checkout| checkout.workspace_id == workspace.id))
+        .find(|checkout| checkout.workspace_id == workspace_id)
 }
 
 /// Iterates logical workspaces that have a machine-local checkout binding.

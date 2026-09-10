@@ -342,6 +342,175 @@ fn checkout_path_and_cwd_resolve_an_id_that_collides_with_another_workspace_name
     }
 }
 
+/// A workspace whose ID equals another workspace's name must still allow publication
+/// binding, rebinding, showing, and removing when selected from its own checkout or
+/// by its unambiguous name [ORB-11879].
+#[test]
+fn publication_lifecycle_survives_id_collision_when_selected_by_checkout_or_name() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let alpha_repo = temp.path().join("alpha");
+    let shadow_repo = temp.path().join("ws-alpha");
+    let elsewhere = temp.path().join("elsewhere");
+    fs::create_dir_all(&home).expect("home");
+    fs::create_dir_all(&elsewhere).expect("elsewhere");
+
+    init_git_repo(&alpha_repo);
+    run_git(
+        &alpha_repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:example/alpha.git",
+        ],
+    );
+    init_git_repo(&shadow_repo);
+    run_git(
+        &shadow_repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:example/shadow.git",
+        ],
+    );
+
+    run_orbit(
+        &alpha_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--host-name",
+            "selector-host",
+            "--task-prefix",
+            "SEL",
+        ],
+    )
+    .success();
+    run_orbit(
+        &alpha_repo,
+        &home,
+        &["workspace", "init", "--name", "alpha"],
+    )
+    .success();
+    run_orbit(
+        &shadow_repo,
+        &home,
+        &["workspace", "init", "--name", "ws_alpha"],
+    )
+    .success();
+
+    // 1. From alpha's checkout (selected by checkout), binding succeeds.
+    let bound = run_orbit_json(
+        &alpha_repo,
+        &home,
+        &[
+            "workspace",
+            "publication",
+            "bind",
+            "--remote",
+            "git@github.com:example/pub.git",
+            "--publication-id",
+            "pub_alpha",
+            "--json",
+        ],
+    );
+    assert_eq!(bound["workspace_id"], "ws_alpha");
+    assert_eq!(bound["publication_id"], "pub_alpha");
+
+    // 2. From alpha's checkout, show succeeds.
+    let shown = run_orbit_json(
+        &alpha_repo,
+        &home,
+        &["workspace", "publication", "show", "--json"],
+    );
+    assert_eq!(shown["workspace_id"], "ws_alpha");
+    assert_eq!(shown["bound"], true);
+
+    // 3. From alpha's checkout, rebind succeeds.
+    let rebound = run_orbit_json(
+        &alpha_repo,
+        &home,
+        &[
+            "workspace",
+            "publication",
+            "rebind",
+            "--remote",
+            "git@github.com:example/pub2.git",
+            "--publication-id",
+            "pub_alpha_v2",
+            "--json",
+        ],
+    );
+    assert_eq!(rebound["workspace_id"], "ws_alpha");
+    assert_eq!(rebound["publication_id"], "pub_alpha_v2");
+
+    // 4. From alpha's checkout, remove succeeds.
+    let removed = run_orbit_json(
+        &alpha_repo,
+        &home,
+        &["workspace", "publication", "remove", "--confirm", "--json"],
+    );
+    assert_eq!(removed["workspace_id"], "ws_alpha");
+    assert_eq!(removed["removed"], true);
+
+    // 5. From elsewhere, selected unambiguously by name (--workspace alpha), bind and remove succeed.
+    let bound_by_name = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "--workspace",
+            "alpha",
+            "workspace",
+            "publication",
+            "bind",
+            "--remote",
+            "git@github.com:example/pub.git",
+            "--publication-id",
+            "pub_alpha",
+            "--json",
+        ],
+    );
+    assert_eq!(bound_by_name["workspace_id"], "ws_alpha");
+
+    let removed_by_name = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "--workspace",
+            "alpha",
+            "workspace",
+            "publication",
+            "remove",
+            "--confirm",
+            "--json",
+        ],
+    );
+    assert_eq!(removed_by_name["workspace_id"], "ws_alpha");
+    assert_eq!(removed_by_name["removed"], true);
+
+    // 6. Typing the ambiguous selector ws_alpha genuinely matches two workspaces and fails closed.
+    let assert = run_orbit(
+        &elsewhere,
+        &home,
+        &[
+            "--workspace",
+            "ws_alpha",
+            "workspace",
+            "publication",
+            "show",
+        ],
+    )
+    .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("ambiguous workspace selector"),
+        "operator-typed colliding selector must fail closed: {stderr}"
+    );
+}
+
 /// `task show` is the one verb whose target is a machine-global primary key, so
 /// omitting `--workspace` follows the ID instead of the cwd [ORB-10797].
 #[test]
