@@ -16,7 +16,9 @@ pub use agent_invoke::{
 pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
 pub use catalog::{JobCatalogEntry, JobCatalogFilter};
 pub use exec::V2JobRunResult;
-pub use pipeline::{PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult};
+pub use pipeline::{
+    PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWorkerLogSnapshot,
+};
 #[cfg(test)]
 pub(crate) use run::TERMINAL_OUTCOME_CONFLICT_CODE;
 pub use run::{

@@ -491,6 +491,79 @@ fn parses_run_logs_step() {
     }
 }
 
+/// [ORB-12038] A run that fails before any step runs — a routine-dispatch
+/// workspace mismatch, most notably — has no audited CLI-invocation blob to
+/// show, so `records` is empty. Before this fix `orbit run logs` reported "No
+/// raw stdout/stderr blobs recorded." even when the worker's own
+/// `<run_id>.worker.log` sat on disk with the actual cause. It must fall back
+/// to that file's content instead.
+#[test]
+fn run_logs_falls_back_to_worker_log_when_no_cli_invocations_are_recorded() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    let scheduled_at = Utc::now();
+    let run = JobRun {
+        run_id: "jrun-cli-worker-log".to_string(),
+        job_id: "task_gate_pipeline".to_string(),
+        attempt: 1,
+        state: JobRunState::Cancelled,
+        scheduled_at,
+        started_at: None,
+        finished_at: Some(scheduled_at),
+        duration_ms: None,
+        created_at: scheduled_at,
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+    };
+    runtime
+        .sqlite_store()
+        .expect("store")
+        .upsert_job_run_for_workspace(&workspace_id, &run, None)
+        .expect("insert run");
+
+    std::fs::create_dir_all(&runtime.paths().logs_dir).expect("create logs dir");
+    let worker_log_path = runtime
+        .paths()
+        .logs_dir
+        .join(format!("{}.worker.log", run.run_id));
+    std::fs::write(
+        &worker_log_path,
+        "error: workspace error: run 'jrun-cli-worker-log' was dispatched for workspace \
+         '/fixture/caseB/.orbit' but this worker resolved workspace '/fixture/caseA/.orbit'; \
+         refusing to execute against a mismatched workspace context",
+    )
+    .expect("write worker log");
+
+    let output =
+        super::logs::run_logs_payload(&runtime, Some(&run.run_id), None).expect("logs payload");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("logs should produce a payload");
+    };
+    let (document, view) = payload.into_view();
+    assert_eq!(
+        document["worker_log_path"].as_str(),
+        Some(worker_log_path.to_string_lossy().as_ref())
+    );
+
+    let crate::output::payload::View::Blocks(blocks) = view else {
+        panic!("logs should keep a human view");
+    };
+    let crate::output::payload::Block::Text(text) = &blocks[0] else {
+        panic!("logs human view is prose");
+    };
+    assert!(text.contains("mismatched workspace"), "{text}");
+    assert!(
+        text.contains(&worker_log_path.display().to_string()),
+        "expected the worker log path to be named in the fallback text: {text}"
+    );
+}
+
 #[test]
 fn parses_run_events_latest() {
     let command = parse_run(&["orbit", "run", "events"]);

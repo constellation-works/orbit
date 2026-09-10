@@ -79,6 +79,12 @@ const SHIP_IN_FLIGHT_SCAN_LIMIT: usize = 200;
 /// visibly failed run instead of a silent no-op success.
 pub(crate) const ROUTINE_DISPATCH_ORBIT_DIR_FIELD: &str = "__routine_dispatch_orbit_dir";
 
+/// [ORB-12038] `error_code` recorded on the diagnostic step for a routine-
+/// dispatch workspace mismatch, so `orbit run show` names the cause rather
+/// than an operator finding only a bare `cancelled` state.
+pub(crate) const ROUTINE_DISPATCH_WORKSPACE_MISMATCH_ERROR_CODE: &str =
+    "routine_dispatch_workspace_mismatch";
+
 /// The refusal for a submission that supplied the reserved trusted-host
 /// admission key it is not entitled to write [ORB-11354].
 ///
@@ -187,6 +193,15 @@ pub struct PipelineInvokeResult {
     pub job_name: String,
     pub submitted_at: String,
     pub queued: bool,
+}
+
+/// [ORB-12038] A run's own `<run_id>.worker.log`, read for inspection when no
+/// audited CLI-invocation blob exists to explain a terminal outcome. See
+/// [`OrbitRuntime::read_pipeline_worker_log`].
+#[derive(Debug, Clone, Serialize)]
+pub struct PipelineWorkerLogSnapshot {
+    pub path: PathBuf,
+    pub content: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1058,6 +1073,7 @@ impl OrbitRuntime {
             }
 
             if let Err(error) = self.verify_routine_dispatch_workspace(&run) {
+                self.record_routine_dispatch_workspace_mismatch(&run, &error);
                 let _ = self.cancel_job_run(&run.run_id);
                 return Err(error);
             }
@@ -1084,6 +1100,17 @@ impl OrbitRuntime {
     /// than silently execute (or vacuously succeed) against the wrong scope.
     /// A run with no declared field is not routine-dispatched and is
     /// unaffected.
+    ///
+    /// [ORB-12038] The refusal terminalizes the run as `cancelled`, not
+    /// `failed`. It reuses [`Self::cancel_job_run`] unchanged — the same
+    /// request/signal/completion audit trail, reservation release, and
+    /// child-cascade settlement that every other cancellation gets — because
+    /// nothing about that machinery is wrong here; only the missing
+    /// diagnostic was. `failed` would read more accurately for a routing
+    /// refusal than an operator action, but that relabeling is a wider
+    /// contract change than this diagnostics fix and is deliberately left
+    /// alone; see [`Self::record_routine_dispatch_workspace_mismatch`] for the
+    /// diagnostic itself.
     fn verify_routine_dispatch_workspace(&self, run: &JobRun) -> Result<(), OrbitError> {
         let Some(declared) = run
             .input
@@ -1105,6 +1132,30 @@ impl OrbitRuntime {
             declared_dir.display(),
             actual_dir.display(),
         )))
+    }
+
+    /// [ORB-12038] Persist the guard's own message as a diagnostic step before
+    /// [`Self::cancel_job_run`] terminalizes the run.
+    ///
+    /// The run is still `pending` here (`execute_pipeline_run_worker` has not
+    /// reached `execute_pipeline_run_now`, so there is no `running` step to
+    /// attach an error to), and cancellation itself records no error detail —
+    /// it is written for an operator-requested stop, which carries no
+    /// message. Without this, the guard's declared-vs-resolved diagnostic
+    /// existed only in the worker process's own stderr and its
+    /// `<run_id>.worker.log`, never on the run `orbit run show` displays.
+    /// Best-effort: a failure to persist the diagnostic must not stop the
+    /// run from being cancelled or the original error from propagating.
+    fn record_routine_dispatch_workspace_mismatch(&self, run: &JobRun, error: &OrbitError) {
+        let now = Utc::now();
+        let _ = self.record_pipeline_diagnostic_step(
+            run,
+            run.scheduled_at,
+            now,
+            Some(ROUTINE_DISPATCH_WORKSPACE_MISMATCH_ERROR_CODE),
+            &error.to_string(),
+            JobRunState::Cancelled,
+        );
     }
 
     /// Reopen the shared SQLite store before the worker claims a run.
@@ -1306,6 +1357,35 @@ impl OrbitRuntime {
             .jobs()
             .complete_job_run_step(&run.run_id, &params)?;
         Ok(())
+    }
+
+    /// [ORB-12038] Read a run's own `<run_id>.worker.log`, for a caller (`orbit
+    /// run logs`) that found no audited CLI-invocation blobs to show. A run
+    /// that fails before any step runs — a routine-dispatch workspace
+    /// mismatch, a worker that could not start at all — has no step-scoped
+    /// output to audit; the worker log is where that process wrote its own
+    /// stderr, and it is the only place the cause exists.
+    ///
+    /// `Ok(None)` means no such file exists (the ordinary case for a run that
+    /// reached step execution). `Some` with `content: None` means the file
+    /// exists but its content could not be recovered (unreadable or empty);
+    /// the caller still has the path to name where to look by hand.
+    pub fn read_pipeline_worker_log(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<PipelineWorkerLogSnapshot>, OrbitError> {
+        let path = pipeline_worker_log_path(&self.paths().logs_dir, run_id)?;
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let mut file = File::open(&path).map_err(|error| {
+            OrbitError::Io(format!(
+                "open pipeline worker log '{}': {error}",
+                path.display()
+            ))
+        })?;
+        let content = read_pipeline_worker_log_tail(&mut file);
+        Ok(Some(PipelineWorkerLogSnapshot { path, content }))
     }
 
     fn collect_pipeline_wait_entries(
