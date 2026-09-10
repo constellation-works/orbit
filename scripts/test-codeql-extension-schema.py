@@ -114,6 +114,34 @@ INVALID_ROW_TYPES = """extensions:
         ]
 """
 
+OVERBROAD_CALLABLE = """extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierGuardModel
+    data:
+      - [
+          "orbit_core::application::job::pipeline::*",
+          "Argument[0]",
+          "true",
+          "path-injection",
+          "manual",
+        ]
+"""
+
+OVERBROAD_ACCESS_PATH = """extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierGuardModel
+    data:
+      - [
+          "orbit_core::application::job::pipeline::is_safe",
+          "Argument[*]",
+          "true",
+          "path-injection",
+          "manual",
+        ]
+"""
+
 
 class CodeqlExtensionSchemaTests(unittest.TestCase):
     def setUp(self):
@@ -174,6 +202,18 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         self.assertIn("kind", errors[0])
         self.assertIn("expected a non-empty string", errors[0])
         self.assertIn("boolean", errors[0])
+
+    def test_overbroad_callable_path_fails_clearly(self):
+        self.write_pack(OVERBROAD_CALLABLE)
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("expected an exact Orbit callable path", errors[0])
+
+    def test_overbroad_access_path_fails_clearly(self):
+        self.write_pack(OVERBROAD_ACCESS_PATH)
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("expected an exact access path", errors[0])
 
     def test_current_extension_files_pass(self):
         self.assertEqual(CHECK.validate_root(REPO_ROOT), [])
