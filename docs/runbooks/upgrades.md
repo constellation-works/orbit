@@ -4,8 +4,8 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753]
-last_validated: 2026-09-08
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013]
+last_validated: 2026-09-10
 ---
 
 # Upgrade Orbit Safely
@@ -28,7 +28,12 @@ orbit update --json               # machine-readable report
 1. Resolve the target version — the newest published release, or the one `--version` names.
 2. Refuse an installation Orbit's own installer does not own. An npm, Homebrew, `cargo
    install`, or checkout build is reported with the command that *does* upgrade it, before
-   anything is downloaded.
+   anything is downloaded. A Homebrew install names the fully qualified canonical formula,
+   `constellation-works/tap/orbit`, rather than an ambiguous `brew upgrade orbit`. A machine
+   that still has the retired `danieljhkim/tap/orbit` formula installed gets a tested migration
+   sequence instead — uninstall the legacy formula, then install the canonical one — because the
+   two conflict rather than coexisting; a canonical-only install gets the ordinary qualified
+   upgrade.
 3. Take an exclusive lock in the install directory, so two updates cannot interleave.
 4. Re-read the installed binary's version under that lock, and on Linux resolve a replaced
    running inode (`/path/to/orbit (deleted)`) back to the live install path. Equal, newer,

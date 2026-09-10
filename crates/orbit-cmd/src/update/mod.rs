@@ -113,9 +113,10 @@ impl UpdateEnvironment {
                 },
             );
         Ok(Self {
-            install_channel: InstallChannel::detect(
+            install_channel: InstallChannel::detect_with_homebrew_ownership(
                 &executable,
                 channel::managed_install_dir().as_deref(),
+                &channel::SystemHomebrewInventory::system(),
             ),
             executable,
             current_version: env!("CARGO_PKG_VERSION").to_string(),
