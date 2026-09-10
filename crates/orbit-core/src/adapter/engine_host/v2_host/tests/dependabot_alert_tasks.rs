@@ -575,8 +575,8 @@ fn unavailable_family_does_not_hide_findings_from_collected_family() {
     );
 }
 
-/// The location ORB-11779 was filed from: alert #165 reported this path at
-/// line 426, and the minted task must already carry it as scope.
+/// Alert #165 reports this workspace file at line 426. Its location remains
+/// evidence at minting time; task-pilot supplies a selector after preparation.
 const ALERT_165_PATH: &str =
     "crates/orbit-core/src/application/job/tests/workspace_auto_pipeline.rs";
 
@@ -682,7 +682,7 @@ fn code_scanning_locations_outside_the_workspace_produce_no_scope() {
 }
 
 #[test]
-fn an_absolute_in_workspace_location_is_stored_as_a_workspace_relative_selector() {
+fn an_absolute_in_workspace_location_remains_evidence_without_initial_scope() {
     let (_root, runtime, repo) = runtime_with_workspace_layout();
     write_workspace_file(&repo, ALERT_165_PATH);
     let absolute = repo.join(ALERT_165_PATH).to_string_lossy().into_owned();
@@ -696,9 +696,13 @@ fn an_absolute_in_workspace_location_is_stored_as_a_workspace_relative_selector(
         ),
         json!({}),
     );
-    assert_eq!(
-        code_task(&runtime, &output).context_files,
-        vec![format!("file:{ALERT_165_PATH}")]
+    let task = code_task(&runtime, &output);
+    assert!(task.context_files.is_empty());
+    assert!(
+        task.description
+            .contains(&format!("Location: `{absolute}` line 426")),
+        "absolute location evidence lost: {}",
+        task.description
     );
 }
 
@@ -720,7 +724,16 @@ fn resweeping_the_same_alert_preserves_the_scoped_task_without_duplicating_it() 
     let first = file(&runtime, snapshot.clone(), json!({}));
     let task = code_task(&runtime, &first);
     let expected = vec![format!("file:{ALERT_165_PATH}")];
-    assert_eq!(task.context_files, expected);
+    assert!(task.context_files.is_empty());
+    runtime
+        .update_task(
+            &task.id,
+            crate::application::task::TaskUpdateParams {
+                context_files: Some(expected.clone()),
+                ..Default::default()
+            },
+        )
+        .expect("prepare scoped task");
 
     let second = file(&runtime, snapshot, json!({}));
     assert_eq!(second["filed_count"], json!(0));

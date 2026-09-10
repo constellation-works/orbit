@@ -245,6 +245,17 @@ fn grant_bound_drain_inherits_the_snapshot_and_rechecks_the_grant_per_child() {
             },
         )
         .expect("give B a footprint of its own");
+    for task_id in [&a.id, &b.id] {
+        runtime
+            .update_task(
+                task_id,
+                crate::application::task::TaskUpdateParams {
+                    complexity: Some(orbit_types::task::TaskComplexity::Medium),
+                    ..Default::default()
+                },
+            )
+            .expect("assess eligible work");
+    }
     let grant = enable(
         runtime,
         &[a.id.clone(), b.id.clone()],
@@ -354,6 +365,17 @@ fn promotion_needs_fresh_positive_evidence_and_the_promote_right() {
     let stale = seed_task(runtime, "stale", TaskStatus::Proposed);
     let unready = seed_task(runtime, "unready", TaskStatus::Proposed);
     let missing = seed_task(runtime, "missing", TaskStatus::Proposed);
+    for task_id in [&fresh.id, &stale.id, &unready.id, &missing.id] {
+        runtime
+            .update_task(
+                task_id,
+                crate::application::task::TaskUpdateParams {
+                    complexity: Some(orbit_types::task::TaskComplexity::Medium),
+                    ..Default::default()
+                },
+            )
+            .expect("assess promotion candidate complexity");
+    }
     seed_assessment(
         &fixture,
         &fresh.id,
@@ -426,6 +448,15 @@ fn promotion_needs_fresh_positive_evidence_and_the_promote_right() {
     // Without the promote right, fresh evidence alone promotes nothing.
     stop(runtime, &grant.id);
     let second = seed_task(runtime, "second fresh", TaskStatus::Proposed);
+    runtime
+        .update_task(
+            &second.id,
+            crate::application::task::TaskUpdateParams {
+                complexity: Some(orbit_types::task::TaskComplexity::Medium),
+                ..Default::default()
+            },
+        )
+        .expect("assess fresh candidate complexity");
     seed_assessment(
         &fixture,
         &second.id,
