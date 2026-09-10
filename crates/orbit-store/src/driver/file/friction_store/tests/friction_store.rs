@@ -181,31 +181,38 @@ fn the_record_walk_lists_month_records_in_order() {
     fs::write(root.join("2026-05/F001.md"), "first\n").unwrap();
 
     let paths = friction_record_paths(root).expect("walk");
+    let canonical_root = fs::canonicalize(root).expect("canonical root");
 
     assert_eq!(
         paths,
         vec![
-            root.join("2026-05/F001.md"),
-            root.join("2026-05/F002.md"),
-            root.join("2026-06/F001.md"),
+            canonical_root.join("2026-05/F001.md"),
+            canonical_root.join("2026-05/F002.md"),
+            canonical_root.join("2026-06/F001.md"),
         ]
     );
 }
 
+/// A legacy tree reached through a symlinked root (a symlinked `$HOME`, a
+/// relocated data dir, macOS's `/var` -> `/private/var`) is workspace-local
+/// configuration, not attacker-controlled input; the walk must resolve it
+/// rather than fail workspace-wide friction access closed.
 #[cfg(unix)]
 #[test]
-fn the_record_walk_rejects_a_symlinked_root() {
+fn the_record_walk_follows_a_symlinked_root() {
     use std::os::unix::fs::symlink;
 
     let temp = tempfile::tempdir().expect("tempdir");
     let real_root = temp.path().join("real");
     let linked_root = temp.path().join("linked");
-    fs::create_dir(&real_root).expect("real root");
+    fs::create_dir_all(real_root.join("2026-05")).expect("real root");
+    fs::write(real_root.join("2026-05/F001.md"), "record\n").expect("record");
     symlink(&real_root, &linked_root).expect("root symlink");
 
-    let error = friction_record_paths(&linked_root).expect_err("symlinked root must fail");
+    let paths = friction_record_paths(&linked_root).expect("symlinked root must resolve");
+    let canonical_root = fs::canonicalize(&real_root).expect("canonical real root");
 
-    assert!(error.to_string().contains("regular directory"));
+    assert_eq!(paths, vec![canonical_root.join("2026-05/F001.md")]);
 }
 
 #[cfg(unix)]
@@ -228,6 +235,32 @@ fn the_record_walk_ignores_symlinked_months_and_records() {
     .expect("record symlink");
 
     let paths = friction_record_paths(&root).expect("walk");
+    let canonical_root = fs::canonicalize(&root).expect("canonical root");
 
-    assert_eq!(paths, vec![root.join("2026-05/F001.md")]);
+    assert_eq!(paths, vec![canonical_root.join("2026-05/F001.md")]);
+}
+
+/// A symlinked root must resolve (`the_record_walk_follows_a_symlinked_root`)
+/// without weakening containment: a month entry inside that root which is
+/// itself a symlink escaping the resolved corpus must still be refused.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_root_still_refuses_an_escaping_record_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let real_root = temp.path().join("real");
+    let linked_root = temp.path().join("linked");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(real_root.join("2026-05")).expect("month dir");
+    fs::create_dir_all(outside.join("2026-06")).expect("outside month dir");
+    fs::write(real_root.join("2026-05/F001.md"), "inside\n").expect("inside record");
+    fs::write(outside.join("2026-06/F002.md"), "outside\n").expect("outside record");
+    symlink(outside.join("2026-06"), real_root.join("2026-06")).expect("month symlink");
+    symlink(&real_root, &linked_root).expect("root symlink");
+
+    let paths = friction_record_paths(&linked_root).expect("symlinked root must resolve");
+    let canonical_root = fs::canonicalize(&real_root).expect("canonical real root");
+
+    assert_eq!(paths, vec![canonical_root.join("2026-05/F001.md")]);
 }

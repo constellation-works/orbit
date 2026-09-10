@@ -5,7 +5,7 @@ use std::fs;
 use orbit_types::record::FrictionStatus;
 
 use super::super::{FrictionListFilter, FrictionUpdateParams};
-use super::support::{at, friction_store, legacy_record, store};
+use super::support::{add_params, at, friction_store, legacy_record, store};
 use crate::workflow::friction::export_workspace_frictions;
 
 #[test]
@@ -24,6 +24,42 @@ fn a_fresh_database_with_no_legacy_tree_imports_nothing() {
             .expect("list")
             .is_empty()
     );
+}
+
+/// A workspace whose legacy friction tree is reached through a symlinked
+/// root is workspace-local configuration Orbit created, not attacker input;
+/// it must not lose friction access (ORB-11992).
+#[cfg(unix)]
+#[test]
+fn a_symlinked_legacy_root_constructs_and_serves_the_friction_store() {
+    use orbit_common::test_fixtures::TEST_CODEX_MODEL;
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let real_source = temp.path().join("real_ws_one");
+    let linked_source = temp.path().join("ws_one");
+    legacy_record(&real_source, "F2026-05-001", "codex", FrictionStatus::Open);
+    symlink(&real_source, &linked_source).expect("legacy root symlink");
+
+    let frictions =
+        crate::compose::workspace_friction_store(store(temp.path()), "ws_one", &linked_source)
+            .expect("friction store must open behind a symlinked legacy root");
+
+    assert_eq!(
+        frictions
+            .list(&FrictionListFilter::default())
+            .expect("list")
+            .len(),
+        1,
+        "the imported legacy record must be listed"
+    );
+    assert!(
+        frictions.show("F2026-05-001").expect("show").is_some(),
+        "the imported legacy record must be readable"
+    );
+    frictions
+        .add(add_params(TEST_CODEX_MODEL, at(6, 0), &["tooling"]))
+        .expect("add must still work behind a symlinked legacy root");
 }
 
 /// Every field the legacy envelope carried has to survive: record identity,
