@@ -944,6 +944,38 @@ mod provider_state_root_validation {
 }
 
 #[cfg(target_os = "linux")]
+mod runtime_root_validation {
+    use std::os::unix::fs::symlink;
+    use std::path::Path;
+
+    use crate::adapter::engine_host::v2_host::sandbox::validated_linux_runtime_root;
+
+    #[test]
+    fn accepts_an_existing_runtime_directory_and_returns_its_canonical_path() {
+        let root = tempfile::tempdir().expect("runtime root");
+
+        let validated = validated_linux_runtime_root(root.path()).expect("validate runtime root");
+
+        assert_eq!(
+            validated,
+            root.path().canonicalize().expect("canonical runtime root")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_relative_and_symlinked_runtime_roots() {
+        let parent = tempfile::tempdir().expect("runtime parent");
+        let missing = parent.path().join("missing");
+        let link = parent.path().join("link");
+        symlink(parent.path(), &link).expect("create runtime-root symlink");
+
+        assert!(validated_linux_runtime_root(&missing).is_err());
+        assert!(validated_linux_runtime_root(Path::new("runtime-root")).is_err());
+        assert!(validated_linux_runtime_root(&link).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
 mod cursor_state_roots {
     use std::path::{Path, PathBuf};
 

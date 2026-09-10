@@ -293,16 +293,8 @@ fn append_linux_runtime_write_roots(
     grants_workspace_modify: bool,
     resolved: &mut ResolvedFsProfile,
 ) -> Result<(), DispatchError> {
-    let global = runtime
-        .paths()
-        .global_dir
-        .canonicalize()
-        .unwrap_or_else(|_| runtime.paths().global_dir.clone());
-    let workspace = runtime
-        .paths()
-        .orbit_dir
-        .canonicalize()
-        .unwrap_or_else(|_| runtime.paths().orbit_dir.clone());
+    let global = validated_linux_runtime_root(&runtime.paths().global_dir)?;
+    let workspace = validated_linux_runtime_root(&runtime.paths().orbit_dir)?;
 
     for directory in [
         global.join("state/logs"),
@@ -355,6 +347,30 @@ fn append_linux_runtime_write_roots(
     append_unique_modify_root(resolved, host_cache.display().to_string());
 
     Ok(())
+}
+
+/// Validate runtime roots before constructing any sandbox path beneath them.
+///
+/// These roots can be selected through the managed-run registry locator or an
+/// explicit root override. They must already exist as directories when a
+/// runtime is resolving its executor sandbox; accepting a missing or redirected
+/// root here would let the later joins and directory creation follow an
+/// attacker-controlled filesystem path.
+#[cfg(target_os = "linux")]
+pub(super) fn validated_linux_runtime_root(path: &Path) -> Result<PathBuf, DispatchError> {
+    let validated = validated_linux_provider_state_root(path, None)?;
+    if !validated.is_dir() {
+        return Err(DispatchError::CliInvocationPermanent(format!(
+            "Linux sandbox runtime root `{}` must be an existing directory",
+            path.display()
+        )));
+    }
+    validated.canonicalize().map_err(|error| {
+        DispatchError::CliInvocationPermanent(format!(
+            "canonicalize Linux sandbox runtime root `{}`: {error}",
+            path.display()
+        ))
+    })
 }
 
 #[cfg(target_os = "linux")]
