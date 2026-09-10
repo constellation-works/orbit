@@ -22,7 +22,7 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_registry::host_identity::validated_host_toml_path",
+          "orbit_registry::host_identity::validated_existing_global_root",
           "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
           "path-injection",
           "manual",

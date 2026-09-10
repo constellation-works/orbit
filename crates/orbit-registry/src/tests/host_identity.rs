@@ -8,8 +8,8 @@ use crate::HOST_IDENTITY_SCHEMA_VERSION;
 
 use crate::host_identity::{
     HostIdentityOutcome, HostIdentityState, NewHostIdentity, ensure_host_identity,
-    inspect_host_identity, load_host_identity, rename_current_host_identity,
-    rename_current_host_identity_with_writer,
+    inspect_host_identity, inspect_host_identity_after_check, load_host_identity,
+    rename_current_host_identity, rename_current_host_identity_with_writer,
 };
 
 #[test]
@@ -196,6 +196,41 @@ fn absent_file_loads_as_actionable_error_not_hostname() {
 }
 
 #[test]
+fn nonexistent_global_root_is_absent_without_creating_it() {
+    let parent = tempfile::tempdir().expect("tempdir");
+    let missing = parent.path().join("missing-root");
+
+    assert!(matches!(
+        inspect_host_identity(&missing).expect("inspect missing root"),
+        HostIdentityState::Absent
+    ));
+    assert!(
+        !missing.exists(),
+        "inspection must not create the global root"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn host_identity_accepts_a_trusted_symlinked_global_root_alias() {
+    let real_root = tempfile::tempdir().expect("create real root");
+    std::fs::write(
+        real_root.path().join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_alias\"\nhost_id = \"aliased\"\ntask_prefix = \"DE\"\n",
+    )
+    .expect("write identity");
+    let alias_parent = tempfile::tempdir().expect("create alias parent");
+    let alias = alias_parent.path().join("global-root-alias");
+    symlink(real_root.path(), &alias).expect("create trusted root alias");
+
+    let state = inspect_host_identity(&alias).expect("read through configured alias");
+    assert!(matches!(
+        state,
+        HostIdentityState::Present(identity) if identity.host_id == "aliased"
+    ));
+}
+
+#[test]
 fn legacy_file_loads_as_error_until_migrated() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("host.toml"), "host_id = \"dk-server-1\"\n").expect("write");
@@ -225,6 +260,55 @@ fn host_identity_rejects_a_host_toml_symlink_outside_its_root() {
     assert!(
         error.contains("regular host.toml file"),
         "unexpected: {error}"
+    );
+}
+
+#[test]
+fn host_identity_rejects_a_non_regular_host_toml() {
+    let root = tempfile::tempdir().expect("create root tempdir");
+    std::fs::create_dir(root.path().join("host.toml")).expect("create host.toml directory");
+
+    let error = inspect_host_identity(root.path())
+        .expect_err("host identity must reject a non-regular final component")
+        .to_string();
+    assert!(
+        error.contains("regular host.toml file"),
+        "unexpected: {error}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn host_identity_rejects_a_final_symlink_swapped_after_the_path_check() {
+    let root = tempfile::tempdir().expect("create root tempdir");
+    let checked_body = "schema_version = 2\nmachine_id = \"hm_checked\"\nhost_id = \"checked\"\ntask_prefix = \"DE\"\n";
+    std::fs::write(root.path().join("host.toml"), checked_body).expect("write checked identity");
+    let outside = tempfile::tempdir().expect("create outside tempdir");
+    let outside_path = outside.path().join("outside.toml");
+    let outside_body = "schema_version = 2\nmachine_id = \"hm_outside\"\nhost_id = \"outside\"\ntask_prefix = \"DE\"\n";
+    std::fs::write(&outside_path, outside_body).expect("write outside identity");
+    let preserved_path = root.path().join("checked-host.toml");
+
+    inspect_host_identity_after_check(root.path(), |checked_path| {
+        std::fs::rename(checked_path, &preserved_path).map_err(|error| {
+            orbit_common::OrbitError::Io(format!("failed to preserve checked file: {error}"))
+        })?;
+        symlink(&outside_path, checked_path).map_err(|error| {
+            orbit_common::OrbitError::Io(format!("failed to install swapped symlink: {error}"))
+        })?;
+        Ok(())
+    })
+    .expect_err("descriptor open must reject the swapped final symlink");
+
+    assert_eq!(
+        std::fs::read_to_string(&preserved_path).expect("read preserved checked identity"),
+        checked_body,
+        "inspection must not rewrite the originally checked file"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&outside_path).expect("read outside identity"),
+        outside_body,
+        "inspection must not read through or write the outside target"
     );
 }
 
