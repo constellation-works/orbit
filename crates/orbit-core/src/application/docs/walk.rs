@@ -279,11 +279,10 @@ fn git_ignored_paths(repo_root: &Path, relatives: &[PathBuf]) -> HashSet<PathBuf
     #[cfg(test)]
     record_git_check_ignore_invocation();
     let mut child = match Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
         .arg("check-ignore")
         .arg("-z")
         .arg("--stdin")
+        .current_dir(repo_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
