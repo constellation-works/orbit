@@ -8,7 +8,8 @@ use crate::context::RuntimeHost;
 use super::super::input::{input_string_field, required_input_string};
 use super::git::{
     BaseSyncMode, GitTimeoutBudget, GitTimeoutBudgetGuard, git_command_success, git_failure_error,
-    git_output, git_run, git_success, git_timeout_error, resolve_worktree_start_point,
+    git_output, git_output_raw, git_run, git_success, git_timeout_error,
+    resolve_worktree_start_point,
 };
 use super::handoff::{
     FailedHandoffPhase, HandoffContext, load_handoff_context, rebase_in_progress,
@@ -297,16 +298,48 @@ fn perform_rebase_onto_base(
 /// Discard a changed HEAD that could not be authenticated as a certified
 /// recovery, restoring the worktree to the last durable pre-rewrite
 /// checkpoint so the ordinary rebase path can redo the work from there.
+///
+/// `git reset --hard` has no concept of "safe to discard": it silently drops
+/// staged changes, unstaged changes, and any untracked file or directory in
+/// the way, with nothing recorded afterward. Refuse instead of resetting
+/// whenever the worktree is not already clean, naming every dirty path so an
+/// operator can recover the state themselves before retrying.
 fn discard_unauthenticated_rewrite(
     workspace_path: &Path,
     head_sha_before: &str,
 ) -> Result<(), OrbitError> {
+    let dirty_paths = dirty_worktree_paths(workspace_path)?;
+    if !dirty_paths.is_empty() {
+        return Err(OrbitError::Execution(format!(
+            "git_rebase: refusing to discard an unauthenticated rewritten HEAD before redoing \
+             the rebase from checkpoint '{head_sha_before}': the worktree has uncommitted \
+             changes that a reset would destroy: {}",
+            dirty_paths.join(", ")
+        )));
+    }
     git_success(workspace_path, &["reset", "--hard", head_sha_before]).map_err(|error| {
         OrbitError::Execution(format!(
             "git_rebase: failed to discard an unauthenticated rewritten HEAD before redoing the \
              rebase from checkpoint '{head_sha_before}': {error}"
         ))
     })
+}
+
+/// Every path `git status --porcelain` reports as staged, unstaged, or
+/// untracked. A nonempty result means a hard reset could destroy something
+/// that is not recorded anywhere else.
+///
+/// Uses [`git_output_raw`] rather than [`git_output`]: the latter trims the
+/// whole output, which would eat the leading status column of a single-line
+/// result (` M path` -> `M path`) and misalign every path by one byte.
+fn dirty_worktree_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
+    Ok(git_output_raw(workspace_path, &["status", "--porcelain"])?
+        .lines()
+        .filter_map(|line| line.get(3..))
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
 }
 
 fn refuse_or_recover_existing_rebase(

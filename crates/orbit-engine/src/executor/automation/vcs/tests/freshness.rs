@@ -8,7 +8,7 @@ use tempfile::tempdir;
 
 use super::super::freshness::{prepare_pr_handoff, rebase_pr_branch};
 use super::super::pr::tests::test_support::{
-    PrOpenTestHost, batch_task, pr_workspace, rebase_conflict_pr_workspace,
+    PrOpenTestHost, PrWorkspace, batch_task, pr_workspace, rebase_conflict_pr_workspace,
 };
 #[cfg(unix)]
 use super::with_fake_git;
@@ -334,6 +334,148 @@ fn uncertified_pre_boundary_checkpoint_redoes_the_rebase_instead_of_failing_resu
     let retried =
         rebase_pr_branch(&host, &rebase_input(&common, &reprepared)).expect("retry after redo");
     assert_eq!(retried["decision"], json!("skipped_current"));
+}
+
+// ORB-12032: `discard_unauthenticated_rewrite` used to run `git reset --hard`
+// unconditionally, silently destroying any uncommitted work in the delivery
+// worktree. These three tests pin the dirty-tree shapes named by the fix:
+// an unstaged edit, a staged-only edit, and an untracked file the redo must
+// not clobber. Each drives the same uncertified-checkpoint redo path as
+// `uncertified_pre_boundary_checkpoint_redoes_the_rebase_instead_of_failing_resume`,
+// but with the worktree left dirty first.
+fn setup_uncertified_redo(
+    task_id: &str,
+) -> (
+    PrWorkspace,
+    PrOpenTestHost,
+    serde_json::Value,
+    serde_json::Value,
+    String,
+) {
+    let workspace = pr_workspace();
+    advance_base(&workspace.repo);
+    let host = PrOpenTestHost::new(
+        vec![batch_task(
+            task_id,
+            "Dirty tree redo",
+            "Outcome: success\nChanges:\n- Candidate remains mergeable.",
+        )],
+        workspace.repo.clone(),
+    );
+    let common = json!({
+        "workspace_path": workspace.repo,
+        "job_run_id": "batch-1",
+        "completed_task_ids": [task_id],
+        "base": "agent-main",
+        "base_sync": "local",
+    });
+    let prepared = prepare_pr_handoff(&host, &common).expect("prepare");
+    assert_eq!(prepared["sync_required"], json!(true));
+
+    git(&workspace.repo, &["rebase", "agent-main"]);
+    let rewritten_head = git(&workspace.repo, &["rev-parse", "HEAD"]);
+    assert_ne!(rewritten_head, prepared["head_sha"].as_str().unwrap());
+    write_sync_base_checkpoint(
+        &host,
+        uncertified_recovery_checkpoint(task_id, &workspace.repo, &prepared, &rewritten_head),
+    );
+
+    (workspace, host, common, prepared, rewritten_head)
+}
+
+fn assert_dirty_redo_is_refused(
+    workspace: &PrWorkspace,
+    host: &PrOpenTestHost,
+    common: &serde_json::Value,
+    prepared: &serde_json::Value,
+    rewritten_head: &str,
+    expected_path: &str,
+) {
+    let error = rebase_pr_branch(host, &rebase_input(common, prepared))
+        .expect_err("a dirty worktree must be refused, not silently reset away");
+    assert!(
+        !matches!(error, OrbitError::RecoverableVcsConflict(_)),
+        "an uncommitted local change is not a merge conflict: {error}"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains(expected_path),
+        "refusal must name the dirty path '{expected_path}': {message}"
+    );
+    assert_eq!(
+        git(&workspace.repo, &["rev-parse", "HEAD"]),
+        rewritten_head,
+        "a refused redo must not move HEAD"
+    );
+}
+
+#[test]
+fn uncertified_redo_refuses_on_unstaged_tracked_modification() {
+    let (workspace, host, common, prepared, rewritten_head) =
+        setup_uncertified_redo("ORB-12032-UNSTAGED-DIRTY");
+
+    let tracked_file = workspace.repo.join("src/lib.rs");
+    fs::write(&tracked_file, "pub fn changed() { /* operator fix */ }\n").unwrap();
+
+    assert_dirty_redo_is_refused(
+        &workspace,
+        &host,
+        &common,
+        &prepared,
+        &rewritten_head,
+        "src/lib.rs",
+    );
+    assert_eq!(
+        fs::read_to_string(&tracked_file).unwrap(),
+        "pub fn changed() { /* operator fix */ }\n",
+        "the refused redo must leave the uncommitted edit in place"
+    );
+}
+
+#[test]
+fn uncertified_redo_refuses_on_staged_tracked_modification() {
+    let (workspace, host, common, prepared, rewritten_head) =
+        setup_uncertified_redo("ORB-12032-STAGED-DIRTY");
+
+    let tracked_file = workspace.repo.join("src/lib.rs");
+    fs::write(&tracked_file, "pub fn changed() { /* staged fix */ }\n").unwrap();
+    git(&workspace.repo, &["add", "src/lib.rs"]);
+
+    assert_dirty_redo_is_refused(
+        &workspace,
+        &host,
+        &common,
+        &prepared,
+        &rewritten_head,
+        "src/lib.rs",
+    );
+    assert_eq!(
+        fs::read_to_string(&tracked_file).unwrap(),
+        "pub fn changed() { /* staged fix */ }\n",
+        "the refused redo must leave the staged edit in place"
+    );
+}
+
+#[test]
+fn uncertified_redo_refuses_on_untracked_obstruction() {
+    let (workspace, host, common, prepared, rewritten_head) =
+        setup_uncertified_redo("ORB-12032-UNTRACKED-DIRTY");
+
+    let untracked_file = workspace.repo.join("recovery-notes.txt");
+    fs::write(&untracked_file, "do not discard\n").unwrap();
+
+    assert_dirty_redo_is_refused(
+        &workspace,
+        &host,
+        &common,
+        &prepared,
+        &rewritten_head,
+        "recovery-notes.txt",
+    );
+    assert!(
+        untracked_file.exists(),
+        "the refused redo must not remove the untracked file"
+    );
 }
 
 // The redo is only automatic when it is safe: when the discarded rewrite
