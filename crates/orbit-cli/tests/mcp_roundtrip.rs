@@ -4734,6 +4734,104 @@ fn read_only_registry_files_keep_uncheckpointed_wal_reads_observational() {
     drop(registry_holder);
 }
 
+/// The mount test's other read-only surface, carried on every Unix runner: the
+/// canonical state directory refuses writes while the optional semantic index
+/// it never carried is absent. The CLI reaches the identical creation denial
+/// one process removed from a `--ro-bind`, and must still start and answer the
+/// reads — such as tool listing — that never needed that index.
+///
+/// It does not replace the mount test: permission bits still allow directory
+/// and sidecar writes a `--ro-bind` refuses outright.
+#[cfg(unix)]
+#[test]
+fn absent_global_semantic_index_keeps_read_only_cli_reads_observational() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let workspace = McpWorkspace::init();
+    let created = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &json!({
+                "title": "Readable without a global semantic index",
+                "description": "The canonical root never built one",
+                "workspace": workspace.work,
+                "complexity": "low",
+                "model": "codex",
+            })
+            .to_string(),
+        ])
+        .output()
+        .expect("create the fixture task");
+    assert_command_succeeded("fixture task add", &created);
+    let created: Value = serde_json::from_slice(&created.stdout).expect("parse fixture task");
+    let task_id = created["id"].as_str().expect("fixture task id");
+
+    // The canonical root is not the checkout: nothing has run `orbit semantic
+    // index` against it, so its optional index is absent.
+    let canonical_root = workspace.home.join(".orbit");
+    let state_dir = canonical_root.join("state");
+    std::fs::create_dir_all(&state_dir).expect("canonical state directory");
+    let semantic_db = state_dir.join("semantic.db");
+    for suffix in ["", "-wal", "-shm"] {
+        let sidecar = PathBuf::from(format!("{}{suffix}", semantic_db.display()));
+        if sidecar.exists() {
+            std::fs::remove_file(&sidecar).expect("clear the unbuilt semantic index");
+        }
+    }
+
+    let worktree = add_linked_worktree(&workspace.work);
+    let original = std::fs::metadata(&state_dir)
+        .expect("canonical state metadata")
+        .permissions();
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o500))
+        .expect("make the canonical state directory read-only");
+    if std::fs::File::create(state_dir.join("probe")).is_ok() {
+        // A user that ignores the mode bits (typically root) cannot reproduce
+        // the creation denial this fixture is about.
+        std::fs::set_permissions(&state_dir, original).expect("restore state permissions");
+        return;
+    }
+
+    let listed = McpWorkspace::orbit_command(&worktree, &workspace.home)
+        .env("ORBIT_ROOT", &canonical_root)
+        .args(["tool", "list", "--json"])
+        .output()
+        .expect("list tools with an unavailable semantic index");
+    let shown = McpWorkspace::orbit_command(&worktree, &workspace.home)
+        .env("ORBIT_ROOT", &canonical_root)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--root",
+            canonical_root.to_str().expect("utf8 Orbit root"),
+            "--input",
+            &json!({ "id": task_id, "model": "codex" }).to_string(),
+        ])
+        .output()
+        .expect("show a task with an unavailable semantic index");
+    std::fs::set_permissions(&state_dir, original).expect("restore state permissions");
+
+    assert_command_succeeded("read-only orbit.tool.list", &listed);
+    let listed: Value = serde_json::from_slice(&listed.stdout).expect("parse listed tools");
+    assert!(
+        listed
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "orbit.task.show")),
+        "tool listing needs no semantic index and must still answer: {listed}"
+    );
+    assert_command_succeeded("read-only orbit.task.show", &shown);
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("parse shown task");
+    assert_eq!(shown["id"], json!(task_id));
+    assert!(
+        !semantic_db.exists(),
+        "an unavailable index must not be created by a read"
+    );
+}
+
 /// Pin the registry's current snapshot so every write that follows stays in the
 /// WAL: SQLite checkpoints when the last connection closes, and otherwise
 /// copies frames back only as far as the oldest reader allows.

@@ -559,7 +559,7 @@ impl OrbitRuntime {
         }
 
         Ok(orbit_search::doc_semantic_search(
-            &self.stores().semantic_vector,
+            self.stores().semantic_index().store()?,
             DocSemanticSearchParams {
                 query: query.to_string(),
                 limit,

@@ -3,6 +3,8 @@
 //! Module layout:
 //!
 //! - [`store`] — [`VectorStore`], the SQLite-backed index. Entry point.
+//! - [`index`] — [`SemanticIndex`], the optional handle a runtime holds: an
+//!   open store, or the explained absence semantic callers are told about.
 //! - [`chunker`] — paragraph-boundary chunker for fields exceeding the
 //!   model's context window.
 //! - [`worker`] — optional background indexer for long-lived hosts. Short-lived
@@ -21,12 +23,14 @@
 
 pub(crate) mod chunker;
 pub(crate) mod doc_fields;
+pub(crate) mod index;
 pub(crate) mod query;
 pub(crate) mod store;
 pub(crate) mod task_fields;
 pub(crate) mod worker;
 
 pub use doc_fields::DocEmbeddingSource;
+pub use index::SemanticIndex;
 pub use store::{SOURCE_KIND_DOC, SOURCE_KIND_TASK, VectorStore};
 pub use worker::EmbedWorker;
 

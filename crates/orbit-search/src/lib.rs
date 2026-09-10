@@ -62,6 +62,6 @@ pub use rpc::{
 };
 pub use subprocess::SubprocessEmbedder;
 pub use vector::{
-    DocEmbeddingSource, EmbedWorker, SOURCE_KIND_DOC, SOURCE_KIND_TASK, SemanticStats,
-    UpsertReport, VectorStore,
+    DocEmbeddingSource, EmbedWorker, SOURCE_KIND_DOC, SOURCE_KIND_TASK, SemanticIndex,
+    SemanticStats, UpsertReport, VectorStore,
 };

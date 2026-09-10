@@ -176,6 +176,18 @@ This makes "reindex everything" idempotent and cheap when nothing has changed. R
 
 **Same-source concurrency.** The first complete write (`upsert_embeddings` or `delete_source`) that commits after a snapshot wins. An in-flight upsert whose snapshot no longer matches does not write: it cannot mix field revisions, overwrite a later accepted source, or resurrect a deleted source. A hash recheck of only the fields this call prepared is not the commit gate. Unrelated sources and readers are not blocked during inference (mutex released; WAL).
 
+### 3.4 A refused index is a startup outcome, not a startup failure
+
+The semantic index is optional state: a workspace that never ran `orbit semantic index` has no `semantic.db` at all. A runtime therefore opens it as a `SemanticIndex`, which is either the open `VectorStore` or an explained refusal, and `orbit-core` holds that handle rather than a store it assumed exists.
+
+Unavailability is exactly one thing: the storage refused to give this process a usable index. A read-only mount with no `semantic.db`, a state directory the caller cannot write, a database whose schema cannot be built here, a directory this process cannot enter. Startup continues and the embed worker stays disabled, because there is nothing for it to write into.
+
+Everything else still propagates. A database that exists and fails to open is state that failed — a malformed file, an unusable WAL, an incompatible layout as in [§5.1](#51-fts5-virtual-table) — so a broken index is never mistaken for a refused one. The refusal is also not classified by asking whether the file exists: on a directory that denies inspection, that question is itself denied and its answer would call real state absent.
+
+The distinction runs one level down, in `VectorStore::open`. A schema call that cannot write is incidental when the database already carries an index — the pre-[ORB-11695] inline layout on a read-only mount is readable through its own reader and stays `Ready`. It is the whole answer when the database carries no index at all: every query would fail on a missing table and no writer could land a row, so that store is refused rather than handed out as ready for a long-lived host to start an embed worker against.
+
+An unavailable index is not an empty corpus. Every semantic operation reports it by name rather than returning a complete-looking empty result. That is what lets hybrid search degrade honestly: it falls back to lexical ranking and says why in the response's `notes` ([§6.3](#63-result-shape)). Authoritative stores — the task registry, the audit database — keep failing closed; only this optional index degrades.
+
 ---
 
 ## 4. What to Embed for Tasks
