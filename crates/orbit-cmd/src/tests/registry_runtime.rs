@@ -14,7 +14,7 @@ use orbit_registry::workspace_registry::{registry_path_for, save_registry_to};
 
 use crate::registry_runtime::{
     RegisteredRuntimeFactory, resolved_workspace_binding, select_workspace_for_cwd_and_roots,
-    workspace_runtime_binding,
+    sync_task_prefix, workspace_runtime_binding,
 };
 
 fn workspace(id: &str, ship_mode: &str) -> Workspace {
@@ -213,6 +213,43 @@ fn registered_checkout_task_creation_uses_host_task_prefix() {
         )
         .expect("task creation");
     assert_eq!(task["id"], "DE-00000");
+}
+
+#[test]
+fn sync_task_prefix_rejects_legacy_host_identity() {
+    let root = tempfile::tempdir().expect("root");
+    std::fs::write(root.path().join("host.toml"), "host_id = \"legacy\"\n")
+        .expect("legacy host identity");
+
+    let error =
+        sync_task_prefix(root.path()).expect_err("legacy host identity must require migration");
+
+    assert!(
+        matches!(error, OrbitError::InvalidInput(message) if message.contains("legacy pre-migration"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_task_prefix_rejects_a_symlinked_host_identity() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("root");
+    let outside = tempfile::tempdir().expect("outside");
+    let outside_identity = outside.path().join("host.toml");
+    std::fs::write(
+        &outside_identity,
+        "schema_version = 2\nmachine_id = \"hm_outside\"\nhost_id = \"outside\"\ntask_prefix = \"DE\"\n",
+    )
+    .expect("outside host identity");
+    symlink(&outside_identity, root.path().join("host.toml")).expect("host identity symlink");
+
+    let error =
+        sync_task_prefix(root.path()).expect_err("symlinked host identity must fail closed");
+
+    assert!(
+        matches!(error, OrbitError::InvalidInput(message) if message.contains("regular host.toml"))
+    );
 }
 
 #[test]
