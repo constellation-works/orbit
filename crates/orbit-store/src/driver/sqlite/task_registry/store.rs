@@ -17,7 +17,8 @@ use super::queries::{
     workspace_checkout_by_paths, write_task_index_rows,
 };
 use super::schema::{
-    apply_schema, assert_registry_user_version, ensure_compatible_schema, registry_user_version,
+    apply_schema, assert_readable_schema, assert_registry_user_version, ensure_compatible_schema,
+    registry_user_version,
 };
 use super::util::{now_string, parse_relation_type_name, path_to_string, relation_type_name};
 use super::workspace_id::{next_workspace_id_candidate, sanitize_slug, validate_workspace_id};
@@ -68,11 +69,19 @@ impl TaskRegistryStore {
                 return Err(mapped);
             }
         }
-        if registry_user_version(&conn)? < super::REGISTRY_SCHEMA_VERSION {
-            apply_schema(&conn)?;
+        // Setup, migration and recovery all need a write transaction, so a
+        // registry opened for observation is either already readable as-is or
+        // reported as needing writable storage. Attempting them here is how a
+        // read-only mount produced `attempt to write a readonly database`.
+        if read_only {
+            assert_readable_schema(&conn, path)?;
+        } else {
+            if registry_user_version(&conn)? < super::REGISTRY_SCHEMA_VERSION {
+                apply_schema(&conn)?;
+            }
+            ensure_compatible_schema(&mut conn, path)?;
+            assert_registry_user_version(&conn)?;
         }
-        ensure_compatible_schema(&mut conn, path)?;
-        assert_registry_user_version(&conn)?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -441,6 +450,28 @@ impl TaskRegistryStore {
                 "task prefix '{task_prefix}' must be 2-5 uppercase ASCII letters and must not use a reserved artifact namespace"
             )));
         }
+        // Runtime construction reasserts the same prefix on every command. That
+        // no-op is an observation, so answer it without a write transaction:
+        // BEGIN IMMEDIATE here is what made every read fail on a read-only
+        // registry. Reading outside the lock is safe because a bound prefix is
+        // immutable — only a pristine `ORB` row can still adopt one.
+        {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+            let current: String = conn
+                .query_row(
+                    "SELECT task_prefix FROM allocator_state WHERE authority = 'local'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            if current == task_prefix {
+                return Ok(());
+            }
+        }
+
         let mut conn = self
             .conn
             .lock()

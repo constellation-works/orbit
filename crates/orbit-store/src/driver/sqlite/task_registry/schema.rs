@@ -145,18 +145,53 @@ pub(super) fn apply_schema(conn: &Connection) -> Result<(), OrbitError> {
     Ok(())
 }
 
-// Required additive storage is checked even when user_version is current.
-// A complete registry needs no write transaction, including on read-only media.
+/// Whether the stored schema is already exactly the shape this build reads.
+///
+/// Required additive storage is checked even when user_version is current: a
+/// complete registry then needs no write transaction, including on read-only
+/// media.
+fn schema_is_current(conn: &Connection) -> Result<bool, OrbitError> {
+    Ok(registry_user_version(conn)? == REGISTRY_SCHEMA_VERSION
+        && table_has_column(conn, "task_action_keys", "action_key")?)
+}
+
+/// Confirm a registry opened for observation is already readable as-is.
+///
+/// Setup, migration and v6 recovery all need a write transaction, so on
+/// read-only storage there is nothing to attempt: naming the writable step the
+/// registry still owes beats an opaque SQLite write error raised from a
+/// transaction that could only fail.
+pub(super) fn assert_readable_schema(conn: &Connection, path: &Path) -> Result<(), OrbitError> {
+    if schema_is_current(conn)? {
+        return Ok(());
+    }
+
+    let version = registry_user_version(conn)?;
+    if version > 6 {
+        return Err(unsupported_schema(version, path));
+    }
+    let action_keys = if table_has_column(conn, "task_action_keys", "action_key")? {
+        ""
+    } else {
+        " without task action keys"
+    };
+    Err(OrbitError::Store(format!(
+        "task registry '{}' requires writable additive setup/recovery: the database is read-only, \
+         and observing it found schema version {version}{action_keys} instead of version \
+         {REGISTRY_SCHEMA_VERSION} with task action keys. Open the registry once from writable \
+         storage, then retry the observation",
+        path.display()
+    )))
+}
+
 pub(super) fn ensure_compatible_schema(
     conn: &mut Connection,
     path: &Path,
 ) -> Result<(), OrbitError> {
-    let version = registry_user_version(conn)?;
-    if version == REGISTRY_SCHEMA_VERSION
-        && table_has_column(conn, "task_action_keys", "action_key")?
-    {
+    if schema_is_current(conn)? {
         return Ok(());
     }
+    let version = registry_user_version(conn)?;
     if version > 6 {
         return Err(unsupported_schema(version, path));
     }
