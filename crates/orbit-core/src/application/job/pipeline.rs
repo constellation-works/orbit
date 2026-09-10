@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -1949,20 +1949,108 @@ fn pipeline_worker_file_name(run_id: &str, suffix: &str) -> Result<String, Orbit
     Ok(format!("{run_id}{suffix}"))
 }
 
+/// Resolve the worker-log directory before using it for any file operation.
+/// Runtime initialization normally owns this directory, but a missing final
+/// component is created only after its existing parent has passed the same
+/// checks. Symlinked paths and traversal syntax fail closed.
+fn validated_pipeline_worker_log_directory(path: &Path) -> Result<PathBuf, OrbitError> {
+    if !path.is_absolute() {
+        return Err(OrbitError::InvalidInput(format!(
+            "pipeline worker log directory must be absolute: {}",
+            path.display()
+        )));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "pipeline worker log directory must not contain traversal components: {}",
+            path.display()
+        )));
+    }
+
+    let parent = path.parent().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "pipeline worker log directory has no parent: {}",
+            path.display()
+        ))
+    })?;
+    for ancestor in parent.ancestors() {
+        let metadata = std::fs::symlink_metadata(ancestor).map_err(|error| {
+            OrbitError::Io(format!(
+                "inspect pipeline worker log directory '{}': {error}",
+                ancestor.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(OrbitError::InvalidInput(format!(
+                "pipeline worker log directory must not contain symlinks: {}",
+                path.display()
+            )));
+        }
+    }
+
+    let canonical_parent = parent.canonicalize().map_err(|error| {
+        OrbitError::Io(format!(
+            "canonicalize pipeline worker log parent '{}': {error}",
+            parent.display()
+        ))
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "pipeline worker log directory has no final component: {}",
+            path.display()
+        ))
+    })?;
+    let canonical_path = canonical_parent.join(file_name);
+
+    match std::fs::symlink_metadata(&canonical_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(OrbitError::InvalidInput(format!(
+                "pipeline worker log directory must not be a symlink: {}",
+                path.display()
+            )));
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(OrbitError::InvalidInput(format!(
+                "pipeline worker log path is not a directory: {}",
+                path.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "inspect pipeline worker log directory '{}': {error}",
+                path.display()
+            )));
+        }
+    }
+
+    Ok(canonical_path)
+}
+
 pub(crate) fn configure_pipeline_worker_stdio(
     command: &mut Command,
     logs_dir: &Path,
     run_id: &str,
 ) -> Result<PipelineWorkerLog, OrbitError> {
-    let log_path = pipeline_worker_log_path(logs_dir, run_id)?;
+    let mut logs_dir = validated_pipeline_worker_log_directory(logs_dir)?;
+    match std::fs::create_dir(&logs_dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "create pipeline worker log directory '{}': {error}",
+                logs_dir.display()
+            )));
+        }
+    }
+    logs_dir = validated_pipeline_worker_log_directory(&logs_dir)?;
+    let log_path = pipeline_worker_log_path(&logs_dir, run_id)?;
 
-    std::fs::create_dir_all(logs_dir).map_err(|error| {
-        OrbitError::Io(format!(
-            "create pipeline worker log directory '{}': {error}",
-            logs_dir.display()
-        ))
-    })?;
-    restrict_pipeline_worker_log_directory(logs_dir)?;
+    restrict_pipeline_worker_log_directory(&logs_dir)?;
 
     let mut options = OpenOptions::new();
     options.create(true).append(true).read(true);
@@ -1979,7 +2067,7 @@ pub(crate) fn configure_pipeline_worker_stdio(
     })?;
     restrict_pipeline_worker_log_file(&log_path)?;
     if let Some(profile) = pipeline_worker_profile_file(
-        logs_dir,
+        &logs_dir,
         run_id,
         std::env::var_os("LLVM_PROFILE_FILE").as_deref(),
     )? {
