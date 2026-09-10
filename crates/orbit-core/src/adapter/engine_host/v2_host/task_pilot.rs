@@ -39,6 +39,8 @@ const HARD_MAX_PARTITION_SIZE: usize = 5;
 const DEFAULT_MAX_TASKS: usize = 50;
 const HARD_MAX_TASKS: usize = 500;
 const NO_DIFF_TAGS: [&str; 2] = ["no-diff-needed", "no-diff-expected"];
+const NO_DIFF_EXPECTED_TAG: &str = "no-diff-expected";
+const AUTO_TASK_TAG_PREFIX: &str = "auto-task:";
 const TASK_PILOT_JOB_ID: &str = "task_pilot_pipeline";
 /// Cap on individually itemized `excluded` entries in routine discovery output.
 /// Automatic-mode exclusions still carry full counts by reason; this bounds
@@ -404,10 +406,20 @@ fn automatic_exclusion_reason(
     if !context_files.is_empty() && complexity.is_some_and(TaskComplexity::is_assessed) {
         return Some("context_files_not_empty");
     }
-    if tags.iter().any(|tag| NO_DIFF_TAGS.contains(&tag.as_str())) {
+    if tags.iter().any(|tag| NO_DIFF_TAGS.contains(&tag.as_str()))
+        && !is_no_diff_expected_auto_task(tags)
+    {
         return Some("no_diff_task");
     }
     None
+}
+
+/// Automatically minted no-diff work still needs a complexity assessment, but
+/// it cannot honestly produce modification selectors. The mint provenance tag
+/// distinguishes it from an ordinary task that merely carries a no-diff tag.
+fn is_no_diff_expected_auto_task(tags: &[String]) -> bool {
+    tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
+        && tags.iter().any(|tag| tag.starts_with(AUTO_TASK_TAG_PREFIX))
 }
 
 fn task_snapshot(

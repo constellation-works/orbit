@@ -152,7 +152,7 @@ fn automatic_readiness_requires_selectors_and_no_deferring_finding() {
 }
 
 #[test]
-fn automatic_discovery_filters_status_context_and_no_diff_tags_then_partitions() {
+fn automatic_discovery_admits_only_provenance_tagged_no_diff_expected_auto_tasks() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "src/existing.rs");
     let mut eligible = Vec::new();
@@ -186,6 +186,13 @@ fn automatic_discovery_filters_status_context_and_no_diff_tags_then_partitions()
         &["no-diff-expected"],
         &[],
     );
+    let no_diff_auto_task = seed_task(
+        &runtime,
+        "no-diff-expected auto-task",
+        TaskStatus::Backlog,
+        &["no-diff-expected", "auto-task:review"],
+        &[],
+    );
     let scoped = seed_task(
         &runtime,
         "already-scoped",
@@ -211,7 +218,7 @@ fn automatic_discovery_filters_status_context_and_no_diff_tags_then_partitions()
     .expect("automatic discovery");
 
     assert_eq!(output["mode"], "automatic");
-    assert_eq!(output["task_count"], 7);
+    assert_eq!(output["task_count"], 8);
     assert_eq!(output["partition_count"], 2);
     assert_eq!(
         output["partitions"][0]["task_ids"]
@@ -225,7 +232,7 @@ fn automatic_discovery_filters_status_context_and_no_diff_tags_then_partitions()
             .as_array()
             .unwrap()
             .len(),
-        2
+        3
     );
     let selected = output["task_ids"].as_array().expect("selected task ids");
     for task in eligible {
@@ -244,6 +251,11 @@ fn automatic_discovery_filters_status_context_and_no_diff_tags_then_partitions()
                 .any(|entry| { entry["task_id"] == task.id && entry["reason"] == "no_diff_task" })
         );
     }
+    assert!(
+        selected
+            .iter()
+            .any(|value| value == &json!(no_diff_auto_task.id))
+    );
     assert!(excluded.iter().any(|entry| {
         entry["task_id"] == scoped.id && entry["reason"] == "context_files_not_empty"
     }));

@@ -168,30 +168,27 @@ pub(super) fn list_backlog_tasks(
         )?;
         (snapshot.admissible_leaves, Some(snapshot.excluded))
     } else {
-        let tasks = explicit_task_ids
-            .iter()
-            .map(|task_id| {
-                runtime
-                    .get_task(task_id)
-                    .map_err(|err| DispatchError::DeterministicActionFailed {
-                        action: action.to_string(),
-                        message: format!("load task {task_id}: {err}"),
-                    })
-                    .and_then(|task| {
-                        if task.complexity.is_some_and(TaskComplexity::is_assessed) {
-                            Ok(task)
-                        } else {
-                            Err(DispatchError::DeterministicActionFailed {
-                                action: action.to_string(),
-                                message: format!(
-                                    "task {task_id} requires task-pilot preparation before implementation admission"
-                                ),
-                            })
-                        }
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        (tasks, None)
+        let mut tasks = Vec::new();
+        let mut excluded = Vec::new();
+        for task_id in &explicit_task_ids {
+            let task = runtime.get_task(task_id).map_err(|err| {
+                DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("load task {task_id}: {err}"),
+                }
+            })?;
+            if task.complexity.is_some_and(TaskComplexity::is_assessed) {
+                tasks.push(task);
+            } else {
+                excluded.push(BacklogTaskExclusion {
+                    id: task.id,
+                    reason: BacklogTaskExclusionReason::UnassessedComplexity,
+                    conflicts: Vec::new(),
+                    crew: None,
+                });
+            }
+        }
+        (tasks, Some(excluded))
     };
     tasks.truncate(max_tasks);
     let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();

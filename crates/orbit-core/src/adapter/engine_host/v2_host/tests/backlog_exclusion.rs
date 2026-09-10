@@ -80,17 +80,48 @@ fn automatic_admission_withholds_unassessed_tasks_until_task_pilot_prepares_them
         excluded_entry(&output, &task.id)["reason"],
         "unassessed_complexity"
     );
-    let error = runtime
-        .run_deterministic(
-            "list_backlog_tasks",
-            &json!({}),
-            &json!({"task_ids": [task.id]}),
-            ToolContext::default(),
-        )
-        .expect_err("explicit implementation admission must not bypass preparation");
-    assert!(
-        error.to_string().contains("task-pilot preparation"),
-        "{error}"
+    let explicit = list_backlog_tasks(&runtime, json!({ "task_ids": [task.id] }));
+    assert_eq!(explicit["task_ids"], json!([]));
+    assert_eq!(
+        excluded_entry(&explicit, &task.id)["reason"],
+        "unassessed_complexity"
+    );
+}
+
+#[test]
+fn explicit_backlog_selection_keeps_assessed_tasks_when_another_is_unassessed() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let assessed = seed_list_backlog_task(
+        &runtime,
+        "Prepared task",
+        TaskStatus::Backlog,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        None,
+        vec![],
+    );
+    let unassessed = runtime
+        .add_task(TaskAddParams {
+            title: "Awaiting preparation".to_string(),
+            description: "fixture".to_string(),
+            acceptance_criteria: vec!["fixture".to_string()],
+            plan: "prepare".to_string(),
+            status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Unassessed,
+            task_type: Some(TaskType::Chore),
+            ..TaskAddParams::default()
+        })
+        .expect("seed unassessed task");
+
+    let output = list_backlog_tasks(
+        &runtime,
+        json!({ "task_ids": [assessed.id, unassessed.id] }),
+    );
+
+    assert_eq!(output["task_ids"], json!([assessed.id]));
+    assert_eq!(
+        excluded_entry(&output, &unassessed.id)["reason"],
+        "unassessed_complexity"
     );
 }
 
@@ -688,7 +719,7 @@ fn list_backlog_tasks_does_not_report_max_tasks_truncation_as_excluded() {
 }
 
 #[test]
-fn list_backlog_tasks_omits_excluded_for_explicit_task_ids() {
+fn list_backlog_tasks_reports_empty_exclusions_for_assessed_explicit_task_ids() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "crates/foo/src/lib.rs");
     seed_list_backlog_task(
@@ -723,7 +754,7 @@ fn list_backlog_tasks_omits_excluded_for_explicit_task_ids() {
 
     assert_eq!(output["task_count"], json!(2));
     assert_eq!(output["task_ids"], json!([backlog.id, corrective.id]));
-    assert!(output.get("excluded").is_none());
+    assert_eq!(output["excluded"], json!([]));
 }
 
 #[test]
