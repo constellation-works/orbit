@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -364,25 +364,37 @@ fn split_frontmatter(raw: &str) -> Option<(&str, &str)> {
 /// its canonical directory prevents a configured path from redirecting the
 /// import outside the selected legacy tree.
 pub(crate) fn validated_friction_root(frictions_root: &Path) -> Result<PathBuf, OrbitError> {
-    let metadata = fs::symlink_metadata(frictions_root).map_err(|error| {
-        OrbitError::Io(format!(
-            "inspect friction corpus root {}: {error}",
-            frictions_root.display()
-        ))
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(OrbitError::InvalidInput(format!(
-            "friction corpus root must be a regular directory: {}",
-            frictions_root.display()
-        )));
-    }
-
     let canonical_root = fs::canonicalize(frictions_root).map_err(|error| {
         OrbitError::Io(format!(
             "canonicalize friction corpus root {}: {error}",
             frictions_root.display()
         ))
     })?;
+
+    // Compare the resolved path with a purely lexical absolute path. This
+    // rejects symlinked roots without sending the unvalidated path through a
+    // second filesystem operation.
+    let absolute_root = if frictions_root.is_absolute() {
+        frictions_root.to_path_buf()
+    } else {
+        let current_dir = std::env::current_dir()
+            .map_err(|error| OrbitError::Io(format!("resolve current directory: {error}")))?;
+        let canonical_current_dir = fs::canonicalize(&current_dir).map_err(|error| {
+            OrbitError::Io(format!(
+                "canonicalize current directory {}: {error}",
+                current_dir.display()
+            ))
+        })?;
+        canonical_current_dir.join(frictions_root)
+    };
+    let normalized_root = normalize_path_components(&absolute_root);
+    if canonical_root != normalized_root {
+        return Err(OrbitError::InvalidInput(format!(
+            "friction corpus root must be a regular directory and must not resolve through a symlink: {}",
+            frictions_root.display()
+        )));
+    }
+
     if !canonical_root.is_dir() {
         return Err(OrbitError::InvalidInput(format!(
             "canonical friction corpus root must be a directory: {}",
@@ -391,6 +403,20 @@ pub(crate) fn validated_friction_root(frictions_root: &Path) -> Result<PathBuf, 
     }
 
     Ok(canonical_root)
+}
+
+fn normalize_path_components(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 pub(crate) fn friction_record_paths(frictions_root: &Path) -> Result<Vec<PathBuf>, OrbitError> {
