@@ -2336,6 +2336,7 @@ version = "0.20.0"
 dependencies = [
  "chrono",
  "hostname",
+ "libc",
  "orbit-common",
  "orbit-types",
  "serde",

@@ -12,6 +12,8 @@
 //! no silent fallback to the OS hostname. Routine `hosts:` pinning,
 //! the sweep, and status all resolve through [`HostIdentity::host_id`].
 
+use std::fs::{File, OpenOptions};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -168,13 +170,13 @@ fn host_toml_path(global_root: &Path) -> PathBuf {
     global_root.join(HOST_TOML_FILE)
 }
 
-/// Resolve the existing host identity through the canonical global root.
+/// Resolve an existing global root to the directory selected by the caller.
 ///
-/// The root may be selected by an explicit runtime override, but the identity
-/// filename is fixed. Canonicalizing the root and checking the final component
-/// without following it keeps the resulting path inside that selected root and
-/// rejects a symlink or non-regular file before it is read.
-fn validated_host_toml_path(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+/// Runtime overrides and configured aliases are supported: an existing symlinked
+/// root resolves to its canonical target. Returning the validated directory
+/// before deriving the fixed identity filename keeps path validation ahead of
+/// every metadata and open sink for `host.toml`.
+fn validated_existing_global_root(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
     let canonical_root = match global_root.canonicalize() {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -185,24 +187,86 @@ fn validated_host_toml_path(global_root: &Path) -> Result<Option<PathBuf>, Orbit
             )));
         }
     };
-    let canonical_path = canonical_root.join(HOST_TOML_FILE);
 
-    match std::fs::symlink_metadata(&canonical_path) {
+    Ok(Some(canonical_root))
+}
+
+/// Open the fixed identity file beneath the validated root without following a
+/// swapped final symlink.
+///
+/// Unix uses `O_NOFOLLOW`; Windows opens the reparse point itself. The descriptor
+/// is checked for a regular file before any bytes are read. Platforms without
+/// either primitive still perform both pathname and descriptor type checks, but
+/// cannot close a final-component check/open race. Canonicalization also permits
+/// trusted root aliases, so this leaf protection does not claim to prevent a
+/// privileged concurrent rename or replacement of a mutable ancestor directory.
+fn open_existing_host_toml_with_hook<F>(
+    global_root: &Path,
+    before_open: F,
+) -> Result<Option<(PathBuf, File)>, OrbitError>
+where
+    F: FnOnce(&Path) -> Result<(), OrbitError>,
+{
+    let Some(canonical_root) = validated_existing_global_root(global_root)? else {
+        return Ok(None);
+    };
+    let path = canonical_root.join(HOST_TOML_FILE);
+
+    match std::fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
             Err(OrbitError::InvalidInput(format!(
                 "host identity path must be a regular {HOST_TOML_FILE} file inside '{}': {}",
                 global_root.display(),
-                canonical_path.display()
+                path.display()
             )))
         }
-        Ok(_) => Ok(Some(canonical_path)),
+        Ok(_) => {
+            before_open(&path)?;
+
+            let mut options = OpenOptions::new();
+            options.read(true);
+            apply_no_follow_final_component(&mut options);
+            let file = options.open(&path).map_err(|error| {
+                OrbitError::Io(format!("failed to open '{}': {error}", path.display()))
+            })?;
+            let metadata = file.metadata().map_err(|error| {
+                OrbitError::Io(format!("failed to inspect '{}': {error}", path.display()))
+            })?;
+            if !metadata.is_file() {
+                return Err(OrbitError::InvalidInput(format!(
+                    "host identity path must open as a regular {HOST_TOML_FILE} file inside '{}': {}",
+                    global_root.display(),
+                    path.display()
+                )));
+            }
+
+            Ok(Some((path, file)))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(OrbitError::Io(format!(
             "failed to inspect host identity '{}': {error}",
-            canonical_path.display()
+            path.display()
         ))),
     }
 }
+
+#[cfg(unix)]
+fn apply_no_follow_final_component(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.custom_flags(libc::O_NOFOLLOW);
+}
+
+#[cfg(windows)]
+fn apply_no_follow_final_component(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn apply_no_follow_final_component(_options: &mut OpenOptions) {}
 
 fn non_blank(value: &Option<String>) -> Option<String> {
     value
@@ -217,10 +281,33 @@ fn non_blank(value: &Option<String>) -> Option<String> {
 /// for malformed, incomplete, blank, or future-schema files (fail closed —
 /// never rewrites the file).
 pub fn inspect_host_identity(global_root: &Path) -> Result<HostIdentityState, OrbitError> {
-    let Some(path) = validated_host_toml_path(global_root)? else {
+    inspect_host_identity_with_hook(global_root, |_| Ok(()))
+}
+
+#[cfg(test)]
+pub(crate) fn inspect_host_identity_after_check<F>(
+    global_root: &Path,
+    before_open: F,
+) -> Result<HostIdentityState, OrbitError>
+where
+    F: FnOnce(&Path) -> Result<(), OrbitError>,
+{
+    inspect_host_identity_with_hook(global_root, before_open)
+}
+
+fn inspect_host_identity_with_hook<F>(
+    global_root: &Path,
+    before_open: F,
+) -> Result<HostIdentityState, OrbitError>
+where
+    F: FnOnce(&Path) -> Result<(), OrbitError>,
+{
+    let Some((path, mut file)) = open_existing_host_toml_with_hook(global_root, before_open)?
+    else {
         return Ok(HostIdentityState::Absent);
     };
-    let raw_text = std::fs::read_to_string(&path)
+    let mut raw_text = String::new();
+    file.read_to_string(&mut raw_text)
         .map_err(|error| OrbitError::Io(format!("failed to read '{}': {error}", path.display())))?;
     let parsed: RawHostToml = toml::from_str(&raw_text).map_err(|error| {
         OrbitError::InvalidInput(format!(
