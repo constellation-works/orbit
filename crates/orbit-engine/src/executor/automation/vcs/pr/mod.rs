@@ -1,11 +1,13 @@
 //! PR automation split across focused seams for maintainability. `attribution`
 //! owns Review/Done actor labels, `body` owns PR rendering, `open` owns
-//! create-or-reuse, `promote` owns the explicit Review handoff, and `merge`
-//! owns approved-PR merge, remote cleanup, and Done reconciliation.
+//! create-or-reuse, `promote` owns the explicit Review handoff, `merge` owns
+//! approved-PR merge, remote cleanup, and Done reconciliation, and `delivery`
+//! owns the candidate identity and merge evidence completion runs behind.
 
 mod attribution;
 mod body;
 mod complete;
+mod delivery;
 mod merge;
 mod open;
 mod promote;

@@ -357,6 +357,9 @@ fn preserved_checkpoint_resume(checkpoint: ResumeCheckpoint) {
             "number": 42,
             "state": "MERGED",
             "mergedAt": "2026-09-07T00:00:00Z",
+            "headRefName": "orbit/test-batch",
+            "baseRefName": "agent-main",
+            "mergeCommit": { "oid": "resumed-merge-commit" },
         }),
     ]);
 

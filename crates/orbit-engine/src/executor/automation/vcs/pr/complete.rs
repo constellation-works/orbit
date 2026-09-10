@@ -22,6 +22,12 @@
 //! completion reuses the ordinary pinned `git_rebase` and lease-checked push
 //! boundaries. Only a rebase that proves unmerged index entries can reach the
 //! existing bounded conflict-recovery leaf.
+//!
+//! [ORB-11982] tightens what "merged" is allowed to mean. The same checkpoints
+//! also pin *which* pull request this run may deliver, so a base-modification
+//! race that repoints the PR, a head this run never published, or a merged
+//! state reported without a merge commit all refuse completion instead of
+//! reaching the transition. See [`super::delivery`].
 
 use std::thread::sleep;
 use std::time::Duration;
@@ -42,6 +48,7 @@ use super::super::git::{base_sync_mode_from_input, resolve_worktree_start_point}
 use super::super::handoff::load_handoff_context;
 use super::super::operations;
 use super::super::push::push_batch_changes;
+use super::delivery::{DeliveryEvidence, DeliveryPin};
 use super::merge::{MergeCapabilities, MergeStrategy, resolve_merge_capabilities};
 
 /// Default budget for waiting out required checks before giving up.
@@ -73,6 +80,7 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
         .iter()
         .map(|task| task.id.clone())
         .collect::<Vec<_>>();
+    let mut delivery_fragment = None;
     let merge_outcome = if no_diff_expected {
         if let Some(checkpoint) = input.get("already_landed_checkpoint").filter(|value| {
             value.get("decision").and_then(Value::as_str) == Some("verified_already_landed")
@@ -94,7 +102,7 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
     } else {
         let workspace_path = context.workspace_path.to_string_lossy().into_owned();
         let pr_number = resolve_pr_number(input, &context.tasks)?;
-        let outcome = drive_pr_to_merged(host, input, &workspace_path, &pr_number)?;
+        let delivered = drive_pr_to_merged(host, input, &workspace_path, &pr_number)?;
         // [ORB-11333] The certificate only carries into coverage when the
         // landing that actually happened is verified against it.
         if let Some(reviewed_head_sha) = reviewed_head_sha(input) {
@@ -105,16 +113,30 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
                 pr_number: pr_number.clone(),
                 base: input_string_field(input, "base").unwrap_or_default(),
                 reviewed_head_sha,
-                managed_merge: outcome["managed_merge"].as_bool().unwrap_or(false),
-                landed_commit: outcome
+                managed_merge: delivered.outcome["managed_merge"]
+                    .as_bool()
+                    .unwrap_or(false),
+                landed_commit: delivered
+                    .outcome
                     .get("landed_commit")
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned),
             })?;
         }
-        outcome
+        delivery_fragment = Some(delivered.evidence.authorization_fragment());
+        delivered.outcome
     };
-    let authorization = authorization_note(input, &context.batch_id);
+
+    // [ORB-11982] Name the evidence that permitted `done` in durable task
+    // history, so a later reader can tell this transition apart from one an
+    // unattributed writer applied.
+    let authorization = match delivery_fragment {
+        Some(fragment) => format!(
+            "{}; {fragment}",
+            authorization_note(input, &context.batch_id)
+        ),
+        None => authorization_note(input, &context.batch_id),
+    };
     let completion = complete_tasks(host, &context.batch_id, &task_ids, &authorization)?;
 
     Ok(json!({
@@ -127,6 +149,13 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
     }))
 }
 
+/// A merge this run is authorized to complete on, with the evidence that
+/// established it.
+struct DeliveredMerge {
+    outcome: Value,
+    evidence: DeliveryEvidence,
+}
+
 /// Poll GitHub until the PR is verifiably merged, requesting the merge (or
 /// auto-merge) as its reported state allows.
 fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
@@ -134,7 +163,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
-) -> Result<Value, OrbitError> {
+) -> Result<DeliveredMerge, OrbitError> {
     let max_wait_seconds = bounded_u64(
         input,
         "max_wait_seconds",
@@ -156,27 +185,36 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let mut merge_capabilities: Option<MergeCapabilities> = None;
 
     let reviewed_head_sha = reviewed_head_sha(input);
+    // [ORB-11982] The candidate this run is authorized to deliver. It moves
+    // exactly once, when the bounded conflict repair below rewrites and
+    // lease-pushes the same branch.
+    let mut pin = DeliveryPin::from_input(input);
 
     loop {
         let status = read_pr_status(host, workspace_path, pr_number)?;
         match classify(&status) {
             PrMergeState::Merged => {
+                let evidence = pin.ensure_delivered(&status, pr_number)?;
                 let landed_commit = status.pointer("/mergeCommit/oid").and_then(Value::as_str);
                 let managed_merge = requested_landed_commit
                     .as_deref()
                     .is_some_and(|requested| Some(requested) == landed_commit);
-                return Ok(json!({
-                    "merged": true,
-                    "pr_number": pr_number,
-                    "strategy": merge_capabilities.map(|capabilities| capabilities.strategy.as_str()),
-                    "auto_merge_requested": auto_merge_requested,
-                    "waited_seconds": waited_seconds,
-                    "max_wait_seconds": max_wait_seconds,
-                    "poll_interval_seconds": poll_interval_seconds,
-                    "landed_commit": landed_commit,
-                    "managed_merge": managed_merge,
-                    "reviewed_head_sha": reviewed_head_sha,
-                }));
+                return Ok(DeliveredMerge {
+                    outcome: json!({
+                        "merged": true,
+                        "pr_number": pr_number,
+                        "strategy": merge_capabilities.map(|capabilities| capabilities.strategy.as_str()),
+                        "auto_merge_requested": auto_merge_requested,
+                        "waited_seconds": waited_seconds,
+                        "max_wait_seconds": max_wait_seconds,
+                        "poll_interval_seconds": poll_interval_seconds,
+                        "landed_commit": landed_commit,
+                        "managed_merge": managed_merge,
+                        "reviewed_head_sha": reviewed_head_sha,
+                        "delivery_evidence": evidence.as_json(),
+                    }),
+                    evidence,
+                });
             }
             PrMergeState::Closed => {
                 return Err(OrbitError::Execution(format!(
@@ -184,11 +222,21 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                      the task stays in review"
                 )));
             }
+            PrMergeState::Contradictory(reason) => {
+                return Err(OrbitError::Execution(format!(
+                    "delivery_evidence_stale: pull request #{pr_number} reports a contradictory \
+                     merge state ({reason}); completion needs an unambiguous merged state, so the \
+                     task stays in review"
+                )));
+            }
             PrMergeState::Blocked(reason) => {
+                let diagnosis = pin
+                    .base_advance_note(input, workspace_path)
+                    .unwrap_or_default();
                 return Err(OrbitError::Execution(format!(
                     "pr_complete: pull request #{pr_number} cannot be merged ({reason}); \
                      branch protection or required reviews are unsatisfied and this run does not \
-                     bypass them — the task stays in review"
+                     bypass them — the task stays in review.{diagnosis}"
                 )));
             }
             PrMergeState::Conflict => {
@@ -204,7 +252,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 if conflict_refresh_attempted || !has_completion_recovery_checkpoint(input) {
                     return Err(completion_conflict_error(pr_number));
                 }
-                refresh_conflicting_pr_branch(host, input, workspace_path, pr_number, &status)?;
+                let refreshed =
+                    refresh_conflicting_pr_branch(host, input, workspace_path, pr_number, &status)?;
+                pin.adopt_refreshed_candidate(refreshed.as_deref());
                 conflict_refresh_attempted = true;
                 // The existing PR remains authoritative. Re-read its state
                 // after the branch update rather than inferring mergeability
@@ -212,6 +262,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 continue;
             }
             PrMergeState::Mergeable => {
+                pin.ensure_candidate_identity(&status, pr_number)?;
                 ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
                 if !merge_requested {
                     let capabilities = resolved_capabilities(
@@ -241,6 +292,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 }
             }
             PrMergeState::Pending => {
+                pin.ensure_candidate_identity(&status, pr_number)?;
                 ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
                 // The CLI auto-merge path cannot retain the review condition.
                 // Gated runs wait locally and use the conditional synchronous
@@ -305,6 +357,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
 enum PrMergeState {
     Merged,
     Closed,
+    /// The provider's answer disagrees with itself about whether this PR
+    /// merged. Completion refuses rather than picking the convenient half.
+    Contradictory(String),
     /// Merging is refused by a gate this run must not bypass.
     Blocked(String),
     /// GitHub reports a content conflict. The local rebase boundary must prove
@@ -322,9 +377,22 @@ fn classify(pull_request: &Value) -> PrMergeState {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_ascii_uppercase();
-    let merged_at = pull_request.get("mergedAt").and_then(Value::as_str);
-    if state == "MERGED" || merged_at.is_some_and(|value| !value.trim().is_empty()) {
+    if state == "MERGED" {
         return PrMergeState::Merged;
+    }
+    // [ORB-11982] A merge timestamp on a pull request the provider does not
+    // report as merged is the shape F2026-09-102 recorded: an open PR that
+    // nonetheless looks delivered. Only the authoritative `state` may close a
+    // run, so the disagreement itself becomes the refusal.
+    let merged_at = pull_request
+        .get("mergedAt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(merged_at) = merged_at {
+        return PrMergeState::Contradictory(format!(
+            "state '{state}' alongside merge timestamp {merged_at}"
+        ));
     }
     if state == "CLOSED" {
         return PrMergeState::Closed;
@@ -413,13 +481,17 @@ fn completion_conflict_error(pr_number: &str) -> OrbitError {
 /// `RecoverableVcsConflict` as the pre-publication synchronization step; all
 /// other fetch, ownership, authorization, and push failures stay untyped and
 /// cannot launch the conflict-recovery agent.
+///
+/// Returns the rewritten candidate SHA now published on the branch, which is
+/// the only SHA other than the original published head that completion may
+/// later accept as delivered.
 fn refresh_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
     pull_request: &Value,
-) -> Result<(), OrbitError> {
+) -> Result<Option<String>, OrbitError> {
     let head =
         input_string_field(input, "head").ok_or_else(|| completion_conflict_error(pr_number))?;
     let published_head_sha = input_string_field(input, "published_head_sha")
@@ -490,7 +562,10 @@ fn refresh_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
         "expected_remote_sha": synced["remote_sha_before"],
     });
     push_batch_changes(host, &push_input)?;
-    Ok(())
+    Ok(synced
+        .get("head_sha")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned))
 }
 
 fn read_pr_status<H: RuntimeHost + ?Sized>(
