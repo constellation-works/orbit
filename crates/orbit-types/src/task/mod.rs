@@ -15,11 +15,11 @@ pub use artifacts::{
     ORB_TASK_ID_WIDTH, TASK_ACCEPTANCE_FILE_NAME, TASK_ARTIFACT_FILES_DIR_NAME,
     TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME,
     TASK_COMMENTS_FILE_NAME, TASK_DESCRIPTION_FILE_NAME, TASK_ENVELOPE_FILE_NAME,
-    TASK_EVENTS_FILE_NAME, TASK_EXECUTION_SUMMARY_FILE_NAME, TASK_PLAN_FILE_NAME, TaskCommentRowV2,
-    TaskEnvelopeV2, TaskEventRowV2, TaskRelation, TaskRelationEdge, TaskRelationType,
-    format_orb_task_id, format_task_id, is_valid_orb_task_id, is_valid_task_id_prefix,
-    parse_task_number, task_id_prefix, validate_orb_task_id, validate_relative_artifact_path,
-    validate_task_relations_for_source,
+    TASK_EVENTS_FILE_NAME, TASK_EXECUTION_SUMMARY_FILE_NAME, TASK_PLAN_FILE_NAME,
+    TaskArtifactMetadata, TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2, TaskRelation,
+    TaskRelationEdge, TaskRelationType, format_orb_task_id, format_task_id, is_valid_orb_task_id,
+    is_valid_task_id_prefix, parse_task_number, serialize_task_artifacts, task_id_prefix,
+    validate_orb_task_id, validate_relative_artifact_path, validate_task_relations_for_source,
 };
 pub use model::{
     ArtifactPresentation, DEFAULT_TASK_LIST_LIMIT, DependencyDeadEnd, ExternalRef,

@@ -436,12 +436,29 @@ fn lightweight_listing_skips_artifact_payload_io() {
     let strict_ms = strict_started.elapsed().as_secs_f64() * 1000.0;
     let strict_payload_opens = take_artifact_payload_reads();
 
+    let manifest_started = Instant::now();
+    for id in &ids {
+        let manifest = store.get_task_artifact_manifest(id).unwrap().unwrap();
+        assert_eq!(manifest.len(), 1);
+    }
+    let manifest_ms = manifest_started.elapsed().as_secs_f64() * 1000.0;
+    let manifest_payload_opens = take_artifact_payload_reads();
+
+    let single_artifact = store
+        .get_task_artifact(&ids[0], "proof.txt")
+        .unwrap()
+        .unwrap();
+    assert_eq!(single_artifact.content.len(), BLOB_BYTES);
+    let single_artifact_opens = take_artifact_payload_reads();
+
     assert_eq!(listed.len(), TASKS);
     assert_eq!(searched.len(), TASKS);
     assert_eq!(page.items.len(), TASKS);
     assert_eq!(list_payload_opens, 0);
     assert_eq!(search_payload_opens, 0);
     assert_eq!(row_payload_opens, 0);
+    assert_eq!(manifest_payload_opens, 0);
+    assert_eq!(single_artifact_opens, 1);
     assert_eq!(strict_payload_opens, TASKS);
 
     println!(
@@ -452,6 +469,7 @@ fn lightweight_listing_skips_artifact_payload_io() {
             "lightweight_list_ms": list_ms,
             "lightweight_search_ms": search_ms,
             "lightweight_rows_ms": rows_ms,
+            "lightweight_manifest_ms": manifest_ms,
             "strict_get_all_ms": strict_ms,
             "lightweight_list_payload_opens": list_payload_opens,
             "lightweight_search_payload_opens": search_payload_opens,

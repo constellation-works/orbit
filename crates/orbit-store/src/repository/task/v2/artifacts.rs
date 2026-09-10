@@ -39,7 +39,7 @@ impl TaskV2Store {
         id: &str,
     ) -> Result<Option<Vec<ArtifactManifestFileV2>>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
-        let bundle = match self.bundle_store.read_bundle(id) {
+        let bundle = match self.bundle_store.read_bundle_lightweight(id) {
             Ok(bundle) => bundle,
             Err(OrbitError::NotFound {
                 kind: NotFoundKind::Task,

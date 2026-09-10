@@ -135,16 +135,14 @@ impl Execute for TaskShowArgs {
                     );
                 }
             }
-            let artifacts = runtime.get_task_artifacts(&task.id)?;
+            let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
             if !artifacts.is_empty() {
                 let _ = writeln!(out, "{}", bold("Artifacts:"));
                 for artifact in artifacts {
                     let _ = writeln!(
                         out,
                         "  - {} ({}, {} bytes)",
-                        artifact.path,
-                        artifact.media_type,
-                        artifact.content.len()
+                        artifact.path, artifact.media_type, artifact.size_bytes
                     );
                 }
             }

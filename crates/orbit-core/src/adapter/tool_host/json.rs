@@ -6,7 +6,8 @@ use orbit_common::OrbitError;
 use orbit_types::task::{
     ArtifactPresentation, MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskComment,
     TaskHistoryEntry, TaskStatus, artifact_presentation, resolve_task_dependencies,
-    resolve_task_relations, task_show_record_field_json, unknown_task_show_field_message,
+    resolve_task_relations, serialize_task_artifacts, task_show_record_field_json,
+    unknown_task_show_field_message,
 };
 use serde_json::{Map, Value, json};
 
@@ -168,38 +169,11 @@ fn task_field_to_json(
         "orchestrator" => serde_json::to_value(&task.orchestrator)
             .map_err(serialize_error("serialize orchestrator")),
         "artifacts" => Ok(serialize_task_artifacts(
-            &runtime.get_task_artifacts(&task.id)?,
+            &runtime.get_task_artifact_manifest(&task.id)?,
         )),
         other => task_show_record_field_json(task, other)
             .ok_or_else(|| OrbitError::InvalidInput(unknown_task_show_field_message(other))),
     }
-}
-
-pub(super) fn serialize_task_artifacts(artifacts: &[TaskArtifact]) -> Value {
-    Value::Array(
-        artifacts
-            .iter()
-            .map(|artifact| {
-                let mut object = Map::new();
-                object.insert("path".to_string(), Value::String(artifact.path.clone()));
-                object.insert(
-                    "media_type".to_string(),
-                    Value::String(artifact.media_type.clone()),
-                );
-                if let Some(created_by) = &artifact.created_by {
-                    object.insert("created_by".to_string(), Value::String(created_by.clone()));
-                }
-                object.insert(
-                    "size".to_string(),
-                    Value::Number(serde_json::Number::from(artifact.content.len())),
-                );
-                if let Some(content) = artifact.text_content() {
-                    object.insert("content".to_string(), Value::String(content.to_string()));
-                }
-                Value::Object(object)
-            })
-            .collect(),
-    )
 }
 
 fn serialize_comments(comments: &[TaskComment]) -> Result<Value, OrbitError> {

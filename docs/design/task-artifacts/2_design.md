@@ -139,7 +139,7 @@ files:
 
 Manifest paths are stored in canonical relative form: slash-separated, no absolute paths, no `..`, no `.`, and no leading `./`. Writers that ingest hand-authored manifests should normalize a leading `./` before validation. SHA-256 values are lowercase hex; writer code should format digest bytes with lowercase hex (`{:x}`).
 
-Text artifacts may still be rendered inline by `orbit.task.show --field artifacts`, but storage and API DTOs must not require UTF-8.
+Task artifact discovery surfaces (`orbit.task.show --field artifacts`, `orbit task artifacts --task <ID>`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact.get` or the dashboard download route.
 
 ## 5a. Image Artifacts, Presentation, and Retrieval
 
@@ -159,7 +159,7 @@ Metadata listing stays compact and payloads are fetched on demand:
 | view | CLI | `orbit task artifact get <ID> <PATH> [--out FILE]` |
 | view | dashboard | task detail → click the artifact row |
 
-The listing never carries binary payloads, so a task with a large screenshot stays cheap to inspect. `orbit.task.artifact.get` reads through the same owning task bundle the dashboard route uses — there is no second artifact store, and no way to reach an artifact except through the task that owns it.
+The listing never carries artifact payloads, so a task with a large screenshot or log stays cheap to inspect. `orbit.task.artifact.get` reads through the same owning task bundle the dashboard route uses — there is no second artifact store, and no way to reach an artifact except through the task that owns it.
 
 ### Supported formats and the presentation classes
 
