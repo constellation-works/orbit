@@ -53,14 +53,14 @@ impl SqliteJobRunStore {
     ) -> Result<bool, OrbitError> {
         self.store
             .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-                let Some(mut run) =
-                    get_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, run_id)?
-                else {
-                    return Ok(false);
+                let maybe_run = get_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, run_id)?;
+                let found = maybe_run.is_some();
+                let Some(mut run) = maybe_run else {
+                    return Ok(found);
                 };
                 update(&mut run)?;
                 upsert_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, &run, None)?;
-                Ok(true)
+                Ok(found)
             })
     }
 
