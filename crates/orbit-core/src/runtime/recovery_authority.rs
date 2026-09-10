@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -43,6 +43,7 @@ const AUTHORITY_FILE_MODE: u32 = 0o600;
 
 /// The durable record a host writes when it completes a rebase recovery, and
 /// the only evidence a later resume will accept.
+#[derive(Debug)]
 pub(crate) struct RecoveryAuthority {
     connection: Connection,
 }
@@ -65,6 +66,8 @@ impl RecoveryAuthority {
     /// Open (creating on first use) the authority for `global_root`.
     pub(crate) fn open(global_root: &Path) -> Result<Self, OrbitError> {
         let root = authority_root(global_root)?;
+        refuse_symlinked_authority_files(&root)?;
+
         let connection = Connection::open(root.join(AUTHORITY_DB))
             .map_err(|error| authority_error("open recovery authority database", error))?;
 
@@ -252,34 +255,136 @@ fn canonical_json(value: &Value) -> String {
     }
 }
 
-/// The protected root, created and validated on demand.
+/// The protected root, validated before any filesystem effect.
 ///
-/// A symlink anywhere in the path would let a writable location stand in for
-/// the authority, so refuse that layout outright rather than deny a pointer
-/// that can be replaced.
+/// Order matters: the trusted root is established first, and only then is the
+/// authority tree created beneath it. Creating first and canonicalizing
+/// afterwards would erase exactly the aliases the check is looking for, so a
+/// symlink planted below the root would be followed and then declared clean.
 fn authority_root(global_root: &Path) -> Result<PathBuf, OrbitError> {
-    let root = global_root.join(AUTHORITY_DIR);
-    fs::create_dir_all(&root)
-        .map_err(|error| path_error("create recovery authority root", &root, error))?;
-    let root = root
-        .canonicalize()
-        .map_err(|error| path_error("canonicalize recovery authority root", &root, error))?;
-    refuse_symlinked_path(&root)?;
-    Ok(root)
+    let trusted = validated_authority_global_root(global_root)?;
+    create_authority_root_under(&trusted)
 }
 
-fn refuse_symlinked_path(path: &Path) -> Result<(), OrbitError> {
-    for ancestor in path.ancestors() {
-        let metadata = fs::symlink_metadata(ancestor)
-            .map_err(|error| path_error("inspect recovery authority path", ancestor, error))?;
+/// Establish the trusted root the authority tree may be built under.
+///
+/// The configured global root reaches this module from `~/.orbit` or from a
+/// managed run's registry locator, so it is untrusted input: it is required to
+/// be an absolute, traversal-free path that already exists as a directory, and
+/// it is resolved *without writing anything*. Aliasing in the configured root
+/// itself is the operator's — a symlinked `$HOME` or a macOS `/var` prefix is a
+/// supported layout, and anyone able to redirect the global root already owns
+/// the run store the authority exists to outrank — so it is resolved once here
+/// and the canonical result becomes the trusted root every later join is
+/// anchored to.
+fn validated_authority_global_root(global_root: &Path) -> Result<PathBuf, OrbitError> {
+    if !global_root.is_absolute() {
+        return Err(OrbitError::InvalidInput(format!(
+            "recovery authority root `{}` must be absolute",
+            global_root.display()
+        )));
+    }
+    if !global_root
+        .components()
+        .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "recovery authority root `{}` must not contain traversal components",
+            global_root.display()
+        )));
+    }
+
+    let trusted = global_root
+        .canonicalize()
+        .map_err(|error| path_error("resolve recovery authority root", global_root, error))?;
+    if !trusted.is_dir() {
+        return Err(OrbitError::InvalidInput(format!(
+            "recovery authority root `{}` must be an existing directory",
+            global_root.display()
+        )));
+    }
+    Ok(trusted)
+}
+
+/// Create `state/recovery-authority` one component at a time under `trusted`.
+///
+/// `create_dir_all` would happily follow a symlink standing in for `state` and
+/// leave the authority in a directory the planter controls. `create_dir` never
+/// writes through an existing entry, so each component is created inside a
+/// parent this walk has already confirmed is a real directory, and is then
+/// re-inspected without following links before it becomes the next parent.
+fn create_authority_root_under(trusted: &Path) -> Result<PathBuf, OrbitError> {
+    let mut root = trusted.to_path_buf();
+    for component in Path::new(AUTHORITY_DIR).components() {
+        root.push(component);
+        match fs::create_dir(&root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(path_error("create recovery authority root", &root, error));
+            }
+        }
+
+        let Some(metadata) = unfollowed_metadata(&root)? else {
+            return Err(path_error(
+                "inspect recovery authority path",
+                &root,
+                std::io::Error::from(std::io::ErrorKind::NotFound),
+            ));
+        };
         if metadata.file_type().is_symlink() {
+            return Err(refuse_symlinked(&root));
+        }
+        if !metadata.is_dir() {
             return Err(OrbitError::PolicyDenied(format!(
-                "recovery authority refuses symlinked path `{}`",
-                ancestor.display()
+                "recovery authority refuses non-directory path `{}`",
+                root.display()
             )));
         }
     }
+    Ok(root)
+}
+
+/// Refuse the authority database and its sidecars when any of them is a link.
+///
+/// A symlinked database file would let the certificate be read from, and
+/// written to, a file outside the protected root while every directory on the
+/// way there still looks correct. A missing sidecar is ordinary: SQLite creates
+/// and removes them around each connection.
+fn refuse_symlinked_authority_files(root: &Path) -> Result<(), OrbitError> {
+    for name in authority_file_names() {
+        let file = root.join(name);
+        if unfollowed_metadata(&file)?.is_some_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(refuse_symlinked(&file));
+        }
+    }
     Ok(())
+}
+
+/// The database and the two SQLite sidecars that share its protected root.
+fn authority_file_names() -> [String; 3] {
+    [
+        AUTHORITY_DB.to_string(),
+        format!("{AUTHORITY_DB}-wal"),
+        format!("{AUTHORITY_DB}-shm"),
+    ]
+}
+
+/// `path`'s own metadata, never the metadata of a symlink's target. `None` when
+/// nothing is there.
+fn unfollowed_metadata(path: &Path) -> Result<Option<fs::Metadata>, OrbitError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(path_error("inspect recovery authority path", path, error)),
+    }
+}
+
+fn refuse_symlinked(path: &Path) -> OrbitError {
+    OrbitError::PolicyDenied(format!(
+        "recovery authority refuses symlinked path `{}`",
+        path.display()
+    ))
 }
 
 #[cfg(unix)]
@@ -288,11 +393,7 @@ fn restrict_permissions(root: &Path) -> Result<(), OrbitError> {
 
     fs::set_permissions(root, fs::Permissions::from_mode(AUTHORITY_DIR_MODE))
         .map_err(|error| path_error("restrict recovery authority root", root, error))?;
-    for name in [
-        AUTHORITY_DB.to_string(),
-        format!("{AUTHORITY_DB}-wal"),
-        format!("{AUTHORITY_DB}-shm"),
-    ] {
+    for name in authority_file_names() {
         let file = root.join(name);
         if file.exists() {
             fs::set_permissions(&file, fs::Permissions::from_mode(AUTHORITY_FILE_MODE))

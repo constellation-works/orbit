@@ -255,7 +255,8 @@ fn checkpoints_written_before_the_boundary_have_no_record() {
 /// Rule *shape*: the deny lands last and is a subtree, which is what makes it
 /// cover `authority.db` together with the `-wal` and `-shm` sidecars a writer
 /// could otherwise use to inject rows. Enforcement of these rules is proven
-/// against a live sandbox in `tests/recovery_authority_linux.rs`.
+/// against a live sandbox in
+/// `adapter/engine_host/v2_host/tests/recovery_authority_sandbox.rs`.
 #[test]
 fn the_authority_deny_is_a_subtree_rule_appended_after_every_grant() {
     let global = TempDir::new().expect("global root");
@@ -295,5 +296,193 @@ fn the_authority_deny_is_a_subtree_rule_appended_after_every_grant() {
     assert_eq!(
         resolved.modify.iter().filter(|rule| *rule == &deny).count(),
         1
+    );
+}
+
+/// The configured global root may legitimately be reached through a symlink —
+/// a symlinked `$HOME` is a supported layout — so it is resolved to its trusted
+/// target rather than refused. What must hold is that resolution is *stable*:
+/// both spellings name one authority, so a certificate issued through the alias
+/// is the same record the canonical path reads back.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_global_root_resolves_to_one_trusted_authority() {
+    use std::os::unix::fs::symlink;
+
+    let base = TempDir::new().expect("base");
+    let workspace = TempDir::new().expect("workspace");
+    let real = base.path().join("real-global");
+    let alias = base.path().join("aliased-global");
+    std::fs::create_dir(&real).expect("real global root");
+    symlink(&real, &alias).expect("global root symlink");
+
+    let accepted = checkpoint(RUN_ID, STEP_ID, workspace.path());
+    RecoveryAuthority::open(&alias)
+        .expect("open through the alias")
+        .issue(RUN_ID, STEP_ID, &accepted)
+        .expect("issue through the alias");
+
+    assert!(
+        real.join("state/recovery-authority/authority.db").is_file(),
+        "the authority must land under the trusted target, not beside the link",
+    );
+    assert!(
+        !alias.symlink_metadata().expect("alias metadata").is_dir(),
+        "the alias itself must stay a symlink rather than be replaced",
+    );
+    assert!(
+        RecoveryAuthority::open(&real)
+            .expect("open through the trusted target")
+            .verify(RUN_ID, STEP_ID, &accepted)
+            .expect("verify through the trusted target"),
+        "both spellings must resolve to the same certificate",
+    );
+}
+
+/// The same property one level up: an aliased *ancestor* of the global root
+/// resolves to the trusted target instead of forking the authority in two.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_ancestor_of_the_global_root_resolves_to_the_same_authority() {
+    use std::os::unix::fs::symlink;
+
+    let base = TempDir::new().expect("base");
+    let workspace = TempDir::new().expect("workspace");
+    let real_parent = base.path().join("real-parent");
+    std::fs::create_dir_all(real_parent.join("global")).expect("global root");
+    symlink(&real_parent, base.path().join("aliased-parent")).expect("ancestor symlink");
+
+    let accepted = checkpoint(RUN_ID, STEP_ID, workspace.path());
+    RecoveryAuthority::open(&base.path().join("aliased-parent/global"))
+        .expect("open through the aliased ancestor")
+        .issue(RUN_ID, STEP_ID, &accepted)
+        .expect("issue through the aliased ancestor");
+
+    assert!(
+        real_parent
+            .join("global/state/recovery-authority/authority.db")
+            .is_file(),
+        "the authority must land under the trusted target of the aliased ancestor",
+    );
+    assert!(
+        RecoveryAuthority::open(&real_parent.join("global"))
+            .expect("open through the trusted target")
+            .verify(RUN_ID, STEP_ID, &accepted)
+            .expect("verify through the trusted target"),
+    );
+}
+
+/// The regression this module exists for. A symlink standing in for a component
+/// *below* the trusted root used to be followed by `create_dir_all` and then
+/// declared clean, because the symlink check ran on an already canonicalized
+/// path. Each layout below must be refused with nothing created at the
+/// redirection target.
+#[cfg(unix)]
+#[test]
+fn a_symlink_below_the_trusted_root_is_refused_before_anything_is_created() {
+    use std::os::unix::fs::symlink;
+
+    for (label, link, target_probe) in [
+        ("authority parent", "state", "recovery-authority"),
+        ("authority root", "state/recovery-authority", "authority.db"),
+    ] {
+        let global = TempDir::new().expect("global root");
+        let elsewhere = TempDir::new().expect("redirection target");
+        let link = global.path().join(link);
+        if let Some(parent) = link.parent() {
+            std::fs::create_dir_all(parent).expect("link parent");
+        }
+        symlink(elsewhere.path(), &link).expect("plant redirection symlink");
+
+        let error =
+            RecoveryAuthority::open(global.path()).expect_err("a redirected component must fail");
+        assert!(
+            error.to_string().contains("symlinked path"),
+            "`{label}` must be refused as a symlink: {error}",
+        );
+        assert!(
+            !elsewhere.path().join(target_probe).exists(),
+            "`{label}` redirected authority state into `{}`",
+            elsewhere.path().display(),
+        );
+        assert!(
+            link.symlink_metadata()
+                .expect("link metadata")
+                .file_type()
+                .is_symlink(),
+            "the planted `{label}` link must be left untouched, not written through",
+        );
+
+        // The deny appended to a sandbox profile derives from the same root, so
+        // it must refuse the redirected layout too rather than name a path the
+        // authority never uses.
+        let mut resolved = ResolvedFsProfile {
+            name: "implementer".to_string(),
+            read: vec!["/**".to_string()],
+            modify: Vec::new(),
+        };
+        let error = append_recovery_authority_denies(global.path(), &mut resolved)
+            .expect_err("a redirected root must not yield a deny rule");
+        assert!(error.to_string().contains("symlinked path"), "{error}");
+        assert!(resolved.modify.is_empty());
+    }
+}
+
+/// A symlinked database file keeps every directory on the way there looking
+/// correct while the certificate is read from, and written to, a file outside
+/// the protected root.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_authority_database_is_refused() {
+    use std::os::unix::fs::symlink;
+
+    for name in ["authority.db", "authority.db-wal", "authority.db-shm"] {
+        let (global, _workspace, _accepted) = fixture();
+        let elsewhere = TempDir::new().expect("redirection target");
+        let planted = elsewhere.path().join("planted.db");
+        std::fs::write(&planted, b"planted").expect("planted file");
+
+        let file = global.path().join("state/recovery-authority").join(name);
+        std::fs::remove_file(&file).ok();
+        symlink(&planted, &file).expect("plant database symlink");
+
+        let error = RecoveryAuthority::open(global.path())
+            .expect_err("a symlinked database file must not be opened");
+        assert!(
+            error.to_string().contains("symlinked path"),
+            "`{name}` must be refused as a symlink: {error}",
+        );
+        assert_eq!(
+            std::fs::read(&planted).expect("planted contents"),
+            b"planted",
+            "`{name}` let the authority write outside the protected root",
+        );
+    }
+}
+
+/// The configured root is untrusted input, so a shape that would resolve
+/// against the process working directory — or climb out of itself — is refused
+/// before it can select where authority state lives.
+#[test]
+fn an_unanchored_global_root_is_refused() {
+    for (label, root) in [
+        ("relative", Path::new("relative/global").to_path_buf()),
+        ("traversing", Path::new("/tmp/../tmp/global").to_path_buf()),
+    ] {
+        let error = RecoveryAuthority::open(&root).expect_err("an unanchored root must fail");
+        assert!(
+            matches!(error, orbit_common::OrbitError::InvalidInput(_)),
+            "a `{label}` root must be refused as invalid input: {error}",
+        );
+    }
+
+    let base = TempDir::new().expect("base");
+    let error = RecoveryAuthority::open(&base.path().join("never-created"))
+        .expect_err("a missing root must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("resolve recovery authority root"),
+        "{error}",
     );
 }

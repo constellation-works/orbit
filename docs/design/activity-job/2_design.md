@@ -279,6 +279,16 @@ and unrenameable as a mountpoint. Removing the `orbit.db` grants was rejected as
 the fix: it would break admitted leaf writes without making the remaining
 evidence authentic.
 
+The trusted root is established before any filesystem effect. The configured
+global root must be absolute and traversal-free and must already exist; it is
+resolved once, without writing, and the canonical result anchors every later
+join. Aliasing in the configured root itself — a symlinked `$HOME`, a macOS
+`/var` prefix — is a supported operator layout, and anyone able to redirect that
+root already owns the run store the authority exists to outrank. Below the
+trusted root the tree is created one component at a time, so a symlink standing
+in for `state` or `recovery-authority` is refused instead of followed, and the
+database and its sidecars are refused when any of them is a link.
+
 Confinement here is by location, not by a secret. Bubblewrap mounts the host
 filesystem `--ro-bind / /` and enforces only write boundaries, so a key file
 would be readable by every leaf and a keyed MAC would add no authority.
