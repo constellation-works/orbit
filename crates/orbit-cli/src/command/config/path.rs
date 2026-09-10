@@ -17,7 +17,7 @@ impl Execute for ConfigPathArgs {
         let path = if self.global {
             global_config_path(runtime)
         } else {
-            runtime.config_path()
+            runtime.config_path()?
         };
         println!("{}", path.to_string_lossy());
         Ok(CommandOutput::Silent)

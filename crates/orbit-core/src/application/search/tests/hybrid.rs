@@ -173,7 +173,7 @@ fn global_search_doc_hybrid_uses_docs_semantic_weight() {
 
     let top_path = |weight: f32| {
         fs::write(
-            runtime.config_path(),
+            runtime.config_path().expect("resolve config path"),
             format!("[docs.search]\nsemantic_weight = {weight:.1}\n"),
         )
         .expect("write config");

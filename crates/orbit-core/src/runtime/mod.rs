@@ -377,17 +377,23 @@ impl OrbitRuntime {
         self.workspace_binding.as_deref()
     }
 
-    /// Returns the effective config.toml path.
-    /// Workspace config replaces global if present; otherwise global.
-    pub fn config_path(&self) -> PathBuf {
+    /// Returns the effective `config.toml` path.
+    ///
+    /// Workspace config replaces global if present; a genuinely missing
+    /// workspace config falls back to global. Rejected workspace entries and
+    /// inspection failures remain visible to the caller instead of silently
+    /// changing precedence. This pathname records selection only; readers must
+    /// still open the file through a race-safe boundary.
+    pub fn config_path(&self) -> Result<PathBuf, OrbitError> {
         let shared_root = self.shared_root();
         let global_root = self.global_root();
         if shared_root != global_root
-            && let Ok(Some(ws_config)) = validated_config_path(&shared_root)
+            && let Some(workspace_config) = existing_workspace_config_path(&shared_root)?
         {
-            return ws_config;
+            return Ok(workspace_config);
         }
-        global_root.join(CONFIG_TOML_FILE)
+
+        Ok(global_root.join(CONFIG_TOML_FILE))
     }
 
     pub fn persistence_config_json(&self) -> Value {
@@ -694,14 +700,15 @@ impl OrbitRuntime {
 
 const CONFIG_TOML_FILE: &str = "config.toml";
 
-/// Resolve an existing workspace `config.toml` through its canonical root.
+/// Resolve an existing config root to the directory selected by the caller.
 ///
-/// The workspace root may be selected by an explicit runtime override
-/// (workspace discovery, `--root`, or an env var), but the file name is
-/// fixed. Canonicalizing the root and rejecting a symlinked result keeps the
-/// resolved path inside the selected root instead of following a planted
-/// symlink to an unintended location [ORB-11931].
-fn validated_config_path(root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+/// Runtime overrides and trusted directory aliases remain supported: an
+/// existing symlinked root resolves to its canonical target. Returning that
+/// validated root before deriving the fixed filename puts the validation
+/// boundary ahead of the child metadata probe. Final-component safety belongs
+/// to the descriptor-based reader; this boundary does not claim protection
+/// against privileged replacement of mutable ancestors.
+fn validated_existing_config_root(root: &Path) -> Result<Option<PathBuf>, OrbitError> {
     let canonical_root = match root.canonicalize() {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -712,7 +719,20 @@ fn validated_config_path(root: &Path) -> Result<Option<PathBuf>, OrbitError> {
             )));
         }
     };
-    let candidate = canonical_root.join(CONFIG_TOML_FILE);
+
+    Ok(Some(canonical_root))
+}
+
+/// Select the fixed workspace config leaf after the root validation boundary.
+///
+/// This no-follow metadata probe decides precedence and rejects an already
+/// visible invalid leaf. It does not authorize a later pathname read; config
+/// consumers reopen the selected path through their descriptor-based boundary.
+fn existing_workspace_config_path(root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let Some(validated_root) = validated_existing_config_root(root)? else {
+        return Ok(None);
+    };
+    let candidate = validated_root.join(CONFIG_TOML_FILE);
 
     match std::fs::symlink_metadata(&candidate) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
