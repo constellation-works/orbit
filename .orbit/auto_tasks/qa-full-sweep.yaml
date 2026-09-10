@@ -1,0 +1,59 @@
+schemaVersion: 1
+name: qa-full-sweep
+description: Intentional full pre-release Orbit end-to-end sign-off
+enabled: false
+schedule:
+  cron: 0 3 * * 0
+template:
+  title: Perform complete pre-release Orbit QA sign-off
+  description: |
+    Perform the workspace-local full Orbit release sweep described in
+    `docs/runbooks/qa-full-sweep.md`. This is a leaf QA mandate: do not repair
+    findings, invoke agents, dispatch jobs, deploy the website, publish npm, or
+    create tags/releases. Provider-backed checks are allowed only when the
+    operator has supplied the documented capability and budget bounds.
+
+    Start by recording the full source HEAD, `orbit --version`, the resolved
+    binary path and SHA-256, managed-asset manifest hashes, OS/architecture,
+    and relevant capability declarations. Run
+    `./scripts/qa-full-sweep.sh --run-commands --output
+    qa-full-sweep-report.json` from the repository root. Execute every scenario in
+    `scripts/qa-full-sweep-inventory.json`; commands marked manual or requiring
+    unavailable authentication, a provider, macOS, browser support, or public
+    post-publication state must be recorded as NOT_RUN or BLOCKED with the
+    missing capability. Linux evidence never verifies macOS.
+
+    Attach the JSON report and any referenced logs to this task through
+    `orbit.task.artifact.put`. A required FAIL, BLOCKED, or NOT_RUN makes the
+    release decision INCOMPLETE, never PASS. Website deployment and npm
+    publication are user-owned: validate build/package fixtures and report
+    public-version freshness as pending until the user performs publication.
+
+    For every failure, search both open and closed tasks through the
+    authoritative ws_orbit task/search surfaces using the exact error,
+    scenario, and affected boundary. Reuse an open owner when it covers the
+    same reproducer. A closed task is evidence to reassess, not permanent
+    suppression. File one task per non-duplicate defect with the exact command,
+    source revision, environment, log artifact, expected and observed result,
+    and severity; tag it `qa-full-sweep`. Record the finding-to-task mapping in
+    the report and this task's execution summary. Do not implement repairs.
+  acceptance_criteria:
+  - The inventory guard passes and every listed scenario has a recorded outcome and evidence reference.
+  - Source revision, binary identity, managed assets, platform, environment capabilities, and all executed commands are pinned in attached artifacts.
+  - Real isolated CLI, MCP, API/dashboard, workflow, lifecycle, routing, recovery, scheduling, GC, publication, and distribution boundaries are exercised where their declared capabilities are available.
+  - Every required failure or unavailable check makes the final decision INCOMPLETE; Linux-only evidence is not called macOS verification.
+  - Findings are deduplicated against open and closed ws_orbit tasks and each new defect is filed with a reproducer and mapped from the sweep report.
+  - The sweep performs no repairs, nested agent/job dispatch, release publication, website deployment, npm publication, tag, or release mutation.
+  task_type: chore
+  tags:
+  - qa-full-sweep
+  - release
+  - no-diff-expected
+  priority: high
+  crew: opus
+  status: backlog
+dedupe: skip_if_open
+created_by: codex
+created_at: 2026-09-10T07:20:00Z
+updated_by: codex
+updated_at: 2026-09-10T07:20:00Z
