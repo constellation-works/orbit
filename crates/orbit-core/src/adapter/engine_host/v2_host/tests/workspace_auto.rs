@@ -376,6 +376,109 @@ fn readiness_uses_the_classifier_candidate_pool() {
 }
 
 #[test]
+fn readiness_uses_the_active_drain_candidate_pool_for_a_conflict_free_tail() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "crates/shared/src/lib.rs");
+    write_workspace_file(&repo_root, "crates/outside/src/lib.rs");
+
+    let mut task_ids = (0..50)
+        .map(|index| {
+            seed_list_backlog_task(
+                &runtime,
+                &format!("Conflicting candidate {index}"),
+                TaskStatus::Backlog,
+                TaskPriority::Medium,
+                TaskType::Chore,
+                None,
+                vec!["crates/shared/src/lib.rs"],
+            )
+            .id
+        })
+        .collect::<Vec<_>>();
+    let outside_pool = seed_list_backlog_task(
+        &runtime,
+        "Conflict-free task after the candidate pool",
+        TaskStatus::Backlog,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        None,
+        vec!["crates/outside/src/lib.rs"],
+    );
+    task_ids.push(outside_pool.id.clone());
+
+    let drain_run_id = seed_running_drain_input(
+        &runtime,
+        json!({ "max_active_leaf_runs": 4, "max_tasks": "51" }),
+    );
+    let classified = classify_with(
+        &runtime,
+        json!({
+            "run_id": drain_run_id,
+            "max_active_leaf_runs": 4,
+            "max_tasks": "51",
+        }),
+    );
+    let readiness = runtime
+        .workspace_auto_readiness(&task_ids, None, 51, &[])
+        .expect("explain readiness");
+    let readiness_admitted = readiness["tasks"]
+        .as_array()
+        .expect("readiness tasks")
+        .iter()
+        .filter(|task| task["eligible"] == true)
+        .map(|task| task["task_id"].clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        &readiness_admitted,
+        classified["loose_task_ids"]
+            .as_array()
+            .expect("classified task ids")
+    );
+    assert_eq!(readiness["capacity"]["candidate_pool_size"], 51);
+    assert_eq!(readiness["capacity"]["candidate_pool_truncated"], false);
+    assert_eq!(
+        readiness_task(&readiness, &outside_pool.id)["reason"],
+        "ready"
+    );
+    assert_eq!(
+        readiness_task(&readiness, &outside_pool.id)["eligible"],
+        true
+    );
+}
+
+#[test]
+fn readiness_candidate_pool_parsing_matches_classifier_for_numeric_and_string_one() {
+    for max_tasks in [json!(1), json!("1")] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let tasks = seed_backlog_leaves(&runtime, 2);
+        let drain_run_id = seed_running_drain_input(
+            &runtime,
+            json!({ "max_active_leaf_runs": 2, "max_tasks": max_tasks }),
+        );
+        let input = json!({
+            "run_id": drain_run_id,
+            "max_active_leaf_runs": 2,
+            "max_tasks": max_tasks,
+        });
+
+        let classified = classify_with(&runtime, input);
+        let readiness = runtime
+            .workspace_auto_readiness(&tasks, None, tasks.len(), &[])
+            .expect("explain readiness");
+
+        assert_eq!(classified["candidate_pool_size"], 1);
+        assert_eq!(readiness["capacity"]["candidate_pool_size"], 1);
+        assert_eq!(classified["loose_task_ids"], json!([tasks[0]]));
+        assert_eq!(readiness_task(&readiness, &tasks[0])["reason"], "ready");
+        assert_eq!(
+            readiness_task(&readiness, &tasks[1])["reason"],
+            "outside_candidate_pool"
+        );
+    }
+}
+
+#[test]
 fn epic_descendants_are_dependency_then_dispatch_ordered_and_terminal_tasks_are_skipped() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let epic = runtime
