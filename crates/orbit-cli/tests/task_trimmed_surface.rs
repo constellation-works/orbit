@@ -385,7 +385,7 @@ fn migrate_bare_invocation_inspects_and_confirm_applies() {
     workspace.run(&["migrate", "--confirm"], "confirmed migration");
     assert_eq!(
         fs::read_to_string(&marker).expect("read applied marker"),
-        "2\n",
+        "3\n",
         "confirmed migrate must advance the layout"
     );
 }

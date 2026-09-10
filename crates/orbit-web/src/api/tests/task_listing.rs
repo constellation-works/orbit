@@ -80,7 +80,7 @@ async fn aggregate_selects_global_newest_rows_before_reading_off_page_workspace_
     let (alpha_orbit, alpha_repo) = seed_workspace(&global, temp.path(), "alpha");
     let alpha = OrbitRuntime::from_roots(&global, &alpha_orbit).unwrap();
     let corrupt = seed_task_with_artifact(&alpha);
-    let artifact = find_artifact_blob(&alpha.data_root(), "file.json").unwrap();
+    let artifact = find_artifact_blob(&alpha.global_root(), "file.json").unwrap();
     std::fs::write(artifact, "invalid artifact content").unwrap();
     assert!(alpha.get_task(&corrupt.id).is_err());
     let (beta_orbit, beta_repo) = seed_workspace(&global, temp.path(), "beta");
@@ -141,7 +141,7 @@ async fn task_list_detail_and_aggregate_leave_async_requests_runnable_during_blo
     for endpoint in ["list", "detail", "aggregate"] {
         let runtime = Arc::new(OrbitRuntime::in_memory().unwrap());
         let task = seed_task_with_artifact(&runtime);
-        let artifact = find_artifact_blob(&runtime.data_root(), "file.json").unwrap();
+        let artifact = find_artifact_blob(&runtime.global_root(), "file.json").unwrap();
         let description = artifact
             .ancestors()
             .find(|path| {

@@ -412,7 +412,10 @@ fn is_initialized_orbit_root(path: &Path) -> bool {
         return true;
     }
 
-    path.join("resources").is_dir() && path.join("tasks").is_dir() && path.join("state").is_dir()
+    // Task bundles are canonical in the global registry. The checkout-local
+    // `.orbit/tasks` projection was removed in layout version 3, so it cannot
+    // be part of the initialized-root probe anymore.
+    path.join("resources").is_dir() && path.join("state").is_dir()
 }
 
 fn resolve_root_path_value(raw: &str, base_dir: &Path) -> Result<PathBuf, OrbitError> {

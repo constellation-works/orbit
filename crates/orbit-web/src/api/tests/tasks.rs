@@ -557,7 +557,7 @@ fn swap_artifact_blob_for_symlink(
     runtime: &OrbitRuntime,
     target: &std::path::Path,
 ) -> std::path::PathBuf {
-    let blob_path = find_artifact_blob(&runtime.data_root(), "file.json")
+    let blob_path = find_artifact_blob(&runtime.global_root(), "file.json")
         .expect("artifact blob exists on disk");
     assert!(
         blob_path.components().any(|c| c.as_os_str() == "artifacts"),
