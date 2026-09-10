@@ -65,6 +65,7 @@ fi
 "$repo_root/scripts/check-orphan-modules.sh"
 "$repo_root/scripts/check-crate-agent-guides.sh"
 "$repo_root/scripts/check-embedded-asset-portability.py"
+"$repo_root/scripts/test-qa-full-sweep.py" --check
 "$repo_root/scripts/sync-activity-assets.sh" --check
 "$repo_root/scripts/sync-plugin-skills.sh" --check
 "$repo_root/scripts/test-validate-codex-plugin.sh"

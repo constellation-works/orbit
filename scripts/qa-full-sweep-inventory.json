@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "surface_contracts": {
+    "cli_top_level": [
+      "activity", "artifacts", "audit", "auto-task", "config", "docs",
+      "doctor", "executor", "friction", "gc", "host", "init", "job",
+      "log", "logs", "mcp", "migrate", "operation", "policy", "routine",
+      "run", "search", "semantic", "skill", "sweep", "task", "tool",
+      "update", "web", "workspace"
+    ],
+    "job_assets": [
+      "auto_task_scheduler_pipeline", "ci_failure_sweep_pipeline",
+      "epic_pipeline", "task_auto_pipeline", "task_gate_pipeline",
+      "task_local_pipeline", "task_pilot_pipeline", "task_pr_pipeline",
+      "task_triage_pipeline", "workspace_auto_pipeline",
+      "workspace_ship_pipeline", "worktree_gc_pipeline"
+    ],
+    "sha256": {
+      "cli": "a33c8dc6ba55b451b0b81527984f33d77eb56b8e9c543dc603a390f6f6a4f203",
+      "job": "6af10624aeb648c8998765463531c3d3a5e3a473e0d7059dab91891f8b5d4ffe",
+      "activity": "1a731d7dd19ea7b0a013f2b07d82b1982676a89a62730ee6e9a7b0e952667d8b",
+      "mcp": "9792ea29b083d7e275ab2d2a44c7eebb17520be8c667d2a4f64d8774db79b2ea",
+      "api": "01520ee981457c5a7ddc50d17c30964d785c7f2deb4f8c4d7b59a872bc24f8e4",
+      "dashboard": "0f6f4e242fb3ece988b2a3192e030c002e1240af5383dd8e9ca4b7908da1be74"
+    }
+  },
+  "feature_families": [
+    {"id":"bootstrap-routing","surfaces":["cli:init","cli:workspace","cli:host","cli:config","cli:migrate"],"scenarios":["isolated-cli-lifecycle","workspace-boundary"]},
+    {"id":"tasks-artifacts-navigation","surfaces":["cli:task","cli:artifacts"],"scenarios":["isolated-cli-lifecycle","task-list-pagination"]},
+    {"id":"mcp-tools","surfaces":["cli:mcp","mcp:*"],"scenarios":["mcp-wire-boundary"]},
+    {"id":"dashboard-api","surfaces":["cli:web","api:*","dashboard:*"],"scenarios":["dashboard-api-boundary","dashboard-browser"]},
+    {"id":"workflow-dispatch-recovery","surfaces":["cli:run","cli:job","cli:activity","job:*","activity:*"],"scenarios":["workflow-catalog","task-pilot-mixed-retry","provider-dispatch-recovery"]},
+    {"id":"automation-scheduling","surfaces":["cli:auto-task","cli:routine","cli:sweep","job:auto_task_scheduler_pipeline"],"scenarios":["auto-task-registration-mint","scheduler-retry"]},
+    {"id":"gc","surfaces":["cli:gc","job:worktree_gc_pipeline"],"scenarios":["gc-routing-protection"]},
+    {"id":"publication-recovery","surfaces":["cli:workspace","cli:task"],"scenarios":["publication-restore"]},
+    {"id":"search-docs-observability","surfaces":["cli:docs","cli:search","cli:semantic","cli:audit","cli:log","cli:logs","cli:doctor","cli:friction"],"scenarios":["docs-search-observe"]},
+    {"id":"definitions-policy-operation","surfaces":["cli:tool","cli:policy","cli:executor","cli:operation","cli:skill"],"scenarios":["definition-surfaces"]},
+    {"id":"installation-update-distribution","surfaces":["cli:update"],"scenarios":["source-binary-provenance","installer-update","npm-package","plugin-install","website-build"]}
+  ],
+  "scenarios": [
+    {"id":"source-binary-provenance","required":true,"capability":"local","kind":"command","command":["--version"],"behavior":["normal","failure"]},
+    {"id":"isolated-cli-lifecycle","required":true,"capability":"local","kind":"builtin","behavior":["normal","failure","workspace-boundary"]},
+    {"id":"workspace-boundary","required":true,"capability":"local","kind":"builtin","behavior":["normal","failure","workspace-boundary"]},
+    {"id":"task-list-pagination","required":true,"capability":"local","kind":"cargo-test","command":["cargo","test","-p","orbit-web","task_pages_reach_every_match_and_reject_invalid_or_mismatched_cursors","--","--nocapture"],"behavior":["normal","failure","boundary"]},
+    {"id":"mcp-wire-boundary","required":true,"capability":"local","kind":"builtin","behavior":["normal","failure","workspace-boundary"]},
+    {"id":"dashboard-api-boundary","required":true,"capability":"local","kind":"builtin","behavior":["normal","failure","workspace-boundary"]},
+    {"id":"dashboard-browser","required":true,"capability":"browser","kind":"command","command":["node","crates/orbit-web/src/tests/dashboard_loading_browser.mjs","{playwright_module}","{evidence_dir}"],"behavior":["normal","failure"]},
+    {"id":"workflow-catalog","required":true,"capability":"local","kind":"builtin","behavior":["normal","failure"]},
+    {"id":"task-pilot-mixed-retry","required":true,"capability":"local","kind":"cargo-test","command":["cargo","test","-p","orbit-core","task_pilot","--","--nocapture"],"behavior":["normal","failure","recovery"]},
+    {"id":"provider-dispatch-recovery","required":true,"capability":"local","kind":"cargo-test","command":["cargo","test","-p","orbit-core","--test","opencode_fake_agent","--","--nocapture"],"behavior":["normal","failure","recovery"]},
+    {"id":"auto-task-registration-mint","required":true,"capability":"local","kind":"builtin","behavior":["normal","failure"]},
+    {"id":"scheduler-retry","required":true,"capability":"local","kind":"cargo-test","command":["cargo","test","-p","orbit-automation","auto_tasks::tests::scheduler","--","--nocapture"],"behavior":["normal","failure","recovery"]},
+    {"id":"gc-routing-protection","required":true,"capability":"local","kind":"cargo-test","command":["cargo","test","-p","orbit-cli","--test","worktree_gc_routing","--","--nocapture"],"behavior":["normal","failure","workspace-boundary"]},
+    {"id":"publication-restore","required":true,"capability":"local","kind":"cargo-test","command":["cargo","test","-p","orbit-cli","--test","task_publication","--","--nocapture"],"behavior":["normal","failure","recovery","workspace-boundary"]},
+    {"id":"docs-search-observe","required":true,"capability":"local","kind":"builtin","behavior":["normal","failure"]},
+    {"id":"definition-surfaces","required":true,"capability":"local","kind":"builtin","behavior":["normal","failure"]},
+    {"id":"installer-update","required":true,"capability":"local","kind":"command","command":["cargo","test","-p","orbit-cli","--test","update","--","--nocapture"],"behavior":["normal","failure","recovery"]},
+    {"id":"npm-package","required":true,"capability":"local","kind":"command","command":["./scripts/smoke-npm-install.sh","--dry-run-version-assertion"],"behavior":["normal","failure"]},
+    {"id":"plugin-install","required":true,"capability":"local","kind":"command","command":["./scripts/smoke-plugin-install.sh"],"behavior":["normal","failure"]},
+    {"id":"website-build","required":true,"capability":"website-build","kind":"command","command":["npm","--prefix","website","run","build"],"behavior":["normal","failure"]},
+    {"id":"macos-platform","required":true,"capability":"macos","kind":"command","command":["./scripts/check-ci-macos.sh"],"behavior":["normal","failure"]}
+  ]
+}
