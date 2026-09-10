@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use tempfile::{TempDir, tempdir};
 
 use crate::OrbitRuntime;
-use crate::bootstrap::global_defaults::{global_defaults_are_current, stamp_path};
+use crate::bootstrap::global_defaults::{
+    global_defaults_are_current, record_global_defaults_reconciled, stamp_path,
+};
 use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::runtime::OrbitRuntimeRoots;
 
@@ -80,6 +82,30 @@ fn first_open_seeds_global_defaults_and_stamps_the_root() {
     assert!(
         global_defaults_are_current(&roots.global),
         "a completed first open must stamp the root"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn stamp_rejects_a_symlinked_resources_directory() {
+    use std::os::unix::fs::symlink;
+
+    let roots = roots();
+    let outside = roots._temp.path().join("outside-resources");
+    fs::create_dir_all(&roots.global).expect("create global root");
+    fs::create_dir_all(&outside).expect("create outside resources directory");
+    symlink(&outside, roots.global.join("resources")).expect("link resources outside root");
+
+    assert!(
+        !global_defaults_are_current(&roots.global),
+        "a symlinked resources directory must not be read as a stamp location"
+    );
+
+    let error = record_global_defaults_reconciled(&roots.global)
+        .expect_err("a symlinked resources directory must not receive a stamp");
+    assert!(
+        matches!(error, orbit_common::OrbitError::InvalidInput(_)),
+        "the unsafe stamp location must be rejected"
     );
 }
 
