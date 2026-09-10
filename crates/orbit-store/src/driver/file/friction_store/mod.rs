@@ -357,24 +357,67 @@ fn split_frontmatter(raw: &str) -> Option<(&str, &str)> {
     Some((yaml, body))
 }
 
+/// Resolve the legacy corpus root before enumerating records.
+///
+/// The root is selected by the workspace configuration, but it is still a
+/// path boundary for the importer. Rejecting a symlinked root and returning
+/// its canonical directory prevents a configured path from redirecting the
+/// import outside the selected legacy tree.
+pub(crate) fn validated_friction_root(frictions_root: &Path) -> Result<PathBuf, OrbitError> {
+    let metadata = fs::symlink_metadata(frictions_root).map_err(|error| {
+        OrbitError::Io(format!(
+            "inspect friction corpus root {}: {error}",
+            frictions_root.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(OrbitError::InvalidInput(format!(
+            "friction corpus root must be a regular directory: {}",
+            frictions_root.display()
+        )));
+    }
+
+    let canonical_root = fs::canonicalize(frictions_root).map_err(|error| {
+        OrbitError::Io(format!(
+            "canonicalize friction corpus root {}: {error}",
+            frictions_root.display()
+        ))
+    })?;
+    if !canonical_root.is_dir() {
+        return Err(OrbitError::InvalidInput(format!(
+            "canonical friction corpus root must be a directory: {}",
+            canonical_root.display()
+        )));
+    }
+
+    Ok(canonical_root)
+}
+
 pub(crate) fn friction_record_paths(frictions_root: &Path) -> Result<Vec<PathBuf>, OrbitError> {
+    let frictions_root = validated_friction_root(frictions_root)?;
     let mut paths = Vec::new();
-    for month_entry in
-        fs::read_dir(frictions_root).map_err(|error| OrbitError::Io(error.to_string()))?
+    for month_entry in fs::read_dir(&frictions_root)
+        .map_err(|error| OrbitError::Io(format!("read {}: {error}", frictions_root.display())))?
     {
-        let month_path = month_entry
-            .map_err(|error| OrbitError::Io(error.to_string()))?
-            .path();
-        if !month_path.is_dir() {
+        let month_entry = month_entry.map_err(|error| OrbitError::Io(error.to_string()))?;
+        let month_type = month_entry
+            .file_type()
+            .map_err(|error| OrbitError::Io(error.to_string()))?;
+        if !month_type.is_dir() {
             continue;
         }
-        for record_entry in
-            fs::read_dir(&month_path).map_err(|error| OrbitError::Io(error.to_string()))?
+        let month_path = month_entry.path();
+        for record_entry in fs::read_dir(&month_path)
+            .map_err(|error| OrbitError::Io(format!("read {}: {error}", month_path.display())))?
         {
-            let path = record_entry
-                .map_err(|error| OrbitError::Io(error.to_string()))?
-                .path();
-            if path.extension().and_then(|value| value.to_str()) == Some("md") {
+            let record_entry = record_entry.map_err(|error| OrbitError::Io(error.to_string()))?;
+            let record_type = record_entry
+                .file_type()
+                .map_err(|error| OrbitError::Io(error.to_string()))?;
+            let path = record_entry.path();
+            if record_type.is_file()
+                && path.extension().and_then(|value| value.to_str()) == Some("md")
+            {
                 paths.push(path);
             }
         }

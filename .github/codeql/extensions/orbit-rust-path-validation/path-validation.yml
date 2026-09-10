@@ -82,6 +82,7 @@ extensions:
           "manual",
         ]
       - [
+          "orbit_store::driver::file::friction_store::validated_friction_root",
           "orbit_cmd::diagnostics::validated_diagnostics_file_path",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",

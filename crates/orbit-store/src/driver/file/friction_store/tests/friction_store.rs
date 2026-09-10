@@ -191,3 +191,43 @@ fn the_record_walk_lists_month_records_in_order() {
         ]
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn the_record_walk_rejects_a_symlinked_root() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let real_root = temp.path().join("real");
+    let linked_root = temp.path().join("linked");
+    fs::create_dir(&real_root).expect("real root");
+    symlink(&real_root, &linked_root).expect("root symlink");
+
+    let error = friction_record_paths(&linked_root).expect_err("symlinked root must fail");
+
+    assert!(error.to_string().contains("regular directory"));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_record_walk_ignores_symlinked_months_and_records() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("frictions");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(root.join("2026-05")).expect("month dir");
+    fs::create_dir_all(outside.join("2026-06")).expect("outside month dir");
+    fs::write(root.join("2026-05/F001.md"), "inside\n").expect("inside record");
+    fs::write(outside.join("2026-06/F002.md"), "outside\n").expect("outside record");
+    symlink(outside.join("2026-06"), root.join("2026-06")).expect("month symlink");
+    symlink(
+        outside.join("2026-06/F002.md"),
+        root.join("2026-05/F002.md"),
+    )
+    .expect("record symlink");
+
+    let paths = friction_record_paths(&root).expect("walk");
+
+    assert_eq!(paths, vec![root.join("2026-05/F001.md")]);
+}
