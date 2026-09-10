@@ -622,7 +622,7 @@ fn validate_recommendations(
 ) -> Result<(), DispatchError> {
     required_string(assessment, "recommended_crew", action)?;
     let complexity = required_string(assessment, "recommended_complexity", action)?;
-    if !matches!(complexity, "low" | "medium" | "hard") {
+    if !matches!(complexity, "low" | "medium" | "hard" | "unassessed") {
         return Err(action_failed(
             action,
             format!("task {task_id} recommended_complexity must be low, medium, or hard"),

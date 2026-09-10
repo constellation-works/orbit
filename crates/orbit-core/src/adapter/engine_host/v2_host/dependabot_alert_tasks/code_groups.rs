@@ -22,12 +22,9 @@
 //! after a group was filed becomes explicit delta work instead of silently
 //! widening a task somebody may already be running.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-
-use orbit_common::fs::selector::{canonical_selector_in_workspace, exists_in_workspace};
 use orbit_types::task::{TaskComplexity, TaskRelation, TaskRelationType, TaskStatus, TaskType};
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::application::task::TaskAddParams;
 
@@ -70,7 +67,6 @@ pub(super) struct CodeGroupTaskRequest<'a> {
     pub(super) group: &'a CodeAlertGroup,
     /// Same-cause alerts left out of this task because open work owns them.
     pub(super) covered_siblings: &'a [CoveredAlert],
-    pub(super) workspace_root: &'a Path,
     pub(super) crew: Option<String>,
 }
 
@@ -155,7 +151,10 @@ pub(super) fn code_group_task_params(request: &CodeGroupTaskRequest<'_>) -> Task
         description: group_description(request),
         acceptance_criteria: group_acceptance_criteria(&rule, request.group),
         tags,
-        context_files: group_context_files(alerts, request.workspace_root),
+        // Alert locations are evidence, not a claim about the files a repair
+        // will modify. Task-pilot resolves bounded modification selectors from
+        // the pinned checkout before an implementation can be admitted.
+        context_files: Vec::new(),
         relations: covering_relations(request.covered_siblings),
         required_tools: Vec::new(),
         crew: request.crew.clone(),
@@ -456,33 +455,4 @@ fn severity_name(rank: u8) -> &'static str {
         2 => "moderate",
         _ => "low",
     }
-}
-
-/// Scope a group to its alerts' remediation targets, read from each alert's
-/// structured `path` rather than the rendered evidence.
-///
-/// The path GitHub reports is repository-relative and may not name anything in
-/// this checkout — the alert can predate a rename or deletion, or describe a
-/// path that escapes the workspace. Emit a selector only when it canonicalizes
-/// and still resolves inside the workspace, so an unusable location yields no
-/// scope instead of an invented one, and one bad alert cannot fail the sweep.
-///
-/// Line numbers stay in the alert evidence: `context_files` selectors address
-/// whole files, and a line suffix would not canonicalize as a `file:` anchor.
-fn group_context_files(alerts: &[Value], workspace_root: &Path) -> Vec<String> {
-    let mut selectors = alerts
-        .iter()
-        .filter_map(|alert| resolved_selector(&field(alert, "path"), workspace_root))
-        .collect::<Vec<_>>();
-    selectors.sort();
-    selectors.dedup();
-    selectors
-}
-
-fn resolved_selector(path: &str, workspace_root: &Path) -> Option<String> {
-    if path.is_empty() {
-        return None;
-    }
-    let selector = canonical_selector_in_workspace(&format!("file:{path}"), workspace_root).ok()?;
-    exists_in_workspace(&selector, workspace_root).then_some(selector)
 }

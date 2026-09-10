@@ -292,7 +292,6 @@ fn replacement_params(
         snapshot: &snapshot,
         group: &consolidation.group,
         covered_siblings: &[],
-        workspace_root: &runtime.paths().repo_root,
         crew,
     });
 

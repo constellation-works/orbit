@@ -55,7 +55,15 @@ Exact persisted fields and migrations require a later implementation review.
 already implements deterministic prepare → read-only worker partitions →
 deterministic apply → success guard. Automatic discovery chooses proposed/backlog
 tasks with empty `context_files`, excluding no-diff tags; explicit IDs can audit
-tasks with populated selectors. Limits are 50 tasks, partitions of five, five
+tasks with populated selectors. Automated security-alert locations remain task
+description evidence rather than pre-claimed modification targets, so the
+pilot resolves selectors from the pinned checkout before any admission. Its
+assessment records repair certainty, behavioral change, coupling, validation
+difficulty, rationale, confidence, evidence gaps, validation approach, and
+reassessment triggers. Priority and readiness remain separate: unavailable
+validation authority is a readiness finding, and insufficient repair evidence
+remains unassessed with a bounded investigation rather than a guessed rating.
+Limits are 50 tasks, partitions of five, five
 pilot workers, and three active pipeline runs. The worker uses the `system` crew,
 so this mechanism need not consume Astra for routine inspection.
 

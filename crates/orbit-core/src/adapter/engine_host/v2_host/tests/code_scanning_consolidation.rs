@@ -150,7 +150,7 @@ fn apply_replaces_the_sources_and_carries_their_traceability_and_dependencies() 
     assert_eq!(replacement.status, TaskStatus::Backlog);
     assert_eq!(replacement.priority, TaskPriority::High);
     assert_eq!(replacement.dependencies(), vec![blocker]);
-    assert_eq!(replacement.context_files, vec![format!("file:{RECONCILE}")]);
+    assert!(replacement.context_files.is_empty());
     for number in ["#101", "#102", "#103"] {
         assert!(
             replacement.description.contains(number),

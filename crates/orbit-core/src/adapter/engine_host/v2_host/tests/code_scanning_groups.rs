@@ -129,7 +129,7 @@ fn one_shared_cause_across_line_offsets_files_a_single_task_naming_every_alert()
             .count(),
         3
     );
-    assert_eq!(task.context_files, vec![format!("file:{RECONCILE}")]);
+    assert!(task.context_files.is_empty());
 }
 
 #[test]
@@ -155,10 +155,7 @@ fn one_cause_reported_in_two_files_is_still_one_repair() {
         "{}",
         task.title
     );
-    assert_eq!(
-        task.context_files,
-        vec![format!("file:{ANTIGRAVITY}"), format!("file:{BOOTSTRAP}")]
-    );
+    assert!(task.context_files.is_empty());
 }
 
 #[test]
