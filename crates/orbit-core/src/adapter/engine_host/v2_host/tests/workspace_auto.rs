@@ -3,14 +3,17 @@ use std::collections::BTreeSet;
 use chrono::{SecondsFormat, Utc};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::adapter::engine_host::v2_host::task_pilot::{apply, prepare};
 use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_config, runtime_with_workspace_layout, seed_list_backlog_task,
     write_workspace_file,
 };
+use crate::application::auto_tasks::AutoTaskAddParams;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 fn classify(runtime: &OrbitRuntime) -> Value {
@@ -26,6 +29,111 @@ fn classify_with(runtime: &OrbitRuntime, input: Value) -> Value {
             ToolContext::default(),
         )
         .expect("classify workspace auto tasks")
+}
+
+fn verified_no_diff_assessment(task: &Task) -> Value {
+    json!({
+        "task_id": task.id,
+        "context_files_before": task.context_files,
+        "context_files_after": [],
+        "disposition": "verified_no_diff",
+        "evidence": "The recurring review is an operational check and changes no repository files.",
+        "recommended_crew": "luna",
+        "recommended_complexity": "low",
+        "assessment_rationale": "The review has bounded read-only scope.",
+        "confidence": "high",
+        "evidence_gaps": [],
+        "validation_approach": "Run the configured review commands.",
+        "reassessment_triggers": ["the review scope changes"],
+        "blocked_by": [],
+        "duplicate_of": null,
+        "already_landed": null,
+        "adr_conflicts": [],
+        "utility_warnings": [],
+        "surface_warnings": [],
+    })
+}
+
+#[test]
+fn minted_no_diff_auto_task_is_prepared_without_selectors_then_admitted() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    runtime
+        .auto_task_add(AutoTaskAddParams {
+            name: "qa-review".to_string(),
+            description: "QA review".to_string(),
+            schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+            template: AutoTaskTemplate {
+                title: "QA review".to_string(),
+                description: "Review the delivered change.".to_string(),
+                acceptance_criteria: vec!["Review result is recorded.".to_string()],
+                task_type: TaskType::Chore,
+                tags: vec!["no-diff-expected".to_string()],
+                required_tools: vec![],
+                priority: TaskPriority::Medium,
+                crew: Some("opus".to_string()),
+                status: TaskStatus::Backlog,
+            },
+            dedupe: DedupePolicy::SkipIfOpen,
+        })
+        .expect("add auto-task definition");
+    let minted = runtime.auto_task_mint("qa-review").expect("mint auto-task");
+
+    assert_eq!(minted.complexity, Some(TaskComplexity::Unassessed));
+    assert_eq!(minted.crew.as_deref(), Some("opus"));
+    assert!(minted.tags.iter().any(|tag| tag == "no-diff-expected"));
+    assert!(minted.tags.iter().any(|tag| tag == "auto-task:qa-review"));
+
+    let before = classify(&runtime);
+    assert!(
+        !before["loose_task_ids"]
+            .as_array()
+            .expect("admitted tasks")
+            .iter()
+            .any(|task_id| task_id == &minted.id)
+    );
+
+    let prepared = prepare(
+        &runtime,
+        "prepare_task_pilot",
+        &json!({ "workspace_path": repo_root }),
+    )
+    .expect("automatic preparation includes minted no-diff auto-task");
+    assert!(
+        prepared["task_ids"]
+            .as_array()
+            .expect("task ids")
+            .contains(&json!(minted.id))
+    );
+
+    let applied = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": prepared,
+            "results": [{
+                "partition_index": 0,
+                "task_ids": [minted.id],
+                "tasks": [verified_no_diff_assessment(&minted)],
+                "summary": "assess no-diff auto-task",
+            }],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("apply no-diff assessment");
+    assert_eq!(applied["status"], "succeeded");
+
+    let prepared_task = runtime.get_task(&minted.id).expect("prepared task");
+    assert_eq!(prepared_task.complexity, Some(TaskComplexity::Low));
+    assert!(prepared_task.context_files.is_empty());
+    assert_eq!(prepared_task.crew.as_deref(), Some("opus"));
+
+    let after = classify(&runtime);
+    assert!(
+        after["loose_task_ids"]
+            .as_array()
+            .expect("admitted tasks")
+            .contains(&json!(minted.id))
+    );
 }
 
 /// A live `task_auto_pipeline` run carrying `task_ids`, as `invoke_detached`
