@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
@@ -1950,9 +1950,13 @@ fn pipeline_worker_file_name(run_id: &str, suffix: &str) -> Result<String, Orbit
 }
 
 /// Resolve the worker-log directory before using it for any file operation.
-/// Runtime initialization normally owns this directory, but a missing final
-/// component is created only after its existing parent has passed the same
-/// checks. Symlinked paths and traversal syntax fail closed.
+///
+/// Containment is the nearest existing parent, canonicalized, plus the final
+/// component. Ancestor symlinks are followed rather than rejected so ordinary
+/// layouts (a symlinked `/tmp`, `$HOME`, or project root) can still spawn a
+/// worker. A missing parent is rebuilt from that canonical ancestor so the
+/// caller can create intermediate directories. The final component itself
+/// must not be a symlink or a non-directory; traversal syntax fails closed.
 fn validated_pipeline_worker_log_directory(path: &Path) -> Result<PathBuf, OrbitError> {
     if !path.is_absolute() {
         return Err(OrbitError::InvalidInput(format!(
@@ -1976,34 +1980,20 @@ fn validated_pipeline_worker_log_directory(path: &Path) -> Result<PathBuf, Orbit
             path.display()
         ))
     })?;
-    for ancestor in parent.ancestors() {
-        let metadata = std::fs::symlink_metadata(ancestor).map_err(|error| {
-            OrbitError::Io(format!(
-                "inspect pipeline worker log directory '{}': {error}",
-                ancestor.display()
-            ))
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(OrbitError::InvalidInput(format!(
-                "pipeline worker log directory must not contain symlinks: {}",
-                path.display()
-            )));
-        }
-    }
-
-    let canonical_parent = parent.canonicalize().map_err(|error| {
-        OrbitError::Io(format!(
-            "canonicalize pipeline worker log parent '{}': {error}",
-            parent.display()
-        ))
-    })?;
     let file_name = path.file_name().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
             "pipeline worker log directory has no final component: {}",
             path.display()
         ))
     })?;
+    let canonical_parent = canonical_pipeline_worker_log_parent(parent)?;
     let canonical_path = canonical_parent.join(file_name);
+    if !canonical_path.starts_with(&canonical_parent) {
+        return Err(OrbitError::InvalidInput(format!(
+            "pipeline worker log directory must not contain traversal components: {}",
+            path.display()
+        )));
+    }
 
     match std::fs::symlink_metadata(&canonical_path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -2031,22 +2021,63 @@ fn validated_pipeline_worker_log_directory(path: &Path) -> Result<PathBuf, Orbit
     Ok(canonical_path)
 }
 
+/// Canonicalize the nearest existing ancestor of `parent` and rejoin any
+/// missing suffix. Unrelated ancestor symlinks are resolved; a dangling
+/// symlink at an existing component still fails closed via `canonicalize`.
+fn canonical_pipeline_worker_log_parent(parent: &Path) -> Result<PathBuf, OrbitError> {
+    let mut existing = parent.to_path_buf();
+    let mut missing = Vec::<OsString>::new();
+    loop {
+        match std::fs::symlink_metadata(&existing) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = existing.file_name() else {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "pipeline worker log directory has no parent: {}",
+                        parent.display()
+                    )));
+                };
+                missing.push(name.to_os_string());
+                if !existing.pop() {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "pipeline worker log directory has no parent: {}",
+                        parent.display()
+                    )));
+                }
+            }
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect pipeline worker log directory '{}': {error}",
+                    existing.display()
+                )));
+            }
+        }
+    }
+
+    let mut canonical = existing.canonicalize().map_err(|error| {
+        OrbitError::Io(format!(
+            "canonicalize pipeline worker log parent '{}': {error}",
+            existing.display()
+        ))
+    })?;
+    for name in missing.into_iter().rev() {
+        canonical.push(name);
+    }
+    Ok(canonical)
+}
+
 pub(crate) fn configure_pipeline_worker_stdio(
     command: &mut Command,
     logs_dir: &Path,
     run_id: &str,
 ) -> Result<PipelineWorkerLog, OrbitError> {
     let mut logs_dir = validated_pipeline_worker_log_directory(logs_dir)?;
-    match std::fs::create_dir(&logs_dir) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => {
-            return Err(OrbitError::Io(format!(
-                "create pipeline worker log directory '{}': {error}",
-                logs_dir.display()
-            )));
-        }
-    }
+    std::fs::create_dir_all(&logs_dir).map_err(|error| {
+        OrbitError::Io(format!(
+            "create pipeline worker log directory '{}': {error}",
+            logs_dir.display()
+        ))
+    })?;
     logs_dir = validated_pipeline_worker_log_directory(&logs_dir)?;
     let log_path = pipeline_worker_log_path(&logs_dir, run_id)?;
 

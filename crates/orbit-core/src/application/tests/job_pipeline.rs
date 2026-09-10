@@ -210,8 +210,14 @@ fn configure_pipeline_worker_stdio_creates_missing_log_directory_after_validatio
     let worker_log = configure_pipeline_worker_stdio(&mut command, &logs_dir, "jrun-child")
         .expect("missing log directory is created after validation");
 
-    assert!(logs_dir.is_dir());
-    assert_eq!(worker_log.path(), logs_dir.join("jrun-child.worker.log"));
+    let resolved_logs = logs_dir
+        .canonicalize()
+        .expect("canonicalize created log directory");
+    assert!(resolved_logs.is_dir());
+    assert_eq!(
+        worker_log.path(),
+        resolved_logs.join("jrun-child.worker.log")
+    );
 }
 
 #[cfg(unix)]
@@ -226,13 +232,89 @@ fn configure_pipeline_worker_stdio_rejects_symlinked_log_directory() {
 
     let result = configure_pipeline_worker_stdio(&mut command, &logs_dir, "jrun-child");
 
+    let error = match result {
+        Ok(_) => panic!("symlinked log directories must fail closed"),
+        Err(error) => error,
+    };
     assert!(
-        result.is_err(),
-        "symlinked log directories must fail closed"
+        error.to_string().contains("must not be a symlink"),
+        "{error}"
     );
     assert!(
         !outside.join("jrun-child.worker.log").exists(),
         "worker setup must not follow a log-directory symlink"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn configure_pipeline_worker_stdio_accepts_symlinked_ancestor_of_log_directory() {
+    let root = TempDir::new().expect("tempdir");
+    let real = root.path().join("real");
+    std::fs::create_dir_all(real.join("state")).expect("create real state directory");
+    let linked = root.path().join("linked");
+    std::os::unix::fs::symlink(&real, &linked).expect("create ancestor symlink");
+
+    let logs_dir = linked.join("state").join("logs");
+    let mut command = Command::new("true");
+    let worker_log = configure_pipeline_worker_stdio(&mut command, &logs_dir, "jrun-child")
+        .expect("symlinked ancestors of a real log directory must be accepted");
+
+    let resolved_logs = real
+        .join("state")
+        .join("logs")
+        .canonicalize()
+        .expect("canonicalize resolved log directory");
+    assert!(resolved_logs.is_dir());
+    assert_eq!(
+        worker_log.path(),
+        resolved_logs.join("jrun-child.worker.log")
+    );
+    assert!(worker_log.path().is_file());
+}
+
+#[test]
+fn configure_pipeline_worker_stdio_creates_missing_intermediate_log_directories() {
+    let root = TempDir::new().expect("tempdir");
+    let logs_dir = root.path().join("state").join("logs");
+    let mut command = Command::new("true");
+
+    let worker_log = configure_pipeline_worker_stdio(&mut command, &logs_dir, "jrun-child")
+        .expect("missing intermediate directories are created");
+
+    let resolved_logs = logs_dir
+        .canonicalize()
+        .expect("canonicalize created log directory");
+    assert!(resolved_logs.is_dir());
+    assert_eq!(
+        worker_log.path(),
+        resolved_logs.join("jrun-child.worker.log")
+    );
+}
+
+#[test]
+fn configure_pipeline_worker_stdio_rejects_traversal_in_log_directory() {
+    let root = TempDir::new().expect("tempdir");
+    let logs_dir = root.path().join("nested").join("..").join("logs");
+    let mut command = Command::new("true");
+
+    let error = match configure_pipeline_worker_stdio(&mut command, &logs_dir, "jrun-child") {
+        Ok(_) => panic!("traversal components must fail closed"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("must not contain traversal components"),
+        "{error}"
+    );
+    assert!(
+        !root
+            .path()
+            .join("logs")
+            .join("jrun-child.worker.log")
+            .exists(),
+        "worker setup must not resolve traversal into a log directory"
     );
 }
 
