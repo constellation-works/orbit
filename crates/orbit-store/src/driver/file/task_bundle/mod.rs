@@ -1,6 +1,5 @@
 //! Pure task-bundle file persistence: codecs, atomic publication, and bundle
-//! stable lock identity. Registry and checkout projection coordination live
-//! in the task repository.
+//! stable lock identity. Registry coordination lives in the task repository.
 
 pub(crate) mod bundle_io;
 mod lock;

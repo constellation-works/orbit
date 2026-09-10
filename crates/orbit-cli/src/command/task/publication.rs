@@ -369,11 +369,6 @@ impl Execute for TaskPublicationRestoreArgs {
                 "already_present_task_ids": outcome.already_present_task_ids,
                 "completeness": completeness,
                 "omitted_attachments": omitted,
-                "projection": {
-                    "projected": outcome.projection.projected,
-                    "repaired": outcome.projection.repaired,
-                    "degraded_reason": outcome.projection.degraded_reason,
-                },
             }),
             format!(
                 "restored publication '{}' generation {} into workspace '{}'\nrestored: {}\nalready present: {}\ncompleteness: {}\nomitted attachments: {}",

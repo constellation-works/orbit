@@ -86,8 +86,8 @@ integrity *before* touching state, so a corrupt or version-incompatible archive
 fails with no partial writes. It resolves the target workspace (the archive's
 source workspace if registered locally, else `--workspace <id>`, else it
 registers the source workspace id), keeps ids that are free, renumbers the rest,
-rebuilds the index rows from bundle YAML, bumps the allocator past the highest
-landed id, and recreates the `.orbit/tasks/` symlink projection. When anything is
+rebuilds the index rows from bundle YAML, and bumps the allocator past the highest
+landed id. When anything is
 renumbered, an `<archive>.idmap.json` old→new map is written and printed.
 
 Idempotency is scoped to *kept* ids: re-importing an archive whose ids are free
@@ -127,8 +127,8 @@ orbit task reindex --workspace <ws-id>   # default: the current workspace
 
 Reindex treats the on-disk bundles as the source of truth: it registers any
 bundle missing from the index, drops stale bindings whose directory is gone,
-rebuilds the index/tag/relation rows, bumps the allocator past the highest
-on-disk id, and reprojects the symlinks. `allocator_state` is otherwise
+rebuilds the index/tag/relation rows and bumps the allocator past the highest
+on-disk id. `allocator_state` is otherwise
 preserved. Unreadable or partial bundles retain their bytes and any registered
 binding/index; healthy neighbors are indexed, and reindex returns an error listing
 the unresolved task IDs rather than reporting full success.
@@ -141,7 +141,7 @@ deleted bundle. Upgrades changing this lock location require restarting all
 writers together; older processes use the former in-bundle lock.
 
 Deletion atomically renames `<task-id>/` to `<task-id>.deleted/` and syncs its
-parent before removing registry and projection entries, then removes the
+parent before removing registry entries, then removes the
 tombstone and syncs again. A crash before rename leaves the live task intact.
 After rename, deletion retry or reindex rolls forward, including when registry
 removal has already succeeded or cleanup left partial contents. A registry

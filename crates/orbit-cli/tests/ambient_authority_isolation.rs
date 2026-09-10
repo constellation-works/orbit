@@ -74,6 +74,12 @@ impl Sentinel {
         self.home.join(".orbit")
     }
 
+    fn task_dir(&self) -> PathBuf {
+        self.registry_root()
+            .join("tasks/workspaces")
+            .join(&self.workspace_id)
+    }
+
     /// Every byte the sentinel owns: its global registry and its workspace's
     /// task store.
     fn snapshot(&self) -> BTreeMap<PathBuf, Vec<u8>> {
@@ -184,7 +190,16 @@ impl Fixture {
     }
 
     fn task_dir(&self) -> PathBuf {
-        self.work.join(".orbit/tasks")
+        let config: Value = serde_yaml::from_slice(
+            &std::fs::read(self.work.join(".orbit/config.yaml"))
+                .expect("read fixture workspace config"),
+        )
+        .expect("parse fixture workspace config");
+        self.home.join(".orbit/tasks/workspaces").join(
+            config["workspace_id"]
+                .as_str()
+                .expect("fixture workspace id"),
+        )
     }
 }
 
@@ -230,7 +245,7 @@ fn an_unscrubbed_child_routes_its_write_into_the_ambient_authority() {
     let created: Value = serde_json::from_slice(&output.stdout).expect("task add JSON");
     let task_id = created["id"].as_str().expect("task id");
     assert!(
-        sentinel.work.join(".orbit/tasks").join(task_id).exists(),
+        sentinel.task_dir().join(task_id).exists(),
         "the reproducer must land in the sentinel, or the isolated cases below \
          prove nothing"
     );
@@ -403,6 +418,10 @@ fn fixture_lifecycle_leaves_the_ambient_authority_byte_for_byte_unchanged() {
         fixture.task_dir().join(&task_id).exists(),
         "the write must land in the fixture's own workspace"
     );
+    assert!(
+        !fixture.work.join(".orbit/tasks").exists(),
+        "fixture task mutations must not create checkout projections"
+    );
 }
 
 /// The scrub is per-command and holds no shared state, so repeated fixtures
@@ -428,6 +447,7 @@ fn parallel_repeated_fixtures_all_stay_off_the_ambient_authority() {
                         fixture.task_dir().join(task_id).exists(),
                         "thread {thread} round {round} wrote outside its own workspace"
                     );
+                    assert!(!fixture.work.join(".orbit/tasks").exists());
                 }
             })
         })

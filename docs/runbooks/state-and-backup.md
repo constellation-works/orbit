@@ -27,7 +27,6 @@ precedence). Path layout is defined in
 |---|---|---|
 | `config.yaml` | workspace identity (`workspace_id`) | authoritative |
 | `config.toml` | optional workspace runtime config (layers over global per key, with security-sensitive exceptions—see [CONFIG.md](../CONFIG.md)) | authoritative |
-| `tasks/` | projection of canonical task bundles: symlinks → `~/.orbit/tasks/workspaces/<ws-id>/` | regenerable (`orbit task reindex`) |
 | `frictions/` | legacy friction import/rollback tree; live records and taxonomy are published under the global root | preserve until migration evidence is no longer needed |
 | `resources/` | workspace overrides for activities/jobs/executors/policies | authoritative |
 | `graph/`, `knowledge/graph/` | retired graph state left by older Orbit versions | non-authoritative; remove explicitly with `orbit doctor --remove-graph` |
@@ -57,6 +56,13 @@ precedence). Path layout is defined in
 | `state/task-publication/` | private Git object/work-tree caches plus pending-push reconciliation records | regenerable after a cleanly recorded success; retain during push-success/local-record recovery |
 | `embed/` | semantic-search companion binary + models | regenerable (`orbit semantic install`) |
 | `bin/` | installed Orbit binary (when installed via `install.sh`) | reinstallable |
+
+Task bundles are not projected into workspace `.orbit/` directories. During
+the layout-v3 upgrade, Orbit removes only checkout task links that match the
+legacy canonical target shape and leaves ambiguous entries untouched. Stop all
+older Orbit processes before installing the upgraded binary, then open each
+workspace once with the new binary. An older process left running can recreate
+the retired links until it is restarted.
 
 > **Registry compatibility residue.** The immutable Store migration ledger can leave
 > `hosts`, `host_aliases`, `workspace_ownership`, `host_workspace_presence`,

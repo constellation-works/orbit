@@ -33,8 +33,7 @@ on every `make ci-fast`:
 | [`compose`](src/compose) | construction; returns contract-facing types | — |
 
 The two drivers never call each other. When a live write spans both — a task
-commit is a canonical bundle write *plus* registry allocation/index rows *plus*
-disposable `.orbit/tasks` checkout symlinks — the join belongs in
+commit is a canonical bundle write plus registry allocation/index rows — the join belongs in
 [`repository/task`](src/repository/task), never in a driver.
 
 A one-shot data movement is a `workflow`, not a hidden side effect of opening a

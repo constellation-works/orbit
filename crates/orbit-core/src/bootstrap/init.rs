@@ -471,7 +471,6 @@ fn ensure_workspace_dirs(paths: &WorkspacePaths) -> Result<(), OrbitError> {
         &paths.diagnostics_dir,
         &paths.scoreboard_dir,
         &paths.worktrees_dir,
-        &paths.tasks_dir,
         &paths.knowledge_dir,
     ] {
         fs::create_dir_all(dir).map_err(|e| OrbitError::Io(e.to_string()))?;

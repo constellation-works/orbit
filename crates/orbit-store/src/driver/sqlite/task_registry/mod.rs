@@ -27,9 +27,8 @@ pub fn task_registry_path(global_root: &Path) -> PathBuf {
 }
 
 pub use crate::contracts::{
-    AllocatorSeedOutcome, BindWorkspaceParams, DanglingRelationTarget, ProjectionRebuildResult,
-    RegisterWorkspaceParams, TaskBundleBinding, TaskIndexFilter, WorkspaceBinding,
-    WorkspaceCheckoutBinding,
+    AllocatorSeedOutcome, BindWorkspaceParams, DanglingRelationTarget, RegisterWorkspaceParams,
+    TaskBundleBinding, TaskIndexFilter, WorkspaceBinding, WorkspaceCheckoutBinding,
 };
 pub use store::TaskRegistryStore;
 pub(crate) use store::parse_orb_task_number;

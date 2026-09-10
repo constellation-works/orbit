@@ -71,9 +71,9 @@ Status-neutral directories make old tasks easy to keep forever. Generated indexe
 
 No compaction should land until retention and audit requirements are clearer.
 
-### 1.9 What is the projection fallback when symlinks are unavailable?
+### 1.9 How are task bundles exposed to a checkout?
 
-The v2 design uses symlinks for `.orbit/tasks/<task-id>` so workspace-relative paths point at canonical bundles under `~/.orbit/tasks/workspaces/<workspace-id>/`. Some filesystems and Windows configurations restrict symlink creation. The reset should prefer symlinks where possible and define a fallback before implementation ships: junctions on platforms that support them, generated read-only command views, or a copy projection with explicit degraded-mode warnings.
+Task and artifact tools resolve canonical bundles under `~/.orbit/tasks/workspaces/<workspace-id>/` through the workspace binding and registry. Orbit intentionally has no checkout-local task projection or filesystem-specific fallback.
 
 ---
 
@@ -136,7 +136,7 @@ The reset keeps `task.yaml` readable by moving audit traffic into append-only lo
 
 ### 3.5 Recoverable local-first task state
 
-Orbit tasks should feel local and inspectable without forcing every user into a conflict protocol. Keeping canonical bundles under `~/.orbit/tasks/workspaces/` gives local-first durability; projecting them into `.orbit/tasks/` keeps agent ergonomics near the code; local registry metadata makes allocation and workspace resolution durable.
+Orbit tasks should feel local and inspectable without forcing every user into a conflict protocol. Keeping canonical bundles under `~/.orbit/tasks/workspaces/` gives local-first durability, while task tools and local registry metadata provide inspection, allocation, and workspace resolution without a checkout projection.
 
 ---
 

@@ -322,7 +322,6 @@ fn build_v2_task_backends(
     Ok(workspace_task_backends(
         registry,
         binding.workspace_id,
-        paths.orbit_dir.clone(),
         Some(binding.workspace_path.to_string_lossy().into_owned()),
         Some(binding.repo_root.to_string_lossy().into_owned()),
     ))

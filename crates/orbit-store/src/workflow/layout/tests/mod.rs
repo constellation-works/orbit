@@ -5,6 +5,8 @@ use std::fs;
 use std::path::Path;
 
 use orbit_common::OrbitError;
+#[cfg(unix)]
+use orbit_common::fs::io::create_dir_symlink;
 use orbit_types::task::TaskStatus;
 
 use super::{
@@ -201,7 +203,7 @@ fn corrupt_marker_is_a_typed_error_naming_the_file() {
     assert!(message.contains("banana"), "{message}");
 }
 
-// ── shipping v2 migration ──
+// ── shipping migrations ──
 
 fn seed_task_bundle(orbit_dir: &Path, id: &str, status: &str) -> std::path::PathBuf {
     let bundle_dir = orbit_dir.join("tasks").join(id);
@@ -267,8 +269,8 @@ fn legacy_friction_task_fails_before_layout_upgrade_and_opens_after() {
 
     let report = upgrade_workspace_layout(temp.path()).expect("apply v2 migration");
     assert_eq!(report.from_version, 1);
-    assert_eq!(report.to_version, 2);
-    assert_eq!(report.applied.len(), 1);
+    assert_eq!(report.to_version, 3);
+    assert_eq!(report.applied.len(), 2);
     assert_eq!(report.applied[0].name, "archive-friction-tasks");
 
     let after = read_bundle_at(&bundle_dir).expect("migrated task bundle opens");
@@ -296,7 +298,7 @@ fn friction_migration_is_idempotent_and_safe_to_replay_before_marker_advance() {
     assert_eq!(current_layout_version(temp.path()).expect("version"), 1);
 
     let report = upgrade_workspace_layout(temp.path()).expect("replay after interruption");
-    assert_eq!(report.applied.len(), 1);
+    assert_eq!(report.applied.len(), 2);
     assert_eq!(report.applied[0].version, 2);
     assert_eq!(
         read_bundle_at(&bundle_dir).expect("bundle").envelope.status,
@@ -324,12 +326,90 @@ fn dry_run_metadata_lists_plain_friction_task_outcome() {
     fs::write(temp.path().join("state/layout.version"), "1\n").expect("stamp v1");
 
     let pending = pending_layout_migrations(temp.path()).expect("pending");
-    assert_eq!(pending.len(), 1);
+    assert_eq!(pending.len(), 2);
     assert_eq!(pending[0].version, 2);
     assert_eq!(pending[0].name, "archive-friction-tasks");
     assert!(pending[0].description.contains("status 'friction'"));
     assert!(pending[0].description.contains("'archived'"));
     assert!(pending[0].description.contains("preserving the task"));
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_task_projection_cleanup_is_guarded_and_idempotent() {
+    let temp = temp_orbit_dir();
+    let tasks_dir = temp.path().join("tasks");
+    let canonical_root = temp.path().join("global/tasks/workspaces/ws_orbit");
+    let live_target = canonical_root.join("ORB-00001");
+    let dangling_target = canonical_root.join("ORB-00002");
+    fs::create_dir_all(&live_target).expect("create canonical target");
+    fs::write(live_target.join("task.yaml"), "canonical").expect("write canonical target");
+    fs::create_dir_all(&tasks_dir).expect("create projection directory");
+    create_dir_symlink(&live_target, &tasks_dir.join("ORB-00001")).expect("create live projection");
+    create_dir_symlink(&dangling_target, &tasks_dir.join("ORB-00002"))
+        .expect("create dangling projection");
+
+    let unknown_target = temp.path().join("unrelated-target");
+    fs::create_dir_all(&unknown_target).expect("create unknown target");
+    let unknown_link = tasks_dir.join("ORB-00003");
+    create_dir_symlink(&unknown_target, &unknown_link).expect("create unknown link");
+    fs::write(tasks_dir.join("ORB-00004"), "ordinary file").expect("write ordinary file");
+    fs::create_dir(tasks_dir.join("ORB-00005")).expect("create ordinary directory");
+    create_dir_symlink(&live_target, &tasks_dir.join("not-a-task")).expect("create unrelated link");
+
+    (LAYOUT_MIGRATIONS[2].apply)(temp.path()).expect("clean legacy projections");
+    (LAYOUT_MIGRATIONS[2].apply)(temp.path()).expect("repeat cleanup");
+
+    assert!(fs::symlink_metadata(tasks_dir.join("ORB-00001")).is_err());
+    assert!(fs::symlink_metadata(tasks_dir.join("ORB-00002")).is_err());
+    assert_eq!(
+        fs::read_to_string(live_target.join("task.yaml")).expect("read canonical target"),
+        "canonical"
+    );
+    assert!(!dangling_target.exists());
+    assert!(unknown_link.is_symlink());
+    assert!(tasks_dir.join("ORB-00004").is_file());
+    assert!(tasks_dir.join("ORB-00005").is_dir());
+    assert!(tasks_dir.join("not-a-task").is_symlink());
+    assert!(unknown_target.is_dir());
+    assert!(
+        tasks_dir.is_dir(),
+        "non-empty projection parent is retained"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_cleanup_does_not_follow_a_symlinked_tasks_parent() {
+    let temp = temp_orbit_dir();
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let target = outside.path().join("ORB-00001");
+    fs::create_dir(&target).expect("create outside entry");
+    create_dir_symlink(outside.path(), &temp.path().join("tasks"))
+        .expect("create symlinked parent");
+
+    (LAYOUT_MIGRATIONS[2].apply)(temp.path()).expect("cleanup symlinked parent");
+
+    assert!(temp.path().join("tasks").is_symlink());
+    assert!(target.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_cleanup_removes_an_empty_projection_directory() {
+    let temp = temp_orbit_dir();
+    let tasks_dir = temp.path().join("tasks");
+    let target = temp
+        .path()
+        .join("global/tasks/workspaces/ws_orbit/ORB-00001");
+    fs::create_dir_all(&target).expect("create canonical target");
+    fs::create_dir(&tasks_dir).expect("create projection directory");
+    create_dir_symlink(&target, &tasks_dir.join("ORB-00001")).expect("create projection");
+
+    (LAYOUT_MIGRATIONS[2].apply)(temp.path()).expect("cleanup projection");
+
+    assert!(!tasks_dir.exists());
+    assert!(target.is_dir());
 }
 
 #[test]

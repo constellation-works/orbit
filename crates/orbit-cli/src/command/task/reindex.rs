@@ -23,15 +23,11 @@ impl Execute for TaskReindexArgs {
             "workspace_id": outcome.workspace_id,
             "indexed": outcome.indexed,
             "removed_stale": outcome.removed_stale,
-            "projection_degraded": outcome.projection.degraded_reason,
         });
-        let mut text = format!(
+        let text = format!(
             "reindexed workspace '{}': {} bundle(s), {} stale binding(s) dropped",
             outcome.workspace_id, outcome.indexed, outcome.removed_stale
         );
-        if let Some(reason) = &outcome.projection.degraded_reason {
-            text.push_str(&format!("\n  warning: projection degraded: {reason}"));
-        }
         Ok(Payload::detail(doc, text).into())
     }
 }

@@ -1,7 +1,7 @@
 //! Rebuild `index.sqlite` rows for a workspace from its on-disk canonical
 //! bundles. Recovers from rsync/manual bundle moves and repairs index drift:
 //! bundle directories are the source of truth, `allocator_state` is preserved
-//! (only bumped upward), and the `.orbit/tasks/` projection is recreated.
+//! (only bumped upward).
 
 use std::collections::BTreeSet;
 
@@ -10,9 +10,7 @@ use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_types::task::is_valid_orb_task_id;
 
 use crate::driver::file::task_bundle::{bundle_lock_target, recover_pending_bundle_at};
-use crate::driver::sqlite::task_registry::{
-    ProjectionRebuildResult, TaskRegistryStore, parse_orb_task_number,
-};
+use crate::driver::sqlite::task_registry::{TaskRegistryStore, parse_orb_task_number};
 use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 
 /// Result of [`reindex_workspace`].
@@ -24,8 +22,6 @@ pub struct ReindexOutcome {
     pub indexed: usize,
     /// Number of stale registry bindings dropped (bundle no longer on disk).
     pub removed_stale: usize,
-    /// Projection rebuild result.
-    pub projection: ProjectionRebuildResult,
 }
 
 /// Rebuild the registry index rows for `workspace_id` from its canonical bundle
@@ -52,15 +48,7 @@ pub fn reindex_workspace(
     for existing in registry.tasks_for_workspace(&workspace_id)? {
         candidates.insert(existing.task_id);
     }
-    let checkout = registry.find_workspace_checkout(&workspace_id)?;
-    let store = match &checkout {
-        Some(checkout) => TaskBundleStoreV2::new(
-            registry.clone(),
-            workspace_id.clone(),
-            checkout.orbit_dir.clone(),
-        ),
-        None => TaskBundleStoreV2::new_checkoutless(registry.clone(), workspace_id.clone()),
-    };
+    let store = TaskBundleStoreV2::new(registry.clone(), workspace_id.clone());
     let mut removed_stale = 0;
     let mut indexed = 0;
     let mut readable = Vec::new();
@@ -115,20 +103,6 @@ pub fn reindex_workspace(
         registry.bump_allocator_to_at_least(max.saturating_add(1))?;
     }
 
-    let projection = if let Some(checkout) = checkout {
-        crate::repository::checkout_projection::rebuild_projection(
-            registry,
-            &checkout.orbit_dir,
-            &workspace_id,
-        )?
-    } else {
-        ProjectionRebuildResult {
-            projected: 0,
-            repaired: 0,
-            degraded_reason: None,
-        }
-    };
-
     if !failures.is_empty() {
         return Err(OrbitError::Store(format!(
             "reindex incomplete: indexed {indexed} healthy tasks; unresolved bundles retained: {}",
@@ -140,7 +114,6 @@ pub fn reindex_workspace(
         workspace_id,
         indexed,
         removed_stale,
-        projection,
     })
 }
 

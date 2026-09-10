@@ -33,7 +33,6 @@ pub(super) fn store(temp: &TempDir) -> TaskV2Store {
     TaskV2Store::new(
         registry,
         binding.workspace_id,
-        orbit_dir,
         Some(repo_dir.to_string_lossy().into_owned()),
         Some(repo_dir.to_string_lossy().into_owned()),
     )

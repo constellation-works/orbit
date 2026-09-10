@@ -17,7 +17,7 @@
 //! - Import validates everything *before* mutating state, then keeps free ids,
 //!   renumbers collisions (rewriting relation targets within the imported set),
 //!   rebuilds index rows from bundle YAML, bumps the allocator past the max
-//!   landed id, and recreates the `.orbit/tasks/` symlink projection.
+//!   landed id.
 //! - Idempotency is scoped to *kept* ids: re-importing an archive whose ids are
 //!   free (or already landed unchanged) is a no-op. A `--on-conflict=renumber`
 //!   run is **not** idempotent — a collision means "these are new local tasks,"
@@ -70,7 +70,7 @@ use crate::driver::file::task_bundle::{
     TaskBundleV2, read_bundle_at, write_bundle_at, write_bundle_with_artifacts_at,
 };
 use crate::driver::sqlite::task_registry::{
-    ProjectionRebuildResult, RegisterWorkspaceParams, TaskRegistryStore, parse_orb_task_number,
+    RegisterWorkspaceParams, TaskRegistryStore, parse_orb_task_number,
 };
 
 mod archive;
@@ -196,8 +196,6 @@ pub struct ImportOutcome {
     pub id_remap: BTreeMap<String, String>,
     /// Path of the written old→new mapping file, if any renumbering occurred.
     pub id_map_path: Option<PathBuf>,
-    /// Projection rebuild result for the target workspace.
-    pub projection: ProjectionRebuildResult,
 }
 
 /// Export the selected tasks of `workspace_id` to a tar.zst archive at `out_path`.
@@ -296,7 +294,6 @@ struct StagedBundle {
 /// Resolved import target after workspace resolution.
 struct ImportTarget {
     workspace_id: String,
-    orbit_dir: Option<PathBuf>,
     /// Set when import must register a new logical workspace record.
     register: Option<RegisterWorkspaceParams>,
 }
@@ -373,14 +370,12 @@ pub fn import_tasks(
 
     // Nothing new to write (all ids were free-and-identical, or all skipped).
     if kept.is_empty() && to_renumber.is_empty() {
-        let projection = rebuild_projection_best_effort(registry, &target);
         return Ok(ImportOutcome {
             workspace_id: target.workspace_id,
             registered_workspace: false,
             tasks: records,
             id_remap: BTreeMap::new(),
             id_map_path: None,
-            projection,
         });
     }
 
@@ -479,8 +474,6 @@ pub fn import_tasks(
         registry.bump_allocator_to_at_least(max + 1)?;
     }
 
-    let projection = rebuild_projection_best_effort(registry, &target);
-
     // Persist and surface the old→new mapping.
     let id_map_path = if id_remap.is_empty() {
         None
@@ -495,7 +488,6 @@ pub fn import_tasks(
         tasks: records,
         id_remap,
         id_map_path,
-        projection,
     })
 }
 
@@ -581,9 +573,6 @@ fn resolve_target(
         })?;
         return Ok(ImportTarget {
             workspace_id: binding.workspace_id,
-            orbit_dir: registry
-                .find_workspace_checkout(requested)?
-                .map(|checkout| checkout.orbit_dir),
             register: None,
         });
     }
@@ -591,16 +580,13 @@ fn resolve_target(
     if let Some(binding) = registry.find_workspace_binding(&manifest.source_workspace_id)? {
         return Ok(ImportTarget {
             workspace_id: binding.workspace_id,
-            orbit_dir: registry
-                .find_workspace_checkout(&manifest.source_workspace_id)?
-                .map(|checkout| checkout.orbit_dir),
             register: None,
         });
     }
 
     // Source workspace is unknown locally and no target was named: register
     // only its logical coordination identity. A later checkout link may add a
-    // local projection; migration must never fabricate checkout paths.
+    // checkout binding; migration must never fabricate checkout paths.
     let params = RegisterWorkspaceParams {
         workspace_id: manifest.source_workspace_id.clone(),
         slug: manifest.source_workspace_slug.clone(),
@@ -608,7 +594,6 @@ fn resolve_target(
     };
     Ok(ImportTarget {
         workspace_id: manifest.source_workspace_id.clone(),
-        orbit_dir: None,
         register: Some(params),
     })
 }
@@ -645,31 +630,6 @@ fn rebuild_index_from_disk(
         envelopes.push(read_bundle_at(&binding.canonical_path)?.envelope);
     }
     registry.replace_workspace_task_indexes(workspace_id, &envelopes)
-}
-
-fn rebuild_projection_best_effort(
-    registry: &TaskRegistryStore,
-    target: &ImportTarget,
-) -> ProjectionRebuildResult {
-    let Some(orbit_dir) = target.orbit_dir.as_deref() else {
-        return ProjectionRebuildResult {
-            projected: 0,
-            repaired: 0,
-            degraded_reason: None,
-        };
-    };
-    match crate::repository::checkout_projection::rebuild_projection(
-        registry,
-        orbit_dir,
-        &target.workspace_id,
-    ) {
-        Ok(result) => result,
-        Err(err) => ProjectionRebuildResult {
-            projected: 0,
-            repaired: 0,
-            degraded_reason: Some(format!("projection rebuild failed after import: {err}")),
-        },
-    }
 }
 
 fn write_id_map(

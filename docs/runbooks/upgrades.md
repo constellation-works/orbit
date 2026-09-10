@@ -199,18 +199,24 @@ Example dry run on a pre-upgrade workspace:
 ```text
 $ orbit migrate --dry-run
 │ COMPONENT          CURRENT   SUPPORTED │
-│ workspace layout   0         2         │
+│ workspace layout   0         3         │
 │ store schema       0         17        │
 Pending migrations:
   layout v1 (baseline) — adopt the versioned .orbit/ layout (records the current shape; changes nothing)
   layout v2 (archive-friction-tasks) — rewrite removed friction statuses as archived
+  layout v3 (remove-task-checkout-projections) — remove verified legacy .orbit/tasks symlinks without following them or touching canonical task bundles
   schema v1 (baseline) through schema v20 (invocations_ts_index)
-error: execution failed: 2 migration(s) pending; run `orbit migrate --confirm` to apply
+error: execution failed: 3 migration(s) pending; run `orbit migrate --confirm` to apply
 ```
 
 Bare `orbit migrate` and the compatibility-explicit `--dry-run` form inspect without opening
 the runtime. Applying pending migrations always requires `--confirm`; the command never prompts
 or reads stdin.
+
+Before applying layout v3, pause admissions and stop every older Orbit process
+that can write tasks. Install the new binary, apply or trigger the workspace
+upgrade, and only then restart workers. Older binaries still contain the
+retired projection writer and can recreate links while they remain running.
 
 ## Respect the downgrade guard
 

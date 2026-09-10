@@ -1,6 +1,5 @@
 //! Live repositories that coordinate persistence drivers.
 
-pub(crate) mod checkout_projection;
 mod file_backends;
 pub(crate) mod friction;
 pub(crate) mod layered_policy;

@@ -78,13 +78,6 @@ pub struct DanglingRelationTarget {
     pub target_task_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectionRebuildResult {
-    pub projected: usize,
-    pub repaired: usize,
-    pub degraded_reason: Option<String>,
-}
-
 /// Outcome of seeding the task-id allocator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AllocatorSeedOutcome {

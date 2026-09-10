@@ -1,6 +1,6 @@
-//! Task bundle orchestration joins file durability, registry bindings and
-//! checkout projections. Full-bundle reads and mutations share a persistent
-//! external lock; deletion publishes a recoverable rename before cleanup.
+//! Task bundle orchestration joins file durability and registry bindings.
+//! Full-bundle reads and mutations share a persistent external lock; deletion
+//! publishes a recoverable rename before cleanup.
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -21,13 +21,8 @@ use crate::driver::file::task_bundle::{
     append_jsonl_row, cleanup_partial_bundle_best_effort, publish_envelope, read_bundle_at,
     read_bundle_lightweight_at, read_envelope_at, write_bundle_at,
 };
-use crate::driver::sqlite::task_registry::{
-    ProjectionRebuildResult, TaskBundleBinding, TaskRegistryStore,
-};
+use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
 use crate::fs::yaml::write_yaml_durable_with;
-use crate::repository::checkout_projection::{
-    ensure_projection_entry_removable, remove_projection_entry,
-};
 
 fn sync_parent_path(path: &Path) -> Result<(), OrbitError> {
     let parent = path.parent().ok_or_else(|| {
@@ -40,12 +35,11 @@ fn sync_parent_path(path: &Path) -> Result<(), OrbitError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TaskBundleCreateResult {
     pub(crate) binding: TaskBundleBinding,
-    pub(crate) projection: ProjectionRebuildResult,
 }
 
 pub(crate) struct TaskBundleStoreV2 {
     // pub(crate) fields widened to allow sibling `tests/v2_bundle.rs` (and promoted
-    // `tests/test_support.rs`) to access internal state for durability and projection
+    // `tests/test_support.rs`) to access internal state for durability
     // assertions. See ORB-00247 and docs/design-patterns/test_layout.md (widen
     // deliberately rather than keep nested anti-pattern).
     #[cfg(test)]
@@ -54,15 +48,10 @@ pub(crate) struct TaskBundleStoreV2 {
     pub(crate) envelope_reads: std::sync::atomic::AtomicUsize,
     pub(crate) registry: TaskRegistryStore,
     pub(crate) workspace_id: String,
-    pub(crate) workspace_orbit_dir: Option<PathBuf>,
 }
 
 impl TaskBundleStoreV2 {
-    pub(crate) fn new(
-        registry: TaskRegistryStore,
-        workspace_id: String,
-        workspace_orbit_dir: PathBuf,
-    ) -> Self {
+    pub(crate) fn new(registry: TaskRegistryStore, workspace_id: String) -> Self {
         Self {
             #[cfg(test)]
             bundle_reads: Default::default(),
@@ -70,19 +59,6 @@ impl TaskBundleStoreV2 {
             envelope_reads: Default::default(),
             registry,
             workspace_id,
-            workspace_orbit_dir: Some(workspace_orbit_dir),
-        }
-    }
-
-    pub(crate) fn new_checkoutless(registry: TaskRegistryStore, workspace_id: String) -> Self {
-        Self {
-            #[cfg(test)]
-            bundle_reads: Default::default(),
-            #[cfg(test)]
-            envelope_reads: Default::default(),
-            registry,
-            workspace_id,
-            workspace_orbit_dir: None,
         }
     }
 
@@ -134,15 +110,6 @@ impl TaskBundleStoreV2 {
             if let Ok(existing) = read_bundle_consistently(&path) {
                 self.registry
                     .register_task_bundle(id, &self.workspace_id, &path)?;
-                if let Some(workspace) = &self.workspace_orbit_dir
-                    && let Err(error) = crate::repository::checkout_projection::rebuild_projection(
-                        &self.registry,
-                        workspace,
-                        &self.workspace_id,
-                    )
-                {
-                    orbit_common::tracing::warn!(task_id=id,error=%error,"recovered action task; checkout projection remains degraded");
-                }
                 return Ok(existing);
             }
             if path.exists() {
@@ -213,43 +180,7 @@ impl TaskBundleStoreV2 {
                     return Err(err);
                 }
             };
-        let projection = match self.workspace_orbit_dir.as_deref() {
-            None => ProjectionRebuildResult {
-                projected: 0,
-                repaired: 0,
-                degraded_reason: None,
-            },
-            Some(workspace_orbit_dir) => {
-                match crate::repository::checkout_projection::rebuild_projection(
-                    &self.registry,
-                    workspace_orbit_dir,
-                    &self.workspace_id,
-                ) {
-                    Ok(projection) => projection,
-                    Err(err) => {
-                        orbit_common::tracing::warn!(
-                            target: "orbit.store.task_bundle_v2",
-                            task_id,
-                            workspace_id = %self.workspace_id,
-                            error = %err,
-                            "task bundle created, but projection rebuild failed; continuing in degraded mode",
-                        );
-                        ProjectionRebuildResult {
-                            projected: 0,
-                            repaired: 0,
-                            degraded_reason: Some(format!(
-                                "projection rebuild failed after bundle creation: {err}"
-                            )),
-                        }
-                    }
-                }
-            }
-        };
-
-        Ok(TaskBundleCreateResult {
-            binding,
-            projection,
-        })
+        Ok(TaskBundleCreateResult { binding })
     }
 
     /// Canonical full-bundle read: hashes every artifact payload.
@@ -307,10 +238,6 @@ impl TaskBundleStoreV2 {
                 "task {task_id} has both a canonical bundle and a deletion tombstone; retained both for repair"
             )));
         }
-        if let Some(workspace_orbit_dir) = self.workspace_orbit_dir.as_deref() {
-            ensure_projection_entry_removable(workspace_orbit_dir, task_id)?;
-        }
-
         // Rename publishes deletion before any destructive cleanup. The whole
         // bundle survives registry failure, and a cleanup failure stays outside
         // the canonical namespace. Retry always rolls a published deletion forward.
@@ -327,17 +254,13 @@ impl TaskBundleStoreV2 {
         let unregistered = self
             .registry
             .unregister_task_bundle(task_id, &self.workspace_id)?;
-        let removed_projection = match self.workspace_orbit_dir.as_deref() {
-            Some(workspace_orbit_dir) => remove_projection_entry(workspace_orbit_dir, task_id)?,
-            None => false,
-        };
         deletion_fault(DeletionFault::Cleanup)?;
         if exists || published {
             fs::remove_dir_all(&tombstone)
                 .map_err(|err| OrbitError::from_write_io(&tombstone, err))?;
             sync_parent_path(&tombstone)?;
         }
-        Ok(unregistered || exists || published || removed_projection)
+        Ok(unregistered || exists || published)
     }
 
     /// List bundles registered to this workspace using the lightweight read.

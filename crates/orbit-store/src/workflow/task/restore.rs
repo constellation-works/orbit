@@ -4,14 +4,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::create_dir_symlink;
 
 use crate::driver::file::task_bundle::{
     read_bundle_at, write_bundle_at, write_bundle_with_artifacts_at,
 };
-use crate::driver::sqlite::task_registry::{
-    ProjectionRebuildResult, TaskRegistryStore, parse_orb_task_number,
-};
+use crate::driver::sqlite::task_registry::{TaskRegistryStore, parse_orb_task_number};
 
 use super::inspect::{ValidatedPublicationBundle, load_validated_publication};
 use super::{OmittedAttachment, PublicationInspectRequest};
@@ -52,7 +49,6 @@ pub struct PublicationRestoreOutcome {
     pub generation: u64,
     pub restored_task_ids: Vec<String>,
     pub already_present_task_ids: Vec<String>,
-    pub projection: ProjectionRebuildResult,
     pub omitted_attachments: Vec<OmittedAttachment>,
     pub completeness: PublicationRecoveryCompleteness,
 }
@@ -70,7 +66,6 @@ pub fn restore_publication(
 pub(super) enum RestoreFailurePoint {
     BundlePublication,
     IndexRebuild,
-    ProjectionRebuild,
     AllocatorAdvance,
 }
 
@@ -144,16 +139,7 @@ fn restore_publication_inner(
     }
 
     if missing.is_empty() {
-        return Ok(outcome(
-            envelope,
-            Vec::new(),
-            already_present,
-            ProjectionRebuildResult {
-                projected: 0,
-                repaired: 0,
-                degraded_reason: None,
-            },
-        ));
+        return Ok(outcome(envelope, Vec::new(), already_present));
     }
 
     let workspace_root = registry.workspaces_dir().join(&task_workspace_id);
@@ -200,20 +186,6 @@ fn restore_publication_inner(
     rebuild_workspace_index(registry, &task_workspace_id)?;
     inject(failure, RestoreFailurePoint::IndexRebuild)?;
 
-    let projection = if let Some(checkout) = registry.find_workspace_checkout(&task_workspace_id)? {
-        let swap = ProjectionSwap::publish(registry, &checkout.orbit_dir, &task_workspace_id)?;
-        let result = swap.result.clone();
-        guard.projection = Some(swap);
-        inject(failure, RestoreFailurePoint::ProjectionRebuild)?;
-        result
-    } else {
-        ProjectionRebuildResult {
-            projected: 0,
-            repaired: 0,
-            degraded_reason: None,
-        }
-    };
-
     let target_allocator = restored_ids
         .iter()
         .filter_map(|task_id| parse_orb_task_number(task_id))
@@ -226,7 +198,7 @@ fn restore_publication_inner(
     inject(failure, RestoreFailurePoint::AllocatorAdvance)?;
 
     guard.commit();
-    Ok(outcome(envelope, restored_ids, already_present, projection))
+    Ok(outcome(envelope, restored_ids, already_present))
 }
 
 fn assert_destination_pairing(
@@ -304,7 +276,6 @@ fn outcome(
     envelope: &super::PublicationEnvelope,
     restored_task_ids: Vec<String>,
     already_present_task_ids: Vec<String>,
-    projection: ProjectionRebuildResult,
 ) -> PublicationRestoreOutcome {
     let completeness = if envelope.omitted_attachments.is_empty() {
         PublicationRecoveryCompleteness::Complete
@@ -317,7 +288,6 @@ fn outcome(
         generation: envelope.generation,
         restored_task_ids,
         already_present_task_ids,
-        projection,
         omitted_attachments: envelope.omitted_attachments.clone(),
         completeness,
     }
@@ -333,83 +303,6 @@ fn inject(
     Ok(())
 }
 
-struct ProjectionSwap {
-    projection_dir: PathBuf,
-    backup_dir: PathBuf,
-    _staging: tempfile::TempDir,
-    had_previous: bool,
-    result: ProjectionRebuildResult,
-    committed: bool,
-}
-
-impl ProjectionSwap {
-    fn publish(
-        registry: &TaskRegistryStore,
-        orbit_dir: &Path,
-        workspace_id: &str,
-    ) -> Result<Self, OrbitError> {
-        let staging = tempfile::Builder::new()
-            .prefix(".orbit-restore-projection-")
-            .tempdir_in(orbit_dir)
-            .map_err(|error| OrbitError::from_write_io(orbit_dir, error))?;
-        let staged_tasks = staging.path().join("tasks");
-        fs::create_dir(&staged_tasks)
-            .map_err(|error| OrbitError::from_write_io(&staged_tasks, error))?;
-        let tasks = registry.tasks_for_workspace(workspace_id)?;
-        for task in &tasks {
-            let link = staged_tasks.join(&task.task_id);
-            create_dir_symlink(&task.canonical_path, &link)
-                .map_err(|error| OrbitError::from_write_io(&link, error))?;
-        }
-
-        let projection_dir = orbit_dir.join("tasks");
-        let backup_dir = staging.path().join("previous-tasks");
-        let had_previous = projection_dir.exists();
-        if had_previous {
-            fs::rename(&projection_dir, &backup_dir)
-                .map_err(|error| OrbitError::from_write_io(&projection_dir, error))?;
-        }
-        if let Err(error) = fs::rename(&staged_tasks, &projection_dir) {
-            if had_previous {
-                let _ = fs::rename(&backup_dir, &projection_dir);
-            }
-            return Err(OrbitError::from_write_io(&projection_dir, error));
-        }
-        Ok(Self {
-            projection_dir,
-            backup_dir,
-            _staging: staging,
-            had_previous,
-            result: ProjectionRebuildResult {
-                projected: tasks.len(),
-                repaired: 0,
-                degraded_reason: None,
-            },
-            committed: false,
-        })
-    }
-
-    fn commit(&mut self) {
-        self.committed = true;
-    }
-
-    fn rollback(&mut self) {
-        let _ = fs::remove_dir_all(&self.projection_dir);
-        if self.had_previous {
-            let _ = fs::rename(&self.backup_dir, &self.projection_dir);
-        }
-        self.committed = true;
-    }
-}
-
-impl Drop for ProjectionSwap {
-    fn drop(&mut self) {
-        if !self.committed {
-            self.rollback();
-        }
-    }
-}
-
 struct RestoreGuard<'a> {
     registry: &'a TaskRegistryStore,
     workspace_id: String,
@@ -418,7 +311,6 @@ struct RestoreGuard<'a> {
     advanced_allocator: Option<u32>,
     published_dirs: Vec<PathBuf>,
     registered_ids: Vec<String>,
-    projection: Option<ProjectionSwap>,
     armed: bool,
 }
 
@@ -437,22 +329,15 @@ impl<'a> RestoreGuard<'a> {
             advanced_allocator: None,
             published_dirs: Vec::new(),
             registered_ids: Vec::new(),
-            projection: None,
             armed: true,
         }
     }
 
     fn commit(&mut self) {
-        if let Some(projection) = &mut self.projection {
-            projection.commit();
-        }
         self.armed = false;
     }
 
     fn rollback(&mut self) {
-        if let Some(projection) = &mut self.projection {
-            projection.rollback();
-        }
         for task_id in self.registered_ids.iter().rev() {
             let _ = self
                 .registry
