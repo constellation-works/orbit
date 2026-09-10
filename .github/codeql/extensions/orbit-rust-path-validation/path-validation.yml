@@ -4,12 +4,6 @@ extensions:
       extensible: barrierModel
     data:
       - [
-          "orbit_core::application::docs::config::validated_docs_config_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
-          "path-injection",
-          "manual",
-        ]
-      - [
           "orbit_core::bootstrap::global_defaults::validated_stamp_path",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",
