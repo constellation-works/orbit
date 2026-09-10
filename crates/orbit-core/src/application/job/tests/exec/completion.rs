@@ -19,58 +19,8 @@ use crate::application::task::{TaskAddParams, TaskUpdateParams};
 fn completion_merge_failure_routes_to_review_recovery_without_republishing() {
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
-    let task = runtime
-        .add_task(TaskAddParams {
-            title: "Published completion candidate".to_string(),
-            description: "Fixture already published and promoted to review.".to_string(),
-            acceptance_criteria: vec!["Completion retry remains safe.".to_string()],
-            plan: "Exercise completion failure recovery.".to_string(),
-            context_files: vec!["src/lib.rs".to_string()],
-            workspace_path: Some(".".to_string()),
-            status: Some(TaskStatus::Review),
-            external_refs: vec![
-                ExternalRef::try_new(
-                    "github-pr".to_string(),
-                    "42".to_string(),
-                    Some("https://github.com/example/orbit/pull/42".to_string()),
-                )
-                .expect("github PR ref"),
-            ],
-            ..Default::default()
-        })
-        .expect("seed published task");
-    // The executor uses the run ID as retry-jitter salt. Reuse the
-    // store-generated fixture task ID instead of a hard-coded salt.
-    let run_id = task.id.clone();
-    runtime
-        .update_task(
-            &task.id,
-            TaskUpdateParams {
-                job_run_id: Some(Some(run_id.to_string())),
-                execution_summary: Some(
-                    "Outcome: success\n\nChanges:\n- Published candidate is ready.".to_string(),
-                ),
-                ..Default::default()
-            },
-        )
-        .expect("attach task to run");
-
-    let mut job = resolved_job(&runtime, "task_pr_pipeline");
-    job.steps.retain(|step| step.id == "complete_pr");
-    let complete = job.steps.first_mut().expect("complete_pr step");
-    complete.when = None;
-    let JobV2StepBody::Target(complete) = &mut complete.body else {
-        panic!("resolved complete_pr target");
-    };
-    complete.default_input = Some(json!({
-        "job_run_id": run_id,
-        "completed_task_ids": [task.id],
-        "workspace_path": repo_root,
-        "pr_number": "42",
-        "poll_interval_seconds": 0,
-        "max_wait_seconds": 0,
-    }));
-    let host = CompletionFailureHost::new(&runtime);
+    let (task, run_id, job) = published_completion_pipeline(&runtime, &repo_root);
+    let host = CompletionFailureHost::new(&runtime, open_pull_request("CLEAN"));
 
     let error = try_execute_job(
         &runtime,
@@ -110,15 +60,128 @@ fn completion_merge_failure_routes_to_review_recovery_without_republishing() {
     assert!(!recovery.message.contains("Manual resolution required"));
 }
 
+/// [ORB-11982] The F2026-09-102 shape at the pipeline boundary: the provider
+/// still reports the pull request as open while carrying a merge timestamp.
+/// The run must fail with the task left in review rather than transition it on
+/// the half of the answer that looks delivered.
+#[test]
+fn an_open_pull_request_reported_as_merged_never_completes_the_pipeline() {
+    let (_root, runtime, repo_root, global_root) = test_runtime();
+    seed_default_catalogs(&global_root);
+    let (task, run_id, job) = published_completion_pipeline(&runtime, &repo_root);
+    let mut status = open_pull_request("CLEAN");
+    status["pull_request"]["mergedAt"] = json!("2026-09-10T01:23:08Z");
+    let host = CompletionFailureHost::new(&runtime, status);
+
+    let error = try_execute_job(
+        &runtime,
+        &repo_root,
+        &host,
+        job,
+        json!({ "task_ids": [task.id] }),
+        &run_id,
+    )
+    .expect_err("a contradictory merge state must fail the pipeline");
+
+    let message = error.to_string();
+    assert!(message.contains("contradictory merge state"), "{message}");
+    let persisted = runtime.get_task(&task.id).expect("preserved task");
+    assert_eq!(persisted.status, TaskStatus::Review);
+    assert_eq!(persisted.github_pr_number(), Some("42"));
+    assert_eq!(
+        host.operations(),
+        vec!["pr.status"],
+        "a contradictory state is refused before any merge policy or mutation"
+    );
+}
+
+/// Seed a bundle that is already published and promoted to review, and reduce
+/// the real PR pipeline to the completion step that acts on it.
+fn published_completion_pipeline(
+    runtime: &OrbitRuntime,
+    repo_root: &std::path::Path,
+) -> (Task, String, orbit_types::workflow::JobV2) {
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Published completion candidate".to_string(),
+            description: "Fixture already published and promoted to review.".to_string(),
+            acceptance_criteria: vec!["Completion retry remains safe.".to_string()],
+            plan: "Exercise completion failure recovery.".to_string(),
+            context_files: vec!["src/lib.rs".to_string()],
+            workspace_path: Some(".".to_string()),
+            status: Some(TaskStatus::Review),
+            external_refs: vec![
+                ExternalRef::try_new(
+                    "github-pr".to_string(),
+                    "42".to_string(),
+                    Some("https://github.com/example/orbit/pull/42".to_string()),
+                )
+                .expect("github PR ref"),
+            ],
+            ..Default::default()
+        })
+        .expect("seed published task");
+    // The executor uses the run ID as retry-jitter salt. Reuse the
+    // store-generated fixture task ID instead of a hard-coded salt.
+    let run_id = task.id.clone();
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                job_run_id: Some(Some(run_id.to_string())),
+                execution_summary: Some(
+                    "Outcome: success\n\nChanges:\n- Published candidate is ready.".to_string(),
+                ),
+                ..Default::default()
+            },
+        )
+        .expect("attach task to run");
+
+    let mut job = resolved_job(runtime, "task_pr_pipeline");
+    job.steps.retain(|step| step.id == "complete_pr");
+    let complete = job.steps.first_mut().expect("complete_pr step");
+    complete.when = None;
+    let JobV2StepBody::Target(complete) = &mut complete.body else {
+        panic!("resolved complete_pr target");
+    };
+    complete.default_input = Some(json!({
+        "job_run_id": run_id,
+        "completed_task_ids": [task.id],
+        "workspace_path": repo_root.to_string_lossy(),
+        "pr_number": "42",
+        "poll_interval_seconds": 0,
+        "max_wait_seconds": 0,
+    }));
+
+    (task, run_id, job)
+}
+
+/// The `gh pr view` projection completion reads, for a pull request that is
+/// still open.
+fn open_pull_request(merge_state_status: &str) -> Value {
+    json!({
+        "pull_request": {
+            "number": 42,
+            "state": "OPEN",
+            "mergedAt": Value::Null,
+            "mergeStateStatus": merge_state_status,
+            "headRefName": "orbit/test-batch",
+            "baseRefName": "agent-main",
+        }
+    })
+}
+
 struct CompletionFailureHost<'a> {
     runtime: &'a OrbitRuntime,
+    pr_status: Value,
     operations: Mutex<Vec<String>>,
 }
 
 impl<'a> CompletionFailureHost<'a> {
-    fn new(runtime: &'a OrbitRuntime) -> Self {
+    fn new(runtime: &'a OrbitRuntime, pr_status: Value) -> Self {
         Self {
             runtime,
+            pr_status,
             operations: Mutex::new(Vec::new()),
         }
     }
@@ -178,14 +241,7 @@ impl RuntimeHost for CompletionFailureHost<'_> {
             .expect("operations lock")
             .push(operation.to_string());
         match operation {
-            "pr.status" => Ok(json!({
-                "pull_request": {
-                    "number": 42,
-                    "state": "OPEN",
-                    "mergedAt": Value::Null,
-                    "mergeStateStatus": "CLEAN",
-                }
-            })),
+            "pr.status" => Ok(self.pr_status.clone()),
             "pr.merge_capabilities" => Ok(json!({
                 "repository": {
                     "name_with_owner": "example/orbit",

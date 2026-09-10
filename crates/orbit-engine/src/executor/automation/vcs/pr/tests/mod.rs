@@ -2,6 +2,7 @@
 
 mod body;
 mod complete;
+mod delivery;
 mod handoff;
 mod merge;
 mod open;

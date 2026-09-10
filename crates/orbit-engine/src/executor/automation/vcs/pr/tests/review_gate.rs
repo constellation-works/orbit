@@ -80,6 +80,8 @@ fn merged(head_oid: &str, merge_commit: &str) -> Value {
         "number": 42,
         "state": "MERGED",
         "mergedAt": "2026-09-07T00:00:00Z",
+        "headRefName": "orbit/test-batch",
+        "baseRefName": "agent-main",
         "headRefOid": head_oid,
         "mergeCommit": { "oid": merge_commit },
     })
@@ -242,9 +244,9 @@ set -eu
 printf '%s\n' "$@" >> provider-args
 if [ "$1 $2" = "pr view" ]; then
     if [ -f provider-merged ]; then
-        printf '%s\n' '{"state":"MERGED","headRefOid":"2222222222222222222222222222222222222222","mergeCommit":{"oid":"unreviewed-merge"}}'
+        printf '%s\n' '{"state":"MERGED","headRefName":"orbit/test-batch","baseRefName":"agent-main","headRefOid":"2222222222222222222222222222222222222222","mergeCommit":{"oid":"unreviewed-merge"}}'
     else
-        printf '%s\n' '{"state":"OPEN","mergeStateStatus":"CLEAN","headRefOid":"1111111111111111111111111111111111111111"}'
+        printf '%s\n' '{"state":"OPEN","mergeStateStatus":"CLEAN","headRefName":"orbit/test-batch","baseRefName":"agent-main","headRefOid":"1111111111111111111111111111111111111111"}'
         printf '%s' '1111111111111111111111111111111111111111' > provider-head
     fi
     exit 0

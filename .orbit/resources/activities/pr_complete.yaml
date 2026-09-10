@@ -56,6 +56,31 @@ spec:
         type: boolean
       merge:
         type: object
+        description: >
+          What completion established about this bundle's delivery. A PR
+          delivery carries delivery_evidence read at completion time: the
+          merged pull request, the branches and head it merged, and the commit
+          that landed. Absent evidence never authorizes the done transition.
+        properties:
+          delivery_evidence:
+            type: object
+            required: [pr_number, merge_commit]
+            properties:
+              pr_number:
+                type: string
+              merged_at:
+                type: string
+              # Null when the provider's answer omitted the field; a pinned
+              # identity that cannot be read refuses completion rather than
+              # reaching this output.
+              head_ref:
+                type: [string, "null"]
+              base_ref:
+                type: [string, "null"]
+              head_sha:
+                type: [string, "null"]
+              merge_commit:
+                type: string
       completed_task_ids:
         type: array
         items:

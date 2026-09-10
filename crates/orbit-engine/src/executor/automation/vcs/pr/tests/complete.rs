@@ -110,8 +110,23 @@ fn complete_input(workspace_path: &std::path::Path, task_ids: &[&str]) -> Value 
     })
 }
 
+/// The merge projection `gh pr view` actually returns for a merged PR. The
+/// completion gate reads every one of these fields, so under-specifying the
+/// fixture would hide the identity and merge-evidence checks it exists for.
 fn merged_state() -> Value {
-    json!({ "number": 42, "state": "MERGED", "mergedAt": "2026-09-05T00:00:00Z" })
+    merged_state_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+}
+
+fn merged_state_for(head_sha: &str) -> Value {
+    json!({
+        "number": 42,
+        "state": "MERGED",
+        "mergedAt": "2026-09-05T00:00:00Z",
+        "headRefName": "orbit/test-batch",
+        "baseRefName": "agent-main",
+        "headRefOid": head_sha,
+        "mergeCommit": { "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+    })
 }
 
 fn state(merge_state_status: &str) -> Value {
@@ -385,6 +400,7 @@ fn published_pr_conflict_reuses_pinned_rebase_branch_and_pr_on_completion_retry(
         String::from_utf8_lossy(&continued.stderr)
     );
 
+    let recovered_head_sha = git(&workspace.repo, &["rev-parse", "HEAD"]);
     let run_id = input["job_run_id"].as_str().unwrap();
     crate::context::RuntimeHost::checkpoint_rebase_recovery(
         &host,
@@ -401,13 +417,17 @@ fn published_pr_conflict_reuses_pinned_rebase_branch_and_pr_on_completion_retry(
             "base_ref": "refs/remotes/origin/agent-main",
             "base_sha": conflict.target_base_sha,
             "remote_sha_before": published_head_sha,
-            "head_sha": git(&workspace.repo, &["rev-parse", "HEAD"]),
+            "head_sha": recovered_head_sha,
             "rewritten": true,
         }),
     )
     .unwrap();
 
-    host.queue_pr_status([state("DIRTY"), state("CLEAN"), merged_state()]);
+    host.queue_pr_status([
+        state("DIRTY"),
+        state("CLEAN"),
+        merged_state_for(&recovered_head_sha),
+    ]);
     let output = pr_complete(&host, &input).expect("retry merges recovered published PR");
 
     assert_eq!(output["merge"]["pr_number"], "42");
