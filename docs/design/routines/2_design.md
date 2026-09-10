@@ -1,8 +1,8 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-10
+last_validated: 2026-09-10
 status: Accepted
 feature: routines
 doc_role: design
@@ -293,7 +293,29 @@ Per pass:
    (idempotency key: routine name + scheduled slot + attempt, transactionally with the
    cursor advance), then dispatch the target via `submit_pipeline_run` in the routine's
    source workspace with actor `routine/<name>` as run provenance.
-8. Record outcomes and exit.
+   Routine dispatch supplies the run base input with exactly one reserved internal field,
+   `__routine_dispatch_orbit_dir`, containing the source workspace's `.orbit` directory.
+   This is workspace-routing metadata, not a caller parameter: routine target jobs still
+   accept no caller-supplied parameters, and every step in such a job must declare its own
+   `default_input` rather than inheriting the job base input (which would expose the
+   reserved field to the activity).
+8. The detached worker clears `ORBIT_ROOT` unconditionally. With no explicit `--root`, its
+   cwd is therefore the workspace selector; when a parent explicitly forwarded `--root`,
+   that argument is the selector. Before any step executes, the worker compares the
+   declared `__routine_dispatch_orbit_dir` directly with its resolved `orbit_dir`. A
+   mismatch is a workspace-identity refusal: the worker persists a diagnostic step with
+   error code `routine_dispatch_workspace_mismatch`, cancels the run before step execution,
+   and returns the mismatch error. The final state is intentionally `cancelled` (the
+   existing cancellation contract is preserved), but it is no longer an unexplained bare
+   cancellation. `orbit run show` exposes the persisted error code and declared-versus-
+   resolved path message; because no activity output exists, `orbit run logs` falls back to
+   the run's worker log, which also contains the diagnostic.
+9. The identity check is a direct path comparison, not a normalized workspace-equivalence
+   check. A workspace whose `.orbit/config.toml` redirects `root` to a different directory
+   is not expected to satisfy the gate unless the worker's resolved `orbit_dir` is exactly
+   the declared `.orbit` path. The gate deliberately refuses that redirected-root case so
+   routine provenance cannot silently resolve to a different store.
+10. Record outcomes and exit.
 
 `orbit routine list`, `orbit routine show`, and `orbit sweep` expose the local registry
 source (`local_workspace_registry`) plus stable diagnostic codes and severity in human and
@@ -393,9 +415,11 @@ out of v1 scope for this reason.
   outcome sync records it as `error` — terminal, never re-fired, so a make-up fire cannot race
   an orphaned run. A dispatched in-flight run is released before that timeout only when its
   recorded owner is conclusively stopped; live and unprobeable owners remain protected.
-- **Routines carry no input payload.** v1 dispatches every target with an empty input
-  object; jobs meant for routines must run with defaults. Parameterized fires would be a
-  schema addition.
+- **Routines carry no caller input payload.** v1 dispatch injects only the reserved internal
+  `__routine_dispatch_orbit_dir` field naming the owning workspace's `.orbit` directory.
+  Jobs meant for routines still take no caller-supplied parameters, and each step should
+  declare its own `default_input` so that this routing field is never inherited as activity
+  input. Parameterized fires would be a schema addition.
 
 ---
 
