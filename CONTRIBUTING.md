@@ -25,6 +25,79 @@ cargo test --workspace
 Use targeted tests while iterating, then run the full workspace suite before
 landing an internal change.
 
+## Safe Mutable CLI Fixtures
+
+Test fixtures and manual reproductions that mutate Orbit task, run, workspace,
+or registry state must be isolated from the process that launches them. This is
+separate from authorized operator or production CLI work, which should retain
+normal Orbit routing and state.
+
+Use absolute disposable paths and spawn the CLI as a child. The shared helper
+clears the managed-run routing, identity, and grant variables before the
+fixture sets its own `HOME` and `USERPROFILE`:
+
+```rust
+use std::fs;
+use std::path::Path;
+
+use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
+
+fn fixture_orbit(work: &Path, home: &Path) -> Command {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(work)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+}
+```
+
+The pattern above is already used by
+[`crates/orbit-cli/tests/tool_list.rs`](crates/orbit-cli/tests/tool_list.rs).
+For a complete disposable fixture, create absolute temporary paths, initialize
+the fixture workspace through that helper, then perform a read-only routing
+check before adding tasks or starting runs:
+
+```rust
+let temp = tempfile::tempdir().expect("fixture tempdir");
+let home = temp.path().join("home");
+let work = temp.path().join("work");
+fs::create_dir_all(&home).expect("fixture home");
+fs::create_dir_all(&work).expect("fixture work");
+
+fixture_orbit(&work, &home)
+    .args(["workspace", "init", "--name", "fixture"])
+    .assert()
+    .success();
+
+let report = fixture_orbit(&work, &home)
+    .args(["workspace", "show", "--format", "json"])
+    .output()
+    .expect("workspace routing check");
+assert!(report.status.success());
+let report: serde_json::Value = serde_json::from_slice(&report.stdout).expect("routing JSON");
+assert_eq!(report["registered"], true);
+assert_eq!(report["checkout"]["repo_root"], work.to_string_lossy().to_string());
+assert_eq!(
+    report["checkout"]["orbit_dir"],
+    work.join(".orbit").to_string_lossy().to_string()
+);
+```
+
+`workspace show` exposes the resolved checkout paths, so this check catches a
+fixture routed to an ambient workspace before the fixture performs its useful
+mutation. A shell `export HOME=/tmp/...` is not an isolation boundary: a
+managed child can inherit `ORBIT_MANAGED_RUN_CONTEXT` and the
+`ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` pair, which carries durable authority
+and takes precedence over home discovery. Never use bare mutable fixture CLI
+commands against ambient authority in a managed worker. See
+[`crates/orbit-cli/tests/ambient_authority_isolation.rs`](crates/orbit-cli/tests/ambient_authority_isolation.rs)
+for the regression coverage.
+
 ## Toolchain (MSRV)
 
 Orbit's minimum supported Rust version is declared as `rust-version` in the

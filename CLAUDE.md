@@ -29,6 +29,13 @@ Project instructions for agents working on Orbit (loaded as both `AGENTS.md` and
 
 `make ci-fast` (fmt-check + guardrail scripts; no compile) and `make ci-lint` (the same workspace-wide, all-target clippy pass as CI, with warnings denied) must both pass before a task moves to `review`. Each task therefore pays for one workspace clippy compile; cold runs can take several minutes, while warm runs reuse Cargo's incremental cache. The full `make ci` is the canonical merge gate via [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every PR — don't run it per task locally.
 
+## Mutable Fixture Operations
+
+- Keep authorized operator/production CLI actions separate from test fixtures and ad-hoc reproductions. Normal user commands may use the configured Orbit state; a fixture that can create, update, archive, or run Orbit tasks, runs, workspaces, or registry entries must use a controlled child process.
+- Give the child absolute disposable paths for its `HOME`/`USERPROFILE` and checkout or data roots. Before setting deliberate fixture values, apply the existing [`orbit_common::test_env::clear_inherited_authority`](crates/orbit-common/src/test_env.rs) helper to the `assert_cmd::Command` or `std::process::Command`; do not recreate its environment-variable list locally.
+- After controlled setup and before the first task/run mutation, verify routing with a read-only command such as `orbit workspace show --format json`, asserting the expected `checkout.repo_root` and `checkout.orbit_dir`. If initialization is the behavior under test, keep initialization itself on the disposable paths and verify routing before any subsequent mutation.
+- Do not run bare mutable fixture commands from a shell inside a managed worker. Exporting `HOME` alone is insufficient: the inherited managed-run marker plus `ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` can carry durable authority and outrank home-directory discovery. These rules guide fixtures only; they do not add restrictions to legitimate operator or production CLI use.
+
 
 ## Architecture
 
