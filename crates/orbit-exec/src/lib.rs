@@ -49,8 +49,8 @@ mod supervision;
 
 pub use linux_landlock::{
     HOST_READ_ENV_VARS, LandlockGrant, LandlockPathGrant, LandlockProbeOutcome,
-    MINIMUM_LANDLOCK_ABI, grants_read, landlock_unavailable_message, linux_landlock_grants,
-    probe_landlock, spawn_under_linux_landlock,
+    LandlockReadBoundary, MINIMUM_LANDLOCK_ABI, grants_read, landlock_unavailable_message,
+    linux_landlock_read_boundary, probe_landlock, spawn_under_linux_landlock,
 };
 pub use linux_sandbox::{
     BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapPlan,
