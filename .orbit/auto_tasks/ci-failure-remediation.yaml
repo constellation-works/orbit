@@ -1,7 +1,7 @@
 schemaVersion: 1
 name: ci-failure-remediation
 description: Recurring evidence-first remediation of current GitHub Actions failures without duplicating the PR-only CI task hook
-enabled: true
+enabled: false
 schedule:
   cron: 15 * * * *
 template:

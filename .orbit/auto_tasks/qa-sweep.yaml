@@ -1,9 +1,9 @@
 schemaVersion: 1
 name: qa-sweep
 description: Hands-on validation of recent workspace changes
-enabled: false
+enabled: true
 schedule:
-  cron: 50 * * * *
+  every_minutes: 120
 template:
   title: Perform QA validation
   description: |
@@ -70,7 +70,7 @@ template:
   priority: medium
   # The portable system lane is seeded per machine and compatibility-aliased
   # for configs written before that crew existed.
-  crew: system
+  crew: opus
   status: backlog
 dedupe: skip_if_open
 created_by: system
