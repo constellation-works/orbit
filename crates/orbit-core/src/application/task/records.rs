@@ -1,7 +1,7 @@
 //! Coordinated task document, history, artifact, and search-index writes.
 
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_search::{EmbedWorker, VectorStore};
+use orbit_search::{EmbedWorker, SemanticIndex};
 use orbit_store::contracts::{
     TaskArtifactStoreBackend, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend,
     TaskDocumentUpdateParams, TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskStoreBackend,
@@ -18,7 +18,7 @@ impl OrbitStores {
             document: self.task_documents(),
             history: self.task_history(),
             artifact: self.task_artifacts(),
-            semantic_vector: self.semantic_vector(),
+            semantic_index: self.semantic_index(),
             semantic_worker: self.semantic_worker(),
         }
     }
@@ -32,7 +32,7 @@ pub(crate) struct TaskRecordService<'a> {
     document: &'a dyn TaskDocumentStoreBackend,
     history: &'a dyn TaskHistoryStoreBackend,
     artifact: &'a dyn TaskArtifactStoreBackend,
-    semantic_vector: &'a VectorStore,
+    semantic_index: &'a SemanticIndex,
     semantic_worker: &'a EmbedWorker,
 }
 
@@ -132,7 +132,15 @@ impl TaskRecordService<'_> {
 
     pub(crate) fn delete(&self, id: &str) -> Result<bool, OrbitError> {
         let deleted = self.store.delete_task(id)?;
-        if deleted && let Err(error) = self.semantic_vector.delete_source("task", id) {
+        // A workspace with no index has nothing to retract, so an unavailable
+        // index reports here exactly like a failed cascade: the task is gone
+        // either way, and the index reconciles on its next reindex.
+        if deleted
+            && let Err(error) = self
+                .semantic_index
+                .store()
+                .and_then(|vector| vector.delete_source("task", id))
+        {
             orbit_common::tracing::debug!(
                 target: "orbit.search.indexer",
                 task_id = id,

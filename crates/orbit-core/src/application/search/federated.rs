@@ -255,7 +255,13 @@ pub(super) fn apply_workspace_cap(targets: &mut Vec<FederatedWorkspaceTarget>) -
 /// name instead of emitting a plausible-looking ranking the caller cannot
 /// tell apart from a fused one.
 fn model_mismatch_note(runtime: &OrbitRuntime, query_model: &str) -> Option<String> {
-    let indexed = runtime.stores().semantic_vector.model_ids().ok()?;
+    let indexed = runtime
+        .stores()
+        .semantic_index()
+        .store()
+        .ok()?
+        .model_ids()
+        .ok()?;
     describe_model_mismatch(&indexed, query_model)
 }
 

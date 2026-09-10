@@ -52,7 +52,7 @@ impl OrbitRuntime {
         params: SemanticIndexParams,
     ) -> Result<TaskIndexResult, OrbitError> {
         let tasks = self.stores().tasks().list_tasks()?;
-        orbit_search::semantic_index(&self.stores().semantic_vector, &tasks, params)
+        orbit_search::semantic_index(self.stores().semantic_index().store()?, &tasks, params)
     }
 
     fn semantic_index_docs(
@@ -73,14 +73,14 @@ impl OrbitRuntime {
             .into_iter()
             .map(|task| task.id)
             .collect();
-        orbit_search::semantic_stats(&self.stores().semantic_vector, &task_ids)
+        orbit_search::semantic_stats(self.stores().semantic_index().store()?, &task_ids)
     }
 
     pub fn semantic_search(
         &self,
         params: SemanticSearchParams,
     ) -> Result<SemanticSearchResult, OrbitError> {
-        orbit_search::semantic_search(&self.stores().semantic_vector, params)
+        orbit_search::semantic_search(self.stores().semantic_index().store()?, params)
     }
 
     pub fn semantic_related(
@@ -88,6 +88,6 @@ impl OrbitRuntime {
         params: SemanticRelatedParams,
     ) -> Result<SemanticRelatedResult, OrbitError> {
         let tasks = self.stores().tasks().list_tasks()?;
-        orbit_search::semantic_related(&self.stores().semantic_vector, &tasks, params)
+        orbit_search::semantic_related(self.stores().semantic_index().store()?, &tasks, params)
     }
 }

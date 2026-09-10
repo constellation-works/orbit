@@ -1,5 +1,6 @@
 mod chunker;
 mod doc_fields;
+mod index;
 mod task_fields;
 mod worker;
 

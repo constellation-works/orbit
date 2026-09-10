@@ -99,6 +99,19 @@ pub fn ensure_vector_schema(conn: &Connection) -> Result<(), OrbitError> {
     }
 }
 
+/// Whether this database carries a vector index at all — the current layout or
+/// the pre-[ORB-11695] inline one.
+///
+/// A database with neither has nothing to read: every query would fail on a
+/// missing table. It is the difference between a schema call that could not
+/// re-apply DDL to an index that already exists and one that could not build
+/// the index in the first place.
+pub(super) fn vector_schema_present(conn: &Connection) -> Result<bool, OrbitError> {
+    Ok(table_exists(conn, "embeddings")?
+        || table_exists(conn, "corpus_fts")?
+        || table_exists(conn, legacy_task_fts_table())?)
+}
+
 fn is_current_layout(conn: &Connection) -> Result<bool, OrbitError> {
     Ok(table_exists(conn, "embeddings")?
         && table_exists(conn, "chunks")?

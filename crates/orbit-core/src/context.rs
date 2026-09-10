@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use orbit_engine::PrConfig;
 use orbit_policy::PolicyEngine;
-use orbit_search::{EmbedWorker, VectorStore};
+use orbit_search::{EmbedWorker, SemanticIndex};
 use orbit_store::Store;
 use orbit_store::contracts::{
     AuditEventStoreBackend, AutomationStoreBackend, ExecutorDefStoreBackend,
@@ -115,7 +115,7 @@ pub(crate) struct OrbitStores {
     pub(crate) task_document: Arc<dyn TaskDocumentStoreBackend>,
     pub(crate) task_history: Arc<dyn TaskHistoryStoreBackend>,
     pub(crate) task_artifact: Arc<dyn TaskArtifactStoreBackend>,
-    pub(crate) semantic_vector: Arc<VectorStore>,
+    pub(crate) semantic_index: SemanticIndex,
     pub(crate) semantic_worker: Arc<EmbedWorker>,
     pub(crate) task_reservation: Arc<dyn TaskReservationStoreBackend>,
     pub(crate) job_run: Arc<dyn JobRunStoreBackend>,
@@ -133,7 +133,7 @@ impl OrbitStores {
         task_document: Arc<dyn TaskDocumentStoreBackend>,
         task_history: Arc<dyn TaskHistoryStoreBackend>,
         task_artifact: Arc<dyn TaskArtifactStoreBackend>,
-        semantic_vector: Arc<VectorStore>,
+        semantic_index: SemanticIndex,
         semantic_worker: Arc<EmbedWorker>,
         task_reservation: Arc<dyn TaskReservationStoreBackend>,
         job_run: Arc<dyn JobRunStoreBackend>,
@@ -148,7 +148,7 @@ impl OrbitStores {
             task_document,
             task_history,
             task_artifact,
-            semantic_vector,
+            semantic_index,
             semantic_worker,
             task_reservation,
             job_run,
@@ -176,8 +176,10 @@ impl OrbitStores {
         self.task_artifact.as_ref()
     }
 
-    pub(crate) fn semantic_vector(&self) -> &VectorStore {
-        self.semantic_vector.as_ref()
+    /// The optional semantic index. Callers reach its store through
+    /// [`SemanticIndex::store`], which names the absence when there is none.
+    pub(crate) fn semantic_index(&self) -> &SemanticIndex {
+        &self.semantic_index
     }
 
     pub(crate) fn semantic_worker(&self) -> &EmbedWorker {

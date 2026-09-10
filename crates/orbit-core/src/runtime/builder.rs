@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use orbit_policy::PolicyEngine;
-use orbit_search::{EmbedWorker, VectorStore};
+use orbit_search::{EmbedWorker, SemanticIndex};
 use orbit_store::Store;
 use orbit_store::compose::{
     WorkspaceTaskBackends, audit_event_store_sqlite, automation_store, coordination_task_backends,
@@ -113,10 +113,13 @@ pub(crate) fn build_context_from_roots(
             "skipped malformed legacy state records during SQLite import",
         );
     }
-    let semantic_vector_store = Arc::new(VectorStore::open(&persistence.semantic_db)?);
-    let semantic_worker = match host_lifetime {
-        HostLifetime::LongLived => Arc::new(EmbedWorker::start((*semantic_vector_store).clone())),
-        HostLifetime::ShortLived => Arc::new(EmbedWorker::disabled()),
+    let semantic_index = SemanticIndex::open(&persistence.semantic_db)?;
+    // The worker writes embeddings. Without an index to write into there is
+    // nothing for it to drain, so it stays disabled alongside the short-lived
+    // hosts that refresh through `orbit semantic index` instead.
+    let semantic_worker = match (host_lifetime, semantic_index.store()) {
+        (HostLifetime::LongLived, Ok(vector)) => Arc::new(EmbedWorker::start(vector.clone())),
+        _ => Arc::new(EmbedWorker::disabled()),
     };
     let job_run_store = workspace_job_run_store(store.clone(), workspace_id);
 
@@ -189,7 +192,7 @@ pub(crate) fn build_context_from_roots(
             task_backends.document,
             task_backends.history,
             task_backends.artifact,
-            semantic_vector_store,
+            semantic_index,
             semantic_worker,
             task_reservation_store,
             job_run_store,

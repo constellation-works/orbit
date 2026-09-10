@@ -309,3 +309,135 @@ fn explicit_data_dir_runtime_does_not_bind_parent_as_a_checkout() {
         "executor-list-style data-dir open must not insert a checkout for parent(data-dir); got {candidates:?}"
     );
 }
+
+/// A read-only state mount carries no writable state directory, so an optional
+/// semantic index that was never built there cannot be created at startup.
+/// Opening the runtime and every read that does not need that index must still
+/// work; semantic ranking must name the unavailable index instead of answering
+/// as a complete but empty corpus.
+#[cfg(unix)]
+#[test]
+fn absent_semantic_index_on_unwritable_state_keeps_the_runtime_observational() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use orbit_search::SemanticSearchParams;
+
+    use crate::application::search::{
+        GlobalSearchKind, GlobalSearchMode, GlobalSearchParams, GlobalSearchResponse,
+    };
+
+    let (_root, global_root, workspace_root, runtime) = v2_runtime();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Observational needle".to_string(),
+            description: "Readable through a state directory that refuses writes".to_string(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("create task on writable state");
+    drop(runtime);
+
+    let state_dir = workspace_root.join("state");
+    let semantic_db = state_dir.join("semantic.db");
+    assert!(
+        semantic_db.exists(),
+        "writable initialization must create the semantic index"
+    );
+    for suffix in ["", "-wal", "-shm"] {
+        let sidecar = PathBuf::from(format!("{}{suffix}", semantic_db.display()));
+        if sidecar.exists() {
+            std::fs::remove_file(&sidecar).expect("remove the index this workspace never built");
+        }
+    }
+    let original = std::fs::metadata(&state_dir)
+        .expect("state metadata")
+        .permissions();
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o500))
+        .expect("make the state directory read-only");
+    if std::fs::File::create(state_dir.join("probe")).is_ok() {
+        // A user that ignores the mode bits (typically root) cannot reproduce
+        // the denial this fixture is about.
+        std::fs::set_permissions(&state_dir, original).expect("restore state permissions");
+        return;
+    }
+
+    let observed = observe_unwritable_state(&global_root, &workspace_root, &task.id);
+    std::fs::set_permissions(&state_dir, original).expect("restore state permissions");
+    assert!(
+        !semantic_db.exists(),
+        "observing an unavailable index must not create it"
+    );
+
+    let (listed, semantic, hybrid) = observed;
+    assert_eq!(
+        listed,
+        vec![task.id.clone()],
+        "task reads must still answer"
+    );
+
+    let message = semantic.to_string();
+    assert!(
+        message.contains("semantic index") && message.contains("is unavailable"),
+        "semantic search must name the unavailable index: {message}"
+    );
+    assert_eq!(
+        hybrid.mode,
+        GlobalSearchMode::Lexical,
+        "hybrid search must degrade rather than report an empty semantic corpus"
+    );
+    assert!(
+        hybrid
+            .notes
+            .iter()
+            .any(|note| note.contains("falling back to lexical task search")
+                && note.contains("is unavailable")),
+        "the fallback must disclose why semantic ranking was skipped: {:?}",
+        hybrid.notes
+    );
+    assert_eq!(
+        hybrid.results.first().and_then(|hit| hit.id.as_deref()),
+        Some(task.id.as_str()),
+        "lexical ranking must still find the task"
+    );
+
+    /// Opens a second runtime while the state directory refuses writes and
+    /// collects everything the assertions need, so the fixture can restore the
+    /// directory's mode before any of them can unwind.
+    fn observe_unwritable_state(
+        global_root: &std::path::Path,
+        workspace_root: &std::path::Path,
+        task_id: &str,
+    ) -> (Vec<String>, OrbitError, GlobalSearchResponse) {
+        let runtime = OrbitRuntime::from_roots(global_root, workspace_root)
+            .expect("an absent optional semantic index must not refuse the runtime");
+        let listed = runtime
+            .list_tasks()
+            .expect("list tasks through the unwritable state directory")
+            .into_iter()
+            .map(|task| task.id)
+            .collect();
+        let semantic = runtime
+            .semantic_search(SemanticSearchParams {
+                query: "observational needle".to_string(),
+                limit: 3,
+                field: None,
+                kind: None,
+                model: None,
+            })
+            .expect_err("semantic search must refuse an unavailable index");
+        let hybrid = runtime
+            .global_search(GlobalSearchParams {
+                query: Some("observational needle".to_string()),
+                hybrid: true,
+                kind: GlobalSearchKind::Task,
+                limit: 3,
+                ..Default::default()
+            })
+            .expect("hybrid search must fall back instead of failing");
+        assert_eq!(
+            runtime.get_task(task_id).expect("read the task").title,
+            "Observational needle"
+        );
+        (listed, semantic, hybrid)
+    }
+}

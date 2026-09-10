@@ -142,7 +142,7 @@ impl OrbitRuntime {
     pub fn index_docs(&self, params: DocIndexParams) -> Result<DocIndexResult, OrbitError> {
         let roots = self.docs_roots()?;
         let sources = doc_embedding_sources(&self.paths().repo_root, &roots)?;
-        orbit_search::doc_index(&self.stores().semantic_vector, &sources, params)
+        orbit_search::doc_index(self.stores().semantic_index().store()?, &sources, params)
     }
 
     pub fn migrate_docs(&self, dry_run: bool) -> Result<DocMigrationReport, OrbitError> {

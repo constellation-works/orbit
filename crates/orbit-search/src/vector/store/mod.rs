@@ -45,16 +45,23 @@ impl VectorStore {
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
         let conn = orbit_common::storage::sqlite::open_private(path)?.connection;
         if let Err(error) = schema::ensure_vector_schema(&conn) {
-            if error.is_readonly_or_access_failure() {
-                tracing::warn!(
-                    target: "orbit.search.vector",
-                    path = %path.display(),
-                    error = %error,
-                    "skipped incidental semantic-index schema persistence"
-                );
-            } else {
+            if !error.is_readonly_or_access_failure() {
                 return Err(error);
             }
+            // An index that already exists stays readable: the schema call only
+            // wanted to re-apply or migrate DDL this process cannot write. One
+            // that carries no index at all has nothing to read and nothing a
+            // writer could ever land in, so the refusal is the whole answer
+            // rather than an incidental one.
+            if !schema::vector_schema_present(&conn)? {
+                return Err(error);
+            }
+            tracing::warn!(
+                target: "orbit.search.vector",
+                path = %path.display(),
+                error = %error,
+                "skipped incidental semantic-index schema persistence"
+            );
         }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
