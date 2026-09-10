@@ -83,9 +83,9 @@ pub(super) fn run_step_with_retry(
     let mut last_failed_outcome: Option<StepOutcome> = None;
     let max_attempts = retry.max_attempts.max(1);
     // Full-jitter backoff (ORB-10006): parallel workers retrying the same
-    // failing dependency draw sleeps from decorrelated streams instead of
-    // waking in lockstep. Seeded per step from time + run id.
-    let mut jitter = JitterRng::seeded(&ctx.run_id);
+    // failing dependency draw sleeps from independent entropy-backed streams
+    // instead of waking in lockstep.
+    let mut jitter = JitterRng::from_entropy();
     for attempt in 0..max_attempts {
         match run_step_body(step, ctx) {
             Ok(outcome) => {

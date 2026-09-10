@@ -54,12 +54,12 @@ fn zero_seed_does_not_stick_at_zero() {
 }
 
 #[test]
-fn seeded_salts_produce_distinct_streams() {
-    // Two runs with different salts should (overwhelmingly) diverge. Time
-    // and pid feed the seed too, so equality is possible in theory but a
-    // shared 64-draw prefix indicates the salt is being ignored.
-    let mut a = JitterRng::seeded("run-a");
-    let mut b = JitterRng::seeded("run-b");
+fn entropy_instances_produce_distinct_streams() {
+    // Production retry streams come from OS entropy rather than an
+    // application identifier. A shared 64-draw prefix is overwhelmingly
+    // unlikely and indicates that construction stopped drawing a fresh seed.
+    let mut a = JitterRng::from_entropy();
+    let mut b = JitterRng::from_entropy();
     let diverged = (0..64).any(|_| a.next_u64() != b.next_u64());
-    assert!(diverged, "distinct salts produced identical streams");
+    assert!(diverged, "entropy instances produced identical streams");
 }

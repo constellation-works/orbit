@@ -26,6 +26,7 @@ orbit-types = { path = "../orbit-types" }
 chrono.workspace = true
 rusqlite = { workspace = true, optional = true }
 fs2.workspace = true
+getrandom.workspace = true
 regex.workspace = true
 rsa.workspace = true
 serde.workspace = true
