@@ -275,6 +275,27 @@ mod parse {
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn legacy_path_dir_check_rejects_symlink_escaping_workspace() {
+        let workspace = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        std::fs::create_dir_all(outside.path().join("secret")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret"),
+            workspace.path().join("linked"),
+        )
+        .unwrap();
+
+        // The legacy (no-prefix) path form is the one that probes the
+        // filesystem with `Path::is_dir()` to pick `dir:` vs `file:`. That
+        // probe must only ever run against the already containment-checked
+        // anchor, so a symlink escaping the workspace is rejected before any
+        // `is_dir()` call touches the outside target.
+        assert!(canonical_selector_in_workspace("linked", workspace.path()).is_err());
+        assert!(!exists_in_workspace("linked", workspace.path()));
+    }
+
     #[test]
     fn symbol_selector_preserves_opaque_qualified_name() {
         let selector: Selector = "symbol:src/lib.rs#<Foo as Runnable>::run#2:method"
