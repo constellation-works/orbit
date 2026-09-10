@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Overview"
 owner: codex
 last_updated: 2026-05-17
-last_validated: 2026-08-16
+last_validated: 2026-09-10
 status: Draft
 feature: task-artifacts
 doc_role: overview
@@ -107,10 +107,10 @@ The canonical bundle lives in the local task store under `~/.orbit/tasks/workspa
 
 | Concern | File | Task |
 |---------|------|------|
-| V2 envelope, relations, JSONL rows, and manifest types | [crates/orbit-common/src/types/task_artifacts.rs](../../../crates/orbit-common/src/types/task_artifacts.rs) | — |
-| Public `Task` DTO (still flat during Phase 6 consumer wiring) | [crates/orbit-common/src/types/task.rs](../../../crates/orbit-common/src/types/task.rs) | — |
-| V2 bundle primitives (file layout, atomic writes, JSONL append) | [crates/orbit-store/src/file/task_store/v2_bundle.rs](../../../crates/orbit-store/src/file/task_store/v2_bundle.rs) | — |
-| V2 task backend adapter (create/get/list/search/mutations) | [crates/orbit-store/src/file/task_store/v2/](../../../crates/orbit-store/src/file/task_store/v2/) | — |
+| V2 envelope, relations, JSONL rows, and manifest types | [crates/orbit-types/src/task/artifacts.rs](../../../crates/orbit-types/src/task/artifacts.rs) | — |
+| Public `Task` DTO | [crates/orbit-types/src/task/model.rs](../../../crates/orbit-types/src/task/model.rs) | — |
+| V2 bundle primitives (file layout, atomic writes, JSONL append) | [crates/orbit-store/src/driver/file/task_bundle/](../../../crates/orbit-store/src/driver/file/task_bundle/) | — |
+| V2 task backend adapter (create/get/list/search/mutations) | [crates/orbit-store/src/repository/task/v2/](../../../crates/orbit-store/src/repository/task/v2/) | — |
 | Home registry: allocator, workspace bindings, generated indexes | [crates/orbit-store/src/sqlite/task_registry/](../../../crates/orbit-store/src/sqlite/task_registry/) | — |
 | V2 runtime wiring (`build_v2_task_backends`) | [crates/orbit-core/src/runtime/builder.rs](../../../crates/orbit-core/src/runtime/builder.rs) | — |
 | Local task store and symlink projection | [2_design.md §6](./2_design.md#6-local-task-store-and-symlink-projection) | — |

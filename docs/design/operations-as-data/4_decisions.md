@@ -2,14 +2,14 @@
 title: Operations as Data — Decisions
 owner: claude
 last_updated: 2026-08-16
-last_validated: 2026-08-16
+last_validated: 2026-09-10
 status: Accepted
 feature: operations-as-data
 doc_role: decisions
 type: design
 summary: Decision log for the operations-as-data registry — the split spec/handler table, what stayed hand-written, and the touch-it-move-it ratchet.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/operation.rs", "crates/orbit-common/src/authorization.rs", "crates/orbit-common/src/friction/**", "crates/orbit-tools/src/builtin/orbit/tests/authorization.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/tests/authorization.rs"]
 related_features: [operations-as-data]
 related_artifacts: [ORB-10358, ORB-10453, ORB-10478]
 ---
@@ -33,7 +33,7 @@ the ratchet.
 ## Split spec/handler table joined by a typed verb enum
 
 **Recorded:** 2026-07-26 00:55:47.755882Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/operation.rs`, `crates/orbit-common/src/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1 describes one operation table holding both the
@@ -72,7 +72,7 @@ verb that is declared but not implemented fails to compile.
 ## Renderers and HTTP routes stay hand-written
 
 **Recorded:** 2026-07-26 00:55:47.967899Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/operation.rs`, `crates/orbit-common/src/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  Once verbs are data, the obvious next step is to make the rest of
@@ -107,7 +107,7 @@ tool names and parameter names from the registry.
 ## Freeze the pre-migration surface as fixtures before migrating
 
 **Recorded:** 2026-07-26 00:55:48.187121Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/operation.rs`, `crates/orbit-common/src/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  The pilot's hard requirement was that CLI argv/output and MCP tool
@@ -144,7 +144,7 @@ same role for MCP, where an empty `git diff` is the proof.
 ## Capability chokepoint for destructive operations outside MCP
 
 **Recorded:** 2026-07-26 21:49:30.348935Z · [ORB-10453]
-**Paths:** `crates/orbit-common/src/authorization.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-core/src/runtime/tool_exec.rs`, `crates/orbit-cli/src/main.rs`, `crates/orbit-cli/src/command/operation.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-core/src/adapter/tool_execution.rs`, `crates/orbit-cli/src/main.rs`, `crates/orbit-cli/src/command/operation.rs`
 
 ### Context
 
@@ -160,7 +160,7 @@ This is an **accident guard, not a security boundary**. Agents on a development 
 
 1. **Extend the existing capability model; do not add a second one.** `McpCapability` is the vocabulary for every surface. MCP becomes one consumer of the model rather than its owner.
 
-2. **Declare governed operations once, as data.** `orbit_common::authorization::GOVERNED_OPERATIONS` is a const registry of `{ id, surface, allowed: &[McpCapability], rationale }`. Call sites name an operation, never a capability; the requirement is resolved from the registry. It lives in the leaf crate for the same reason the operations-as-data registry does ([North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1): every consumer surface must read it without a new dependency edge.
+2. **Declare governed operations once, as data.** `orbit_common::governance::authorization::GOVERNED_OPERATIONS` is a const registry of `{ id, surface, allowed: &[McpCapability], rationale }`. Call sites name an operation, never a capability; the requirement is resolved from the registry. It lives in the leaf crate for the same reason the operations-as-data registry does ([North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1): every consumer surface must read it without a new dependency edge.
 
 3. **One decision function, one chokepoint per surface.** `authorization::authorize` is the only place the rule is evaluated. It is reached from exactly two enforcement points, each of which its whole surface must traverse: `OrbitRuntime::run_tool_with_context_and_role` for every tool call (CLI `tool run`, the CLI admin bypass, MCP `tools/call`, the dashboard, the v2 deterministic dispatcher, agent loops), and the `Commands::operation` dispatch in `orbit-cli`'s `main` for CLI commands that destroy without a tool. Neither reimplements any part of the rule.
 
@@ -192,7 +192,7 @@ This is an **accident guard, not a security boundary**. Agents on a development 
 ## MCP advertisement is placement; the capability chokepoint is permission
 
 **Recorded:** 2026-08 · [ORB-10478] · **Implemented** in [ORB-10478]
-**Paths:** `crates/orbit-common/src/authorization.rs`, `crates/orbit-common/src/operation.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`
 
 ### Context
 
