@@ -38,12 +38,18 @@ probe() {
 rename() {
   if mv "$2" "$2.moved" 2>/dev/null; then echo "$1=REPLACED"; else echo "$1=denied"; fi
 }
+plant() {
+  if ln -s /tmp "$2" 2>/dev/null; then echo "$1=PLANTED"; else echo "$1=denied"; fi
+}
 probe original "$AUTHORITY/authority.db"
 probe wal_sidecar "$AUTHORITY/authority.db-wal"
 probe shm_sidecar "$AUTHORITY/authority.db-shm"
 probe stable_alias "$ALIAS/authority.db"
 rename authority_root "$AUTHORITY"
 rename authority_parent "$GLOBAL/state"
+probe authority_parent_entry "$GLOBAL/state/planted-file"
+plant authority_root_redirect "$GLOBAL/state/planted-link"
+plant global_child_redirect "$GLOBAL/planted-link"
 probe leaf_task "$GLOBAL/tasks/leaf-write.json"
 probe leaf_audit "$GLOBAL/state/audit/leaf-write.jsonl"
 "#;
@@ -150,6 +156,12 @@ fn a_leaf_cannot_reach_the_recovery_authority_through_any_path_it_can_build() {
         "stable_alias",
         "authority_root",
         "authority_parent",
+        // Redirection preconditions: the module refuses a symlinked component
+        // below the trusted root, and the sandbox denies a leaf the write that
+        // would let it plant one in the first place.
+        "authority_parent_entry",
+        "authority_root_redirect",
+        "global_child_redirect",
     ] {
         assert!(
             stdout.contains(&format!("{vector}=denied")),
@@ -167,6 +179,17 @@ fn a_leaf_cannot_reach_the_recovery_authority_through_any_path_it_can_build() {
     // the bytes actually landed outside the sandbox rather than on its tmpfs.
     assert!(authority_root.join("authority.db").is_file());
     assert!(!authority_root.with_extension("moved").exists());
+    for planted in [
+        global.join("state/planted-file"),
+        global.join("state/planted-link"),
+        global.join("planted-link"),
+    ] {
+        assert!(
+            planted.symlink_metadata().is_err(),
+            "leaf planted `{}` on the way to the authority",
+            planted.display(),
+        );
+    }
     assert!(global.join("tasks/leaf-write.json").is_file());
     assert!(global.join("state/audit/leaf-write.jsonl").is_file());
 }

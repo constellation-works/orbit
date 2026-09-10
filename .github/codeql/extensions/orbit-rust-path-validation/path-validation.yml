@@ -117,3 +117,9 @@ extensions:
           "path-injection",
           "manual",
         ]
+      - [
+          "orbit_core::runtime::recovery_authority::validated_authority_global_root",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
