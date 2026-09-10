@@ -76,7 +76,7 @@ impl DiagnosticsCommands for OrbitRuntime {
 
 /// Ascending list of `YYYY-MM` subdirectories under `state/diagnostics/<category>/`.
 fn list_jsonl_months(root: &Path, category: &str) -> Result<Vec<String>, OrbitError> {
-    let category_dir = root.join("state").join("diagnostics").join(category);
+    let category_dir = validated_diagnostics_category_dir(root, category)?;
     if !category_dir.exists() {
         return Ok(Vec::new());
     }
@@ -100,16 +100,105 @@ fn is_year_month(name: &str) -> bool {
         && bytes[5..].iter().all(u8::is_ascii_digit)
 }
 
+fn validated_diagnostics_root(root: &Path) -> Result<PathBuf, OrbitError> {
+    let canonical_root = root.canonicalize().map_err(|error| {
+        OrbitError::Io(format!(
+            "resolve diagnostics root {}: {error}",
+            root.display()
+        ))
+    })?;
+    if !canonical_root.is_dir() {
+        return Err(OrbitError::InvalidInput(format!(
+            "diagnostics root must be a directory: {}",
+            canonical_root.display()
+        )));
+    }
+    Ok(canonical_root)
+}
+
+/// Resolve a diagnostics category beneath the runtime's canonical data root.
+/// Categories are an internal allow-list rather than path segments supplied by
+/// callers, and the returned path is bounded to that root before any read.
+fn validated_diagnostics_category_dir(root: &Path, category: &str) -> Result<PathBuf, OrbitError> {
+    let canonical_root = validated_diagnostics_root(root)?;
+    let category = validated_diagnostics_category_name(category)?;
+
+    validate_diagnostics_path(
+        &canonical_root,
+        canonical_root
+            .join("state")
+            .join("diagnostics")
+            .join(category),
+    )
+}
+
+/// Resolve a diagnostics month after converting the accepted text into a
+/// canonical value. The original caller-provided string never reaches a path
+/// operation, so traversal and separator characters cannot affect the lookup.
+fn validated_diagnostics_month_dir(
+    root: &Path,
+    category: &str,
+    year_month: &str,
+) -> Result<PathBuf, OrbitError> {
+    let canonical_root = validated_diagnostics_root(root)?;
+    let category = validated_diagnostics_category_name(category)?;
+    let canonical_month = validated_year_month(year_month)?;
+    let category_dir = canonical_root
+        .join("state")
+        .join("diagnostics")
+        .join(category);
+
+    validate_diagnostics_path(&canonical_root, category_dir.join(canonical_month))
+}
+
+fn validated_diagnostics_category_name(category: &str) -> Result<&'static str, OrbitError> {
+    match category {
+        "metrics" => Ok("metrics"),
+        "friction" => Ok("friction"),
+        _ => Err(OrbitError::InvalidInput(format!(
+            "unsupported diagnostics category: {category}"
+        ))),
+    }
+}
+
+fn validated_year_month(year_month: &str) -> Result<String, OrbitError> {
+    if !is_year_month(year_month) {
+        return Err(OrbitError::InvalidInput(format!(
+            "diagnostics month must use YYYY-MM format: {year_month}"
+        )));
+    }
+
+    let year = year_month[..4].parse::<u16>().map_err(|_| {
+        OrbitError::InvalidInput("diagnostics month contains an invalid year".to_string())
+    })?;
+    let month = year_month[5..].parse::<u8>().map_err(|_| {
+        OrbitError::InvalidInput("diagnostics month contains an invalid month".to_string())
+    })?;
+    Ok(format!("{year:04}-{month:02}"))
+}
+
+fn validate_diagnostics_path(root: &Path, path: PathBuf) -> Result<PathBuf, OrbitError> {
+    match path.canonicalize() {
+        Ok(canonical) if canonical.starts_with(root) => Ok(canonical),
+        Ok(canonical) => Err(OrbitError::InvalidInput(format!(
+            "diagnostics path '{}' resolves outside {}",
+            canonical.display(),
+            root.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(path),
+        Err(error) => Err(OrbitError::Io(format!(
+            "resolve diagnostics path {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
 fn read_jsonl_month<T: DeserializeOwned>(
     root: &Path,
     category: &str,
     year_month: &str,
 ) -> Result<Vec<T>, OrbitError> {
-    let month_dir: PathBuf = root
-        .join("state")
-        .join("diagnostics")
-        .join(category)
-        .join(year_month);
+    let month_dir = validated_diagnostics_month_dir(root, category, year_month)?;
     if !month_dir.exists() {
         return Ok(Vec::new());
     }
@@ -156,11 +245,7 @@ fn read_jsonl_month_limited<T: DeserializeOwned>(
         return Ok(Vec::new());
     }
 
-    let month_dir: PathBuf = root
-        .join("state")
-        .join("diagnostics")
-        .join(category)
-        .join(year_month);
+    let month_dir = validated_diagnostics_month_dir(root, category, year_month)?;
     if !month_dir.exists() {
         return Ok(Vec::new());
     }
@@ -231,7 +316,10 @@ fn parse_jsonl_values<T: DeserializeOwned>(line: &str) -> Result<Vec<T>, serde_j
 mod tests {
     use serde_json::{Value, json};
 
-    use super::{is_year_month, list_jsonl_months, parse_jsonl_values};
+    use super::{
+        is_year_month, list_jsonl_months, parse_jsonl_values, read_jsonl_month,
+        validated_diagnostics_month_dir, validated_year_month,
+    };
 
     #[test]
     fn parse_jsonl_values_recovers_concatenated_objects() {
@@ -254,6 +342,31 @@ mod tests {
         assert!(!is_year_month("26-03"));
         assert!(!is_year_month("2026/03"));
         assert!(!is_year_month(""));
+    }
+
+    #[test]
+    fn validated_year_month_rebuilds_only_the_allowed_components() {
+        assert_eq!(validated_year_month("2026-03").unwrap(), "2026-03");
+        assert!(validated_year_month("2026/03").is_err());
+        assert!(validated_year_month("../secrets").is_err());
+    }
+
+    #[test]
+    fn validated_month_dir_rejects_unknown_categories() {
+        let root = tempfile::tempdir().expect("tempdir");
+
+        let error = validated_diagnostics_month_dir(root.path(), "secrets", "2026-03").unwrap_err();
+
+        assert!(matches!(error, orbit_common::OrbitError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn read_month_rejects_path_traversal() {
+        let root = tempfile::tempdir().expect("tempdir");
+
+        let error = read_jsonl_month::<Value>(root.path(), "metrics", "../secrets").unwrap_err();
+
+        assert!(matches!(error, orbit_common::OrbitError::InvalidInput(_)));
     }
 
     #[test]
