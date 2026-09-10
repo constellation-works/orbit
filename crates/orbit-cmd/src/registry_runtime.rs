@@ -14,7 +14,9 @@ use orbit_types::workspace::{
 };
 use serde_json::Value;
 
-use orbit_registry::{HOST_TOML_FILE, load_host_identity, workspace_registry};
+use orbit_registry::{
+    HostIdentityState, inspect_host_identity, load_host_identity, workspace_registry,
+};
 
 use crate::workspace_catalog::attach as attach_workspace_catalog;
 
@@ -582,10 +584,14 @@ fn unsupported_cli_workspace(selector: &str) -> OrbitError {
 /// Custom/legacy roots without host.toml retain the historical ORB default;
 /// once an identity exists, malformed or conflicting state fails closed.
 pub(crate) fn sync_task_prefix(global_root: &Path) -> Result<(), OrbitError> {
-    if !global_root.join(HOST_TOML_FILE).is_file() {
-        return Ok(());
-    }
-    let identity = load_host_identity(global_root)?;
+    let identity = match inspect_host_identity(global_root)? {
+        HostIdentityState::Present(identity) => identity,
+        HostIdentityState::Absent => return Ok(()),
+        // Keep legacy files on the established migration-required path while
+        // using Registry's validated classifier for every host.toml access.
+        HostIdentityState::Legacy { .. } => load_host_identity(global_root)?,
+    };
+
     let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
     registry.set_task_prefix(&identity.task_prefix)
 }
