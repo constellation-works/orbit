@@ -186,7 +186,9 @@ pub(crate) fn read_recent_matching_events_from<R: Read + Seek>(
         return Ok(Vec::new());
     }
 
-    let mut newest_first = Vec::with_capacity(limit);
+    // `limit` ultimately originates at the request boundary. Grow this vector
+    // only as matching records are found rather than preallocating from it.
+    let mut newest_first = Vec::new();
     let mut carry = Vec::new();
     let mut buf = Vec::new();
 
