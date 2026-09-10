@@ -51,6 +51,8 @@ fi
 "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
 "$repo_root/scripts/check-dependency-direction.sh"
 "$repo_root/scripts/test-ci-fast-guards.py"
+"$repo_root/scripts/test-codeql-extension-schema.py"
+"$repo_root/scripts/check-codeql-extension-schema.py"
 "$repo_root/scripts/check-cli-imports.sh"
 "$repo_root/scripts/check-terminal-state-guard.sh"
 "$repo_root/scripts/check-history-note-size.sh"
