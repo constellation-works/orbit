@@ -88,6 +88,12 @@ extensions:
           "manual",
         ]
       - [
+          "orbit_core::adapter::engine_host::v2_host::sandbox::validated_linux_runtime_descendant",
+          "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
+          "path-injection",
+          "manual",
+        ]
+      - [
           "orbit_common::storage::sqlite::validated_sqlite_path",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",

@@ -871,8 +871,8 @@ fn resolve_executor_sandbox_rejects_bare_worktrees_root_cwd() {
 }
 
 // [ORB-10946] The Linux half of the Copilot state-root gate. Every entry this
-// returns is created by `ensure_owned_directory`, so an ungated entry would
-// mkdir a `~/.copilot` on hosts that never installed the CLI.
+// returns is created by `ensure_linux_provider_directory`, so an ungated entry
+// would mkdir a `~/.copilot` on hosts that never installed the CLI.
 #[cfg(target_os = "linux")]
 mod copilot_state_roots {
     use std::path::{Path, PathBuf};
@@ -1317,5 +1317,266 @@ fn linux_resolution_appends_git_protection_after_provider_grants() {
         linux_bwrap_write_grant_diagnostic(&sandbox.fs_profile, &git_dir.join("HEAD"))
             .unwrap()
             .is_some()
+    );
+}
+
+/// Runtime stores are reached by joining constant segments onto an already
+/// canonical runtime root, so validating the root says nothing about them.
+/// These cover that descendant boundary and the two grants built on it.
+#[cfg(target_os = "linux")]
+mod runtime_store_grants {
+    use std::os::unix::fs::symlink;
+    use std::path::Path;
+
+    use orbit_types::policy::ResolvedFsProfile;
+
+    use crate::adapter::engine_host::v2_host::sandbox::{
+        append_runtime_directory_grant, append_runtime_sidecar_grant,
+        validated_linux_runtime_descendant,
+    };
+
+    fn canonical_root(root: &Path) -> std::path::PathBuf {
+        root.canonicalize().expect("canonical runtime root")
+    }
+
+    fn empty_profile() -> ResolvedFsProfile {
+        ResolvedFsProfile {
+            name: "test".to_string(),
+            read: Vec::new(),
+            modify: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn accepts_a_store_that_stays_under_its_root() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let root = canonical_root(root.path());
+        std::fs::create_dir_all(root.join("state/logs")).expect("create store");
+
+        let resolved = validated_linux_runtime_descendant(&root, "state/logs")
+            .expect("validate store")
+            .expect("a store inside the root is grantable");
+
+        assert_eq!(resolved, root.join("state/logs"));
+    }
+
+    #[test]
+    fn accepts_a_store_that_has_not_been_created_yet_without_creating_it() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let root = canonical_root(root.path());
+
+        let resolved = validated_linux_runtime_descendant(&root, "state/logs")
+            .expect("validate store")
+            .expect("a store that has never been created is still grantable");
+
+        assert_eq!(resolved, root.join("state/logs"));
+        assert!(
+            !root.join("state").exists(),
+            "validation alone must not create the store"
+        );
+    }
+
+    /// Relocating a store behind a symlink is an ordinary host configuration,
+    /// so an alias that still lands inside the root keeps its grant — reported
+    /// at the real location rather than at the link name. [ORB-11984]
+    #[test]
+    fn resolves_an_alias_that_still_lands_inside_the_root() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let root = canonical_root(root.path());
+        std::fs::create_dir_all(root.join("real-tasks")).expect("create real store");
+        symlink(root.join("real-tasks"), root.join("tasks")).expect("alias the store");
+
+        let resolved = validated_linux_runtime_descendant(&root, "tasks")
+            .expect("validate store")
+            .expect("an in-root alias stays grantable");
+
+        assert_eq!(resolved, root.join("real-tasks"));
+    }
+
+    #[test]
+    fn rejects_a_store_redirected_outside_the_root() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let outside = tempfile::tempdir().expect("redirect target");
+        let root = canonical_root(root.path());
+        symlink(outside.path(), root.join("state")).expect("redirect the state store");
+
+        assert_eq!(
+            validated_linux_runtime_descendant(&root, "state/logs").expect("validate store"),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_a_store_that_traverses_or_escapes_the_root() {
+        let parent = tempfile::tempdir().expect("runtime parent");
+        let root = parent.path().join("root");
+        std::fs::create_dir_all(&root).expect("create runtime root");
+        let root = canonical_root(&root);
+
+        for relative in ["../sibling", "state/../../sibling", "/etc"] {
+            assert_eq!(
+                validated_linux_runtime_descendant(&root, relative).expect("validate store"),
+                None,
+                "`{relative}` must not resolve to a grant"
+            );
+        }
+    }
+
+    #[test]
+    fn directory_grant_creates_and_grants_a_store_inside_the_root() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let root = canonical_root(root.path());
+        let mut profile = empty_profile();
+
+        append_runtime_directory_grant(&root, "state/logs", &mut profile).expect("grant store");
+
+        assert!(
+            root.join("state/logs").is_dir(),
+            "the store must be created"
+        );
+        assert_eq!(
+            profile.modify,
+            vec![root.join("state/logs").display().to_string()]
+        );
+    }
+
+    /// A store whose parent is redirected out of the runtime root must not be
+    /// created at the redirect target and must not become a writable grant:
+    /// either one would hand a sandboxed leaf a host path the profile never
+    /// authorized.
+    #[test]
+    fn directory_grant_neither_creates_nor_grants_a_redirected_store() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let outside = tempfile::tempdir().expect("redirect target");
+        let root = canonical_root(root.path());
+        let outside = canonical_root(outside.path());
+        symlink(&outside, root.join("state")).expect("redirect the state store");
+        let mut profile = empty_profile();
+
+        append_runtime_directory_grant(&root, "state/logs", &mut profile)
+            .expect("a redirected store is skipped, not a dispatch failure");
+
+        assert!(profile.modify.is_empty(), "grants: {:?}", profile.modify);
+        assert!(
+            !outside.join("logs").exists(),
+            "the redirect target must be left untouched"
+        );
+    }
+
+    #[test]
+    fn sidecar_grant_covers_an_existing_regular_file_and_skips_a_missing_one() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let root = canonical_root(root.path());
+        std::fs::write(root.join("orbit.db-wal"), b"").expect("create sidecar");
+        let mut profile = empty_profile();
+
+        append_runtime_sidecar_grant(&root, "orbit.db-wal", &mut profile).expect("grant sidecar");
+        append_runtime_sidecar_grant(&root, "orbit.db-shm", &mut profile).expect("skip sidecar");
+
+        assert_eq!(
+            profile.modify,
+            vec![root.join("orbit.db-wal").display().to_string()]
+        );
+    }
+
+    /// SQLite writes its sidecars next to the database it opens, so a sidecar
+    /// that is a symlink is never Orbit's own file. Granting one would bind the
+    /// link's target into the sandbox as writable.
+    #[test]
+    fn sidecar_grant_skips_a_sidecar_symlinked_outside_the_root() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let outside = tempfile::tempdir().expect("redirect target");
+        let root = canonical_root(root.path());
+        let target = canonical_root(outside.path()).join("credentials");
+        std::fs::write(&target, b"secret").expect("create redirect target");
+        symlink(&target, root.join("orbit.db-wal")).expect("redirect the sidecar");
+        let mut profile = empty_profile();
+
+        append_runtime_sidecar_grant(&root, "orbit.db-wal", &mut profile)
+            .expect("a redirected sidecar is skipped, not a dispatch failure");
+
+        assert!(profile.modify.is_empty(), "grants: {:?}", profile.modify);
+    }
+
+    #[test]
+    fn sidecar_grant_skips_a_dangling_sidecar_symlink() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let root = canonical_root(root.path());
+        symlink(root.join("never-created"), root.join("orbit.db-wal")).expect("dangling sidecar");
+        let mut profile = empty_profile();
+
+        append_runtime_sidecar_grant(&root, "orbit.db-wal", &mut profile)
+            .expect("a dangling sidecar is skipped, not a dispatch failure");
+
+        assert!(profile.modify.is_empty(), "grants: {:?}", profile.modify);
+    }
+}
+
+/// A redirected runtime store must stay out of the profile that reaches
+/// Bubblewrap, not just out of the helper that builds it.
+#[cfg(target_os = "linux")]
+#[test]
+fn resolved_linux_sandbox_drops_a_redirected_global_runtime_store() {
+    use std::os::unix::fs::symlink;
+
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let outside = tempfile::tempdir().expect("redirect target");
+    let outside = outside.path().canonicalize().expect("canonical target");
+    let redirected = runtime.paths().global_dir.join("cache");
+    symlink(&outside, &redirected).expect("redirect the host cache store");
+
+    seed_executor(
+        &runtime,
+        "claude",
+        Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+    );
+    let sandbox = runtime
+        .resolve_executor_sandbox("claude", None, Some(&repo_root))
+        .expect("resolve sandbox")
+        .expect("descriptor");
+
+    // Bubblewrap resolves the paths it binds, so naming the link is the same
+    // grant as naming its target. Neither may appear.
+    let denied = [
+        outside.display().to_string(),
+        redirected.display().to_string(),
+    ];
+    assert!(
+        sandbox.fs_profile.modify.iter().all(|rule| denied
+            .iter()
+            .all(|prefix| !rule.trim_start_matches('!').starts_with(prefix))),
+        "a redirected runtime store must not widen the sandbox: {:?}",
+        sandbox.fs_profile.modify
+    );
+}
+
+/// Sandbox preparation appends runtime write roots before the recovery
+/// authority deny that rejects a symlinked `<global>/state`. The later
+/// rejection is not a substitute for validating the store first: without it,
+/// preparation has already created directories at the redirect target by the
+/// time dispatch fails.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target() {
+    use std::os::unix::fs::symlink;
+
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let outside = tempfile::tempdir().expect("redirect target");
+    let outside = outside.path().canonicalize().expect("canonical target");
+    symlink(&outside, runtime.paths().global_dir.join("state"))
+        .expect("redirect the global state store");
+
+    seed_executor(
+        &runtime,
+        "claude",
+        Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+    );
+    runtime
+        .resolve_executor_sandbox("claude", None, Some(&repo_root))
+        .expect_err("a symlinked global state root must not resolve a sandbox");
+
+    assert!(
+        !outside.join("logs").exists() && !outside.join("audit").exists(),
+        "sandbox preparation must not create runtime stores at a redirect target"
     );
 }
