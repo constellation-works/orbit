@@ -517,23 +517,32 @@ pub(super) fn validated_linux_provider_state_root(
     // directory counts as existing and canonicalizes to its real destination.
     let mut existing = path.to_path_buf();
     let mut missing = Vec::<OsString>::new();
-    while !existing.exists() {
-        let Some(name) = existing.file_name() else {
-            return Err(DispatchError::CliInvocationPermanent(format!(
-                "Linux provider state root `{}` has no existing ancestor",
-                path.display()
-            )));
-        };
-        missing.push(name.to_os_string());
-        existing.pop();
-    }
-
-    let canonical_existing = existing.canonicalize().map_err(|error| {
-        DispatchError::CliInvocationPermanent(format!(
-            "canonicalize Linux provider state root ancestor `{}`: {error}",
-            existing.display()
-        ))
-    })?;
+    let canonical_existing = loop {
+        match existing.canonicalize() {
+            Ok(canonical) => break canonical,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = existing.file_name() else {
+                    return Err(DispatchError::CliInvocationPermanent(format!(
+                        "Linux provider state root `{}` has no existing ancestor",
+                        path.display()
+                    )));
+                };
+                missing.push(name.to_os_string());
+                if !existing.pop() {
+                    return Err(DispatchError::CliInvocationPermanent(format!(
+                        "Linux provider state root `{}` has no existing ancestor",
+                        path.display()
+                    )));
+                }
+            }
+            Err(error) => {
+                return Err(DispatchError::CliInvocationPermanent(format!(
+                    "inspect Linux provider state root ancestor `{}`: {error}",
+                    existing.display()
+                )));
+            }
+        }
+    };
     let mut validated = canonical_existing;
     for component in missing.iter().rev() {
         validated.push(component);
