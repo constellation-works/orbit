@@ -41,6 +41,10 @@ pub struct VcsCall {
 
 pub struct PrOpenTestHost {
     run_states: Mutex<HashMap<String, orbit_types::workflow::PipelineState>>,
+    /// In-memory stand-in for the host-only recovery authority. Kept apart
+    /// from `run_states` on purpose: a test that edits a checkpoint the way a
+    /// leaf would must then fail verification.
+    recovery_certificates: Mutex<HashMap<(String, String), Value>>,
     tasks: Mutex<Vec<Task>>,
     job_runs: Mutex<Vec<JobRun>>,
     comments: Mutex<HashMap<String, Vec<TaskComment>>>,
@@ -64,6 +68,7 @@ impl PrOpenTestHost {
         let scoreboard_dir = data_root.join("scoreboard");
         Self {
             run_states: Mutex::new(HashMap::new()),
+            recovery_certificates: Mutex::new(HashMap::new()),
             tasks: Mutex::new(tasks),
             job_runs: Mutex::new(Vec::new()),
             comments: Mutex::new(HashMap::new()),
@@ -86,6 +91,15 @@ impl PrOpenTestHost {
     pub fn with_provider_completion(mut self) -> Self {
         self.provider_completion = true;
         self
+    }
+
+    /// Certify `output` the way a real host would, for a state a test wrote
+    /// straight into the run store.
+    pub fn certify_recovery(&self, run_id: &str, step_id: &str, output: &Value) {
+        self.recovery_certificates
+            .lock()
+            .expect("recovery certificates lock")
+            .insert((run_id.to_string(), step_id.to_string()), output.clone());
     }
 
     pub fn review_landings(&self) -> Vec<ReviewLandingRequest> {
@@ -280,7 +294,23 @@ impl RuntimeHost for PrOpenTestHost {
         state
             .rebase_recovery_checkpoints
             .insert(step_id.to_string(), output.clone());
+        drop(states);
+        self.certify_recovery(run_id, step_id, output);
         Ok(())
+    }
+
+    fn verify_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        checkpoint: &Value,
+    ) -> Result<bool, OrbitError> {
+        Ok(self
+            .recovery_certificates
+            .lock()
+            .expect("recovery certificates lock")
+            .get(&(run_id.to_string(), step_id.to_string()))
+            == Some(checkpoint))
     }
 
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {

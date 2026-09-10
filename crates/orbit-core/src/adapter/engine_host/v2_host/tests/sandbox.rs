@@ -129,6 +129,63 @@ fn linux_child_runtime_grants_do_not_include_global_workspace_layout() {
     }
 }
 
+/// The recovery authority is the one durable record a resume trusts, so it
+/// must sit outside every grant the leaf receives — including the run store
+/// the leaf legitimately writes through `orbit.task.*` and audit tools.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    seed_executor(
+        &runtime,
+        "claude",
+        Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+    );
+
+    let resolved = runtime
+        .resolve_executor_sandbox("claude", None, Some(&repo_root))
+        .expect("resolve Linux sandbox")
+        .expect("descriptor");
+    let global = runtime
+        .paths()
+        .global_dir
+        .canonicalize()
+        .unwrap_or_else(|_| runtime.paths().global_dir.clone());
+    let authority = global.join("state/recovery-authority");
+
+    // The database and both SQLite sidecars: a writer holding any one of them
+    // could inject rows, so the deny has to cover the whole root.
+    for name in ["authority.db", "authority.db-wal", "authority.db-shm"] {
+        let denied =
+            linux_bwrap_write_grant_diagnostic(&resolved.fs_profile, &authority.join(name))
+                .expect("diagnose authority path")
+                .expect("authority path must be attributably denied");
+        assert!(
+            denied.contains(name) && denied.contains("denyModify rule"),
+            "the deny must name the path and the rule that shadows it: {denied}"
+        );
+    }
+
+    // Removing the run-store grants is not the fix and must not be the effect:
+    // admitted leaf tool writes keep working.
+    for granted in [
+        global.join("orbit.db"),
+        global.join("orbit.db-wal"),
+        global.join("orbit.db-shm"),
+        global.join("tasks"),
+        global.join("state/audit"),
+    ] {
+        assert!(
+            linux_bwrap_write_grant_diagnostic(&resolved.fs_profile, &granted)
+                .expect("diagnose granted path")
+                .is_none(),
+            "admitted leaf write {} must stay granted: {:?}",
+            granted.display(),
+            resolved.fs_profile.modify
+        );
+    }
+}
+
 /// [ORB-11259] Implementer sandboxes receive a language-neutral host cache
 /// write root; reviewer profiles do not. The global registry root itself
 /// stays denied.

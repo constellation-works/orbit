@@ -33,6 +33,7 @@ use crate::application::task::{
     SYSTEM_ACTOR_LABEL, TaskAttributionInput, TaskUpdateParams, assemble_task_attribution,
 };
 use crate::runtime::engine::paths::{codex_workspace_write_writable_dirs, current_repo_root};
+use crate::runtime::recovery_authority::RecoveryAuthority;
 
 impl RuntimeHost for OrbitRuntime {
     fn record_direct_landing_intent(
@@ -595,12 +596,26 @@ impl RuntimeHost for OrbitRuntime {
             })
     }
 
+    /// Certify the host's completion first, then persist the advisory copy.
+    ///
+    /// The certificate lives outside every leaf write grant; the run-state
+    /// entry that follows it is progress data a leaf can rewrite. Either half
+    /// failing leaves the run without usable evidence rather than with
+    /// unauthenticated evidence, so both orders are fail-closed.
     fn checkpoint_rebase_recovery(
         &self,
         run_id: &str,
         step_id: &str,
         output: &Value,
     ) -> Result<(), DispatchError> {
+        RecoveryAuthority::open(&self.global_root())
+            .and_then(|authority| authority.issue(run_id, step_id, output))
+            .map_err(|error| {
+                DispatchError::JobExecution(format!(
+                    "certify rebase recovery (run {run_id}, step `{step_id}`): {error}"
+                ))
+            })?;
+
         self.stores()
             .jobs()
             .update_run_state(run_id, &mut |run_state, state| {
@@ -629,6 +644,15 @@ impl RuntimeHost for OrbitRuntime {
                     "persist rebase recovery checkpoint (run {run_id}, step `{step_id}`): {error}"
                 ))
             })
+    }
+
+    fn verify_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        checkpoint: &Value,
+    ) -> Result<bool, OrbitError> {
+        RecoveryAuthority::open(&self.global_root())?.verify(run_id, step_id, checkpoint)
     }
 
     fn tool_context_for_activity(

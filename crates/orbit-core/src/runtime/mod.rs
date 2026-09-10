@@ -23,6 +23,7 @@ pub(crate) mod friction;
 #[cfg(target_os = "linux")]
 pub(crate) mod git_sandbox;
 pub mod mutation;
+pub(crate) mod recovery_authority;
 mod resolve;
 pub mod run_audit;
 pub(crate) mod run_input;

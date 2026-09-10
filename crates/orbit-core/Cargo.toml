@@ -18,6 +18,7 @@ clap = ["orbit-types/clap"]
 getrandom.workspace = true
 orbit-automation = { path = "../orbit-automation" }
 base64.workspace = true
+blake3.workspace = true
 chrono.workspace = true
 croner.workspace = true
 fs2.workspace = true

@@ -565,6 +565,13 @@ fn parse_divergence_count(
 
 /// Read only host-written provenance, authenticating the original durable run
 /// when a resume carries a copy. Advisory activity outputs never authorize HEAD.
+///
+/// The run store these entries come from is writable by managed leaves, so a
+/// matching entry is a candidate, not authority. Every candidate must also
+/// carry the host's certificate from [`RuntimeHost::verify_rebase_recovery`].
+/// A checkpoint written before that boundary existed has no certificate and is
+/// refused here; the run redoes the rebase rather than inheriting an
+/// unauthenticated HEAD.
 pub(super) fn recovered_head_checkpoint<H: RuntimeHost + ?Sized>(
     host: &H,
     run_id: &str,
@@ -584,6 +591,12 @@ pub(super) fn recovered_head_checkpoint<H: RuntimeHost + ?Sized>(
             continue;
         }
         let source_run_id = required_input_string(checkpoint, "run_id")?;
+        if !host.verify_rebase_recovery(source_run_id, step_id, checkpoint)? {
+            return Err(OrbitError::Execution(format!(
+                "recovered rebase for step `{step_id}` of run {source_run_id} carries no host \
+                 recovery certificate; rerun the rebase instead of trusting run-store evidence"
+            )));
+        }
         if source_run_id != run_id {
             let source = host.read_run_state(source_run_id)?.ok_or_else(|| {
                 OrbitError::Execution(

@@ -259,6 +259,53 @@ If execution stops after Git changes HEAD but before the host persists verified
 completion, there is no authenticated completed-head record: resume fails closed
 and requires inspection. It never reconstructs success from the agent's result.
 
+#### Recovery authority is host-only
+
+`PipelineState.rebase_recovery_checkpoints` lives in the run row of
+`<global>/orbit.db`, and a managed leaf holds modify grants on that database and
+its WAL/SHM sidecars so `orbit.task.*` and audit tools keep working inside the
+sandbox. Those grants also cover the recovery rows, so the rows are progress
+data, not authority: a leaf can write bytes that look exactly like a host
+checkpoint, and authenticating them against the same store proves nothing.
+
+After [F2026-09-063], the record a resume trusts is a separate certificate the
+host writes to `<global>/state/recovery-authority/authority.db`. That root
+appears in no leaf write grant, and sandbox resolution appends an explicit
+subtree deny for it after every convenience grant, alongside the Git-metadata
+denies. The subtree form covers the database together with its `-wal` and `-shm`
+sidecars, and Bubblewrap binds the root read-only, so it is unwritable through
+its own path, unreachable through a symlink alias a leaf builds in its worktree,
+and unrenameable as a mountpoint. Removing the `orbit.db` grants was rejected as
+the fix: it would break admitted leaf writes without making the remaining
+evidence authentic.
+
+Confinement here is by location, not by a secret. Bubblewrap mounts the host
+filesystem `--ro-bind / /` and enforces only write boundaries, so a key file
+would be readable by every leaf and a keyed MAC would add no authority.
+
+Each certificate binds the run ID, step ID, canonical workspace path, recovered
+`head_sha`, pinned `base_sha`, and a BLAKE3 digest over the whole checkpoint
+payload, so an edit to any field — including `task_ids` and `rewritten`, which
+the bound columns do not name — no longer matches. Certificates are immutable
+per `(run_id, step_id)`: re-issuing identical evidence is a harmless retry, and
+different evidence for an already certified step is refused rather than
+replacing the accepted record. `recovered_head_checkpoint` checks the
+certificate before it consults the source run, so a payload relabelled into
+another run or step, or replayed after a host restart, fails at the first gate;
+lineage and source-equality checks continue to apply behind it.
+
+**Migration.** Checkpoints written before this boundary have no certificate and
+are never backfilled — a row in a store the leaf can write is not evidence that
+the host wrote it, so blessing old rows would import exactly the forgery the
+boundary removes. `recovered_head_checkpoint` refuses an otherwise matching but
+uncertified checkpoint with a typed error naming the run and step, rather than
+reporting it absent. The operational consequence is bounded: an in-flight run
+resumed across the upgrade redoes its rebase from the preserved candidate
+instead of inheriting the rewritten HEAD, and a resume that has no other
+authority (no preservation commit and no successful workflow commit) fails
+closed for inspection. No durable data is discarded; the stale rows remain
+readable and inert.
+
 `step.recovery_attempted` retains a bounded, redacted `error_message` and
 `failure_phase` when authorization, input preparation, crew resolution, dispatch,
 or the recovery activity fails. These optional fields are absent from older
@@ -872,6 +919,11 @@ One subtlety: profile attachment happens at two layers.
 - A target step may override or supply one around an inlined activity spec.
 
 Readers must distinguish "profile on the reusable activity" from "profile on this call site."
+
+Host-owned state is denied after both layers resolve, so no profile or provider
+convenience grant can reopen it: Git metadata (see [ORB-11506]) and the recovery
+authority root described in §8.6 are appended as subtree denies at the end of
+the resolved modify list.
 
 ---
 

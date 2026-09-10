@@ -131,9 +131,15 @@ pub struct PipelineState {
     /// candidate the failure activity preserved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_activity_checkpoint: Option<FailureActivityCheckpoint>,
-    /// Host-validated rebase completions keyed by failed step ID. These are
-    /// provenance, not successful step outputs; retries must still run the step.
-    /// Absent in older runs, whose rewritten heads remain unverified.
+    /// Rebase completions keyed by failed step ID. These are provenance, not
+    /// successful step outputs; retries must still run the step. Absent in
+    /// older runs, whose rewritten heads remain unverified.
+    ///
+    /// This map is untrusted progress data. Managed leaves hold modify grants
+    /// on the store it is persisted in, so a matching entry is a candidate
+    /// only: authority is the host-only certificate a resume checks through
+    /// `RuntimeHost::verify_rebase_recovery`. Never treat an entry here as
+    /// evidence on its own.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rebase_recovery_checkpoints: BTreeMap<String, Value>,
     pub updated_at: DateTime<Utc>,

@@ -630,6 +630,22 @@ pub trait RuntimeHost: Send + Sync {
         ))
     }
 
+    /// Whether `checkpoint` is exactly the recovery evidence this host
+    /// certified for `run_id` / `step_id`.
+    ///
+    /// The run store a checkpoint is read back from is writable by managed
+    /// leaves, so the stored bytes are progress data. Authority lives in a
+    /// host-only record this method consults. Hosts without one certify
+    /// nothing and therefore authenticate nothing.
+    fn verify_rebase_recovery(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _checkpoint: &Value,
+    ) -> Result<bool, OrbitError> {
+        Ok(false)
+    }
+
     fn tool_context_for_activity(
         &self,
         _run_id: Option<&str>,
