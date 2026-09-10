@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use super::super::git_commit;
 use super::test_support::*;
 
-use super::super::super::git::git_output;
+use super::super::super::git::{git_output, git_success};
 use super::super::super::handoff::reject_failed_delivery;
 
 const GATED_TASK_ID: &str = "ORB-10313-GATE";
@@ -143,6 +143,7 @@ fn commit_batch_allows_meaningful_non_failed_outcomes() {
         let workspace = temp.path();
         fs::create_dir_all(workspace.join("src")).unwrap();
         fs::write(workspace.join("src/change.txt"), "delivered\n").unwrap();
+        git_success(workspace, &["add", "--", "src/change.txt"]).unwrap();
 
         let host = CommitTestHost::new(vec![task_with_summary(summary)], workspace.to_path_buf());
         let result = git_commit(&host, &batch_input(workspace))

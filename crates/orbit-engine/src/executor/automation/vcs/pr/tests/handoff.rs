@@ -612,6 +612,7 @@ fn non_fast_forward_drift_handoff_commits_dirty_work_and_raises_pr() {
         "pub fn recovered() {}\n",
     )
     .expect("write uncommitted candidate");
+    git(&workspace.repo, &["add", "--", "src/recovered.rs"]);
     let task_id = "ORB-DIRTY-HANDOFF";
     let host = PrOpenTestHost::new(
         vec![batch_task(

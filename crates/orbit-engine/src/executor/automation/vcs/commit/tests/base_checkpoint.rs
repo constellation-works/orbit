@@ -112,6 +112,7 @@ fn commit_survives_the_shared_base_ref_moving_after_worktree_setup() {
     move_shared_base_ref(workspace, &advanced_base);
     git_success(workspace, &["checkout", "orbit/T1"]).expect("return to the task branch");
     fs::write(workspace.join("task.txt"), "task work\n").unwrap();
+    git_success(workspace, &["add", "--", "task.txt"]).unwrap();
     assert_ne!(
         git_output(workspace, &["rev-parse", MOVING_BASE_REF]).expect("read moved base"),
         base_sha,
@@ -198,6 +199,7 @@ fn commit_accepts_only_the_exact_orbit_preservation_head_for_a_resume() {
     fs::write(workspace.join("candidate.txt"), "preserved candidate\n").unwrap();
     let preserved_head = commit_all(workspace, "[T1] Orbit failure preservation");
     fs::write(workspace.join("task.txt"), "resumed edit\n").unwrap();
+    git_success(workspace, &["add", "--", "task.txt"]).unwrap();
 
     let host = host_with_preservation(workspace, &base_sha, &preserved_head);
     let mut input = batch_input(workspace, &base_sha);
@@ -482,6 +484,7 @@ fn allow_moved_head_commits_leftover_finisher_work() {
     fs::write(workspace.join("child.txt"), "landed child\n").unwrap();
     commit_all(workspace, "child landed into epic");
     fs::write(workspace.join("finisher.txt"), "leftover finisher work\n").unwrap();
+    git_success(workspace, &["add", "--", "finisher.txt"]).unwrap();
 
     let task = task_with_file("T1", "Epic root", "finisher.txt", "claude");
     let host = CommitTestHost::new(vec![task], workspace.to_path_buf());

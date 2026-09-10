@@ -3,6 +3,7 @@
 mod already_landed;
 mod author;
 mod base_checkpoint;
+mod candidate_paths;
 mod delivery_gate;
 mod git_ops;
 mod message;

@@ -534,6 +534,7 @@ fn stale_setup_retry_stays_refused_until_operator_recovers_the_branch() {
     assert_eq!(git(&workspace, &["rev-parse", "HEAD"]), second_base);
 
     fs::write(workspace.join("task.txt"), "recovered work\n").unwrap();
+    git(&workspace, &["add", "--", "task.txt"]);
     let commit = git_commit(
         &host,
         &json!({
