@@ -119,13 +119,51 @@ pub(super) fn expand_root(repo_root: &Path, root: &str) -> Result<Vec<PathBuf>, 
     };
     if !trimmed.contains('*') {
         if absolute.exists() {
-            return Ok(vec![absolute]);
+            return Ok(vec![validated_docs_root_path(repo_root, &absolute)?]);
         }
         return Ok(Vec::new());
     }
+
+    // Wildcard expansion is intentionally workspace-relative. Apart from
+    // making the supported pattern language unambiguous, rejecting rooted and
+    // parent-directory components keeps configured text from selecting the
+    // starting point for a filesystem walk outside the repository.
+    if root_path.is_absolute()
+        || root_path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Ok(Vec::new());
+    }
+
     let mut out = Vec::new();
     expand_wildcard_segments(repo_root, Path::new(trimmed), &mut out)?;
     Ok(out)
+}
+
+/// Resolve a discovered docs path before it reaches a filesystem operation.
+///
+/// Docs roots are workspace-relative configuration, so canonicalizing both
+/// sides prevents `..` traversal and symlinks from redirecting a walk outside
+/// the repository. Callers only use this after confirming the candidate
+/// exists; a missing literal root remains the walker's documented no-op.
+fn validated_docs_root_path(repo_root: &Path, candidate: &Path) -> Result<PathBuf, OrbitError> {
+    let canonical_repo = repo_root.canonicalize().map_err(|error| {
+        OrbitError::Io(format!("canonicalize {}: {error}", repo_root.display()))
+    })?;
+    let canonical_candidate = candidate.canonicalize().map_err(|error| {
+        OrbitError::Io(format!("canonicalize {}: {error}", candidate.display()))
+    })?;
+    if !canonical_candidate.starts_with(&canonical_repo) {
+        return Err(OrbitError::InvalidInput(format!(
+            "docs root path must stay inside the workspace root: {}",
+            candidate.display()
+        )));
+    }
+    Ok(canonical_candidate)
 }
 
 fn expand_wildcard_segments(
@@ -133,10 +171,15 @@ fn expand_wildcard_segments(
     pattern: &Path,
     out: &mut Vec<PathBuf>,
 ) -> Result<(), OrbitError> {
-    fn rec(base: &Path, parts: &[String], out: &mut Vec<PathBuf>) -> Result<(), OrbitError> {
+    fn rec(
+        repo_root: &Path,
+        base: &Path,
+        parts: &[String],
+        out: &mut Vec<PathBuf>,
+    ) -> Result<(), OrbitError> {
         if parts.is_empty() {
             if base.exists() {
-                out.push(base.to_path_buf());
+                out.push(validated_docs_root_path(repo_root, base)?);
             }
             return Ok(());
         }
@@ -146,7 +189,8 @@ fn expand_wildcard_segments(
             if !base.is_dir() {
                 return Ok(());
             }
-            let entries = fs::read_dir(base)
+            let base = validated_docs_root_path(repo_root, base)?;
+            let entries = fs::read_dir(&base)
                 .map_err(|error| OrbitError::Io(format!("read {}: {error}", base.display())))?;
             for entry in entries {
                 let entry = entry.map_err(|error| OrbitError::Io(error.to_string()))?;
@@ -155,12 +199,12 @@ fn expand_wildcard_segments(
                     .map_err(|error| OrbitError::Io(error.to_string()))?
                     .is_dir()
                 {
-                    rec(&entry.path(), tail, out)?;
+                    rec(repo_root, &entry.path(), tail, out)?;
                 }
             }
             return Ok(());
         }
-        rec(&base.join(head), tail, out)
+        rec(repo_root, &base.join(head), tail, out)
     }
 
     let parts = pattern
@@ -168,7 +212,7 @@ fn expand_wildcard_segments(
         .filter_map(super::path_util::component_str)
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
-    rec(base, &parts, out)
+    rec(base, base, &parts, out)
 }
 
 fn walk_dir(repo_root: &Path, dir: &Path, candidates: &mut Vec<PathBuf>) -> Result<(), OrbitError> {
