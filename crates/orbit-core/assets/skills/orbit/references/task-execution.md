@@ -91,13 +91,35 @@ pop can restore another session's work. Record the worktree's initial
 and linked job-run worktrees, the repository's `.git` mount is read-only and
 must not be worked around by chmod or host-side gitdir writes. Commands that
 write to `.git` fail:
-- Do not use `git worktree add` to inspect or build other revisions; use
-  `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base` to extract a
-  baseline revision without touching `.git` or creating `.git/worktrees/*`,
-  then build with a separate build cache/target directory.
+- Do not use `git worktree add` to inspect or build other revisions. Extract
+  each revision into its own scratch directory outside the checkout:
+  `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base`. That reads
+  `.git` without writing it or creating `.git/worktrees/*`.
 - When `git checkout -- <path>` fails because it cannot acquire `index.lock`,
   revert the tracked file with `git show HEAD:<path> > <path>`.
 - Read-only inspection commands succeed with `GIT_OPTIONAL_LOCKS=0 git status --short`.
+
+**A bare extract is not yet before/after evidence.** Each step below answers a
+recorded false result, not a hypothetical one. Before comparing two revisions:
+
+- Give each revision its own build/output directory. Sharing one lets the
+  second arm reuse the first arm's artifacts and embedded fixture paths, so it
+  never exercises the revision it names.
+- Refresh timestamps after extracting (`find <dir> -exec touch {} +`).
+  `git archive` and `tar` write the archive's own mtimes, so an extract placed
+  beside an existing build can look up to date and rerun a stale binary.
+- Turn off compiler caches and wrappers for both arms. A cached baseline has
+  been observed producing a binary that contained the *other* tree's tests.
+- Verify provenance in the output instead of assuming it: require a string only
+  the intended revision can emit, and treat the sibling revision's string
+  appearing in an arm as a failed comparison.
+- Capture the producer's exit status before trimming output. Redirect to a log,
+  record the status, then read the tail. A filter at the end of a pipeline
+  reports the filter's success, not the build's failure — this turns a compile
+  error into a green validation line.
+
+If the workspace ships a helper for this comparison, use it rather than
+hand-rolling the steps; check the workspace's build and CI instructions.
 
 ## Step 5 — Summarize and hand off
 

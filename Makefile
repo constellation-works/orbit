@@ -1,4 +1,4 @@
-.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench
+.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test
 
 # ------------------------------------------------------------
 # Config
@@ -63,6 +63,7 @@ help:
 	@echo "  make compiler-cache-status  Show whether the opt-in rustc cache would enable"
 	@echo "  make compiler-cache-setup   Create ~/.orbit/cache/compiler (SETUP_FLAGS=--install to fetch sccache)"
 	@echo "  make compiler-cache-bench   Two-worktree cold/warm/concurrent compiler-cache timings"
+	@echo "  make cross-revision-check-test  Test the provenance-safe before/after validation helper"
 	@echo "  make watch        Continuous check + test"
 
 # ------------------------------------------------------------
@@ -206,6 +207,11 @@ compiler-cache-setup:
 
 compiler-cache-bench:
 	./scripts/bench-compiler-cache.sh
+
+# Provenance-safe before/after validation across two revisions. See
+# docs/runbooks/compiler-cache.md. [ORB-11981]
+cross-revision-check-test:
+	./scripts/test-cross-revision-check.sh
 
 # ------------------------------------------------------------
 # Dev Loop

@@ -74,3 +74,4 @@ fi
 "$repo_root/scripts/test-build-budget.sh"
 "$repo_root/scripts/test-compiler-cache.sh"
 "$repo_root/scripts/test-compiler-cache-namespaces.sh"
+"$repo_root/scripts/test-cross-revision-check.sh"
