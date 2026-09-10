@@ -133,10 +133,9 @@ clippy:
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings
 
 # Supply-chain audit: advisories + license allow-list via cargo-deny (deny.toml).
-# Canonical command; CI runs the same check via scripts/ci-guardrails.sh.
+# Canonical command; CI runs the same check via scripts/ci-guardrails.sh. [ORB-11983]
 audit:
-	@command -v cargo-deny >/dev/null 2>&1 || { echo "Install cargo-deny via: cargo install cargo-deny --locked"; exit 1; }
-	$(CARGO) deny check
+	./scripts/cargo-deny.sh check
 
 # Dependency tree inspection
 tree:
