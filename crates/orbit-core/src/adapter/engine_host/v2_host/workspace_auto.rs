@@ -426,9 +426,11 @@ pub fn explain_workspace_auto_readiness(
         })
         .map(|task| task.id.clone())
         .collect::<Vec<_>>();
-    // [ORB-11973] The identical routine the classifier runs, over the identical
-    // ordered pool, so readiness explains the wave the drain would actually
-    // admit rather than a second guess at it.
+    // [ORB-11973] Use the classifier's identical ordered prefix and admission
+    // routine, so readiness explains the wave the drain would actually admit
+    // rather than a second guess at it.
+    let candidate_pool_size = usize::try_from(DEFAULT_CANDIDATE_POOL).unwrap_or(usize::MAX);
+    let examined = &pending[..pending.len().min(candidate_pool_size)];
     let workspace_root = runtime.paths().repo_root.as_path();
     let claimed = claimed_by_task.keys().cloned().collect::<BTreeSet<_>>();
     let holders = AdmissionHolders::new(
@@ -438,12 +440,14 @@ pub fn explain_workspace_auto_readiness(
         workspace_root,
     );
     let selection = select_admissions(
-        &pending,
+        examined,
         &snapshot.task_lookup,
         workspace_root,
         &holders,
         free_slots,
     );
+    let candidate_pool_truncated =
+        pending.len() > examined.len() && selection.selected.len() < free_slots;
     let admitted = selection.selected.iter().cloned().collect::<BTreeSet<_>>();
     let occupancy = read_leaf_occupancy(
         runtime,
@@ -598,6 +602,11 @@ pub fn explain_workspace_auto_readiness(
             } else if admitted.contains(&task.id) {
                 object.insert("eligible".to_string(), Value::Bool(true));
                 object.insert("reason".to_string(), Value::String("ready".to_string()));
+            } else if !examined.contains(&task.id) {
+                object.insert(
+                    "reason".to_string(),
+                    Value::String("outside_candidate_pool".to_string()),
+                );
             } else if let Some(deferred) = selection.deferred_for(&task.id) {
                 // [ORB-11973] A slot was free and this task did not take it,
                 // which is a different problem from having no slot at all.
@@ -626,6 +635,8 @@ pub fn explain_workspace_auto_readiness(
             // indistinguishable from a busy one by the counts above alone.
             "occupancy": occupancy_json(&occupancy, free_slots),
             "deferred_conflicts": selection.deferred_json(),
+            "candidate_pool_size": examined.len(),
+            "candidate_pool_truncated": candidate_pool_truncated,
             "limit_source": limit_source,
             "drain_run_id": active_drain.as_ref().map(|drain| &drain.run_id),
             "worker_limit": active_drain.as_ref().and_then(|drain| drain.limit.clone()),

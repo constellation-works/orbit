@@ -317,6 +317,65 @@ fn readiness_matches_dispatch_and_does_not_mutate_the_snapshot() {
 }
 
 #[test]
+fn readiness_uses_the_classifier_candidate_pool() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "crates/shared/src/lib.rs");
+    write_workspace_file(&repo_root, "crates/outside/src/lib.rs");
+
+    let mut task_ids = (0..50)
+        .map(|index| {
+            seed_list_backlog_task(
+                &runtime,
+                &format!("Conflicting candidate {index}"),
+                TaskStatus::Backlog,
+                TaskPriority::Medium,
+                TaskType::Chore,
+                None,
+                vec!["crates/shared/src/lib.rs"],
+            )
+            .id
+        })
+        .collect::<Vec<_>>();
+    let outside_pool = seed_list_backlog_task(
+        &runtime,
+        "Conflict-free task outside the candidate pool",
+        TaskStatus::Backlog,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        None,
+        vec!["crates/outside/src/lib.rs"],
+    );
+    task_ids.push(outside_pool.id.clone());
+
+    let classified = classify_with(&runtime, json!({ "max_active_leaf_runs": 4 }));
+    let readiness = runtime
+        .workspace_auto_readiness(&task_ids, Some(4), 51, &[])
+        .expect("explain readiness");
+    let readiness_admitted = readiness["tasks"]
+        .as_array()
+        .expect("readiness tasks")
+        .iter()
+        .filter(|task| task["eligible"] == true)
+        .map(|task| task["task_id"].clone())
+        .collect::<Vec<_>>();
+
+    let classified_admitted = classified["loose_task_ids"]
+        .as_array()
+        .expect("classified task ids");
+    assert_eq!(&readiness_admitted, classified_admitted);
+    assert_eq!(readiness["capacity"]["candidate_pool_size"], 50);
+    assert_eq!(readiness["capacity"]["candidate_pool_truncated"], true);
+    assert_eq!(
+        readiness_task(&readiness, &outside_pool.id)["reason"],
+        "outside_candidate_pool"
+    );
+    assert_eq!(
+        readiness_task(&readiness, &outside_pool.id)["eligible"],
+        false
+    );
+}
+
+#[test]
 fn epic_descendants_are_dependency_then_dispatch_ordered_and_terminal_tasks_are_skipped() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let epic = runtime
