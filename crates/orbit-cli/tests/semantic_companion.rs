@@ -134,6 +134,123 @@ fn tool_run_hybrid_search_without_companion_returns_lexical_results() {
     );
 }
 
+/// ORB-12086 regression: a hostile ancestor directory carrying both a `.git`
+/// marker and a conflicting `.orbit/config.yaml` identity must not capture a
+/// child `workspace init`. Root discovery's legacy git-repo-root fallback
+/// walks ancestors for `.git`, so without the child's own boundary marker it
+/// would otherwise resolve the ancestor's `.orbit` as the workspace root —
+/// exactly how the original bug produced a shared `/tmp/.orbit` that later
+/// fixtures then refused as an identity conflict.
+#[test]
+fn workspace_init_ignores_hostile_ancestor_git_and_orbit_directories() {
+    let parent = tempdir().expect("hostile parent tempdir");
+    harden_dir(parent.path());
+    fs::create_dir_all(parent.path().join(".git")).expect("seed hostile parent git marker");
+    let parent_orbit = parent.path().join(".orbit");
+    fs::create_dir_all(&parent_orbit).expect("seed hostile parent .orbit");
+    fs::write(
+        parent_orbit.join("config.yaml"),
+        "schema_version: 1\nworkspace_id: ws_hostile-parent\n",
+    )
+    .expect("seed hostile parent config");
+    let home = parent.path().join("nested/home");
+    let work = parent.path().join("nested/work");
+    fs::create_dir_all(&home).expect("create nested home");
+    fs::create_dir_all(&work).expect("create nested work");
+    fs::create_dir_all(work.join(".git")).expect("seed child git boundary");
+
+    let parent_orbit_before = snapshot_tree(&parent_orbit);
+    let parent_top_level_before = top_level_entries(parent.path());
+
+    let output = run_orbit(
+        &work,
+        &home,
+        &["workspace", "init", "--name", "hostile-child"],
+        None,
+    );
+    assert_success("hostile-parent workspace init", &output);
+
+    let child_config_path = work.join(".orbit").join("config.yaml");
+    assert!(
+        child_config_path.exists(),
+        "child workspace must bind its own .orbit under work, not the hostile ancestor"
+    );
+    let child_config = fs::read_to_string(&child_config_path).expect("read child config");
+    assert!(
+        child_config.contains("ws_hostile-child"),
+        "child config should reflect the child's own workspace identity: {child_config}"
+    );
+
+    // Exercise roots=[] against the child's own config in this hostile-parent
+    // scenario: the empty override must be honored from the child's own
+    // .orbit/config.toml, never inherited or shadowed by ancestor state.
+    fs::write(
+        work.join(".orbit").join("config.toml"),
+        "[docs]\nroots = []\n",
+    )
+    .expect("seed child docs roots override");
+    fs::create_dir_all(work.join("docs")).expect("create child docs dir");
+    fs::write(
+        work.join("docs/cli.md"),
+        "---\ntype: design\nsummary: child doc\n---\n# Child Doc\n\nBody\n",
+    )
+    .expect("seed child doc");
+    let docs_output = run_orbit(&work, &home, &["docs", "list", "--json"], None);
+    assert_success("child docs list", &docs_output);
+    let docs: Value = serde_json::from_slice(&docs_output.stdout).expect("docs list JSON");
+    assert_eq!(
+        docs,
+        json!([]),
+        "roots=[] must return no docs even with a hostile ancestor present: {docs}"
+    );
+
+    let parent_orbit_after = snapshot_tree(&parent_orbit);
+    assert_eq!(
+        parent_orbit_after, parent_orbit_before,
+        "hostile ancestor .orbit tree must remain byte-for-byte unchanged"
+    );
+    let parent_top_level_after = top_level_entries(parent.path());
+    assert_eq!(
+        parent_top_level_after, parent_top_level_before,
+        "hostile ancestor directory must gain no new top-level entries"
+    );
+}
+
+/// Recursively snapshots every file under `root` as `(relative path,
+/// contents)`, sorted for deterministic comparison.
+fn snapshot_tree(root: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut entries = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).expect("read_dir") {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let relative = path
+                    .strip_prefix(root)
+                    .expect("relative path")
+                    .to_path_buf();
+                let contents = fs::read(&path).expect("read file");
+                entries.push((relative, contents));
+            }
+        }
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+/// Sorted top-level entry names directly under `root`.
+fn top_level_entries(root: &Path) -> Vec<std::ffi::OsString> {
+    let mut names = fs::read_dir(root)
+        .expect("read_dir")
+        .map(|entry| entry.expect("dir entry").file_name())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
 struct TestWorkspace {
     _temp: TempDir,
     home: std::path::PathBuf,
@@ -152,6 +269,11 @@ impl TestWorkspace {
         let invocations = temp.path().join("companion-invocations");
         fs::create_dir_all(&home).expect("create home");
         fs::create_dir_all(&work).expect("create work");
+        // ORB-12086: seed a child `.git` marker so root discovery's
+        // walk-up boundary stops at `work` itself. Without it, an ambient
+        // `.git`/`.orbit` above the OS temp root can capture this fixture's
+        // `workspace init` into that ancestor instead of `work/.orbit`.
+        fs::create_dir_all(work.join(".git")).expect("seed child git boundary");
 
         let workspace = Self {
             _temp: temp,
