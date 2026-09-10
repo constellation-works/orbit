@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from argparse import ArgumentParser
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -29,6 +30,12 @@ RUST_ALL_PREDICATES = {
 SUPPORTED_PACKS = {RUST_ALL_PACK: RUST_ALL_PREDICATES}
 EXTENSIONS_ROOT = Path(".github/codeql/extensions")
 PACK_FILENAME = "codeql-pack.yml"
+GENERATED_EXTENSION_GLOB = "extensions/**/*.yaml"
+CANONICAL_CALLABLE = re.compile(r"^orbit_[a-z0-9_]+(?:::[A-Za-z_][A-Za-z0-9_]*)+$")
+ACCESS_PATH = re.compile(
+    r"^(?:ReturnValue|Argument\[(?:self|[0-9]+)\])"
+    r"(?:\.(?:Future|Field\[[A-Za-z0-9_:()]+\]))*$"
+)
 
 
 class YamlError(Exception):
@@ -399,6 +406,48 @@ def _error(path: str, message: str) -> str:
     return f"check-codeql-extension-schema: {path}: {message}"
 
 
+def _validate_repository_model_scope(
+    path: str,
+    predicate: str,
+    fields: tuple[str, ...],
+    row: list[str],
+    location: str,
+) -> list[str]:
+    """Reject valid CodeQL syntax that is too broad for this first-party pack."""
+    errors: list[str] = []
+    values = dict(zip(fields, row))
+    callable_path = values["path"]
+    if not CANONICAL_CALLABLE.fullmatch(callable_path):
+        errors.append(
+            _error(
+                path,
+                f"{location} field 1 (path): expected an exact Orbit callable path; "
+                "wildcards, trait-wide selectors, and external crates are not allowed",
+            )
+        )
+
+    for field_name in ("input", "output"):
+        access_path = values.get(field_name)
+        if access_path is not None and not ACCESS_PATH.fullmatch(access_path):
+            field_index = fields.index(field_name) + 1
+            errors.append(
+                _error(
+                    path,
+                    f"{location} field {field_index} ({field_name}): expected an exact access path",
+                )
+            )
+
+    if values.get("kind") != "path-injection":
+        errors.append(_error(path, f"{location}: only the 'path-injection' model kind is allowed"))
+    if values.get("provenance") != "manual":
+        errors.append(_error(path, f"{location}: only 'manual' provenance is allowed"))
+    if predicate == "barrierGuardModel" and values.get("acceptingValue") not in {"true", "false"}:
+        errors.append(
+            _error(path, f"{location}: acceptingValue must be exactly 'true' or 'false'")
+        )
+    return errors
+
+
 def validate_data_extension(path: str, document: Any) -> list[str]:
     """Return schema errors for one loaded data-extension document."""
     errors: list[str] = []
@@ -474,6 +523,10 @@ def validate_data_extension(path: str, document: Any) -> list[str]:
                             f"expected a non-empty string, found {_type_name(value)}",
                         )
                     )
+            if all(isinstance(value, str) and value.strip() for value in row):
+                errors.extend(
+                    _validate_repository_model_scope(path, predicate, fields, row, location)
+                )
     return errors
 
 
@@ -506,6 +559,15 @@ def _pack_data_extensions(pack_dir: Path, document: Any, pack_path: str) -> tupl
         if candidate.is_absolute() or ".." in candidate.parts:
             errors.append(
                 _error(pack_path, f"dataExtensions[{index}] must be a path inside the pack directory")
+            )
+            continue
+        if candidate.suffix != ".yaml":
+            errors.append(
+                _error(
+                    pack_path,
+                    f"dataExtensions[{index}] must end in '.yaml' to match "
+                    f"the generated CodeQL discovery glob {GENERATED_EXTENSION_GLOB!r}: {entry}",
+                )
             )
             continue
         resolved = (pack_dir / candidate).resolve()

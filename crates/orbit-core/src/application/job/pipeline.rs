@@ -2393,23 +2393,34 @@ pub(crate) mod pipeline_worker_log_test_hook {
 /// phase below. Keeping this phase free of filesystem operations makes the
 /// trust boundary explicit to both reviewers and CodeQL.
 fn validate_pipeline_worker_log_directory_input(path: &Path) -> Result<PathBuf, OrbitError> {
+    if pipeline_worker_log_directory_input_is_valid(path) {
+        return Ok(path.to_path_buf());
+    }
+
     if !path.is_absolute() {
         return Err(OrbitError::InvalidInput(format!(
             "pipeline worker log directory must be absolute: {}",
             path.display()
         )));
     }
-    if path
-        .components()
-        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
-    {
-        return Err(OrbitError::InvalidInput(format!(
-            "pipeline worker log directory must not contain traversal components: {}",
-            path.display()
-        )));
-    }
 
-    Ok(path.to_path_buf())
+    Err(OrbitError::InvalidInput(format!(
+        "pipeline worker log directory must not contain traversal components: {}",
+        path.display()
+    )))
+}
+
+/// Report whether a worker-log directory has the lexical shape required by
+/// the filesystem-resolution phase.
+///
+/// This boolean guard is kept separate because CodeQL's Rust model API can
+/// represent conditional validation directly, unlike a successful `Result`
+/// projection.
+fn pipeline_worker_log_directory_input_is_valid(path: &Path) -> bool {
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
 }
 
 /// Canonicalize the nearest existing ancestor of `parent` and rejoin any
