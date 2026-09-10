@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -162,6 +162,21 @@ pub(super) fn read_task_context_docs_roots_from_config_path(
 }
 
 fn read_config_contents(path: &Path) -> Result<Option<String>, OrbitError> {
+    let Some(path) = validated_docs_config_path(path)? else {
+        return Ok(None);
+    };
+
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+    Ok(Some(raw))
+}
+
+/// Return a canonical config path only after proving it is the regular,
+/// fixed-name file directly beneath its canonical parent.
+///
+/// The CodeQL extension models this return value as a path-injection barrier.
+/// Keep its checks and the model in sync when changing this function.
+fn validated_docs_config_path(path: &Path) -> Result<Option<PathBuf>, OrbitError> {
     if !path.exists() {
         return Ok(None);
     }
@@ -194,12 +209,7 @@ fn read_config_contents(path: &Path) -> Result<Option<String>, OrbitError> {
         )));
     }
 
-    // Read the path that passed the canonical-location and regular-file checks.
-    // Reconstructing the path from the untrusted parent after validation would
-    // reintroduce a symlink race between the check and the read.
-    let raw = std::fs::read_to_string(&canonical_path)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", canonical_path.display())))?;
-    Ok(Some(raw))
+    Ok(Some(canonical_path))
 }
 
 /// Parse the task-context docs roots (used by related_docs_for_task and its tests).
