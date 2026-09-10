@@ -59,7 +59,16 @@ pub(super) fn walk_docs_with_bodies(
     let mut candidates: HashMap<PathBuf, bool> = HashMap::new();
     for root in roots {
         let mut found = Vec::new();
-        for path in expand_root(repo_root, &root.path)? {
+        let expanded = match expand_root(repo_root, &root.path) {
+            Ok(paths) => paths,
+            Err(error) => {
+                // One unusable docs root does not abort the walk of the remaining
+                // configured roots.
+                tracing::warn!(root = %root.path, %error, "skipping unusable docs root");
+                continue;
+            }
+        };
+        for path in expanded {
             if path_is_or_contains_dot_orbit(repo_root, &path) {
                 continue;
             }
@@ -119,7 +128,20 @@ pub(super) fn expand_root(repo_root: &Path, root: &str) -> Result<Vec<PathBuf>, 
     };
     if !trimmed.contains('*') {
         if absolute.exists() {
-            return Ok(vec![validated_docs_root_path(repo_root, &absolute)?]);
+            return match validated_docs_root_path(repo_root, &absolute) {
+                Ok(path) => Ok(vec![path]),
+                Err(OrbitError::InvalidInput(_)) => {
+                    // Chosen policy: out-of-workspace docs roots (such as in-repo
+                    // symlinks pointing outside the workspace, parent traversal,
+                    // or absolute paths) are skipped as unusable roots (returning
+                    // an empty list) rather than aborting the walk. This matches
+                    // the wildcard branch and the walker's documented no-op
+                    // behavior for missing roots, ensuring literal and wildcard
+                    // forms produce the same outcome.
+                    Ok(Vec::new())
+                }
+                Err(error) => Err(error),
+            };
         }
         return Ok(Vec::new());
     }
@@ -150,7 +172,10 @@ pub(super) fn expand_root(repo_root: &Path, root: &str) -> Result<Vec<PathBuf>, 
 /// sides prevents `..` traversal and symlinks from redirecting a walk outside
 /// the repository. Callers only use this after confirming the candidate
 /// exists; a missing literal root remains the walker's documented no-op.
-fn validated_docs_root_path(repo_root: &Path, candidate: &Path) -> Result<PathBuf, OrbitError> {
+pub(super) fn validated_docs_root_path(
+    repo_root: &Path,
+    candidate: &Path,
+) -> Result<PathBuf, OrbitError> {
     let canonical_repo = repo_root.canonicalize().map_err(|error| {
         OrbitError::Io(format!("canonicalize {}: {error}", repo_root.display()))
     })?;
@@ -159,8 +184,9 @@ fn validated_docs_root_path(repo_root: &Path, candidate: &Path) -> Result<PathBu
     })?;
     if !canonical_candidate.starts_with(&canonical_repo) {
         return Err(OrbitError::InvalidInput(format!(
-            "docs root path must stay inside the workspace root: {}",
-            candidate.display()
+            "docs root path must stay inside the workspace root: {} (resolves to {})",
+            candidate.display(),
+            canonical_candidate.display()
         )));
     }
     Ok(canonical_candidate)
@@ -179,7 +205,11 @@ fn expand_wildcard_segments(
     ) -> Result<(), OrbitError> {
         if parts.is_empty() {
             if base.exists() {
-                out.push(validated_docs_root_path(repo_root, base)?);
+                match validated_docs_root_path(repo_root, base) {
+                    Ok(path) => out.push(path),
+                    Err(OrbitError::InvalidInput(_)) => return Ok(()),
+                    Err(error) => return Err(error),
+                }
             }
             return Ok(());
         }
@@ -189,7 +219,11 @@ fn expand_wildcard_segments(
             if !base.is_dir() {
                 return Ok(());
             }
-            let base = validated_docs_root_path(repo_root, base)?;
+            let base = match validated_docs_root_path(repo_root, base) {
+                Ok(base) => base,
+                Err(OrbitError::InvalidInput(_)) => return Ok(()),
+                Err(error) => return Err(error),
+            };
             let entries = fs::read_dir(&base)
                 .map_err(|error| OrbitError::Io(format!("read {}: {error}", base.display())))?;
             for entry in entries {

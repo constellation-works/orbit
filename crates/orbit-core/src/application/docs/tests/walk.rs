@@ -6,7 +6,8 @@ use tempfile::tempdir;
 
 use super::super::config::DocsRoot;
 use super::super::walk::{
-    expand_root, git_check_ignore_invocations, reset_git_check_ignore_invocations, walk_docs_roots,
+    expand_root, git_check_ignore_invocations, reset_git_check_ignore_invocations,
+    validated_docs_root_path, walk_docs_roots,
 };
 
 fn init_git_repo(root: &std::path::Path) {
@@ -179,5 +180,91 @@ fn override_root_still_excludes_nested_dot_orbit() {
     assert!(
         records.is_empty(),
         "expected .orbit exclusion to hold under an override root: {records:?}"
+    );
+}
+
+#[test]
+fn symlinked_in_repo_docs_root_outside_workspace_behaves_consistently() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().join("repo");
+    let outside = dir.path().join("outside");
+    fs::create_dir_all(&root).expect("repo dir");
+    fs::create_dir_all(&outside).expect("outside dir");
+    fs::write(
+        outside.join("doc.md"),
+        "---\ntype: context\nsummary: Outside doc\n---\nbody\n",
+    )
+    .expect("write outside doc");
+
+    orbit_common::fs::io::create_dir_symlink(&outside, &root.join("docs")).expect("create symlink");
+
+    let valid_docs = root.join("valid_docs");
+    fs::create_dir_all(&valid_docs).expect("valid docs dir");
+    fs::write(
+        valid_docs.join("valid.md"),
+        "---\ntype: context\nsummary: Valid doc\n---\nbody\n",
+    )
+    .expect("write valid doc");
+
+    // 1. Literal form of symlinked root ("docs/")
+    let literal_records = walk_docs_roots(&root, &[DocsRoot::new("docs/")]).expect("walk literal");
+    assert!(
+        literal_records.is_empty(),
+        "expected symlinked root outside workspace to be skipped: {literal_records:?}"
+    );
+
+    // 2. Wildcard form of symlinked root ("docs/*")
+    let wildcard_records =
+        walk_docs_roots(&root, &[DocsRoot::new("docs/*")]).expect("walk wildcard");
+    assert!(
+        wildcard_records.is_empty(),
+        "expected wildcard form to produce the same outcome: {wildcard_records:?}"
+    );
+
+    // 3. Both produce the same outcome
+    assert_eq!(literal_records, wildcard_records);
+
+    // 4. Literal and wildcard expand_root produce the same outcome
+    let literal_expanded = expand_root(&root, "docs/").expect("expand literal");
+    let wildcard_expanded = expand_root(&root, "docs/*").expect("expand wildcard");
+    assert_eq!(literal_expanded, wildcard_expanded);
+    assert!(literal_expanded.is_empty());
+
+    // 5. One unusable docs root does not abort the walk of remaining configured roots
+    let combined_records = walk_docs_roots(
+        &root,
+        &[DocsRoot::new("docs/"), DocsRoot::new("valid_docs/")],
+    )
+    .expect("walk with unusable root should not abort");
+    assert_eq!(
+        combined_records
+            .iter()
+            .map(|r| r.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["valid_docs/valid.md"]
+    );
+}
+
+#[test]
+fn out_of_workspace_root_validation_error_names_resolved_target() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().join("repo");
+    let outside = dir.path().join("outside");
+    fs::create_dir_all(&root).expect("repo dir");
+    fs::create_dir_all(&outside).expect("outside dir");
+
+    orbit_common::fs::io::create_dir_symlink(&outside, &root.join("docs")).expect("create symlink");
+
+    let err = validated_docs_root_path(&root, &root.join("docs"))
+        .expect_err("should reject outside root");
+    let msg = err.to_string();
+    let canonical_outside = outside.canonicalize().expect("canonicalize outside");
+    assert!(
+        msg.contains(&canonical_outside.display().to_string()),
+        "error message should name resolved target {canonical_outside:?}, got: {msg}"
+    );
+    assert!(
+        msg.contains(&root.join("docs").display().to_string()),
+        "error message should name configured path, got: {msg}"
     );
 }
