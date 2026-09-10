@@ -25,6 +25,31 @@ pub(super) fn git_commit_with_identity(
     git_success_dynamic_with_identity(workspace_path, &args, &author, &committer)
 }
 
+/// Commit only the explicitly supplied paths while preserving other staged
+/// candidates for their owning task.
+pub(super) fn git_commit_paths_with_identity(
+    workspace_path: &Path,
+    message: &str,
+    resolved_model: Option<&str>,
+    paths: &[String],
+) -> Result<(), OrbitError> {
+    let author = resolved_model
+        .map(GitAuthor::resolved_model)
+        .unwrap_or_else(GitAuthor::orbit);
+    let committer = GitAuthor::orbit();
+    let mut args = vec![
+        "commit".to_string(),
+        "--only".to_string(),
+        "--author".to_string(),
+        author.spec(),
+        "-m".to_string(),
+        message.to_string(),
+        "--".to_string(),
+    ];
+    args.extend(paths.iter().cloned());
+    git_success_dynamic_with_identity(workspace_path, &args, &author, &committer)
+}
+
 /// Commit with an explicit author; the workflow committer stays Orbit.
 pub(super) fn git_commit_as(
     workspace_path: &Path,

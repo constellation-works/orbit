@@ -4,7 +4,10 @@ metadata:
   name: git_commit
 spec:
   type: deterministic
-  description: Commit pending shared worktree changes on the active task branch.
+  description: >
+    Commit the active task candidate: every tracked change plus new paths with
+    exact durable file intent. Refuse unknown untracked paths before changing
+    the index.
   input_schema_json:
     type: object
     properties:

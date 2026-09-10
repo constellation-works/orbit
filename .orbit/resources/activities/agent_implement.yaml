@@ -162,7 +162,14 @@ spec:
         the declared scope requires reconciliation rather than this exemption.
 
         Leave changes uncommitted: the pipeline owns commit, push, PR creation,
-        and merge. Do not invoke another agent or dispatch additional work.
+        and merge. After creating an intended new source file, append its exact
+        `file:` selector through `orbit.task.update`; a containing directory
+        selector is not new-file intent. Tracked modifications, deletions, and
+        renames need no declaration beyond existing task scope, and temporary
+        evidence or scratch files must remain outside the worktree. The
+        delivery boundary refuses every untracked path without exact durable
+        intent and never parses the execution summary as an oracle. Do not
+        invoke another agent or dispatch additional work.
         In the execution summary, map criteria to results, list validation
         commands as passed/failed/not run with reasons, and disclose remaining
         risks or deviations. Do not claim a skipped check passed or mark

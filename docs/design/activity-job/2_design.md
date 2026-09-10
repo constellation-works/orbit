@@ -547,12 +547,37 @@ After [ORB-10603] / [Derive the delivery execution summary from the change, not 
 ordinary case, because the commit step fills the field it reads. When — and only
 when — durable state carries no meaningful summary, `commit_batch_changes`
 derives one from `git status` in the delivery worktree (the same file set
-`git add --all` will stage), persists it to the task record with an
+`git_commit` will validate), persists it to the task record with an
 `execution_summary_derived` event, and then meets the unchanged gate. The
 derivation reads durable, re-checkable state and never the agent's advisory
 response envelope ([L-0115]); an agent-authored summary is always preserved; and
 a worktree with nothing to describe still yields no summary and is still
 refused.
+
+After [ORB-12050], task delivery has a concrete path-intent contract at that
+same deterministic boundary. Every tracked modification, deletion, or rename
+is a candidate because Git already identifies it as repository content. A new
+path is a candidate only when the implementing worker appends its exact
+`file:` selector to durable task state after creating it. This ordering
+respects the authoring rule that selectors name existing paths and also works
+in managed workers whose Git metadata is read-only. An explicitly staged path
+remains accepted for callers with a writable index, but staging is not required
+of managed workers. Directory selectors are ownership boundaries, not
+new-file intent. Before staging anything, `git_commit` compares all untracked
+paths with those explicit signals and refuses every unknown path by exact name.
+It therefore cannot be bypassed by a persuasive summary, empty selectors, or
+one legitimate file already in the index, and refusal preserves the prior
+index and every worktree byte. Accepted candidates are staged by explicit path;
+per-task publication commits only the paths assigned to that task so an
+already-populated index cannot leak a sibling candidate.
+
+Failure-candidate preservation uses the same task-candidate boundary. The
+before-PR reviewer is deliberately different: it starts from a committed,
+pinned candidate, is forbidden to run staging commands, and its activity
+contract makes every path it leaves changed an intended reviewer repair.
+Reviewer scratch, logs, and attachment staging files must live outside the
+worktree; the host may therefore stage that reviewer's entire repair delta
+without heuristically forcing implementer task selectors onto it.
 
 **Declared exceptions.** No shipped `agent_loop` activity opts out of
 `require_completion_envelope`. Every seeded agent step performs work whose

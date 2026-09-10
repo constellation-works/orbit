@@ -24,6 +24,7 @@ fn git_commit_uses_resolved_model_author_without_mutating_local_human_config() {
             format!("implemented by {crew_alias}\n"),
         )
         .unwrap();
+        git_success(workspace, &["add", "--", "src/task.txt"]).unwrap();
 
         let task = task_with_file("T1", "Implement one task", "src/task.txt", crew_alias);
         let host = CommitTestHost::new(vec![task], workspace.to_path_buf())
@@ -109,6 +110,7 @@ fn git_commit_without_resolved_model_uses_generic_fallback_and_no_local_config()
     let workspace = temp.path();
     fs::create_dir_all(workspace.join("src")).unwrap();
     fs::write(workspace.join("src/task.txt"), "codex work\n").unwrap();
+    git_success(workspace, &["add", "--", "src/task.txt"]).unwrap();
 
     let task = task_with_file("T1", "Implement one task", "src/task.txt", "gpt-5.5");
     let host = CommitTestHost::new(vec![task], workspace.to_path_buf());
@@ -141,6 +143,7 @@ fn git_commit_per_task_preserves_orchestration_attribution_in_the_source_message
     let workspace = temp.path();
     fs::create_dir_all(workspace.join("src")).unwrap();
     fs::write(workspace.join("src/task.txt"), "orchestrated work\n").unwrap();
+    git_success(workspace, &["add", "--", "src/task.txt"]).unwrap();
 
     let mut task = task_with_file("T1", "Implement one task", "src/task.txt", "gpt-5.6-terra");
     task.orchestrator = Some("sol".to_string());
@@ -168,6 +171,7 @@ fn git_commit_treats_bare_configured_model_as_opaque() {
     let workspace = temp.path();
     fs::create_dir_all(workspace.join("src")).unwrap();
     fs::write(workspace.join("src/task.txt"), "bare model config\n").unwrap();
+    git_success(workspace, &["add", "--", "src/task.txt"]).unwrap();
 
     let task = task_with_file("T1", "Implement one task", "src/task.txt", "claude");
     let host = CommitTestHost::new(vec![task], workspace.to_path_buf()).with_crew_model("opus");
@@ -193,6 +197,7 @@ fn git_commit_preserves_model_author_and_coauthors_without_commit_hooks() {
     fs::create_dir_all(workspace.join("src")).unwrap();
     fs::write(workspace.join("src/one.txt"), "one\n").unwrap();
     fs::write(workspace.join("src/two.txt"), "two\n").unwrap();
+    git_success(workspace, &["add", "--", "src/one.txt", "src/two.txt"]).unwrap();
 
     let tasks = vec![
         task_with_file("T1", "Implement one task", "src/one.txt", "claude-opus-5"),
@@ -229,6 +234,7 @@ fn git_commit_batch_uses_templated_single_task_message() {
     let workspace = temp.path();
     fs::create_dir_all(workspace.join("src")).unwrap();
     fs::write(workspace.join("src/bug.txt"), "bug fix\n").unwrap();
+    git_success(workspace, &["add", "--", "src/bug.txt"]).unwrap();
 
     let title = "a".repeat(145);
     let mut task = task_with_file("ORB-00107", &title, "src/bug.txt", "claude");

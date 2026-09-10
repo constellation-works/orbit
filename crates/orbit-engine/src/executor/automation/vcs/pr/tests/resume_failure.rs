@@ -87,6 +87,7 @@ impl RuntimeHost for ResumeFailureHost {
                     action: action.to_string(),
                     message: format!("write fixture partial repair: {error}"),
                 })?;
+                git(Path::new(workspace_path), &["add", "--", "src/repaired.rs"]);
                 Err(DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: "repaired two ownership calls; required macOS validation remains unavailable"
@@ -782,6 +783,7 @@ fn original_run_ownership_still_authorizes_failure_handoff() {
     let workspace = no_diff_pr_workspace();
     fs::write(workspace.repo.join("original.txt"), "original candidate\n")
         .expect("write original candidate");
+    git(&workspace.repo, &["add", "--", "original.txt"]);
     let host = PrOpenTestHost::new(
         vec![task_owned_by(CHECKPOINT_RUN_ID)],
         workspace.repo.clone(),

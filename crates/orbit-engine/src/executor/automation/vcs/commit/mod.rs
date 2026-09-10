@@ -20,11 +20,11 @@ use super::git::{git_output, git_success};
 use super::handoff::reject_failed_delivery;
 use author::{append_co_author_trailers, commit_author_for_tasks, reviewer_author};
 use git_ops::{
-    ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, git_commit_with_identity,
-    stage_paths, staged_changed_files,
+    ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, git_commit_paths_with_identity,
+    git_commit_with_identity, stage_paths, staged_changed_files,
 };
 use message::{batch_commit_message, finalize_commit_message, task_commit_message};
-use scope::{changed_files_for_task, collect_worktree_changes, filter_changed_files_for_task};
+use scope::{ensure_candidate_ownership, filter_changed_files_for_task, task_candidate_paths};
 use summary::ensure_durable_execution_summary;
 
 pub(in crate::executor::automation) fn git_commit<H: RuntimeHost + ?Sized>(
@@ -76,8 +76,6 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
     let workspace_path = resolve_workspace_path(host, input, batch_id)?;
     ensure_named_branch(&workspace_path)?;
     ensure_no_unmerged_changes(&workspace_path)?;
-    let resolved_model = host.resolved_crew_model(batch_id)?;
-
     let task_ids = match explicit_completed_task_ids {
         Some(task_ids) => task_ids,
         None => fallback_batch_tasks
@@ -86,27 +84,32 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
             .map(|task| task.id)
             .collect(),
     };
+    let tasks = task_ids
+        .iter()
+        .map(|task_id| host.get_task(task_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let resolved_model = host.resolved_crew_model(batch_id)?;
+    let candidate_paths = task_candidate_paths(&workspace_path, &tasks)?;
+    ensure_candidate_ownership(&candidate_paths, &workspace_path, &tasks, true)?;
 
     let mut committed_task_ids = Vec::new();
     let mut skipped_task_ids = Vec::new();
 
-    for task_id in task_ids {
-        let task = host.get_task(&task_id)?;
-        let changed_files = changed_files_for_task(&workspace_path, &task)?;
+    for task in tasks {
+        let changed_files = filter_changed_files_for_task(&candidate_paths, &workspace_path, &task);
         if changed_files.is_empty() {
-            skipped_task_ids.push(task_id);
-            continue;
-        }
-
-        stage_paths(&workspace_path, &changed_files)?;
-        let staged_files = staged_changed_files(&workspace_path)?;
-        if staged_files.is_empty() {
             skipped_task_ids.push(task.id);
             continue;
         }
 
+        stage_paths(&workspace_path, &changed_files)?;
         let message = task_commit_message(&task);
-        git_commit_with_identity(&workspace_path, &message, resolved_model.as_deref())?;
+        git_commit_paths_with_identity(
+            &workspace_path,
+            &message,
+            resolved_model.as_deref(),
+            &changed_files,
+        )?;
         committed_task_ids.push(task.id);
     }
 
@@ -131,10 +134,11 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
     ensure_named_branch(&workspace_path)?;
     ensure_no_unmerged_changes(&workspace_path)?;
 
-    let changed_files = collect_worktree_changes(&workspace_path)?;
+    let changed_files = task_candidate_paths(&workspace_path, &batch_tasks)?;
     if changed_files.is_empty() {
         return Ok(json!({}));
     }
+    ensure_candidate_ownership(&changed_files, &workspace_path, &batch_tasks, false)?;
 
     let mut affected_tasks = Vec::new();
     let mut files_to_commit = BTreeSet::new();
@@ -153,21 +157,21 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
 
     let files_to_commit: Vec<String> = files_to_commit.into_iter().collect();
     stage_paths(&workspace_path, &files_to_commit)?;
-    let staged_files = staged_changed_files(&workspace_path)?;
-    if staged_files.is_empty() {
-        return Ok(json!({}));
-    }
-
     let mut message = finalize_commit_message(&affected_tasks);
     let (_, coauthors) = commit_author_for_tasks(&affected_tasks);
     append_co_author_trailers(&mut message, &coauthors);
     let resolved_model = host.resolved_crew_model(batch_id)?;
-    git_commit_with_identity(&workspace_path, &message, resolved_model.as_deref())?;
+    git_commit_paths_with_identity(
+        &workspace_path,
+        &message,
+        resolved_model.as_deref(),
+        &files_to_commit,
+    )?;
 
     Ok(json!({
         "workspace_path": workspace_path.to_string_lossy().to_string(),
         "committed_task_ids": affected_tasks.into_iter().map(|task| task.id).collect::<Vec<_>>(),
-        "committed_files": staged_files,
+        "committed_files": files_to_commit,
     }))
 }
 
@@ -243,13 +247,12 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         }
     };
 
-    // A proposed ADR the run allocated lives in an ignored partition, so
-    // `git add --all` below would skip it and ship the code without the
-    // decision documenting it. Hand it off first: this is the step that can
-    // fail on read-only worktree metadata, and going first means that failure
-    // names the bundle instead of surfacing as a bare `git add` error.
-
-    git_success(&workspace_path, &["add", "--all", "--", "."])?;
+    // Tracked paths carry repository identity. New paths require exact durable
+    // file intent (or a pre-staged writable index). Resolve and validate that
+    // set before mutating the index, then stage exactly those paths.
+    let candidate_paths = task_candidate_paths(&workspace_path, std::slice::from_ref(&task))?;
+    let candidate_paths = candidate_paths.into_iter().collect::<Vec<_>>();
+    stage_paths(&workspace_path, &candidate_paths)?;
 
     let changed_files = staged_changed_files(&workspace_path)?;
     if changed_files.is_empty() {
@@ -345,7 +348,11 @@ pub(super) fn commit_failure_candidate<H: RuntimeHost + ?Sized>(
 ) -> Result<(String, Vec<String>), OrbitError> {
     ensure_named_branch(workspace_path)?;
     ensure_no_unmerged_changes(workspace_path)?;
-    git_success(workspace_path, &["add", "--all", "--", "."])?;
+    let candidate_paths = task_candidate_paths(workspace_path, std::slice::from_ref(task))?;
+    stage_paths(
+        workspace_path,
+        &candidate_paths.into_iter().collect::<Vec<_>>(),
+    )?;
     let changed_files = staged_changed_files(workspace_path)?;
     if !changed_files.is_empty() {
         let message = batch_commit_message(task);

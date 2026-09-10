@@ -15,7 +15,7 @@ use super::super::summary::{
 };
 use super::test_support::*;
 
-use super::super::super::git::git_output;
+use super::super::super::git::{git_output, git_success};
 
 const DERIVED_TASK_ID: &str = "ORB-10603-DERIVE";
 
@@ -44,6 +44,7 @@ fn stage_worktree_change(workspace: &Path) {
     fs::create_dir_all(workspace.join("src")).unwrap();
     fs::write(workspace.join("src/change.txt"), "delivered\n").unwrap();
     fs::write(workspace.join("README.md"), "base\nedited\n").unwrap();
+    git_success(workspace, &["add", "--", "src/change.txt"]).unwrap();
 }
 
 /// The wedge this task fixes: implementation completed, the agent wrote no

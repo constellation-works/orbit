@@ -151,7 +151,10 @@ spec:
 
        Attach the report for every task id in `task_ids`.
     7. Return one Orbit response envelope whose result carries `summary` and
-       `verdict`. Leave your repairs uncommitted in the worktree.
+       `verdict`. Leave your repairs uncommitted in the worktree. The host
+       treats every changed or untracked path you leave there as an intended
+       reviewer repair and commits it under your identity, so create temporary
+       reports, logs, and scratch files outside the worktree.
   tools:
     - orbit.task.*
     - orbit.search
