@@ -22,6 +22,10 @@ use super::{
 const RUN_EVENTS_DEFAULT_LIMIT: usize = 100;
 /// Hard cap on rows scanned from a single run's persisted v2 audit events.
 pub(super) const RUN_EVENTS_MAX_SCAN_LINES: usize = 50_000;
+/// Capacity hint for the returned events page. A fixed constant rather than
+/// the caller-supplied `limit` so the allocation size never derives from
+/// request input, regardless of how large a `limit` a caller requests.
+const RUN_EVENTS_PAGE_CAPACITY_HINT: usize = 64;
 /// Maximum bytes included in stdout/stderr previews returned by run-log APIs.
 const RUN_LOG_PREVIEW_MAX_BYTES: usize = 8192;
 /// Maximum lines included in stdout/stderr previews returned by run-log APIs.
@@ -474,7 +478,7 @@ pub(super) async fn list_run_events(
             limit: Some(RUN_EVENTS_MAX_SCAN_LINES + 1),
             ..Default::default()
         })?;
-        let mut page: Vec<Value> = Vec::with_capacity(limit.min(64));
+        let mut page: Vec<Value> = Vec::with_capacity(RUN_EVENTS_PAGE_CAPACITY_HINT);
         let mut matched: usize = 0;
         let mut lines_scanned: usize = 0;
         let mut budget_exceeded = false;
