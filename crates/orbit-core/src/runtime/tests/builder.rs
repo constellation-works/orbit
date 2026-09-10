@@ -120,7 +120,7 @@ fn registry_neutral_binding_rejects_a_conflicting_workspace_config() {
 
 #[test]
 fn v2_task_backend_wires_through_runtime_add_show_list_and_update() {
-    let (_root, _global_root, workspace_root, runtime) = v2_runtime();
+    let (_root, global_root, _workspace_root, runtime) = v2_runtime();
 
     let task = runtime
         .add_task(TaskAddParams {
@@ -132,8 +132,11 @@ fn v2_task_backend_wires_through_runtime_add_show_list_and_update() {
         })
         .expect("create task");
     assert_eq!(task.id, "ORB-00000");
-    assert!(!workspace_root.join("tasks/backlog").exists());
-    assert!(workspace_root.join("tasks/ORB-00000").exists());
+    let bundle_path = global_root
+        .join("tasks/workspaces")
+        .join(runtime.workspace_id().expect("workspace identity"))
+        .join(&task.id);
+    assert!(bundle_path.exists());
 
     let started = runtime
         .start_task(&task.id, Some("start".to_string()), None)
