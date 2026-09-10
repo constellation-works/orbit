@@ -1,8 +1,9 @@
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::super::redaction::{
-    credential_safe_location, is_high_confidence_single_token_credential, is_redactable_value,
-    is_sensitive_env_name, redact_all, redact_home_dir, redact_sensitive_env_text,
+    PatternRedactor, credential_safe_location, is_high_confidence_single_token_credential,
+    is_redactable_value, is_sensitive_env_name, redact_all, redact_home_dir,
+    redact_sensitive_env_text,
 };
 
 #[test]
@@ -122,6 +123,60 @@ fn redact_all_preserves_knowledge_record_identifiers_and_paths() {
     );
 
     assert_eq!(redact_all(legitimate), legitimate);
+}
+
+#[test]
+fn provider_key_redaction_respects_identifier_boundaries() {
+    let migration = "remove-task-checkout-projections";
+    let compounds = [
+        "disk-sk-checkout-projections",
+        "risk-sk-checkout-projections",
+        "task-sk-checkout-projections",
+        "é-sk-checkout-projections",
+    ];
+    let default = PatternRedactor::default();
+    let argv = PatternRedactor::with_argv_secrets();
+
+    assert_eq!(redact_all(migration), migration);
+    assert_eq!(default.apply_str(migration), migration);
+    assert_eq!(argv.apply_str(migration), migration);
+
+    for compound in compounds {
+        assert_eq!(redact_all(compound), compound, "default: {compound}");
+        assert_eq!(argv.apply_str(compound), compound, "argv: {compound}");
+    }
+}
+
+#[test]
+fn provider_key_redaction_keeps_standalone_and_argv_forms() {
+    let key = "sk-abcdefghijklmnopqrstuvwxyz";
+    let default = PatternRedactor::default();
+
+    for input in [
+        key.to_string(),
+        format!("before {key} after"),
+        format!("'{key}'"),
+        format!("({key}),"),
+        format!("X-Api-Key: {key}"),
+        format!(r#"{{"api_key":"{key}"}}"#),
+    ] {
+        let redacted = default.apply_str(&input);
+        assert!(!redacted.contains(key), "{input}");
+        assert!(
+            redacted.contains("[REDACTED_SECRET]") || redacted.contains("[REDACTED_AUTH]"),
+            "{redacted}"
+        );
+    }
+
+    let argv = PatternRedactor::with_argv_secrets();
+    for (input, marker) in [
+        (key, "[REDACTED_SECRET]"),
+        ("--api-key=sk-short", "[REDACTED_API_KEY]"),
+    ] {
+        let redacted = argv.apply_str(input);
+        assert!(!redacted.contains("sk-"), "{redacted}");
+        assert!(redacted.contains(marker), "{redacted}");
+    }
 }
 
 #[test]
