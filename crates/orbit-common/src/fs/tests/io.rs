@@ -121,6 +121,99 @@ fn private_append_rejects_a_final_symlink() {
     );
 }
 
+#[test]
+fn read_file_lock_holder_parses_a_regular_holder_file() {
+    let temp = TempDir::new().expect("tempdir");
+    let lock_path = temp.path().join(".task.yaml.lock");
+    std::fs::write(
+        &lock_path,
+        br#"{"pid":7,"acquired_at":"2026-01-01T00:00:00Z","label":"holder"}"#,
+    )
+    .expect("write holder file");
+
+    let holder = read_file_lock_holder(&lock_path).expect("holder metadata");
+    assert_eq!(holder.pid, 7);
+    assert_eq!(holder.label, "holder");
+}
+
+/// Platform-neutral coverage for the supported non-Unix path: without
+/// `O_NOFOLLOW`, the reject-a-non-regular-final-component behavior still
+/// comes from the pathname pre-check and the post-open `fstat`, so a
+/// directory at the lock path is refused everywhere, not just on Unix.
+#[test]
+fn read_file_lock_holder_returns_none_for_a_directory_lock_path() {
+    let temp = TempDir::new().expect("tempdir");
+    let lock_path = temp.path().join("dir.lock");
+    std::fs::create_dir(&lock_path).expect("create directory");
+
+    assert!(
+        read_file_lock_holder(&lock_path).is_none(),
+        "a directory must never be read as holder metadata"
+    );
+}
+
+#[test]
+fn read_file_lock_holder_returns_none_for_malformed_json() {
+    let temp = TempDir::new().expect("tempdir");
+    let lock_path = temp.path().join(".task.yaml.lock");
+    std::fs::write(&lock_path, b"not json").expect("write malformed holder");
+
+    assert!(read_file_lock_holder(&lock_path).is_none());
+}
+
+#[test]
+fn read_file_lock_holder_returns_none_for_a_missing_lock_file() {
+    let temp = TempDir::new().expect("tempdir");
+    let lock_path = temp.path().join(".missing.lock");
+
+    assert!(read_file_lock_holder(&lock_path).is_none());
+}
+
+/// [ORB-12029]: the previous implementation checked `symlink_metadata` on the
+/// resolved candidate and opened it in a later, unguarded `File::open` — a
+/// final component swapped to a symlink in between would be followed by that
+/// open, exposing the swapped target's content. This deterministically
+/// installs that swap between path resolution and the open (rather than
+/// relying on a real race window) to prove `O_NOFOLLOW` rejects it instead of
+/// reading through.
+#[cfg(unix)]
+#[test]
+fn read_file_lock_holder_rejects_a_final_symlink_swapped_after_the_path_check() {
+    use crate::fs::file_lock::read_file_lock_holder_after_resolve;
+
+    let root = tempfile::tempdir().expect("root tempdir");
+    let lock_path = root.path().join(".task.yaml.lock");
+    let checked_body = br#"{"pid":1,"acquired_at":"2026-01-01T00:00:00Z","label":"checked"}"#;
+    std::fs::write(&lock_path, checked_body).expect("write checked holder");
+
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let outside_path = outside.path().join("outside.json");
+    let outside_body = br#"{"pid":2,"acquired_at":"2026-01-01T00:00:00Z","label":"outside"}"#;
+    std::fs::write(&outside_path, outside_body).expect("write outside holder");
+
+    let preserved_path = root.path().join("checked-holder.json");
+
+    let holder = read_file_lock_holder_after_resolve(&lock_path, |checked_path| {
+        std::fs::rename(checked_path, &preserved_path).expect("preserve checked holder");
+        std::os::unix::fs::symlink(&outside_path, checked_path).expect("install swapped symlink");
+    });
+
+    assert!(
+        holder.is_none(),
+        "the no-follow open must reject the swapped final symlink"
+    );
+    assert_eq!(
+        std::fs::read(&preserved_path).expect("read preserved checked holder"),
+        checked_body,
+        "the originally checked file must be untouched"
+    );
+    assert_eq!(
+        std::fs::read(&outside_path).expect("read outside holder"),
+        outside_body,
+        "the outside file must never be read or written through the swap"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn read_file_lock_holder_rejects_a_symlinked_lock_file() {
