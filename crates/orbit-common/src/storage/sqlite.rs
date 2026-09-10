@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
@@ -25,6 +26,17 @@ pub const DEFAULT_BUSY_TIMEOUT_MS: u32 = 5_000;
 /// frames, so the main database file already holds every committed page.
 const WAL_HEADER_BYTES: u64 = 32;
 
+/// Leading bytes of every SQLite database file.
+const DATABASE_MAGIC: &[u8] = b"SQLite format 3\0";
+
+/// Bytes of the database header this module reads: through offsets 18 and 19,
+/// the write and read file-format versions.
+const DATABASE_HEADER_BYTES: u64 = 20;
+
+/// File-format version recorded at offsets 18 and 19 while a database is in
+/// WAL mode. Rollback-journal databases record `1`.
+const WAL_FILE_FORMAT: u8 = 2;
+
 /// A file-backed SQLite connection opened under Orbit's filesystem policy.
 pub struct OpenedConnection {
     /// The ready-to-use SQLite connection.
@@ -32,6 +44,9 @@ pub struct OpenedConnection {
     /// Whether the database was opened for observation only, without any
     /// ability to write.
     pub read_only: bool,
+    /// Whether this connection keeps up with commits made after it was opened.
+    /// Writable connections are always [`ObservationCurrency::Live`].
+    pub currency: ObservationCurrency,
 }
 
 /// Open an Orbit SQLite database without exposing its persisted state.
@@ -77,19 +92,25 @@ pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
     let pragmas = apply_default_pragmas(&connection)?;
     if pragmas.write_denied || filesystem_is_read_only(&path)? {
         drop(connection);
-        return Ok(OpenedConnection {
-            connection: open_observational(&path)?,
-            read_only: true,
-        });
+        return open_observational(&path, ObservationRequirement::PublishedMainFile);
     }
     harden_sqlite_files(&path)?;
 
     Ok(OpenedConnection {
         connection,
         read_only: false,
+        currency: ObservationCurrency::Live,
     })
 }
 
+/// Observe a database Orbit may not write.
+///
+/// Orbit's stores accept [`ObservationCurrency::MainFileOnly`] deliberately:
+/// state published as a static file set — a read-only mount of a directory
+/// whose last writer closed cleanly, and so left no wal-index behind — carries
+/// no sidecars at all, and refusing it would make such a deployment unreadable
+/// rather than stale. Every caller is handed the currency it got, and
+/// [`open_observational`] warns when the degraded read is in use.
 pub(super) fn open_private_read_only(
     path: &Path,
     filesystem_read_only: bool,
@@ -99,10 +120,7 @@ pub(super) fn open_private_read_only(
     if !filesystem_read_only {
         harden_read_only_sqlite_files(&path)?;
     }
-    Ok(OpenedConnection {
-        connection: open_observational(&path)?,
-        read_only: true,
-    })
+    open_observational(&path, ObservationRequirement::PublishedMainFile)
 }
 
 /// Resolve a SQLite file path through its existing parent and reject traversal
@@ -220,11 +238,9 @@ fn harden_read_only_sqlite_files(path: &Path) -> Result<(), OrbitError> {
 
 #[cfg(unix)]
 fn harden_existing_read_only_file(path: &Path) -> Result<(), OrbitError> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
 
-    let mut options = fs::OpenOptions::new();
-    options.read(true).custom_flags(libc::O_NOFOLLOW);
-    let file = match options.open(path) {
+    let file = match open_read_no_follow(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(sqlite_path_error("inspect", path, error)),
@@ -243,6 +259,24 @@ fn harden_existing_read_only_file(path: &Path) -> Result<(), OrbitError> {
 #[cfg(not(unix))]
 fn harden_existing_read_only_file(_path: &Path) -> Result<(), OrbitError> {
     Ok(())
+}
+
+/// Open a database or sidecar file for reading without traversing a final
+/// symlink, so inspection stays inside the directory
+/// [`validated_sqlite_path`] resolved.
+#[cfg(unix)]
+fn open_read_no_follow(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_read_no_follow(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
 }
 
 fn sqlite_sidecar_paths(path: &Path) -> [PathBuf; 2] {
@@ -341,77 +375,174 @@ pub fn apply_default_pragmas(conn: &Connection) -> Result<PragmaOutcome, OrbitEr
     })
 }
 
-/// How an unwritable SQLite database can be observed without changing any of
-/// its files.
+/// What a caller needs from an observational open.
+///
+/// A database whose current state cannot be read without writing leaves only a
+/// degraded read, and which of the two answers is right — refuse, or read the
+/// main file alone — belongs to the caller, not to whichever sidecars happen
+/// to be on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ReadOnlyAccess {
-    /// `immutable=1`. The only mode that never needs WAL shared memory, and
-    /// correct only while the `-wal` sidecar cannot hide committed pages.
-    Immutable,
-    /// An ordinary read-only connection, reading the `-wal` through the `-shm`
-    /// wal-index already present on disk.
-    WalReadOnly,
+pub enum ObservationRequirement {
+    /// The connection must observe commits made after it is opened, or the
+    /// open must fail explaining what writable storage still owes it.
+    CurrentState,
+    /// The caller also accepts [`ObservationCurrency::MainFileOnly`], having
+    /// weighed that degraded read against not reading the database at all.
+    PublishedMainFile,
+}
+
+/// Whether a connection keeps up with commits another process makes after the
+/// connection was opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservationCurrency {
+    /// Ordinary access: every statement re-reads the database files, so a
+    /// commit that lands after this connection was opened becomes visible to
+    /// the next query.
+    Live,
+    /// `immutable=1`: the connection reads the main database file alone and is
+    /// free to cache it forever.
+    ///
+    /// It is not a guaranteed snapshot. It ignores every `-wal`, including one
+    /// a writer creates after the open, so later commits stay invisible; and
+    /// because `immutable=1` promises SQLite that the bytes never change, a
+    /// writer that later checkpoints into the main file can leave this
+    /// connection returning results that are not merely stale but internally
+    /// inconsistent. It is only sound for a database published as a static
+    /// file set, and only a caller that passes
+    /// [`ObservationRequirement::PublishedMainFile`] ever receives it.
+    /// Observing current state again means opening a new connection.
+    MainFileOnly,
 }
 
 /// Open an existing SQLite database for reads that must not write to it, and
 /// must not create a WAL/SHM sidecar.
 ///
-/// `immutable=1` is the mode a read-only mount reaches for, because SQLite's
-/// ordinary read-only mode may try to create WAL shared-memory state before the
-/// first SELECT. It is also the mode that makes SQLite ignore an existing
-/// `-wal`: a database whose newest commits were never checkpointed back reads
-/// as its older main-file state. A caller that treats that stale view as
-/// current then repairs a database it cannot write — how a read-only Orbit
-/// mount turned an observation into `attempt to write a readonly database`.
+/// Two SQLite behaviors bound what is possible here. An ordinary read-only
+/// connection stays current, but a WAL-mode database drives it through the
+/// `-shm` wal-index, which SQLite creates — a write — when it is absent; on a
+/// read-only mount that attempt fails outright. `immutable=1` needs no
+/// sidecars, but it buys that by reading the main file alone and trusting it
+/// never changes. Reporting either as current is how a read-only Orbit mount
+/// turned an observation into `attempt to write a readonly database`, and how
+/// a checkpointed database kept reporting its pre-open row count.
 ///
-/// So the sidecars pick the mode. See [`read_only_access`].
-pub fn open_observational(path: &Path) -> Result<Connection, OrbitError> {
-    let access = read_only_access(path)?;
-    let conn = open_read_only_connection(path, access)?;
+/// The database's own state decides which reads are possible, and
+/// `requirement` decides whether the degraded one is acceptable; see
+/// [`observation_currency`].
+pub fn open_observational(
+    path: &Path,
+    requirement: ObservationRequirement,
+) -> Result<OpenedConnection, OrbitError> {
+    let currency = observation_currency(path, requirement)?;
+    let connection = open_read_only_connection(path, currency)?;
 
-    if access == ReadOnlyAccess::WalReadOnly {
-        // Opening is lazy, so an unusable wal-index would otherwise surface as
-        // an opaque failure inside whichever query happened to run first.
-        conn.query_row("SELECT count(*) FROM sqlite_schema", [], |row| {
+    // Opening is lazy, so an unreadable database or an unusable wal-index would
+    // otherwise surface as an opaque failure inside whichever query happened to
+    // run first.
+    connection
+        .query_row("SELECT count(*) FROM sqlite_schema", [], |row| {
             row.get::<_, i64>(0)
         })
         .map_err(|error| {
-            observational_unavailable(path, &format!("its wal-index is unusable: {error}"))
+            observational_unavailable(path, &format!("its first read failed: {error}"))
         })?;
+
+    if currency == ObservationCurrency::MainFileOnly {
+        tracing::warn!(
+            target: "orbit.common.sqlite",
+            path = %path.display(),
+            "no wal-index is published alongside the database; reading its main file alone, which \
+             will not show commits made from writable storage after this open"
+        );
     }
 
-    Ok(conn)
+    Ok(OpenedConnection {
+        connection,
+        read_only: true,
+        currency,
+    })
 }
 
-/// Decide how `path` can be observed without writing, or explain why its
+/// Decide how `path` can be observed without writing to it, or explain why its
 /// current state cannot be read at all.
 ///
-/// A `-wal` holding frames may carry committed pages the main database file
-/// does not have, so those reads need a real read-only connection — which in
-/// turn needs the `-shm` wal-index to already exist, since creating one is a
-/// write. Without both, reporting the main file alone would be a silent,
-/// stale success, so this fails closed instead.
-pub(super) fn read_only_access(path: &Path) -> Result<ReadOnlyAccess, OrbitError> {
-    let [wal, shm] = sqlite_sidecar_paths(path);
+/// The database file's own header decides first: a rollback-journal database
+/// needs no shared memory, so an ordinary read-only connection reads it live
+/// and creates nothing. A WAL-mode database needs the wal-index, and a
+/// read-only connection may only use one that is already published, because
+/// SQLite creates both the `-wal` and the `-shm` when either is missing.
+///
+/// That leaves a WAL-mode database whose sidecars are incomplete. A `-wal`
+/// holding frames, or a `-shm` published without the `-wal` it indexes, may be
+/// hiding committed pages the main file does not have; reporting the main file
+/// alone would be a silent, stale success, so those always fail closed.
+///
+/// A WAL-mode database with no wal-index at all is the one case the caller
+/// decides. Nothing on disk proves it is quiescent — sidecar absence only says
+/// no writer holds it *right now* — so the degraded
+/// [`ObservationCurrency::MainFileOnly`] read is offered to
+/// [`ObservationRequirement::PublishedMainFile`] and refused to
+/// [`ObservationRequirement::CurrentState`].
+pub(super) fn observation_currency(
+    path: &Path,
+    requirement: ObservationRequirement,
+) -> Result<ObservationCurrency, OrbitError> {
+    let [wal_path, shm_path] = sqlite_sidecar_paths(path);
+    let wal = sidecar_metadata(&wal_path)?;
+    let shm = sidecar_metadata(&shm_path)?;
 
-    let wal_carries_frames =
-        sidecar_metadata(&wal)?.is_some_and(|metadata| metadata.len() > WAL_HEADER_BYTES);
-    if !wal_carries_frames {
-        return Ok(ReadOnlyAccess::Immutable);
+    if !database_uses_wal(path)? {
+        return Ok(ObservationCurrency::Live);
     }
-    if sidecar_metadata(&shm)?.is_none() {
-        return Err(observational_unavailable(
+
+    match (wal, shm) {
+        (Some(_), Some(_)) => Ok(ObservationCurrency::Live),
+        (None, Some(_)) => Err(observational_unavailable(
             path,
-            "its '-shm' wal-index is missing",
-        ));
+            "its '-shm' wal-index is published without the '-wal' sidecar it indexes",
+        )),
+        (Some(wal), None) if wal.len() > WAL_HEADER_BYTES => Err(observational_unavailable(
+            path,
+            "its '-wal' sidecar holds committed frames but its '-shm' wal-index is missing",
+        )),
+        (Some(_) | None, None) => match requirement {
+            ObservationRequirement::PublishedMainFile => Ok(ObservationCurrency::MainFileOnly),
+            ObservationRequirement::CurrentState => Err(observational_unavailable(
+                path,
+                "it is in WAL mode with no published '-shm' wal-index, so a reader that may not \
+                 create one can only read the main file alone",
+            )),
+        },
+    }
+}
+
+/// Whether the database file records WAL mode in its header.
+///
+/// A missing or truncated file, and any file that does not carry the SQLite
+/// magic, is reported as not WAL: there are no committed WAL frames to miss,
+/// and SQLite gives a better diagnosis of the file itself than this check
+/// could.
+fn database_uses_wal(path: &Path) -> Result<bool, OrbitError> {
+    let file = match open_read_no_follow(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(sqlite_path_error("inspect", path, error)),
+    };
+
+    let mut header = Vec::with_capacity(DATABASE_HEADER_BYTES as usize);
+    file.take(DATABASE_HEADER_BYTES)
+        .read_to_end(&mut header)
+        .map_err(|error| sqlite_path_error("read the header of", path, error))?;
+    if header.len() < DATABASE_HEADER_BYTES as usize || !header.starts_with(DATABASE_MAGIC) {
+        return Ok(false);
     }
 
-    Ok(ReadOnlyAccess::WalReadOnly)
+    Ok(header[18] == WAL_FILE_FORMAT || header[19] == WAL_FILE_FORMAT)
 }
 
 fn open_read_only_connection(
     path: &Path,
-    access: ReadOnlyAccess,
+    currency: ObservationCurrency,
 ) -> Result<Connection, OrbitError> {
     let mut uri = url::Url::from_file_path(path).map_err(|()| {
         OrbitError::Store(format!(
@@ -419,7 +550,7 @@ fn open_read_only_connection(
             path.display()
         ))
     })?;
-    if access == ReadOnlyAccess::Immutable {
+    if currency == ObservationCurrency::MainFileOnly {
         uri.query_pairs_mut().append_pair("immutable", "1");
     }
 
@@ -446,19 +577,18 @@ fn open_read_only_connection(
     Ok(conn)
 }
 
-/// The database holds committed WAL state this process may not read and may
-/// not write into place. Name the writable step an operator still owes rather
-/// than reporting the main file's older contents as current.
+/// The database's current state cannot be read from this process, and cannot
+/// be repaired without writable storage. Name the writable step an operator
+/// still owes rather than reporting the main file's older contents as current.
 ///
 /// Deliberately not phrased as a read-only/permission failure: callers that
 /// downgrade those to a warning and continue would turn this back into the
 /// silent stale read it exists to prevent.
 fn observational_unavailable(path: &Path, reason: &str) -> OrbitError {
     OrbitError::Store(format!(
-        "cannot observe current SQLite state '{}': its '-wal' sidecar holds committed frames but \
-         {reason}. Checkpoint the database from writable storage \
-         (`PRAGMA wal_checkpoint(TRUNCATE)`) or publish its '-shm' wal-index alongside it, then \
-         retry the observation",
+        "cannot observe current SQLite state '{}': {reason}. Checkpoint the database from \
+         writable storage (`PRAGMA wal_checkpoint(TRUNCATE)`) or publish its '-wal' and '-shm' \
+         sidecars alongside it, then retry the observation",
         path.display()
     ))
 }

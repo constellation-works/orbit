@@ -104,8 +104,9 @@ impl Store {
                 orbit_common::tracing::warn!(
                     target: "orbit.store.sqlite",
                     path = %path.display(),
+                    currency = ?opened.currency,
                     error = %error,
-                    "skipped schema migration while opening a store for immutable reads"
+                    "skipped schema migration while opening a store for observational reads"
                 );
             } else {
                 return Err(error);
