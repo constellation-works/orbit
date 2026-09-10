@@ -6,7 +6,7 @@
 //! `validate_trusted_host_activity` flow (F2026-09-093, F2026-09-097,
 //! F2026-09-101), and sibling scoreboard reads behind one path check.
 
-use orbit_types::task::{Task, TaskPriority, TaskStatus};
+use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -14,6 +14,9 @@ use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_layout, write_workspace_file,
 };
 use crate::application::task::TaskUpdateParams;
+
+use super::super::backlog_exclusion::list_backlog_tasks;
+use super::super::task_pilot::{apply as apply_task_pilot, prepare as prepare_task_pilot};
 
 use super::dependabot_alert_tasks::{code_alert, expanded_snapshot, file};
 
@@ -129,7 +132,75 @@ fn one_shared_cause_across_line_offsets_files_a_single_task_naming_every_alert()
             .count(),
         3
     );
-    assert_eq!(task.context_files, vec![format!("file:{RECONCILE}")]);
+    assert!(task.context_files.is_empty());
+}
+
+#[test]
+fn grouped_alert_mint_requires_pilot_assessment_before_implementation_admission() {
+    let (_root, runtime, repo) = runtime_with_workspace_layout();
+    write_workspace_file(&repo, RECONCILE);
+    let filed = sweep(&runtime, reconcile_hash_alerts());
+    let minted = filed_code_tasks(&runtime, &filed).remove(0);
+
+    assert!(minted.context_files.is_empty());
+    assert_eq!(minted.complexity, Some(TaskComplexity::Unassessed));
+    let before = list_backlog_tasks(&runtime, "list_backlog_tasks", &json!({}))
+        .expect("inspect implementation admission before pilot");
+    assert!(before["task_ids"].as_array().expect("task ids").is_empty());
+
+    let prepared = prepare_task_pilot(
+        &runtime,
+        "prepare_task_pilot",
+        &json!({"workspace_path": repo}),
+    )
+    .expect("prepare selector-free unassessed task");
+    assert_eq!(prepared["task_ids"], json!([minted.id]));
+    assert_eq!(prepared["tasks"][0]["context_files_before"], json!([]));
+    assert_eq!(prepared["tasks"][0]["complexity"], "unassessed");
+
+    let assessment = json!({
+        "task_id": minted.id,
+        "context_files_before": [],
+        "context_files_after": [format!("file:{RECONCILE}")],
+        "disposition": "selectors",
+        "recommended_crew": "system",
+        "recommended_complexity": "medium",
+        "assessment_rationale": "One shared remediation changes a security-sensitive helper and its grouped locations.",
+        "confidence": "high",
+        "evidence_gaps": [],
+        "validation_approach": "Run focused tests and the scanner query for every grouped alert.",
+        "reassessment_triggers": ["the shared helper boundary changes"],
+        "blocked_by": [],
+        "duplicate_of": null,
+        "already_landed": null,
+        "release_action_required": null,
+        "adr_conflicts": [],
+        "utility_warnings": [],
+        "surface_warnings": [],
+    });
+    let applied = apply_task_pilot(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": prepared,
+            "results": [{
+                "partition_index": 0,
+                "task_ids": [minted.id],
+                "tasks": [assessment],
+                "summary": "one grouped repair",
+            }],
+            "workspace_path": repo,
+        }),
+    )
+    .expect("apply grouped repair assessment");
+    assert_eq!(applied["status"], "succeeded");
+
+    let assessed = runtime.get_task(&minted.id).expect("assessed task");
+    assert_eq!(assessed.context_files, vec![format!("file:{RECONCILE}")]);
+    assert_eq!(assessed.complexity, Some(TaskComplexity::Medium));
+    let after = list_backlog_tasks(&runtime, "list_backlog_tasks", &json!({}))
+        .expect("inspect implementation admission after pilot");
+    assert_eq!(after["task_ids"], json!([minted.id]));
 }
 
 #[test]
@@ -155,10 +226,7 @@ fn one_cause_reported_in_two_files_is_still_one_repair() {
         "{}",
         task.title
     );
-    assert_eq!(
-        task.context_files,
-        vec![format!("file:{ANTIGRAVITY}"), format!("file:{BOOTSTRAP}")]
-    );
+    assert!(task.context_files.is_empty());
 }
 
 #[test]

@@ -87,7 +87,22 @@ spec:
               type: string
             recommended_complexity:
               type: string
-              enum: [low, medium, hard]
+              enum: [low, medium, hard, unassessed]
+            assessment_rationale:
+              type: string
+            confidence:
+              type: string
+              enum: [high, medium, low]
+            evidence_gaps:
+              type: array
+              items:
+                type: string
+            validation_approach:
+              type: string
+            reassessment_triggers:
+              type: array
+              items:
+                type: string
             blocked_by:
               type: array
               items:
@@ -203,7 +218,21 @@ spec:
        variable to make a criterion reachable. A criterion that expects a
        refusal is a correct negative test, and a tool name inside a quoted
        example is not a requirement; report neither.
-    6. Report recommendations only; do not apply them:
+    6. Assess the bounded logical repair, not alert severity, alert count, file
+       count, version increment, or expected wall-clock time. Evaluate repair
+       certainty, behavioral change, component coupling, and validation
+       difficulty. Record `assessment_rationale`, `confidence` (`high`,
+       `medium`, or `low`), `evidence_gaps`, `validation_approach`, and
+       `reassessment_triggers` for every assessment. A known compatible
+       dependency bump with direct validation can be low; a caller migration
+       is often medium; a trust-boundary or cross-subsystem redesign can be
+       hard. These are policy examples, not proof of live-model classification
+       accuracy. If evidence cannot support a rating, return `unassessed`, name
+       concrete evidence gaps, and propose the smallest bounded investigation
+       through selectors and validation approach. Missing validation authority
+       belongs in `utility_warnings` as a readiness blocker. Complexity,
+       urgency, and readiness are separate decisions.
+    7. Report recommendations only; do not apply them:
        `recommended_crew`, `recommended_complexity`, real `blocked_by` task IDs,
        `duplicate_of`, `already_landed`, `release_action_required`,
        `adr_conflicts` (a legacy output field name kept for consumer
@@ -246,7 +275,12 @@ spec:
         "disposition":"selectors|verified_no_diff|host_operational",
         "evidence":"required when context_files_after is empty",
         "recommended_crew":"<crew configured in this workspace>",
-        "recommended_complexity":"low|medium|hard",
+        "recommended_complexity":"low|medium|hard|unassessed",
+        "assessment_rationale":"why evidence supports the rating or investigation",
+        "confidence":"high|medium|low",
+        "evidence_gaps":[],
+        "validation_approach":"validation that would establish the repair",
+        "reassessment_triggers":[],
         "blocked_by":[],
         "duplicate_of":null,
         "already_landed":null,
@@ -259,8 +293,9 @@ spec:
     },"error":null}
 
     Copy `partition_index` and `task_ids` exactly from the input and return one
-    task assessment per input ID. If any task cannot be assessed, return a
-    failed envelope for the whole partition; never omit it or claim success.
+    task assessment per input ID. If evidence is insufficient to assign a
+    complexity, return the task as `unassessed` with actionable evidence gaps;
+    never omit it or invent certainty.
   tools:
     - orbit.task.show
     - orbit.task.list

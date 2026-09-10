@@ -4,7 +4,7 @@ use std::path::Path;
 use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    Task, TaskPriority, TaskReferenceIndex, TaskStatus, TaskType,
+    Task, TaskComplexity, TaskPriority, TaskReferenceIndex, TaskStatus, TaskType,
     task_dependencies_ready_with_index,
 };
 use serde::Serialize;
@@ -42,6 +42,9 @@ pub(super) enum BacklogTaskExclusionReason {
     EpicChild,
     EpicRoot,
     GroupMemberConflict,
+    /// Automated work must be prepared before an implementation lane can
+    /// consume it; urgency does not substitute for a complexity assessment.
+    UnassessedComplexity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,6 +177,18 @@ pub(super) fn list_backlog_tasks(
                         action: action.to_string(),
                         message: format!("load task {task_id}: {err}"),
                     })
+                    .and_then(|task| {
+                        if task.complexity.is_some_and(TaskComplexity::is_assessed) {
+                            Ok(task)
+                        } else {
+                            Err(DispatchError::DeterministicActionFailed {
+                                action: action.to_string(),
+                                message: format!(
+                                    "task {task_id} requires task-pilot preparation before implementation admission"
+                                ),
+                            })
+                        }
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?;
         (tasks, None)
@@ -270,12 +285,23 @@ pub(super) fn backlog_snapshot(
         .collect();
     sort_tasks_for_automatic_dispatch(&mut backlog);
     let mut excluded = Vec::new();
-    // [ORB-11242] The crew filter runs first so an excluded task reports the
-    // reason an operator can act on — reassign it, or run a drain that permits
-    // its crew — rather than a downstream epic/lock reason that would not
-    // explain why a permitted-looking task never started. Everything that
-    // survives keeps its ordinary priority/age order, so the remaining crews
-    // go on filling the drain's slots at the usual rate.
+    backlog.retain(|task| {
+        if task.complexity.is_some_and(TaskComplexity::is_assessed) {
+            return true;
+        }
+        excluded.push(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::UnassessedComplexity,
+            conflicts: Vec::new(),
+            crew: None,
+        });
+        false
+    });
+    // Once the assessment gate has held back unprepared work, the crew filter
+    // runs before scheduling exclusions so a task reports the reason an
+    // operator can act on — reassign it, or run a drain that permits its crew
+    // — rather than a downstream epic/lock reason. Everything that survives
+    // keeps its ordinary priority/age order.
     if let Some(allowlist) = allowlist {
         backlog.retain(|task| {
             match runtime.auto_task_crew_candidates(task, pools, None) {

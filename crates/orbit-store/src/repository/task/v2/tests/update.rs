@@ -639,10 +639,13 @@ fn atomic_task_mutation_commits_receipt_event_and_envelope_together() {
         operation_id: "operation-one".to_string(),
         expected_context_files: vec!["docs/design/task-artifacts/1_overview.md".to_string()],
         expected_status: TaskStatus::Backlog,
+        expected_complexity: None,
         context_files: vec!["file:src/lib.rs".to_string()],
         status: TaskStatus::Backlog,
+        complexity: TaskComplexity::Hard,
         event_type: "task_pilot_applied".to_string(),
         event_note: "task-pilot atomic application".to_string(),
+        audit_note: r#"{"assessment_rationale":"cross-component repair"}"#.to_string(),
     };
 
     assert_eq!(
@@ -659,6 +662,7 @@ fn atomic_task_mutation_commits_receipt_event_and_envelope_together() {
     );
     let task = store.get_task("ORB-00000").unwrap().unwrap();
     assert_eq!(task.context_files, vec!["file:src/lib.rs"]);
+    assert_eq!(task.complexity, Some(TaskComplexity::Hard));
     let history = store.get_task_history("ORB-00000").unwrap().unwrap();
     assert_eq!(
         history
@@ -666,6 +670,66 @@ fn atomic_task_mutation_commits_receipt_event_and_envelope_together() {
             .filter(|event| event.event == "task_pilot_applied")
             .count(),
         1
+    );
+    let note = history
+        .iter()
+        .find(|event| event.event == "task_pilot_applied")
+        .and_then(|event| event.note.as_deref())
+        .expect("task-pilot audit note");
+    assert!(note.starts_with("operation_id=operation-one\n"), "{note}");
+    assert!(note.contains("assessment_rationale"), "{note}");
+}
+
+#[test]
+fn atomic_task_mutation_refuses_a_changed_complexity_without_partial_audit() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    store
+        .create_task(create_params("Atomic stale", TaskStatus::Backlog))
+        .expect("create task");
+    store
+        .update_task_document(
+            "ORB-00000",
+            &TaskDocumentUpdateParams {
+                actor: "operator".to_string(),
+                complexity: Some(TaskComplexity::Hard),
+                ..Default::default()
+            },
+        )
+        .expect("operator changes complexity");
+    let history_before = store.get_task_history("ORB-00000").unwrap().unwrap();
+
+    let outcome = store
+        .apply_atomic_task_mutation(
+            "ORB-00000",
+            &AtomicTaskMutationParams {
+                actor: "task-pilot".to_string(),
+                operation_id: "stale-complexity".to_string(),
+                expected_context_files: vec![
+                    "docs/design/task-artifacts/1_overview.md".to_string(),
+                ],
+                expected_status: TaskStatus::Backlog,
+                expected_complexity: None,
+                context_files: vec!["file:src/lib.rs".to_string()],
+                status: TaskStatus::Backlog,
+                complexity: TaskComplexity::Low,
+                event_type: "task_pilot_applied".to_string(),
+                event_note: "task-pilot atomic application".to_string(),
+                audit_note: "stale assessment".to_string(),
+            },
+        )
+        .expect("stale mutation is a structured outcome");
+
+    assert_eq!(outcome, AtomicTaskMutationOutcome::Stale);
+    let task = store.get_task("ORB-00000").unwrap().unwrap();
+    assert_eq!(task.complexity, Some(TaskComplexity::Hard));
+    assert_eq!(
+        task.context_files,
+        vec!["docs/design/task-artifacts/1_overview.md"]
+    );
+    assert_eq!(
+        store.get_task_history("ORB-00000").unwrap().unwrap(),
+        history_before
     );
 }
 
@@ -691,10 +755,13 @@ fn atomic_task_mutation_rolls_back_receipt_when_envelope_publish_fails() {
                     "docs/design/task-artifacts/1_overview.md".to_string(),
                 ],
                 expected_status: TaskStatus::Backlog,
+                expected_complexity: None,
                 context_files: vec!["file:src/lib.rs".to_string()],
                 status: TaskStatus::Backlog,
+                complexity: TaskComplexity::Hard,
                 event_type: "task_pilot_applied".to_string(),
                 event_note: "task-pilot atomic application".to_string(),
+                audit_note: r#"{"assessment_rationale":"fault fixture"}"#.to_string(),
             },
         )
         .expect_err("injected publish failure");
@@ -704,6 +771,7 @@ fn atomic_task_mutation_rolls_back_receipt_when_envelope_publish_fails() {
         task.context_files,
         vec!["docs/design/task-artifacts/1_overview.md"]
     );
+    assert_eq!(task.complexity, None);
     assert_eq!(
         store.get_task_history("ORB-00000").unwrap().unwrap(),
         history_before

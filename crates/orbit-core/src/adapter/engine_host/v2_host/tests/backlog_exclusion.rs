@@ -1,6 +1,6 @@
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -56,6 +56,44 @@ fn list_backlog_tasks_empty_workspace_is_a_clean_noop() {
     assert_eq!(output["excluded"], json!([]));
 }
 
+#[test]
+fn automatic_admission_withholds_unassessed_tasks_until_task_pilot_prepares_them() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Automated repair awaiting assessment".to_string(),
+            description: "Automated repair fixture".to_string(),
+            acceptance_criteria: vec!["Repair is validated.".to_string()],
+            plan: "Prepare with task-pilot.".to_string(),
+            status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Unassessed,
+            task_type: Some(TaskType::Bug),
+            system_created: true,
+            ..TaskAddParams::default()
+        })
+        .expect("seed unassessed automated task");
+
+    let output = list_backlog_tasks(&runtime, json!({}));
+
+    assert!(!output_task_ids(&output).contains(&task.id));
+    assert_eq!(
+        excluded_entry(&output, &task.id)["reason"],
+        "unassessed_complexity"
+    );
+    let error = runtime
+        .run_deterministic(
+            "list_backlog_tasks",
+            &json!({}),
+            &json!({"task_ids": [task.id]}),
+            ToolContext::default(),
+        )
+        .expect_err("explicit implementation admission must not bypass preparation");
+    assert!(
+        error.to_string().contains("task-pilot preparation"),
+        "{error}"
+    );
+}
+
 fn seed_task_with_dependencies(
     runtime: &OrbitRuntime,
     title: &str,
@@ -71,6 +109,7 @@ fn seed_task_with_dependencies(
             plan: "Fixture plan.".to_string(),
             workspace_path: Some(".".to_string()),
             priority: TaskPriority::Medium,
+            complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Chore),
             status: Some(status),
             ..Default::default()
@@ -196,6 +235,7 @@ fn only_exact_review_tags_enter_the_corrective_band() {
             acceptance_criteria: vec!["Selected deterministically".to_string()],
             plan: "Fixture plan".to_string(),
             status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Chore),
             ..Default::default()
         })
@@ -208,6 +248,7 @@ fn only_exact_review_tags_enter_the_corrective_band() {
             tags: vec!["code-review-sweep".to_string()],
             plan: "Fixture plan".to_string(),
             status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Chore),
             ..Default::default()
         })
@@ -220,6 +261,7 @@ fn only_exact_review_tags_enter_the_corrective_band() {
             tags: vec!["review".to_string()],
             plan: "Fixture plan".to_string(),
             status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Chore),
             ..Default::default()
         })
@@ -232,6 +274,7 @@ fn only_exact_review_tags_enter_the_corrective_band() {
             tags: vec!["code-review".to_string()],
             plan: "Fixture plan".to_string(),
             status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Chore),
             ..Default::default()
         })
@@ -244,6 +287,7 @@ fn only_exact_review_tags_enter_the_corrective_band() {
             tags: vec!["security-review".to_string()],
             plan: "Fixture plan".to_string(),
             status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Chore),
             ..Default::default()
         })
@@ -298,6 +342,7 @@ fn list_backlog_tasks_does_not_filter_auto_task_provenance_tags() {
             acceptance_criteria: vec!["selected".to_string()],
             plan: "ship".to_string(),
             status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Chore),
             ..Default::default()
         })
@@ -310,6 +355,7 @@ fn list_backlog_tasks_does_not_filter_auto_task_provenance_tags() {
             tags: vec!["auto-task:nightly-maintenance".to_string()],
             plan: "ship".to_string(),
             status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Chore),
             ..Default::default()
         })
@@ -709,6 +755,7 @@ fn list_backlog_tasks_excludes_epic_roots_and_descendants_with_reasons() {
             tags: vec!["epic".to_string()],
             plan: "Delegate children".to_string(),
             status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Medium,
             ..Default::default()
         })
         .expect("seed epic root");

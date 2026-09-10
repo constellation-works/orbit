@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use chrono::{SecondsFormat, Utc};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -736,6 +736,7 @@ model = "gpt-5.6-terra"
             title: "Sol high".to_string(),
             description: "Crew partition fixture".to_string(),
             priority: TaskPriority::High,
+            complexity: TaskComplexity::Medium,
             crew: Some("sol".to_string()),
             status: Some(TaskStatus::Backlog),
             ..Default::default()
@@ -746,6 +747,7 @@ model = "gpt-5.6-terra"
             title: "Terra medium".to_string(),
             description: "Crew partition fixture".to_string(),
             priority: TaskPriority::Medium,
+            complexity: TaskComplexity::Medium,
             crew: Some("terra".to_string()),
             status: Some(TaskStatus::Backlog),
             ..Default::default()
@@ -756,6 +758,7 @@ model = "gpt-5.6-terra"
             title: "Sol low".to_string(),
             description: "Crew partition fixture".to_string(),
             priority: TaskPriority::Low,
+            complexity: TaskComplexity::Medium,
             crew: Some("sol".to_string()),
             status: Some(TaskStatus::Backlog),
             ..Default::default()

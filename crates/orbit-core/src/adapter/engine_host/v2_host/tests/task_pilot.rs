@@ -1,5 +1,5 @@
 use chrono::Utc;
-use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 
@@ -85,13 +85,22 @@ fn seed_active_preparation(runtime: &OrbitRuntime, prepared: Value) -> String {
 }
 
 fn selector_assessment(task: &Task, after: Vec<&str>) -> Value {
+    selector_assessment_with_complexity(task, after, "medium")
+}
+
+fn selector_assessment_with_complexity(task: &Task, after: Vec<&str>, complexity: &str) -> Value {
     json!({
         "task_id": task.id,
         "context_files_before": task.context_files,
         "context_files_after": after,
         "disposition": "selectors",
         "recommended_crew": "luna",
-        "recommended_complexity": "medium",
+        "recommended_complexity": complexity,
+        "assessment_rationale": "The repair changes one known caller and has bounded validation.",
+        "confidence": "high",
+        "evidence_gaps": [],
+        "validation_approach": "Run the focused caller tests.",
+        "reassessment_triggers": ["the target API changes"],
         "blocked_by": [],
         "duplicate_of": null,
         "already_landed": null,
@@ -116,6 +125,7 @@ fn automatic_readiness_requires_selectors_and_no_deferring_finding() {
         "task_id": "ORB-FIXTURE",
         "disposition": "selectors",
         "context_files_after": ["file:src/existing.rs"],
+        "recommended_complexity": "medium",
         "blocked_by": [],
         "duplicate_of": null,
         "already_landed": null,
@@ -183,6 +193,15 @@ fn automatic_discovery_filters_status_context_and_no_diff_tags_then_partitions()
         &[],
         &["file:src/existing.rs"],
     );
+    runtime
+        .update_task(
+            &scoped.id,
+            TaskUpdateParams {
+                complexity: Some(TaskComplexity::Medium),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("mark manually scoped fixture as assessed");
 
     let output = prepare(
         &runtime,
@@ -390,7 +409,45 @@ fn explicit_mode_selects_exact_ids_even_with_nonempty_context_or_active_status()
 }
 
 #[test]
-fn apply_validates_all_results_then_mutates_context_files_only() {
+fn explicit_audit_does_not_rewrite_in_progress_work() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/existing.rs");
+    write_workspace_file(&repo_root, "src/new.rs");
+    let running = seed_task(
+        &runtime,
+        "running",
+        TaskStatus::InProgress,
+        &[],
+        &["file:src/existing.rs"],
+    );
+    let snapshot = prepared(&runtime, &repo_root, std::slice::from_ref(&running.id));
+    let output = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": snapshot,
+            "results": [partition_result(
+                0,
+                std::slice::from_ref(&running.id),
+                vec![selector_assessment_with_complexity(
+                    &running,
+                    vec!["file:src/new.rs"],
+                    "hard",
+                )],
+            )],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("active task is a structured stale outcome");
+
+    assert_eq!(output["task_outcomes"][0]["reason"], "status_not_mutable");
+    let current = runtime.get_task(&running.id).expect("running task");
+    assert_eq!(current.context_files, vec!["file:src/existing.rs"]);
+    assert_eq!(current.complexity, Some(TaskComplexity::Unassessed));
+}
+
+#[test]
+fn apply_validates_all_results_then_mutates_assessment_fields_only() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "src/alpha.rs");
     let alpha = seed_task(&runtime, "alpha", TaskStatus::Backlog, &["pilot"], &[]);
@@ -402,6 +459,15 @@ fn apply_validates_all_results_then_mutates_context_files_only() {
         &[],
     );
     let task_ids = vec![alpha.id.clone(), operational.id.clone()];
+    runtime
+        .update_task(
+            &alpha.id,
+            TaskUpdateParams {
+                crew: Some(Some("sol".to_string())),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("set explicit crew override");
     let prepared_snapshot = prepared(&runtime, &repo_root, &task_ids);
     let before_alpha = runtime.get_task(&alpha.id).expect("alpha before");
     let before_operational = runtime
@@ -420,6 +486,11 @@ fn apply_validates_all_results_then_mutates_context_files_only() {
                 "evidence": "Changes host service state only; no repository artifact is modified.",
                 "recommended_crew": "luna",
                 "recommended_complexity": "low",
+                "assessment_rationale": "No repository change is required.",
+                "confidence": "high",
+                "evidence_gaps": [],
+                "validation_approach": "Verify the current source evidence.",
+                "reassessment_triggers": ["the source revision changes"],
                 "blocked_by": [],
                 "duplicate_of": null,
                 "already_landed": null,
@@ -447,10 +518,13 @@ fn apply_validates_all_results_then_mutates_context_files_only() {
         .expect("operational after");
     assert_eq!(after_alpha.context_files, vec!["file:src/alpha.rs"]);
     assert_eq!(after_operational.context_files, Vec::<String>::new());
+    assert_eq!(after_alpha.complexity, Some(TaskComplexity::Medium));
+    assert_eq!(after_operational.complexity, Some(TaskComplexity::Low));
     assert_eq!(after_alpha.title, before_alpha.title);
     assert_eq!(after_alpha.status, before_alpha.status);
     assert_eq!(after_alpha.tags, before_alpha.tags);
     assert_eq!(after_alpha.plan, before_alpha.plan);
+    assert_eq!(after_alpha.crew.as_deref(), Some("sol"));
     assert_eq!(after_operational.title, before_operational.title);
     assert_eq!(after_operational.status, before_operational.status);
     assert_eq!(output["status"], "succeeded");
@@ -461,7 +535,7 @@ fn apply_validates_all_results_then_mutates_context_files_only() {
         json!(["file:src/alpha.rs"])
     );
     assert_eq!(output["tasks"][0]["applied"], true);
-    assert_eq!(output["tasks"][1]["applied"], false);
+    assert_eq!(output["tasks"][1]["applied"], true);
     assert_eq!(
         output["tasks"][1]["utility_warnings"],
         json!(["requires host access"])
@@ -662,21 +736,66 @@ fn replay_returns_already_applied_without_a_second_mutation() {
     .expect("changed replay is a structured stale result");
 
     assert_eq!(first["tasks"][0]["outcome"], "applied");
-    assert_eq!(replay["tasks"][0]["outcome"], "already_applied");
+    assert_eq!(replay["tasks"][0]["outcome"], "already_applied", "{replay}");
     assert_eq!(changed["task_outcomes"][0]["outcome"], "stale");
     assert_eq!(
         runtime.get_task(&task.id).unwrap().context_files,
         vec!["file:src/alpha.rs"]
     );
     assert_eq!(
-        runtime
-            .get_task_history(&task.id)
-            .unwrap()
-            .iter()
-            .filter(|event| event.event == "task_pilot_applied")
-            .count(),
-        1
+        runtime.get_task(&task.id).unwrap().complexity,
+        Some(TaskComplexity::Medium)
     );
+    let pilot_events = runtime
+        .get_task_history(&task.id)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.event == "task_pilot_applied")
+        .collect::<Vec<_>>();
+    assert_eq!(pilot_events.len(), 1);
+    let audit = pilot_events[0].note.as_deref().expect("audit note");
+    assert!(audit.starts_with("operation_id="), "{audit}");
+    assert!(audit.contains("assessment_rationale"), "{audit}");
+    assert!(audit.contains("validation_approach"), "{audit}");
+
+    let reassessed_task = runtime.get_task(&task.id).expect("reassessed task");
+    let fresh = prepared(
+        &runtime,
+        &repo_root,
+        std::slice::from_ref(&reassessed_task.id),
+    );
+    let reassessment = partition_result(
+        0,
+        std::slice::from_ref(&reassessed_task.id),
+        vec![selector_assessment_with_complexity(
+            &reassessed_task,
+            vec!["file:src/beta.rs"],
+            "hard",
+        )],
+    );
+    let changed = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": fresh,
+            "results": [reassessment],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("fresh changed evidence is a new assessment");
+    assert_eq!(changed["status"], "succeeded");
+    let current = runtime.get_task(&task.id).expect("changed assessment");
+    assert_eq!(current.context_files, vec!["file:src/beta.rs"]);
+    assert_eq!(current.complexity, Some(TaskComplexity::Hard));
+    let audits = runtime
+        .get_task_history(&task.id)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.event == "task_pilot_applied")
+        .filter_map(|event| event.note)
+        .collect::<Vec<_>>();
+    assert_eq!(audits.len(), 2);
+    assert_ne!(audits[0].lines().next(), audits[1].lines().next());
 }
 
 #[test]
@@ -987,6 +1106,11 @@ fn empty_context_requires_verified_no_diff_or_host_operational_evidence() {
             "evidence": "The requested behavior already exists on the target branch.",
             "recommended_crew": "luna",
             "recommended_complexity": "low",
+            "assessment_rationale": "The current source already contains the behavior.",
+            "confidence": "high",
+            "evidence_gaps": [],
+            "validation_approach": "Inspect the current source and history.",
+            "reassessment_triggers": ["the source revision changes"],
             "blocked_by": [],
             "duplicate_of": null,
             "already_landed": null,
@@ -1005,7 +1129,7 @@ fn empty_context_requires_verified_no_diff_or_host_operational_evidence() {
         }),
     )
     .expect("verified no-diff result is valid");
-    assert_eq!(output["tasks"][0]["applied"], false);
+    assert_eq!(output["tasks"][0]["applied"], true);
 }
 
 #[test]

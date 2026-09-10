@@ -257,6 +257,11 @@ impl RuntimeHost for ScriptedPilotHost<'_> {
                     "disposition": "selectors",
                     "recommended_crew": "system",
                     "recommended_complexity": "medium",
+                    "assessment_rationale": "The scripted repair changes one known source file.",
+                    "confidence": "high",
+                    "evidence_gaps": [],
+                    "validation_approach": "Run the focused source test.",
+                    "reassessment_triggers": ["the source revision changes"],
                     "blocked_by": [],
                     "duplicate_of": null,
                     "already_landed": null,
@@ -357,9 +362,11 @@ spec:
     assert_eq!(outcome.pipeline["apply_repairs"]["applied_count"], 2);
     assert_eq!(host.calls.lock().unwrap().as_slice(), &[false, true]);
     for task_id in task_ids {
+        let task = fixture.runtime.get_task(&task_id).unwrap();
+        assert_eq!(task.context_files, vec!["file:src/remote.rs"]);
         assert_eq!(
-            fixture.runtime.get_task(&task_id).unwrap().context_files,
-            vec!["file:src/remote.rs"]
+            task.complexity,
+            Some(orbit_types::task::TaskComplexity::Medium)
         );
     }
 }

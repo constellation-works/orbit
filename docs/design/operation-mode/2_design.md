@@ -47,15 +47,20 @@ application policy/composition to `orbit-core`, execution/retry mechanics to
 `orbit-engine`, persisted contracts/drivers to `orbit-store`, and thin command
 adapters to the CLI. The proposal can stay within existing dependency directions.
 It would extend existing run/task records, not add a parallel policy database.
-Exact persisted fields and migrations require a later implementation review.
+Task-pilot now persists its assessed complexity and modification selectors
+through the existing task-bundle mutation boundary; broader operation-mode
+policy remains subject to later implementation review.
 
 ## 2. Preparation and its narrow promotion exception
 
 [Task-pilot](../../../crates/orbit-core/assets/jobs/task_pilot_pipeline.yaml)
 already implements deterministic prepare → read-only worker partitions →
 deterministic apply → success guard. Automatic discovery chooses proposed/backlog
-tasks with empty `context_files`, excluding no-diff tags; explicit IDs can audit
-tasks with populated selectors. Limits are 50 tasks, partitions of five, five
+tasks whose `context_files` are empty or whose complexity is unassessed,
+excluding no-diff tags; explicit IDs can audit tasks with populated selectors.
+Automated scanner locations stay in the task description as evidence rather
+than being minted as guessed modification targets. Limits are 50 tasks,
+partitions of five, five
 pilot workers, and three active pipeline runs. The worker uses the `system` crew,
 so this mechanism need not consume Astra for routine inspection.
 
@@ -77,7 +82,12 @@ stale and storage-failed tasks require fresh preparation, and successful sibling
 are not sent back to a model. The prepared material fingerprint covers task
 meaning and dependency evidence, while `task_snapshot_drift` also names direct
 context, status, title, and tag changes in its structured stale outcomes.
-Ordinary apply changes selectors, leaving orchestration recommendations advisory.
+Ordinary apply atomically changes selectors and assessed complexity while
+leaving crew recommendations advisory. The receipt event retains the complete
+assessment rationale, confidence, evidence gaps, validation approach, and
+reassessment triggers. Missing evidence leaves complexity `unassessed`, and
+automatic implementation admission excludes that task until preparation can
+produce an assessed result; priority remains an independent urgency signal.
 There is no reusable general promotion-readiness certificate today.
 
 The [CI-failure admission seam](../../../crates/orbit-core/src/adapter/engine_host/v2_host/ci_failure_admission.rs)

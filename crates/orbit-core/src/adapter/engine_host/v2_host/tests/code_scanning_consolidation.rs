@@ -150,7 +150,7 @@ fn apply_replaces_the_sources_and_carries_their_traceability_and_dependencies() 
     assert_eq!(replacement.status, TaskStatus::Backlog);
     assert_eq!(replacement.priority, TaskPriority::High);
     assert_eq!(replacement.dependencies(), vec![blocker]);
-    assert_eq!(replacement.context_files, vec![format!("file:{RECONCILE}")]);
+    assert!(replacement.context_files.is_empty());
     for number in ["#101", "#102", "#103"] {
         assert!(
             replacement.description.contains(number),
@@ -189,6 +189,28 @@ fn apply_replaces_the_sources_and_carries_their_traceability_and_dependencies() 
             "a retired source must name its covering task: {comments:?}"
         );
     }
+}
+
+#[test]
+fn consolidation_preserves_an_existing_prepared_selector() {
+    let (_root, runtime, sources) = seeded_reconcile_backlog();
+    runtime
+        .update_task(
+            &sources[0],
+            TaskUpdateParams {
+                context_files: Some(vec![format!("file:{RECONCILE}")]),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("persist a prepared source selector");
+
+    let applied = consolidate(&runtime, json!({"apply": true}));
+    let replacement_id = applied["groups"][0]["replacement_task_id"]
+        .as_str()
+        .expect("replacement id");
+    let replacement = runtime.get_task(replacement_id).expect("replacement");
+
+    assert_eq!(replacement.context_files, vec![format!("file:{RECONCILE}")]);
 }
 
 #[test]

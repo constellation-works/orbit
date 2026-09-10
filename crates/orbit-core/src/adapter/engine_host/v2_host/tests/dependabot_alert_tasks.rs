@@ -600,7 +600,7 @@ fn code_task(runtime: &OrbitRuntime, output: &Value) -> orbit_types::task::Task 
 }
 
 #[test]
-fn code_scanning_task_is_scoped_to_the_alert_location_at_creation() {
+fn code_scanning_task_keeps_alert_location_as_evidence_without_claiming_scope() {
     let (_root, runtime, repo) = runtime_with_workspace_layout();
     write_workspace_file(&repo, ALERT_165_PATH);
 
@@ -623,7 +623,7 @@ fn code_scanning_task_is_scoped_to_the_alert_location_at_creation() {
     // Read straight back from the store: no task-pilot pass and no manual
     // update ran between minting and this assertion.
     let task = code_task(&runtime, &output);
-    assert_eq!(task.context_files, vec![format!("file:{ALERT_165_PATH}")]);
+    assert!(task.context_files.is_empty());
     assert!(
         task.description.contains("line 426"),
         "alert evidence lost the line: {}",
@@ -634,13 +634,21 @@ fn code_scanning_task_is_scoped_to_the_alert_location_at_creation() {
             .iter()
             .any(|criterion| criterion.contains("line 426"))
     );
-    assert!(
-        task.context_files
-            .iter()
-            .all(|selector| !selector.contains("426")),
-        "selector must not carry a line suffix: {:?}",
-        task.context_files
-    );
+    for evidence in [
+        "Repository: `acme/orbit`",
+        "Alert: `#165`",
+        "Rule: `rust/sql-injection`",
+        "Tool: `CodeQL` (version `2.20`, guid `codeql-guid`)",
+        "Ref: `refs/heads/main`",
+        "Commit: `abc123`",
+        "https://github.test/code/165",
+    ] {
+        assert!(
+            task.description.contains(evidence),
+            "missing alert evidence {evidence:?}: {}",
+            task.description
+        );
+    }
 }
 
 #[test]

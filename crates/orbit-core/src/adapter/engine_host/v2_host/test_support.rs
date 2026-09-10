@@ -95,6 +95,7 @@ pub(crate) fn seed_list_backlog_task(
             context_files: context_files.into_iter().map(str::to_string).collect(),
             workspace_path: Some(".".to_string()),
             priority,
+            complexity: orbit_types::task::TaskComplexity::Medium,
             task_type: Some(task_type),
             status: Some(status),
             ..Default::default()

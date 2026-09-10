@@ -85,7 +85,7 @@ pub(crate) fn consolidate_code_scanning_tasks(
         .then(|| SYSTEM_CREW.to_string());
     let mut groups = Vec::new();
     for consolidation in consolidations.iter().take(max_groups) {
-        let params = replacement_params(runtime, consolidation, crew.clone());
+        let params = replacement_params(consolidation, crew.clone());
         let mut entry = describe(consolidation, &params);
         if apply {
             apply_one(runtime, consolidation, params, &mut entry)?;
@@ -282,17 +282,12 @@ fn apply_one(
     Ok(())
 }
 
-fn replacement_params(
-    runtime: &OrbitRuntime,
-    consolidation: &Consolidation,
-    crew: Option<String>,
-) -> TaskAddParams {
+fn replacement_params(consolidation: &Consolidation, crew: Option<String>) -> TaskAddParams {
     let snapshot = json!({"repository": {"full_name": consolidation.repository}});
     let mut params = code_group_task_params(&CodeGroupTaskRequest {
         snapshot: &snapshot,
         group: &consolidation.group,
         covered_siblings: &[],
-        workspace_root: &runtime.paths().repo_root,
         crew,
     });
 

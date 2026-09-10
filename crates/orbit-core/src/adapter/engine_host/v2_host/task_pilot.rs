@@ -2,10 +2,12 @@
 //!
 //! The agent leg only proposes task metadata. These actions own discovery,
 //! partitioning and canonical selector validation. Ordinarily the sole write
-//! is replacing `context_files` on the exact tasks prepared for the run. A
-//! CI-failure sweep may additionally request explicit admission: after the
-//! selectors and every recommendation validate, this boundary promotes only a
-//! current, warning-free repair from `proposed` to `backlog`.
+//! is persisting assessed complexity and replacing `context_files` on the exact
+//! tasks prepared for the run, with the assessment audit and replay receipt in
+//! the same task-bundle commit. A CI-failure sweep may additionally request
+//! explicit admission: after the selectors and every recommendation validate,
+//! this boundary promotes only a current, warning-free repair from `proposed`
+//! to `backlog`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -15,7 +17,7 @@ use orbit_common::fs::selector::{
 };
 use orbit_engine::DispatchError;
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::{TaskEnvelopeV2, TaskStatus};
+use orbit_types::task::{TaskComplexity, TaskEnvelopeV2, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
@@ -133,6 +135,7 @@ pub(super) fn prepare(
                     &task.id,
                     &task.title,
                     task.status,
+                    task.complexity,
                     &task.tags,
                     &task.context_files,
                 )
@@ -166,6 +169,7 @@ pub(super) fn prepare(
             let reason = automatic_exclusion_reason(
                 envelope.status,
                 &envelope.context_files,
+                envelope.complexity,
                 &envelope.tags,
             )
             .or_else(|| {
@@ -190,6 +194,7 @@ pub(super) fn prepare(
                     &task.id,
                     &task.title,
                     task.status,
+                    task.complexity,
                     &task.tags,
                     &task.context_files,
                 )
@@ -390,12 +395,13 @@ fn prepared_task_ids(output: &Value, workspace_root: &Path) -> Option<Vec<String
 fn automatic_exclusion_reason(
     status: TaskStatus,
     context_files: &[String],
+    complexity: Option<TaskComplexity>,
     tags: &[String],
 ) -> Option<&'static str> {
     if !matches!(status, TaskStatus::Proposed | TaskStatus::Backlog) {
         return Some("status_not_eligible");
     }
-    if !context_files.is_empty() {
+    if !context_files.is_empty() && complexity.is_some_and(TaskComplexity::is_assessed) {
         return Some("context_files_not_empty");
     }
     if tags.iter().any(|tag| NO_DIFF_TAGS.contains(&tag.as_str())) {
@@ -408,6 +414,7 @@ fn task_snapshot(
     id: &str,
     title: &str,
     status: TaskStatus,
+    complexity: Option<TaskComplexity>,
     tags: &[String],
     context_files: &[String],
 ) -> Value {
@@ -415,6 +422,7 @@ fn task_snapshot(
         "task_id": id,
         "title": title,
         "status": status,
+        "complexity": complexity,
         "tags": tags,
         "context_files_before": context_files,
     })
@@ -596,6 +604,12 @@ pub(super) fn member_ready(assessment: &Value) -> bool {
         .is_none_or(Vec::is_empty);
 
     validation_tools_feasible
+        && matches!(
+            assessment
+                .get("recommended_complexity")
+                .and_then(Value::as_str),
+            Some("low" | "medium" | "hard")
+        )
         && assessment["disposition"] == "selectors"
         && [
             "blocked_by",
@@ -619,13 +633,38 @@ fn validate_recommendations(
     action: &str,
     task_id: &str,
     assessment: &Value,
-) -> Result<(), DispatchError> {
+) -> Result<TaskComplexity, DispatchError> {
     required_string(assessment, "recommended_crew", action)?;
     let complexity = required_string(assessment, "recommended_complexity", action)?;
-    if !matches!(complexity, "low" | "medium" | "hard") {
+    let complexity = complexity.parse::<TaskComplexity>().map_err(|_| {
+        action_failed(
+            action,
+            format!(
+                "task {task_id} recommended_complexity must be low, medium, hard, or unassessed"
+            ),
+        )
+    })?;
+    required_string(assessment, "assessment_rationale", action)?;
+    required_string(assessment, "validation_approach", action)?;
+    let confidence = required_string(assessment, "confidence", action)?;
+    if !matches!(confidence, "high" | "medium" | "low") {
         return Err(action_failed(
             action,
-            format!("task {task_id} recommended_complexity must be low, medium, or hard"),
+            format!("task {task_id} confidence must be high, medium, or low"),
+        ));
+    }
+    let evidence_gaps = required_string_array(assessment, "evidence_gaps", action)?;
+    required_string_array(assessment, "reassessment_triggers", action)?;
+    if complexity == TaskComplexity::Unassessed && evidence_gaps.is_empty() {
+        return Err(action_failed(
+            action,
+            format!("task {task_id} unassessed complexity requires actionable evidence_gaps"),
+        ));
+    }
+    if complexity.is_assessed() && !evidence_gaps.is_empty() {
+        return Err(action_failed(
+            action,
+            format!("task {task_id} must remain unassessed while evidence_gaps are present"),
         ));
     }
     for field in [
@@ -665,7 +704,7 @@ fn validate_recommendations(
         "release_action_required",
         &["action", "evidence"],
     )?;
-    Ok(())
+    Ok(complexity)
 }
 
 fn validate_optional_finding(

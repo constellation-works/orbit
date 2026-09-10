@@ -314,7 +314,6 @@ where
             snapshot,
             group,
             covered_siblings,
-            workspace_root: &runtime.paths().repo_root,
             crew: system_crew.clone(),
         });
         pending_tasks.push(PendingTask {

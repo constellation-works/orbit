@@ -12,9 +12,10 @@ impl TaskV2Store {
         if fields.actor.trim().is_empty()
             || fields.operation_id.trim().is_empty()
             || fields.event_type.trim().is_empty()
+            || fields.audit_note.trim().is_empty()
         {
             return Err(OrbitError::InvalidInput(
-                "atomic task mutation actor, operation id, and event type must not be empty"
+                "atomic task mutation actor, operation id, event type, and audit note must not be empty"
                     .to_string(),
             ));
         }
@@ -24,12 +25,16 @@ impl TaskV2Store {
             let receipt = format!("operation_id={}", fields.operation_id);
             if bundle.events.iter().any(|event| {
                 event.event_type == fields.event_type
-                    && event.note.as_deref() == Some(receipt.as_str())
+                    && event
+                        .note
+                        .as_deref()
+                        .is_some_and(|note| note.lines().next() == Some(receipt.as_str()))
             }) {
                 return Ok(AtomicTaskMutationOutcome::AlreadyApplied);
             }
             if bundle.envelope.context_files != fields.expected_context_files
                 || bundle.envelope.status != fields.expected_status
+                || bundle.envelope.complexity != fields.expected_complexity
             {
                 return Ok(AtomicTaskMutationOutcome::Stale);
             }
@@ -43,7 +48,7 @@ impl TaskV2Store {
                 at: now,
                 by: fields.actor.clone(),
                 event_type: fields.event_type.clone(),
-                note: Some(receipt),
+                note: Some(format!("{receipt}\n{}", fields.audit_note)),
                 from_status: status_changed.then_some(bundle.envelope.status),
                 to_status: status_changed.then_some(fields.status),
             };
@@ -52,6 +57,7 @@ impl TaskV2Store {
 
             bundle.envelope.context_files = fields.context_files.clone();
             bundle.envelope.status = fields.status;
+            bundle.envelope.complexity = Some(fields.complexity);
             bundle.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
             pending.finish();

@@ -19,6 +19,7 @@ mod scan_unresolved;
 mod sweep_duplicate_tasks;
 mod task_context;
 mod task_pilot;
+mod task_pilot_assessment;
 mod task_pilot_source;
 mod task_pilot_validation_tools;
 mod triage;
