@@ -163,12 +163,13 @@ fn resumed_recovery_requires_the_exact_immutable_source_checkpoint() {
     host.write_state(resumed.clone());
 
     // The row exists in the run store the leaf can write, but nothing has
-    // certified it yet. That is the pre-boundary shape, and it is refused.
-    let error =
-        recovered_head_checkpoint(&host, SECOND_RESUME_RUN_ID, &workspace.repo, &head).unwrap_err();
-    assert!(
-        error.to_string().contains("no host recovery certificate"),
-        "{error}"
+    // certified it yet. That is the pre-boundary shape (ORB-12015): it is not
+    // authority, so it is treated as no usable checkpoint — not trusted, but
+    // also not a hard refusal — which is what lets a resume redo the rebase
+    // instead of getting stuck.
+    assert_eq!(
+        recovered_head_checkpoint(&host, SECOND_RESUME_RUN_ID, &workspace.repo, &head).unwrap(),
+        None
     );
 
     host.inner
@@ -187,11 +188,11 @@ fn resumed_recovery_requires_the_exact_immutable_source_checkpoint() {
         .get_mut("sync_base")
         .unwrap()["head_sha_before"] = json!("substituted-origin");
     host.write_state(resumed.clone());
-    let error =
-        recovered_head_checkpoint(&host, SECOND_RESUME_RUN_ID, &workspace.repo, &head).unwrap_err();
-    assert!(
-        error.to_string().contains("no host recovery certificate"),
-        "{error}"
+    // The substituted payload has no certificate of its own either, so it is
+    // just as unusable as the pre-boundary case above.
+    assert_eq!(
+        recovered_head_checkpoint(&host, SECOND_RESUME_RUN_ID, &workspace.repo, &head).unwrap(),
+        None
     );
 
     // Certifying the substituted payload isolates the second gate, which is

@@ -102,6 +102,16 @@ impl PrOpenTestHost {
             .insert((run_id.to_string(), step_id.to_string()), output.clone());
     }
 
+    /// Write run-store state directly, the way a managed leaf can, without
+    /// certifying it. Used to reproduce a pre-authority-boundary (or forged)
+    /// rebase recovery checkpoint that carries no host certificate.
+    pub fn write_run_state(&self, state: orbit_types::workflow::PipelineState) {
+        self.run_states
+            .lock()
+            .expect("run states lock")
+            .insert(state.run_id.clone(), state);
+    }
+
     pub fn review_landings(&self) -> Vec<ReviewLandingRequest> {
         self.review_landings
             .lock()
