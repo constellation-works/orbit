@@ -1,7 +1,7 @@
 //! Upgrade coverage uses the schema shipped before action-key admission existed.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 use std::thread;
 
@@ -251,6 +251,12 @@ fn readonly_prior_v5_requires_upgrade_and_current_registry_remains_readable() {
         Err(error) => error,
     };
     assert!(error.is_readonly_or_access_failure(), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("requires writable additive setup/recovery"),
+        "read-only setup must name the writable step it owes: {error}"
+    );
     assert_eq!(fs::read(&path).expect("read failed upgrade"), before);
     assert!(!path.parent().expect("parent").join("workspaces").exists());
 
@@ -560,4 +566,111 @@ fn readonly_known_v6_waits_for_writable_recovery() {
             .expect("read task")
             .is_some()
     );
+}
+
+/// Copy a database and its live sidecars to `published`, read-only.
+///
+/// SQLite shares one wal-index mapping per file across a process, so a local
+/// writer would let an observing connection write through it. Observing a copy
+/// keeps the fixture honest about what a separate read-only mount can do.
+#[cfg(unix)]
+fn publish_read_only(source: &Path, published: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::create_dir_all(published.parent().expect("published parent")).expect("create parent");
+    for suffix in ["", "-wal", "-shm"] {
+        let from = PathBuf::from(format!("{}{suffix}", source.display()));
+        let to = PathBuf::from(format!("{}{suffix}", published.display()));
+        assert!(from.exists(), "live fixture file: {}", from.display());
+        fs::copy(&from, &to).expect("publish registry file");
+        fs::set_permissions(&to, fs::Permissions::from_mode(0o400)).expect("publish read-only");
+    }
+}
+
+#[cfg(unix)]
+fn published_bytes(path: &Path) -> Vec<Vec<u8>> {
+    ["", "-wal", "-shm"]
+        .iter()
+        .map(|suffix| {
+            fs::read(PathBuf::from(format!("{}{suffix}", path.display())))
+                .expect("read published registry file")
+        })
+        .collect()
+}
+
+/// ORB-12090: an upgrade that is committed but not yet checkpointed lives only
+/// in the WAL. Reading the main file alone reports the pre-upgrade schema, and
+/// the opener then tried to apply that upgrade to storage it cannot write.
+#[cfg(unix)]
+#[test]
+fn readonly_registry_reads_an_upgrade_that_only_the_wal_holds() {
+    let temp = TempDir::new().expect("tempdir");
+    let path = prior_v5(&temp);
+
+    // Hold the pre-upgrade snapshot open: the upgrade's frames then cannot be
+    // checkpointed back into the main database file.
+    let holder = Connection::open(&path).expect("open snapshot holder");
+    holder
+        .pragma_update(None, "journal_mode", "WAL")
+        .expect("enable WAL");
+    holder
+        .pragma_update(None, "wal_autocheckpoint", 0)
+        .expect("keep new frames in the WAL");
+    holder
+        .execute_batch("BEGIN")
+        .expect("start the pinning read transaction");
+    holder
+        .query_row("SELECT count(*) FROM allocator_state", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("pin the pre-upgrade snapshot");
+
+    drop(TaskRegistryStore::open(&path).expect("upgrade the registry"));
+
+    let main_file_only = Connection::open_with_flags(
+        format!("file:{}?immutable=1", path.display()),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .expect("open the main database file alone");
+    assert!(
+        table_columns(&main_file_only, "task_action_keys").is_empty(),
+        "the fixture must keep the upgrade out of the main database file"
+    );
+    drop(main_file_only);
+
+    let published = temp.path().join("published").join("index.sqlite");
+    publish_read_only(&path, &published);
+    let before = published_bytes(&published);
+
+    let registry = TaskRegistryStore::open(&published).expect("observe the upgraded registry");
+
+    assert_eq!(
+        registry.allocator_next_number().expect("read allocator"),
+        100005
+    );
+    assert!(
+        registry
+            .find_task_binding("DE-100004")
+            .expect("read retained task")
+            .is_some()
+    );
+    let error = registry
+        .reserve_task_action(WORKSPACE, "new", "digest")
+        .expect_err("observation cannot admit");
+    assert!(error.is_readonly_or_access_failure(), "{error}");
+
+    drop(registry);
+    assert_eq!(
+        published_bytes(&published),
+        before,
+        "observing must not change the database, WAL, or SHM"
+    );
+    assert!(
+        !published
+            .parent()
+            .expect("parent")
+            .join("workspaces")
+            .exists()
+    );
+    drop(holder);
 }

@@ -21,11 +21,16 @@ use crate::OrbitError;
 /// contending connection spins before surfacing `database is locked`.
 pub const DEFAULT_BUSY_TIMEOUT_MS: u32 = 5_000;
 
+/// Bytes in a WAL file header. A `-wal` of at most this size carries no
+/// frames, so the main database file already holds every committed page.
+const WAL_HEADER_BYTES: u64 = 32;
+
 /// A file-backed SQLite connection opened under Orbit's filesystem policy.
 pub struct OpenedConnection {
     /// The ready-to-use SQLite connection.
     pub connection: Connection,
-    /// Whether the database was opened in immutable read-only mode.
+    /// Whether the database was opened for observation only, without any
+    /// ability to write.
     pub read_only: bool,
 }
 
@@ -36,8 +41,9 @@ pub struct OpenedConnection {
 /// pre-existing sidecars are repaired as part of the same operation. Newly
 /// created parent directories are owner-only as well. An existing read-only
 /// database on writable storage has group/other permissions removed before it
-/// is opened immutable. A database on a read-only filesystem is opened
-/// immutable before any directory creation or permission change is attempted.
+/// is opened for observation. A database on a read-only filesystem is opened
+/// observationally before any directory creation or permission change is
+/// attempted; see [`open_observational`] for how such a database is read.
 pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
     let path = validated_sqlite_path(path)?;
 
@@ -72,7 +78,7 @@ pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
     if pragmas.write_denied || filesystem_is_read_only(&path)? {
         drop(connection);
         return Ok(OpenedConnection {
-            connection: open_immutable(&path)?,
+            connection: open_observational(&path)?,
             read_only: true,
         });
     }
@@ -94,7 +100,7 @@ pub(super) fn open_private_read_only(
         harden_read_only_sqlite_files(&path)?;
     }
     Ok(OpenedConnection {
-        connection: open_immutable(&path)?,
+        connection: open_observational(&path)?,
         read_only: true,
     })
 }
@@ -246,6 +252,23 @@ fn sqlite_sidecar_paths(path: &Path) -> [PathBuf; 2] {
     ]
 }
 
+/// Metadata for an existing sidecar, or `None` when it is absent.
+///
+/// A symlinked or otherwise irregular sidecar is rejected: read-only opens
+/// decide what to trust from these files, and SQLite would follow a link out
+/// of the state directory [`validated_sqlite_path`] just checked.
+fn sidecar_metadata(path: &Path) -> Result<Option<fs::Metadata>, OrbitError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(Some(metadata)),
+        Ok(_) => Err(OrbitError::InvalidInput(format!(
+            "SQLite sidecar must be a regular file: {}",
+            path.display()
+        ))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(sqlite_path_error("inspect", path, error)),
+    }
+}
+
 fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(suffix);
@@ -268,8 +291,8 @@ pub struct PragmaOutcome {
     /// such as `delete` when the filesystem refuses WAL sidecars).
     pub journal_mode: String,
     /// The connection refused a persistence pragma because its backing store
-    /// is read-only. Callers that need sidecar-free reads should reopen it as
-    /// an immutable SQLite URI.
+    /// is read-only. Callers that need sidecar-free reads should reopen it
+    /// with [`open_observational`].
     pub write_denied: bool,
 }
 
@@ -318,19 +341,88 @@ pub fn apply_default_pragmas(conn: &Connection) -> Result<PragmaOutcome, OrbitEr
     })
 }
 
-/// Open an existing SQLite database without creating WAL/SHM sidecars.
+/// How an unwritable SQLite database can be observed without changing any of
+/// its files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReadOnlyAccess {
+    /// `immutable=1`. The only mode that never needs WAL shared memory, and
+    /// correct only while the `-wal` sidecar cannot hide committed pages.
+    Immutable,
+    /// An ordinary read-only connection, reading the `-wal` through the `-shm`
+    /// wal-index already present on disk.
+    WalReadOnly,
+}
+
+/// Open an existing SQLite database for reads that must not write to it, and
+/// must not create a WAL/SHM sidecar.
 ///
-/// `immutable=1` is required for a database on a genuinely read-only mount:
-/// SQLite's ordinary read-only mode may still try to create WAL shared-memory
-/// state before the first SELECT.
-pub fn open_immutable(path: &Path) -> Result<Connection, OrbitError> {
+/// `immutable=1` is the mode a read-only mount reaches for, because SQLite's
+/// ordinary read-only mode may try to create WAL shared-memory state before the
+/// first SELECT. It is also the mode that makes SQLite ignore an existing
+/// `-wal`: a database whose newest commits were never checkpointed back reads
+/// as its older main-file state. A caller that treats that stale view as
+/// current then repairs a database it cannot write — how a read-only Orbit
+/// mount turned an observation into `attempt to write a readonly database`.
+///
+/// So the sidecars pick the mode. See [`read_only_access`].
+pub fn open_observational(path: &Path) -> Result<Connection, OrbitError> {
+    let access = read_only_access(path)?;
+    let conn = open_read_only_connection(path, access)?;
+
+    if access == ReadOnlyAccess::WalReadOnly {
+        // Opening is lazy, so an unusable wal-index would otherwise surface as
+        // an opaque failure inside whichever query happened to run first.
+        conn.query_row("SELECT count(*) FROM sqlite_schema", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| {
+            observational_unavailable(path, &format!("its wal-index is unusable: {error}"))
+        })?;
+    }
+
+    Ok(conn)
+}
+
+/// Decide how `path` can be observed without writing, or explain why its
+/// current state cannot be read at all.
+///
+/// A `-wal` holding frames may carry committed pages the main database file
+/// does not have, so those reads need a real read-only connection — which in
+/// turn needs the `-shm` wal-index to already exist, since creating one is a
+/// write. Without both, reporting the main file alone would be a silent,
+/// stale success, so this fails closed instead.
+pub(super) fn read_only_access(path: &Path) -> Result<ReadOnlyAccess, OrbitError> {
+    let [wal, shm] = sqlite_sidecar_paths(path);
+
+    let wal_carries_frames =
+        sidecar_metadata(&wal)?.is_some_and(|metadata| metadata.len() > WAL_HEADER_BYTES);
+    if !wal_carries_frames {
+        return Ok(ReadOnlyAccess::Immutable);
+    }
+    if sidecar_metadata(&shm)?.is_none() {
+        return Err(observational_unavailable(
+            path,
+            "its '-shm' wal-index is missing",
+        ));
+    }
+
+    Ok(ReadOnlyAccess::WalReadOnly)
+}
+
+fn open_read_only_connection(
+    path: &Path,
+    access: ReadOnlyAccess,
+) -> Result<Connection, OrbitError> {
     let mut uri = url::Url::from_file_path(path).map_err(|()| {
         OrbitError::Store(format!(
             "cannot represent SQLite path '{}' as a file URI",
             path.display()
         ))
     })?;
-    uri.query_pairs_mut().append_pair("immutable", "1");
+    if access == ReadOnlyAccess::Immutable {
+        uri.query_pairs_mut().append_pair("immutable", "1");
+    }
+
     let conn = Connection::open_with_flags(
         uri.as_str(),
         OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -340,10 +432,11 @@ pub fn open_immutable(path: &Path) -> Result<Connection, OrbitError> {
     )
     .map_err(|error| {
         OrbitError::Store(format!(
-            "cannot open SQLite database '{}' for immutable reads: {error}",
+            "cannot open SQLite database '{}' for observational reads: {error}",
             path.display()
         ))
     })?;
+
     conn.pragma_update(None, "query_only", "ON")
         .map_err(|error| OrbitError::Store(format!("failed to set query_only: {error}")))?;
     conn.pragma_update(None, "busy_timeout", DEFAULT_BUSY_TIMEOUT_MS)
@@ -351,6 +444,23 @@ pub fn open_immutable(path: &Path) -> Result<Connection, OrbitError> {
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|error| OrbitError::Store(format!("failed to enable foreign keys: {error}")))?;
     Ok(conn)
+}
+
+/// The database holds committed WAL state this process may not read and may
+/// not write into place. Name the writable step an operator still owes rather
+/// than reporting the main file's older contents as current.
+///
+/// Deliberately not phrased as a read-only/permission failure: callers that
+/// downgrade those to a warning and continue would turn this back into the
+/// silent stale read it exists to prevent.
+fn observational_unavailable(path: &Path, reason: &str) -> OrbitError {
+    OrbitError::Store(format!(
+        "cannot observe current SQLite state '{}': its '-wal' sidecar holds committed frames but \
+         {reason}. Checkpoint the database from writable storage \
+         (`PRAGMA wal_checkpoint(TRUNCATE)`) or publish its '-shm' wal-index alongside it, then \
+         retry the observation",
+        path.display()
+    ))
 }
 
 /// Whether `path` resides on a filesystem mounted read-only.

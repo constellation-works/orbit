@@ -153,6 +153,35 @@ fn allocator_uses_host_prefix_and_expands_past_five_digits() {
     );
 }
 
+/// Runtime construction reasserts the configured prefix on every command, so
+/// the matching case has to stay observational: a registry on read-only
+/// storage must answer it instead of failing on a write it never needed.
+#[cfg(unix)]
+#[test]
+fn reasserting_the_bound_task_prefix_needs_no_write() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new().expect("tempdir");
+    let path = registry_path(&temp);
+    let store = TaskRegistryStore::open(&path).expect("open registry");
+    store.set_task_prefix("DE").expect("bind the host prefix");
+    drop(store);
+    let before = fs::read(&path).expect("snapshot the bound registry");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).expect("make read-only");
+
+    let registry = TaskRegistryStore::open(&path).expect("observe the bound registry");
+    registry
+        .set_task_prefix("DE")
+        .expect("reasserting the bound prefix is an observation");
+
+    let error = registry
+        .set_task_prefix("XY")
+        .expect_err("a real prefix change still needs writable storage");
+    assert!(error.is_readonly_or_access_failure(), "{error}");
+    drop(registry);
+    assert_eq!(fs::read(&path).expect("re-read the registry"), before);
+}
+
 #[test]
 fn open_creates_registry_parent_and_workspaces_dir() {
     let temp = TempDir::new().expect("tempdir");

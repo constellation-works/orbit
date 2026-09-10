@@ -4447,8 +4447,39 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         .expect("warm fixture search state");
     assert_command_succeeded("fixture search warmup", &warm_search);
 
-    let worktree = add_linked_worktree(&workspace.work);
+    // Leave a committed registry write behind in the WAL, the state the mount
+    // has to read through (ORB-12090). The holder pins the snapshot taken
+    // before the next task is created, so nothing checkpoints that task back
+    // into the main database file.
     let canonical_root = workspace.home.join(".orbit");
+    let registry = canonical_root.join("tasks").join("index.sqlite");
+    let registry_holder = hold_uncheckpointed_registry_snapshot(&registry);
+    let wal_only = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &json!({
+                "title": "Committed into the registry WAL",
+                "description": "Only a WAL-aware read-only open reports this task",
+                "workspace": workspace.work,
+                "complexity": "low",
+                "model": "codex",
+            })
+            .to_string(),
+        ])
+        .output()
+        .expect("create the WAL-only fixture task");
+    assert_command_succeeded("WAL-only task add", &wal_only);
+    let wal_only: Value = serde_json::from_slice(&wal_only.stdout).expect("parse WAL-only task");
+    let wal_only_task_id = wal_only["id"].as_str().expect("WAL-only task id");
+    assert!(
+        !main_registry_file_has_task(&registry, wal_only_task_id),
+        "the fixture must keep {wal_only_task_id} out of the main registry file"
+    );
+
+    let worktree = add_linked_worktree(&workspace.work);
     let workspace_state_root = workspace.work.join(".orbit");
     let protected_state = snapshot_fixture_state(&[&canonical_root, &workspace_state_root]);
 
@@ -4467,6 +4498,10 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         (
             "orbit.task.show",
             json!({ "id": task_id, "model": "codex" }),
+        ),
+        (
+            "orbit.task.show",
+            json!({ "id": wal_only_task_id, "model": "codex" }),
         ),
         (
             "orbit.task.list",
@@ -4558,7 +4593,19 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         client.call_tool_ok("orbit_task_show", json!({ "id": task_id }))["id"],
         task_id
     );
-    assert!(client.call_tool_ok("orbit_task_list", json!({}))["items"].is_array());
+    assert_eq!(
+        client.call_tool_ok("orbit_task_show", json!({ "id": wal_only_task_id }))["id"],
+        wal_only_task_id
+    );
+    let listed = client.call_tool_ok("orbit_task_list", json!({}));
+    assert!(
+        listed["items"]
+            .as_array()
+            .expect("task list items")
+            .iter()
+            .any(|task| task["id"] == json!(wal_only_task_id)),
+        "the registry index must report its uncheckpointed WAL state: {listed}"
+    );
     assert_eq!(
         client.call_tool_ok(
             "orbit_search",
@@ -4582,6 +4629,161 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         protected_state,
         "read-only CLI and MCP calls must leave canonical and workspace state unchanged"
     );
+    drop(registry_holder);
+}
+
+/// The mount test above needs user and mount namespaces, which nested
+/// container runners deny. This carries the same WAL-aware read contract on
+/// every Unix runner by making the registry file set itself unwritable: the
+/// CLI reaches the identical read-only open, one process removed from its
+/// state, and must still report the task that only the WAL holds.
+///
+/// It does not replace the mount test — a `--ro-bind` also refuses the sidecar
+/// creation and directory writes that permission bits here still allow.
+#[cfg(unix)]
+#[test]
+fn read_only_registry_files_keep_uncheckpointed_wal_reads_observational() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let workspace = McpWorkspace::init();
+    let registry = workspace
+        .home
+        .join(".orbit")
+        .join("tasks")
+        .join("index.sqlite");
+    let created = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &json!({
+                "title": "Warmed before the registry files turn read-only",
+                "description": "Every commit here is checkpointed into the main database file",
+                "workspace": workspace.work,
+                "complexity": "low",
+                "model": "codex",
+            })
+            .to_string(),
+        ])
+        .output()
+        .expect("create the warmup task");
+    assert_command_succeeded("warmup task add", &created);
+
+    let registry_holder = hold_uncheckpointed_registry_snapshot(&registry);
+    let wal_only = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &json!({
+                "title": "Committed into the registry WAL",
+                "description": "Only a WAL-aware read-only open reports this task",
+                "workspace": workspace.work,
+                "complexity": "low",
+                "model": "codex",
+            })
+            .to_string(),
+        ])
+        .output()
+        .expect("create the WAL-only task");
+    assert_command_succeeded("WAL-only task add", &wal_only);
+    let wal_only: Value = serde_json::from_slice(&wal_only.stdout).expect("parse WAL-only task");
+    let wal_only_task_id = wal_only["id"].as_str().expect("WAL-only task id");
+    assert!(
+        !main_registry_file_has_task(&registry, wal_only_task_id),
+        "the fixture must keep {wal_only_task_id} out of the main registry file"
+    );
+
+    let registry_files: Vec<PathBuf> = ["", "-wal", "-shm"]
+        .iter()
+        .map(|suffix| PathBuf::from(format!("{}{suffix}", registry.display())))
+        .collect();
+    for file in &registry_files {
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o400))
+            .unwrap_or_else(|error| panic!("make {} read-only: {error}", file.display()));
+    }
+    let before: Vec<Vec<u8>> = registry_files
+        .iter()
+        .map(|file| std::fs::read(file).expect("snapshot registry file"))
+        .collect();
+
+    let shown = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &json!({ "id": wal_only_task_id, "model": "codex" }).to_string(),
+        ])
+        .output()
+        .expect("show the WAL-only task through the read-only registry");
+    assert_command_succeeded("read-only orbit.task.show", &shown);
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("parse shown task");
+    assert_eq!(shown["id"], json!(wal_only_task_id));
+
+    let after: Vec<Vec<u8>> = registry_files
+        .iter()
+        .map(|file| std::fs::read(file).expect("re-read registry file"))
+        .collect();
+    assert_eq!(
+        after, before,
+        "observing must not change the registry database, WAL, or SHM"
+    );
+    drop(registry_holder);
+}
+
+/// Pin the registry's current snapshot so every write that follows stays in the
+/// WAL: SQLite checkpoints when the last connection closes, and otherwise
+/// copies frames back only as far as the oldest reader allows.
+#[cfg(unix)]
+fn hold_uncheckpointed_registry_snapshot(registry: &Path) -> Connection {
+    assert!(
+        registry.exists(),
+        "warmed fixture registry: {}",
+        registry.display()
+    );
+    let holder = Connection::open(registry).expect("open registry snapshot holder");
+    let journal_mode: String = holder
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .expect("read registry journal mode");
+    assert_eq!(
+        journal_mode.to_lowercase(),
+        "wal",
+        "this fixture needs the registry's WAL"
+    );
+    holder
+        .pragma_update(None, "wal_autocheckpoint", 0)
+        .expect("keep new frames in the WAL");
+    holder
+        .execute_batch("BEGIN")
+        .expect("start the pinning read transaction");
+    holder
+        .query_row("SELECT count(*) FROM task_bundle_bindings", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("pin the current registry snapshot");
+    holder
+}
+
+/// Whether the main registry file alone — the view `immutable=1` gives, which
+/// ignores the WAL entirely — knows about `task_id`.
+#[cfg(unix)]
+fn main_registry_file_has_task(registry: &Path, task_id: &str) -> bool {
+    let main_file_only = Connection::open_with_flags(
+        format!("file:{}?immutable=1", registry.display()),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .expect("open the main registry file alone");
+    let bindings: i64 = main_file_only
+        .query_row(
+            "SELECT count(*) FROM task_bundle_bindings WHERE task_id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .expect("count bindings in the main registry file");
+    bindings > 0
 }
 
 #[cfg(target_os = "linux")]
