@@ -89,8 +89,8 @@ feature.
   `fs` owns narrowly named lock, path-safety, and YAML mechanics; private
   `driver/file` and `driver/sqlite` modules implement exactly one persistence
   technology each. `repository` owns live invariants that join drivers (task
-  bundles + registry indexes + checkout projections, and friction SQLite +
-  file taxonomy). `workflow` owns explicit import/export/reindex/repair,
+  bundles + registry allocation/index rows, and friction SQLite + file
+  taxonomy). `workflow` owns explicit import/export/reindex/repair,
   owner-only task-publication transport, read-only task-publication
   inspection, and layout-upgrade operations.
   `compose` constructs concrete implementations and
@@ -148,13 +148,12 @@ flowchart BT
 
 The file and SQLite drivers are private and never import one another. Shared
 atomic-write, advisory-lock, path-safety, and YAML mechanics belong to `fs`,
-not to a backend-shaped utility module. Checkout projection and workspace
+not to a backend-shaped utility module. Canonical task bundles and workspace
 binding YAML are file behavior even though registry rows are SQLite-backed.
 
-Live task writes are committed by the composite task repository: canonical
-bundle durability is the file-driver operation, allocation/binding/index rows
-are the registry-driver operation, and `.orbit/tasks` symlinks are disposable
-checkout projections. The drivers do not call each other. Task archive
+Live task writes are committed by the composite task repository: a canonical
+bundle write plus registry allocation/binding/index rows. The drivers do not
+call each other. Task archive
 import/export/reindex, owner-only task-publication transport and its read-only
 inspection, friction Markdown import/SQLite export, legacy audit and job-run
 import, and workspace layout upgrades are explicit `workflow` modules.
