@@ -2373,6 +2373,7 @@ dependencies = [
  "chrono",
  "fs2",
  "jsonschema",
+ "libc",
  "orbit-common",
  "orbit-types",
  "regex",

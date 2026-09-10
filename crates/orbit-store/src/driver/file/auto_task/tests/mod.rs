@@ -1,16 +1,17 @@
 //! Cursor-file load, lock, and atomic replace tests.
 
 use std::fs;
+use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
-use orbit_types::workflow::AutoTaskCursor;
+use orbit_types::workflow::{AutoTaskCursor, AutoTaskCursorState};
 use tempfile::tempdir;
 
 use super::{
     cursor_lock_path, cursor_state_path, inject_cursor_save_failures, load_cursor_state,
-    upsert_cursor, with_cursor_lock,
+    load_cursor_state_after_check, upsert_cursor, with_cursor_lock,
 };
 
 fn cursor(baseline: &str, last_slot: Option<&str>) -> AutoTaskCursor {
@@ -21,6 +22,15 @@ fn cursor(baseline: &str, last_slot: Option<&str>) -> AutoTaskCursor {
         last_task_id: last_slot.map(|_| "ORB-1".to_string()),
         pending: None,
     }
+}
+
+/// One definition's state as it is stored on disk.
+fn state_json(name: &str) -> String {
+    let mut state = AutoTaskCursorState::default();
+    state
+        .definitions
+        .insert(name.to_string(), cursor("2026-01-01T00:00:00+00:00", None));
+    serde_json::to_string(&state).expect("encode state")
 }
 
 #[test]
@@ -139,6 +149,133 @@ fn load_cursor_state_rejects_a_symlinked_state_file() {
     assert!(
         error.to_string().contains("must not be a symlink"),
         "{error}"
+    );
+
+    fs::remove_file(&outside_target).expect("cleanup outside target");
+}
+
+/// [ORB-12026] A path with no normal final component names no file, so there is
+/// nothing to validate. It must fail closed instead of falling back to the raw
+/// caller input, which previously reached the metadata probe unvalidated.
+#[test]
+fn load_cursor_state_rejects_a_path_without_a_final_component() {
+    let root = tempdir().expect("tempdir");
+
+    for path in [root.path().join(".."), PathBuf::from("/")] {
+        let error = load_cursor_state(&path).expect_err("no final component");
+        assert!(
+            error
+                .to_string()
+                .contains("must name a file inside a state dir"),
+            "{path:?}: {error}"
+        );
+    }
+}
+
+/// A trailing `.` resolves to the state dir itself, which is a directory rather
+/// than a cursor file — an explicit rejection, not a silent empty baseline.
+#[test]
+fn load_cursor_state_rejects_a_dot_terminated_path() {
+    let root = tempdir().expect("tempdir");
+
+    let error = load_cursor_state(&root.path().join(".")).expect_err("dot-terminated");
+    assert!(
+        error.to_string().contains("must be a regular file"),
+        "{error}"
+    );
+}
+
+/// `load_cursor_state` is public and callers may name a basename other than the
+/// fixed one [`cursor_state_path`] builds. Validation is "one normal final
+/// component", so alternate basenames stay supported.
+#[test]
+fn load_cursor_state_supports_an_alternate_basename() {
+    let root = tempdir().expect("tempdir");
+    let path = root.path().join("alternate-cursors.json");
+    fs::write(&path, state_json("chore")).expect("write");
+
+    let loaded = load_cursor_state(&path).expect("alternate basename");
+    assert!(loaded.definitions.contains_key("chore"), "{loaded:?}");
+}
+
+#[test]
+fn missing_state_dir_is_empty_state() {
+    let root = tempdir().expect("tempdir");
+    let path = cursor_state_path(&root.path().join("never-created"));
+
+    let loaded = load_cursor_state(&path).expect("missing state dir");
+    assert!(loaded.definitions.is_empty(), "{loaded:?}");
+}
+
+/// The parent is canonicalized rather than rejected, so a symlinked state dir —
+/// a checkout projection or an operator-configured alias — keeps resolving.
+#[cfg(unix)]
+#[test]
+fn load_cursor_state_resolves_through_a_symlinked_state_dir() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("tempdir");
+    let real_dir = root.path().join("real-state");
+    fs::create_dir(&real_dir).expect("state dir");
+    fs::write(cursor_state_path(&real_dir), state_json("chore")).expect("write");
+    let alias_dir = root.path().join("alias-state");
+    symlink(&real_dir, &alias_dir).expect("symlink state dir");
+
+    let loaded = load_cursor_state(&cursor_state_path(&alias_dir)).expect("aliased state dir");
+    assert!(loaded.definitions.contains_key("chore"), "{loaded:?}");
+}
+
+/// A non-regular final component (here a directory) is not cursor state and is
+/// never opened for reading.
+#[test]
+fn load_cursor_state_rejects_a_non_regular_state_file() {
+    let root = tempdir().expect("tempdir");
+    let path = cursor_state_path(root.path());
+    fs::create_dir(&path).expect("directory in place of the state file");
+
+    let error = load_cursor_state(&path).expect_err("non-regular state file");
+    assert!(
+        error.to_string().contains("must be a regular file"),
+        "{error}"
+    );
+}
+
+/// [ORB-12026] The pathname probe and the read must not be separable: the read
+/// goes through a descriptor opened with final-component no-follow semantics,
+/// so a symlink swapped in after the check is refused at open time and no byte
+/// of the outside file is read.
+#[cfg(unix)]
+#[test]
+fn load_cursor_state_rejects_a_symlink_swapped_in_after_the_check() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("tempdir");
+    let path = cursor_state_path(root.path());
+    fs::write(&path, state_json("local")).expect("seed regular state file");
+    let outside_target = root
+        .path()
+        .parent()
+        .expect("state dir has parent")
+        .join("swapped-auto-tasks.json");
+    let outside_contents = state_json("leaked");
+    fs::write(&outside_target, &outside_contents).expect("write file outside state dir");
+
+    let swap_target = outside_target.clone();
+    let error = load_cursor_state_after_check(&path, move |checked| {
+        fs::remove_file(checked).expect("remove checked file");
+        symlink(&swap_target, checked).expect("swap in a symlink");
+        Ok(())
+    })
+    .expect_err("symlink swapped in after the check");
+
+    assert!(
+        error.to_string().contains("must not be a symlink"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(&outside_target).expect("outside target"),
+        outside_contents,
+        "the outside file must be neither rewritten nor consumed"
     );
 
     fs::remove_file(&outside_target).expect("cleanup outside target");

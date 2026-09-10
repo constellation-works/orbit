@@ -148,8 +148,14 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_store::driver::file::auto_task::validated_cursor_state_path",
+          "orbit_store::driver::file::auto_task::validated_cursor_state_dir",
           "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_store::driver::file::auto_task::validated_cursor_state_file_name",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",
           "manual",
         ]
