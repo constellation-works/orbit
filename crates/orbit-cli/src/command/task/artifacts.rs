@@ -31,18 +31,8 @@ impl Execute for ArtifactsCommand {
 }
 
 fn show_task_artifacts(runtime: &OrbitRuntime, task_id: &str) -> CommandOut {
-    let artifacts = runtime.get_task_artifacts(task_id)?;
-    let values: Vec<serde_json::Value> = artifacts
-        .iter()
-        .map(|a| {
-            serde_json::json!({
-                "path": a.path,
-                "media_type": a.media_type,
-                "size": a.content.len(),
-            })
-        })
-        .collect();
-    let doc = serde_json::Value::Array(values);
+    let artifacts = runtime.get_task_artifact_manifest(task_id)?;
+    let doc = orbit_types::task::serialize_task_artifacts(&artifacts);
 
     if artifacts.is_empty() {
         return Ok(
@@ -54,15 +44,8 @@ fn show_task_artifacts(runtime: &OrbitRuntime, task_id: &str) -> CommandOut {
     for a in &artifacts {
         lines.push(format!(
             "--- {} ({}, {} bytes) ---",
-            a.path,
-            a.media_type,
-            a.content.len()
+            a.path, a.media_type, a.size_bytes
         ));
-        if let Some(content) = a.text_content() {
-            lines.push(content.to_string());
-        } else {
-            lines.push("[binary content omitted]".to_string());
-        }
     }
     Ok(Payload::detail(doc, lines.join("\n")).into())
 }

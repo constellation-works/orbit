@@ -2626,6 +2626,96 @@ mod artifact_get {
     }
 
     #[test]
+    fn task_artifact_discovery_is_metadata_only_and_bounded() {
+        let (_root, runtime, repo_root) = test_runtime();
+        let id = seeded_task(&runtime, &repo_root);
+        let png = synthetic_png();
+        let large_text = "line of text\n".repeat(10_000); // 130,000 bytes
+        attach(&runtime, &id, "diagrams/flow.png", png.clone());
+        attach(
+            &runtime,
+            &id,
+            "logs/large.txt",
+            large_text.as_bytes().to_vec(),
+        );
+
+        // Baseline comparison task with tiny text artifact
+        let tiny_id = seeded_task(&runtime, &repo_root);
+        attach(&runtime, &tiny_id, "diagrams/flow.png", png.clone());
+        attach(&runtime, &tiny_id, "logs/large.txt", b"tiny\n".to_vec());
+
+        let listed = run_tool_as_operator(
+            &runtime,
+            "orbit.task.show",
+            json!({"id": id, "fields": "artifacts"}),
+        )
+        .expect("list artifacts");
+        let rows = listed.as_array().expect("artifact rows");
+        assert_eq!(rows.len(), 2);
+
+        for row in rows {
+            assert!(
+                row.get("content").is_none(),
+                "content must not ride along in metadata listing"
+            );
+            assert!(
+                row.get("content_base64").is_none(),
+                "content_base64 must not ride along in metadata listing"
+            );
+            assert!(row.get("path").is_some());
+            assert!(row.get("media_type").is_some());
+            assert!(row.get("size").is_some());
+            assert!(row.get("created_by").is_some());
+        }
+
+        assert_eq!(rows[0]["path"], "diagrams/flow.png");
+        assert_eq!(rows[0]["size"], png.len());
+        assert_eq!(rows[1]["path"], "logs/large.txt");
+        assert_eq!(rows[1]["size"], large_text.len());
+
+        // Serialized response growth depends on metadata formatting, not blob size
+        let tiny_listed = run_tool_as_operator(
+            &runtime,
+            "orbit.task.show",
+            json!({"id": tiny_id, "fields": "artifacts"}),
+        )
+        .expect("list artifacts for tiny task");
+        let large_json_str = serde_json::to_string(&listed).expect("serialize large listing");
+        let tiny_json_str = serde_json::to_string(&tiny_listed).expect("serialize tiny listing");
+        let len_diff = (large_json_str.len() as isize - tiny_json_str.len() as isize).abs();
+        assert!(
+            len_diff < 20,
+            "serialized response growth must not depend on blob size ({len_diff} byte diff for 130KB blob)"
+        );
+
+        // artifact.get still retrieves payload and preserves byte integrity
+        let read_text = get(&runtime, &id, "logs/large.txt");
+        assert_eq!(read_text["presentation"], "text");
+        assert_eq!(read_text["encoding"], "utf8");
+        assert_eq!(read_text["content"], large_text);
+
+        let read_png = get(&runtime, &id, "diagrams/flow.png");
+        assert_eq!(read_png["presentation"], "image");
+        assert_eq!(read_png["encoding"], "base64");
+        let decoded = BASE64_STANDARD
+            .decode(read_png["content_base64"].as_str().expect("base64"))
+            .expect("decode");
+        assert_eq!(decoded, png);
+
+        // Unknown path is rejected
+        let error = run_tool_as_operator(
+            &runtime,
+            "orbit.task.artifact.get",
+            json!({"id": id, "path": "nonexistent/file.txt"}),
+        )
+        .expect_err("unknown artifact path must fail");
+        assert!(
+            matches!(error, orbit_common::OrbitError::NotFound { .. }),
+            "expected NotFound, got {error}"
+        );
+    }
+
+    #[test]
     fn text_artifacts_are_returned_as_utf8_rather_than_base64() {
         let (_root, runtime, repo_root) = test_runtime();
         let id = seeded_task(&runtime, &repo_root);

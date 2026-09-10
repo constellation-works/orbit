@@ -11,7 +11,11 @@ use crate::command::{Cli, Commands};
 use super::super::artifact::{
     TaskArtifactCommand, TaskArtifactGetArgs, TaskArtifactPutArgs, TaskArtifactSubcommand,
 };
+use super::super::artifacts::ArtifactsCommand;
+use super::super::show::TaskShowArgs;
+use crate::command::CommandOutput;
 use crate::command::task::TaskSubcommand;
+use crate::output::payload::{Block, View};
 
 #[test]
 fn cli_parses_task_artifact_put() {
@@ -182,6 +186,188 @@ fn artifact_get_refuses_to_print_binary_content_without_an_output_file() {
         error.to_string().contains("--out"),
         "the error should name the remedy: {error}"
     );
+}
+
+#[test]
+fn task_show_and_artifacts_command_are_metadata_only_and_lazy() {
+    let (_root, runtime, repo_root) = test_runtime();
+
+    let text_payload = "A".repeat(100 * 1024);
+    let text_source = repo_root.join("large.txt");
+    std::fs::write(&text_source, &text_payload).expect("write text source");
+
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&[0x00, 0xFF, 0x10, 0x42, 0x00]);
+    let png_source = repo_root.join("diagram.png");
+    std::fs::write(&png_source, &png).expect("write png source");
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Metadata only test".to_string(),
+            description: "Artifact listing must be metadata only".to_string(),
+            workspace_path: Some(repo_root.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .expect("create task");
+
+    TaskArtifactPutArgs {
+        id: task.id.clone(),
+        source_path: text_source,
+        artifact_path: Some("docs/large.txt".to_string()),
+        model: Some("codex".to_string()),
+        json: false,
+    }
+    .execute(&runtime)
+    .expect("put large text");
+
+    TaskArtifactPutArgs {
+        id: task.id.clone(),
+        source_path: png_source,
+        artifact_path: Some("diagrams/diagram.png".to_string()),
+        model: Some("codex".to_string()),
+        json: false,
+    }
+    .execute(&runtime)
+    .expect("put binary png");
+
+    // 1. TaskShowArgs with --fields artifacts returns metadata only
+    let CommandOutput::Payload(field_payload) = (TaskShowArgs {
+        id: task.id.clone(),
+        json: true,
+        fields: vec!["artifacts".to_string()],
+        with_context: false,
+        max_docs: None,
+    })
+    .execute(&runtime)
+    .expect("task show --fields artifacts") else {
+        panic!("expected payload");
+    };
+
+    let (field_doc, field_view) = field_payload.into_view();
+    let artifacts = field_doc.as_array().expect("artifacts field is array");
+    assert_eq!(artifacts.len(), 2);
+    for item in artifacts {
+        assert!(item.get("path").is_some());
+        assert!(item.get("media_type").is_some());
+        assert!(item.get("size").is_some());
+        assert!(item.get("created_by").is_some());
+        assert!(item.get("content").is_none(), "content must be omitted");
+        assert!(
+            item.get("content_base64").is_none(),
+            "content_base64 must be omitted"
+        );
+    }
+    let serialized_field_doc = serde_json::to_string(&field_doc).unwrap();
+    assert!(
+        serialized_field_doc.len() < 1000,
+        "serialized metadata document should be small, got {} bytes",
+        serialized_field_doc.len()
+    );
+
+    let View::Blocks(field_blocks) = field_view else {
+        panic!("expected blocks view");
+    };
+    for block in field_blocks {
+        if let Block::Text(text) = block {
+            assert!(!text.contains(&text_payload));
+            assert!(text.contains("docs/large.txt (text/plain, 102400 bytes)"));
+        }
+    }
+
+    // 2. Full TaskShowArgs returns metadata only in artifacts field
+    let CommandOutput::Payload(full_payload) = (TaskShowArgs {
+        id: task.id.clone(),
+        json: true,
+        fields: vec![],
+        with_context: false,
+        max_docs: None,
+    })
+    .execute(&runtime)
+    .expect("full task show") else {
+        panic!("expected payload");
+    };
+    let (full_doc, full_view) = full_payload.into_view();
+    let full_artifacts = full_doc["artifacts"]
+        .as_array()
+        .expect("artifacts array in full doc");
+    assert_eq!(full_artifacts.len(), 2);
+    for item in full_artifacts {
+        assert!(item.get("content").is_none());
+        assert!(item.get("content_base64").is_none());
+    }
+    let View::Blocks(full_blocks) = full_view else {
+        panic!("expected blocks view");
+    };
+    for block in full_blocks {
+        if let Block::Text(text) = block {
+            assert!(!text.contains(&text_payload));
+            assert!(text.contains("docs/large.txt (text/plain, 102400 bytes)"));
+        }
+    }
+
+    // 3. ArtifactsCommand (task: true) returns metadata only
+    let CommandOutput::Payload(cmd_payload) = (ArtifactsCommand {
+        id: task.id.clone(),
+        task: true,
+        json: true,
+    })
+    .execute(&runtime)
+    .expect("task artifacts command") else {
+        panic!("expected payload");
+    };
+    let (cmd_doc, cmd_view) = cmd_payload.into_view();
+    let cmd_artifacts = cmd_doc.as_array().expect("artifacts array in cmd doc");
+    assert_eq!(cmd_artifacts.len(), 2);
+    for item in cmd_artifacts {
+        assert!(item.get("content").is_none());
+        assert!(item.get("content_base64").is_none());
+    }
+    let View::Blocks(cmd_blocks) = cmd_view else {
+        panic!("expected blocks view");
+    };
+    for block in cmd_blocks {
+        if let Block::Text(text) = block {
+            assert!(!text.contains(&text_payload));
+            assert!(text.contains("--- docs/large.txt (text/plain, 102400 bytes) ---"));
+        }
+    }
+
+    // 4. Verify artifact retrieval via artifact get preserves content and rejects unknown paths
+    let out = repo_root.join("retrieved_large.txt");
+    TaskArtifactGetArgs {
+        id: task.id.clone(),
+        path: "docs/large.txt".to_string(),
+        out: Some(out.clone()),
+        json: false,
+    }
+    .execute(&runtime)
+    .expect("get large text");
+    assert_eq!(
+        std::fs::read_to_string(&out).expect("read retrieved"),
+        text_payload
+    );
+
+    let png_out = repo_root.join("retrieved_diagram.png");
+    TaskArtifactGetArgs {
+        id: task.id.clone(),
+        path: "diagrams/diagram.png".to_string(),
+        out: Some(png_out.clone()),
+        json: false,
+    }
+    .execute(&runtime)
+    .expect("get binary png");
+    assert_eq!(std::fs::read(&png_out).expect("read retrieved png"), png);
+
+    // Unknown artifact path rejected
+    let err = TaskArtifactGetArgs {
+        id: task.id.clone(),
+        path: "docs/nonexistent.txt".to_string(),
+        out: Some(repo_root.join("none.txt")),
+        json: false,
+    }
+    .execute(&runtime)
+    .expect_err("unknown artifact path should fail");
+    assert!(matches!(err, orbit_core::OrbitError::NotFound { .. }));
 }
 
 fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf) {

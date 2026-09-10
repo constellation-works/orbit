@@ -261,6 +261,18 @@ impl TaskBundleStoreV2 {
         read_bundle_consistently(&bundle_dir)
     }
 
+    /// Assemble a task bundle without opening artifact payload bytes.
+    pub(crate) fn read_bundle_lightweight(
+        &self,
+        task_id: &str,
+    ) -> Result<TaskBundleV2, OrbitError> {
+        #[cfg(test)]
+        self.bundle_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let bundle_dir = self.bundle_path(task_id)?;
+        read_bundle_lightweight_consistently(&bundle_dir)
+    }
+
     pub(crate) fn delete_bundle(&self, task_id: &str) -> Result<bool, OrbitError> {
         orbit_types::task::validate_orb_task_id(task_id)?;
         let bundle_dir = self.bundle_path(task_id)?;

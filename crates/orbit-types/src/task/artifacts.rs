@@ -364,6 +364,92 @@ impl ArtifactManifestFileV2 {
     }
 }
 
+/// Common metadata interface for task artifacts across manifest and runtime DTO representations.
+pub trait TaskArtifactMetadata {
+    fn path(&self) -> &str;
+    fn media_type(&self) -> &str;
+    fn size(&self) -> u64;
+    fn created_by(&self) -> Option<&str>;
+}
+
+impl TaskArtifactMetadata for ArtifactManifestFileV2 {
+    fn path(&self) -> &str {
+        &self.path
+    }
+
+    fn media_type(&self) -> &str {
+        &self.media_type
+    }
+
+    fn size(&self) -> u64 {
+        self.size_bytes
+    }
+
+    fn created_by(&self) -> Option<&str> {
+        let trimmed = self.created_by.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+}
+
+impl TaskArtifactMetadata for crate::task::TaskArtifact {
+    fn path(&self) -> &str {
+        &self.path
+    }
+
+    fn media_type(&self) -> &str {
+        &self.media_type
+    }
+
+    fn size(&self) -> u64 {
+        self.content.len() as u64
+    }
+
+    fn created_by(&self) -> Option<&str> {
+        self.created_by
+            .as_deref()
+            .map(str::trim)
+            .filter(|trimmed| !trimmed.is_empty())
+    }
+}
+
+/// Serialize task artifact metadata for task discovery and projection surfaces (`task.show`).
+///
+/// Emits bounded metadata only (`path`, `media_type`, `size`, `created_by`); payload content
+/// is never included and must be retrieved explicitly via `orbit.task.artifact.get`.
+pub fn serialize_task_artifacts<T: TaskArtifactMetadata>(artifacts: &[T]) -> serde_json::Value {
+    serde_json::Value::Array(
+        artifacts
+            .iter()
+            .map(|artifact| {
+                let mut object = serde_json::Map::new();
+                object.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(artifact.path().to_string()),
+                );
+                object.insert(
+                    "media_type".to_string(),
+                    serde_json::Value::String(artifact.media_type().to_string()),
+                );
+                if let Some(created_by) = artifact.created_by() {
+                    object.insert(
+                        "created_by".to_string(),
+                        serde_json::Value::String(created_by.to_string()),
+                    );
+                }
+                object.insert(
+                    "size".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(artifact.size())),
+                );
+                serde_json::Value::Object(object)
+            })
+            .collect(),
+    )
+}
+
 pub fn validate_relative_artifact_path(path: &str) -> Result<(), TaskError> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
