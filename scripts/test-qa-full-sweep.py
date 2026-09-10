@@ -228,7 +228,7 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
         failure = None
         try:
             validator(evidence)
-        except (AssertionError, KeyError, TypeError, ValueError) as error:
+        except (AssertionError, KeyError, OSError, TypeError, ValueError) as error:
             failure = str(error)
         add_result(results, scenario, finalize_result(evidence, assertions, candidate_id, failure,
                                                        accept_nonzero=accept_nonzero))
@@ -317,6 +317,229 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
     checked("workspace-boundary",
             [orbit_bin, "--root", str(root), "--workspace", str(other), "task", "show", task_id, "--json"],
             other, ["cross-workspace-task-read-refused"], refused, accept_nonzero=True)
+
+    config_path = work / ".orbit/config.toml"
+    config_set = checked("config-transaction",
+                         [orbit_bin, "--root", str(root), "--workspace", str(work), "config", "set",
+                          "workflow.base_branch", "qa-candidate", "--fresh"], work,
+                         ["supported-setting-persists"], succeeds)
+    if config_set is None:
+        return results
+
+    def config_readback(evidence):
+        body = parse_json(evidence, "config get")
+        if body.get("key") != "workflow.base_branch" or body.get("value") != "qa-candidate":
+            raise ValueError("config get did not return the exact persisted value")
+        if body.get("scope") != "workspace" or Path(body.get("path", "")).resolve() != config_path.resolve():
+            raise ValueError("config get read from the wrong scope or path")
+
+    checked("config-transaction",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "config", "get",
+             "workflow.base_branch", "--scope", "workspace", "--format", "json"], work,
+            ["exact-setting-readback"], config_readback)
+    config_before_invalid = config_path.read_bytes()
+
+    def invalid_config_refused(evidence):
+        refused(evidence)
+        if config_path.read_bytes() != config_before_invalid:
+            raise ValueError("invalid config write changed config.toml bytes")
+
+    checked("config-transaction",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "config", "set",
+             "execution.codex.sandbox", "not-a-real-mode"], work,
+            ["invalid-setting-refused-without-byte-change"], invalid_config_refused,
+            accept_nonzero=True)
+
+    identity_path = root / "host.toml"
+    registry_path = root / "workspaces.json"
+
+    def host_identity(evidence):
+        body = parse_json(evidence, "host show")
+        if body.get("host_id") != "qa-host" or body.get("task_prefix") != "QAF":
+            raise ValueError("host show did not return the initialized identity")
+        machine_id = body.get("machine_id")
+        if not isinstance(machine_id, str) or not machine_id.startswith("hm_"):
+            raise ValueError("host show returned an invalid stable machine_id")
+
+    initial_host = checked("host-identity-transaction",
+                           [orbit_bin, "--root", str(root), "host", "show", "--format", "json"],
+                           work, ["initialized-identity-readback"], host_identity)
+    initial_machine_id = json.loads(initial_host["stdout"])["machine_id"] if initial_host else None
+    checked("host-identity-transaction",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "host", "rename",
+             "qa-host", "qa-renamed"], work, ["supported-rename-updates-local-records"], succeeds)
+
+    def renamed_identity(evidence):
+        body = parse_json(evidence, "renamed host show")
+        if body.get("machine_id") != initial_machine_id or body.get("host_id") != "qa-renamed":
+            raise ValueError("rename changed stable identity or failed host_id readback")
+        registry = json.loads(registry_path.read_text())
+        if registry.get("owner_host_ids", {}).get(initial_machine_id) != "qa-renamed":
+            raise ValueError("rename did not update the isolated registry owner projection")
+
+    checked("host-identity-transaction",
+            [orbit_bin, "--root", str(root), "host", "show", "--format", "json"], work,
+            ["rename-preserves-machine-id-and-reads-back"], renamed_identity)
+    host_before_invalid = identity_path.read_bytes()
+    registry_before_invalid = registry_path.read_bytes()
+
+    def invalid_host_refused(evidence):
+        refused(evidence)
+        if (identity_path.read_bytes() != host_before_invalid
+                or registry_path.read_bytes() != registry_before_invalid):
+            raise ValueError("refused host rename changed identity or registry bytes")
+
+    checked("host-identity-transaction",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "host", "rename",
+             "stale-host", "other-name"], work, ["stale-rename-refused-without-mutation"],
+            invalid_host_refused, accept_nonzero=True)
+    checked("host-identity-transaction",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "host", "rename",
+             "qa-renamed", "invalid/name"], work, ["invalid-rename-refused-without-mutation"],
+            invalid_host_refused, accept_nonzero=True)
+
+    log_path = temp / "qa-unified-log.jsonl"
+    selected_event = {
+        "timestamp": "2026-09-10T01:02:03.000000000Z", "level": "INFO",
+        "target": "orbit.qa.selected", "fields": {"message": "qa exact record", "case": 12062},
+    }
+    ignored_event = {
+        "timestamp": "2026-09-10T01:02:04.000000000Z", "level": "DEBUG",
+        "target": "orbit.qa.ignored", "fields": {"message": "must not be selected"},
+    }
+    log_path.write_text("\n".join([json.dumps(ignored_event), "not-json", json.dumps(selected_event)]) + "\n")
+
+    def exact_log_record(evidence):
+        succeeds(evidence)
+        lines = [json.loads(line) for line in evidence["stdout"].splitlines() if line.strip()]
+        if lines != [selected_event]:
+            raise ValueError(f"log tail selected the wrong records: {lines!r}")
+
+    checked("unified-log-selection",
+            [orbit_bin, "--root", str(root), "log", "tail", "-n", "10", "--target",
+             "orbit.qa.selected", "--level", "info", "--path", str(log_path), "--format", "ndjson"],
+            work, ["exact-filtered-unified-record"], exact_log_record)
+
+    def empty_log_selection(evidence):
+        succeeds(evidence)
+        if evidence["stdout"] != "":
+            raise ValueError("negative log filter returned a record")
+
+    checked("unified-log-selection",
+            [orbit_bin, "--root", str(root), "log", "tail", "-n", "10", "--target",
+             "orbit.qa.absent", "--path", str(log_path), "--format", "ndjson"], work,
+            ["nonmatching-and-malformed-records-are-excluded"], empty_log_selection)
+
+    fixture_job = temp / "qa-legacy-logs.yaml"
+    fixture_job.write_text("""schemaVersion: 2
+kind: Job
+metadata:
+  name: qa_legacy_logs_fixture
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  steps:
+    - id: exact_step
+      default_input:
+        seconds: 0
+      spec:
+        type: deterministic
+        action: sleep
+        config: {}
+""")
+
+    def completed_fixture_run(evidence):
+        body = parse_json(evidence, "fixture job run")
+        if body.get("state") != "succeeded" or not body.get("run_id"):
+            raise ValueError("deterministic fixture job did not succeed")
+
+    fixture_run = checked("legacy-logs-compatibility",
+                          [orbit_bin, "--root", str(root), "--workspace", str(work), "run", "job",
+                           str(fixture_job), "--input", "crew=sol", "--wait", "--format", "json"],
+                          work, ["supported-run-fixture-completes"], completed_fixture_run)
+    fixture_run_id = json.loads(fixture_run["stdout"])["run_id"] if fixture_run else "missing-run"
+
+    def legacy_logs_output(evidence):
+        body = parse_json(evidence, "legacy logs")
+        if body != []:
+            raise ValueError(f"legacy logs changed its exact detached-run compatibility output: {body!r}")
+        if "[deprecated]" not in evidence.get("stderr", ""):
+            raise ValueError("legacy logs omitted its compatibility deprecation notice")
+
+    checked("legacy-logs-compatibility",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "logs", fixture_run_id,
+             "--format", "json"], work,
+            ["exact-legacy-compatibility-output-and-deprecation"], legacy_logs_output)
+    checked("legacy-logs-compatibility",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "logs", fixture_run_id,
+             "--step", "absent-step", "--format", "json"], work,
+            ["unknown-legacy-step-is-refused"], refused, accept_nonzero=True)
+
+    migration_root = temp / "migration-root"
+    migration_init = checked(
+        "migration-lifecycle",
+        [orbit_bin, "--root", str(migration_root), "init", "--non-interactive",
+         "--host-name", "qa-migration", "--task-prefix", "QAM"],
+        temp, ["disposable-migration-fixture-initialized"], succeeds,
+    )
+    if migration_init is None:
+        return results
+    migration_marker = migration_root / "state/layout.version"
+    migration_marker.parent.mkdir(parents=True, exist_ok=True)
+    migration_marker.write_text("1\n")
+    migration_before = migration_marker.read_bytes()
+
+    def pending_migration(evidence):
+        refused(evidence)
+        if "migration(s) pending" not in evidence.get("stderr", ""):
+            raise ValueError("dry-run did not report pending migrations")
+        if migration_marker.read_bytes() != migration_before:
+            raise ValueError("migration dry-run changed the legacy marker")
+
+    checked("migration-lifecycle",
+            [orbit_bin, "--root", str(migration_root), "migrate", "--dry-run", "--json"],
+            temp, ["legacy-dry-run-reports-pending-without-mutation"], pending_migration,
+            accept_nonzero=True)
+
+    def applied_migration(evidence):
+        body = parse_json(evidence, "confirmed migration")
+        layout = body.get("layout", {})
+        if body.get("up_to_date") is not True or layout.get("current") != layout.get("supported"):
+            raise ValueError("confirmed migration did not reach the supported layout")
+        applied = body.get("applied_layout", [])
+        if not applied or applied[0].get("version") != 2:
+            raise ValueError("confirmed migration did not report the known legacy transition")
+
+    checked("migration-lifecycle",
+            [orbit_bin, "--root", str(migration_root), "migrate", "--confirm", "--json"],
+            temp, ["confirmed-migration-applies-known-legacy-state"], applied_migration)
+
+    def idempotent_migration(evidence):
+        body = parse_json(evidence, "repeated migration")
+        if body.get("up_to_date") is not True or body.get("applied_layout") != []:
+            raise ValueError("repeated migration was not idempotent")
+
+    checked("migration-lifecycle",
+            [orbit_bin, "--root", str(migration_root), "migrate", "--confirm", "--json"],
+            temp, ["repeated-migration-is-idempotent"], idempotent_migration)
+    migration_marker.write_text("99\n")
+    newer_before = migration_marker.read_bytes()
+    migration_identity_path = migration_root / "host.toml"
+    migration_identity_before = migration_identity_path.read_bytes()
+
+    def newer_migration_refused(evidence):
+        refused(evidence)
+        if "newer" not in evidence.get("stderr", ""):
+            raise ValueError("newer migration refusal did not explain the incompatibility")
+        if (migration_marker.read_bytes() != newer_before
+                or migration_identity_path.read_bytes() != migration_identity_before):
+            raise ValueError("newer migration refusal changed marker or host identity bytes")
+
+    checked("migration-lifecycle",
+            [orbit_bin, "--root", str(migration_root), "migrate", "--dry-run", "--json"],
+            temp, ["newer-state-refused-without-mutation"], newer_migration_refused,
+            accept_nonzero=True)
 
     def auto_task_show(evidence):
         body = parse_json(evidence, "auto-task show")
@@ -460,6 +683,42 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
     return results
 
 
+def validate_hosted_macos_evidence(body, scenario, candidate, repo):
+    if body.get("evidence_type") != "orbit-macos-platform" or body.get("platform") != "macos":
+        raise ValueError("hosted evidence has the wrong type or platform")
+    if candidate.get("status"):
+        raise ValueError("hosted evidence requires a clean exact-checkout candidate")
+    if body.get("source_revision") != candidate.get("head"):
+        raise ValueError("hosted evidence is stale or for a different checkout")
+    if body.get("command") != scenario.get("command"):
+        raise ValueError("hosted evidence command does not match the required check")
+    if body.get("outcome") != "PASS":
+        raise ValueError("hosted evidence check failed or was not run")
+    if body.get("assertions") != scenario.get("assertions"):
+        raise ValueError("hosted evidence assertions are missing or unexpected")
+
+    producer = body.get("producer", {})
+    required_producer = ["repository", "run_id", "run_attempt", "workflow_ref", "workflow_sha"]
+    if producer.get("system") != "github-actions" or any(not producer.get(key) for key in required_producer):
+        raise ValueError("hosted evidence lacks authenticated GitHub Actions provenance")
+    if not str(producer["run_id"]).isdigit() or not str(producer["run_attempt"]).isdigit():
+        raise ValueError("hosted evidence has invalid GitHub Actions run identity")
+    if ".github/workflows/ci-macos.yml@" not in str(producer["workflow_ref"]):
+        raise ValueError("hosted evidence came from the wrong workflow")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(producer["workflow_sha"])):
+        raise ValueError("hosted evidence has an invalid workflow revision")
+
+    expected_identity = {
+        path: hashlib.sha256((repo / path).read_bytes()).hexdigest()
+        for path in [
+            "scripts/check-ci-macos.sh", "scripts/qa-full-sweep-inventory.json",
+            "scripts/test-qa-full-sweep.py", ".github/workflows/ci-macos.yml",
+        ]
+    }
+    if body.get("source_identity") != expected_identity:
+        raise ValueError("hosted evidence source identity does not match the checkout")
+
+
 def self_test():
     inventory = {"scenarios": [{"id":"required", "required":True,
                                 "assertions":["exact-json", "persisted-effect"]}],
@@ -509,12 +768,79 @@ def self_test():
             continue
         raise AssertionError(f"wrong or empty exit-zero output passed: {stdout!r}")
 
+    with tempfile.TemporaryDirectory(prefix="orbit-qa-platform-self-test-") as tmp:
+        repo = Path(tmp)
+        identity_paths = [
+            "scripts/check-ci-macos.sh", "scripts/qa-full-sweep-inventory.json",
+            "scripts/test-qa-full-sweep.py", ".github/workflows/ci-macos.yml",
+        ]
+        for relative in identity_paths:
+            path = repo / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(relative + "\n")
+        scenario = {
+            "command": ["./scripts/check-ci-macos.sh"],
+            "assertions": ["workflow-current", "matching-revision"],
+        }
+        hosted = {
+            "evidence_type": "orbit-macos-platform", "platform": "macos",
+            "source_revision": "a" * 40, "command": scenario["command"], "outcome": "PASS",
+            "assertions": scenario["assertions"],
+            "producer": {"system": "github-actions", "repository": "owner/orbit",
+                         "run_id": "123", "run_attempt": "1",
+                         "workflow_ref": "owner/orbit/.github/workflows/ci-macos.yml@refs/heads/main",
+                         "workflow_sha": "b" * 40},
+            "source_identity": {
+                path: hashlib.sha256((repo / path).read_bytes()).hexdigest()
+                for path in identity_paths
+            },
+        }
+        candidate = {"head": "a" * 40, "status": []}
+        validate_hosted_macos_evidence(hosted, scenario, candidate, repo)
+        mutations = [
+            {**hosted, "source_revision": "c" * 40},
+            {**hosted, "command": ["./wrong-command"]},
+            {**hosted, "outcome": "FAIL"},
+            {**hosted, "outcome": "NOT_RUN"},
+            {**hosted, "assertions": ["workflow-current"]},
+            {**hosted, "producer": {**hosted["producer"], "run_id": ""}},
+            {**hosted, "source_identity": {}},
+        ]
+        for mutation in mutations:
+            try:
+                validate_hosted_macos_evidence(mutation, scenario, candidate, repo)
+            except ValueError:
+                continue
+            raise AssertionError(f"invalid hosted macOS evidence passed: {mutation!r}")
+        try:
+            validate_hosted_macos_evidence(hosted, scenario,
+                                           {**candidate, "status": [" M scripts/file"]}, repo)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("hosted evidence passed for a dirty candidate")
 
-def import_platform_evidence(paths, inventory, candidate_id):
+
+def import_platform_evidence(paths, inventory, candidate, repo):
     imported = []
+    candidate_id = candidate["candidate_id"]
     scenarios = {item["id"]: item for item in inventory["scenarios"]}
     for path in paths:
         body = json.loads(path.read_text())
+        if body.get("schema_version") == 1:
+            scenario = scenarios.get("macos-platform")
+            if scenario is None:
+                raise ValueError(f"{path}: macos-platform is absent from the inventory")
+            validate_hosted_macos_evidence(body, scenario, candidate, repo)
+            imported.append({
+                "scenario": "macos-platform", "command": body["command"], "exit_code": 0,
+                "stdout": json.dumps({"producer": body["producer"],
+                                      "source_revision": body["source_revision"]}, sort_keys=True),
+                "stderr": "", "outcome": "PASS", "assertions": body["assertions"],
+                "candidate_id": candidate_id, "imported_from": str(path),
+                "evidence_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            })
+            continue
         if body.get("schema_version") != 2 or body.get("candidate", {}).get("id") != candidate_id:
             raise ValueError(f"{path}: evidence is for a different or unsupported candidate")
         for result in body.get("results", []):
@@ -624,7 +950,7 @@ def main():
                                 "outcome":"NOT_RUN", "assertions":[], "candidate_id":candidate_id})
 
         try:
-            imported = import_platform_evidence(args.platform_evidence, inventory, candidate_id)
+            imported = import_platform_evidence(args.platform_evidence, inventory, candidate, repo)
             imported_scenarios = {result["scenario"] for result in imported}
             results = [result for result in results
                        if not (result["scenario"] in imported_scenarios and result["outcome"] == "NOT_RUN")]

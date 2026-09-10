@@ -3,24 +3,42 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 workflow="${CI_MACOS_WORKFLOW:-$repo_root/.github/workflows/ci-macos.yml}"
+evidence_output=""
+
+if [[ "${1:-}" == "--evidence-output" ]]; then
+  if [[ -z "${2:-}" || -n "${3:-}" ]]; then
+    echo "usage: $0 [--evidence-output PATH]" >&2
+    exit 2
+  fi
+  evidence_output="$2"
+elif [[ $# -ne 0 ]]; then
+  echo "usage: $0 [--evidence-output PATH]" >&2
+  exit 2
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "check-ci-macos: python3 is required; install it before running" >&2
   exit 1
 fi
 
-python3 - "$repo_root" "$workflow" <<'PY'
+python3 - "$repo_root" "$workflow" "$evidence_output" <<'PY'
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import platform
 import re
 import shlex
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
 repo_root = Path(sys.argv[1]).resolve()
 workflow = Path(sys.argv[2]).resolve()
+evidence_output = Path(sys.argv[3]).resolve() if sys.argv[3] else None
 
 if not workflow.is_file():
     print(f"check-ci-macos: workflow does not exist: {workflow}", file=sys.stderr)
@@ -164,4 +182,69 @@ if errors:
     raise SystemExit(1)
 
 print("check-ci-macos: workflow paths and filtered tests passed")
+
+if evidence_output is not None:
+    required_environment = {
+        "GITHUB_ACTIONS": "true",
+        "RUNNER_OS": "macOS",
+    }
+    for name, expected in required_environment.items():
+        if os.environ.get(name) != expected:
+            print(
+                f"check-ci-macos: --evidence-output requires {name}={expected!r}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+    producer_fields = [
+        "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT",
+        "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
+    ]
+    missing = [name for name in producer_fields if not os.environ.get(name)]
+    if missing:
+        print(
+            "check-ci-macos: hosted evidence environment is incomplete: " + ", ".join(missing),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if platform.system() != "Darwin":
+        print("check-ci-macos: hosted evidence requires a Darwin runtime", file=sys.stderr)
+        raise SystemExit(1)
+
+    checked_out_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
+    ).strip()
+    source_paths = [
+        Path("scripts/check-ci-macos.sh"),
+        Path("scripts/qa-full-sweep-inventory.json"),
+        Path("scripts/test-qa-full-sweep.py"),
+        Path(".github/workflows/ci-macos.yml"),
+    ]
+    report = {
+        "schema_version": 1,
+        "evidence_type": "orbit-macos-platform",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "platform": "macos",
+        "source_revision": checked_out_commit,
+        "command": ["./scripts/check-ci-macos.sh"],
+        "outcome": "PASS",
+        "assertions": [
+            "macos-required-workflow-is-current",
+            "macos-check-ran-on-matching-revision",
+        ],
+        "producer": {
+            "system": "github-actions",
+            "repository": os.environ["GITHUB_REPOSITORY"],
+            "run_id": os.environ["GITHUB_RUN_ID"],
+            "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+            "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+            "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"],
+        },
+        "source_identity": {
+            str(path): hashlib.sha256((repo_root / path).read_bytes()).hexdigest()
+            for path in source_paths
+        },
+    }
+    evidence_output.parent.mkdir(parents=True, exist_ok=True)
+    evidence_output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    print(f"check-ci-macos: wrote hosted evidence to {evidence_output}")
 PY

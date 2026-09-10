@@ -34,6 +34,9 @@ on:
       - "crates/orbit-core/src/application/job/run/owner.rs"
       - "crates/orbit-core/src/application/job/run/tests/actions.rs"
       - "crates/orbit-core/src/application/job/run/tests/owner.rs"
+      - "scripts/check-ci-macos.sh"
+      - "scripts/qa-full-sweep-inventory.json"
+      - "scripts/test-qa-full-sweep.py"
       - "Cargo.lock"
       - ".github/workflows/ci-macos.yml"
 
@@ -90,3 +93,17 @@ jobs:
           cargo test --no-fail-fast -p orbit-common --locked process::tests::identity -- --nocapture
           cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::owner -- --nocapture
           cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::actions -- --nocapture
+
+      # This runs only after every required macOS command above succeeds. The
+      # report records the physical checkout HEAD rather than github.sha, which
+      # is an ephemeral merge commit for pull_request events.
+      - name: Emit exact-checkout macOS QA evidence
+        run: ./scripts/check-ci-macos.sh --evidence-output macos-platform-evidence.json
+
+      - name: Upload exact-checkout macOS QA evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-platform-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: macos-platform-evidence.json
+          if-no-files-found: error
+          retention-days: 14
