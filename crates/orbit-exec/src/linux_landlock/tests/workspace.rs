@@ -181,6 +181,23 @@ fn a_directory_out_of_reach_keeps_its_tree_grant() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_missing_child_uses_the_canonical_identity_of_its_parent() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let alias_parent = tempfile::tempdir().expect("alias parent");
+    fs::create_dir(workspace.path().join("src")).expect("mkdir src");
+
+    let alias_root = alias_parent.path().join("workspace-alias");
+    std::os::unix::fs::symlink(workspace.path(), &alias_root).expect("symlink workspace");
+    let grants = compile(&alias_root, &profile(&["**"], &[]));
+
+    assert!(
+        grants_read(&grants, &alias_root.join("src/generated.out")),
+        "{grants:?}"
+    );
+}
+
 /// A `*` cannot cross a separator, so it narrows the reach to one level rather
 /// than opening the whole subtree.
 #[test]
