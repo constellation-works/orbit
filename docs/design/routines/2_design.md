@@ -169,8 +169,11 @@ and `overlap: forbid`. The pipeline runs every GitHub query on the host, files e
 current, non-stale failure cluster as a proposed bug task carrying that evidence inline,
 dedupes against still-open owners by failure key, and pilots each candidate through the
 existing task-pilot job. The all-join lets independently valid pilots apply even when a
-sibling is stale or fails; a following `pipeline_success_guard` then fails the parent from
-the collected child statuses. The guard is skipped only for a filer-reported zero-candidate
+sibling is stale or fails. Within a returned partition, deterministic apply also commits
+valid tasks independently, then sends only invalid assessments through one targeted repair
+attempt at the original pinned revision; stale tasks require fresh preparation. A following
+`pipeline_success_guard` fails the parent while any task remains unresolved. The guard is
+skipped only for a filer-reported zero-candidate
 result, so empty clean/deduped sweeps remain no-ops without hiding failed work.
 
 A release-head failure remains current even when the same workflow is green on the

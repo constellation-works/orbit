@@ -1,7 +1,65 @@
 use super::*;
+use crate::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use crate::driver::file::task_bundle::{BundleWriteFault, PendingWriteGuard, fail_if_injected};
 
 impl TaskV2Store {
+    pub(crate) fn apply_atomic_task_mutation(
+        &self,
+        id: &str,
+        fields: &AtomicTaskMutationParams,
+    ) -> Result<AtomicTaskMutationOutcome, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        if fields.actor.trim().is_empty()
+            || fields.operation_id.trim().is_empty()
+            || fields.event_type.trim().is_empty()
+        {
+            return Err(OrbitError::InvalidInput(
+                "atomic task mutation actor, operation id, and event type must not be empty"
+                    .to_string(),
+            ));
+        }
+
+        self.with_task_lock(id, || {
+            let mut bundle = self.read_existing_bundle(id)?;
+            let receipt = format!("operation_id={}", fields.operation_id);
+            if bundle.events.iter().any(|event| {
+                event.event_type == fields.event_type
+                    && event.note.as_deref() == Some(receipt.as_str())
+            }) {
+                return Ok(AtomicTaskMutationOutcome::AlreadyApplied);
+            }
+            if bundle.envelope.context_files != fields.expected_context_files
+                || bundle.envelope.status != fields.expected_status
+            {
+                return Ok(AtomicTaskMutationOutcome::Stale);
+            }
+
+            let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let now = Utc::now();
+            let status_changed = fields.status != bundle.envelope.status;
+            let event = TaskEventRowV2 {
+                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                event_id: next_event_id(&bundle.events),
+                at: now,
+                by: fields.actor.clone(),
+                event_type: fields.event_type.clone(),
+                note: Some(receipt),
+                from_status: status_changed.then_some(bundle.envelope.status),
+                to_status: status_changed.then_some(fields.status),
+            };
+            self.bundle_store.append_event(id, &event)?;
+            fail_if_injected(BundleWriteFault::AfterJsonlAppend)?;
+
+            bundle.envelope.context_files = fields.context_files.clone();
+            bundle.envelope.status = fields.status;
+            bundle.envelope.updated_at = now;
+            self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
+            pending.finish();
+            self.replace_index_best_effort(&bundle.envelope, &fields.event_note);
+            Ok(AtomicTaskMutationOutcome::Applied)
+        })
+    }
+
     pub(crate) fn update_task_document(
         &self,
         id: &str,

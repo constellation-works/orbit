@@ -13,12 +13,14 @@
 # Prepare resolves an omitted base branch through the owning workspace's
 # `workflow.base_branch`; a non-empty run input remains an explicit override.
 # Any successful partition reaches apply even if another agent failed.
-# Apply isolates stale or malformed assessments by partition, applies
-# every independently valid partition, then a guard fails the total run when
-# any partition did not apply. Selector existence is validated against the
-# prepared source revision, not a later checkout. Apply normally changes only context_files. A CI sweep may pass its exact filing record plus
-# literal promotion authority; only then can apply promote a warning-free,
-# selector-backed proposed repair to backlog.
+# Apply rejects untrusted partition envelopes, then isolates stale or malformed
+# assessments by task and applies every independently valid sibling. The guard
+# fails the total run while any task remains unresolved. Bare relative file and
+# directory targets are normalized only from the pinned source tree. Selector
+# existence is validated against the prepared source revision, not a later
+# checkout. Apply normally changes only context_files. A CI sweep may pass its
+# exact filing record plus literal promotion authority; only then can apply
+# promote a warning-free, selector-backed proposed repair to backlog.
 #
 # Crew resolution
 # - The pilot step names the `system` crew directly, so this definition states
@@ -93,8 +95,51 @@ spec:
         promotion_authorized: "{{ input.promotion_authorized }}"
         ci_sweep_filing: "{{ input.ci_sweep_filing }}"
 
-    - id: require_apply_success
+    - id: repair_pilots
+      when: "{{ steps.apply.output.repair_count }} != 0"
+      fan_out:
+        items: "{{ steps.apply.output.repair_partitions }}"
+        max_workers: 5
+        worker:
+          id: repair_pilot
+          target: activity:task_pilot
+          default_input:
+            task_ids: "{{ item.task_ids }}"
+            partition_index: "{{ item.partition_index }}"
+            validation_errors: "{{ item.validation_errors }}"
+            repair_attempt: true
+            workspace_path: "{{ steps.prepare.output.workspace_path }}"
+            base_branch: "{{ steps.prepare.output.source.base_branch }}"
+            source_revision: "{{ steps.prepare.output.source.source_revision }}"
+            inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
+            crew: system
+      fan_in:
+        join:
+          mode: any
+        collect: repair_results
+
+    - id: apply_repairs
+      when: "{{ steps.apply.output.repair_count }} != 0"
+      target: activity:apply_task_pilot_results
+      default_input:
+        prepared: "{{ steps.apply.output.repair_prepared }}"
+        results: "{{ steps.repair_results.output }}"
+        workspace_path: "{{ steps.prepare.output.workspace_path }}"
+        promotion_authorized: "{{ input.promotion_authorized }}"
+        ci_sweep_filing: "{{ input.ci_sweep_filing }}"
+        prior_applied_count: "{{ steps.apply.output.applied_count }}"
+        carried_task_outcomes: "{{ steps.apply.output.non_repairable_outcomes }}"
+
+    - id: require_initial_apply_success
+      when: "{{ steps.apply.output.repair_count }} == 0"
       target: activity:pipeline_success_guard
       default_input:
         context: task-pilot partition apply
         result: "{{ steps.apply.output }}"
+
+    - id: require_repair_apply_success
+      when: "{{ steps.apply.output.repair_count }} != 0"
+      target: activity:pipeline_success_guard
+      default_input:
+        context: task-pilot targeted repair apply
+        result: "{{ steps.apply_repairs.output }}"

@@ -66,11 +66,19 @@ has no lifecycle or repository-write authority. It reports scope, dependency,
 duplicate, already-landed, utility, and current-contract findings as data.
 
 [Apply](../../../crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/apply.rs)
-validates selectors at the pinned source, isolates invalid/stale partitions, and
-rechecks task state under write locks. Its `task_snapshot_drift` compares context,
-status, title, and tags; it is not a full description/criteria/plan freshness
-check. Ordinary apply changes selectors, leaving orchestration recommendations
-advisory. There is no reusable general promotion-readiness certificate today.
+validates selectors at the pinned source, deterministically normalizes unambiguous
+bare file/directory targets, rejects untrusted partition identities, isolates
+invalid/stale tasks, and rechecks task state under write locks. Each accepted
+task mutation carries a stable operation identity; the task envelope and durable
+receipt event share one bundle commit point, so replay reports `already_applied`
+without another mutation. Invalid assessments alone enter one targeted repair
+fan-out carrying their exact validation errors and the original pinned revision;
+stale and storage-failed tasks require fresh preparation, and successful siblings
+are not sent back to a model. The prepared material fingerprint covers task
+meaning and dependency evidence, while `task_snapshot_drift` also names direct
+context, status, title, and tag changes in its structured stale outcomes.
+Ordinary apply changes selectors, leaving orchestration recommendations advisory.
+There is no reusable general promotion-readiness certificate today.
 
 The [CI-failure admission seam](../../../crates/orbit-core/src/adapter/engine_host/v2_host/ci_failure_admission.rs)
 is a **shipped narrow exception**: explicit `promotion_authorized`, matching

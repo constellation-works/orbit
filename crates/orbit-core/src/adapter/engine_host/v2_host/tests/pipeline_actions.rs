@@ -53,6 +53,29 @@ fn pipeline_success_guard_rejects_failed_result() {
 }
 
 #[test]
+fn pipeline_success_guard_reports_task_pilot_apply_without_unknown_run() {
+    let error = pipeline_success_guard(
+        "pipeline_success_guard",
+        &json!({
+            "context": "task-pilot apply",
+            "result": {
+                "status": "failed",
+                "error": "partition 0, task ORB-11991: selector missing",
+                "partition_decisions": [],
+                "applied_count": 4,
+                "unresolved_count": 1,
+            }
+        }),
+    )
+    .expect_err("unresolved apply fails the guard");
+
+    let message = action_failure_message(error, "pipeline_success_guard");
+    assert!(message.contains("partition 0, task ORB-11991: selector missing"));
+    assert!(message.contains("4 applied, 1 unresolved"));
+    assert!(!message.contains("<unknown>"));
+}
+
+#[test]
 fn pipeline_success_guard_rejects_mixed_results() {
     let err = pipeline_success_guard(
         "pipeline_success_guard",

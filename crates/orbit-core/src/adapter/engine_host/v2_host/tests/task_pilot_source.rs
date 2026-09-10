@@ -295,6 +295,104 @@ fn clean_stale_primary_is_preserved_and_apply_admits_newly_merged_file() {
 }
 
 #[test]
+fn bare_file_and_directory_selectors_normalize_at_the_pinned_revision() {
+    let fixture = remote_landing_fixture();
+    let prepared = prepare_landing(&fixture).expect("prepare pinned source");
+
+    let output = apply_selectors(
+        &fixture.runtime,
+        &prepared,
+        &fixture.task,
+        vec!["src/merged.rs", "src"],
+    );
+
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(
+        output["tasks"][0]["context_files_after"],
+        json!(["file:src/merged.rs", "dir:src"])
+    );
+    assert_eq!(
+        output["tasks"][0]["selector_normalizations"],
+        json!([
+            {"original": "src/merged.rs", "normalized": "file:src/merged.rs"},
+            {"original": "src", "normalized": "dir:src"},
+        ])
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task(&fixture.task.id)
+            .unwrap()
+            .context_files,
+        vec!["file:src/merged.rs", "dir:src"]
+    );
+}
+
+#[test]
+fn five_task_partition_keeps_valid_siblings_when_bare_target_is_missing() {
+    let fixture = remote_landing_fixture();
+    let mut tasks = vec![fixture.task.clone()];
+    for index in 1..5 {
+        tasks.push(seed_task(&fixture.runtime, &format!("sibling-{index}")));
+    }
+    let task_ids = tasks.iter().map(|task| task.id.clone()).collect::<Vec<_>>();
+    let prepared = prepare(
+        &fixture.runtime,
+        "prepare_task_pilot",
+        &json!({
+            "task_ids": task_ids,
+            "workspace_path": fixture.repo,
+            "base_branch": LANDING,
+        }),
+    )
+    .expect("prepare five-task partition");
+    let assessments = tasks
+        .iter()
+        .enumerate()
+        .map(|(index, task)| {
+            selector_assessment(
+                task,
+                if index == 0 {
+                    vec![".orbit/resources/activities/task_pilot.yaml"]
+                } else {
+                    vec!["file:src/merged.rs"]
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let output = apply(
+        &fixture.runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": prepared,
+            "results": [{
+                "partition_index": 0,
+                "task_ids": task_ids,
+                "tasks": assessments,
+            }],
+            "workspace_path": fixture.repo,
+        }),
+    )
+    .expect("mixed partition returns structured outcomes");
+
+    assert_eq!(output["status"], "failed");
+    assert_eq!(output["partition_decisions"][0]["outcome"], "partial");
+    assert_eq!(output["applied_count"], 4);
+    assert_eq!(output["unresolved_count"], 1);
+    assert_eq!(
+        output["partition_decisions"][0]["task_outcomes"][0]["outcome"],
+        "invalid"
+    );
+    for task in tasks.iter().skip(1) {
+        assert_eq!(
+            fixture.runtime.get_task(&task.id).unwrap().context_files,
+            vec!["file:src/merged.rs"]
+        );
+    }
+}
+
+#[test]
 fn dirty_primary_preserves_head_index_tracked_and_untracked_bytes() {
     let fixture = remote_landing_fixture();
     fs::write(fixture.repo.join("src/existing.rs"), "staged edit\n").unwrap();

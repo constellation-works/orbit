@@ -100,6 +100,27 @@ pub struct TaskHistoryUpdateParams {
     pub expected_status: Option<Vec<TaskStatus>>,
 }
 
+/// One task-bundle mutation whose freshness guard, durable receipt, history
+/// event, and envelope changes share the envelope publish commit point.
+#[derive(Debug, Clone)]
+pub struct AtomicTaskMutationParams {
+    pub actor: String,
+    pub operation_id: String,
+    pub expected_context_files: Vec<String>,
+    pub expected_status: TaskStatus,
+    pub context_files: Vec<String>,
+    pub status: TaskStatus,
+    pub event_type: String,
+    pub event_note: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicTaskMutationOutcome {
+    Applied,
+    AlreadyApplied,
+    Stale,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct TaskArtifactUpdateParams {
     pub actor: String,

@@ -41,6 +41,12 @@ spec:
         type: number
       crew:
         type: string
+      repair_attempt:
+        type: boolean
+      validation_errors:
+        type: array
+        items:
+          type: string
   # Agent-returned data is advisory until apply_task_pilot_results validates
   # the complete fan-in, so keep fields optional at this boundary (no
   # `required` list at any level) and let that validation step — not this
@@ -133,6 +139,12 @@ spec:
     task tools using the temporary checkout path.
 
     For every task:
+
+    If `repair_attempt` is true, this is the single targeted repair attempt for
+    an assessment rejected by deterministic apply. Reassess only the supplied
+    task IDs at the original `source_revision`, and correct every exact message
+    in `validation_errors`. Do not revisit successful siblings or resolve a new
+    source revision. The repaired output is validated through the same boundary.
 
     1. Call `orbit.task.show` and read its title, description, acceptance
        criteria, plan, tags, relations, status, and exact current

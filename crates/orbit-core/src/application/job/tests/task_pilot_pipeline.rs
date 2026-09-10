@@ -3,18 +3,23 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
-use orbit_engine::JobOutcome;
+use orbit_engine::{DispatchError, JobOutcome, ResolvedCliExecutor, RuntimeHost};
+use orbit_tools::{FsAuditLogger, ToolContext};
+use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::exec::{seed_default_catalogs, try_execute_named_job};
 use crate::OrbitRuntime;
+use crate::application::task::TaskAddParams;
 
 struct TaskPilotJobFixture {
     _root: TempDir,
     runtime: OrbitRuntime,
     repo_root: PathBuf,
+    global_root: PathBuf,
     stale_sha: String,
     current_sha: String,
     dirty_status: String,
@@ -107,6 +112,7 @@ fn task_pilot_job_fixture(config_branch: &str, remote_branch: &str) -> TaskPilot
         _root: root,
         runtime,
         repo_root,
+        global_root,
         stale_sha,
         current_sha,
         dirty_status,
@@ -208,4 +214,152 @@ fn shipped_task_pilot_job_rejects_an_unavailable_explicit_branch() {
         git(&fixture.repo_root, &["status", "--short"]),
         fixture.dirty_status
     );
+}
+
+struct ScriptedPilotHost<'a> {
+    runtime: &'a OrbitRuntime,
+    calls: Mutex<Vec<bool>>,
+}
+
+impl RuntimeHost for ScriptedPilotHost<'_> {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        tool_context: ToolContext,
+    ) -> Result<Value, DispatchError> {
+        if action != "scripted_task_pilot" {
+            return <OrbitRuntime as RuntimeHost>::run_deterministic(
+                self.runtime,
+                action,
+                config,
+                input,
+                tool_context,
+            );
+        }
+        let repair = input["repair_attempt"].as_bool().unwrap_or(false);
+        self.calls.lock().expect("calls").push(repair);
+        let task_ids = input["task_ids"].as_array().expect("task ids");
+        let tasks = task_ids
+            .iter()
+            .enumerate()
+            .map(|(index, task_id)| {
+                let selector = if !repair && index == 0 {
+                    ".orbit/resources/activities/task_pilot.yaml"
+                } else {
+                    "file:src/remote.rs"
+                };
+                json!({
+                    "task_id": task_id,
+                    "context_files_before": [],
+                    "context_files_after": [selector],
+                    "disposition": "selectors",
+                    "recommended_crew": "system",
+                    "recommended_complexity": "medium",
+                    "blocked_by": [],
+                    "duplicate_of": null,
+                    "already_landed": null,
+                    "release_action_required": null,
+                    "adr_conflicts": [],
+                    "utility_warnings": [],
+                    "surface_warnings": [],
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({
+            "partition_index": input["partition_index"],
+            "task_ids": task_ids,
+            "tasks": tasks,
+            "summary": "scripted pilot",
+        }))
+    }
+
+    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
+        <OrbitRuntime as RuntimeHost>::resolve_cli_executor(self.runtime, provider)
+    }
+
+    fn tool_context_for_activity(
+        &self,
+        run_id: Option<&str>,
+        fs_profile: Option<&str>,
+        fs_audit: Option<Arc<dyn FsAuditLogger>>,
+        proc_allowed_programs: Option<&[String]>,
+    ) -> ToolContext {
+        <OrbitRuntime as RuntimeHost>::tool_context_for_activity(
+            self.runtime,
+            run_id,
+            fs_profile,
+            fs_audit,
+            proc_allowed_programs,
+        )
+    }
+}
+
+#[test]
+fn shipped_pipeline_repairs_only_invalid_task_and_preserves_partial_progress() {
+    let fixture = task_pilot_job_fixture("agent-main", "agent-main");
+    fs::write(
+        fixture
+            .global_root
+            .join("resources/activities/task_pilot.yaml"),
+        r#"schemaVersion: 2
+kind: Activity
+metadata:
+  name: task_pilot
+spec:
+  type: deterministic
+  description: Scripted task-pilot fixture.
+  input_schema_json: {type: object}
+  output_schema_json: {type: object}
+  action: scripted_task_pilot
+  config: {}
+"#,
+    )
+    .expect("write scripted pilot activity");
+    let task_ids = (0..2)
+        .map(|index| {
+            fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: format!("pipeline repair {index}"),
+                    description: "pipeline repair fixture".to_string(),
+                    acceptance_criteria: vec!["repair completes".to_string()],
+                    plan: "run pilot".to_string(),
+                    workspace_path: Some(".".to_string()),
+                    priority: TaskPriority::Medium,
+                    task_type: Some(TaskType::Bug),
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .expect("seed task")
+                .id
+        })
+        .collect::<Vec<_>>();
+    let host = ScriptedPilotHost {
+        runtime: &fixture.runtime,
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let outcome = try_execute_named_job(
+        &fixture.runtime,
+        &fixture.repo_root,
+        &host,
+        "task_pilot_pipeline",
+        json!({"task_ids": task_ids, "base_branch": "agent-main"}),
+        "jrun-task-pilot-repair",
+    )
+    .expect("execute task-pilot repair workflow");
+
+    assert!(outcome.success, "{outcome:?}");
+    assert_eq!(outcome.pipeline["apply"]["applied_count"], 1);
+    assert_eq!(outcome.pipeline["apply"]["repair_count"], 1);
+    assert_eq!(outcome.pipeline["apply_repairs"]["applied_count"], 2);
+    assert_eq!(host.calls.lock().unwrap().as_slice(), &[false, true]);
+    for task_id in task_ids {
+        assert_eq!(
+            fixture.runtime.get_task(&task_id).unwrap().context_files,
+            vec!["file:src/remote.rs"]
+        );
+    }
 }

@@ -6,7 +6,8 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::contracts::{
-    TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentUpdateParams, TaskHistoryUpdateParams,
+    AtomicTaskMutationOutcome, AtomicTaskMutationParams, TaskArtifactUpdateParams,
+    TaskCreateParams, TaskDocumentUpdateParams, TaskHistoryUpdateParams,
 };
 use crate::driver::sqlite::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path,
