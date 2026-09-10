@@ -4,6 +4,8 @@ mod ci_failure_admission;
 mod ci_failure_cancelled;
 mod ci_failure_tasks;
 mod cli_executor;
+mod code_scanning_consolidation;
+mod code_scanning_groups;
 mod dependabot_alert_tasks;
 mod dispatch;
 mod leaf_occupancy;

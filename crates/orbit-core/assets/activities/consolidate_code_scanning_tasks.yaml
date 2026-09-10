@@ -1,0 +1,101 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: consolidate_code_scanning_tasks
+spec:
+  type: deterministic
+  description: >
+    Fold unstarted per-alert Code scanning tasks into the bounded remediation
+    groups the sweep now files. Previews by default: the dry run names the
+    exact source tasks and the replacement group for each shared cause and
+    writes nothing. Only proposed and backlog tasks carrying exactly one
+    parseable alert record are candidates; started, deferred, already grouped
+    and unreadable records are reported and left untouched. An explicit apply
+    mints the replacement with every member's per-alert coverage key, the
+    union of the sources' dependencies and scope, and a supersedes relation to
+    each source, then retires the sources with a covering-task comment. A
+    group whose sources moved since the preview is abandoned whole rather than
+    partially applied, and a second run finds nothing left to consolidate.
+  input_schema_json:
+    type: object
+    properties:
+      apply:
+        type: boolean
+        default: false
+        description: >
+          Write the consolidation. Leave false to preview it.
+      max_groups:
+        type: number
+        minimum: 1
+        maximum: 50
+        default: 10
+  output_schema_json:
+    type: object
+    required: [outcome, apply, scanned_source_tasks, group_count, groups, unchanged_single_source, skipped]
+    properties:
+      outcome:
+        type: string
+        enum: [dry_run, applied, nothing_to_consolidate]
+      apply:
+        type: boolean
+      scanned_source_tasks:
+        type: number
+      group_count:
+        type: number
+      groups:
+        type: array
+        items:
+          type: object
+          required: [cause_key, rule_id, alert_numbers, source_task_ids, replacement_title]
+          properties:
+            cause_key:
+              type: string
+            repository:
+              type: string
+            rule_id:
+              type: string
+            message:
+              type: string
+            alert_numbers:
+              type: array
+            paths:
+              type: array
+            source_task_ids:
+              type: array
+            carried_dependencies:
+              type: array
+            replacement_title:
+              type: string
+            replacement_priority:
+              type: string
+            applied:
+              type: boolean
+            replacement_task_id:
+              type: string
+            not_applied_reason:
+              type: string
+            moved_source_task_id:
+              type: string
+            sources_not_retired:
+              type: array
+      unchanged_single_source:
+        type: array
+      skipped:
+        type: array
+        items:
+          type: object
+          required: [task_id, status, reason]
+          properties:
+            task_id:
+              type: string
+            status:
+              type: string
+            reason:
+              type: string
+              enum: [active_work, deferred, already_grouped, unparsable_evidence]
+      max_groups:
+        type: number
+      group_bounds:
+        type: object
+  action: consolidate_code_scanning_tasks
+  config: {}

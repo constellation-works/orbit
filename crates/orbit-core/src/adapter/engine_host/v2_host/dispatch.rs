@@ -229,6 +229,13 @@ pub(crate) fn run_deterministic(
                 }
             })
         }
+        CoreDeterministicAction::ConsolidateCodeScanningTasks => {
+            dependabot_alert_tasks::consolidate::consolidate_code_scanning_tasks(runtime, input)
+                .map_err(|error| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: error.to_string(),
+                })
+        }
         CoreDeterministicAction::FileDependabotAlertTasks => {
             dependabot_alert_tasks::file_dependabot_alert_tasks(runtime, input).map_err(|error| {
                 DispatchError::DeterministicActionFailed {

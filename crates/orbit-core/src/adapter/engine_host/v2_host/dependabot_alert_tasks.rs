@@ -1,12 +1,12 @@
 //! Turn a host-collected repository security snapshot into ordinary backlog tasks.
 
+pub(super) mod code_groups;
+pub(super) mod consolidate;
 mod duplicates;
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::selector::{canonical_selector_in_workspace, exists_in_workspace};
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -17,6 +17,10 @@ use crate::adapter::engine_host::v2_host::duplicate_tasks::{
 };
 use crate::application::task::TaskAddParams;
 
+use self::code_groups::{
+    CodeGroupTaskRequest, CoveredAlert, alert_key, cause_key, code_group_task_params,
+    group_alert_numbers, group_code_alerts, group_paths,
+};
 use self::duplicates::{
     code_duplicate_candidate, dependabot_duplicate_candidate, duplicate_lookup_error,
     secret_duplicate_candidate,
@@ -28,6 +32,7 @@ const DEPENDABOT_KEY_PREFIX: &str = "dependabot:";
 const DEPENDABOT_TITLE_PREFIX: &str = "[dependabot-sweep] ";
 const CODE_TAG: &str = "code-scanning-sweep";
 const CODE_KEY_PREFIX: &str = "code-scanning:";
+const CODE_GROUP_KEY_PREFIX: &str = "code-scanning-group:";
 const CODE_TITLE_PREFIX: &str = "[code-scanning-sweep] ";
 const SECRET_TAG: &str = "secret-scanning-sweep";
 const SECRET_KEY_PREFIX: &str = "secret-scanning:";
@@ -233,9 +238,14 @@ where
         .pointer("/repository/full_name")
         .and_then(Value::as_str)
         .unwrap_or("unknown repository");
+    // Code scanning: one lookup per alert decides coverage, then the alerts
+    // nobody owns are grouped by shared cause into bounded remediation tasks.
+    // Coverage stays per alert, so an existing per-alert task keeps covering
+    // its alert and a newly reported sibling becomes explicit delta work.
     let mut code_alerts = family_alerts(snapshot, "code_scanning");
     code_alerts.sort_by_key(alert_number);
-    candidate_count += code_alerts.len();
+    let mut uncovered_code_alerts = Vec::new();
+    let mut covered_by_cause: BTreeMap<String, Vec<CoveredAlert>> = BTreeMap::new();
     for alert in code_alerts {
         let number = alert_number(&alert);
         if number == 0 {
@@ -258,7 +268,7 @@ where
             }));
             continue;
         }
-        let key = digest(&["code-scanning", repository, &number.to_string()]);
+        let key = alert_key(repository, &alert);
         if let Some(DuplicateTaskMatch {
             task_id,
             match_kind,
@@ -266,6 +276,13 @@ where
         }) = find_covering_task(lookup, &code_duplicate_candidate(&key, &alert))
             .map_err(|error| duplicate_lookup_error("code_scanning", &key, &error))?
         {
+            covered_by_cause
+                .entry(cause_key(repository, &alert))
+                .or_default()
+                .push(CoveredAlert {
+                    number,
+                    task_id: task_id.clone(),
+                });
             skipped_existing.push(json!({
                 "family": "code_scanning", "key": key, "task_id": task_id,
                 "alert_number": number,
@@ -273,48 +290,42 @@ where
             }));
             continue;
         }
+        uncovered_code_alerts.push(alert);
+    }
+
+    let code_groups = group_code_alerts(repository, uncovered_code_alerts);
+    // A Code scanning candidate is one unit of work the sweep judged: a group
+    // it can file, or an alert it found an owner for.
+    candidate_count += code_groups.len() + covered_by_cause.values().map(Vec::len).sum::<usize>();
+    let no_siblings: Vec<CoveredAlert> = Vec::new();
+    for group in &code_groups {
+        let alert_numbers = group_alert_numbers(group);
         if pending_tasks.len() >= max_tasks {
             skipped_over_cap.push(json!({
-                "family": "code_scanning", "key": key, "alert_number": number,
+                "family": "code_scanning", "key": group.cause_key,
+                "alert_numbers": alert_numbers,
             }));
             continue;
         }
-        let rule = field(&alert, "rule_id");
-        let path = field(&alert, "path");
-        let rank = rank.unwrap_or(floor);
-        let params = TaskAddParams {
-            title: code_task_title(&rule, &path),
-            description: code_task_description(snapshot, &alert),
-            acceptance_criteria: vec![
-                format!(
-                    "Remediate Code scanning rule `{}` at `{}`{} with a real code or configuration fix; do not suppress, dismiss, or exclude the finding.",
-                    display(&rule),
-                    display(&path),
-                    line_suffix(&alert),
-                ),
-                "Preserve the intended behavior while removing the data flow or unsafe construct identified in the inline alert evidence.".to_string(),
-                "Run the repository's documented validation and security checks and confirm the identified rule no longer reports at the affected location.".to_string(),
-            ],
-            tags: vec![
-                CODE_TAG.to_string(),
-                format!("{CODE_KEY_PREFIX}{key}"),
-                "security".to_string(),
-            ],
-            context_files: code_context_files(&alert, &runtime.paths().repo_root),
-            required_tools: Vec::new(),
+        let covered_siblings = covered_by_cause
+            .get(&group.cause_key)
+            .unwrap_or(&no_siblings);
+        let params = code_group_task_params(&CodeGroupTaskRequest {
+            snapshot,
+            group,
+            covered_siblings,
+            workspace_root: &runtime.paths().repo_root,
             crew: system_crew.clone(),
-            priority: priority_for_rank(rank),
-            complexity: TaskComplexity::Unassessed,
-            task_type: Some(TaskType::Bug),
-            status: Some(TaskStatus::Backlog),
-            system_created: true,
-            ..TaskAddParams::default()
-        };
+        });
         pending_tasks.push(PendingTask {
             params,
             result: json!({
-                "family": "code_scanning", "key": key,
-                "alert_number": number, "rule_id": rule, "path": path,
+                "family": "code_scanning", "key": group.cause_key,
+                "rule_id": field(&group.alerts[0], "rule_id"),
+                "paths": group_paths(group),
+                "alert_numbers": alert_numbers,
+                "alert_count": group.alerts.len(),
+                "delta_covered_by": covered_alert_owners(covered_siblings),
             }),
         });
     }
@@ -428,7 +439,19 @@ where
         "min_severity": floor_name,
         "skip_when_dependabot_pr_open": skip_pr,
         "max_tasks": max_tasks,
+        "code_scanning_group_bounds": code_groups::group_bounds(),
     }))
+}
+
+/// The open tasks that already own same-cause alerts left out of a group, as
+/// the sweep reports them alongside the delta task it filed instead.
+fn covered_alert_owners(covered: &[CoveredAlert]) -> Value {
+    json!(
+        covered
+            .iter()
+            .map(|sibling| json!({"alert_number": sibling.number, "task_id": sibling.task_id}))
+            .collect::<Vec<_>>()
+    )
 }
 
 fn family_alerts(snapshot: &Value, family: &str) -> Vec<Value> {
@@ -495,12 +518,6 @@ fn dependabot_task_title(package: &str, manifest_path: &str) -> String {
     format!("{DEPENDABOT_TITLE_PREFIX}{}", truncate_chars(&body, budget))
 }
 
-fn code_task_title(rule: &str, path: &str) -> String {
-    let budget = 120usize.saturating_sub(CODE_TITLE_PREFIX.chars().count());
-    let body = format!("Fix {} in {}", display(rule), display(path));
-    format!("{CODE_TITLE_PREFIX}{}", truncate_chars(&body, budget))
-}
-
 fn secret_task_title(secret_type: &str, number: u64) -> String {
     let budget = 120usize.saturating_sub(SECRET_TITLE_PREFIX.chars().count());
     let body = format!(
@@ -554,31 +571,6 @@ fn dependabot_task_description(
     }
     append_collection_bounds(&mut out, snapshot.get("truncation"));
     out.push_str("\nUpdate the dependency and regenerate the lockfile through the repository's normal package-manager workflow. Verify that the manifest and lockfile agree and run the documented pre-handoff checks.\n");
-    out
-}
-
-fn code_task_description(snapshot: &Value, alert: &Value) -> String {
-    let mut out = format!(
-        "This task was filed from bounded Code scanning evidence collected on the engine-private host boundary. It does not require agent-side GitHub access.\n\n## Alert evidence\n\n- Repository: `{}`\n- Alert: `#{}`\n- Rule: `{}` ({})\n- Security severity: `{}`\n- Tool: `{}` (version `{}`, guid `{}`)\n- Message: {}\n- Ref: `{}`\n- Commit: `{}`\n- Location: `{}`{}\n- Created: `{}`\n- Updated: `{}`\n- Alert URL: {}\n",
-        repository_name(snapshot),
-        field(alert, "number"),
-        display(&field(alert, "rule_id")),
-        display(&field(alert, "rule_name")),
-        display(&field(alert, "security_severity")),
-        display(&field(alert, "tool_name")),
-        display(&field(alert, "tool_version")),
-        display(&field(alert, "tool_guid")),
-        display(&field(alert, "message")),
-        display(&field(alert, "ref")),
-        display(&field(alert, "commit_sha")),
-        display(&field(alert, "path")),
-        line_suffix(alert),
-        display(&field(alert, "created_at")),
-        display(&field(alert, "updated_at")),
-        display(&field(alert, "html_url")),
-    );
-    append_collection_bounds(&mut out, snapshot.pointer("/code_scanning/truncation"));
-    out.push_str("\nRemediate the identified rule at the affected location without suppressing or dismissing the finding, then run the repository's normal validation.\n");
     out
 }
 
@@ -653,34 +645,6 @@ fn location_url(location: &Value) -> String {
         }
     }
     "no location URL".to_string()
-}
-
-/// Scope a Code scanning repair task to the alert's remediation target, read
-/// from the alert's structured `path` rather than the rendered evidence.
-///
-/// The path GitHub reports is repository-relative and may not name anything in
-/// this checkout — the alert can predate a rename or deletion, or describe a
-/// path that escapes the workspace. Emit a selector only when it canonicalizes
-/// and still resolves inside the workspace, so an unusable location yields no
-/// scope instead of an invented one, and one bad alert cannot fail the sweep.
-///
-/// Line numbers stay in the alert evidence: `context_files` selectors address
-/// whole files, and a line suffix would not canonicalize as a `file:` anchor.
-fn code_context_files(alert: &Value, workspace_root: &Path) -> Vec<String> {
-    let path = field(alert, "path");
-    if path.is_empty() {
-        return Vec::new();
-    }
-
-    let Ok(selector) = canonical_selector_in_workspace(&format!("file:{path}"), workspace_root)
-    else {
-        return Vec::new();
-    };
-    if exists_in_workspace(&selector, workspace_root) {
-        vec![selector]
-    } else {
-        Vec::new()
-    }
 }
 
 fn line_suffix(value: &Value) -> String {
