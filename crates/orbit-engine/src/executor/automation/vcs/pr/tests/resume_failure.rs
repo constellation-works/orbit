@@ -261,7 +261,18 @@ impl RuntimeHost for ResumeFailureHost {
             .unwrap()
             .rebase_recovery_checkpoints
             .insert(step_id.to_string(), output.clone());
+        self.inner.certify_recovery(run_id, step_id, output);
         Ok(())
+    }
+
+    fn verify_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        checkpoint: &Value,
+    ) -> Result<bool, OrbitError> {
+        self.inner
+            .verify_rebase_recovery(run_id, step_id, checkpoint)
     }
 
     fn checkpoint_failure_activity(

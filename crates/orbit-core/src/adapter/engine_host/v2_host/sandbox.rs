@@ -70,6 +70,7 @@ pub(crate) fn resolve_executor_sandbox(
                 append_codex_side_write_roots(runtime, provider, &mut resolved)?;
                 append_orbit_child_runtime_write_roots(runtime, &mut resolved);
                 append_active_worktree_root(runtime, subprocess_cwd, &mut resolved);
+                append_recovery_authority_deny(runtime, &mut resolved)?;
                 Ok(Some(ResolvedSandbox {
                     kind,
                     fs_profile: resolved,
@@ -113,6 +114,7 @@ pub(crate) fn resolve_executor_sandbox(
                     &mut resolved,
                 )?;
                 append_linux_provider_state_roots(provider, &mut resolved)?;
+                append_recovery_authority_deny(runtime, &mut resolved)?;
                 // Host Git state is never a provider convenience grant. Append
                 // these last so even a side root inside metadata stays denied.
                 crate::runtime::git_sandbox::append_linux_git_denies(
@@ -278,6 +280,22 @@ fn append_orbit_child_runtime_write_roots(
     ] {
         append_unique_modify_root(resolved, root);
     }
+}
+
+/// Deny the host-only recovery authority store, after every convenience grant.
+///
+/// No grant above names this root, so the rule is a tripwire that keeps a
+/// future broadening of the `<global>` grants from reopening it. Both sandbox
+/// kinds get it: the boundary is a property of the store, not of one OS.
+fn append_recovery_authority_deny(
+    runtime: &OrbitRuntime,
+    resolved: &mut ResolvedFsProfile,
+) -> Result<(), DispatchError> {
+    crate::runtime::recovery_authority::append_recovery_authority_denies(
+        &runtime.paths().global_dir,
+        resolved,
+    )
+    .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))
 }
 
 fn append_unique_modify_root(resolved: &mut ResolvedFsProfile, root: String) {

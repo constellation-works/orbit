@@ -161,6 +161,18 @@ fn resumed_recovery_requires_the_exact_immutable_source_checkpoint() {
         serde_json::from_slice(&serde_json::to_vec(&source).unwrap()).unwrap();
     resumed.run_id = SECOND_RESUME_RUN_ID.to_string();
     host.write_state(resumed.clone());
+
+    // The row exists in the run store the leaf can write, but nothing has
+    // certified it yet. That is the pre-boundary shape, and it is refused.
+    let error =
+        recovered_head_checkpoint(&host, SECOND_RESUME_RUN_ID, &workspace.repo, &head).unwrap_err();
+    assert!(
+        error.to_string().contains("no host recovery certificate"),
+        "{error}"
+    );
+
+    host.inner
+        .certify_recovery(FIRST_RESUME_RUN_ID, "sync_base", &checkpoint);
     assert_eq!(
         recovered_head_checkpoint(&host, SECOND_RESUME_RUN_ID, &workspace.repo, &head).unwrap(),
         Some(checkpoint)
@@ -174,7 +186,20 @@ fn resumed_recovery_requires_the_exact_immutable_source_checkpoint() {
         .rebase_recovery_checkpoints
         .get_mut("sync_base")
         .unwrap()["head_sha_before"] = json!("substituted-origin");
-    host.write_state(resumed);
+    host.write_state(resumed.clone());
+    let error =
+        recovered_head_checkpoint(&host, SECOND_RESUME_RUN_ID, &workspace.repo, &head).unwrap_err();
+    assert!(
+        error.to_string().contains("no host recovery certificate"),
+        "{error}"
+    );
+
+    // Certifying the substituted payload isolates the second gate, which is
+    // what keeps a resume honest even about evidence the host did write: the
+    // copy still has to equal the immutable source row.
+    let substituted = resumed.rebase_recovery_checkpoints["sync_base"].clone();
+    host.inner
+        .certify_recovery(FIRST_RESUME_RUN_ID, "sync_base", &substituted);
     let error =
         recovered_head_checkpoint(&host, SECOND_RESUME_RUN_ID, &workspace.repo, &head).unwrap_err();
     assert!(

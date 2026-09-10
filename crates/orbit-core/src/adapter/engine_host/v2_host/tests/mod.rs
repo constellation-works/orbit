@@ -10,6 +10,8 @@ mod dependabot_alert_tasks;
 mod dispatch;
 mod leaf_occupancy;
 mod pipeline_actions;
+#[cfg(target_os = "linux")]
+mod recovery_authority_sandbox;
 mod required_tools;
 mod sandbox;
 mod sandbox_nested;
