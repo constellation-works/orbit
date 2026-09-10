@@ -168,7 +168,13 @@ fn host_toml_path(global_root: &Path) -> PathBuf {
     global_root.join(HOST_TOML_FILE)
 }
 
-fn existing_host_toml_path(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+/// Resolve the existing host identity through the canonical global root.
+///
+/// The root may be selected by an explicit runtime override, but the identity
+/// filename is fixed. Canonicalizing the root and checking the final component
+/// without following it keeps the resulting path inside that selected root and
+/// rejects a symlink or non-regular file before it is read.
+fn validated_host_toml_path(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
     let canonical_root = match global_root.canonicalize() {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -211,7 +217,7 @@ fn non_blank(value: &Option<String>) -> Option<String> {
 /// for malformed, incomplete, blank, or future-schema files (fail closed —
 /// never rewrites the file).
 pub fn inspect_host_identity(global_root: &Path) -> Result<HostIdentityState, OrbitError> {
-    let Some(path) = existing_host_toml_path(global_root)? else {
+    let Some(path) = validated_host_toml_path(global_root)? else {
         return Ok(HostIdentityState::Absent);
     };
     let raw_text = std::fs::read_to_string(&path)
