@@ -434,7 +434,7 @@ fn code_scanning_severity_floor_excludes_lower_severity_alerts() {
     );
 
     assert_eq!(output["filed_count"], json!(1));
-    assert_eq!(output["filed"][0]["alert_number"], json!(11));
+    assert_eq!(output["filed"][0]["alert_numbers"], json!([11]));
     assert_eq!(
         output["excluded_below_min_severity"],
         json!([{

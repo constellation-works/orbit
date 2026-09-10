@@ -22,6 +22,7 @@ macro_rules! deterministic_action_catalog {
                 ApplyTriageDispositions => "apply_triage_dispositions",
                 ApplyTaskPilotResults => "apply_task_pilot_results",
                 ClassifyWorkspaceAutoTasks => "classify_workspace_auto_tasks",
+                ConsolidateCodeScanningTasks => "consolidate_code_scanning_tasks",
                 ContextConflictCheck => "context_conflict_check",
                 DrainWindow => "drain_window",
                 FileCiFailureTasks => "file_ci_failure_tasks",

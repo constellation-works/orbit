@@ -9,12 +9,18 @@ spec:
     Dependabot, Code scanning, and secret scanning snapshot. Preserve
     Dependabot clustering, severity filtering, and PR skips; dedupe the other
     families by repository and alert number; and enforce one max_tasks bound
-    across all families. Exact generated-key tags remain the fast path, then a
-    shared high-confidence material coverage check finds untagged still-open
-    tasks. Skips name the covering task and bounded match evidence; closed
-    historical tasks and superficial similarities do not suppress a current
-    alert. Duplicate-check failures are bounded retryable errors and happen
-    before any task is filed. Filed tasks require no tools.
+    across all families. Code scanning alerts that share scan provenance, rule
+    and scanner message are filed as one bounded remediation group carrying a
+    per-alert evidence ledger, a per-alert disposition contract, the highest
+    member severity as priority, and every member's per-alert coverage key.
+    Coverage is still decided per alert, so an alert an open task already owns
+    is left to that task and its uncovered siblings become an attributed delta
+    group rather than widening work in flight. Exact generated-key tags remain
+    the fast path, then a shared high-confidence material coverage check finds
+    untagged still-open tasks. Skips name the covering task and bounded match
+    evidence; closed historical tasks and superficial similarities do not
+    suppress a current alert. Duplicate-check failures are bounded retryable
+    errors and happen before any task is filed. Filed tasks require no tools.
   input_schema_json:
     type: object
     required: [dependabot_snapshot]
@@ -74,5 +80,10 @@ spec:
         type: array
       excluded_below_min_severity:
         type: array
+      code_scanning_group_bounds:
+        type: object
+        description: >
+          The alert and distinct-path caps that split one cause into several
+          remediation groups so each leaf task stays executable.
   action: file_dependabot_alert_tasks
   config: {}
