@@ -60,11 +60,38 @@ Add `--website-build` only after preparing the website dependencies through
 the isolated procedure in [website validation](website-validation.md). It
 authorizes the harness's build check, never deployment.
 
-Hosted evidence can be combined with `--platform-evidence <report.json>`. Only
-schema-version 2 reports for the exact candidate ID are accepted, and each
-imported scenario's command must exactly match the current inventory. The
-imported file hash is retained in the report. This permits a macOS runner to
-contribute its actual required check without describing a Linux run as macOS.
+Hosted evidence can be combined with `--platform-evidence <report.json>`. A
+schema-version 2 full-sweep report must name the exact candidate ID and exact
+inventory command. The macOS workflow also uploads a bounded
+`macos-platform-evidence-<run>-<attempt>` artifact after all of its required
+tests pass. That report records the physical checkout commit, exact required
+command, assertion set, workflow/run identity, and hashes of the workflow,
+checker, inventory, and importer. Import accepts it only against a clean
+checkout of that exact commit;
+stale revisions, dirty candidates, wrong commands, missing assertions, failed
+or unrun outcomes, incomplete GitHub Actions provenance, and changed source
+hashes are rejected. The imported file hash is retained in the combined
+report. This permits the hosted runner to contribute its actual macOS check
+without describing a Linux run as macOS or requiring an executor to access a
+manual Mac.
+
+After the candidate lands, an operator must select the successful hosted
+`macOS Platform` run for the landed commit, download its evidence artifact
+through the authenticated GitHub Actions interface, and run from a clean
+checkout of that same commit:
+
+```bash
+./scripts/qa-full-sweep.sh --build-candidate --run-commands \
+  --platform-evidence /absolute/path/to/macos-platform-evidence.json \
+  --output qa-full-sweep-report.json
+```
+
+The workflow creates the bounded report with
+`./scripts/check-ci-macos.sh --evidence-output macos-platform-evidence.json`.
+That emission mode deliberately refuses non-Darwin and non-GitHub-Actions
+environments. The ordinary `./scripts/check-ci-macos.sh` command remains the
+inventory contract and can be run locally to validate workflow paths and test
+filters, but on Linux it is not macOS execution evidence.
 
 ## Capability-bound legs
 
@@ -81,7 +108,9 @@ The pre-release sweep validates source builds, packaging, installers, and
 dry-run/version contracts but never deploys or publishes. Live website/npm
 freshness is reported as `PENDING` and is deliberately excluded from the
 pre-release decision, so it cannot create a version/tag cycle. Linux evidence
-does not verify the required macOS leg.
+does not verify the required macOS leg. Post-merge hosted execution and
+exact-commit artifact import remain explicit operator verification; a
+pre-merge run for an earlier commit is stale by design.
 
 ## Sign-off decision and findings
 

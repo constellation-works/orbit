@@ -6,7 +6,7 @@
     "sha256": {"cli":"a33c8dc6ba55b451b0b81527984f33d77eb56b8e9c543dc603a390f6f6a4f203","job":"6af10624aeb648c8998765463531c3d3a5e3a473e0d7059dab91891f8b5d4ffe","activity":"1a731d7dd19ea7b0a013f2b07d82b1982676a89a62730ee6e9a7b0e952667d8b","mcp":"9792ea29b083d7e275ab2d2a44c7eebb17520be8c667d2a4f64d8774db79b2ea","api":"01520ee981457c5a7ddc50d17c30964d785c7f2deb4f8c4d7b59a872bc24f8e4","dashboard":"0f6f4e242fb3ece988b2a3192e030c002e1240af5383dd8e9ca4b7908da1be74"}
   },
   "feature_families": [
-    {"id":"bootstrap-routing","scenarios":["isolated-cli-lifecycle","workspace-boundary"]},
+    {"id":"bootstrap-routing","scenarios":["isolated-cli-lifecycle","workspace-boundary","config-transaction","host-identity-transaction","migration-lifecycle"]},
     {"id":"tasks-artifacts-navigation","scenarios":["isolated-cli-lifecycle","task-list-pagination"]},
     {"id":"mcp-tools","scenarios":["mcp-wire-boundary","mcp-process-boundary"]},
     {"id":"dashboard-api","scenarios":["dashboard-api-boundary","api-process-boundary","dashboard-browser"]},
@@ -14,7 +14,7 @@
     {"id":"automation-scheduling","scenarios":["auto-task-registration-mint","scheduler-retry"]},
     {"id":"gc","scenarios":["gc-routing-protection"]},
     {"id":"publication-recovery","scenarios":["publication-restore"]},
-    {"id":"search-docs-observability","scenarios":["search-observability-boundary","docs-process-boundary","semantic-process-boundary"]},
+    {"id":"search-docs-observability","scenarios":["search-observability-boundary","unified-log-selection","legacy-logs-compatibility","docs-process-boundary","semantic-process-boundary"]},
     {"id":"definitions-policy-operation","scenarios":["definition-policy-boundary"]},
     {"id":"installation-update-distribution","scenarios":["source-binary-provenance","installer-update","npm-package","plugin-install","website-build","macos-platform"]}
   ],
@@ -23,6 +23,11 @@
     {"id":"source-binary-provenance","required":true,"capability":"local","kind":"builtin","surfaces":[],"assertions":["binary-built-from-current-source","source-stable-through-build","binary-hash-recorded"],"behavior":["normal","failure"]},
     {"id":"isolated-cli-lifecycle","required":true,"capability":"local","kind":"builtin","surfaces":["cli:init","cli:task","cli:artifacts"],"assertions":["global-init-persists-isolated-root","workspace-init-registers-primary","task-add-returns-requested-fields","task-show-round-trips-payload","artifact-put-mutates-task","artifact-get-round-trips-exact-content","task-list-contains-created-task"],"behavior":["normal","failure","persistence"]},
     {"id":"workspace-boundary","required":true,"capability":"local","kind":"builtin","surfaces":["cli:workspace"],"assertions":["second-workspace-isolated","explicit-selector-wins-over-cwd","cross-workspace-task-read-refused"],"behavior":["normal","failure","workspace-boundary"]},
+    {"id":"config-transaction","required":true,"capability":"local","kind":"builtin","surfaces":["cli:config"],"assertions":["supported-setting-persists","exact-setting-readback","invalid-setting-refused-without-byte-change"],"behavior":["normal","failure","persistence"]},
+    {"id":"host-identity-transaction","required":true,"capability":"local","kind":"builtin","surfaces":["cli:host"],"assertions":["initialized-identity-readback","supported-rename-updates-local-records","rename-preserves-machine-id-and-reads-back","stale-rename-refused-without-mutation","invalid-rename-refused-without-mutation"],"behavior":["normal","failure","persistence"]},
+    {"id":"unified-log-selection","required":true,"capability":"local","kind":"builtin","surfaces":["cli:log"],"assertions":["exact-filtered-unified-record","nonmatching-and-malformed-records-are-excluded"],"behavior":["normal","failure"]},
+    {"id":"legacy-logs-compatibility","required":true,"capability":"local","kind":"builtin","surfaces":["cli:logs"],"assertions":["supported-run-fixture-completes","exact-legacy-compatibility-output-and-deprecation","unknown-legacy-step-is-refused"],"behavior":["normal","failure","compatibility"]},
+    {"id":"migration-lifecycle","required":true,"capability":"local","kind":"builtin","surfaces":["cli:migrate"],"assertions":["disposable-migration-fixture-initialized","legacy-dry-run-reports-pending-without-mutation","confirmed-migration-applies-known-legacy-state","repeated-migration-is-idempotent","newer-state-refused-without-mutation"],"behavior":["normal","failure","persistence","idempotency"]},
     {"id":"task-list-pagination","required":true,"capability":"local","kind":"cargo-test","surfaces":[],"command":["cargo","test","-p","orbit-web","task_pages_reach_every_match_and_reject_invalid_or_mismatched_cursors","--","--nocapture"],"assertions":["pagination-reaches-every-match","invalid-cursor-refused","cross-workspace-cursor-refused"],"behavior":["normal","failure","boundary"]},
     {"id":"mcp-wire-boundary","required":true,"capability":"local","kind":"builtin","surfaces":["cli:mcp","mcp:orbit_workspace_list","mcp:orbit_task_show"],"assertions":["initialize-negotiates-jsonrpc","tools-list-is-structured","workspace-list-returns-bound-checkout","task-show-round-trips-over-mcp","cross-workspace-mcp-read-refused"],"behavior":["normal","failure","workspace-boundary"]},
     {"id":"mcp-process-boundary","required":true,"capability":"local","kind":"cargo-test","surfaces":["cli:audit","mcp:orbit_agent_invoke","mcp:orbit_auto_task_list","mcp:orbit_auto_task_mint","mcp:orbit_command_exec","mcp:orbit_crew_list","mcp:orbit_friction_add","mcp:orbit_friction_list","mcp:orbit_friction_update","mcp:orbit_operation_enable","mcp:orbit_operation_explain","mcp:orbit_operation_list","mcp:orbit_operation_revoke","mcp:orbit_operation_stop","mcp:orbit_search","mcp:orbit_task_add","mcp:orbit_task_approve","mcp:orbit_task_artifact_get","mcp:orbit_task_artifact_put","mcp:orbit_task_list","mcp:orbit_task_start","mcp:orbit_task_update","mcp:orbit_workflow_run_list","mcp:orbit_workflow_run_resume","mcp:orbit_workflow_run_show","mcp:orbit_workflow_run_workers","mcp:orbit_workflow_ship"],"command":["cargo","test","-p","orbit-cli","--test","mcp_roundtrip","--","--nocapture"],"assertions":["real-stdio-jsonrpc-tools-cross-runtime-store-boundary","mcp-mutating-tools-persist-and-audit","mcp-routing-and-refusal-contracts"],"behavior":["normal","failure","persistence","workspace-boundary"]},
@@ -47,11 +52,5 @@
     {"id":"website-build","required":true,"capability":"website-build","kind":"command","surfaces":[],"command":["npm","--prefix","website","run","build"],"assertions":["website-builds-from-candidate-source","website-build-does-not-deploy"],"behavior":["normal","failure"]},
     {"id":"macos-platform","required":true,"capability":"macos","kind":"command","surfaces":[],"command":["./scripts/check-ci-macos.sh"],"assertions":["macos-required-workflow-is-current","macos-check-ran-on-matching-revision"],"behavior":["normal","failure"]}
   ],
-  "required_capability_gaps": {
-    "cli:config":"No isolated behavioral read/write/refusal transaction is implemented yet.",
-    "cli:host":"No isolated host identity mutation/readback/refusal transaction is implemented yet.",
-    "cli:log":"The full sweep does not yet seed and assert an exact unified-log record.",
-    "cli:logs":"The compatibility logs entry surface lacks an exact isolated output assertion.",
-    "cli:migrate":"No safe disposable legacy-state migration and rollback scenario is implemented yet."
-  }
+  "required_capability_gaps": {}
 }
