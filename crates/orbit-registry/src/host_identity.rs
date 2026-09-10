@@ -12,7 +12,6 @@
 //! no silent fallback to the OS hostname. Routine `hosts:` pinning,
 //! the sweep, and status all resolve through [`HostIdentity::host_id`].
 
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -170,35 +169,33 @@ fn host_toml_path(global_root: &Path) -> PathBuf {
 }
 
 fn existing_host_toml_path(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
-    let path = host_toml_path(global_root);
-    if !path.exists() {
-        return Ok(None);
-    }
+    let canonical_root = match global_root.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "failed to canonicalize host identity directory '{}': {error}",
+                global_root.display()
+            )));
+        }
+    };
+    let canonical_path = canonical_root.join(HOST_TOML_FILE);
 
-    let canonical_root = global_root.canonicalize().map_err(|error| {
-        OrbitError::Io(format!(
-            "failed to canonicalize host identity directory '{}': {error}",
-            global_root.display()
-        ))
-    })?;
-    let canonical_path = path.canonicalize().map_err(|error| {
-        OrbitError::Io(format!(
-            "failed to canonicalize host identity '{}': {error}",
-            path.display()
-        ))
-    })?;
-    if !canonical_path.starts_with(&canonical_root)
-        || canonical_path.file_name() != Some(OsStr::new(HOST_TOML_FILE))
-        || !canonical_path.is_file()
-    {
-        return Err(OrbitError::InvalidInput(format!(
-            "host identity path must be a regular {HOST_TOML_FILE} file inside '{}': {}",
-            global_root.display(),
-            path.display()
-        )));
+    match std::fs::symlink_metadata(&canonical_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(OrbitError::InvalidInput(format!(
+                "host identity path must be a regular {HOST_TOML_FILE} file inside '{}': {}",
+                global_root.display(),
+                canonical_path.display()
+            )))
+        }
+        Ok(_) => Ok(Some(canonical_path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(OrbitError::Io(format!(
+            "failed to inspect host identity '{}': {error}",
+            canonical_path.display()
+        ))),
     }
-
-    Ok(Some(canonical_root.join(HOST_TOML_FILE)))
 }
 
 fn non_blank(value: &Option<String>) -> Option<String> {
