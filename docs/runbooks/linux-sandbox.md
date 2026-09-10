@@ -146,3 +146,23 @@ affected services/connections and verify ordinary reads again. Do not launch
 an old MCP server or drain against shared executor files that still contain
 `off`. These steps change Orbit processes and resources, not host AppArmor
 settings.
+
+### Runtime grant race regression
+
+Runtime directory and SQLite sidecar grants are passed to Bubblewrap as held
+file descriptors using `--bind-fd`; the capability probe rejects older builds
+that do not advertise this option. Run the explicit kernel regression on an
+authorized Linux host after building the candidate revision:
+
+```sh
+cargo test -p orbit-exec --test linux_sandbox \
+  kernel_descriptor_mount_never_writes_the_replacement_object -- --ignored --exact
+```
+
+The test deliberately replaces a regular sidecar name after its descriptor is
+opened and proves that the replacement is unchanged. Namespace denial is a
+test failure, not a skip. Ordinary tests also cover descriptor closure and
+fail-closed external-symlink replacement without requiring user namespaces.
+The contract assumes concurrent writers cannot perform privileged remounts of
+the already-open runtime root or its ancestors. macOS uses its existing
+Seatbelt path rules; other platforms reject `linux-bwrap` at dispatch.

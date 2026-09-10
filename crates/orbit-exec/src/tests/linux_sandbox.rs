@@ -5,6 +5,8 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
 use super::{LinuxBwrapPostRunGuard, expand_rule, expand_rules, walk_paths};
@@ -225,4 +227,156 @@ fn managed_aliases_replay_denies_and_pin_replaceable_parents() {
         assert_eq!(final_mount[0], mode);
         assert_eq!(final_mount[1], source.display().to_string());
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn descriptor_mount_plan_holds_the_validated_object_and_closes_it_on_drop() {
+    use super::{LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority};
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let target = root.join("orbit.db-wal");
+    fs::write(&target, b"validated").expect("sidecar");
+    let source = fs::File::open(&target).expect("open authority");
+    let source_fd = source.as_raw_fd();
+    fs::rename(&target, root.join("validated-sidecar")).expect("replace name");
+    fs::write(&target, b"replacement").expect("replacement");
+    let resolved = profile(vec![target.display().to_string()]);
+
+    let plan = compile_linux_bwrap_argv_with_authority(
+        &resolved,
+        "/bin/true",
+        &[],
+        Some(&root),
+        false,
+        vec![LinuxBwrapMountAuthority {
+            destination: target.clone(),
+            source,
+        }],
+    )
+    .expect("descriptor-backed plan");
+    assert!(plan.args.windows(3).any(|args| {
+        args[0] == "--bind-fd" && args[1] == "3" && args[2] == target.display().to_string()
+    }));
+    assert!(unsafe { libc::fcntl(source_fd, libc::F_GETFD) } >= 0);
+
+    drop(plan);
+    assert_eq!(unsafe { libc::fcntl(source_fd, libc::F_GETFD) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EBADF)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn descriptor_mount_plan_rejects_an_external_symlink_replacement() {
+    use std::os::unix::fs::symlink;
+
+    use super::{LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority};
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("root");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&root).expect("root");
+    fs::create_dir_all(&outside).expect("outside");
+    let target = root.join("orbit.db-wal");
+    let secret = outside.join("secret");
+    fs::write(&target, b"validated").expect("sidecar");
+    fs::write(&secret, b"outside").expect("secret");
+    let source = fs::File::open(&target).expect("open authority");
+    fs::remove_file(&target).expect("remove validated name");
+    symlink(&secret, &target).expect("external replacement");
+    let resolved = profile(vec![target.display().to_string()]);
+
+    let error = compile_linux_bwrap_argv_with_authority(
+        &resolved,
+        "/bin/true",
+        &[],
+        Some(&root),
+        false,
+        vec![LinuxBwrapMountAuthority {
+            destination: target,
+            source,
+        }],
+    )
+    .expect_err("replacement must fail closed");
+
+    assert!(matches!(error, OrbitError::PolicyDenied(_)));
+    assert_eq!(fs::read(&secret).expect("outside content"), b"outside");
+}
+
+/// Control for the original fault: path-only compilation follows the name at
+/// consumption time. Keep this executable finding beside the descriptor-safe
+/// case so the latter cannot become a model-only assertion.
+#[cfg(target_os = "linux")]
+#[test]
+fn path_only_mount_plan_follows_an_external_sidecar_replacement() {
+    use std::os::unix::fs::symlink;
+
+    use super::compile_linux_bwrap_argv;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("root");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&root).expect("root");
+    fs::create_dir_all(&outside).expect("outside");
+    let target = root.join("orbit.db-wal");
+    let secret = outside.join("secret");
+    fs::write(&target, b"validated").expect("sidecar");
+    fs::write(&secret, b"outside").expect("secret");
+    fs::remove_file(&target).expect("remove validated name");
+    symlink(&secret, &target).expect("external replacement");
+    let resolved = profile(vec![target.display().to_string()]);
+
+    let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&root), false)
+        .expect("path-only control compiles");
+    let outside = secret.canonicalize().expect("canonical outside");
+
+    assert!(plan.args.windows(3).any(|args| {
+        args[0] == "--bind"
+            && args[1] == outside.display().to_string()
+            && args[2] == outside.display().to_string()
+    }));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn descriptor_directory_mount_rejects_an_external_symlink_replacement() {
+    use std::os::unix::fs::symlink;
+
+    use super::{LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority};
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("root");
+    let outside = temp.path().join("outside");
+    let target = root.join("state/logs");
+    fs::create_dir_all(&target).expect("runtime directory");
+    fs::create_dir_all(&outside).expect("outside");
+    let source = fs::File::open(&target).expect("open directory authority");
+    fs::remove_dir(&target).expect("remove validated directory name");
+    symlink(&outside, &target).expect("external replacement");
+    let resolved = profile(vec![format!("{}/**", target.display())]);
+
+    let error = compile_linux_bwrap_argv_with_authority(
+        &resolved,
+        "/bin/true",
+        &[],
+        Some(&root),
+        false,
+        vec![LinuxBwrapMountAuthority {
+            destination: target,
+            source,
+        }],
+    )
+    .expect_err("directory replacement must fail closed");
+
+    assert!(matches!(error, OrbitError::PolicyDenied(_)));
+    assert!(
+        fs::read_dir(&outside)
+            .expect("outside directory")
+            .next()
+            .is_none()
+    );
 }

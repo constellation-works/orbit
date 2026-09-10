@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use orbit_types::workflow::activity_job::V2AuditEventKind;
@@ -45,6 +47,25 @@ pub struct ResolvedShellExecutor {
     pub timeout_seconds: Option<u64>,
 }
 
+/// Open host object backing a Linux runtime convenience grant.
+///
+/// The descriptor is acquired while the runtime path is validated and remains
+/// alive until Bubblewrap consumes the mount plan. The displayed path is only
+/// the namespace destination; it is never reopened as the mount source.
+#[derive(Clone, Debug)]
+pub struct LinuxRuntimeWriteAuthority {
+    pub path: PathBuf,
+    pub handle: Arc<File>,
+}
+
+impl PartialEq for LinuxRuntimeWriteAuthority {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && Arc::ptr_eq(&self.handle, &other.handle)
+    }
+}
+
+impl Eq for LinuxRuntimeWriteAuthority {}
+
 /// Sandbox descriptor for a CLI invocation. The host resolves the executor's
 /// `sandbox` declaration and the activity's `fsProfile` against the active
 /// policy and workspace root; the engine compiles the OS-specific payload
@@ -62,6 +83,9 @@ pub struct ResolvedSandbox {
     /// Whether the subprocess runs in an Orbit-owned disposable worktree.
     /// Linux may snapshot-expand non-subtree deny globs only in this case.
     pub managed_worktree: bool,
+    /// Linux runtime grants whose host objects were opened by the resolving
+    /// host. Empty for other backends and ordinary policy-derived grants.
+    pub runtime_write_authority: Vec<LinuxRuntimeWriteAuthority>,
 }
 
 /// Input bundle for a single v2 activity dispatch.

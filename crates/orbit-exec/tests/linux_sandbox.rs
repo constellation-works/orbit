@@ -7,10 +7,11 @@ use std::process::Stdio;
 
 use orbit_common::OrbitError;
 use orbit_exec::{
-    LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapPostRunGuard,
-    LinuxBwrapSpawnRequest, WriteAnchorKind, bwrap_path, bwrap_program_for_audit,
-    compile_linux_bwrap_argv, linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants,
-    prepare_linux_bwrap_write_grants, probe_bwrap, spawn_under_linux_bwrap,
+    LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMountAuthority,
+    LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, WriteAnchorKind, bwrap_path,
+    bwrap_program_for_audit, compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority,
+    linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
+    probe_bwrap, spawn_under_linux_bwrap,
 };
 use orbit_types::policy::ResolvedFsProfile;
 
@@ -78,6 +79,60 @@ fn bwrap_child_gets_only_the_supplied_environment() {
             "{leaked} must not reach a Bubblewrap-confined provider child: {child_env}"
         );
     }
+}
+
+/// Explicit live regression for the validation-to-mount boundary. The host
+/// name is replaced after its descriptor is opened; the child may modify only
+/// that opened object, never the replacement now visible at the name.
+#[test]
+#[ignore = "requires a Linux host with working Bubblewrap user/mount namespaces"]
+fn kernel_descriptor_mount_never_writes_the_replacement_object() {
+    let probe = probe_bwrap();
+    assert!(
+        probe.available,
+        "live boundary unvalidated: {}",
+        probe.detail
+    );
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let target = root.join("orbit.db-wal");
+    let original = root.join("original-wal");
+    std::fs::write(&target, b"validated").expect("validated file");
+    let source = std::fs::File::open(&target).expect("open validated authority");
+    std::fs::rename(&target, &original).expect("move validated object");
+    std::fs::write(&target, b"replacement").expect("replacement file");
+    let resolved = profile(vec![target.display().to_string()]);
+    let plan = compile_linux_bwrap_argv_with_authority(
+        &resolved,
+        "/bin/sh",
+        &[
+            "-c".to_string(),
+            format!("printf child > '{}'", target.display()),
+        ],
+        Some(&root),
+        false,
+        vec![LinuxBwrapMountAuthority {
+            destination: target.clone(),
+            source,
+        }],
+    )
+    .expect("compile descriptor plan");
+
+    let status = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+        plan: &plan,
+        env: &[],
+        cwd: Some(&root),
+        stdin: Stdio::null(),
+        stdout: Stdio::null(),
+        stderr: Stdio::piped(),
+    })
+    .expect("spawn")
+    .wait()
+    .expect("wait");
+
+    assert!(status.success());
+    assert_eq!(std::fs::read(&original).expect("held object"), b"child");
+    assert_eq!(std::fs::read(&target).expect("replacement"), b"replacement");
 }
 
 #[test]

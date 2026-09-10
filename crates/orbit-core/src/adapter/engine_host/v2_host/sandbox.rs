@@ -1,10 +1,16 @@
 #[cfg(target_os = "linux")]
-use std::ffi::OsString;
+use std::ffi::{CString, OsString};
+#[cfg(target_os = "linux")]
+use std::fs::File;
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+#[cfg(target_os = "linux")]
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
 
 use orbit_engine::RuntimeHost;
-use orbit_engine::{DispatchError, ResolvedSandbox};
+use orbit_engine::{DispatchError, LinuxRuntimeWriteAuthority, ResolvedSandbox};
 use orbit_types::policy::{ResolvedFsProfile, UNRESTRICTED_FS_PROFILE};
 use orbit_types::workflow::ExecutorSandboxKind;
 
@@ -40,6 +46,7 @@ pub(crate) fn resolve_executor_sandbox(
             },
             allow_fallback: false,
             managed_worktree: false,
+            runtime_write_authority: Vec::new(),
         })),
         ExecutorSandboxKind::MacosSandboxExec => {
             #[cfg(not(target_os = "macos"))]
@@ -76,6 +83,7 @@ pub(crate) fn resolve_executor_sandbox(
                     fs_profile: resolved,
                     allow_fallback: executor.allow_fallback,
                     managed_worktree: false,
+                    runtime_write_authority: Vec::new(),
                 }))
             }
         }
@@ -107,11 +115,13 @@ pub(crate) fn resolve_executor_sandbox(
                 if grants_workspace_modify {
                     append_codex_side_write_roots(runtime, provider, &mut resolved)?;
                 }
+                let mut runtime_write_authority = Vec::new();
                 append_linux_runtime_write_roots(
                     runtime,
                     subprocess_cwd,
                     grants_workspace_modify,
                     &mut resolved,
+                    &mut runtime_write_authority,
                 )?;
                 append_linux_provider_state_roots(provider, &mut resolved)?;
                 append_recovery_authority_deny(runtime, &mut resolved)?;
@@ -136,6 +146,7 @@ pub(crate) fn resolve_executor_sandbox(
                     fs_profile: resolved,
                     allow_fallback: executor.allow_fallback,
                     managed_worktree,
+                    runtime_write_authority,
                 }))
             }
         }
@@ -310,15 +321,16 @@ fn append_linux_runtime_write_roots(
     _subprocess_cwd: Option<&Path>,
     grants_workspace_modify: bool,
     resolved: &mut ResolvedFsProfile,
+    authority: &mut Vec<LinuxRuntimeWriteAuthority>,
 ) -> Result<(), DispatchError> {
     let global = validated_linux_runtime_root(&runtime.paths().global_dir)?;
     let workspace = validated_linux_runtime_root(&runtime.paths().orbit_dir)?;
 
     for relative in ["state/logs", "state/audit", "tasks"] {
-        append_runtime_directory_grant(&global, relative, resolved)?;
+        append_runtime_directory_grant(&global, relative, resolved, authority)?;
     }
     for relative in ["orbit.db", "orbit.db-wal", "orbit.db-shm"] {
-        append_runtime_sidecar_grant(&global, relative, resolved)?;
+        append_runtime_sidecar_grant(&global, relative, resolved, authority)?;
     }
 
     if !grants_workspace_modify {
@@ -332,21 +344,21 @@ fn append_linux_runtime_write_roots(
         "state/logs",
         "state/job-runs",
     ] {
-        append_runtime_directory_grant(&workspace, relative, resolved)?;
+        append_runtime_directory_grant(&workspace, relative, resolved, authority)?;
     }
     for relative in [
         "state/semantic.db",
         "state/semantic.db-wal",
         "state/semantic.db-shm",
     ] {
-        append_runtime_sidecar_grant(&workspace, relative, resolved)?;
+        append_runtime_sidecar_grant(&workspace, relative, resolved, authority)?;
     }
 
     // Language-neutral host cache for toolchain artifacts shared across
     // worktrees (compiler caches, etc.). Implementer-only so read-only
     // profiles stay non-writers. Not a workspace `.orbit` path and not a
     // shared Cargo target directory. [ORB-11259]
-    append_runtime_directory_grant(&global, "cache", resolved)?;
+    append_runtime_directory_grant(&global, "cache", resolved, authority)?;
 
     Ok(())
 }
@@ -364,6 +376,7 @@ pub(super) fn append_runtime_directory_grant(
     root: &Path,
     relative: &str,
     resolved: &mut ResolvedFsProfile,
+    authority: &mut Vec<LinuxRuntimeWriteAuthority>,
 ) -> Result<(), DispatchError> {
     let Some(directory) = validated_linux_runtime_descendant(root, relative)? else {
         tracing::warn!(
@@ -374,13 +387,12 @@ pub(super) fn append_runtime_directory_grant(
         return Ok(());
     };
 
-    std::fs::create_dir_all(&directory).map_err(|error| {
-        DispatchError::CliInvocationPermanent(format!(
-            "create Linux sandbox runtime store `{}`: {error}",
-            directory.display()
-        ))
-    })?;
+    let handle = open_or_create_runtime_directory(root, &directory)?;
     append_unique_modify_root(resolved, directory.display().to_string());
+    authority.push(LinuxRuntimeWriteAuthority {
+        path: directory,
+        handle: std::sync::Arc::new(File::from(handle)),
+    });
     Ok(())
 }
 
@@ -397,6 +409,7 @@ pub(super) fn append_runtime_sidecar_grant(
     root: &Path,
     relative: &str,
     resolved: &mut ResolvedFsProfile,
+    authority: &mut Vec<LinuxRuntimeWriteAuthority>,
 ) -> Result<(), DispatchError> {
     let Some(file) = validated_linux_runtime_descendant(root, relative)? else {
         tracing::warn!(
@@ -409,7 +422,12 @@ pub(super) fn append_runtime_sidecar_grant(
 
     match std::fs::symlink_metadata(&file) {
         Ok(metadata) if metadata.is_file() => {
+            let handle = open_runtime_file(root, &file)?;
             append_unique_modify_root(resolved, file.display().to_string());
+            authority.push(LinuxRuntimeWriteAuthority {
+                path: file,
+                handle: std::sync::Arc::new(File::from(handle)),
+            });
             Ok(())
         }
         Ok(_) => Ok(()),
@@ -419,6 +437,106 @@ pub(super) fn append_runtime_sidecar_grant(
             file.display()
         ))),
     }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn open_or_create_runtime_directory(
+    root: &Path,
+    directory: &Path,
+) -> Result<OwnedFd, DispatchError> {
+    let relative = directory.strip_prefix(root).map_err(|_| {
+        DispatchError::CliInvocationPermanent(format!(
+            "Linux sandbox runtime store `{}` escaped `{}`",
+            directory.display(),
+            root.display()
+        ))
+    })?;
+    let mut current =
+        open_directory_at(None, root).map_err(|error| runtime_open_error(root, error))?;
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(DispatchError::CliInvocationPermanent(format!(
+                "Linux sandbox runtime store `{}` contains an invalid component",
+                directory.display()
+            )));
+        };
+        match open_directory_at(Some(&current), Path::new(name)) {
+            Ok(next) => current = next,
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
+                mkdir_at(&current, name, directory)?;
+                current = open_directory_at(Some(&current), Path::new(name))
+                    .map_err(|error| runtime_open_error(directory, error))?;
+            }
+            Err(error) => return Err(runtime_open_error(directory, error)),
+        }
+    }
+    Ok(current)
+}
+
+#[cfg(target_os = "linux")]
+fn open_runtime_file(root: &Path, file: &Path) -> Result<OwnedFd, DispatchError> {
+    let relative = file
+        .strip_prefix(root)
+        .map_err(|_| runtime_open_error(file, std::io::Error::from_raw_os_error(libc::EXDEV)))?;
+    let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+    let parent_path = root.join(parent);
+    let directory = open_or_create_runtime_directory(root, &parent_path)?;
+    let name = relative
+        .file_name()
+        .ok_or_else(|| runtime_open_error(file, std::io::Error::from_raw_os_error(libc::EINVAL)))?;
+    let name = CString::new(name.as_bytes())
+        .map_err(|_| runtime_open_error(file, std::io::Error::from_raw_os_error(libc::EINVAL)))?;
+    let flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+    let raw = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
+    if raw < 0 {
+        return Err(runtime_open_error(file, std::io::Error::last_os_error()));
+    }
+    let opened = File::from(unsafe { OwnedFd::from_raw_fd(raw) });
+    let metadata = opened
+        .metadata()
+        .map_err(|error| runtime_open_error(file, error))?;
+    if !metadata.is_file() {
+        return Err(runtime_open_error(
+            file,
+            std::io::Error::from_raw_os_error(libc::EINVAL),
+        ));
+    }
+    Ok(opened.into())
+}
+
+#[cfg(target_os = "linux")]
+fn open_directory_at(parent: Option<&OwnedFd>, path: &Path) -> std::io::Result<OwnedFd> {
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from_raw_os_error(libc::EINVAL))?;
+    let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+    let raw = match parent {
+        Some(parent) => unsafe { libc::openat(parent.as_raw_fd(), path.as_ptr(), flags) },
+        None => unsafe { libc::open(path.as_ptr(), flags) },
+    };
+    if raw < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(unsafe { OwnedFd::from_raw_fd(raw) })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn mkdir_at(parent: &OwnedFd, name: &std::ffi::OsStr, path: &Path) -> Result<(), DispatchError> {
+    let name = CString::new(name.as_bytes())
+        .map_err(|_| runtime_open_error(path, std::io::Error::from_raw_os_error(libc::EINVAL)))?;
+    let result = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o777) };
+    if result < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST) {
+        return Err(runtime_open_error(path, std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn runtime_open_error(path: &Path, error: std::io::Error) -> DispatchError {
+    DispatchError::CliInvocationPermanent(format!(
+        "open Linux sandbox runtime object `{}` without following links: {error}",
+        path.display()
+    ))
 }
 
 /// Resolve a store Orbit owns beneath an already-validated runtime root.

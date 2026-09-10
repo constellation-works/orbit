@@ -240,6 +240,26 @@ The ADR authoring exception follows that same ordering: trusted host setup ensur
 
 `spawn_linux_bwrap` prepares mount anchors immediately before compiling argv, from the same `ResolvedFsProfile` that compiles it. The grant set is every positive exact/subtree `modify` rule that is a narrow re-allow beneath an earlier deny and remains writable at its anchor after the full ordered rule list is evaluated. A later deny covering the anchor therefore prevents materialization, while a narrower deny below a writable subtree leaves the remaining subtree grant intact. Broad writable roots are excluded; they are host-owned and must already exist, so an absent one still fails closed at compile.
 
+Linux runtime-store conveniences have a stronger source contract than ordinary
+policy paths. Core resolves them beneath a canonical runtime root, creates
+missing directory components with descriptor-relative `mkdirat`/`openat`
+operations that refuse symlinks, and opens the final directory or regular
+SQLite object. Engine retains those descriptors through dispatch. The actual
+Bubblewrap plan uses inherited `--bind-fd` mount sources; the mutable pathname
+is only the mount destination. Bubblewrap consumes and closes these setup
+descriptors rather than preserving them for the provider process. A path
+replacement that prevents the descriptor grant from matching the final plan is
+rejected before spawn. This assumes the already-open runtime-root object and
+its ancestors cannot be remounted by an unprivileged concurrent writer; name
+renames and symlink replacement below that object do not change descriptor
+authority. Descriptor closure occurs when the plan is dropped after spawn.
+
+This descriptor handoff is Linux-only. macOS continues to compile Seatbelt
+rules from canonical paths and other platforms reject a Linux Bubblewrap
+executor. The generic path-only Bubblewrap compiler remains available for
+ordinary policy rules and audit rendering; it is intentionally not a sanitizer
+for mutable runtime sidecars.
+
 The policy grammar is the explicit anchor-type contract: an exact rule denotes a file, while `<root>/**` denotes a directory subtree. Filename punctuation is never type evidence, so an extensionless exact rule materializes a file and a dotted subtree root materializes a directory without any hardcoded path inventory. An existing target whose filesystem type contradicts its rule fails closed.
 
 Creation is confined to the canonical managed worktree, which is trusted and disposable. Every worktree-owned component is checked for symlinks before both existing- and absent-target handling, the resolved existing anchor (or newly created parent) must remain inside the canonical root, and files use create-new semantics. Anchors outside that root are the host's to create and are reported, not invented. Creating an anchor grants nothing new — the final effective profile already decided the path is writable — so this is materialization, not policy.

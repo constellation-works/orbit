@@ -5,7 +5,10 @@
 //! write confinement, not a general read-policy implementation.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
 use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -29,7 +32,7 @@ pub struct BwrapProbeOutcome {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct LinuxBwrapPlan {
     pub wrapper: String,
     pub args: Vec<String>,
@@ -37,6 +40,26 @@ pub struct LinuxBwrapPlan {
     /// because their anchor does not exist. Never silently discarded: the
     /// caller reports each one against the rule that granted it.
     pub dropped_grants: Vec<UnsatisfiedWriteGrant>,
+    /// Mount-source descriptors retained until Bubblewrap has consumed argv.
+    /// Empty for ordinary path-based plans and audit rendering.
+    mount_sources: Vec<File>,
+}
+
+impl PartialEq for LinuxBwrapPlan {
+    fn eq(&self, other: &Self) -> bool {
+        self.wrapper == other.wrapper
+            && self.args == other.args
+            && self.dropped_grants == other.dropped_grants
+    }
+}
+
+impl Eq for LinuxBwrapPlan {}
+
+/// A host object already validated and opened by the runtime owner.
+#[derive(Debug)]
+pub struct LinuxBwrapMountAuthority {
+    pub destination: PathBuf,
+    pub source: File,
 }
 
 #[derive(Debug)]
@@ -499,6 +522,19 @@ pub fn probe_bwrap() -> BwrapProbeOutcome {
             detail: bwrap_unavailable_message(),
         };
     };
+    let supports_bind_fd = Command::new(&path)
+        .arg("--help")
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).contains("--bind-fd"))
+        .unwrap_or(false);
+    if !supports_bind_fd {
+        return BwrapProbeOutcome {
+            available: false,
+            trusted_path: path.display().to_string(),
+            detail: "Bubblewrap does not support the required --bind-fd object-authority mount"
+                .to_string(),
+        };
+    }
     let args = base_namespace_args();
     let output = Command::new(&path)
         .args(&args)
@@ -655,7 +691,47 @@ pub fn compile_linux_bwrap_argv(
         wrapper: TRUSTED_BWRAP_PATH.to_string(),
         args: out,
         dropped_grants,
+        mount_sources: Vec::new(),
     })
+}
+
+/// Compile a plan whose selected writable mount sources are descriptor-backed.
+///
+/// The authority descriptors name the validated objects even if their host
+/// paths are subsequently replaced. Bubblewrap receives only inherited
+/// `--bind-fd` sources for those grants; a missing matching bind fails
+/// closed because the runtime authority would otherwise be silently unused.
+pub fn compile_linux_bwrap_argv_with_authority(
+    profile: &ResolvedFsProfile,
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+    managed_worktree: bool,
+    authority: Vec<LinuxBwrapMountAuthority>,
+) -> Result<LinuxBwrapPlan, OrbitError> {
+    let mut plan = compile_linux_bwrap_argv(profile, program, args, cwd, managed_worktree)?;
+    for (descriptor_index, grant) in authority.into_iter().enumerate() {
+        let rendered = grant.destination.display().to_string();
+        let mut replaced = false;
+        for index in 0..plan.args.len().saturating_sub(2) {
+            if plan.args[index] == "--bind"
+                && plan.args[index + 1] == rendered
+                && plan.args[index + 2] == rendered
+            {
+                plan.args[index] = "--bind-fd".to_string();
+                plan.args[index + 1] = (descriptor_index + 3).to_string();
+                replaced = true;
+            }
+        }
+        if !replaced {
+            return Err(OrbitError::PolicyDenied(format!(
+                "validated Linux runtime grant `{}` had no writable mount in the final sandbox plan",
+                grant.destination.display()
+            )));
+        }
+        plan.mount_sources.push(grant.source);
+    }
+    Ok(plan)
 }
 
 pub fn spawn_under_linux_bwrap(request: LinuxBwrapSpawnRequest<'_>) -> Result<Child, OrbitError> {
@@ -691,6 +767,31 @@ pub fn spawn_under_linux_bwrap(request: LinuxBwrapSpawnRequest<'_>) -> Result<Ch
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
+        let source_fds = plan
+            .mount_sources
+            .iter()
+            .map(AsRawFd::as_raw_fd)
+            .collect::<Vec<_>>();
+        let mut temporary_fds = vec![-1; source_fds.len()];
+        unsafe {
+            command.pre_exec(move || {
+                let minimum = 3 + source_fds.len() as libc::c_int;
+                for (index, source) in source_fds.iter().copied().enumerate() {
+                    let duplicate = libc::fcntl(source, libc::F_DUPFD_CLOEXEC, minimum);
+                    if duplicate < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    temporary_fds[index] = duplicate;
+                }
+                for (index, duplicate) in temporary_fds.iter().copied().enumerate() {
+                    if libc::dup2(duplicate, 3 + index as libc::c_int) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    libc::close(duplicate);
+                }
+                Ok(())
+            });
+        }
         command.process_group(0);
     }
     command.spawn().map_err(|error| {

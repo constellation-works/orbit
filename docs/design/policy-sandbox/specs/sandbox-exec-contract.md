@@ -209,6 +209,21 @@ silently amend the original mandate.
 | Hardlinks | Names do not track secret provenance. AppArmor's subset rule can reject a child creating a more permissive alias, but an already existing allowed-name hardlink is a different case. Define resolved-path semantics consistently with the current evaluator, or require an isolated backing tree with no external hardlink writers. Neither is byte-provenance tracking. |
 | File opened while allowed, then renamed; existing mmap | The Landlock probes retain access. Linux 6.8 AppArmor caches granted FD permissions and does not provide general rename-based revocation. A mapping can already expose bytes without another pathname syscall. If revocation after rename is required, neither candidate is a full solution; specify stronger mutation isolation or a narrower acquisition contract explicitly. |
 | Inherited FD, cwd/dirfd, SCM_RIGHTS and pidfd acquisition | Close all nonessential descriptors before untrusted exec; use owned stdin pipes/null rather than arbitrary inherited files. Restrict Unix-socket FD donors, ptrace/process-memory and other access channels. AppArmor transition revalidation is not a substitute for descriptor hygiene. The deliberate inherited-FD probe demonstrates the Landlock hole. |
+
+Linux runtime directories and SQLite sidecars are an object-authority exception
+to path-only compilation. The host must open each accepted object while it is
+validating or descriptor-relatively creating it, carry that descriptor through
+engine dispatch, and supply `--bind-fd` as Bubblewrap's bind source. The
+pathname remains the namespace destination only. Replacing a validated name
+with a symlink or different object must either leave the held object as the sole
+writable source or reject the plan before spawn. A second canonicalization or
+metadata check without a retained descriptor does not meet this contract.
+
+The guarantee covers renames and link replacement beneath the opened runtime
+root. It assumes an unprivileged peer cannot remount the runtime root or its
+host ancestors. Bubblewrap consumes and closes the inherited setup descriptors
+before provider exec; the parent closes its copies with the plan after spawn.
+Non-Linux backends do not consume this authority representation.
 | Descendants and detached sessions | Enforce before the first untrusted instruction; use inherited/stacked confinement across fork/exec. `setsid` does not remove Landlock or AppArmor. Termination of processes escaping the original PGID is a separate supervision problem; the probe's detached child exits and is waited for explicitly. |
 | External writers or already known bytes | A denied name cannot undo copies, prior reads or malicious externally supplied hardlinks. Record the trusted-writer/acquisition boundary; do not advertise retroactive secrecy. |
 
