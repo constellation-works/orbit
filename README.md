@@ -138,7 +138,6 @@ The companion is released for macOS arm64 and Linux x86_64/aarch64 (glibc >= 2.3
 ├── config.yaml                  # workspace_id only
 ├── auto_tasks/                  # recurring task definitions
 ├── routines/                    # routine definitions
-├── tasks/                       # projection of ~/.orbit/tasks/workspaces/<id>/
 ├── resources/                   # activities, jobs, executors, policies (customizable)
 └── state/                       # worktrees, logs, job-runs, audit spool, scoreboard, semantic.db
 
