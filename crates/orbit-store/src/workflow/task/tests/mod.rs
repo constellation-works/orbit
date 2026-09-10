@@ -819,15 +819,40 @@ fn export_racing_a_deletion_is_valid_or_reports_the_disappeared_bundle() {
             .recv_timeout(Duration::from_secs(10))
             .expect("export must finish")
         {
-            Ok(_) => {
+            Ok(outcome) => {
+                assert_eq!(outcome.task_ids, vec!["ORB-00000"]);
                 let target = open_registry(dst.path());
-                import_tasks(&target, &archive, None, ImportConflictPolicy::Fail)
+                let imported = import_tasks(&target, &archive, None, ImportConflictPolicy::Fail)
                     .expect("a completed export must import cleanly");
+                assert_eq!(
+                    imported.tasks.first().map(|task| task.final_id.as_str()),
+                    Some("ORB-00000"),
+                    "a completed export must retain the deleted task bundle"
+                );
+                let imported_bundle = target
+                    .canonical_task_bundle_path(ws, "ORB-00000")
+                    .expect("canonical imported bundle path");
+                assert!(imported_bundle.is_dir());
+                let imported_bundle = read_bundle_at(&imported_bundle)
+                    .expect("a completed export must contain a readable task bundle");
+                assert_eq!(imported_bundle.envelope.id, "ORB-00000");
             }
-            Err(error) => assert!(
-                error.to_string().contains("disappeared"),
-                "concurrent deletion must be actionable: {error}"
-            ),
+            Err(error) => {
+                let message = error.to_string();
+                let bundle_path = bundle_dir.display().to_string();
+                assert!(
+                    message.contains("missing") || message.contains("disappeared"),
+                    "concurrent deletion must report the disappeared bundle: {message}"
+                );
+                assert!(
+                    message.contains("ORB-00000"),
+                    "concurrent deletion error must name the task ID: {message}"
+                );
+                assert!(
+                    message.contains(&bundle_path),
+                    "concurrent deletion error must name the bundle path: {message}"
+                );
+            }
         }
     });
 }
