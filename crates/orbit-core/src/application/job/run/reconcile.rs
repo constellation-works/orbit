@@ -1,7 +1,5 @@
 //! Stale-run reconciliation, terminal timing repair, and audit helpers.
 
-use std::collections::HashSet;
-
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::TaskReservationReleaseReason;
@@ -23,13 +21,13 @@ use super::owner::{
 /// list/history call.
 #[derive(Default)]
 pub(super) struct ReconcilePass {
-    healthy: HashSet<OwnerSnapshotKey>,
+    healthy: Vec<OwnerSnapshotKey>,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct OwnerSnapshotKey {
     run_id: String,
-    state: String,
+    state: JobRunState,
     pid: Option<u32>,
     pid_start_time: Option<String>,
 }
@@ -38,7 +36,7 @@ impl ReconcilePass {
     fn key(run: &JobRun) -> OwnerSnapshotKey {
         OwnerSnapshotKey {
             run_id: run.run_id.clone(),
-            state: run.state.to_string(),
+            state: run.state,
             pid: run.pid,
             pid_start_time: run.pid_start_time.clone(),
         }
@@ -49,7 +47,7 @@ impl ReconcilePass {
     }
 
     fn remember_healthy(&mut self, run: &JobRun) {
-        self.healthy.insert(Self::key(run));
+        self.healthy.push(Self::key(run));
     }
 }
 
