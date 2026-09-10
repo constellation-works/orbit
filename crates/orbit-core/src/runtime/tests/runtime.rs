@@ -23,6 +23,50 @@ fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathBuf) {
 }
 
 #[test]
+fn config_path_prefers_existing_workspace_config_over_global() {
+    let (_root, runtime, global_root, workspace_root) = test_runtime();
+    std::fs::write(global_root.join("config.toml"), "").expect("write global config");
+    std::fs::write(workspace_root.join("config.toml"), "").expect("write workspace config");
+
+    let expected = workspace_root
+        .canonicalize()
+        .expect("canonicalize workspace root")
+        .join("config.toml");
+    assert_eq!(runtime.config_path(), expected);
+}
+
+#[test]
+fn config_path_falls_back_to_global_when_workspace_config_is_absent() {
+    let (_root, runtime, global_root, _workspace_root) = test_runtime();
+
+    assert_eq!(runtime.config_path(), global_root.join("config.toml"));
+}
+
+/// [ORB-11931] A symlinked workspace `config.toml` must not be followed:
+/// resolving through it would let a planted symlink redirect config reads
+/// outside the selected workspace root, so the runtime falls back to the
+/// global config instead of the symlink target.
+#[test]
+#[cfg(unix)]
+fn config_path_falls_back_to_global_when_workspace_config_is_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let (_root, runtime, global_root, workspace_root) = test_runtime();
+    let outside_target = workspace_root
+        .parent()
+        .expect("workspace root has parent")
+        .join("outside-config.toml");
+    std::fs::write(&outside_target, "leaked = true\n").expect("write file outside workspace root");
+    symlink(&outside_target, workspace_root.join("config.toml"))
+        .expect("symlink workspace config.toml");
+
+    let resolved = runtime.config_path();
+
+    assert_eq!(resolved, global_root.join("config.toml"));
+    assert_ne!(resolved, outside_target);
+}
+
+#[test]
 fn orbit_root_env_pins_global_registry_root() {
     let home = tempdir().expect("home tempdir");
     let repo = tempdir().expect("repo tempdir");

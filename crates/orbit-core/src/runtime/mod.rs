@@ -380,12 +380,14 @@ impl OrbitRuntime {
     /// Returns the effective config.toml path.
     /// Workspace config replaces global if present; otherwise global.
     pub fn config_path(&self) -> PathBuf {
-        let ws_config = self.shared_root().join("config.toml");
-        if ws_config.exists() && self.shared_root() != self.global_root() {
-            ws_config
-        } else {
-            self.global_root().join("config.toml")
+        let shared_root = self.shared_root();
+        let global_root = self.global_root();
+        if shared_root != global_root
+            && let Ok(Some(ws_config)) = validated_config_path(&shared_root)
+        {
+            return ws_config;
         }
+        global_root.join(CONFIG_TOML_FILE)
     }
 
     pub fn persistence_config_json(&self) -> Value {
@@ -687,6 +689,45 @@ impl OrbitRuntime {
         def: &orbit_types::policy::PolicyDef,
     ) -> Result<(), OrbitError> {
         self.stores().policies().upsert_policy_def(def)
+    }
+}
+
+const CONFIG_TOML_FILE: &str = "config.toml";
+
+/// Resolve an existing workspace `config.toml` through its canonical root.
+///
+/// The workspace root may be selected by an explicit runtime override
+/// (workspace discovery, `--root`, or an env var), but the file name is
+/// fixed. Canonicalizing the root and rejecting a symlinked result keeps the
+/// resolved path inside the selected root instead of following a planted
+/// symlink to an unintended location [ORB-11931].
+fn validated_config_path(root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let canonical_root = match root.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "failed to canonicalize config root '{}': {error}",
+                root.display()
+            )));
+        }
+    };
+    let candidate = canonical_root.join(CONFIG_TOML_FILE);
+
+    match std::fs::symlink_metadata(&candidate) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(OrbitError::InvalidInput(format!(
+                "config path must be a regular {CONFIG_TOML_FILE} file inside '{}': {}",
+                root.display(),
+                candidate.display()
+            )))
+        }
+        Ok(_) => Ok(Some(candidate)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(OrbitError::Io(format!(
+            "failed to inspect config path '{}': {error}",
+            candidate.display()
+        ))),
     }
 }
 
