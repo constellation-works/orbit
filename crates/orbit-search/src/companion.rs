@@ -11,6 +11,7 @@ use std::env;
 use std::ffi::CStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use orbit_common::OrbitError;
 
@@ -65,13 +66,21 @@ pub fn platform_companion_filename() -> String {
 }
 
 pub fn platform_id() -> &'static str {
-    match (env::consts::OS, env::consts::ARCH) {
-        ("macos", "aarch64") => "macos-aarch64",
-        ("macos", "x86_64") => "macos-x86_64",
-        ("linux", "aarch64") => "linux-aarch64",
-        ("linux", "x86_64") => "linux-x86_64",
-        ("windows", "x86_64") => "windows-x86_64",
-        _ => "unknown",
+    static PLATFORM_ID: OnceLock<String> = OnceLock::new();
+
+    PLATFORM_ID
+        .get_or_init(|| platform_id_for(env::consts::OS, env::consts::ARCH))
+        .as_str()
+}
+
+fn platform_id_for(os: &str, arch: &str) -> String {
+    match (os, arch) {
+        ("macos", "aarch64")
+        | ("macos", "x86_64")
+        | ("linux", "aarch64")
+        | ("linux", "x86_64")
+        | ("windows", "x86_64") => format!("{os}-{arch}"),
+        _ => "unknown".to_owned(),
     }
 }
 
