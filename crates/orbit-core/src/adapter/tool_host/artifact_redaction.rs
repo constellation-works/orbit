@@ -1008,6 +1008,79 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_round_trips_identifiers_and_reports_synthetic_provider_key_redaction() {
+        let (_root, runtime, _repo_root) = test_runtime();
+        let identifier = "remove-task-checkout-projections";
+        let key = "sk-abcdefghijklmnopqrstuvwxyz";
+
+        let task = runtime
+            .execute_tool_command(
+                "orbit.task.add",
+                json!({
+                    "title": identifier,
+                    "description": format!("migration {identifier}; credential {key}"),
+                    "complexity": "low",
+                    "workspace": ".",
+                }),
+                Some("codex".to_string()),
+                Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+            )
+            .expect("task add succeeds");
+
+        assert_eq!(task["redactions_applied"], true);
+        assert_eq!(task["title"], identifier);
+        assert_eq!(
+            task["description"],
+            format!("migration {identifier}; credential [REDACTED_SECRET]")
+        );
+        assert_eq!(task["redactions"][0]["field_path"], "description");
+        assert_eq!(task["redactions"][0]["redaction_kinds"], json!(["pattern"]));
+        assert_eq!(
+            task["redactions"][0]["redaction_classes"],
+            json!(["credential"])
+        );
+        let task_id = task["id"].as_str().expect("task id");
+        assert_eq!(
+            runtime.get_task(task_id).expect("task persisted").title,
+            identifier
+        );
+
+        let friction = runtime
+            .execute_tool_command(
+                "orbit.friction.add",
+                json!({
+                    "body": format!("migration {identifier}; credential {key}"),
+                    "tags": ["tooling"],
+                }),
+                Some("codex".to_string()),
+                Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+            )
+            .expect("friction add succeeds");
+
+        assert_eq!(friction["redactions_applied"], true);
+        assert_eq!(
+            friction["body"],
+            format!("migration {identifier}; credential [REDACTED_SECRET]")
+        );
+        assert_eq!(friction["redactions"][0]["field_path"], "body");
+        assert_eq!(
+            friction["redactions"][0]["redaction_kinds"],
+            json!(["pattern"])
+        );
+        assert_eq!(
+            friction["redactions"][0]["redaction_classes"],
+            json!(["credential"])
+        );
+        let shown = runtime
+            .run_tool("orbit.friction.show", json!({ "id": friction["id"] }))
+            .expect("friction show succeeds");
+        assert_eq!(
+            shown["body"],
+            format!("migration {identifier}; credential [REDACTED_SECRET]")
+        );
+    }
+
+    #[test]
     fn friction_body_update_is_sanitized_but_tags_are_verbatim() {
         let token = "orbit-friction-secret-value";
         let _env = env_var("GITHUB_TOKEN", token);

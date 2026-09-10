@@ -714,8 +714,12 @@ impl PatternRedactor {
                 "[REDACTED_SSH_FINGERPRINT]",
             ),
             (
-                Regex::new(r"sk-[A-Za-z0-9_\-]{20,}").expect("valid regex"),
-                "[REDACTED_SECRET]",
+                // Keep provider-key matching at a token boundary. Without the
+                // prefix capture, `task-checkout-projections` is misread from
+                // its trailing `sk-` as a provider key.
+                Regex::new(r"(^|[^\p{L}\p{N}_-])sk-[A-Za-z0-9_\-]{20,}")
+                    .expect("valid regex"),
+                "${1}[REDACTED_SECRET]",
             ),
             (
                 Regex::new(r"AIza[0-9A-Za-z_\-]{35}").expect("valid regex"),
@@ -773,8 +777,8 @@ impl PatternRedactor {
     pub fn with_argv_secrets() -> Self {
         let mut me = Self::http_default();
         me.patterns.push((
-            Regex::new(r"sk-[A-Za-z0-9_\-]+").expect("valid regex"),
-            "[REDACTED_API_KEY]",
+            Regex::new(r"(^|[^\p{L}\p{N}_-])sk-[A-Za-z0-9_\-]+").expect("valid regex"),
+            "${1}[REDACTED_API_KEY]",
         ));
         me
     }
