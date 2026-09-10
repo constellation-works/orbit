@@ -10,11 +10,23 @@
 //! one command that actually works for them.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use orbit_common::OrbitError;
 
 /// Environment variable `install.sh` reads for the managed install directory.
 pub const INSTALL_DIR_ENV: &str = "ORBIT_INSTALL_DIR";
+
+/// The formula name every current install instruction and diagnostic names.
+/// Fully qualified so `brew` never has to guess between it and a retired tap.
+pub const CANONICAL_HOMEBREW_FORMULA: &str = "constellation-works/tap/orbit";
+
+/// The formula Orbit published under before consolidating on the
+/// `constellation-works` tap. Still resolvable by `brew`, and still what a
+/// machine set up before the move has installed — its Cellar keg shares the
+/// canonical formula's short name, so the two conflict rather than
+/// coexisting.
+pub const LEGACY_HOMEBREW_FORMULA: &str = "danieljhkim/tap/orbit";
 
 /// The installer that owns the current executable.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,8 +39,15 @@ pub enum InstallChannel {
     },
     /// The npm package `@orbit-tools/cli` owns this binary.
     Npm,
-    /// A Homebrew formula owns this binary.
-    Homebrew,
+    /// A Homebrew formula owns this binary. `remediation` is resolved once,
+    /// against the formulae `brew` reports installed, by
+    /// [`Self::detect_with_homebrew_ownership`] — `None` until then, in which
+    /// case [`Self::unsupported_reason`] falls back to the plain qualified
+    /// upgrade rather than guessing which tap owns it.
+    Homebrew {
+        /// The exact remediation text, once resolved.
+        remediation: Option<String>,
+    },
     /// `cargo install` or `make install` owns this binary.
     Cargo,
     /// A build tree inside a checkout's `target/` directory.
@@ -43,7 +62,7 @@ impl InstallChannel {
         match self {
             Self::Managed { .. } => "managed",
             Self::Npm => "npm",
-            Self::Homebrew => "homebrew",
+            Self::Homebrew { .. } => "homebrew",
             Self::Cargo => "cargo",
             Self::LocalBuild => "local-build",
             Self::Unknown => "unknown",
@@ -69,7 +88,7 @@ impl InstallChannel {
             return Self::Npm;
         }
         if has_component(executable, "Cellar") || has_component(executable, "homebrew") {
-            return Self::Homebrew;
+            return Self::Homebrew { remediation: None };
         }
         if is_cargo_build_output(executable) {
             return Self::LocalBuild;
@@ -78,6 +97,23 @@ impl InstallChannel {
             return Self::Cargo;
         }
         Self::Unknown
+    }
+
+    /// [`Self::detect`], then — only for a bare Homebrew match — resolve
+    /// which formula owns the install by asking `inventory`, so the
+    /// remediation names an ordinary qualified upgrade or the legacy-tap
+    /// migration instead of leaving it unresolved.
+    pub fn detect_with_homebrew_ownership(
+        executable: &Path,
+        managed_install_dir: Option<&Path>,
+        inventory: &dyn HomebrewInventory,
+    ) -> Self {
+        match Self::detect(executable, managed_install_dir) {
+            Self::Homebrew { .. } => Self::Homebrew {
+                remediation: Some(homebrew_remediation(inventory.installed_full_names())),
+            },
+            other => other,
+        }
     }
 
     /// Refuse an in-place replacement, naming the command that does work.
@@ -94,10 +130,12 @@ impl InstallChannel {
                 "npm owns this installation; run `npm install -g @orbit-tools/cli@{target_version}` \
                  (or `npx -y @orbit-tools/cli@{target_version}`)"
             ),
-            Self::Homebrew => {
-                "Homebrew owns this installation; run `brew update && brew upgrade orbit`"
-                    .to_string()
-            }
+            Self::Homebrew { remediation } => remediation.clone().unwrap_or_else(|| {
+                format!(
+                    "Homebrew owns this installation; run \
+                     `brew update && brew upgrade {CANONICAL_HOMEBREW_FORMULA}`"
+                )
+            }),
             Self::Cargo => format!(
                 "cargo owns this installation; run `cargo install --git https://github.com/constellation-works/orbit --tag v{target_version} --locked orbit-cli`, \
                  or reinstall through the managed installer with `curl -sSf https://raw.githubusercontent.com/constellation-works/orbit/main/install.sh | sh`"
@@ -118,6 +156,93 @@ impl InstallChannel {
             "cannot update '{}' in place: {remediation}",
             executable.display()
         )))
+    }
+}
+
+/// Reports which Orbit formula full names Homebrew currently has installed —
+/// the signal [`InstallChannel::detect_with_homebrew_ownership`] needs to
+/// tell an ordinary canonical upgrade from a legacy-tap migration.
+pub trait HomebrewInventory {
+    /// Full names (`tap/formula`) `brew list --formula --full-name` reports.
+    fn installed_full_names(&self) -> Result<Vec<String>, OrbitError>;
+}
+
+/// Asks the real `brew` on the caller's `PATH`.
+///
+/// Tests construct this directly with `command` pointed at a fake `brew`
+/// fixture instead of touching the process's `PATH`.
+pub(crate) struct SystemHomebrewInventory {
+    pub(crate) command: PathBuf,
+}
+
+impl SystemHomebrewInventory {
+    /// Probe the real `brew` found on `PATH`.
+    pub(crate) fn system() -> Self {
+        Self {
+            command: PathBuf::from("brew"),
+        }
+    }
+}
+
+impl HomebrewInventory for SystemHomebrewInventory {
+    fn installed_full_names(&self) -> Result<Vec<String>, OrbitError> {
+        let output = Command::new(&self.command)
+            .args(["list", "--formula", "--full-name"])
+            .output()
+            .map_err(|error| {
+                OrbitError::Execution(format!(
+                    "failed to run '{} list --formula --full-name': {error}",
+                    self.command.display()
+                ))
+            })?;
+        if !output.status.success() {
+            return Err(OrbitError::Execution(format!(
+                "'{} list --formula --full-name' failed: {}",
+                self.command.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+}
+
+/// Build the exact Homebrew remediation from the formula full names
+/// `inventory` reported, or the diagnostic if it could not be asked.
+///
+/// An installed [`LEGACY_HOMEBREW_FORMULA`] always wins the recommendation,
+/// even alongside the canonical one — Homebrew keys formulae by short name,
+/// so having both installed at once is itself the conflict this guides the
+/// operator out of. When the listing does not mention either formula, or the
+/// probe itself failed, the fallback is still the fully qualified canonical
+/// upgrade — never a bare, ambiguous `brew upgrade orbit`.
+pub fn homebrew_remediation(inventory: Result<Vec<String>, OrbitError>) -> String {
+    let legacy_installed = matches!(
+        &inventory,
+        Ok(names) if names.iter().any(|name| name == LEGACY_HOMEBREW_FORMULA)
+    );
+    if legacy_installed {
+        return format!(
+            "Homebrew owns this installation through the retired `{LEGACY_HOMEBREW_FORMULA}` \
+             formula; migrate to the canonical tap without removing unrelated packages or taps: \
+             `brew uninstall {LEGACY_HOMEBREW_FORMULA} && brew update && \
+             brew install {CANONICAL_HOMEBREW_FORMULA}`"
+        );
+    }
+    match inventory {
+        Ok(_) => format!(
+            "Homebrew owns this installation; run \
+             `brew update && brew upgrade {CANONICAL_HOMEBREW_FORMULA}`"
+        ),
+        Err(error) => format!(
+            "Homebrew owns this installation; run \
+             `brew update && brew upgrade {CANONICAL_HOMEBREW_FORMULA}` \
+             (could not confirm the installed formula: {error})"
+        ),
     }
 }
 

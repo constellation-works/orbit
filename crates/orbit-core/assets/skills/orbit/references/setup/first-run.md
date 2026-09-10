@@ -28,10 +28,15 @@ A prebuilt CLI gives you setup, dashboard, and administration commands:
 ```bash
 curl -sSf https://raw.githubusercontent.com/constellation-works/orbit/main/install.sh | sh
 # Alternative when Homebrew is the chosen package manager:
-brew install danieljhkim/tap/orbit
+brew install constellation-works/tap/orbit
 ```
 
-Choose one installation method; do not run both. Agent plugins provide the MCP
+Choose one installation method; do not run both. A machine that still has the
+retired `danieljhkim/tap/orbit` formula installed conflicts with the canonical
+one — `orbit update` on that machine detects it and reports the exact
+migration sequence (uninstall the legacy formula, then install the canonical
+one) instead of an ambiguous `brew upgrade orbit`; do not improvise a
+different migration. Agent plugins provide the MCP
 integration and bundled skill through their own package distribution, and do
 not require a source checkout. Source builds are optional for customization;
 follow the published README for toolchain and build instructions if that is

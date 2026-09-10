@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 
-use crate::update::channel::InstallChannel;
+use crate::update::channel::{
+    CANONICAL_HOMEBREW_FORMULA, InstallChannel, LEGACY_HOMEBREW_FORMULA, homebrew_remediation,
+};
 use crate::update::tests::fixture::{
     FakeBinary, Fixture, PausingLatestSource, request, tar_gz, tar_gz_named,
 };
@@ -74,7 +76,13 @@ fn check_answers_availability_even_where_a_package_manager_owns_the_install() {
     let fixture = Fixture::new("0.18.0");
     fixture.publish("0.19.0", FakeBinary::Healthy);
     let mut environment = fixture.environment();
-    environment.install_channel = InstallChannel::Homebrew;
+    environment.install_channel = InstallChannel::Homebrew {
+        remediation: Some(
+            "Homebrew owns this installation; run \
+             `brew update && brew upgrade constellation-works/tap/orbit`"
+                .to_string(),
+        ),
+    };
 
     let mut requested = request();
     requested.check = true;
@@ -86,10 +94,64 @@ fn check_answers_availability_even_where_a_package_manager_owns_the_install() {
         report
             .remediation
             .as_deref()
-            .is_some_and(|text| text.contains("brew upgrade orbit")),
+            .is_some_and(|text| text.contains("brew upgrade constellation-works/tap/orbit")),
         "{:?}",
         report.remediation
     );
+}
+
+#[test]
+fn a_legacy_tap_install_is_refused_with_a_migration_that_preserves_unrelated_taps() {
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    let mut environment = fixture.environment();
+    environment.install_channel = InstallChannel::Homebrew {
+        remediation: Some(homebrew_remediation(Ok(vec![
+            LEGACY_HOMEBREW_FORMULA.to_string(),
+        ]))),
+    };
+
+    let error =
+        run_update(&environment, &request()).expect_err("a legacy Homebrew install is refused");
+
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("brew uninstall {LEGACY_HOMEBREW_FORMULA}")),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("brew install {CANONICAL_HOMEBREW_FORMULA}")),
+        "{message}"
+    );
+    // Nothing was downloaded or replaced: the channel guard runs before staging.
+    assert_eq!(fixture.installed_reports(), "orbit 0.18.0");
+    assert_eq!(fixture.install_dir_entries(), vec!["orbit".to_string()]);
+}
+
+#[test]
+fn a_canonical_tap_install_is_refused_with_an_ordinary_qualified_upgrade() {
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    let mut environment = fixture.environment();
+    environment.install_channel = InstallChannel::Homebrew {
+        remediation: Some(homebrew_remediation(Ok(vec![
+            CANONICAL_HOMEBREW_FORMULA.to_string(),
+        ]))),
+    };
+
+    let error =
+        run_update(&environment, &request()).expect_err("a canonical Homebrew install is refused");
+
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!(
+            "brew update && brew upgrade {CANONICAL_HOMEBREW_FORMULA}"
+        )),
+        "{message}"
+    );
+    assert!(!message.contains("uninstall"), "{message}");
+    assert_eq!(fixture.installed_reports(), "orbit 0.18.0");
+    assert_eq!(fixture.install_dir_entries(), vec!["orbit".to_string()]);
 }
 
 #[test]
