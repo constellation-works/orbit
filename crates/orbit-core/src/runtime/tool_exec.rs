@@ -227,8 +227,7 @@ fn git_checkout_root(path: &Path) -> Option<PathBuf> {
     GIT_CHECKOUT_PROBES.with(|count| count.set(count.get() + 1));
 
     let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
+        .current_dir(path)
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .ok()?;
@@ -256,8 +255,7 @@ fn git_common_dir(path: &Path) -> Option<PathBuf> {
     GIT_COMMON_DIR_PROBES.with(|count| count.set(count.get() + 1));
 
     let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
+        .current_dir(path)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
         .output()
         .ok()?;
