@@ -64,6 +64,7 @@ fn package_manager_installs_are_classified_and_get_their_own_command() {
         let message = error.to_string();
         assert!(message.contains(remediation), "{path}: {message}");
         assert!(message.contains(path), "{path}: {message}");
+        assert!(!message.contains("invalid input: "), "{path}: {message}");
     }
 }
 
