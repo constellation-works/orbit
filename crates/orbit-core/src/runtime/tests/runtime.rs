@@ -9,6 +9,7 @@ use orbit_common::test_env;
 use tempfile::tempdir;
 
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
+use crate::runtime::existing_workspace_config_path;
 
 fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathBuf) {
     let root = tempdir().expect("create tempdir");
@@ -32,23 +33,22 @@ fn config_path_prefers_existing_workspace_config_over_global() {
         .canonicalize()
         .expect("canonicalize workspace root")
         .join("config.toml");
-    assert_eq!(runtime.config_path(), expected);
+    assert_eq!(runtime.config_path().expect("select config"), expected);
 }
 
 #[test]
 fn config_path_falls_back_to_global_when_workspace_config_is_absent() {
     let (_root, runtime, global_root, _workspace_root) = test_runtime();
 
-    assert_eq!(runtime.config_path(), global_root.join("config.toml"));
+    assert_eq!(
+        runtime.config_path().expect("select config"),
+        global_root.join("config.toml")
+    );
 }
 
-/// [ORB-11931] A symlinked workspace `config.toml` must not be followed:
-/// resolving through it would let a planted symlink redirect config reads
-/// outside the selected workspace root, so the runtime falls back to the
-/// global config instead of the symlink target.
 #[test]
 #[cfg(unix)]
-fn config_path_falls_back_to_global_when_workspace_config_is_a_symlink() {
+fn config_path_rejects_a_symlink_without_reading_its_external_target() {
     use std::os::unix::fs::symlink;
 
     let (_root, runtime, global_root, workspace_root) = test_runtime();
@@ -56,14 +56,85 @@ fn config_path_falls_back_to_global_when_workspace_config_is_a_symlink() {
         .parent()
         .expect("workspace root has parent")
         .join("outside-config.toml");
+    std::fs::write(
+        global_root.join("config.toml"),
+        "[docs]\nroots = [\"global/\"]\n",
+    )
+    .expect("write global config");
     std::fs::write(&outside_target, "leaked = true\n").expect("write file outside workspace root");
     symlink(&outside_target, workspace_root.join("config.toml"))
         .expect("symlink workspace config.toml");
 
-    let resolved = runtime.config_path();
+    let error = runtime
+        .docs_roots()
+        .expect_err("symlinked workspace config must fail closed");
 
-    assert_eq!(resolved, global_root.join("config.toml"));
-    assert_ne!(resolved, outside_target);
+    let diagnostic = error.to_string();
+    assert!(diagnostic.contains("regular config.toml"), "{diagnostic}");
+    assert!(diagnostic.contains(&workspace_root.display().to_string()));
+    assert!(!diagnostic.contains("invalid docs config"), "{diagnostic}");
+    assert!(global_root.join("config.toml").is_file());
+}
+
+#[test]
+fn config_path_rejects_a_non_regular_workspace_config() {
+    let (_root, runtime, _global_root, workspace_root) = test_runtime();
+    std::fs::create_dir(workspace_root.join("config.toml")).expect("create config directory");
+
+    let error = runtime
+        .config_path()
+        .expect_err("non-regular workspace config must fail closed");
+
+    assert!(error.to_string().contains("regular config.toml"), "{error}");
+}
+
+#[test]
+fn workspace_config_selection_reports_a_non_directory_root() {
+    let root = tempdir().expect("create tempdir");
+    let root_file = root.path().join("not-a-directory");
+    std::fs::write(&root_file, "not a directory").expect("write root file");
+
+    let error = existing_workspace_config_path(&root_file)
+        .expect_err("a config child cannot be selected beneath a file");
+
+    assert!(error.to_string().contains("failed to inspect config path"));
+    assert!(error.to_string().contains("not-a-directory/config.toml"));
+}
+
+#[test]
+fn config_root_validation_treats_a_missing_root_as_absent() {
+    let root = tempdir().expect("create tempdir");
+    let missing = root.path().join("missing");
+
+    assert_eq!(
+        existing_workspace_config_path(&missing).expect("select beneath missing root"),
+        None
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn workspace_config_selection_accepts_a_trusted_root_alias() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("create tempdir");
+    let real_root = root.path().join("real");
+    let alias_root = root.path().join("alias");
+    std::fs::create_dir(&real_root).expect("create real root");
+    std::fs::write(real_root.join("config.toml"), "").expect("write config");
+    symlink(&real_root, &alias_root).expect("create trusted root alias");
+
+    let selected_config = existing_workspace_config_path(&alias_root)
+        .expect("select through trusted alias")
+        .expect("config exists");
+
+    assert_eq!(
+        selected_config,
+        real_root
+            .canonicalize()
+            .expect("canonical root")
+            .join("config.toml")
+    );
 }
 
 #[test]

@@ -43,11 +43,13 @@ use self::walk::walk_docs_with_bodies;
 // that are mechanical (use of super:: paths). All bodies delegate to submodules.
 impl OrbitRuntime {
     pub fn docs_roots(&self) -> Result<Vec<DocsRoot>, OrbitError> {
-        read_docs_roots_from_config_path(&self.config_path())
+        let config_path = self.config_path()?;
+        read_docs_roots_from_config_path(&config_path)
     }
 
     pub fn docs_search_config(&self) -> Result<DocsSearchConfig, OrbitError> {
-        read_docs_search_config_from_config_path(&self.config_path())
+        let config_path = self.config_path()?;
+        read_docs_search_config_from_config_path(&config_path)
     }
 
     pub fn list_docs(
@@ -112,7 +114,8 @@ impl OrbitRuntime {
         task: &Task,
         limit: Option<usize>,
     ) -> Result<Vec<TaskRelatedDoc>, OrbitError> {
-        let roots = read_task_context_docs_roots_from_config_path(&self.config_path())?;
+        let config_path = self.config_path()?;
+        let roots = read_task_context_docs_roots_from_config_path(&config_path)?;
         if roots.is_empty() {
             return Ok(Vec::new());
         }
