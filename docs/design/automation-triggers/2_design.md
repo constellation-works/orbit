@@ -447,6 +447,17 @@ policy:
   retries: {max: 1, backoff_minutes: 5}
 ```
 
+Preparation eligibility includes both selector-free tasks and tasks whose
+persisted complexity remains `unassessed`. Task-pilot records the bounded
+repair's certainty, behavioral change, coupling, validation difficulty,
+rationale, confidence, evidence gaps, validation approach, and reassessment
+triggers. Its apply step commits concrete selectors, complexity, audit evidence,
+and the idempotency receipt at one task-bundle boundary. Automatic admission
+then rejects any still-unassessed task, including urgent security work; missing
+validation permission is a readiness blocker rather than a complexity or
+priority inference. The low/medium/hard examples in the activity contract are
+deterministic policy fixtures, not a claim about live-model accuracy.
+
 ```yaml
 # Proposed routine: one diagnosis per settled causal incident.
 schemaVersion: 2

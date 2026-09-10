@@ -2,8 +2,8 @@
 #
 # Scheduled and other zero-input runs leave discovery entirely to
 # `prepare_task_pilot`: automatic mode (task_ids empty) discovers only
-# proposed/backlog tasks in the active workspace with empty context_files,
-# excluding no-diff tasks. Explicit mode audits exactly the named workspace
+# proposed/backlog tasks in the active workspace with empty context_files or
+# unassessed complexity, excluding no-diff tasks. Explicit mode audits named
 # tasks, including non-empty selectors.
 # Preparation never promotes or dispatches a task. In a Git workspace it
 # fetches the landing branch and pins one source revision without changing
@@ -16,7 +16,9 @@
 # Apply isolates stale or malformed assessments by partition, applies
 # every independently valid partition, then a guard fails the total run when
 # any partition did not apply. Selector existence is validated against the
-# prepared source revision, not a later checkout. Apply normally changes only context_files. A CI sweep may pass its exact filing record plus
+# prepared source revision, not a later checkout. Apply atomically persists
+# context_files, assessed complexity, its audit rationale/evidence, and a replay
+# receipt. A CI sweep may pass its exact filing record plus
 # literal promotion authority; only then can apply promote a warning-free,
 # selector-backed proposed repair to backlog.
 #

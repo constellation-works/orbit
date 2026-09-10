@@ -108,10 +108,14 @@ pub struct AtomicTaskMutationParams {
     pub operation_id: String,
     pub expected_context_files: Vec<String>,
     pub expected_status: TaskStatus,
+    pub expected_complexity: Option<TaskComplexity>,
     pub context_files: Vec<String>,
     pub status: TaskStatus,
+    pub complexity: TaskComplexity,
     pub event_type: String,
     pub event_note: String,
+    /// Human-inspectable evidence for the decision committed by this mutation.
+    pub audit_note: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

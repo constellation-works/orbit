@@ -7,7 +7,7 @@ use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -27,6 +27,7 @@ use super::{
 struct PreparedTaskSnapshot {
     context_files: Vec<String>,
     status: TaskStatus,
+    complexity: Option<TaskComplexity>,
     title: String,
     tags: Vec<String>,
     material: Option<(String, String)>,
@@ -41,6 +42,7 @@ struct ValidatedTask {
     assessment: Value,
     admission: Option<Value>,
     promote: bool,
+    complexity: TaskComplexity,
     operation_id: String,
 }
 
@@ -129,6 +131,15 @@ pub(in super::super) fn apply(
                 PreparedTaskSnapshot {
                     context_files,
                     status,
+                    complexity: serde_json::from_value::<Option<TaskComplexity>>(
+                        entry.get("complexity").cloned().unwrap_or(Value::Null),
+                    )
+                    .map_err(|error| {
+                        action_failed(
+                            action,
+                            format!("prepared task complexity is invalid: {error}"),
+                        )
+                    })?,
                     title,
                     tags,
                     validation_tool_warnings: string_array(
@@ -386,10 +397,13 @@ pub(in super::super) fn apply(
                 }
             };
             let after = selectors.values;
-            if let Err(error) = validate_recommendations(action, task_id, assessment) {
-                outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
-                continue;
-            }
+            let complexity = match validate_recommendations(action, task_id, assessment) {
+                Ok(complexity) => complexity,
+                Err(error) => {
+                    outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
+                    continue;
+                }
+            };
             let current = match runtime.get_task(task_id) {
                 Ok(task) => task,
                 Err(OrbitError::NotFound { .. }) => {
@@ -456,6 +470,7 @@ pub(in super::super) fn apply(
                 assessment,
                 admission,
                 promote,
+                complexity,
                 operation_id,
             };
 
@@ -759,6 +774,12 @@ fn apply_task(
     task: &ValidatedTask,
     prepared: &Value,
 ) -> Result<ApplyTaskOutcome, OrbitError> {
+    if !matches!(snapshot.status, TaskStatus::Proposed | TaskStatus::Backlog) {
+        return Ok(ApplyTaskOutcome::Stale(
+            "status_not_mutable",
+            "task-pilot does not rewrite in-progress, review, or terminal work",
+        ));
+    }
     let mut lock_ids = vec![task.task_id.clone()];
     lock_ids.extend(runtime.get_task(&task.task_id)?.dependencies());
     lock_ids.sort();
@@ -772,7 +793,10 @@ fn apply_task(
             .iter()
             .any(|event| {
                 event.event == "task_pilot_applied"
-                    && event.note.as_deref() == Some(receipt.as_str())
+                    && event
+                        .note
+                        .as_deref()
+                        .is_some_and(|note| note.lines().next() == Some(receipt.as_str()))
             })
         {
             outcome = Some(ApplyTaskOutcome::AlreadyApplied(resulting_fingerprint(
@@ -808,10 +832,21 @@ fn apply_task(
             operation_id: task.operation_id.clone(),
             expected_context_files: snapshot.context_files.clone(),
             expected_status: snapshot.status,
+            expected_complexity: snapshot.complexity,
             context_files: task.after.clone(),
             status: target_status,
+            complexity: task.complexity,
             event_type: "task_pilot_applied".to_string(),
             event_note: "task-pilot atomic application".to_string(),
+            audit_note: serde_json::to_string(&json!({
+                "assessment": task.assessment,
+                "context_files_before": snapshot.context_files,
+                "complexity_before": snapshot.complexity,
+                "complexity_after": task.complexity,
+            }))
+            .map_err(|error| {
+                OrbitError::Execution(format!("serialize task-pilot audit: {error}"))
+            })?,
         };
         let mutation = apply_atomic_with_retries(runtime, &task.task_id, &mutation_params)?;
         match mutation {
@@ -901,7 +936,8 @@ fn record_applied_assessment(
     task_results: &mut Vec<Value>,
     ci_sweep_admission: &mut Vec<Value>,
 ) {
-    let changed = snapshot.context_files != task.after;
+    let changed =
+        snapshot.context_files != task.after || snapshot.complexity != Some(task.complexity);
     if let Value::Object(fields) = &mut task.assessment {
         fields.insert("applied".to_string(), Value::Bool(changed || task.promote));
         fields.insert("outcome".to_string(), json!(outcome));
@@ -956,6 +992,11 @@ fn task_snapshot_drift(
         ))
     } else if current.status != snapshot.status {
         Some(("status_changed", "task status changed after preparation"))
+    } else if current.complexity != snapshot.complexity {
+        Some((
+            "complexity_changed",
+            "task complexity changed after preparation",
+        ))
     } else if current.title != snapshot.title {
         Some(("title_changed", "task title changed after preparation"))
     } else if current.tags != snapshot.tags {
