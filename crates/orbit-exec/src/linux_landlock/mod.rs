@@ -124,8 +124,44 @@ impl LandlockPathGrant {
 
 /// Whether any compiled grant lets the child read `path`.
 pub fn grants_read(grants: &[LandlockPathGrant], path: &Path) -> bool {
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let path = canonicalize_with_missing_tail(path);
     grants.iter().any(|grant| grant.reads(&path))
+}
+
+/// Resolve the existing part of a path before appending any missing names.
+///
+/// Workspace grants are compiled from canonical paths. A query for a file
+/// that has not been created yet cannot itself be canonicalized, so falling
+/// back to its original spelling makes an existing symlink alias (such as
+/// macOS's `/var` → `/private/var`) look unrelated to the grant. Preserve the
+/// same canonical identity for both existing and not-yet-existing paths.
+fn canonicalize_with_missing_tail(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut current = path;
+
+    loop {
+        if let Ok(canonical) = current.canonicalize() {
+            let mut canonical = canonical;
+            for component in missing.iter().rev() {
+                canonical.push(component);
+            }
+            return canonical;
+        }
+
+        let Some(name) = current.file_name() else {
+            return path.to_path_buf();
+        };
+        missing.push(name.to_os_string());
+
+        let Some(parent) = current.parent() else {
+            return path.to_path_buf();
+        };
+        current = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+    }
 }
 
 /// Result of asking the running kernel whether it can enforce a ruleset.
