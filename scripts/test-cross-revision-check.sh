@@ -12,11 +12,13 @@ HELPER="$ROOT/scripts/cross-revision-check.sh"
 TMP="$(mktemp -d)"
 SRC="$TMP/src"
 START_EPOCH="$(date +%s)"
+PRESERVED_WORK=""
 
 # The read-only-.git case leaves the fixture unwritable; restore it before rm.
 cleanup() {
   chmod -R u+w "$TMP" 2>/dev/null || true
   rm -rf "$TMP"
+  [[ -z "$PRESERVED_WORK" ]] || rm -rf -- "$PRESERVED_WORK"
 }
 trap cleanup EXIT
 
@@ -104,12 +106,15 @@ EOF
 chmod +x "$SRC/leak.sh"
 
 printf 'MARKER_BASELINE\n' >"$SRC/marker.txt"
+printf 'baseline-only\n' >"$SRC/baseline-only.txt"
 git_fixture add probe.sh leak.sh marker.txt
+git_fixture add baseline-only.txt
 GIT_AUTHOR_DATE="$ARCHIVE_DATE" GIT_COMMITTER_DATE="$ARCHIVE_DATE" \
   git_fixture commit -q -m "baseline revision"
 BASELINE_SHA="$(git_fixture rev-parse HEAD)"
 
 printf 'MARKER_CANDIDATE\n' >"$SRC/marker.txt"
+git_fixture rm -q baseline-only.txt
 git_fixture add marker.txt
 GIT_AUTHOR_DATE="$ARCHIVE_DATE" GIT_COMMITTER_DATE="$ARCHIVE_DATE" \
   git_fixture commit -q -m "candidate revision"
@@ -118,8 +123,14 @@ CANDIDATE_SHA="$(git_fixture rev-parse HEAD)"
 run_helper() {
   local out="$1"
   shift
+  run_helper_revisions "$out" "$BASELINE_SHA" "$CANDIDATE_SHA" "$@"
+}
+
+run_helper_revisions() {
+  local out="$1" baseline="$2" candidate="$3"
+  shift 3
   local status=0
-  "$HELPER" --repo "$SRC" --baseline "$BASELINE_SHA" --candidate "$CANDIDATE_SHA" \
+  "$HELPER" --repo "$SRC" --baseline "$baseline" --candidate "$candidate" \
     "$@" >"$out" 2>&1 || status=$?
   printf '%s' "$status"
 }
@@ -166,7 +177,32 @@ done
 
 assert_contains "$out" "provenance=ok" "helper should report verified provenance"
 
-# --- 2. A failing producer stays a failure behind bounded output -------------
+# --- 2. Reusing a workdir refreshes trees and targets ------------------------
+
+work="$TMP/work-reuse"
+out="$TMP/reuse-first.out"
+status="$(run_helper_revisions "$out" "$BASELINE_SHA" "$CANDIDATE_SHA" \
+  --workdir "$work" --expect-baseline pass --expect-candidate fail \
+  -- sh -c 'touch "$CARGO_TARGET_DIR/stale-target-marker"; test -e baseline-only.txt')"
+assert_eq "$status" "0" "the first reused-workdir run should match its revision contents"
+[[ -e "$work/baseline/baseline-only.txt" ]] \
+  || fail "the baseline revision should contain its baseline-only file"
+[[ ! -e "$work/candidate/baseline-only.txt" ]] \
+  || fail "the candidate revision should not contain the baseline-only file"
+
+out="$TMP/reuse-second.out"
+status="$(run_helper_revisions "$out" "$CANDIDATE_SHA" "$CANDIDATE_SHA" \
+  --workdir "$work" \
+  -- sh -c 'test ! -e baseline-only.txt && test ! -e "$CARGO_TARGET_DIR/stale-target-marker"')"
+assert_eq "$status" "0" "a reused workdir must not retain prior tree or target state"
+for arm in baseline candidate; do
+  [[ ! -e "$work/$arm/baseline-only.txt" ]] \
+    || fail "$arm tree retained a file absent from the current revision"
+  [[ ! -e "$work/$arm-target/stale-target-marker" ]] \
+    || fail "$arm target retained an artifact from the prior invocation"
+done
+
+# --- 3. A failing producer stays a failure behind bounded output -------------
 
 work="$TMP/work-exit"
 out="$TMP/exit.out"
@@ -206,7 +242,7 @@ status=0
   >"$out" 2>&1 || status=$?
 assert_eq "$status" "0" "before-fails/after-passes is the regression-proof shape"
 
-# --- 3. Provenance failures are detected, not assumed absent -----------------
+# --- 4. Provenance failures are detected, not assumed absent -----------------
 
 work="$TMP/work-missing-marker"
 out="$TMP/missing-marker.out"
@@ -222,7 +258,7 @@ assert_eq "$status" "1" "a sibling marker in an arm's log must fail the run"
 assert_contains "$out" "contains the sibling revision marker" "the helper should name the contamination"
 assert_contains "$out" "provenance=contaminated" "the report should mark the arm contaminated"
 
-# --- 4. Read-only Git metadata and an unmodified source checkout -------------
+# --- 5. Read-only Git metadata and an unmodified source checkout -------------
 
 before="$TMP/snapshot-before"
 after="$TMP/snapshot-after"
@@ -241,7 +277,7 @@ diff -u "$before" "$after" \
   || fail "the helper must not modify the source checkout (including .git mtimes)"
 [[ ! -e "$SRC/.git/index.lock" ]] || fail "the helper must not leave a Git index lock behind"
 
-# --- 5. Scratch state stays outside the checkout and outside Orbit state -----
+# --- 6. Scratch state stays outside the checkout and outside Orbit state -----
 
 out="$TMP/inside-repo.out"
 status="$(run_helper "$out" --workdir "$SRC/scratch" -- ./probe.sh)"
@@ -254,7 +290,19 @@ status="$(run_helper "$out" --workdir "$TMP/.orbit/state/scratch" -- ./probe.sh)
 assert_eq "$status" "1" "a workdir inside .orbit must be refused"
 assert_contains "$out" "must not be inside Orbit state" "the refusal should name Orbit state"
 
-# --- 6. The cache opt-out is a default, not a hard-coded policy --------------
+# A failed run with an auto-created workdir must retain its logs for diagnosis.
+out="$TMP/auto-workdir-failure.out"
+status=0
+PROBE_EXIT=9 "$HELPER" --repo "$SRC" --baseline "$BASELINE_SHA" --candidate "$CANDIDATE_SHA" \
+  -- ./probe.sh >"$out" 2>&1 || status=$?
+assert_eq "$status" "1" "an unexpected producer failure should fail the helper"
+PRESERVED_WORK="$(sed -n 's/^cross-revision-check: logs preserved at //p' "$out")"
+[[ -n "$PRESERVED_WORK" && -d "$PRESERVED_WORK" ]] \
+  || fail "a failed auto-workdir run should preserve its scratch root"
+[[ -f "$PRESERVED_WORK/baseline.log" && -f "$PRESERVED_WORK/candidate.log" ]] \
+  || fail "a failed auto-workdir run should preserve both arm logs"
+
+# --- 7. The cache opt-out is a default, not a hard-coded policy --------------
 
 work="$TMP/work-keep-cache"
 out="$TMP/keep-cache.out"

@@ -199,6 +199,12 @@ run_arm() {
   ARM_TARGET="$WORKDIR/$arm-target"
   ARM_LOG="$WORKDIR/$arm.log"
 
+  # A caller may intentionally reuse --workdir to retain logs. The extract and
+  # target are per-invocation state, so clear both arm-specific paths before
+  # rebuilding them; otherwise files and build artifacts from an older
+  # revision can survive into this arm.
+  rm -rf -- "$ARM_TREE" "$ARM_TARGET"
+
   extract_revision "$sha" "$ARM_TREE"
   mkdir -p "$ARM_TARGET"
 
