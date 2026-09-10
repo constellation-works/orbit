@@ -34,28 +34,37 @@ chooses to enable it.
 The executor runs the harness from the repository root:
 
 ```bash
-./scripts/qa-full-sweep.sh --orbit-bin "$(command -v orbit)" \
+./scripts/qa-full-sweep.sh --build-candidate \
   --output qa-full-sweep-report.json --run-commands
 orbit task artifact put <TASK_ID> qa-full-sweep-report.json \
   --path qa-full-sweep-report.json --model claude --json
 ```
 
-Use the exact release candidate binary. The report pins its resolved path and
-SHA-256 separately from the source HEAD, so a stale installed binary cannot be
-mistaken for the checkout under test. The harness constructs a clean child
+`--build-candidate` compiles the executable from the checkout into a disposable
+target directory. The harness snapshots HEAD, the tracked diff, and untracked
+inputs before the build, verifies that identity is unchanged after every local
+scenario, and binds every result to the resulting candidate ID. Supplying an
+installed binary without that build attestation intentionally makes provenance
+FAIL, even when `--version` exits zero. The harness constructs a clean child
 environment and disposable Orbit root and Git repositories for mutations.
 
 For the browser leg, pass the absolute Playwright module installed in the
 worker's own disposable namespace:
 
 ```bash
-./scripts/qa-full-sweep.sh --run-commands \
+./scripts/qa-full-sweep.sh --build-candidate --run-commands \
   --playwright-module /tmp/orbit-browser-check/node_modules/playwright/index.mjs
 ```
 
 Add `--website-build` only after preparing the website dependencies through
 the isolated procedure in [website validation](website-validation.md). It
 authorizes the harness's build check, never deployment.
+
+Hosted evidence can be combined with `--platform-evidence <report.json>`. Only
+schema-version 2 reports for the exact candidate ID are accepted, and each
+imported scenario's command must exactly match the current inventory. The
+imported file hash is retained in the report. This permits a macOS runner to
+contribute its actual required check without describing a Linux run as macOS.
 
 ## Capability-bound legs
 
@@ -67,17 +76,21 @@ bounded in advance and may not recursively dispatch agents or jobs from the
 sweep. Browser setup may use the documented disposable Playwright recipe; an
 unavailable browser is NOT_RUN, not a clean dashboard result.
 
-Website deployment and npm publication are user-owned. The sweep validates
-source builds, packaging, installers, and dry-run/version contracts but never
-deploys or publishes. Before publication, live website/npm freshness is
-pending and full sign-off remains incomplete. Linux evidence does not verify
-the required macOS leg.
+Website deployment and npm publication are user-owned post-release handoffs.
+The pre-release sweep validates source builds, packaging, installers, and
+dry-run/version contracts but never deploys or publishes. Live website/npm
+freshness is reported as `PENDING` and is deliberately excluded from the
+pre-release decision, so it cannot create a version/tag cycle. Linux evidence
+does not verify the required macOS leg.
 
 ## Sign-off decision and findings
 
-`PASS` is allowed only when every required inventory scenario has current PASS
-evidence for the same source revision and binary. Any required FAIL, BLOCKED,
-or NOT_RUN result makes the decision `INCOMPLETE`. Logs and the JSON report are
+`PASS` is allowed only when every required inventory scenario supplies its
+complete, exact assertion set for one candidate. An exit-zero command with
+empty or wrong structured output, missing assertions, duplicate mixed-candidate
+evidence, a declared capability gap, or any required FAIL, BLOCKED, or NOT_RUN
+makes the decision `INCOMPLETE`. `python3 scripts/test-qa-full-sweep.py
+--self-test` exercises those fail-closed rules. Logs and the JSON report are
 task artifacts, not a parallel results store.
 
 For a failure, search open and closed `ws_orbit` tasks using the scenario ID,
