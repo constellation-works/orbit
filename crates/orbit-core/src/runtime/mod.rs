@@ -385,15 +385,7 @@ impl OrbitRuntime {
     /// changing precedence. This pathname records selection only; readers must
     /// still open the file through a race-safe boundary.
     pub fn config_path(&self) -> Result<PathBuf, OrbitError> {
-        let shared_root = self.shared_root();
-        let global_root = self.global_root();
-        if shared_root != global_root
-            && let Some(workspace_config) = existing_workspace_config_path(&shared_root)?
-        {
-            return Ok(workspace_config);
-        }
-
-        Ok(global_root.join(CONFIG_TOML_FILE))
+        validated_runtime_config_path(self)
     }
 
     pub fn persistence_config_json(&self) -> Value {
@@ -696,6 +688,23 @@ impl OrbitRuntime {
     ) -> Result<(), OrbitError> {
         self.stores().policies().upsert_policy_def(def)
     }
+}
+
+/// Select the fixed config leaf from roots owned by an initialized runtime.
+///
+/// Keeping this as a free-function boundary gives static analysis a precise
+/// callable whose return is authoritative. It does not authorize an arbitrary
+/// caller-supplied root: both roots come from the runtime's resolved context.
+fn validated_runtime_config_path(runtime: &OrbitRuntime) -> Result<PathBuf, OrbitError> {
+    let shared_root = runtime.shared_root();
+    let global_root = runtime.global_root();
+    if shared_root != global_root
+        && let Some(workspace_config) = existing_workspace_config_path(&shared_root)?
+    {
+        return Ok(workspace_config);
+    }
+
+    Ok(global_root.join(CONFIG_TOML_FILE))
 }
 
 const CONFIG_TOML_FILE: &str = "config.toml";

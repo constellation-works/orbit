@@ -11,13 +11,19 @@ extensions:
         ]
       - [
           "orbit_core::runtime::validated_existing_config_root",
-          "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
+          "ReturnValue",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_core::runtime::validated_runtime_config_path",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_registry::host_identity::validated_existing_global_root",
-          "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
@@ -59,7 +65,7 @@ extensions:
         ]
       - [
           "orbit_common::fs::io::validated_private_file_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
@@ -72,6 +78,12 @@ extensions:
       - [
           "orbit_core::adapter::engine_host::v2_host::sandbox::validated_linux_runtime_root",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_core::adapter::engine_host::v2_host::sandbox::validated_linux_runtime_descendant",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
@@ -131,19 +143,19 @@ extensions:
         ]
       - [
           "orbit_store::driver::file::auto_task::validated_cursor_state_dir",
-          "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_store::driver::file::auto_task::validated_cursor_state_file_name",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
           "orbit_common::fs::file_lock::validated_lock_holder_parent",
-          "ReturnValue.Field[core::option::Option::Some(0)]",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]
