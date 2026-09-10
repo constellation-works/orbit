@@ -101,17 +101,13 @@ fn is_year_month(name: &str) -> bool {
 }
 
 fn validated_diagnostics_root(root: &Path) -> Result<PathBuf, OrbitError> {
-    let canonical_root = root.canonicalize().map_err(|error| {
-        OrbitError::Io(format!(
-            "resolve diagnostics root {}: {error}",
-            root.display()
-        ))
-    })?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| OrbitError::Io(format!("resolve diagnostics root: {error}")))?;
     if !canonical_root.is_dir() {
-        return Err(OrbitError::InvalidInput(format!(
-            "diagnostics root must be a directory: {}",
-            canonical_root.display()
-        )));
+        return Err(OrbitError::InvalidInput(
+            "diagnostics root must be a directory".to_string(),
+        ));
     }
     Ok(canonical_root)
 }
@@ -180,17 +176,48 @@ fn validated_year_month(year_month: &str) -> Result<String, OrbitError> {
 fn validate_diagnostics_path(root: &Path, path: PathBuf) -> Result<PathBuf, OrbitError> {
     match path.canonicalize() {
         Ok(canonical) if canonical.starts_with(root) => Ok(canonical),
-        Ok(canonical) => Err(OrbitError::InvalidInput(format!(
-            "diagnostics path '{}' resolves outside {}",
-            canonical.display(),
-            root.display()
-        ))),
+        Ok(_) => Err(OrbitError::InvalidInput(
+            "diagnostics path resolves outside the data root".to_string(),
+        )),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(path),
-        Err(error) => Err(OrbitError::Io(format!(
-            "resolve diagnostics path {}: {error}",
-            path.display()
-        ))),
+        Err(error) => Err(OrbitError::Io(format!("resolve diagnostics path: {error}"))),
     }
+}
+
+/// Canonicalize an enumerated JSONL file and keep it inside its validated
+/// month directory. Directory validation alone is insufficient because a
+/// JSONL entry may itself be a symlink to a different file.
+fn validated_diagnostics_file_path(
+    root: &Path,
+    month_dir: &Path,
+    path: PathBuf,
+) -> Result<PathBuf, OrbitError> {
+    let canonical_month_dir = month_dir
+        .canonicalize()
+        .map_err(|error| OrbitError::Io(format!("resolve diagnostics month: {error}")))?;
+    let canonical_file = path
+        .canonicalize()
+        .map_err(|error| OrbitError::Io(format!("resolve diagnostics file: {error}")))?;
+
+    if canonical_file.starts_with(root) && canonical_file.starts_with(&canonical_month_dir) {
+        Ok(canonical_file)
+    } else {
+        Err(OrbitError::InvalidInput(
+            "diagnostics file resolves outside its month directory".to_string(),
+        ))
+    }
+}
+
+fn diagnostics_jsonl_files(root: &Path, month_dir: &Path) -> Result<Vec<PathBuf>, OrbitError> {
+    let mut files = fs::read_dir(month_dir)
+        .map_err(|e| OrbitError::Io(e.to_string()))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("jsonl"))
+        .map(|path| validated_diagnostics_file_path(root, month_dir, path))
+        .collect::<Result<Vec<_>, _>>()?;
+    files.sort();
+    Ok(files)
 }
 
 fn read_jsonl_month<T: DeserializeOwned>(
@@ -202,13 +229,7 @@ fn read_jsonl_month<T: DeserializeOwned>(
     if !month_dir.exists() {
         return Ok(Vec::new());
     }
-    let mut files = fs::read_dir(&month_dir)
-        .map_err(|e| OrbitError::Io(e.to_string()))?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|v| v.to_str()) == Some("jsonl"))
-        .collect::<Vec<_>>();
-    files.sort();
+    let files = diagnostics_jsonl_files(root, &month_dir)?;
 
     let mut entries = Vec::new();
     for path in files {
@@ -249,13 +270,7 @@ fn read_jsonl_month_limited<T: DeserializeOwned>(
     if !month_dir.exists() {
         return Ok(Vec::new());
     }
-    let mut files = fs::read_dir(&month_dir)
-        .map_err(|e| OrbitError::Io(e.to_string()))?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|v| v.to_str()) == Some("jsonl"))
-        .collect::<Vec<_>>();
-    files.sort();
+    let files = diagnostics_jsonl_files(root, &month_dir)?;
 
     let mut entries = Vec::new();
     for path in files.into_iter().rev() {
@@ -365,6 +380,27 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
 
         let error = read_jsonl_month::<Value>(root.path(), "metrics", "../secrets").unwrap_err();
+
+        assert!(matches!(error, orbit_common::OrbitError::InvalidInput(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_month_rejects_jsonl_symlink_outside_month() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let month_dir = root
+            .path()
+            .join("state")
+            .join("diagnostics")
+            .join("metrics")
+            .join("2026-03");
+        std::fs::create_dir_all(&month_dir).unwrap();
+        let outside_file = outside.path().join("outside.jsonl");
+        std::fs::write(&outside_file, r#"{"value":1}"#).unwrap();
+        std::os::unix::fs::symlink(&outside_file, month_dir.join("entries.jsonl")).unwrap();
+
+        let error = read_jsonl_month::<Value>(root.path(), "metrics", "2026-03").unwrap_err();
 
         assert!(matches!(error, orbit_common::OrbitError::InvalidInput(_)));
     }
