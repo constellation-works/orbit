@@ -108,8 +108,15 @@ pub(crate) fn execute_engine_action<
                 host,
                 &vcs::WorktreeGcOptions {
                     delete: true,
+                    // [ORB-11998] Read the activity's own `target_run_id`
+                    // field, not the engine-injected `run_id` (every step's
+                    // own dispatching run id — see `inject_run_id` in
+                    // `activity_job::dispatcher`). Reading `run_id` here
+                    // would scope every real job/routine dispatch to itself,
+                    // a run with no worktree of its own, and silently reap
+                    // nothing on every invocation.
                     run_id: input
-                        .get("run_id")
+                        .get("target_run_id")
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
                     older_than,

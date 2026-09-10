@@ -63,6 +63,13 @@ const AGENT_INVOKE_IDEMPOTENCY_SCAN_LIMIT: usize = 200;
 /// enough to spot a duplicate dispatch without walking the whole history.
 const SHIP_IN_FLIGHT_SCAN_LIMIT: usize = 200;
 
+/// [ORB-11998] Run-input field carrying the owning workspace's `.orbit`
+/// directory, as set by routine dispatch (`RuntimeDispatch::submit`). The
+/// executing worker verifies its own resolved workspace against this value
+/// before running any step, so a workspace-routing failure surfaces as a
+/// visibly failed run instead of a silent no-op success.
+pub(crate) const ROUTINE_DISPATCH_ORBIT_DIR_FIELD: &str = "__routine_dispatch_orbit_dir";
+
 /// The refusal for a submission that supplied the reserved trusted-host
 /// admission key it is not entitled to write [ORB-11354].
 ///
@@ -1041,6 +1048,11 @@ impl OrbitRuntime {
                 )));
             }
 
+            if let Err(error) = self.verify_routine_dispatch_workspace(&run) {
+                let _ = self.cancel_job_run(&run.run_id);
+                return Err(error);
+            }
+
             self.reconcile_stale_job_runs(Some(&run.job_id))?;
             let active_runs = self
                 .stores()
@@ -1053,6 +1065,37 @@ impl OrbitRuntime {
 
             return self.execute_pipeline_run_now(&run, &yaml_path);
         }
+    }
+
+    /// [ORB-11998] A routine-dispatched run declares the `.orbit` directory of
+    /// the workspace that owns it (see [`ROUTINE_DISPATCH_ORBIT_DIR_FIELD`]).
+    /// Confirm this worker actually opened that same workspace before it runs
+    /// any step. A mismatch — an ambient `ORBIT_ROOT`, an unregistered cwd, or
+    /// any other workspace-routing failure — must fail the run visibly rather
+    /// than silently execute (or vacuously succeed) against the wrong scope.
+    /// A run with no declared field is not routine-dispatched and is
+    /// unaffected.
+    fn verify_routine_dispatch_workspace(&self, run: &JobRun) -> Result<(), OrbitError> {
+        let Some(declared) = run
+            .input
+            .as_ref()
+            .and_then(|input| input.get(ROUTINE_DISPATCH_ORBIT_DIR_FIELD))
+            .and_then(Value::as_str)
+        else {
+            return Ok(());
+        };
+        let declared_dir = Path::new(declared);
+        let actual_dir = &self.paths().orbit_dir;
+        if declared_dir == actual_dir.as_path() {
+            return Ok(());
+        }
+        Err(OrbitError::WorkspaceError(format!(
+            "run '{}' was dispatched for workspace '{}' but this worker resolved workspace '{}'; \
+             refusing to execute against a mismatched workspace context",
+            run.run_id,
+            declared_dir.display(),
+            actual_dir.display(),
+        )))
     }
 
     /// Reopen the shared SQLite store before the worker claims a run.
@@ -1876,11 +1919,18 @@ pub(crate) fn configure_pipeline_worker_command(
     run_id: &str,
     root_override: Option<&Path>,
 ) {
+    // [ORB-11998] `resolve_roots` prefers an `ORBIT_ROOT` env value over cwd
+    // walk-up, so an inherited value — from the sweep clock's own service
+    // environment, an operator's shell, or any other ambient source — would
+    // silently redirect this worker to a different registered workspace than
+    // the one `current_dir` below pins it to. Every worker gets an explicit
+    // workspace identity, either via `--root` (pinned parent) or cwd (default
+    // split-root layout), so `ORBIT_ROOT` must never be left to compete with
+    // either.
+    command.env_remove("ORBIT_ROOT");
     if let Some(root) = root_override {
-        // `--root` pins both stores. Clear inherited `ORBIT_ROOT` so the child
-        // cannot reopen `$HOME/.orbit` via the env-only workspace selector
-        // while the parent persisted the run under the pinned root.
-        command.arg("--root").arg(root).env_remove("ORBIT_ROOT");
+        // `--root` pins both stores.
+        command.arg("--root").arg(root);
     }
     command
         .arg("job")
