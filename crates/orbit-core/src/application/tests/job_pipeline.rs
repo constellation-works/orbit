@@ -16,10 +16,10 @@ use tempfile::TempDir;
 use crate::OrbitRuntime;
 use crate::application::job::JobRunListParams;
 use crate::application::job::pipeline::{
-    configure_pipeline_worker_command, configure_pipeline_worker_stdio, pipeline_worker_log_path,
-    pipeline_worker_profile_file, pipeline_worker_root_override,
-    resolve_pipeline_worker_executable, run_definition_snapshot_path, worker_command_override,
-    worker_observer_read_counter,
+    ROUTINE_DISPATCH_ORBIT_DIR_FIELD, configure_pipeline_worker_command,
+    configure_pipeline_worker_stdio, pipeline_worker_log_path, pipeline_worker_profile_file,
+    pipeline_worker_root_override, resolve_pipeline_worker_executable,
+    run_definition_snapshot_path, worker_command_override, worker_observer_read_counter,
 };
 use crate::application::task::TaskAddParams;
 use crate::application::workflow::{CompletionPolicy, ShipMode};
@@ -112,6 +112,15 @@ fn pipeline_worker_command_discovers_registered_workspace_from_cwd() {
         "an unpinned parent must not pass --root; that pins both roots and disconnects the worker from the global store"
     );
     assert_eq!(command.get_current_dir(), Some(workspace));
+    assert!(
+        command
+            .get_envs()
+            .any(|(key, value)| key == OsStr::new("ORBIT_ROOT") && value.is_none()),
+        "ORB-11998: an inherited ORBIT_ROOT must not be left to outrank the cwd this \
+         worker was explicitly pinned to — resolve_roots prefers the env var over cwd \
+         walk-up, so a leftover value would silently redirect the worker to a different \
+         registered workspace"
+    );
 }
 
 #[test]
@@ -988,6 +997,90 @@ fn newer_schema_fails_before_worker_claims_or_executes() {
     assert_eq!(stored.state, JobRunState::Pending);
     assert_eq!(stored.pid, None);
     assert!(stored.steps.is_empty());
+}
+
+/// Seed a trivial always-enabled job (a single `sleep` step) so a run can
+/// reach step execution without depending on catalog defaults.
+fn seed_sleep_job(runtime: &OrbitRuntime, job_name: &str) {
+    let jobs_dir = runtime.paths().global_dir.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    std::fs::write(
+        jobs_dir.join(format!("{job_name}.yaml")),
+        format!(
+            r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: {job_name}
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: nap
+      default_input:
+        seconds: 0
+      spec:
+        type: deterministic
+        action: sleep
+        config: {{}}
+"#
+        ),
+    )
+    .expect("seed sleep job definition");
+}
+
+/// [ORB-11998] A routine-dispatched run declares the `.orbit` directory of its
+/// owning workspace. If the worker that claims it resolved a different
+/// workspace — the exact failure mode behind the original incident, where an
+/// inherited `ORBIT_ROOT` silently redirected the worker — the run must fail
+/// visibly instead of vacuously succeeding against the wrong (or empty) scope.
+#[test]
+fn routine_dispatch_workspace_mismatch_fails_the_run_before_it_executes() {
+    let (_root, runtime) = test_runtime();
+    seed_sleep_job(&runtime, "task_gate_pipeline");
+    let mismatched_dir = "/completely/unrelated/workspace/.orbit";
+    let input = serde_json::json!({ ROUTINE_DISPATCH_ORBIT_DIR_FIELD: mismatched_dir });
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_gate_pipeline", 1, Utc::now(), Some(input), None)
+        .expect("insert routine-dispatched run declaring a mismatched workspace");
+
+    let error = runtime
+        .execute_pipeline_run_worker(&run.run_id)
+        .expect_err("a mismatched declared workspace must fail the run");
+    let message = error.to_string();
+    assert!(message.contains(mismatched_dir), "{message}");
+    assert!(message.contains("mismatched workspace"), "{message}");
+
+    let terminal = runtime.show_job_run(&run.run_id).expect("show run");
+    assert_eq!(
+        terminal.state,
+        JobRunState::Cancelled,
+        "a workspace-routing failure must be a visible terminal outcome, not success"
+    );
+}
+
+/// The companion positive case: a routine-dispatched run whose declared
+/// workspace matches the executing worker's own resolved workspace must run
+/// its steps normally, proving the new check is not a blanket refusal.
+#[test]
+fn routine_dispatch_workspace_match_lets_the_run_execute() {
+    let (_root, runtime) = test_runtime();
+    seed_sleep_job(&runtime, "task_gate_pipeline");
+    let matching_dir = runtime.paths().orbit_dir.to_string_lossy().into_owned();
+    let input = serde_json::json!({ ROUTINE_DISPATCH_ORBIT_DIR_FIELD: matching_dir });
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_gate_pipeline", 1, Utc::now(), Some(input), None)
+        .expect("insert routine-dispatched run declaring the correct workspace");
+
+    runtime
+        .execute_pipeline_run_worker(&run.run_id)
+        .expect("a matching declared workspace must not be refused");
+
+    let terminal = runtime.show_job_run(&run.run_id).expect("show run");
+    assert_eq!(terminal.state, JobRunState::Success);
 }
 
 #[test]

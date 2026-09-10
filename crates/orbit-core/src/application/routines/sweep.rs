@@ -70,8 +70,15 @@ impl RoutineDispatch for RuntimeDispatch<'_> {
                 source_orbit_dir.display()
             ))
         })?;
+        // [ORB-11998] Carry the owning workspace's `.orbit` directory into the
+        // run explicitly, so the detached worker that ends up executing it can
+        // verify its own resolved workspace matches this one — instead of the
+        // run silently trusting whatever the worker's cwd/env resolved to.
+        let mut input = json!({});
+        input[crate::application::job::pipeline::ROUTINE_DISPATCH_ORBIT_DIR_FIELD] =
+            json!(source_orbit_dir.to_string_lossy());
         runtime
-            .submit_pipeline_run(job_name, json!({}), None, Some(actor))
+            .submit_pipeline_run(job_name, input, None, Some(actor))
             .map(|invoke| invoke.run_id)
     }
 
