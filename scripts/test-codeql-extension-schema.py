@@ -30,8 +30,10 @@ extensionTargets:
   codeql/rust-all: "*"
 
 dataExtensions:
-  - path-validation.yml
+  - path-validation.yaml
 """
+
+LEGACY_YML_PACK = PACK_YML.replace("path-validation.yaml", "path-validation.yml")
 
 TWO_VALID_ROWS = """extensions:
   - addsTo:
@@ -114,6 +116,34 @@ INVALID_ROW_TYPES = """extensions:
         ]
 """
 
+OVERBROAD_CALLABLE = """extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierGuardModel
+    data:
+      - [
+          "orbit_core::application::job::pipeline::*",
+          "Argument[0]",
+          "true",
+          "path-injection",
+          "manual",
+        ]
+"""
+
+OVERBROAD_ACCESS_PATH = """extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierGuardModel
+    data:
+      - [
+          "orbit_core::application::job::pipeline::is_safe",
+          "Argument[*]",
+          "true",
+          "path-injection",
+          "manual",
+        ]
+"""
+
 
 class CodeqlExtensionSchemaTests(unittest.TestCase):
     def setUp(self):
@@ -121,12 +151,13 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
-    def write_pack(self, data_yml, pack_yml=None):
+    def write_pack(self, data_yaml, pack_yml=None, data_filename="path-validation.yaml"):
         pack_dir = self.root / ".github/codeql/extensions/orbit-rust-path-validation"
         pack_dir.mkdir(parents=True)
         (pack_dir / "codeql-pack.yml").write_text(pack_yml or PACK_YML, encoding="utf-8")
-        (pack_dir / "path-validation.yml").write_text(data_yml, encoding="utf-8")
-        return pack_dir / "path-validation.yml"
+        data_file = pack_dir / data_filename
+        data_file.write_text(data_yaml, encoding="utf-8")
+        return data_file
 
     def errors(self):
         return CHECK.validate_root(self.root)
@@ -174,6 +205,31 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         self.assertIn("kind", errors[0])
         self.assertIn("expected a non-empty string", errors[0])
         self.assertIn("boolean", errors[0])
+
+    def test_overbroad_callable_path_fails_clearly(self):
+        self.write_pack(OVERBROAD_CALLABLE)
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("expected an exact Orbit callable path", errors[0])
+
+    def test_overbroad_access_path_fails_clearly(self):
+        self.write_pack(OVERBROAD_ACCESS_PATH)
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("expected an exact access path", errors[0])
+
+    def test_generated_style_yaml_discovery_includes_extension(self):
+        data_file = self.write_pack(TWO_VALID_ROWS)
+        discovered = list(data_file.parent.rglob("*.yaml"))
+        self.assertEqual(discovered, [data_file])
+        self.assertEqual(self.errors(), [])
+
+    def test_yml_extension_fails_generated_discovery_gate(self):
+        self.write_pack(TWO_VALID_ROWS, LEGACY_YML_PACK, "path-validation.yml")
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("must end in '.yaml'", errors[0])
+        self.assertIn(CHECK.GENERATED_EXTENSION_GLOB, errors[0])
 
     def test_current_extension_files_pass(self):
         self.assertEqual(CHECK.validate_root(REPO_ROOT), [])

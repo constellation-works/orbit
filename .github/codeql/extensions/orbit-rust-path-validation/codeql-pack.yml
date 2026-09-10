@@ -6,4 +6,4 @@ extensionTargets:
   codeql/rust-all: "*"
 
 dataExtensions:
-  - path-validation.yml
+  - path-validation.yaml
