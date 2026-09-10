@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::fs::OpenOptions;
 #[cfg(unix)]
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -710,7 +710,10 @@ pub fn compile_linux_bwrap_argv_with_authority(
     authority: Vec<LinuxBwrapMountAuthority>,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
     let mut plan = compile_linux_bwrap_argv(profile, program, args, cwd, managed_worktree)?;
-    for (descriptor_index, grant) in authority.into_iter().enumerate() {
+    for grant in authority {
+        let source = prepare_mount_source(grant.source)?;
+        #[cfg(unix)]
+        let source_fd = source.as_raw_fd();
         let rendered = grant.destination.display().to_string();
         let mut replaced = false;
         for index in 0..plan.args.len().saturating_sub(2) {
@@ -719,7 +722,13 @@ pub fn compile_linux_bwrap_argv_with_authority(
                 && plan.args[index + 2] == rendered
             {
                 plan.args[index] = "--bind-fd".to_string();
-                plan.args[index + 1] = (descriptor_index + 3).to_string();
+                // The retained File reserves this exact descriptor while
+                // Command builds its pipes. Rendering that descriptor here
+                // keeps argv and child inheritance on one source of truth.
+                #[cfg(unix)]
+                {
+                    plan.args[index + 1] = source_fd.to_string();
+                }
                 replaced = true;
             }
         }
@@ -729,9 +738,57 @@ pub fn compile_linux_bwrap_argv_with_authority(
                 grant.destination.display()
             )));
         }
-        plan.mount_sources.push(grant.source);
+        plan.mount_sources.push(source);
     }
     Ok(plan)
+}
+
+#[cfg(unix)]
+fn prepare_mount_source(source: File) -> Result<File, OrbitError> {
+    if source.as_raw_fd() >= 3 {
+        return Ok(source);
+    }
+
+    let descriptor = unsafe { libc::fcntl(source.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+    if descriptor < 0 {
+        return Err(OrbitError::Execution(format!(
+            "duplicate Linux runtime grant descriptor: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+#[cfg(not(unix))]
+fn prepare_mount_source(_source: File) -> Result<File, OrbitError> {
+    Err(OrbitError::Execution(
+        "descriptor-backed Linux runtime grants require Unix file descriptors".to_string(),
+    ))
+}
+
+#[cfg(unix)]
+fn inherit_mount_sources(command: &mut Command, mount_sources: &[File]) {
+    use std::os::unix::process::CommandExt;
+
+    let source_fds = mount_sources
+        .iter()
+        .map(AsRawFd::as_raw_fd)
+        .collect::<Vec<_>>();
+    unsafe {
+        command.pre_exec(move || {
+            // Keep each source at its already-occupied descriptor. Remapping
+            // into a conventional low range can overwrite Command's private
+            // exec-error pipe, causing exec failures to look like success.
+            for source in &source_fds {
+                let flags = libc::fcntl(*source, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(*source, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
 }
 
 pub fn spawn_under_linux_bwrap(request: LinuxBwrapSpawnRequest<'_>) -> Result<Child, OrbitError> {
@@ -767,31 +824,7 @@ pub fn spawn_under_linux_bwrap(request: LinuxBwrapSpawnRequest<'_>) -> Result<Ch
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let source_fds = plan
-            .mount_sources
-            .iter()
-            .map(AsRawFd::as_raw_fd)
-            .collect::<Vec<_>>();
-        let mut temporary_fds = vec![-1; source_fds.len()];
-        unsafe {
-            command.pre_exec(move || {
-                let minimum = 3 + source_fds.len() as libc::c_int;
-                for (index, source) in source_fds.iter().copied().enumerate() {
-                    let duplicate = libc::fcntl(source, libc::F_DUPFD_CLOEXEC, minimum);
-                    if duplicate < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    temporary_fds[index] = duplicate;
-                }
-                for (index, duplicate) in temporary_fds.iter().copied().enumerate() {
-                    if libc::dup2(duplicate, 3 + index as libc::c_int) < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    libc::close(duplicate);
-                }
-                Ok(())
-            });
-        }
+        inherit_mount_sources(&mut command, &plan.mount_sources);
         command.process_group(0);
     }
     command.spawn().map_err(|error| {
