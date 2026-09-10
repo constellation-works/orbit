@@ -157,8 +157,10 @@ fn load_activity_asset_rejects_trusted_host_execution_on_any_other_activity() {
         matches!(error, AssetLoadError::TrustedHostActivity(_)),
         "expected a trusted-host refusal, got {error:?}"
     );
-    assert!(error.to_string().contains("an activity declares"));
-    assert!(!error.to_string().contains("agent_implement"));
+    assert!(
+        error.to_string().contains("activity `agent_implement`"),
+        "the refusal must name the refused asset: {error}"
+    );
 }
 
 #[test]

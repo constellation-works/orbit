@@ -46,6 +46,12 @@ pub enum AssetLoadError {
     },
     #[error("kind mismatch: expected `{expected}`, got `{actual}`")]
     KindMismatch { expected: String, actual: String },
+    // Both asset-validation refusals below name the offending activity, and
+    // they stay in step. An activity's `metadata.name` identifies a workspace
+    // file the operator can open and fix, so naming it is what makes the
+    // refusal actionable; redaction here is reserved for credentials and
+    // user-identifying paths. Redacting one arm alone only costs
+    // diagnosability, because the other still reports the same value.
     #[error("activity `{activity}` tool allowlist invalid: {source}")]
     ToolAllowlist {
         activity: String,

@@ -113,18 +113,21 @@ pub fn strip_trusted_host_admission(input: &mut Value) -> bool {
 
 /// Refusal to load an asset that claims trusted-host execution it may not have.
 ///
-/// The offending asset name is replaced with a constant marker. Asset metadata
-/// is operator-controlled input and this error can cross logging boundaries;
-/// the stable diagnostic preserves the validation reason without copying that
-/// input into a value that may be formatted later.
+/// The refusal names the offending activity. An activity's `metadata.name`
+/// identifies a workspace asset file, not secret material, and the operator
+/// reading this error is the person who has to find and edit that file — a
+/// refusal that will not say which asset it refused is not actionable.
+/// Redaction in this workspace covers credentials and user-identifying paths
+/// (`orbit_common::security::redaction`), and the sibling
+/// `AssetLoadError::ToolAllowlist` names the same value on the same grounds.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "an activity declares `trustedHostExecution: true`, which only the built-in \
+    "activity `{activity}` declares `trustedHostExecution: true`, which only the built-in \
      `{TRUSTED_HOST_ACTIVITY}` activity may declare; an unsandboxed provider subprocess is \
      admitted per invocation by an operator, never by an asset"
 )]
 pub struct TrustedHostActivityError {
-    /// Redacted marker retained for source compatibility with error consumers.
+    /// Name of the offending activity asset.
     pub activity: String,
 }
 
@@ -138,7 +141,7 @@ pub fn validate_trusted_host_activity(
 ) -> Result<(), TrustedHostActivityError> {
     if declares_trusted_host && activity != TRUSTED_HOST_ACTIVITY {
         return Err(TrustedHostActivityError {
-            activity: "<redacted>".to_string(),
+            activity: activity.to_string(),
         });
     }
     Ok(())
