@@ -56,8 +56,15 @@ impl<'a> Source<'a> {
         let output = file
             .try_clone()
             .map_err(|e| AutomationError::Deferred(e.to_string()))?;
-        let mut child = Command::new(program)
-            .args(args)
+        // Keep each value as a separate OS argument. This avoids treating the
+        // collected values as a command-line string while retaining Git's
+        // normal argument semantics.
+        let mut command = Command::new(program);
+        for arg in args {
+            command.arg(arg);
+        }
+
+        let mut child = command
             .current_dir(self.root)
             .stdin(Stdio::null())
             .stdout(output)
