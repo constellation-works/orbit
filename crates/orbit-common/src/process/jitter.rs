@@ -9,11 +9,15 @@
 //! The generator is an xorshift64* seeded through SplitMix64 — no external
 //! dependency, not suitable for anything security-sensitive.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Fallback seed used when the entropy sources collapse to zero
 /// (xorshift64* has a fixed point at state 0).
 const SEED_FALLBACK: u64 = 0x9e37_79b9_7f4a_7c15;
+
+/// Separates fallback seeds if the operating system cannot provide entropy.
+static FALLBACK_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Small xorshift64* PRNG for retry jitter. Not cryptographic.
 #[derive(Debug, Clone)]
@@ -22,16 +26,11 @@ pub struct JitterRng {
 }
 
 impl JitterRng {
-    /// Seed from wall-clock nanos, the process id, and a caller-provided
-    /// salt (e.g. a run id) so concurrent workers retrying the same failing
-    /// dependency draw from decorrelated streams.
-    pub fn seeded(salt: &str) -> Self {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        let salt_hash = fnv1a_64(salt.as_bytes());
-        Self::from_seed(nanos ^ salt_hash ^ u64::from(std::process::id()))
+    /// Construct from operating-system entropy so production retry streams
+    /// are independent of application identifiers.
+    pub fn from_entropy() -> Self {
+        let seed = getrandom::u64().unwrap_or_else(|_| fallback_seed());
+        Self::from_seed(seed)
     }
 
     /// Construct from an explicit seed (deterministic; intended for tests).
@@ -66,20 +65,20 @@ impl JitterRng {
     }
 }
 
+fn fallback_seed() -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    let sequence = FALLBACK_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    nanos ^ u64::from(std::process::id()) ^ sequence
+}
+
 /// SplitMix64 finalizer — mixes a raw seed into a well-distributed state.
 fn splitmix64(seed: u64) -> u64 {
     let mut z = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     z ^ (z >> 31)
-}
-
-/// FNV-1a hash of arbitrary bytes; used only for seed salting.
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }

@@ -277,7 +277,7 @@ impl SubprocessEmbedder {
             .io
             .lock()
             .map_err(|error| OrbitError::Execution(format!("companion mutex poisoned: {error}")))?;
-        let mut jitter = JitterRng::seeded(&self.model_arg);
+        let mut jitter = JitterRng::from_entropy();
         let mut last_transient: Option<TransientFailure> = None;
         for attempt in 0..RPC_MAX_ATTEMPTS {
             if attempt > 0 {
@@ -499,7 +499,7 @@ fn spawn_companion_with_retry(
     model: &str,
     stderr: CompanionStderr,
 ) -> Result<ChildIo, OrbitError> {
-    let mut jitter = JitterRng::seeded(model);
+    let mut jitter = JitterRng::from_entropy();
     let mut last_error: Option<std::io::Error> = None;
     for attempt in 0..RPC_MAX_ATTEMPTS {
         if attempt > 0 {
