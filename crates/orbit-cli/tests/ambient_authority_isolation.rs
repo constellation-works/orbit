@@ -33,6 +33,7 @@ use tempfile::{TempDir, tempdir};
 /// live managed authority a leaking fixture would otherwise reach.
 struct Sentinel {
     _temp: TempDir,
+    parent: PathBuf,
     home: PathBuf,
     work: PathBuf,
     workspace_id: String,
@@ -41,10 +42,15 @@ struct Sentinel {
 impl Sentinel {
     fn new() -> Self {
         let temp = tempdir().expect("sentinel tempdir");
-        let home = temp.path().join("home");
-        let work = temp.path().join("work");
+        let parent = temp.path().join("hostile-parent");
+        let home = parent.join("home");
+        let work = home.join("work");
+        std::fs::create_dir_all(parent.join(".git")).expect("create hostile parent repo");
+        std::fs::create_dir_all(parent.join(".orbit")).expect("create hostile parent state");
+        std::fs::write(parent.join(".orbit/sentinel"), "must remain unchanged\n")
+            .expect("write hostile parent sentinel");
         std::fs::create_dir_all(&home).expect("create sentinel home");
-        std::fs::create_dir_all(&work).expect("create sentinel work");
+        std::fs::create_dir_all(work.join(".git")).expect("create sentinel work repo");
 
         let mut command = isolated_orbit(&work, &home);
         run_ok(
@@ -64,6 +70,7 @@ impl Sentinel {
 
         Self {
             _temp: temp,
+            parent,
             home,
             work,
             workspace_id,
@@ -86,6 +93,12 @@ impl Sentinel {
         let mut files = BTreeMap::new();
         // Label each half: the registry and the task store both contain a
         // `.orbit/config.yaml`, and a colliding key would hide a change.
+        collect_files(
+            Path::new("hostile-parent"),
+            &self.parent.join(".orbit"),
+            &self.parent.join(".orbit"),
+            &mut files,
+        );
         collect_files(Path::new("registry"), &self.home, &self.home, &mut files);
         collect_files(Path::new("workspace"), &self.work, &self.work, &mut files);
         assert!(
@@ -138,9 +151,9 @@ impl Fixture {
     fn new(sentinel: &Sentinel) -> Self {
         let temp = tempdir().expect("fixture tempdir");
         let home = temp.path().join("home");
-        let work = temp.path().join("work");
+        let work = home.join("work");
         std::fs::create_dir_all(&home).expect("create fixture home");
-        std::fs::create_dir_all(&work).expect("create fixture work");
+        std::fs::create_dir_all(work.join(".git")).expect("create fixture work repo");
 
         let fixture = Self {
             _temp: temp,

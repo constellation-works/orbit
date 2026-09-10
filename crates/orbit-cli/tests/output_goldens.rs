@@ -105,9 +105,9 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
-        let work = temp.path().join("work");
+        let work = home.join("work");
         std::fs::create_dir_all(&home).expect("create home");
-        std::fs::create_dir_all(&work).expect("create work");
+        std::fs::create_dir_all(work.join(".git")).expect("create work repo");
         let fixture = Self {
             _temp: temp,
             home,

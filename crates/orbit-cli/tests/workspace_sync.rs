@@ -45,9 +45,10 @@ fn read_optional(path: impl Into<PathBuf>) -> Option<Vec<u8>> {
 #[test]
 fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_idempotent() {
     let home = tempdir().expect("home tempdir");
-    let repo = tempdir().expect("workspace tempdir");
+    let repo = home.path().join("workspace");
+    std::fs::create_dir_all(repo.join(".git")).expect("create workspace repo");
     write_host_identity(home.path());
-    orbit(repo.path(), home.path())
+    orbit(&repo, home.path())
         .args(["workspace", "init"])
         .assert()
         .success();
@@ -55,7 +56,7 @@ fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_ide
     // `workspace sync` reports each action's path as the process resolves it,
     // so fixtures compared against those paths have to resolve the same way.
     // A macOS temp dir arrives as `/var/...` and resolves to `/private/var/...`.
-    let repo_root = std::fs::canonicalize(repo.path()).expect("canonical workspace root");
+    let repo_root = std::fs::canonicalize(&repo).expect("canonical workspace root");
     let workspace_root = repo_root.join(".orbit");
     let auto_tasks = workspace_root.join("auto_tasks");
     let missing = auto_tasks.join("code-review.yaml");
@@ -91,9 +92,9 @@ fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_ide
     let identity = workspace_root.join("config.yaml");
     let registry_before = read(&registry);
     let identity_before = read(&identity);
-    let gitignore_before = read_optional(repo.path().join(".gitignore"));
+    let gitignore_before = read_optional(repo.join(".gitignore"));
 
-    let check = orbit(repo.path(), home.path())
+    let check = orbit(&repo, home.path())
         .args(["workspace", "sync", "--check", "--json"])
         .assert()
         .code(3)
@@ -121,12 +122,9 @@ fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_ide
     );
     assert_eq!(read(&registry), registry_before);
     assert_eq!(read(&identity), identity_before);
-    assert_eq!(
-        read_optional(repo.path().join(".gitignore")),
-        gitignore_before
-    );
+    assert_eq!(read_optional(repo.join(".gitignore")), gitignore_before);
 
-    let applied = orbit(repo.path(), home.path())
+    let applied = orbit(&repo, home.path())
         .args(["workspace", "sync", "--json"])
         .assert()
         .success()
@@ -156,13 +154,10 @@ fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_ide
     );
     assert_eq!(read(&registry), registry_before);
     assert_eq!(read(&identity), identity_before);
-    assert_eq!(
-        read_optional(repo.path().join(".gitignore")),
-        gitignore_before
-    );
+    assert_eq!(read_optional(repo.join(".gitignore")), gitignore_before);
 
     let managed_after = read(&missing);
-    orbit(repo.path(), home.path())
+    orbit(&repo, home.path())
         .args(["workspace", "sync", "--check", "--json"])
         .assert()
         .success();
@@ -175,20 +170,34 @@ fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_ide
 
 #[test]
 fn workspace_sync_outside_registered_workspace_fails_before_writing() {
-    let home = tempdir().expect("home tempdir");
-    let repo = tempdir().expect("workspace tempdir");
-    write_host_identity(home.path());
-    let before: Vec<_> = std::fs::read_dir(repo.path())
-        .expect("read empty repo")
-        .collect();
-    orbit(repo.path(), home.path())
-        .args(["workspace", "sync"])
+    let parent = tempdir().expect("parent tempdir");
+    let home = parent.path().join("home");
+    let repo = home.join("outside-workspace");
+    let uninitialized_root = home.join("uninitialized-root");
+    std::fs::create_dir_all(parent.path().join(".git")).expect("create parent repo");
+    std::fs::create_dir_all(repo.join(".git")).expect("create outside repo");
+    std::fs::create_dir_all(&uninitialized_root).expect("create uninitialized root");
+    write_host_identity(&home);
+    orbit(parent.path(), &home)
+        .args(["workspace", "init", "--name", "initialized-parent"])
+        .assert()
+        .success();
+    let parent_state = read(parent.path().join(".orbit/config.yaml"));
+    let before: Vec<_> = std::fs::read_dir(&repo).expect("read empty repo").collect();
+    orbit(&repo, &home)
+        .args([
+            "workspace",
+            "sync",
+            "--root",
+            uninitialized_root.to_str().expect("utf8 root"),
+        ])
         .assert()
         .failure()
         .stderr(predicates::str::contains("orbit workspace init"));
-    let after: Vec<_> = std::fs::read_dir(repo.path())
+    let after: Vec<_> = std::fs::read_dir(&repo)
         .expect("reread empty repo")
         .collect();
     assert_eq!(after.len(), before.len());
-    assert!(!repo.path().join(".orbit").exists());
+    assert!(!repo.join(".orbit").exists());
+    assert_eq!(read(parent.path().join(".orbit/config.yaml")), parent_state);
 }
