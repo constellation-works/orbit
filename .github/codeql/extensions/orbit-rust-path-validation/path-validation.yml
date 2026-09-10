@@ -135,3 +135,9 @@ extensions:
           "path-injection",
           "manual",
         ]
+      - [
+          "orbit_common::fs::file_lock::validated_lock_holder_path",
+          "ReturnValue.Field[core::option::Option::Some(0)]",
+          "path-injection",
+          "manual",
+        ]

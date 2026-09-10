@@ -4,7 +4,9 @@ use std::io;
 use tempfile::TempDir;
 
 use crate::OrbitError;
-use crate::fs::io::{remove_path_if_exists, sync_parent_dir, with_exclusive_file_lock};
+use crate::fs::io::{
+    read_file_lock_holder, remove_path_if_exists, sync_parent_dir, with_exclusive_file_lock,
+};
 
 #[test]
 fn sync_parent_dir_uses_a_preopened_directory_handle() {
@@ -117,6 +119,48 @@ fn private_append_rejects_a_final_symlink() {
         std::fs::read(&outside_file).expect("outside file remains"),
         b"unchanged"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn read_file_lock_holder_rejects_a_symlinked_lock_file() {
+    let root = tempfile::tempdir().expect("root tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let outside_file = outside.path().join("holder.json");
+    std::fs::write(
+        &outside_file,
+        br#"{"pid":1,"acquired_at":"2026-01-01T00:00:00Z","label":"planted"}"#,
+    )
+    .expect("outside holder file");
+    let link = root.path().join(".task.yaml.lock");
+    std::os::unix::fs::symlink(&outside_file, &link).expect("symlink");
+
+    assert!(
+        read_file_lock_holder(&link).is_none(),
+        "a symlinked lock path must not be read as holder metadata"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn read_file_lock_holder_reads_through_a_symlinked_parent_route() {
+    let root = tempfile::tempdir().expect("root tempdir");
+    let real_dir = root.path().join("real");
+    std::fs::create_dir(&real_dir).expect("real directory");
+    let linked_dir = root.path().join("linked");
+    std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("parent symlink");
+
+    let lock_path = real_dir.join(".task.yaml.lock");
+    std::fs::write(
+        &lock_path,
+        br#"{"pid":1,"acquired_at":"2026-01-01T00:00:00Z","label":"holder"}"#,
+    )
+    .expect("holder file");
+
+    let holder = read_file_lock_holder(&linked_dir.join(".task.yaml.lock"))
+        .expect("holder metadata through a symlinked parent");
+    assert_eq!(holder.pid, 1);
+    assert_eq!(holder.label, "holder");
 }
 
 #[cfg(unix)]

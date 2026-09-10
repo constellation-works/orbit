@@ -161,9 +161,31 @@ pub(crate) fn acquire_shared_file_lock(
 /// Read advisory holder metadata. Missing, empty, torn, and legacy files are
 /// intentionally reported as no metadata because the OS lock is authoritative.
 pub fn read_file_lock_holder(lock_path: &Path) -> Option<FileLockHolderInfo> {
+    let validated = validated_lock_holder_path(lock_path)?;
     let mut raw = String::new();
-    File::open(lock_path).ok()?.read_to_string(&mut raw).ok()?;
+    File::open(validated).ok()?.read_to_string(&mut raw).ok()?;
     serde_json::from_str(&raw).ok()
+}
+
+/// Resolve `lock_path` through its canonical parent directory and require the
+/// final component to already exist as a regular, non-symlinked file.
+///
+/// `lock_path` reaches this function as a caller-selected value (a task lock,
+/// a store lock) with no upstream containment check, so canonicalizing the
+/// parent and rejecting a symlinked or non-regular final component keeps the
+/// read confined to the resolved parent directory instead of a planted
+/// symlink's target [ORB-11953]. `None` covers "nothing to read", matching
+/// this function's existing no-metadata-on-missing-file semantics.
+fn validated_lock_holder_path(lock_path: &Path) -> Option<PathBuf> {
+    let file_name = lock_path.file_name()?;
+    let parent = lock_path.parent()?;
+    let canonical_parent = parent.canonicalize().ok()?;
+    let candidate = canonical_parent.join(file_name);
+
+    match std::fs::symlink_metadata(&candidate) {
+        Ok(metadata) if metadata.is_file() => Some(candidate),
+        _ => None,
+    }
 }
 
 fn open_lock_file(lock_path: &Path, label: &str) -> io::Result<File> {
