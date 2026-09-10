@@ -1341,7 +1341,11 @@ ssh_key_fingerprint = "{CALLER_KEY_FINGERPRINT}"
 #[test]
 fn a_key_bound_remote_operator_invokes_an_agent_only_in_the_granted_workspace() {
     let workspace = McpWorkspace::init();
+    // `model` attributes the caller; the workspace's frozen default crew picks
+    // the provider. Stub both possible selected providers, because an inherited
+    // host `claude` binary makes `opus` the default crew during fixture init.
     plant_agent_response_stub(&McpWorkspace::stub_bin_dir(&workspace.home), "codex");
+    plant_agent_response_stub(&McpWorkspace::stub_bin_dir(&workspace.home), "claude");
     let registry: Value = serde_json::from_str(
         &std::fs::read_to_string(workspace.home.join(".orbit/workspaces.json"))
             .expect("read workspace registry"),
@@ -4444,12 +4448,19 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
     assert_command_succeeded("fixture search warmup", &warm_search);
 
     let worktree = add_linked_worktree(&workspace.work);
-    let state_root = workspace.work.join(".orbit");
+    let canonical_root = workspace.home.join(".orbit");
+    let workspace_state_root = workspace.work.join(".orbit");
+    let protected_state = snapshot_fixture_state(&[&canonical_root, &workspace_state_root]);
 
-    let tool_list = readonly_orbit_command(&worktree, &workspace.home, &state_root)
-        .args(["tool", "list", "--json"])
-        .output()
-        .expect("list tools through the read-only mount");
+    let tool_list = readonly_orbit_command(
+        &worktree,
+        &workspace.home,
+        &canonical_root,
+        &workspace_state_root,
+    )
+    .args(["tool", "list", "--json"])
+    .output()
+    .expect("list tools through the read-only mount");
     assert_command_succeeded("read-only orbit.tool.list", &tool_list);
 
     for (name, input) in [
@@ -4470,47 +4481,62 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
             }),
         ),
     ] {
-        let output = readonly_orbit_command(&worktree, &workspace.home, &state_root)
-            .args([
-                "tool",
-                "run",
-                name,
-                "--root",
-                state_root.to_str().expect("utf8 Orbit root"),
-                "--input",
-                &input.to_string(),
-            ])
-            .output()
-            .unwrap_or_else(|error| panic!("run {name} through the read-only mount: {error}"));
-        assert_command_succeeded(name, &output);
-    }
-
-    let mutation = readonly_orbit_command(&worktree, &workspace.home, &state_root)
+        let output = readonly_orbit_command(
+            &worktree,
+            &workspace.home,
+            &canonical_root,
+            &workspace_state_root,
+        )
         .args([
             "tool",
             "run",
-            "orbit.task.update",
+            name,
             "--root",
-            state_root.to_str().expect("utf8 Orbit root"),
+            canonical_root.to_str().expect("utf8 Orbit root"),
             "--input",
-            &json!({
-                "id": task_id,
-                "execution_summary": "must not persist",
-                "model": "codex"
-            })
-            .to_string(),
+            &input.to_string(),
         ])
         .output()
-        .expect("attempt task mutation through the read-only mount");
+        .unwrap_or_else(|error| panic!("run {name} through the read-only mount: {error}"));
+        assert_command_succeeded(name, &output);
+    }
+
+    let mutation = readonly_orbit_command(
+        &worktree,
+        &workspace.home,
+        &canonical_root,
+        &workspace_state_root,
+    )
+    .args([
+        "tool",
+        "run",
+        "orbit.task.update",
+        "--root",
+        canonical_root.to_str().expect("utf8 Orbit root"),
+        "--input",
+        &json!({
+            "id": task_id,
+            "execution_summary": "must not persist",
+            "model": "codex"
+        })
+        .to_string(),
+    ])
+    .output()
+    .expect("attempt task mutation through the read-only mount");
     assert_readonly_mutation_failed("CLI", &mutation);
 
-    let mut child = readonly_orbit_command(&worktree, &workspace.home, &state_root);
+    let mut child = readonly_orbit_command(
+        &worktree,
+        &workspace.home,
+        &canonical_root,
+        &workspace_state_root,
+    );
     child
         .args([
             "mcp",
             "serve",
             "--root",
-            state_root.to_str().expect("utf8 Orbit root"),
+            canonical_root.to_str().expect("utf8 Orbit root"),
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -4549,6 +4575,13 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         }),
     );
     assert_readonly_diagnostic("MCP", mutation["message"].as_str().unwrap_or_default());
+    drop(client);
+
+    assert_eq!(
+        snapshot_fixture_state(&[&canonical_root, &workspace_state_root]),
+        protected_state,
+        "read-only CLI and MCP calls must leave canonical and workspace state unchanged"
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -4569,16 +4602,21 @@ fn bubblewrap_mount_namespaces_available() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn readonly_orbit_command(worktree: &Path, home: &Path, state_root: &Path) -> Command {
+fn readonly_orbit_command(
+    worktree: &Path,
+    home: &Path,
+    canonical_root: &Path,
+    workspace_state_root: &Path,
+) -> Command {
     let mut command = Command::new("bwrap");
     command
         .args(["--die-with-parent", "--bind", "/", "/"])
         .arg("--ro-bind")
-        .arg(state_root)
-        .arg(state_root)
+        .arg(canonical_root)
+        .arg(canonical_root)
         .arg("--ro-bind")
-        .arg(home.join(".orbit"))
-        .arg(home.join(".orbit"))
+        .arg(workspace_state_root)
+        .arg(workspace_state_root)
         .arg("--chdir")
         .arg(worktree)
         .arg("--setenv")
@@ -4592,10 +4630,41 @@ fn readonly_orbit_command(worktree: &Path, home: &Path, state_root: &Path) -> Co
         .arg(stub_first_path(&McpWorkspace::stub_bin_dir(home)))
         .arg("--setenv")
         .arg("ORBIT_ROOT")
-        .arg(state_root)
+        .arg(canonical_root)
         .arg("--")
         .arg(env!("CARGO_BIN_EXE_orbit"));
     command
+}
+
+#[cfg(target_os = "linux")]
+fn snapshot_fixture_state(roots: &[&Path]) -> BTreeSet<(PathBuf, Vec<u8>)> {
+    let mut state = BTreeSet::new();
+
+    for root in roots {
+        snapshot_fixture_state_at(root, &mut state);
+    }
+
+    state
+}
+
+#[cfg(target_os = "linux")]
+fn snapshot_fixture_state_at(root: &Path, state: &mut BTreeSet<(PathBuf, Vec<u8>)>) {
+    for entry in std::fs::read_dir(root).expect("read protected fixture state directory") {
+        let entry = entry.expect("read protected fixture state entry");
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .expect("read protected fixture state type");
+
+        if file_type.is_dir() {
+            snapshot_fixture_state_at(&path, state);
+        } else if file_type.is_file() {
+            state.insert((
+                path.clone(),
+                std::fs::read(&path).expect("read protected fixture state"),
+            ));
+        }
+    }
 }
 
 // Not Linux-specific: this only asserts on exit status, and 14 call sites
