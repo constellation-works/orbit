@@ -1,8 +1,8 @@
 ---
 title: "Remote Access — Design"
 owner: codex
-last_updated: 2026-08-15
-last_validated: 2026-09-07
+last_updated: 2026-09-10
+last_validated: 2026-09-10
 status: Accepted
 feature: remote-access
 doc_role: design
@@ -54,9 +54,13 @@ Runtime construction happens outside state locks. Web calls orbit-cmd's Register
 
 Workspace-scoped API handlers use ?workspace=<id>, falling back to the pinned default. Unknown workspaces return not found; inactive workspaces return a client error. Omitting the selector with no default is also an error.
 
-GET /api/workspaces lists current entries. GET /api/tasks/all opens active workspaces, skips ones that cannot be opened, tags tasks with workspace metadata, sorts the union newest-first, and applies the standard task-list limit.
+GET /api/workspaces lists current entries. `GET /api/tasks` and `GET /api/tasks/all` share the same task-page query contract. Both accept `status`, `tag` (also `tags`), `type` (also `task_type`), `q` (also `search`), `limit`, and `cursor`. Status and tag values may be repeated or comma-separated; `q` is a case-insensitive task ID/title substring; and `limit` is a positive caller-supplied page size, defaulting to the server default only when omitted. Every predicate is applied before the page bound, so the page contains the newest matching tasks rather than the newest tasks filtered afterward.
 
-GET /api/tasks supports status, tag, type, and limit filters before truncation and returns an items/total/limit/truncated envelope. The aggregate endpoint remains an unfiltered bounded array.
+Both endpoints return `{ items, total, limit, truncated, offset, next_cursor }`. `total` is the count of all matches before the page bound and remains the pre-cursor total on later pages. `truncated` means `total > items.length` against that pre-cursor total; it can therefore remain `true` on a final cursor page. `next_cursor`, not `truncated`, tells a client whether to request another page. `offset` is zero for the first page and records the cursor's position thereafter.
+
+`GET /api/tasks` is scoped to the selected workspace. `GET /api/tasks/all` opens active workspaces, skips ones that cannot be opened, tags rows with workspace metadata, applies the same predicates independently in each workspace, and merges the candidate pages under one global `created_at DESC, id ASC` order. Its `total` is the sum of the untruncated per-workspace match counts, and its caller-supplied `limit` bounds the merged page.
+
+The cursor is opaque and bound to its endpoint scope and the active workspace set: a workspace cursor cannot be used for another workspace, and an aggregate cursor becomes invalid if its active workspace scope changes. It is also bound to the active status, tag, type, search, and limit values, so changing any of them requires a fresh request. The cursor continues the stable `created_at DESC, id ASC` order. Inserts newer than the first page do not disturb an existing continuation, but changes to a task's ordering or filter membership can move it across the boundary; clients that need a new live snapshot must restart without a cursor.
 
 ## 3. orbit web connect
 

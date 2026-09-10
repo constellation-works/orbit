@@ -3,8 +3,8 @@ summary: "User Interface — Design"
 type: design
 title: "User Interface — Design"
 owner: gemini
-last_updated: 2026-08-16
-last_validated: 2026-08-17
+last_updated: 2026-09-10
+last_validated: 2026-09-10
 status: Draft
 feature: user-interface
 doc_role: design
@@ -73,7 +73,9 @@ In the aggregate ("All workspaces") view there is no ambient workspace to scope 
 
 ## 8. Task Count, Filters, and the Tasks/Log Layout
 
-The Tasks count states what it means instead of an ambiguous `N/50`: it names the shown count, the filtered-to-fetched relationship when they differ, and — using the `/api/tasks` paging envelope (`{ items, total, limit, truncated }`, ORB-10400) — the true total and the server's page limit when the result was truncated. The active status chips are sent to the server as an explicit `status=` filter rather than fetched wholesale and narrowed client-side, so `total`/`truncated` describe the filter actually in effect [ORB-10874].
+The Tasks count uses the `/api/tasks` or `/api/tasks/all` paging envelope (`{ items, total, limit, truncated, offset, next_cursor }`) to render the current page range and matching total rather than an ambiguous `N/50`. For example, a page with twenty items at offset zero of fifty-five matches reads `1–20 of 55`; the final fifteen-item page reads `41–55 of 55`. An empty page reads `0 of N`. If a client-side filter narrows the loaded page, the count prefixes that range with the number shown, such as `3 shown · page 1–20 of 55`. The count does not name a server page limit or describe a fetched-versus-filtered relationship. The active status chips are sent to the server as an explicit `status=` filter rather than fetched wholesale and narrowed client-side, so the envelope's `total` describes the filter actually in effect [ORB-10874].
+
+The Tasks pager has Previous and Next buttons. Previous follows the saved cursor history and is enabled after moving beyond the first page; Next follows `next_cursor` when the server supplies one and is disabled on the last page. Both controls are disabled while a page is loading. The adjacent polite live region reports `Loading task page…` or `Page failed: …`, and changing the status or search filters resets pagination to a new first-page request.
 
 The active status filter and search query are represented in the `#tasks` hash (mirroring the Audit tab's own hash-encoded filters) and restated as plain text next to the count, so the current view survives a reload or the browser's back/forward button and is legible without reading each chip's color. The selected workspace is likewise mirrored into the page's `?workspace=` query parameter on every change [ORB-10874].
 
