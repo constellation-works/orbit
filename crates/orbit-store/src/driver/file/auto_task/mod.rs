@@ -12,9 +12,12 @@
 //! lock is not the inode being replaced and readers never observe truncated
 //! JSON. Missing state is an empty map (first-observation baseline). An
 //! existing unreadable or malformed file is an explicit error and is left
-//! unchanged for investigation.
+//! unchanged for investigation. Loads read through a descriptor opened without
+//! following the final component, so the path check and the read cannot be
+//! separated by a swap [ORB-12026].
 
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -45,66 +48,213 @@ pub fn cursor_lock_path(state_path: &Path) -> PathBuf {
 /// A missing file is empty state. An existing file that cannot be read or
 /// parsed is an error; callers must not treat that as a baseline or rewrite it.
 pub fn load_cursor_state(path: &Path) -> Result<AutoTaskCursorState, OrbitError> {
-    let validated = match validated_cursor_state_path(path)? {
-        Some(validated) => validated,
-        None => return Ok(AutoTaskCursorState::default()),
+    load_cursor_state_with_hook(path, |_| Ok(()))
+}
+
+/// Load through an opened descriptor, letting a test perturb the file between
+/// the pathname probe and the open.
+#[cfg(test)]
+pub(crate) fn load_cursor_state_after_check<F>(
+    path: &Path,
+    before_open: F,
+) -> Result<AutoTaskCursorState, OrbitError>
+where
+    F: FnOnce(&Path) -> Result<(), OrbitError>,
+{
+    load_cursor_state_with_hook(path, before_open)
+}
+
+fn load_cursor_state_with_hook<F>(
+    path: &Path,
+    before_open: F,
+) -> Result<AutoTaskCursorState, OrbitError>
+where
+    F: FnOnce(&Path) -> Result<(), OrbitError>,
+{
+    let Some((resolved, mut file)) = open_cursor_state_file(path, before_open)? else {
+        return Ok(AutoTaskCursorState::default());
     };
 
-    match fs::read_to_string(&validated) {
-        Ok(raw) => parse_state(&raw, &validated),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(AutoTaskCursorState::default())
-        }
+    let mut raw = String::new();
+    file.read_to_string(&mut raw)
+        .map_err(|error| unreadable_cursor_state(&resolved, &error))?;
+
+    parse_state(&raw, &resolved)
+}
+
+/// Final component of `path`, accepted only when the caller actually named a
+/// child of some directory.
+///
+/// `Path::file_name` already yields `None` for a filesystem root, for `.`, and
+/// for anything terminating in `..`, so those shapes fail closed here rather
+/// than falling back to the unvalidated input. The contract deliberately stays
+/// "one normal component" instead of the fixed `auto-tasks.json` that
+/// [`cursor_state_path`] builds: [`load_cursor_state`] is public and callers
+/// may point it at an alternate basename.
+fn validated_cursor_state_file_name(path: &Path) -> Result<PathBuf, OrbitError> {
+    path.file_name().map(PathBuf::from).ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "auto-task cursor state path must name a file inside a state dir: {}",
+            path.display()
+        ))
+    })
+}
+
+/// Canonical directory that owns the cursor-state file.
+///
+/// `path` is built from a caller-selected state dir (workspace discovery,
+/// `--root`, or web dashboard workspace routing), so the parent is
+/// canonicalized rather than rejected and supported aliases — a symlinked
+/// state dir or checkout projection — keep resolving [ORB-11948]. This
+/// directory is the authority every later probe and open is resolved against.
+/// A bare relative filename is owned by the current directory, matching where
+/// [`CursorSession::save`] would write it. `Ok(None)` means the directory does
+/// not exist, which callers treat as empty baseline state.
+fn validated_cursor_state_dir(path: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let parent = path.parent().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "auto-task cursor state path has no parent dir: {}",
+            path.display()
+        ))
+    })?;
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+
+    match parent.canonicalize() {
+        Ok(dir) => Ok(Some(dir)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(OrbitError::Io(format!(
-            "unreadable auto-task cursor state {}: {error}; file left unchanged for investigation",
-            validated.display()
+            "failed to canonicalize auto-task state dir {}: {error}",
+            parent.display()
         ))),
     }
 }
 
-/// Resolve `path` through its canonical parent dir, rejecting a symlinked
-/// target. `path` is built by [`cursor_state_path`] from a caller-selected
-/// state dir (workspace discovery, `--root`, or web dashboard workspace
-/// routing), so canonicalizing the parent and refusing to follow a symlinked
-/// result keeps the read inside the selected state dir instead of a planted
-/// symlink's target [ORB-11948]. `Ok(None)` means "no existing file", which
-/// callers treat as empty baseline state, matching prior behavior for a
-/// missing state dir or a missing data file.
-fn validated_cursor_state_path(path: &Path) -> Result<Option<PathBuf>, OrbitError> {
-    let Some(parent) = path.parent() else {
-        return Ok(Some(path.to_path_buf()));
+/// Open the existing cursor-state file beneath its canonical directory without
+/// following a swapped final component.
+///
+/// Both the directory and the final component are validated before the first
+/// metadata probe, so no sink here ever sees the raw caller path. Unix opens
+/// with `O_NOFOLLOW` and Windows opens the reparse point itself; the resulting
+/// descriptor is re-checked for a regular file, so a symlink planted between
+/// the probe and the open fails instead of redirecting the read. A platform
+/// with neither primitive still performs the pathname and descriptor checks
+/// but cannot close that final-component race. Because ancestors are
+/// canonicalized rather than rejected, this leaf protection does not claim to
+/// stop a concurrent rename or replacement of a mutable ancestor directory.
+///
+/// `Ok(None)` means "no existing file", matching prior behavior for a missing
+/// state dir or a missing data file.
+fn open_cursor_state_file<F>(
+    path: &Path,
+    before_open: F,
+) -> Result<Option<(PathBuf, File)>, OrbitError>
+where
+    F: FnOnce(&Path) -> Result<(), OrbitError>,
+{
+    let file_name = validated_cursor_state_file_name(path)?;
+    let Some(canonical_dir) = validated_cursor_state_dir(path)? else {
+        return Ok(None);
     };
-    let Some(file_name) = path.file_name() else {
-        return Ok(Some(path.to_path_buf()));
-    };
-
-    let canonical_parent = match parent.canonicalize() {
-        Ok(dir) => dir,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(OrbitError::Io(format!(
-                "failed to canonicalize auto-task state dir {}: {error}",
-                parent.display()
-            )));
-        }
-    };
-    let candidate = canonical_parent.join(file_name);
+    let candidate = canonical_dir.join(file_name);
 
     match fs::symlink_metadata(&candidate) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err(OrbitError::InvalidInput(format!(
-                "auto-task cursor state path must not be a symlink: {}",
-                candidate.display()
-            )))
+            return Err(symlinked_cursor_state(&candidate));
         }
-        Ok(_) => Ok(Some(candidate)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(OrbitError::Io(format!(
+        Ok(metadata) if !metadata.is_file() => return Err(irregular_cursor_state(&candidate)),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "failed to inspect auto-task cursor state path {}: {error}",
+                candidate.display()
+            )));
+        }
+    }
+
+    before_open(&candidate)?;
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    apply_no_follow_final_component(&mut options);
+    let file = match options.open(&candidate) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if is_symlink_open_refusal(&error) => {
+            return Err(symlinked_cursor_state(&candidate));
+        }
+        Err(error) => return Err(unreadable_cursor_state(&candidate, &error)),
+    };
+
+    let metadata = file.metadata().map_err(|error| {
+        OrbitError::Io(format!(
             "failed to inspect auto-task cursor state path {}: {error}",
             candidate.display()
-        ))),
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(irregular_cursor_state(&candidate));
     }
+
+    Ok(Some((candidate, file)))
 }
+
+fn symlinked_cursor_state(path: &Path) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "auto-task cursor state path must not be a symlink: {}",
+        path.display()
+    ))
+}
+
+fn irregular_cursor_state(path: &Path) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "auto-task cursor state path must be a regular file: {}",
+        path.display()
+    ))
+}
+
+fn unreadable_cursor_state(path: &Path, error: &std::io::Error) -> OrbitError {
+    OrbitError::Io(format!(
+        "unreadable auto-task cursor state {}: {error}; file left unchanged for investigation",
+        path.display()
+    ))
+}
+
+/// `O_NOFOLLOW` reports a symlinked final component as `ELOOP`, which has no
+/// stable [`std::io::ErrorKind`] to match on.
+#[cfg(unix)]
+fn is_symlink_open_refusal(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ELOOP)
+}
+
+/// Elsewhere a symlinked final component is caught by the descriptor's own
+/// file-type check rather than by an open-time refusal.
+#[cfg(not(unix))]
+fn is_symlink_open_refusal(_error: &std::io::Error) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn apply_no_follow_final_component(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.custom_flags(libc::O_NOFOLLOW);
+}
+
+#[cfg(windows)]
+fn apply_no_follow_final_component(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn apply_no_follow_final_component(_options: &mut OpenOptions) {}
 
 fn parse_state(raw: &str, path: &Path) -> Result<AutoTaskCursorState, OrbitError> {
     serde_json::from_str(raw.trim()).map_err(|error| {
