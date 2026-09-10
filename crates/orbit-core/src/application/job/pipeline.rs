@@ -1958,29 +1958,14 @@ fn pipeline_worker_file_name(run_id: &str, suffix: &str) -> Result<String, Orbit
 /// caller can create intermediate directories. The final component itself
 /// must not be a symlink or a non-directory; traversal syntax fails closed.
 fn validated_pipeline_worker_log_directory(path: &Path) -> Result<PathBuf, OrbitError> {
-    if !path.is_absolute() {
-        return Err(OrbitError::InvalidInput(format!(
-            "pipeline worker log directory must be absolute: {}",
-            path.display()
-        )));
-    }
-    if path
-        .components()
-        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
-    {
-        return Err(OrbitError::InvalidInput(format!(
-            "pipeline worker log directory must not contain traversal components: {}",
-            path.display()
-        )));
-    }
-
-    let parent = path.parent().ok_or_else(|| {
+    let validated_path = validate_pipeline_worker_log_directory_input(path)?;
+    let parent = validated_path.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
             "pipeline worker log directory has no parent: {}",
             path.display()
         ))
     })?;
-    let file_name = path.file_name().ok_or_else(|| {
+    let file_name = validated_path.file_name().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
             "pipeline worker log directory has no final component: {}",
             path.display()
@@ -2019,6 +2004,31 @@ fn validated_pipeline_worker_log_directory(path: &Path) -> Result<PathBuf, Orbit
     }
 
     Ok(canonical_path)
+}
+
+/// Perform path-shape checks before the value reaches filesystem APIs.
+///
+/// The returned value is the only path accepted by the filesystem-resolution
+/// phase below. Keeping this phase free of filesystem operations makes the
+/// trust boundary explicit to both reviewers and CodeQL.
+fn validate_pipeline_worker_log_directory_input(path: &Path) -> Result<PathBuf, OrbitError> {
+    if !path.is_absolute() {
+        return Err(OrbitError::InvalidInput(format!(
+            "pipeline worker log directory must be absolute: {}",
+            path.display()
+        )));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "pipeline worker log directory must not contain traversal components: {}",
+            path.display()
+        )));
+    }
+
+    Ok(path.to_path_buf())
 }
 
 /// Canonicalize the nearest existing ancestor of `parent` and rejoin any
