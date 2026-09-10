@@ -1,11 +1,11 @@
 ---
 type: runbook
-summary: Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees.
+summary: Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, and validate before/after builds with it off.
 tags: [operations, rust, cache, worktrees, sandbox, linux]
-paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", ".cargo/config.toml"]
+paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", ".cargo/config.toml"]
 related_features: [policy-sandbox, executors]
-related_artifacts: [ORB-11259, ORB-11755]
-last_validated: 2026-09-08
+related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
+last_validated: 2026-09-10
 ---
 
 # Share Rust dependency compilation across worker worktrees
@@ -190,6 +190,68 @@ stays in the client tree. Do not advertise command-tree CPU as total compiler
 CPU when using server-side mode.
 
 Practical opt-out, no uninstall: `ORBIT_COMPILER_CACHE=0`.
+
+## Cross-revision before/after validation
+
+Comparing two revisions is the one workflow where the cache must be **off**, and
+where reused build state is the main source of false evidence. Recorded
+observations, all of them ordinary consequences of reusing state across source
+trees rather than defects in Cargo or sccache:
+
+- An archived baseline compiled under the configured rustc wrapper produced a
+  test binary listing the *current* worktree's newly added tests.
+- Two extracts sharing one `CARGO_TARGET_DIR` ran the first extract's embedded
+  fixture paths, so the second arm never exercised the revision it named.
+- `git archive` and `tar` write the commit's timestamps, so an extract placed
+  beside an existing build can look up to date and skip the rebuild.
+- A build piped into `tail` reported `tail`'s exit status, turning a compile
+  error into a green result.
+
+Use the maintained helper instead of hand-rolling `git archive | tar -x`:
+
+```bash
+scripts/cross-revision-check.sh \
+  --baseline <pre-fix-sha> --candidate <post-fix-sha> \
+  --expect-baseline fail --expect-candidate pass \
+  --baseline-marker 'test result: FAILED' \
+  --candidate-marker 'test result: ok' \
+  -- cargo test -p orbit-core --lib
+```
+
+| Guarantee | False result it prevents |
+| --- | --- |
+| A scratch extract and a private `CARGO_TARGET_DIR` per arm | An arm reusing the sibling revision's build output or embedded fixture paths |
+| Every extracted mtime reset to now | A build skipped because archive timestamps predate an existing target dir |
+| `ORBIT_COMPILER_CACHE=0`, empty `RUSTC_WRAPPER` / `CARGO_BUILD_RUSTC_WRAPPER`, `CARGO_INCREMENTAL=0` | A baseline compiled through the host cache picking up the other tree's artifacts |
+| Producer status captured from a redirect, then `--tail` reads the log file | A filter's success replacing the build's failure |
+| `--expect-baseline` / `--expect-candidate` | An unexpected failure reported as an ordinary arm result |
+| Per-arm marker required, sibling marker rejected | A stale or foreign test set passing as this revision's |
+| Read-only Git access (`rev-parse`, `archive`, `GIT_OPTIONAL_LOCKS=0`) | Writes to a managed read-only `.git`, or a mutated source checkout |
+| `--workdir` refused inside the checkout or under `.orbit/` | Scratch trees landing in the state being validated |
+
+Limits worth stating in a validation summary:
+
+- Marker verification is a literal substring match on each arm's log. A marker
+  both revisions can print proves nothing; pick text only one arm can emit.
+- The helper compares whatever the two revisions contain. It does not establish
+  that they differ only in the change under test.
+- Uncached arms are slower than a warm worktree build. That is the cost of an
+  independent baseline, not a regression; do not re-enable the cache for the
+  baseline arm to speed it up. `--keep-compiler-cache` exists for deliberate
+  cache experiments, not for before/after evidence.
+- Arm wall time is not a cache measurement. Use
+  [`scripts/bench-compiler-cache.sh`](#measure) for that.
+- The helper cannot recover a status you discard inside your own pipeline. Pass
+  the producer directly and let `--tail` do the bounding.
+
+Regression fixtures for the helper — arm isolation, mtime normalization, cache
+opt-out, producer exit code through bounded output, read-only `.git`, and
+workdir containment — run in CI and locally:
+
+```bash
+make cross-revision-check-test
+# equivalent: scripts/test-cross-revision-check.sh
+```
 
 ## Measure
 

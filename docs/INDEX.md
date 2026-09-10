@@ -25,7 +25,7 @@ CLI behavior, state layout, or recovery semantics change.
 | --- | --- |
 | [Inspect the Audit Trail](./runbooks/audit-trail.md) | Query and interpret Orbit invocation, run, step, and activity audit history. |
 | [Bound Concurrent Orbit Repository Builds](./runbooks/build-budget.md) | Run Cargo builds within Orbit's host-wide cross-worktree admission and compiler-job budget. |
-| [Share Rust dependency compilation across worker worktrees](./runbooks/compiler-cache.md) | Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees. |
+| [Share Rust dependency compilation across worker worktrees](./runbooks/compiler-cache.md) | Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, and validate before/after builds with it off. |
 | [Recover a Corrupted Database](./runbooks/database-recovery.md) | Recover a corrupted Orbit SQLite database from backup, salvage, or regeneration. |
 | [Onboard an Executor](./runbooks/executor-onboarding.md) | Add and validate a CLI-agent or deterministic local-shell executor without changing existing users' routing or state. |
 | [Check Orbit Health](./runbooks/health-checks.md) | Check Orbit workspace, database, dashboard, log-sink, job-run, and routine-clock health. |
