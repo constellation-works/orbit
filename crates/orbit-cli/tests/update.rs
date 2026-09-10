@@ -325,6 +325,34 @@ fn check_reports_the_available_release_and_exits_three() {
             .contains("make install"),
         "{report}"
     );
+    assert!(
+        !report["remediation"]
+            .as_str()
+            .expect("remediation")
+            .contains("invalid input: "),
+        "{report}"
+    );
+}
+
+#[test]
+fn check_renders_a_prefix_free_remediation_sentence() {
+    let home = tempdir().expect("home");
+    let mirror = mirror_publishing("9.9.9");
+    let output = orbit(home.path(), home.path(), mirror.path())
+        .args(["update", "--check"])
+        .output()
+        .expect("run update --check");
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("An update is available, but cannot update '")
+            && text.contains(
+                "in place: this is a local build inside a checkout; update the checkout and rebuild (`git pull && make install`)."
+            ),
+        "{text}"
+    );
+    assert!(!text.contains("invalid input: "), "{text}");
 }
 
 #[test]

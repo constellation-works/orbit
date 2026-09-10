@@ -212,8 +212,7 @@ pub fn run_update(
     let asset = channel::release_archive_name(&environment.target_triple);
     let remediation = environment
         .install_channel
-        .unsupported_reason(&environment.executable, &target.to_string())
-        .map(|error| error.to_string());
+        .unsupported_reason(&environment.executable, &target.to_string());
     let mut report = UpdateReport {
         install_channel: environment.install_channel.as_str(),
         updatable: remediation.is_none(),
@@ -250,11 +249,11 @@ pub fn run_update(
     }
 
     // Everything past this point can write, so the channel guard comes first.
-    if let Some(error) = environment
+    if let Some(remediation) = environment
         .install_channel
         .unsupported_reason(&environment.executable, &target.to_string())
     {
-        return Err(error);
+        return Err(OrbitError::InvalidInput(remediation));
     }
 
     let install_dir = environment.executable.parent().ok_or_else(|| {

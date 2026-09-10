@@ -116,14 +116,11 @@ impl InstallChannel {
         }
     }
 
-    /// Refuse an in-place replacement, naming the command that does work.
+    /// Describe why an in-place replacement is unsupported, naming the command
+    /// that does work.
     ///
     /// Returns `None` for [`Self::Managed`], which is updatable.
-    pub fn unsupported_reason(
-        &self,
-        executable: &Path,
-        target_version: &str,
-    ) -> Option<OrbitError> {
+    pub fn unsupported_reason(&self, executable: &Path, target_version: &str) -> Option<String> {
         let remediation = match self {
             Self::Managed { .. } => return None,
             Self::Npm => format!(
@@ -152,10 +149,10 @@ impl InstallChannel {
                  or set {INSTALL_DIR_ENV} to the directory it owns"
             ),
         };
-        Some(OrbitError::InvalidInput(format!(
+        Some(format!(
             "cannot update '{}' in place: {remediation}",
             executable.display()
-        )))
+        ))
     }
 }
 
