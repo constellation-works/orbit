@@ -52,7 +52,8 @@ fn fixture_orbit(work: &Path, home: &Path) -> Command {
     command
         .current_dir(work)
         .env("HOME", home)
-        .env("USERPROFILE", home)
+        .env("USERPROFILE", home);
+    command
 }
 ```
 
@@ -69,6 +70,8 @@ let work = temp.path().join("work");
 fs::create_dir_all(&home).expect("fixture home");
 fs::create_dir_all(&work).expect("fixture work");
 
+let expected_work = fs::canonicalize(&work).expect("canonicalize fixture work");
+
 fixture_orbit(&work, &home)
     .args(["workspace", "init", "--name", "fixture"])
     .assert()
@@ -81,16 +84,20 @@ let report = fixture_orbit(&work, &home)
 assert!(report.status.success());
 let report: serde_json::Value = serde_json::from_slice(&report.stdout).expect("routing JSON");
 assert_eq!(report["registered"], true);
-assert_eq!(report["checkout"]["repo_root"], work.to_string_lossy().to_string());
+assert_eq!(
+    report["checkout"]["repo_root"],
+    expected_work.to_string_lossy().to_string()
+);
 assert_eq!(
     report["checkout"]["orbit_dir"],
-    work.join(".orbit").to_string_lossy().to_string()
+    expected_work.join(".orbit").to_string_lossy().to_string()
 );
 ```
 
-`workspace show` exposes the resolved checkout paths, so this check catches a
-fixture routed to an ambient workspace before the fixture performs its useful
-mutation. A shell `export HOME=/tmp/...` is not an isolation boundary: a
+`workspace show` exposes the physical checkout paths resolved by the child, so
+canonicalize the fixture path before comparing it. This check catches a fixture
+routed to an ambient workspace before the fixture performs its useful mutation.
+A shell `export HOME=/tmp/...` is not an isolation boundary: a
 managed child can inherit `ORBIT_MANAGED_RUN_CONTEXT` and the
 `ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` pair, which carries durable authority
 and takes precedence over home discovery. Never use bare mutable fixture CLI
