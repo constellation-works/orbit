@@ -4049,6 +4049,15 @@
         main.tasks-layout {
           grid-template-columns: 1fr !important;
         }
+        /* The stacked dock makes the task layout taller than the remaining
+           shell. Let the pane scroll instead of constraining its first grid
+           row to zero height, which leaves the task-body clipped below its
+           column header. */
+        .main-col > .tab-pane[data-tab="tasks"] { overflow-y: auto; }
+        .main-col > .tab-pane[data-tab="tasks"] > main.tasks-layout {
+          height: auto;
+          min-height: 100%;
+        }
         .col-log { min-height: 320px; }
       }
       .col-log {

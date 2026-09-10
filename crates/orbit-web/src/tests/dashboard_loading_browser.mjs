@@ -9,6 +9,43 @@ const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
 const assets = fileURLToPath(new URL('../../assets/dashboard/', import.meta.url));
 const scenarios = fileURLToPath(new URL('./dashboard_loading.mjs', import.meta.url));
+
+async function assertVisibleTaskRow(page, viewport, pageName) {
+  const visible = await page.evaluate(() => {
+    const row = document.querySelector('#tasks-body .row[data-key^="task-"]:not(.header)');
+    const body = document.getElementById('tasks-body');
+    if (!row || !body) return { visible: false, reason: 'task row or body missing' };
+
+    const rowRect = row.getBoundingClientRect();
+    const bodyRect = body.getBoundingClientRect();
+    const viewportRect = { top: 0, right: window.innerWidth, bottom: window.innerHeight, left: 0 };
+    const intersection = (rect, bounds) => ({
+      left: Math.max(rect.left, bounds.left),
+      top: Math.max(rect.top, bounds.top),
+      right: Math.min(rect.right, bounds.right),
+      bottom: Math.min(rect.bottom, bounds.bottom),
+    });
+    const area = (rect) => Math.max(0, rect.right - rect.left) * Math.max(0, rect.bottom - rect.top);
+    const bodyIntersection = intersection(rowRect, bodyRect);
+    const viewportIntersection = intersection(rowRect, viewportRect);
+    const visibleIntersection = intersection(bodyIntersection, viewportIntersection);
+    const paintPoint = {
+      x: (visibleIntersection.left + visibleIntersection.right) / 2,
+      y: (visibleIntersection.top + visibleIntersection.bottom) / 2,
+    };
+    const topmost = area(visibleIntersection) > 0 ? document.elementFromPoint(paintPoint.x, paintPoint.y) : null;
+
+    return {
+      visible: area(bodyIntersection) > 0 && area(viewportIntersection) > 0 && row.contains(topmost),
+      row: rowRect.toJSON(),
+      body: bodyRect.toJSON(),
+      viewport: viewportRect,
+      paintTarget: topmost?.className || topmost?.id || null,
+    };
+  });
+  if (!visible.visible) throw new Error(`First task row is clipped on ${pageName} at ${viewport.width}px: ${JSON.stringify(visible)}`);
+}
+
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
   const file = name === '/test.mjs' ? scenarios : path.join(assets, name === '/' ? 'index.html' : path.basename(name));
@@ -40,17 +77,40 @@ try {
   await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '1–20 of 55');
   for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
     await page.setViewportSize({ width: viewport.width, height: 900 });
+    await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      document.getElementById('tasks-body').scrollTop = 0;
+    });
     const pager = page.locator('.task-pagination');
     if (!(await pager.isVisible())) throw new Error(`Task pagination invisible at ${viewport.width}px`);
     if (!(await page.locator('#tasks-next').isEnabled())) throw new Error('First task page must enable Next');
     if (await page.locator('#tasks-previous').isEnabled()) throw new Error('First task page must disable Previous');
+    await assertVisibleTaskRow(page, viewport, 'page 1');
     await page.screenshot({ path: path.join(evidence, `task-pagination-${viewport.name}.png`), fullPage: true });
   }
+  await page.evaluate(() => { document.getElementById('tasks-body').scrollTop = 120; });
   await page.locator('#tasks-next').click();
   await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '21–40 of 55');
-  await page.evaluate(() => window.scrollTo(0, 0));
+  if (await page.locator('#tasks-body').evaluate((body) => body.scrollTop !== 0)) throw new Error('Task page navigation must reset the task-body scroll position');
   if (!(await page.locator('#tasks-previous').isEnabled())) throw new Error('Second task page must enable Previous');
-  await page.screenshot({ path: path.join(evidence, 'task-pagination-mobile-page-2.png'), fullPage: true });
+  for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
+    await page.setViewportSize({ width: viewport.width, height: 900 });
+    await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      document.getElementById('tasks-body').scrollTop = 0;
+    });
+    await assertVisibleTaskRow(page, viewport, 'page 2');
+    await page.screenshot({ path: path.join(evidence, `task-pagination-${viewport.name}-page-2.png`), fullPage: true });
+  }
+  await page.locator('#task-filter .chip[data-status="done"]').click();
+  await page.waitForFunction(() => document.getElementById('task-filter-summary').textContent.includes('done'));
+  await page.locator('#task-filter .chip[data-role="all"]').click();
+  const firstTask = page.locator('#tasks-body .row[data-key^="task-"]:not(.header)').first();
+  await firstTask.click();
+  const detail = page.locator('#tasks-body .row-detail').first();
+  await detail.waitFor({ state: 'visible' });
+  const pageOverflowsHorizontally = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+  if (pageOverflowsHorizontally) throw new Error('Task filters or expanded details introduced horizontal page clipping');
   await page.evaluate(() => globalThis.showDiagnosticsEvidence());
   // Hold a real visible panel in refresh, then inspect its rendered accessible
   // feedback and retry affordance at desktop and narrow widths.
@@ -76,7 +136,7 @@ try {
   });
   await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
   if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task pagination page 1/page 2 and accessible Previous/Next at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
   console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
 } finally {
   await browser?.close();
