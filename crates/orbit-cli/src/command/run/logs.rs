@@ -1,6 +1,7 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::application::job::PipelineWorkerLogSnapshot;
 use orbit_core::runtime::run_audit::RunCliInvocationRecord;
+use orbit_core::{JobRun, OrbitRuntime};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -30,7 +31,7 @@ impl Execute for RunLogsArgs {
     }
 }
 
-fn run_logs_payload(
+pub(crate) fn run_logs_payload(
     runtime: &OrbitRuntime,
     run_id: Option<&str>,
     step_id: Option<&str>,
@@ -42,15 +43,16 @@ fn run_logs_payload(
         runtime.collect_run_cli_invocations(&run.run_id)?,
         step_filter.as_deref(),
     );
+
+    if records.is_empty() {
+        return worker_log_fallback_payload(runtime, &run);
+    }
+
     let doc = json!({
         "run_id": run.run_id,
         "job_id": run.job_id,
         "records": records.iter().map(cli_invocation_record_to_json).collect::<Vec<_>>(),
     });
-
-    if records.is_empty() {
-        return Ok(Payload::detail(doc, "No raw stdout/stderr blobs recorded.").into());
-    }
 
     // Subprocess stderr is diagnostic: keep it off the record stream so
     // `--format json` stdout stays parseable.
@@ -62,6 +64,37 @@ fn run_logs_payload(
         .map(|record| record.stdout.as_str())
         .collect::<String>();
     Ok(Payload::detail(doc, text).into())
+}
+
+/// [ORB-12038] `records` is empty for a run that never reached step
+/// execution — most notably a routine-dispatch workspace mismatch, which
+/// fails the run before any step can run and so has no audited CLI
+/// invocation to show. That worker still writes its own
+/// `<run_id>.worker.log` directly; fall back to it instead of reporting no
+/// logs when the file is actually sitting on disk.
+fn worker_log_fallback_payload(runtime: &OrbitRuntime, run: &JobRun) -> CommandOut {
+    let worker_log = runtime.read_pipeline_worker_log(&run.run_id)?;
+    let doc = json!({
+        "run_id": run.run_id,
+        "job_id": run.job_id,
+        "records": Value::Array(Vec::new()),
+        "worker_log_path": worker_log.as_ref().map(|snapshot| snapshot.path.display().to_string()),
+    });
+    let detail = match worker_log {
+        Some(PipelineWorkerLogSnapshot {
+            path,
+            content: Some(content),
+        }) => format!("worker log ({}):\n{content}", path.display()),
+        Some(PipelineWorkerLogSnapshot {
+            path,
+            content: None,
+        }) => format!(
+            "worker log recorded with no readable content: {}",
+            path.display()
+        ),
+        None => "No raw stdout/stderr blobs recorded.".to_string(),
+    };
+    Ok(Payload::detail(doc, detail).into())
 }
 
 fn filter_cli_invocation_records(

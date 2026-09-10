@@ -18,10 +18,11 @@ use crate::application::job::JobRunListParams;
 #[cfg(unix)]
 use crate::application::job::pipeline::pipeline_worker_log_test_hook::{self, Phase};
 use crate::application::job::pipeline::{
-    ROUTINE_DISPATCH_ORBIT_DIR_FIELD, configure_pipeline_worker_command,
-    configure_pipeline_worker_stdio, pipeline_worker_log_path, pipeline_worker_profile_file,
-    pipeline_worker_root_override, resolve_pipeline_worker_executable,
-    run_definition_snapshot_path, worker_command_override, worker_observer_read_counter,
+    ROUTINE_DISPATCH_ORBIT_DIR_FIELD, ROUTINE_DISPATCH_WORKSPACE_MISMATCH_ERROR_CODE,
+    configure_pipeline_worker_command, configure_pipeline_worker_stdio, pipeline_worker_log_path,
+    pipeline_worker_profile_file, pipeline_worker_root_override,
+    resolve_pipeline_worker_executable, run_definition_snapshot_path, worker_command_override,
+    worker_observer_read_counter,
 };
 use crate::application::task::TaskAddParams;
 use crate::application::workflow::{CompletionPolicy, ShipMode};
@@ -1181,6 +1182,14 @@ spec:
 /// workspace — the exact failure mode behind the original incident, where an
 /// inherited `ORBIT_ROOT` silently redirected the worker — the run must fail
 /// visibly instead of vacuously succeeding against the wrong (or empty) scope.
+///
+/// [ORB-12038] Visible to the *caller* was never the gap: the guard already
+/// returns `Err` from `execute_pipeline_run_worker`. The gap was that nothing
+/// persisted the guard's declared-vs-resolved diagnostic onto the cancelled
+/// run, so `orbit run show` (backed by `JobRun::steps`) had only a bare
+/// `cancelled` state to display, with `error_code`/`error_message` both null.
+/// This assertion is the regression check: before the fix it fails because no
+/// step carries an error at all.
 #[test]
 fn routine_dispatch_workspace_mismatch_fails_the_run_before_it_executes() {
     let (_root, runtime) = test_runtime();
@@ -1205,6 +1214,32 @@ fn routine_dispatch_workspace_mismatch_fails_the_run_before_it_executes() {
         terminal.state,
         JobRunState::Cancelled,
         "a workspace-routing failure must be a visible terminal outcome, not success"
+    );
+
+    let diagnostic = terminal
+        .steps
+        .iter()
+        .find(|step| step.error_message.is_some())
+        .expect(
+            "the cancelled run must carry the guard's declared-vs-resolved diagnostic on a \
+             step, so `orbit run show` can display it instead of a bare `cancelled` with no \
+             error_message",
+        );
+    let diagnostic_message = diagnostic
+        .error_message
+        .as_deref()
+        .expect("step matched on error_message.is_some()");
+    assert!(
+        diagnostic_message.contains(mismatched_dir),
+        "{diagnostic_message}"
+    );
+    assert!(
+        diagnostic_message.contains("mismatched workspace"),
+        "{diagnostic_message}"
+    );
+    assert_eq!(
+        diagnostic.error_code.as_deref(),
+        Some(ROUTINE_DISPATCH_WORKSPACE_MISMATCH_ERROR_CODE)
     );
 }
 
