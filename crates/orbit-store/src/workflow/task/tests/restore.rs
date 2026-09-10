@@ -143,7 +143,7 @@ fn fixture_with_task_workspace(
 }
 
 #[test]
-fn empty_destination_restore_preserves_ids_rebuilds_projection_and_advances_allocator() {
+fn empty_destination_restore_preserves_ids_without_checkout_projection() {
     let fixture = fixture(AttachmentPolicyKind::Include);
     let registry = fixture.registry();
     let outcome = restore_publication(
@@ -161,12 +161,7 @@ fn empty_destination_restore_preserves_ids_rebuilds_projection_and_advances_allo
     assert!(outcome.omitted_attachments.is_empty());
     assert_eq!(registry.allocator_next_number().unwrap(), 8);
     assert_eq!(registry.tasks_for_workspace(WORKSPACE).unwrap().len(), 2);
-    let checkout = registry
-        .find_workspace_checkout(WORKSPACE)
-        .unwrap()
-        .unwrap();
     for task_id in &outcome.restored_task_ids {
-        assert!(checkout.orbit_dir.join("tasks").join(task_id).is_symlink());
         let restored = read_bundle_at(
             &registry
                 .canonical_task_bundle_path(WORKSPACE, task_id)
@@ -175,6 +170,13 @@ fn empty_destination_restore_preserves_ids_rebuilds_projection_and_advances_allo
         .unwrap();
         assert_eq!(restored.envelope.id, *task_id);
     }
+    assert!(
+        !fixture
+            .destination
+            .path()
+            .join("repos/ws_restore/.orbit/tasks")
+            .exists()
+    );
 }
 
 #[test]
@@ -193,12 +195,7 @@ fn restore_keeps_logical_identity_but_writes_to_the_runtime_task_partition() {
         2
     );
     assert!(registry.tasks_for_workspace(WORKSPACE).unwrap().is_empty());
-    let checkout = registry
-        .find_workspace_checkout(TASK_WORKSPACE)
-        .unwrap()
-        .unwrap();
     for task_id in &outcome.restored_task_ids {
-        assert!(checkout.orbit_dir.join("tasks").join(task_id).is_symlink());
         assert!(
             registry
                 .canonical_task_bundle_path(TASK_WORKSPACE, task_id)
@@ -212,6 +209,13 @@ fn restore_keeps_logical_identity_but_writes_to_the_runtime_task_partition() {
                 .exists()
         );
     }
+    assert!(
+        !fixture
+            .destination
+            .path()
+            .join("repos/ws_restore-runtime/.orbit/tasks")
+            .exists()
+    );
 }
 
 #[test]
@@ -449,22 +453,15 @@ fn corrupt_included_blob_and_unsupported_schema_leave_destination_empty() {
 }
 
 #[test]
-fn every_mutation_phase_rolls_back_canonical_registry_projection_and_allocator() {
+fn every_mutation_phase_rolls_back_canonical_registry_and_allocator() {
     for failure in [
         RestoreFailurePoint::BundlePublication,
         RestoreFailurePoint::IndexRebuild,
-        RestoreFailurePoint::ProjectionRebuild,
         RestoreFailurePoint::AllocatorAdvance,
     ] {
         let fixture = fixture(AttachmentPolicyKind::Include);
         let registry = fixture.registry();
         let allocator = registry.allocator_next_number().unwrap();
-        let checkout = registry
-            .find_workspace_checkout(WORKSPACE)
-            .unwrap()
-            .unwrap();
-        let projection_existed = checkout.orbit_dir.join("tasks").exists();
-
         let error = restore_publication_with_failure(
             &registry,
             fixture.request(PublicationRestoreMode::EmptyDestination),
@@ -475,9 +472,12 @@ fn every_mutation_phase_rolls_back_canonical_registry_projection_and_allocator()
         assert!(error.contains("injected failure"), "{failure:?}: {error}");
         assert!(registry.tasks_for_workspace(WORKSPACE).unwrap().is_empty());
         assert_eq!(registry.allocator_next_number().unwrap(), allocator);
-        assert_eq!(
-            checkout.orbit_dir.join("tasks").exists(),
-            projection_existed,
+        assert!(
+            !fixture
+                .destination
+                .path()
+                .join("repos/ws_restore/.orbit/tasks")
+                .exists(),
             "{failure:?}"
         );
         for task_id in ["ORB-00001", "ORB-00007"] {

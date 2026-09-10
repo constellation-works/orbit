@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{TimeZone, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::io::{atomic_write_text, create_dir_symlink};
+use orbit_common::fs::io::atomic_write_text;
 use orbit_types::task::{
     ORB_TASK_ID_MAX, TaskComplexity, TaskEnvelopeV2, TaskPriority, TaskRelation, TaskRelationType,
     TaskStatus, TaskType, UNSET_BUCKET,
@@ -19,8 +19,8 @@ use super::REGISTRY_SCHEMA_VERSION;
 use super::schema::registry_user_version;
 use super::util::now_string;
 use super::{
-    BindWorkspaceParams, ProjectionRebuildResult, RegisterWorkspaceParams, TaskIndexFilter,
-    TaskRegistryStore, WorkspaceCheckoutBinding, task_registry_path,
+    BindWorkspaceParams, RegisterWorkspaceParams, TaskIndexFilter, TaskRegistryStore,
+    WorkspaceCheckoutBinding, task_registry_path,
 };
 use crate::contracts::WorkspaceConfig;
 use crate::fs::path_safety::normalize_path;
@@ -94,20 +94,6 @@ fn envelope(
         created_at: now,
         updated_at: now,
     }
-}
-
-fn projection_links_supported(result: &ProjectionRebuildResult) -> bool {
-    if let Some(reason) = &result.degraded_reason {
-        #[cfg(unix)]
-        panic!("symlink projection unexpectedly degraded on unix: {reason}");
-
-        #[cfg(not(unix))]
-        {
-            assert!(!reason.is_empty());
-            return false;
-        }
-    }
-    true
 }
 
 fn table_columns(conn: &Connection, table: &str) -> Vec<String> {
@@ -659,20 +645,6 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
             .indexed_task_count_for_workspace(&second.workspace_id)
             .expect("second count"),
         1
-    );
-
-    let fake_checkout = temp.path().join("must-not-be-created").join(".orbit");
-    let error = crate::repository::checkout_projection::rebuild_projection(
-        &store,
-        &fake_checkout,
-        &first.workspace_id,
-    )
-    .expect_err("checkout-local projection requires a binding");
-    assert!(error.to_string().contains(&first.workspace_id));
-    assert!(error.to_string().contains("no local checkout binding"));
-    assert!(
-        !fake_checkout.exists(),
-        "preflight must happen before mutation"
     );
 
     let before_allocator = store.allocator_next_number().expect("allocator before");
@@ -1717,111 +1689,6 @@ fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
             .expect("relation sources after unregister"),
         relation_sources_before
     );
-}
-
-#[test]
-fn projection_rebuild_creates_and_repairs_symlinks() {
-    let temp = TempDir::new().expect("tempdir");
-    let store = store(&temp);
-    let workspace = bind(&store, temp.path());
-    let bundle_dir = create_canonical_bundle(&store, &workspace, "ORB-00000");
-    let wrong_bundle_dir = temp.path().join("wrong-task-target");
-    fs::create_dir_all(&wrong_bundle_dir).expect("create wrong bundle");
-
-    store
-        .register_task_bundle("ORB-00000", &workspace.workspace_id, &bundle_dir)
-        .expect("register bundle");
-    let first = crate::repository::checkout_projection::rebuild_projection(
-        &store,
-        &workspace.orbit_dir,
-        &workspace.workspace_id,
-    )
-    .expect("rebuild");
-    if !projection_links_supported(&first) {
-        return;
-    }
-    assert_eq!(first.projected, 1);
-
-    let link_path = workspace.orbit_dir.join("tasks").join("ORB-00000");
-    fs::remove_file(&link_path).expect("remove correct link");
-    create_dir_symlink(&wrong_bundle_dir, &link_path).expect("create wrong link");
-
-    let second = crate::repository::checkout_projection::rebuild_projection(
-        &store,
-        &workspace.orbit_dir,
-        &workspace.workspace_id,
-    )
-    .expect("rebuild repair");
-    assert_eq!(second.repaired, 1);
-    assert_eq!(
-        normalize_path(&fs::read_link(&link_path).expect("read link")),
-        normalize_path(&bundle_dir)
-    );
-}
-
-#[test]
-fn projection_rebuild_recovers_after_reopen_and_projection_delete() {
-    let temp = TempDir::new().expect("tempdir");
-    let path = registry_path(&temp);
-    let store = TaskRegistryStore::open(&path).expect("open registry");
-    let workspace = bind(&store, temp.path());
-    let bundle_dir = create_canonical_bundle(&store, &workspace, "ORB-00000");
-    store
-        .register_task_bundle("ORB-00000", &workspace.workspace_id, &bundle_dir)
-        .expect("register bundle");
-
-    let first = crate::repository::checkout_projection::rebuild_projection(
-        &store,
-        &workspace.orbit_dir,
-        &workspace.workspace_id,
-    )
-    .expect("initial rebuild");
-    if !projection_links_supported(&first) {
-        return;
-    }
-    fs::remove_dir_all(workspace.orbit_dir.join("tasks")).expect("delete projection");
-    drop(store);
-
-    let reopened = TaskRegistryStore::open(&path).expect("reopen registry");
-    let rebuilt = crate::repository::checkout_projection::rebuild_projection(
-        &reopened,
-        &workspace.orbit_dir,
-        &workspace.workspace_id,
-    )
-    .expect("rebuild after reopen");
-    if !projection_links_supported(&rebuilt) {
-        return;
-    }
-    assert_eq!(rebuilt.projected, 1);
-    assert_eq!(
-        normalize_path(
-            &fs::read_link(workspace.orbit_dir.join("tasks").join("ORB-00000")).expect("read link")
-        ),
-        normalize_path(&bundle_dir)
-    );
-}
-
-#[test]
-fn projection_rebuild_errors_on_non_symlink_blocker() {
-    let temp = TempDir::new().expect("tempdir");
-    let store = store(&temp);
-    let workspace = bind(&store, temp.path());
-    let bundle_dir = create_canonical_bundle(&store, &workspace, "ORB-00000");
-    store
-        .register_task_bundle("ORB-00000", &workspace.workspace_id, &bundle_dir)
-        .expect("register bundle");
-    let projection_dir = workspace.orbit_dir.join("tasks");
-    fs::create_dir_all(&projection_dir).expect("create projection");
-    fs::write(projection_dir.join("ORB-00000"), "blocker").expect("write blocker");
-
-    assert!(matches!(
-        crate::repository::checkout_projection::rebuild_projection(
-            &store,
-            &workspace.orbit_dir,
-            &workspace.workspace_id
-        ),
-        Err(OrbitError::Store(_))
-    ));
 }
 
 #[test]

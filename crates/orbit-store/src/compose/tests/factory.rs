@@ -62,7 +62,6 @@ fn workspace_task_backends_exposes_create_get_and_list_trait_surface() {
     let backends = workspace_task_backends(
         registry,
         binding.workspace_id,
-        orbit_dir,
         Some(repo_dir.to_string_lossy().into_owned()),
         Some(repo_dir.to_string_lossy().into_owned()),
     );

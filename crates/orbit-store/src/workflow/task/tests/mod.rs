@@ -223,11 +223,7 @@ fn bundle_store(
     registry: &TaskRegistryStore,
     binding: &WorkspaceCheckoutBinding,
 ) -> TaskBundleStoreV2 {
-    TaskBundleStoreV2::new(
-        registry.clone(),
-        binding.workspace_id.clone(),
-        binding.orbit_dir.clone(),
-    )
+    TaskBundleStoreV2::new(registry.clone(), binding.workspace_id.clone())
 }
 
 fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundleV2 {
@@ -378,10 +374,7 @@ fn round_trip_keeps_ids_and_content() {
     );
     assert!(registry.allocator_next_number().unwrap() >= 2);
 
-    // Projection symlinks materialized.
-    let projection = binding.orbit_dir.join("tasks");
-    assert!(projection.join("ORB-00000").exists());
-    assert!(projection.join("ORB-00001").exists());
+    assert!(!binding.orbit_dir.join("tasks").exists());
 }
 
 #[test]

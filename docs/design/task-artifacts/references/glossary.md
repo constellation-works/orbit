@@ -19,8 +19,7 @@ This glossary covers Orbit-specific task artifact terms. Generic issue-tracker o
 | **Canonical task bundle** | The active local task copy under `~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/`. See [2_design.md §2.1](../2_design.md). |
 | **Local task registry** | `~/.orbit/tasks/index.sqlite`, the mandatory local allocator, workspace-binding registry, and generated-index store. See [2_design.md §2.6](../2_design.md). |
 | **Prose sidecar** | A Markdown file that stores long-form task content outside `task.yaml`. See [1_overview.md §2.3](../1_overview.md). |
-| **Projection link** | A symlink under `.orbit/tasks/<task-id>` that points to the canonical task bundle in `~/.orbit/tasks/workspaces/<workspace-id>/`. See [Home task store with workspace symlink projection](../4_decisions.md#home-task-store-with-workspace-symlink-projection). |
-| **Status-neutral directory** | The v2 layout where `.orbit/tasks/<task-id>/` does not encode lifecycle state in the path. See [Status-neutral task directories](../4_decisions.md#status-neutral-task-directories). |
+| **Status-neutral directory** | The v2 canonical layout where a task bundle's path does not encode lifecycle state. See [Status-neutral task directories](../4_decisions.md#status-neutral-task-directories). |
 | **Task event stream** | Append-only lifecycle and metadata rows stored in `events.jsonl`. See [1_overview.md §2.5](../1_overview.md). |
 | **Typed relation** | A structured task-to-task link with an explicit relation type such as `blocked_by` or `supersedes`. See [1_overview.md §2.6](../1_overview.md). |
 | **Workspace ID** | A stable `<slug>-<6char>` identifier stored in `.orbit/config.yaml` and used to bind a checkout to canonical bundles under `~/.orbit/tasks/workspaces/`. See [2_design.md §2.6](../2_design.md). |

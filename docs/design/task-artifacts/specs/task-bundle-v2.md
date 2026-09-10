@@ -25,12 +25,6 @@ Every canonical task bundle lives at:
 ~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/
 ```
 
-The workspace-local projection lives at:
-
-```text
-.orbit/tasks/<task-id> -> ~/.orbit/tasks/workspaces/<workspace-id>/<task-id>
-```
-
 `<task-id>` must be the canonical ID inside the current allocation authority. The canonical v2 format is `ORB-` plus a decimal suffix formatted with at least five digits (for example, `ORB-00000`); parsers accept wider decimal suffixes and the allocator is bounded by `u32::MAX`. `<workspace-id>` is assigned once per workspace as `<slug>-<6char>` and stored in `.orbit/config.yaml`. Old `T<YYYYMMDD>-<N>` IDs are not valid v2 identifiers or lookup aliases.
 
 Required files:
@@ -60,7 +54,7 @@ directory, including all manifest-referenced artifact blobs, then published by
 an atomic directory rename. An interrupted create must leave the canonical task
 path absent rather than expose a partial bundle.
 
-## Local Store and Workspace Projection
+## Local Store and Canonical Lookup
 
 The home-directory bundle is the active source of truth for task content. Local-first Orbit must keep allocation and local operational metadata under:
 
@@ -83,9 +77,9 @@ schema_version: 1
 workspace_id: orbit-a3f9c2
 ```
 
-`.orbit/tasks/` is a symlink projection to canonical bundles. Task mutations must make the canonical bundle and registry metadata durable before reporting success. If `.orbit/tasks/` is deleted, Orbit rebuilds projection links from `.orbit/config.yaml` and `index.sqlite`. If `.orbit/config.yaml` is missing, Orbit must prompt to rebind by matching the checkout path, repo root, and optional remote fingerprints against `index.sqlite`; ambiguous matches must not silently attach to a workspace.
+Task and artifact tools must resolve bundles from the workspace binding and canonical registry path. Task mutations must make the canonical bundle and registry metadata durable before reporting success. They must not create a checkout-local task-bundle projection. If `.orbit/config.yaml` is missing, Orbit must prompt to rebind by matching the checkout path, repo root, and optional remote fingerprints against `index.sqlite`; ambiguous matches must not silently attach to a workspace.
 
-Delete verifies that any projection entry is a symlink, unregisters the task binding and generated index rows, removes the canonical bundle directory, then removes the projection entry. A projection path that exists as a non-symlink must stop the delete before unregistering rather than removing unrelated workspace files.
+Delete publishes a canonical-bundle tombstone, unregisters the task binding and generated index rows, then removes the tombstone. Legacy checkout task links are handled only by the guarded workspace-layout upgrade, which must never follow them or remove ambiguous entries.
 
 ## Envelope
 
@@ -308,11 +302,10 @@ Cutover from the current pre-reset task schema must:
 2. Allocate a canonical `ORB-00000` ID.
 3. Record allocation and workspace binding metadata in `~/.orbit/tasks/index.sqlite`.
 4. Materialize the canonical bundle under `~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/`.
-5. Create `.orbit/tasks/<task-id>` as a symlink to the canonical bundle.
-6. Move YAML `description` to `description.md`.
-7. Render YAML `acceptance_criteria` into `acceptance.md`.
-8. Preserve existing `plan.md`.
-9. Preserve existing `execution-summary.md`.
+5. Move YAML `description` to `description.md`.
+6. Render YAML `acceptance_criteria` into `acceptance.md`.
+7. Preserve existing `plan.md`.
+8. Preserve existing `execution-summary.md`.
 10. Convert YAML `history` to `events.jsonl`.
 11. Convert YAML `comments` to `comments.jsonl`.
 12. Preserve any legacy review-thread files as inert sidecars.

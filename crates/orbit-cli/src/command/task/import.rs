@@ -79,7 +79,6 @@ impl Execute for TaskImportArgs {
             "registered_workspace": outcome.registered_workspace,
             "id_remap": outcome.id_remap,
             "id_map_path": outcome.id_map_path.as_ref().map(|p| p.display().to_string()),
-            "projection_degraded": outcome.projection.degraded_reason,
             "tasks": tasks,
         });
         let mut lines = vec![format!(
@@ -107,9 +106,6 @@ impl Execute for TaskImportArgs {
         }
         if let Some(path) = &outcome.id_map_path {
             lines.push(format!("  id mapping written to {}", path.display()));
-        }
-        if let Some(reason) = &outcome.projection.degraded_reason {
-            lines.push(format!("  warning: projection degraded: {reason}"));
         }
         Ok(Payload::detail(doc, lines.join("\n")).into())
     }

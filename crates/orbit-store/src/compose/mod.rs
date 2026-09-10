@@ -31,14 +31,12 @@ pub struct WorkspaceTaskBackends {
 pub fn workspace_task_backends(
     registry: TaskRegistryStore,
     workspace_id: String,
-    workspace_orbit_dir: PathBuf,
     workspace_path: Option<String>,
     repo_root: Option<String>,
 ) -> WorkspaceTaskBackends {
     let store = Arc::new(TaskV2Store::new(
         registry,
         workspace_id,
-        workspace_orbit_dir,
         workspace_path,
         repo_root,
     ));

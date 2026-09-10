@@ -47,7 +47,7 @@ use orbit_types::task::is_valid_orb_task_id;
 
 /// Highest workspace-layout version this binary knows how to produce.
 /// Bump together with a new [`LAYOUT_MIGRATIONS`] entry — never without one.
-pub const SUPPORTED_LAYOUT_VERSION: u32 = 2;
+pub const SUPPORTED_LAYOUT_VERSION: u32 = 3;
 
 /// Marker file recording the workspace's current layout version, relative to
 /// the workspace `.orbit` directory. Lives under `state/` (gitignored
@@ -88,6 +88,12 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         description: "rewrite affected task records from status 'friction' to 'archived', preserving the task and its event history",
         apply: apply_archive_friction_tasks,
     },
+    LayoutMigration {
+        version: 3,
+        name: "remove-task-checkout-projections",
+        description: "remove verified legacy .orbit/tasks symlinks without following them or touching canonical task bundles",
+        apply: remove_legacy_task_projections,
+    },
 ];
 
 /// v1 baseline: the current `.orbit/` shape. Intentionally a no-op — running
@@ -107,6 +113,21 @@ fn apply_baseline_layout(_orbit_dir: &Path) -> Result<(), OrbitError> {
 /// migration never recurses beyond one task bundle.
 fn apply_archive_friction_tasks(orbit_dir: &Path) -> Result<(), OrbitError> {
     let tasks_dir = orbit_dir.join("tasks");
+    let metadata = match fs::symlink_metadata(&tasks_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(layout_io_error(
+                "inspect projected task directory",
+                &tasks_dir,
+                error,
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Ok(());
+    }
+
     let entries = match fs::read_dir(&tasks_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -136,6 +157,97 @@ fn apply_archive_friction_tasks(orbit_dir: &Path) -> Result<(), OrbitError> {
         migrate_envelope_status(&bundle_dir.join("task.yaml"))?;
     }
     Ok(())
+}
+
+/// v3: checkout-local task symlinks were a disposable convenience view over
+/// canonical bundles. Remove only links whose names and targets match the
+/// shipped `<global>/tasks/workspaces/<workspace>/<task-id>` shape. Anything
+/// ambiguous is retained and diagnosed; in particular, never traverse a
+/// symlink used as the `.orbit/tasks` parent.
+fn remove_legacy_task_projections(orbit_dir: &Path) -> Result<(), OrbitError> {
+    let tasks_dir = orbit_dir.join("tasks");
+    let metadata = match fs::symlink_metadata(&tasks_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(layout_io_error(
+                "inspect legacy task directory",
+                &tasks_dir,
+                error,
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        orbit_common::tracing::warn!(
+            target: "orbit.store.layout",
+            path = %tasks_dir.display(),
+            "retained ambiguous legacy task path; expected a real directory",
+        );
+        return Ok(());
+    }
+
+    let entries = fs::read_dir(&tasks_dir)
+        .map_err(|error| layout_io_error("read legacy task directory", &tasks_dir, error))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            layout_io_error("read legacy task directory entry", &tasks_dir, error)
+        })?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| layout_io_error("inspect legacy task entry", &path, error))?;
+        if !metadata.file_type().is_symlink() {
+            continue;
+        }
+        let target = fs::read_link(&path)
+            .map_err(|error| layout_io_error("read legacy task link", &path, error))?;
+        if !is_owned_task_projection(&path, &target) {
+            orbit_common::tracing::warn!(
+                target: "orbit.store.layout",
+                path = %path.display(),
+                target = %target.display(),
+                "retained unrecognized link in legacy task directory",
+            );
+            continue;
+        }
+        fs::remove_file(&path)
+            .map_err(|error| layout_io_error("remove legacy task link", &path, error))?;
+    }
+
+    match fs::remove_dir(&tasks_dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(layout_io_error(
+            "remove empty legacy task directory",
+            &tasks_dir,
+            error,
+        )),
+    }
+}
+
+fn is_owned_task_projection(link: &Path, target: &Path) -> bool {
+    let Some(task_id) = link.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if !is_valid_orb_task_id(task_id) || !target.is_absolute() {
+        return false;
+    }
+    let Some(workspace_dir) = target.parent() else {
+        return false;
+    };
+    let Some(workspaces_dir) = workspace_dir.parent() else {
+        return false;
+    };
+    let Some(tasks_dir) = workspaces_dir.parent() else {
+        return false;
+    };
+
+    target.file_name() == link.file_name()
+        && workspace_dir.file_name().is_some()
+        && workspaces_dir
+            .file_name()
+            .is_some_and(|name| name == "workspaces")
+        && tasks_dir.file_name().is_some_and(|name| name == "tasks")
 }
 
 fn migrate_envelope_status(path: &Path) -> Result<(), OrbitError> {

@@ -83,7 +83,7 @@ pub(crate) fn bundle_store(temp: &TempDir) -> TaskBundleStoreV2 {
             repo_fingerprint: None,
         })
         .expect("bind workspace");
-    TaskBundleStoreV2::new(registry, binding.workspace_id, orbit_dir)
+    TaskBundleStoreV2::new(registry, binding.workspace_id)
 }
 
 pub(crate) fn task_lock_path(bundle_dir: &Path) -> PathBuf {

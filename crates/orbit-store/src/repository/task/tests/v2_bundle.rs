@@ -119,10 +119,11 @@ fn bundle_store_lists_registered_bundles_from_registry() {
         .map(|bundle| bundle.envelope.id)
         .collect();
     assert_eq!(ids, vec!["ORB-00000", "ORB-00001"]);
+    assert!(!temp.path().join("repo/.orbit/tasks").exists());
 }
 
 #[test]
-fn delete_bundle_removes_canonical_projection_and_registry_rows() {
+fn delete_bundle_removes_canonical_bundle_and_registry_rows() {
     let temp = TempDir::new().expect("tempdir");
     let store = bundle_store(&temp);
     store
@@ -133,14 +134,7 @@ fn delete_bundle_removes_canonical_projection_and_registry_rows() {
 
     assert!(store.delete_bundle("ORB-00000").expect("delete bundle"));
     assert!(!bundle_dir.exists());
-    assert!(
-        !store
-            .workspace_orbit_dir
-            .as_ref()
-            .expect("checkout fixture")
-            .join("tasks/ORB-00000")
-            .exists()
-    );
+    assert!(!temp.path().join("repo/.orbit/tasks").exists());
     assert_eq!(
         store
             .registry
@@ -169,16 +163,7 @@ fn delete_bundle_unregisters_stale_binding_when_canonical_dir_is_missing() {
     fs::remove_dir_all(&bundle_dir).expect("remove canonical bundle");
 
     assert!(store.delete_bundle("ORB-00000").expect("delete stale"));
-    assert!(
-        fs::symlink_metadata(
-            store
-                .workspace_orbit_dir
-                .as_ref()
-                .expect("checkout fixture")
-                .join("tasks/ORB-00000")
-        )
-        .is_err()
-    );
+    assert!(!temp.path().join("repo/.orbit/tasks").exists());
     assert_eq!(
         store
             .registry
@@ -277,14 +262,10 @@ fn create_bundle_cleans_partial_directory_but_retains_lock_on_validation_error()
 }
 
 #[test]
-fn create_bundle_treats_projection_error_as_degraded_success() {
+fn create_bundle_ignores_legacy_checkout_task_entries() {
     let temp = TempDir::new().expect("tempdir");
     let store = bundle_store(&temp);
-    let projection_dir = store
-        .workspace_orbit_dir
-        .as_ref()
-        .expect("checkout fixture")
-        .join("tasks");
+    let projection_dir = temp.path().join("repo/.orbit/tasks");
     fs::create_dir_all(&projection_dir).expect("create projection dir");
     fs::write(projection_dir.join("ORB-00000"), "not a symlink").expect("write blocker");
 
@@ -293,7 +274,6 @@ fn create_bundle_treats_projection_error_as_degraded_success() {
         .expect("create bundle");
 
     assert_eq!(created.binding.task_id, "ORB-00000");
-    assert!(created.projection.degraded_reason.is_some());
     assert!(store.read_bundle("ORB-00000").is_ok());
     assert_eq!(
         store
