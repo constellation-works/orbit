@@ -401,7 +401,7 @@ await import("./app.js");
 await tick(); await tick(); requests.length = 0;
 const selector = get("rail-workspace").children.find((child) => child.id === "workspace-select");
 selector.value = ""; selector.listeners.change(); await tick(); await tick();
-if (!requests.includes("/api/tasks/all") || requests.some((path) => ["/api/crews", "/api/tasks/locks", "/api/audit/summary"].some((forbidden) => path.startsWith(forbidden)))) throw new Error(`aggregate mode made incorrect requests: ${requests}`);
+if (!requests.some((path) => path.startsWith("/api/tasks/all?status=")) || requests.some((path) => ["/api/crews", "/api/tasks/locks", "/api/audit/summary"].some((forbidden) => path.startsWith(forbidden)))) throw new Error(`aggregate mode made incorrect requests: ${requests}`);
 "#,
     );
 }
@@ -1175,9 +1175,9 @@ fn dashboard_task_write_actions_are_configuration_free() {
 /// ORB-10874: the Tasks count previously read an ambiguous `N/50` with no way
 /// to tell a total from a page size from a hard cap. It must now state which
 /// number means what, using the `/api/tasks` paging envelope
-/// (`{ items, total, limit, truncated }`, ORB-10400) when it is available.
+/// (`{ items, total, limit, truncated, offset, next_cursor }`) when available.
 #[test]
-fn dashboard_task_count_states_shown_total_and_server_limit_explicitly() {
+fn dashboard_task_count_states_page_range_and_total_explicitly() {
     let tasks = include_str!("../../assets/dashboard/tasks.js");
 
     assert!(
@@ -1185,8 +1185,8 @@ fn dashboard_task_count_states_shown_total_and_server_limit_explicitly() {
         "the count formatter must be a standalone, testable function"
     );
     assert!(
-        tasks.contains("shown") && tasks.contains("total") && tasks.contains("server limit"),
-        "the formatter must use explicit shown/total/server-limit language"
+        tasks.contains("offset + 1") && tasks.contains("offset + fetchedCount"),
+        "the formatter must expose the selected page's exact range"
     );
     assert!(
         !tasks.contains("filtered.length}/${tasks.length}"),
@@ -1195,6 +1195,37 @@ fn dashboard_task_count_states_shown_total_and_server_limit_explicitly() {
     assert!(
         tasks.contains("$(\"tasks-count\").textContent = formatTaskCount("),
         "the rendered count must go through the explicit formatter"
+    );
+}
+
+#[test]
+fn dashboard_task_pagination_is_accessible_responsive_and_race_safe() {
+    let index = include_str!("../../assets/dashboard/index.html");
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let app = include_str!("../../assets/dashboard/app.js");
+    let tasks = include_str!("../../assets/dashboard/tasks.js");
+
+    assert!(
+        index.contains(r#"<nav class="task-pagination" aria-label="Task pages">"#)
+            && index.contains(r#"id="tasks-previous" type="button""#)
+            && index.contains(r#"id="tasks-next" type="button""#)
+            && index.contains(r#"id="tasks-page-status" role="status" aria-live="polite""#),
+        "visible page controls and live loading/error status must use native accessible markup"
+    );
+    assert!(
+        css.contains(".task-pagination") && css.contains("@media (max-width: 520px)"),
+        "pagination must retain a narrow-screen layout"
+    );
+    assert!(
+        app.contains("const sequence = ++taskFetchSequence")
+            && app.contains("sequence === taskFetchSequence")
+            && app.contains("taskPreviousCursors.push(taskPageCursor)"),
+        "navigation must retain a previous stack and reject stale page responses"
+    );
+    assert!(
+        tasks.contains("export function renderTaskPagination(")
+            && tasks.contains("context.resetTaskPagination()"),
+        "filter navigation must reset page state before rendering"
     );
 }
 

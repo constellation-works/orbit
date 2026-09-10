@@ -36,6 +36,22 @@ try {
     throw new Error(`${error.message}\nPage errors: ${failures.join('\n')}`);
   });
   if (failures.length) throw new Error(failures.join('\n'));
+  await page.evaluate(() => globalThis.showTaskPaginationEvidence());
+  await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '1–20 of 55');
+  for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
+    await page.setViewportSize({ width: viewport.width, height: 900 });
+    const pager = page.locator('.task-pagination');
+    if (!(await pager.isVisible())) throw new Error(`Task pagination invisible at ${viewport.width}px`);
+    if (!(await page.locator('#tasks-next').isEnabled())) throw new Error('First task page must enable Next');
+    if (await page.locator('#tasks-previous').isEnabled()) throw new Error('First task page must disable Previous');
+    await page.screenshot({ path: path.join(evidence, `task-pagination-${viewport.name}.png`), fullPage: true });
+  }
+  await page.locator('#tasks-next').click();
+  await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '21–40 of 55');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  if (!(await page.locator('#tasks-previous').isEnabled())) throw new Error('Second task page must enable Previous');
+  await page.screenshot({ path: path.join(evidence, 'task-pagination-mobile-page-2.png'), fullPage: true });
+  await page.evaluate(() => globalThis.showDiagnosticsEvidence());
   // Hold a real visible panel in refresh, then inspect its rendered accessible
   // feedback and retry affordance at desktop and narrow widths.
   await page.evaluate(() => {
@@ -60,7 +76,7 @@ try {
   });
   await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
   if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery; visible live feedback at 1280px and 390px' }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task pagination page 1/page 2 and accessible Previous/Next at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
   console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
 } finally {
   await browser?.close();

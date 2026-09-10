@@ -92,6 +92,11 @@
               <div id="task-filter" role="group" aria-label="Filter tasks by status"></div>
             </div>
             <div class="filter-summary" id="task-filter-summary" role="status" aria-live="polite"></div>
+            <nav class="task-pagination" aria-label="Task pages">
+              <button id="tasks-previous" type="button" disabled>Previous</button>
+              <span id="tasks-page-status" role="status" aria-live="polite"></span>
+              <button id="tasks-next" type="button" disabled>Next</button>
+            </nav>
             <div class="body" id="tasks-body">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>

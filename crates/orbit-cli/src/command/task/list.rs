@@ -107,6 +107,7 @@ impl Execute for TaskListArgs {
                 external_ref,
                 has_external_ref_system: has_ref_system,
                 scan_before: None,
+                search: None,
             },
             ready,
             path,
