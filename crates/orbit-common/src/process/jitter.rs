@@ -6,8 +6,9 @@
 //! deterministic sleep with a uniform draw over `[0, bound]`, decorrelating
 //! the retries while keeping the same cap growth.
 //!
-//! The generator is an xorshift64* seeded through SplitMix64 — no external
-//! dependency, not suitable for anything security-sensitive.
+//! The generator is an xorshift64* seeded through SplitMix64. Operating-system
+//! entropy supplies production seeds; this remains unsuitable for anything
+//! security-sensitive.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,7 +16,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Fallback seed used when the entropy sources collapse to zero
 /// (xorshift64* has a fixed point at state 0).
 const SEED_FALLBACK: u64 = 0x9e37_79b9_7f4a_7c15;
-
 /// Separates fallback seeds if the operating system cannot provide entropy.
 static FALLBACK_COUNTER: AtomicU64 = AtomicU64::new(0);
 
