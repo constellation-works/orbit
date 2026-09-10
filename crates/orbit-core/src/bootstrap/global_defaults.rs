@@ -47,7 +47,10 @@ struct GlobalDefaultsStamp {
 /// binary embeds. An absent, unreadable, or unrecognized stamp reads as stale,
 /// so an unusable stamp costs one reconciliation rather than correctness.
 pub(crate) fn global_defaults_are_current(global_root: &Path) -> bool {
-    let Ok(raw) = fs::read_to_string(stamp_path(global_root)) else {
+    let Ok(path) = validated_stamp_path(global_root) else {
+        return false;
+    };
+    let Ok(raw) = fs::read_to_string(path) else {
         return false;
     };
     let Ok(stamp) = serde_json::from_str::<GlobalDefaultsStamp>(&raw) else {
@@ -70,7 +73,7 @@ pub(crate) fn record_global_defaults_reconciled(global_root: &Path) -> Result<()
         .map_err(|error| OrbitError::Store(format!("serialize global defaults stamp: {error}")))?;
     encoded.push('\n');
 
-    let path = stamp_path(global_root);
+    let path = validated_stamp_path(global_root)?;
     atomic_write_text(&path, &encoded).map_err(|error| {
         OrbitError::Io(format!(
             "write global defaults stamp '{}': {error}",
@@ -83,10 +86,64 @@ pub(crate) fn record_global_defaults_reconciled(global_root: &Path) -> Result<()
 /// describes, and never in `state/`, which the layout reserves for workspace
 /// runtime state. Exposed so fixtures can model a root left by another release
 /// without duplicating the path.
+#[cfg(test)]
 pub(crate) fn stamp_path(global_root: &Path) -> PathBuf {
     global_root
         .join("resources")
         .join(".orbit-global-defaults.json")
+}
+
+/// Resolve the defaults stamp beneath the canonical global root.
+///
+/// The root can come from an explicit runtime override, but both the resources
+/// directory and stamp filename are fixed. Resolving existing components and
+/// requiring their expected locations prevents a symlink from redirecting a
+/// stamp read or write outside the selected root.
+fn validated_stamp_path(global_root: &Path) -> Result<PathBuf, OrbitError> {
+    let canonical_root = fs::canonicalize(global_root).map_err(|error| {
+        OrbitError::Io(format!(
+            "resolve global defaults root {}: {error}",
+            global_root.display()
+        ))
+    })?;
+    let expected_parent = canonical_root.join("resources");
+    let expected_path = expected_parent.join(".orbit-global-defaults.json");
+
+    let canonical_parent = match fs::canonicalize(&expected_parent) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(expected_path),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "resolve global defaults directory {}: {error}",
+                expected_parent.display()
+            )));
+        }
+    };
+    if canonical_parent != expected_parent || !canonical_parent.is_dir() {
+        return Err(OrbitError::InvalidInput(format!(
+            "global defaults directory must be a regular directory directly under {}",
+            canonical_root.display()
+        )));
+    }
+
+    let canonical_path = match fs::canonicalize(&expected_path) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(expected_path),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "resolve global defaults stamp {}: {error}",
+                expected_path.display()
+            )));
+        }
+    };
+    if canonical_path != expected_path || !canonical_path.is_file() {
+        return Err(OrbitError::InvalidInput(format!(
+            "global defaults stamp must be a regular file directly under {}",
+            expected_parent.display()
+        )));
+    }
+
+    Ok(canonical_path)
 }
 
 /// Identity of the defaults a global-scope bootstrap installs into one root.
