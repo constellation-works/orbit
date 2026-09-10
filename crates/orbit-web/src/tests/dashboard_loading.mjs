@@ -7,6 +7,7 @@ let heldPath = '/api/tasks';
 let networkDown = false;
 let metricsError = false;
 let marker = 'first';
+let taskPaging = false;
 let summaryReads = 0;
 const pendingReads = [];
 const list = items => ({ items, total: items.length, limit: 50, truncated: false });
@@ -14,7 +15,25 @@ function fixture(url) {
   const workspace = url.searchParams.get('workspace');
   switch (url.pathname) {
     case '/api/workspaces': return ['one', 'two'].map(id => ({ id, name: id, status: 'active', is_default: id === 'one' }));
-    case '/api/tasks': return list([{ id: 'TEST-1', title: marker, status: 'in-progress', priority: 'medium' }]);
+    case '/api/tasks': {
+      if (!taskPaging) return list([{ id: 'TEST-1', title: marker, status: 'in-progress', priority: 'medium' }]);
+      const cursor = url.searchParams.get('cursor');
+      const page = cursor === 'page-2' ? 2 : cursor === 'page-1' ? 1 : 0;
+      const size = page === 2 ? 15 : 20;
+      return {
+        items: Array.from({ length: size }, (_, index) => ({
+          id: `PAGE-${page}-${index}`,
+          title: `task page ${page}`,
+          status: 'in-progress',
+          priority: 'medium',
+        })),
+        total: 55,
+        limit: 20,
+        truncated: true,
+        offset: page * 20,
+        next_cursor: page < 2 ? `page-${page + 1}` : null,
+      };
+    }
     case '/api/job-runs': return list([{ run_id: marker, job_id: 'fixture', state: 'failed' }]);
     case '/api/diagnostics/errors': return [{ message: marker, source: 'fixture' }];
     case '/api/routines': return { host_id: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
@@ -39,6 +58,7 @@ const refresh = () => {
   const button = node('refresh-btn');
   if (button.listeners) button.listeners.click(); else button.click();
 };
+const click = target => target.listeners ? target.listeners.click() : target.click();
 const release = (request, payload = request.payload) => request.resolve(response(payload));
 const text = id => node(id).textContent;
 const busy = id => node(id).getAttribute ? node(id).getAttribute('aria-busy') : node(id)['aria-busy'];
@@ -125,6 +145,37 @@ for (const surface of surfaces) {
   check(text(surface.body).includes(surface.emptyText) && !text(surface.body).includes('Unable to load'), `${surface.route}: empty success recovers`);
 }
 heldPath = null;
+taskPaging = true;
+setActiveTab('tasks');
+refresh(); await settle();
+check(text('tasks-count') === '1–20 of 55', 'first page exposes its matching range and total');
+check(!node('tasks-next').disabled && node('tasks-previous').disabled, 'first page has accessible forward-only navigation');
+click(node('tasks-next')); await settle();
+check(text('tasks-count') === '21–40 of 55' && text('tasks-body').includes('task page 1'), 'Next reaches the second page');
+check(!node('tasks-previous').disabled, 'second page enables Previous');
+click(node('tasks-next')); await settle();
+check(text('tasks-count') === '41–55 of 55' && node('tasks-next').disabled, 'last partial page has the correct range and no Next');
+click(node('tasks-previous')); await settle();
+check(text('tasks-count') === '21–40 of 55', 'Previous returns to the prior cursor');
+
+heldPath = '/api/tasks';
+marker = 'unused';
+refresh(); await settle();
+const olderPage = pendingReads.splice(0);
+refresh(); await settle();
+for (const request of pendingReads.splice(0)) release(request, {
+  ...request.payload,
+  items: request.payload.items.map(item => ({ ...item, title: 'new page response' })),
+});
+await settle();
+for (const request of olderPage) release(request, {
+  ...request.payload,
+  items: request.payload.items.map(item => ({ ...item, title: 'stale page response' })),
+});
+await settle();
+check(text('tasks-body').includes('new page response') && !text('tasks-body').includes('stale page response'), 'stale page response cannot overwrite newer navigation data');
+heldPath = null;
+taskPaging = false;
 metricsError = true;
 const priorSummaryReads = summaryReads;
 setActiveTab('diagnostics/metrics');
@@ -170,16 +221,25 @@ const runPoll = async () => {
   poll.fn(...poll.args);
   await settle();
 };
+const setDocumentHidden = value => {
+  try { document.hidden = value; } catch (_) {
+    Object.defineProperty(document, 'hidden', { configurable: true, value });
+  }
+};
+const fireVisibilityChange = () => {
+  if (typeof documentListeners !== 'undefined') documentListeners.visibilitychange();
+  else document.dispatchEvent(new Event('visibilitychange'));
+};
 
 // Pausing a dashboard removes its pending poll. Returning to it refreshes once,
 // then failed polls double their delay and a successful retry restores 30s.
-document.hidden = true;
-documentListeners.visibilitychange();
+setDocumentHidden(true);
+fireVisibilityChange();
 const hiddenSummaryReads = summaryReads;
 await settle();
 check(summaryReads === hiddenSummaryReads, 'hidden dashboard makes no audit-summary request');
-document.hidden = false;
-documentListeners.visibilitychange();
+setDocumentHidden(false);
+fireVisibilityChange();
 await settle();
 check(summaryReads === hiddenSummaryReads + 1, 'visible dashboard refreshes exactly once');
 check(activePoll().ms === 30000, 'successful refresh schedules the normal 30s interval');
@@ -193,5 +253,20 @@ await runPoll();
 check(activePoll().ms === 30000, 'successful retry restores the 30s interval');
 globalThis.setTimeout = realTimeout;
 globalThis.clearTimeout = realClearTimeout;
+globalThis.showTaskPaginationEvidence = async () => {
+  networkDown = false;
+  metricsError = false;
+  heldPath = null;
+  taskPaging = true;
+  setActiveTab('tasks');
+  refresh();
+  await settle();
+};
+globalThis.showDiagnosticsEvidence = async () => {
+  taskPaging = false;
+  setActiveTab('diagnostics/metrics');
+  refresh();
+  await settle();
+};
 globalThis.loadingTestsPassed = true;
 console.log('Dashboard loading, ordering, empty, error and recovery scenarios passed.');

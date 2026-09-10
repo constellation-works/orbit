@@ -2,7 +2,7 @@
 // Pure vanilla JS, split into ES modules with no build step.
 
 import { requestPanel, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './common.js';
-import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './tasks.js';
+import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './audit.js';
 import { renderScoreboard } from './scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './reliability.js';
@@ -71,9 +71,15 @@ const $ = (id) => document.getElementById(id);
 let searchQuery = "";
 let activeStatuses = new Set(DEFAULT_ACTIVE_STATUSES);
 let lastTasks = [];
-// ORB-10874: paging metadata from task-list envelopes so the count can state a
-// shown/total/server-limit fact instead of an ambiguous `N/50`.
+// Paging metadata from task-list envelopes drives the visible range and
+// Previous/Next availability.
 let lastTasksMeta = null;
+let taskPageCursor = null;
+let taskPreviousCursors = [];
+let taskPageLoading = false;
+let taskPageError = null;
+let taskFetchSequence = 0;
+let taskScrollResetPending = false;
 let lastRuns = [];
 let lastRunsMeta = null;
 let lastRunsLoading = true;
@@ -100,6 +106,14 @@ function taskContext() {
   return {
     getTasks: () => lastTasks,
     getTasksMeta: () => lastTasksMeta,
+    getTaskPagination: () => ({
+      canPrevious: taskPreviousCursors.length > 0,
+      canNext: Boolean(lastTasksMeta && lastTasksMeta.next_cursor),
+      loading: taskPageLoading,
+      error: taskPageError,
+    }),
+    navigateTaskPage,
+    resetTaskPagination,
     replaceTask: (updatedTask) => {
       const index = lastTasks.findIndex((task) => task.id === updatedTask.id);
       if (index >= 0) {
@@ -1056,16 +1070,45 @@ function resetHealthStrip() {
 // active status chips are sent as `?status=a,b` instead of over-fetching every
 // status and filtering client-side. That keeps the `total`/`limit`/`truncated`
 // envelope meaningful for the filter actually in effect (see formatTaskCount
-// in tasks.js). Omitted when every status (or none) is active: the endpoint's
-// status-neutral response is correct for all-active, while an empty selection
-// is applied client-side because the API has no empty status set.
-function tasksListPath() {
+// in tasks.js). Omitted only when every status is active; an empty selection is
+// sent explicitly as `status=none` so the server applies it before pagination.
+function resetTaskPagination() {
+  taskPageCursor = null;
+  taskPreviousCursors = [];
+  taskPageError = null;
+  lastTasksMeta = null;
+  taskScrollResetPending = true;
+}
+
+function tasksListPath(base = "/api/tasks") {
   const sp = new URLSearchParams();
   if (activeStatuses.size > 0 && activeStatuses.size < STATUS_ORDER.length) {
     sp.set("status", STATUS_ORDER.filter((s) => activeStatuses.has(s)).join(","));
+  } else if (activeStatuses.size === 0) {
+    sp.set("status", "none");
   }
+  if (searchQuery) sp.set("q", searchQuery);
+  if (taskPageCursor) sp.set("cursor", taskPageCursor);
   const qs = sp.toString();
-  return qs ? `/api/tasks?${qs}` : "/api/tasks";
+  return qs ? `${base}?${qs}` : base;
+}
+
+function navigateTaskPage(direction) {
+  if (taskPageLoading) return;
+  if (direction === "next") {
+    const next = lastTasksMeta && lastTasksMeta.next_cursor;
+    if (!next) return;
+    taskPreviousCursors.push(taskPageCursor);
+    taskPageCursor = next;
+  } else if (direction === "previous") {
+    if (taskPreviousCursors.length === 0) return;
+    taskPageCursor = taskPreviousCursors.pop();
+  } else {
+    return;
+  }
+  taskPageError = null;
+  taskScrollResetPending = true;
+  fetchAndRenderTasks().catch((error) => console.error("Failed to navigate task pages", error));
 }
 
 function fetchAndRenderTasks() {
@@ -1073,7 +1116,11 @@ function fetchAndRenderTasks() {
   // every workspace's tasks; otherwise the single/selected workspace's tasks
   // (the workspace query param is applied by fetchJson).
   const aggregate = isAggregateView();
-  const path = aggregate ? "/api/tasks/all" : tasksListPath();
+  const path = tasksListPath(aggregate ? "/api/tasks/all" : "/api/tasks");
+  const sequence = ++taskFetchSequence;
+  taskPageLoading = true;
+  taskPageError = null;
+  renderTaskPagination(taskContext());
   // /api/crews is per-workspace and 400s without a concrete workspace, so in
   // aggregate mode skip the crew fetch and let the crew controls degrade to a
   // disabled "crew unavailable" fallback rather than rejecting the Promise.all
@@ -1090,10 +1137,32 @@ function fetchAndRenderTasks() {
     const tasks = listItems(payload);
     lastTasks = tasks;
     lastTasksMeta = payload && !Array.isArray(payload)
-      ? { total: payload.total, limit: payload.limit, truncated: payload.truncated }
+      ? {
+          total: payload.total,
+          limit: payload.limit,
+          truncated: payload.truncated,
+          offset: payload.offset || 0,
+          next_cursor: payload.next_cursor || null,
+        }
       : null;
     renderTasks(tasks, taskContext());
-  }, "tasks-count");
+    if (taskScrollResetPending) {
+      const body = $("tasks-body");
+      if (body) body.scrollTop = 0;
+      taskScrollResetPending = false;
+    }
+  }, "tasks-count").catch((error) => {
+    if (sequence === taskFetchSequence) {
+      taskPageError = error.message || String(error);
+      renderTaskPagination(taskContext());
+    }
+    throw error;
+  }).finally(() => {
+    if (sequence === taskFetchSequence) {
+      taskPageLoading = false;
+      renderTaskPagination(taskContext());
+    }
+  });
 }
 
 // ORB-00030: discover servable workspaces and, in global mode, install a
@@ -1528,6 +1597,8 @@ async function refreshDashboard() {
 // Invalidate caches at the scope boundary, including programmatic selections.
 // Panel state is reset synchronously by common.js before another frame paints.
 onWorkspaceChange(() => {
+  resetTaskPagination();
+  taskFetchSequence += 1;
   lastTasks = [];
   lastTasksMeta = null;
   cacheCrewPayload({ crews: [] });

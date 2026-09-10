@@ -71,6 +71,31 @@ fn bounded_queries_load_only_selected_bundles_as_the_corpus_grows() {
 }
 
 #[test]
+fn title_search_filters_metadata_before_bounded_hydration() {
+    let temp = TempDir::new().unwrap();
+    let store = corpus(&temp, 120);
+    let page = store
+        .query_task_rows(
+            &TaskListFilter {
+                search: Some("task 1".to_string()),
+                ..Default::default()
+            },
+            7,
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(page.total, 31);
+    assert_eq!(page.items.len(), 7);
+    assert!(
+        page.items
+            .iter()
+            .all(|row| row.task.title.to_lowercase().contains("task 1"))
+    );
+    assert_eq!(reads(&store).0, 7, "only the selected page is hydrated");
+}
+
+#[test]
 fn bounded_integrity_is_selected_only_but_direct_unbounded_and_fallback_reads_are_strict() {
     for corruption in ["body", "events"] {
         let temp = TempDir::new().unwrap();
@@ -307,6 +332,19 @@ fn metadata_filters_preserve_ties_and_legacy_tag_normalization() {
             .collect::<Vec<_>>(),
         expected[..2].iter().collect::<Vec<_>>()
     );
+    let boundary = page.items.last().unwrap();
+    let continuation = store
+        .query_task_rows(
+            &TaskListFilter {
+                scan_before: Some((boundary.task.created_at, boundary.task.id.clone())),
+                ..filter
+            },
+            2,
+            None,
+        )
+        .unwrap();
+    assert_eq!(continuation.items.len(), 1);
+    assert_eq!(continuation.items[0].task.id, expected[2]);
 }
 
 fn upsert_proof(store: &TaskV2Store, id: &str, content: &[u8]) {

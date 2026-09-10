@@ -8,18 +8,18 @@
 
 use std::path::{Path, PathBuf};
 
-use axum::extract::State;
+use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_core::application::job::{JobRunListParams, JobRunOrder, job_run_to_json};
-use orbit_core::{DEFAULT_TASK_LIST_LIMIT, JobRun, JobRunState, OrbitRuntime};
+use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::pagination::TaskPageQuery;
 use super::{HISTORY_DEFAULT_LIMIT, bad_request, blocking, bounded_limit, server_error};
 use crate::projections::task_row_to_json;
 use crate::state::DashboardState;
-use orbit_core::application::task::TaskListFilter;
 
 /// `GET /api/workspaces` — list every workspace the dashboard can serve, with
 /// the currently-selected default flagged.
@@ -57,13 +57,42 @@ pub(super) async fn list_workspaces(State(state): State<DashboardState>) -> Resp
 /// ORB-00037) so the frontend can badge the row and show the full location in
 /// the task's Details box. Inactive (stale-path) workspaces are skipped, as are
 /// any that fail to open — the aggregate view stays available even when one
-/// workspace is broken.
-pub(super) async fn list_all_tasks(State(state): State<DashboardState>) -> Response {
-    match blocking("aggregate task list", move || Ok(all_tasks_json(&state))).await {
+/// workspace is broken. Status/tag/type/search filters, limit, and cursor have
+/// the same semantics as `/api/tasks`; selection happens independently in each
+/// workspace before one global `created_at DESC, id ASC` merge.
+pub(super) async fn list_all_tasks(
+    State(state): State<DashboardState>,
+    RawQuery(raw_query): RawQuery,
+) -> Response {
+    let mut query = match TaskPageQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(message) => return bad_request(message),
+    };
+    let scope = aggregate_task_scope(&state);
+    if let Err(message) = query.bind_cursor(&scope) {
+        return bad_request(message);
+    }
+    match blocking("aggregate task list", move || {
+        Ok(all_tasks_json(&state, &query, &scope))
+    })
+    .await
+    {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => server_error(error),
         Err(response) => *response,
     }
+}
+
+fn aggregate_task_scope(state: &DashboardState) -> String {
+    let pinned = state.pin();
+    let mut workspace_ids = pinned
+        .entries()
+        .iter()
+        .filter(|entry| entry.active)
+        .map(|entry| entry.id.as_str())
+        .collect::<Vec<_>>();
+    workspace_ids.sort_unstable();
+    format!("aggregate:{}", workspace_ids.join(","))
 }
 
 #[derive(Deserialize, Default)]
@@ -230,17 +259,23 @@ fn run_timestamp(run: &JobRun) -> DateTime<Utc> {
     run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 
-fn all_tasks_json(state: &DashboardState) -> Result<Value, orbit_core::OrbitError> {
+fn all_tasks_json(
+    state: &DashboardState,
+    query: &TaskPageQuery,
+    scope: &str,
+) -> Result<Value, orbit_core::OrbitError> {
     let pinned = state.pin();
     let home = home_dir();
     let mut candidates = Vec::new();
     let mut total = 0;
+    let mut remaining = 0;
     for entry in pinned.entries().iter().filter(|entry| entry.active) {
         let Ok(runtime) = pinned.runtime_for(&entry.id) else {
             continue;
         };
-        let page = runtime.task_candidates(&TaskListFilter::default(), DEFAULT_TASK_LIST_LIMIT)?;
-        total += page.total;
+        total += runtime.task_candidates(&query.count_filter(), 0)?.total;
+        let page = runtime.task_candidates(&query.filter(), query.limit())?;
+        remaining += page.total;
         for task in page.items {
             candidates.push((task, runtime.clone(), entry));
         }
@@ -250,7 +285,22 @@ fn all_tasks_json(state: &DashboardState) -> Result<Value, orbit_core::OrbitErro
             .cmp(&a.created_at)
             .then_with(|| a.id.cmp(&b.id))
     });
-    candidates.truncate(DEFAULT_TASK_LIST_LIMIT);
+    candidates.truncate(query.limit());
+    let offset = query.offset();
+    let next_offset = offset.saturating_add(candidates.len());
+    let next_cursor = if remaining > candidates.len() {
+        candidates
+            .last()
+            .map(|(task, _, _)| {
+                query.next_cursor(scope, task.created_at, task.id.clone(), next_offset)
+            })
+            .transpose()
+            .map_err(|error| {
+                orbit_core::OrbitError::Execution(format!("encode task cursor: {error}"))
+            })?
+    } else {
+        None
+    };
     // All runtimes in a dashboard share one coordination registry. Read its
     // global dependency projection once, after the metadata selection.
     let statuses = candidates
@@ -277,8 +327,10 @@ fn all_tasks_json(state: &DashboardState) -> Result<Value, orbit_core::OrbitErro
     Ok(json!({
         "items": values,
         "total": total,
-        "limit": DEFAULT_TASK_LIST_LIMIT,
+        "limit": query.limit(),
         "truncated": total > values.len(),
+        "offset": offset,
+        "next_cursor": next_cursor,
     }))
 }
 

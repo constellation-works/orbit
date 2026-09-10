@@ -9,8 +9,8 @@ use axum::http::{HeaderName, HeaderValue, header};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{
-    DEFAULT_TASK_LIST_LIMIT, ExternalRef, OrbitRuntime, Task, TaskComplexity, TaskCreateStatus,
-    TaskPriority, TaskStatus, TaskType,
+    ExternalRef, OrbitRuntime, Task, TaskComplexity, TaskCreateStatus, TaskPriority, TaskStatus,
+    TaskType,
 };
 use orbit_types::identity::{
     agent_family_from_cli, all_agent_families, infer_agent_family_from_model,
@@ -20,6 +20,7 @@ use orbit_types::task::{inline_safe_artifact_media_type, validate_relative_artif
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
+use super::pagination::TaskPageQuery;
 use super::{
     bad_request, blocking, map_runtime_error, non_empty_string, server_error, validate_id,
 };
@@ -306,7 +307,10 @@ where
 ///   `auto-task:qa-sweep` matches that whole tag rather than being split.
 /// - `type` (alias `task_type`) — a single task type (`feature`/`bug`/
 ///   `refactor`/`chore`).
-/// - `limit` — positive integer, defaulting to [`DEFAULT_TASK_LIST_LIMIT`].
+/// - `q` (alias `search`) — case-insensitive task ID/title substring.
+/// - `limit` — positive integer, defaulting to [`orbit_core::DEFAULT_TASK_LIST_LIMIT`].
+/// - `cursor` — opaque continuation returned as `next_cursor`; it is rejected
+///   when malformed or reused with a different workspace, endpoint, or filter.
 ///
 /// Unknown keys (including the `?workspace=<id>` selector consumed by the
 /// [`Ws`] extractor) are ignored; an unparseable value is a 400 rather than a
@@ -316,7 +320,8 @@ where
 ///
 /// ```json
 /// { "items": [ /* task objects, newest first */ ],
-///   "total": 137, "limit": 50, "truncated": true }
+///   "total": 137, "limit": 50, "truncated": true,
+///   "offset": 0, "next_cursor": "..." }
 /// ```
 ///
 /// **Every predicate is applied before the limit**, so `items` holds the newest
@@ -327,16 +332,26 @@ where
 /// the window (previously indistinguishable, because the handler answered a bare
 /// truncated array with no metadata).
 ///
-/// The cross-workspace `/api/tasks/all` aggregate uses the same envelope. It
-/// takes no filters and its `total` sums the untruncated candidate counts from
-/// active workspaces.
+/// The cursor is an opaque continuation of the stable `created_at DESC, id ASC`
+/// order and is bound to this workspace and the active filters. Inserts newer
+/// than the first page do not disturb an existing continuation. Changing a
+/// task's `created_at`, ID, or filter membership while paging may move it across
+/// the boundary; clients that need a new live snapshot restart without a cursor.
+/// The cross-workspace `/api/tasks/all` aggregate uses the same contract.
 pub(super) async fn list_tasks(Ws(runtime): Ws, RawQuery(query): RawQuery) -> Response {
-    let query = match TaskListQuery::parse(query.as_deref()) {
+    let mut query = match TaskPageQuery::parse(query.as_deref()) {
         Ok(query) => query,
         Err(message) => return bad_request(message),
     };
+    let scope = match runtime.workspace_id() {
+        Ok(workspace_id) => format!("workspace:{workspace_id}"),
+        Err(error) => return server_error(error),
+    };
+    if let Err(message) = query.bind_cursor(&scope) {
+        return bad_request(message);
+    }
     match blocking("task list", move || {
-        Ok(task_list_page_json(&runtime, &query))
+        Ok(task_list_page_json(&runtime, &query, &scope))
     })
     .await
     {
@@ -346,114 +361,16 @@ pub(super) async fn list_tasks(Ws(runtime): Ws, RawQuery(query): RawQuery) -> Re
     }
 }
 
-/// Server-side filters for `GET /api/tasks`, mirroring `orbit task list`
-/// semantics (ORB-10400).
-struct TaskListQuery {
-    /// Accepted statuses; empty means status-neutral (every lifecycle status).
-    statuses: Vec<TaskStatus>,
-    /// Required tags, AND-combined. Passed verbatim to `list_tasks_by_tags`,
-    /// which normalizes them.
-    tags: Vec<String>,
-    task_type: Option<TaskType>,
-    limit: usize,
-}
-
-impl Default for TaskListQuery {
-    fn default() -> Self {
-        Self {
-            statuses: Vec::new(),
-            tags: Vec::new(),
-            task_type: None,
-            limit: DEFAULT_TASK_LIST_LIMIT,
-        }
-    }
-}
-
-impl TaskListQuery {
-    /// Parse the raw (still percent-encoded) query string.
-    ///
-    /// Repeated keys accumulate and each value may itself be comma-separated,
-    /// matching the CLI's `--status a,b` / repeated `--tag`. Empty values are
-    /// ignored so `?status=` behaves like an omitted filter, and unknown keys
-    /// are skipped because this endpoint shares its query string with the `Ws`
-    /// workspace selector.
-    fn parse(raw_query: Option<&str>) -> Result<Self, String> {
-        let mut parsed = Self::default();
-        let Some(raw_query) = raw_query else {
-            return Ok(parsed);
-        };
-        for (key, value) in url::form_urlencoded::parse(raw_query.as_bytes()) {
-            match key.as_ref() {
-                "status" => {
-                    for raw in split_filter_values(&value) {
-                        let status = raw
-                            .to_ascii_lowercase()
-                            .parse::<TaskStatus>()
-                            .map_err(|error| format!("invalid `status` value `{raw}`: {error}"))?;
-                        if !parsed.statuses.contains(&status) {
-                            parsed.statuses.push(status);
-                        }
-                    }
-                }
-                // A tag is matched whole: only `,` separates values, so a
-                // colon-bearing tag (`auto-task:qa-sweep`) stays intact.
-                "tag" | "tags" => parsed
-                    .tags
-                    .extend(split_filter_values(&value).map(str::to_string)),
-                "type" | "task_type" => {
-                    for raw in split_filter_values(&value) {
-                        parsed.task_type =
-                            Some(raw.to_ascii_lowercase().parse::<TaskType>().map_err(
-                                |error| format!("invalid `type` value `{raw}`: {error}"),
-                            )?);
-                    }
-                }
-                "limit" => {
-                    if let Some(raw) = split_filter_values(&value).next_back() {
-                        parsed.limit = parse_limit(raw)?;
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(parsed)
-    }
-}
-
-/// Split one query value into its comma-separated parts, trimming each and
-/// dropping empties.
-fn split_filter_values(value: &str) -> impl DoubleEndedIterator<Item = &str> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-}
-
-/// Parse `?limit=`, rejecting zero (which would return nothing) the same way the
-/// CLI's `--limit` does.
-fn parse_limit(raw: &str) -> Result<usize, String> {
-    let value: usize = raw
-        .parse()
-        .map_err(|_| format!("invalid `limit` value `{raw}` (expected a positive integer)"))?;
-    if value == 0 {
-        return Err("`limit` must be at least 1".to_string());
-    }
-    Ok(value)
-}
-
 /// Build the `{ items, total, limit, truncated }` page for `GET /api/tasks`.
 fn task_list_page_json(
     runtime: &OrbitRuntime,
-    query: &TaskListQuery,
+    query: &TaskPageQuery,
+    scope: &str,
 ) -> Result<Value, orbit_core::OrbitError> {
+    let total = runtime.task_candidates(&query.count_filter(), 0)?.total;
     let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
-        filter: orbit_core::application::task::TaskListFilter {
-            statuses: (!query.statuses.is_empty()).then(|| query.statuses.clone()),
-            task_type: query.task_type,
-            tags: query.tags.clone(),
-            ..Default::default()
-        },
-        limit: query.limit,
+        filter: query.filter(),
+        limit: query.limit(),
         ..Default::default()
     })?;
     let status_by_id = page.status_by_id;
@@ -462,10 +379,29 @@ fn task_list_page_json(
         .iter()
         .map(|row| task_row_to_json(runtime, row, &status_by_id))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(
-        json!({ "truncated": page.total > items.len(), "items": items,
-        "total": page.total, "limit": query.limit }),
-    )
+    let offset = query.offset();
+    let next_offset = offset.saturating_add(items.len());
+    let next_cursor = if page.total > items.len() {
+        page.items
+            .last()
+            .map(|row| {
+                query.next_cursor(scope, row.task.created_at, row.task.id.clone(), next_offset)
+            })
+            .transpose()
+            .map_err(|error| {
+                orbit_core::OrbitError::Execution(format!("encode task cursor: {error}"))
+            })?
+    } else {
+        None
+    };
+    Ok(json!({
+        "truncated": total > items.len(),
+        "items": items,
+        "total": total,
+        "limit": query.limit(),
+        "offset": offset,
+        "next_cursor": next_cursor,
+    }))
 }
 
 pub(super) async fn list_task_locks(Ws(runtime): Ws) -> Response {

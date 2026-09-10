@@ -10,6 +10,8 @@ use orbit_types::task::{
 pub struct TaskListFilter {
     /// Continue the canonical created-descending, ID-ascending scan.
     pub scan_before: Option<(chrono::DateTime<chrono::Utc>, String)>,
+    /// Case-insensitive ID/title substring matched from envelope metadata.
+    pub search: Option<String>,
     pub statuses: Option<Vec<TaskStatus>>,
     pub priority: Option<TaskPriority>,
     pub task_type: Option<TaskType>,
@@ -24,6 +26,12 @@ impl TaskListFilter {
     pub(crate) fn normalized(&self) -> Self {
         Self {
             tags: normalize_task_tags(self.tags.clone()),
+            search: self
+                .search
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_lowercase),
             ..self.clone()
         }
     }
@@ -31,6 +39,8 @@ impl TaskListFilter {
     pub(crate) fn matches(&self, task: &TaskEnvelopeV2) -> bool {
         self.scan_before.as_ref().is_none_or(|(at, id)| {
             task.created_at < *at || (task.created_at == *at && task.id > *id)
+        }) && self.search.as_ref().is_none_or(|query| {
+            task.id.to_lowercase().contains(query) || task.title.to_lowercase().contains(query)
         }) && self
             .statuses
             .as_ref()

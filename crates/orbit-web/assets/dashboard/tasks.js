@@ -89,17 +89,14 @@ function tasksMeta(context) {
   return context && typeof context.getTasksMeta === "function" ? context.getTasksMeta() : null;
 }
 
-// ORB-10874: explicit shown/total/server-limit language instead of the
-// ambiguous `N/50` shorthand — `50` could previously have meant a total, a
-// page size, or a hard cap with no way to tell which from the UI alone.
+// Explicit page range and matching total instead of the ambiguous `N/50`
+// shorthand, which could mean either a total or an unreachable hard cap.
 export function formatTaskCount(filteredCount, fetchedCount, meta) {
   if (meta && Number.isFinite(meta.total)) {
-    const base = filteredCount === fetchedCount
-      ? `${filteredCount} shown`
-      : `${filteredCount} shown (of ${fetchedCount} fetched)`;
-    return meta.truncated
-      ? `${base} · ${meta.total} total · server limit ${meta.limit}`
-      : `${base} · ${meta.total} total`;
+    const offset = Number.isFinite(meta.offset) ? meta.offset : 0;
+    if (fetchedCount === 0) return `0 of ${meta.total}`;
+    const range = `${offset + 1}–${offset + fetchedCount} of ${meta.total}`;
+    return filteredCount === fetchedCount ? range : `${filteredCount} shown · page ${range}`;
   }
   return filteredCount === fetchedCount
     ? `${fetchedCount} shown`
@@ -365,6 +362,9 @@ export function buildTasksHash(context) {
 }
 
 export function applyTasksHashQuery(query, context) {
+  if (context && typeof context.resetTaskPagination === "function") {
+    context.resetTaskPagination();
+  }
   const order = statusOrder(context);
   const statusParam = query.get("status");
   if (statusParam == null) {
@@ -393,12 +393,36 @@ export function syncTaskControls(context) {
 }
 
 function navigateTasksHash(context) {
+  if (context && typeof context.resetTaskPagination === "function") {
+    context.resetTaskPagination();
+  }
   const hash = buildTasksHash(context);
   if (window.location.hash !== hash) {
     window.location.hash = hash;
   } else {
     refreshChips(context);
-    renderTasks(taskList(context), context);
+    refreshTasks(context).catch((error) => console.error("Failed to reset task pages", error));
+  }
+}
+
+export function renderTaskPagination(context) {
+  const previous = $("tasks-previous");
+  const next = $("tasks-next");
+  const status = $("tasks-page-status");
+  if (!previous || !next || !status) return;
+  const state = context && typeof context.getTaskPagination === "function"
+    ? context.getTaskPagination()
+    : {};
+  previous.disabled = Boolean(state.loading) || !state.canPrevious;
+  next.disabled = Boolean(state.loading) || !state.canNext;
+  status.textContent = state.error
+    ? `Page failed: ${state.error}`
+    : state.loading ? "Loading task page…" : "";
+  status.className = state.error ? "error" : "";
+  if (previous.dataset.wired !== "true") {
+    previous.dataset.wired = "true";
+    previous.addEventListener("click", () => context.navigateTaskPage("previous"));
+    next.addEventListener("click", () => context.navigateTaskPage("next"));
   }
 }
 
@@ -1360,6 +1384,7 @@ export function renderTasks(tasks, context) {
 
   const filtered = filterTasks(tasks, context);
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
+  renderTaskPagination(context);
   // ORB-10972: the rail shows the same filtered count the panel header does,
   // so the Tasks entry reads correctly from any other tab.
   const railCount = document.getElementById("rail-count-tasks");

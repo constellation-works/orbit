@@ -249,6 +249,81 @@ async fn tasks_all_reports_aggregate_total_when_global_limit_truncates() {
 }
 
 #[tokio::test]
+async fn tasks_all_pages_globally_without_per_workspace_omissions() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    let mut entries = Vec::new();
+    for name in ["alpha", "beta"] {
+        let (orbit_dir, repo_root) = seed_workspace(&global_root, tmp.path(), name);
+        let runtime = OrbitRuntime::from_roots(&global_root, &orbit_dir)
+            .expect("runtime")
+            .with_actor(ActorIdentity::human("human"));
+        for index in 1..30 {
+            runtime
+                .add_task(TaskAddParams {
+                    title: format!("global page {name} {index:02}"),
+                    description: "seed".to_string(),
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                })
+                .expect("seed task");
+        }
+        entries.push(workspace_entry(name, repo_root, orbit_dir, true));
+    }
+    let state = DashboardState::global(global_root, entries, Some("alpha".to_string()));
+    let mut cursor = None;
+    let mut identities = HashSet::new();
+    let mut offset = 0;
+    loop {
+        let uri = cursor.as_deref().map_or_else(
+            || "/tasks/all?limit=7&q=global".to_string(),
+            |cursor| {
+                let query = url::form_urlencoded::Serializer::new(String::new())
+                    .append_pair("limit", "7")
+                    .append_pair("q", "global")
+                    .append_pair("cursor", cursor)
+                    .finish();
+                format!("/tasks/all?{query}")
+            },
+        );
+        let body = body_json(
+            router()
+                .with_state(state.clone())
+                .oneshot(get(&uri))
+                .await
+                .expect("response"),
+        )
+        .await;
+        assert_eq!(body["total"], json!(58));
+        assert_eq!(body["offset"], json!(offset));
+        let items = body["items"].as_array().expect("items");
+        for item in items {
+            let identity = (
+                item["workspace_id"]
+                    .as_str()
+                    .expect("workspace")
+                    .to_string(),
+                item["id"].as_str().expect("id").to_string(),
+            );
+            assert!(
+                identities.insert(identity),
+                "aggregate page duplicated a task"
+            );
+        }
+        offset += items.len();
+        cursor = body["next_cursor"].as_str().map(str::to_string);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(identities.len(), 58);
+    assert_eq!(offset, 58);
+    assert!(identities.iter().any(|(workspace, _)| workspace == "alpha"));
+    assert!(identities.iter().any(|(workspace, _)| workspace == "beta"));
+}
+
+#[tokio::test]
 async fn job_runs_all_preserves_workspace_identity_order_bounds_and_unavailable_sources() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");

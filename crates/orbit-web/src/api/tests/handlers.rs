@@ -34,17 +34,128 @@ async fn request_cancel(
 }
 
 async fn request_tasks(runtime: OrbitRuntime) -> Response {
+    request_tasks_query(runtime, "").await
+}
+
+async fn request_tasks_query(runtime: OrbitRuntime, query: &str) -> Response {
+    let uri = if query.is_empty() {
+        "/tasks".to_string()
+    } else {
+        format!("/tasks?{query}")
+    };
     router()
         .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/tasks")
+                .uri(uri)
                 .body(Body::empty())
                 .expect("request"),
         )
         .await
         .expect("response")
+}
+
+#[tokio::test]
+async fn task_pages_reach_every_match_and_reject_invalid_or_mismatched_cursors() {
+    let runtime = OrbitRuntime::in_memory()
+        .expect("build runtime")
+        .with_actor(orbit_core::ActorIdentity::human("human"));
+    for index in 0..55 {
+        runtime
+            .add_task(TaskAddParams {
+                title: format!("pagination fixture {index:02}"),
+                description: "seed".to_string(),
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            })
+            .expect("seed task");
+    }
+
+    let mut cursor = None;
+    let mut ids = std::collections::HashSet::new();
+    let mut expected_offset = 0;
+    loop {
+        let query = cursor.as_deref().map_or_else(
+            || "limit=10&q=pagination".to_string(),
+            |cursor| {
+                url::form_urlencoded::Serializer::new(String::new())
+                    .append_pair("limit", "10")
+                    .append_pair("q", "pagination")
+                    .append_pair("cursor", cursor)
+                    .finish()
+            },
+        );
+        let response = request_tasks_query(runtime.clone(), &query).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["total"], json!(55));
+        assert_eq!(body["offset"], json!(expected_offset));
+        let page = body["items"].as_array().expect("items");
+        for task in page {
+            assert!(
+                ids.insert(task["id"].as_str().expect("task id").to_string()),
+                "stable pages must not duplicate tasks"
+            );
+        }
+        expected_offset += page.len();
+        cursor = body["next_cursor"].as_str().map(str::to_string);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(ids.len(), 55, "stable pages must not omit tasks");
+    assert_eq!(expected_offset, 55);
+
+    let invalid = request_tasks_query(runtime.clone(), "cursor=not-a-cursor").await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(invalid).await["error"]
+            .as_str()
+            .expect("error")
+            .contains("cursor")
+    );
+
+    let first = body_json(request_tasks_query(runtime.clone(), "limit=10").await).await;
+    let cursor = first["next_cursor"].as_str().expect("next cursor");
+    let aggregate_query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("limit", "10")
+        .append_pair("cursor", cursor)
+        .finish();
+    let wrong_endpoint = router()
+        .with_state(crate::state::DashboardState::single(Arc::new(
+            runtime.clone(),
+        )))
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/tasks/all?{aggregate_query}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(wrong_endpoint.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(wrong_endpoint).await["error"]
+            .as_str()
+            .expect("error")
+            .contains("different workspace or endpoint")
+    );
+
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("limit", "10")
+        .append_pair("q", "different")
+        .append_pair("cursor", cursor)
+        .finish();
+    let mismatch = request_tasks_query(runtime, &query).await;
+    assert_eq!(mismatch.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(mismatch).await["error"]
+            .as_str()
+            .expect("error")
+            .contains("does not match")
+    );
 }
 
 async fn request_job_runs(runtime: OrbitRuntime, query: &str) -> Response {
