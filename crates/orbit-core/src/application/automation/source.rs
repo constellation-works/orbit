@@ -12,19 +12,18 @@ use std::{
 };
 
 #[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-#[cfg(test)]
-static LS_TREE_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    static LS_TREE_INVOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
 pub(super) fn reset_ls_tree_invocations() {
-    LS_TREE_INVOCATIONS.store(0, Ordering::SeqCst);
+    LS_TREE_INVOCATIONS.with(|count| count.set(0));
 }
 
 #[cfg(test)]
 pub(super) fn ls_tree_invocations() -> usize {
-    LS_TREE_INVOCATIONS.load(Ordering::SeqCst)
+    LS_TREE_INVOCATIONS.with(std::cell::Cell::get)
 }
 
 pub(crate) struct Source<'a> {
@@ -44,7 +43,7 @@ impl<'a> Source<'a> {
     fn command(&self, program: &str, args: &[&str]) -> Result<String, AutomationError> {
         #[cfg(test)]
         if program == "git" && args.first() == Some(&"ls-tree") {
-            LS_TREE_INVOCATIONS.fetch_add(1, Ordering::SeqCst);
+            LS_TREE_INVOCATIONS.with(|count| count.set(count.get() + 1));
         }
 
         if self.started.elapsed() > Duration::from_secs(30) {
