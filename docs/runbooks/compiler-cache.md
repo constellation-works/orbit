@@ -221,6 +221,7 @@ scripts/cross-revision-check.sh \
 | Guarantee | False result it prevents |
 | --- | --- |
 | A scratch extract and a private `CARGO_TARGET_DIR` per arm | An arm reusing the sibling revision's build output or embedded fixture paths |
+| Reused `--workdir` arm trees and targets are reset at the start of each invocation | Files or build artifacts from an earlier revision surviving into a rerun |
 | Every extracted mtime reset to now | A build skipped because archive timestamps predate an existing target dir |
 | `ORBIT_COMPILER_CACHE=0`, empty `RUSTC_WRAPPER` / `CARGO_BUILD_RUSTC_WRAPPER`, `CARGO_INCREMENTAL=0` | A baseline compiled through the host cache picking up the other tree's artifacts |
 | Producer status captured from a redirect, then `--tail` reads the log file | A filter's success replacing the build's failure |
