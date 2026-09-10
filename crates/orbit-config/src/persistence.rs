@@ -8,14 +8,11 @@ use serde_json::{Value, json};
 /// These are derived from the two roots, never from the config document, so a
 /// `config.toml` cannot relocate a store.
 ///
-/// - Tasks: workspace only
 /// - Skills: workspace override directory layered over global defaults
 /// - Activities/Jobs/Executors/Policies: global only
 /// - Audit: global only (single SQLite database)
 #[derive(Debug, Clone)]
 pub struct PersistenceConfig {
-    /// Workspace task documents.
-    pub task_dir: PathBuf,
     /// Global activity definitions.
     pub activity_dir: PathBuf,
     /// Global job definitions.
@@ -58,7 +55,6 @@ impl PersistenceConfig {
         let global_resources_dir = paths.global_dir.join("resources");
 
         Self {
-            task_dir: paths.tasks_dir.clone(),
             activity_dir: global_resources_dir.join("activities"),
             job_dir: global_resources_dir.join("jobs"),
             skill_dir: paths.skills_dir.clone(),
@@ -73,7 +69,6 @@ impl PersistenceConfig {
     /// runtime diagnostics.
     pub fn as_json_value(&self) -> Value {
         json!({
-            "task": { "path": self.task_dir.to_string_lossy() },
             "activity": { "path": self.activity_dir.to_string_lossy() },
             "job": { "path": self.job_dir.to_string_lossy() },
             "skill": { "path": self.skill_dir.to_string_lossy() },

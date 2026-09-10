@@ -380,11 +380,10 @@ fn interrupted_layout_upgrade_is_reported_stale() {
 
 #[cfg(unix)]
 #[test]
-fn stale_task_lock_files_are_removed() {
+fn stale_workspace_state_lock_files_are_removed() {
     let temp = tempfile::tempdir().expect("tempdir");
     let runtime = workspace_runtime(&temp);
-    let paths = runtime.paths();
-    let stale_locks = [paths.tasks_dir.join(".ORB-00001.lock")];
+    let stale_locks = [runtime.paths().state_dir.join(".crashed-op.lock")];
 
     let dead_pid = reaped_child_pid();
     for path in &stale_locks {
@@ -412,7 +411,7 @@ fn stale_task_lock_files_are_removed() {
 fn cleanup_preserves_a_lock_held_by_a_live_process() {
     let temp = tempfile::tempdir().expect("tempdir");
     let runtime = workspace_runtime(&temp);
-    let lock_path = runtime.paths().tasks_dir.join(".ORB-00001.lock");
+    let lock_path = runtime.paths().state_dir.join(".held-op.lock");
     write_holder_lock(&lock_path, reaped_child_pid(), "stale metadata");
 
     let file = fs::OpenOptions::new()
@@ -620,10 +619,7 @@ fn collect_lock_files_scans_the_store_lock_locations() {
     let runtime = workspace_runtime(&temp);
     let paths = runtime.paths().clone();
 
-    let expected = [
-        paths.state_dir.join(".id_alloc.lock"),
-        paths.tasks_dir.join(".ORB-00001.lock"),
-    ];
+    let expected = [paths.state_dir.join(".id_alloc.lock")];
     for path in &expected {
         fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
         fs::write(path, b"{}").expect("write lock file");

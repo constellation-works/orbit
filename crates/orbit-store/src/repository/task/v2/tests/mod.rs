@@ -30,12 +30,7 @@ pub(super) fn store(temp: &TempDir) -> TaskV2Store {
             repo_fingerprint: None,
         })
         .expect("bind workspace");
-    TaskV2Store::new(
-        registry,
-        binding.workspace_id,
-        Some(repo_dir.to_string_lossy().into_owned()),
-        Some(repo_dir.to_string_lossy().into_owned()),
-    )
+    TaskV2Store::new(registry, binding.workspace_id)
 }
 
 pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {

@@ -2,7 +2,8 @@ use std::fs;
 
 use orbit_config::{ConfigRoots, load_effective_config};
 
-use super::super::show::effective_json;
+use super::super::show::{effective_json, effective_text, scoped_json, scoped_text};
+use super::super::support::{ConfigScopeArg, open_store_for_scope};
 use super::test_runtime;
 
 #[test]
@@ -88,5 +89,40 @@ provider = "claude"
         json["settings"].get("crews.opus.effort").is_none(),
         "omitted effort must not appear in settings: {}",
         json["settings"]
+    );
+}
+
+#[test]
+fn config_show_omits_the_retired_workspace_task_projection() {
+    let (_root, runtime, global_root, workspace_root) = test_runtime();
+    let effective = load_effective_config(&ConfigRoots::new(&global_root, &workspace_root))
+        .expect("load effective layered config");
+
+    let json = effective_json(&runtime, effective.values());
+    let text = effective_text(&runtime, effective.values());
+    let scoped_store =
+        open_store_for_scope(&runtime, ConfigScopeArg::Global).expect("open global scoped config");
+    let scoped_snapshot = scoped_store.snapshot().expect("read scoped config");
+    let scoped_settings = scoped_snapshot.all_values();
+    let scoped_json = scoped_json(&runtime, &scoped_store, &scoped_snapshot, &scoped_settings);
+    let scoped_text = scoped_text(&runtime, &scoped_store, &scoped_snapshot, &scoped_settings);
+
+    assert!(
+        json["persistence"].get("task").is_none(),
+        "configuration must not advertise the removed workspace task projection: {}",
+        json["persistence"]
+    );
+    assert!(
+        !text.contains("\"task\""),
+        "text configuration output must not advertise the removed task store: {text}"
+    );
+    assert!(
+        scoped_json["persistence"].get("task").is_none(),
+        "scoped JSON must not advertise the removed task store: {}",
+        scoped_json["persistence"]
+    );
+    assert!(
+        !scoped_text.contains("\"task\""),
+        "scoped text must not advertise the removed task store: {scoped_text}"
     );
 }
