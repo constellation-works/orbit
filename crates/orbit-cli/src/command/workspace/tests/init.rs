@@ -1597,12 +1597,16 @@ fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
         child_identity,
         "child recovery must restore its own identity"
     );
-    for state_dir in ["resources", "tasks", "state"] {
+    for state_dir in ["resources", "state"] {
         assert!(
             child_orbit.join(state_dir).is_dir(),
             "child workspace must own its {state_dir} state"
         );
     }
+    assert!(
+        !child_orbit.join("tasks").exists(),
+        "child workspace must not project a tasks directory"
+    );
     assert!(
         !parent.path().join("codebases/.orbit").exists(),
         "bootstrap must not create an intermediate shadow store"
