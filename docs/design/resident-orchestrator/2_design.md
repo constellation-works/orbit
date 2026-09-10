@@ -217,6 +217,16 @@ the short-circuit above it: `classify_workspace_auto_tasks` returns an admissibl
 (`loose_task_ids` + at most one `epic_task_id`) instead of a four-way
 `ship`/`hold`/`epic`/`empty` decision, and `hold` is gone.
 
+[ORB-11973] closed the gap between those two checks. Discovery excluded leaves that overlapped a
+*held* lock, but the set it then handed out was a blind prefix of the priority order, so leaves
+that overlapped each other — or a task a live `task_auto_pipeline` wrapper was already carrying,
+which stays `backlog` and holds no lock — could take every slot and then serialize at the gate
+while independent work stayed queued. `select_admissions` now fills the free slots with a pairwise
+compatible set over the same order, skipping a blocked candidate rather than spending a slot on it,
+and both the classifier and `orbit run readiness` call it, so the diagnostic and the drain cannot
+disagree about which task starts. `reserve_locks` remains authoritative for the race; the wave is a
+prediction, not a reservation.
+
 A task is in the **epic family** when it carries `tag: epic` or any ancestor does. Walk `parent_id`
 the same way `list_backlog_tasks` already walks it for lock grouping.
 

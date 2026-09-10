@@ -108,6 +108,22 @@ never creates a run, reconciles stale runs, reserves files, or mutates a task.
 Its answer can change immediately after the snapshot, so `eligible` means
 "would be admitted by this snapshot", never a guarantee that work will start.
 
+Two of its answers separate contention from capacity:
+
+- `conflict_deferred` means a slot was free and this task did not take it,
+  because its files overlap something already spoken for.
+  `blocking_task_ids` and `conflicts` name the tasks and selectors, and
+  `provenance` says whether the blocker holds the lock (`held_lock`), is a
+  task a live child is already carrying (`live_claim`), or was chosen earlier
+  in the same admission wave (`same_wave`). `capacity_saturated`, by contrast,
+  means there was no free slot at all.
+- `capacity.occupancy` breaks the occupied slots down by what each is doing —
+  `lock_waiting`, `implementing`, `post_implementation`, or `unknown` — with
+  the wrapper, task, and descendant run IDs behind each. A drain whose slots
+  are all `lock_waiting` is queued on itself, which the occupancy total alone
+  cannot show. Phase comes from durable run state only; where that evidence is
+  missing the phase is `unknown` and names the reason.
+
 ```bash
 orbit run history -j task_auto_pipeline
 orbit run show <run_id>

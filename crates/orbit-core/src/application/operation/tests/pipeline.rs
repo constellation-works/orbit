@@ -231,6 +231,20 @@ fn grant_bound_drain_inherits_the_snapshot_and_rechecks_the_grant_per_child() {
     let a = seed_task(runtime, "in scope A", TaskStatus::Backlog);
     let b = seed_task(runtime, "in scope B", TaskStatus::Backlog);
     let outside = seed_task(runtime, "outside", TaskStatus::Backlog);
+    // Everything below is about grant scope and the captured ceiling, so keep A
+    // and B off each other's files. `seed_task` gives every task `README.md`,
+    // and a shared footprint would defer B for contention with the live child
+    // carrying A [ORB-11973] rather than for anything the grant decided.
+    std::fs::write(fixture.repo.join("in_scope_b.rs"), "fixture\n").expect("write B's own file");
+    runtime
+        .update_task(
+            &b.id,
+            crate::application::task::TaskUpdateParams {
+                context_files: Some(vec!["file:in_scope_b.rs".to_string()]),
+                ..Default::default()
+            },
+        )
+        .expect("give B a footprint of its own");
     let grant = enable(
         runtime,
         &[a.id.clone(), b.id.clone()],

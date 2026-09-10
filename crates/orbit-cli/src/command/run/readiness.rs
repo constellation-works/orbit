@@ -74,6 +74,9 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",
         capacity["active_leaf_runs"], capacity["max_active_leaf_runs"], capacity["free_slots"],
     )];
+    if let Some(phases) = occupancy_phases(&capacity["occupancy"]["phases"]) {
+        lines.push(format!("Occupied slots: {phases}."));
+    }
     if let Some(tasks) = payload["tasks"].as_array() {
         for task in tasks {
             let task_id = task["task_id"].as_str().unwrap_or("-");
@@ -83,13 +86,41 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
                 .as_str()
                 .map(|crew| format!(" crew={crew}"))
                 .unwrap_or_default();
+            let blocked_by = blocking_task_ids(&task["blocking_task_ids"])
+                .map(|ids| format!(" blocked-by={ids}"))
+                .unwrap_or_default();
             lines.push(format!(
-                "{task_id}: {} ({reason}){crew}",
+                "{task_id}: {} ({reason}){crew}{blocked_by}",
                 if eligible { "eligible" } else { "waiting" }
             ));
         }
     }
     lines
+}
+
+/// [ORB-11973] A saturated drain reads the same whether its slots are working
+/// or queued on each other's locks, so name the phases beside the count.
+/// Phases that are zero are omitted; an occupancy block with nothing in it
+/// prints no line at all.
+fn occupancy_phases(phases: &Value) -> Option<String> {
+    let named = phases
+        .as_object()?
+        .iter()
+        .filter_map(|(phase, count)| {
+            let count = count.as_u64().filter(|count| *count > 0)?;
+            Some(format!("{count} {}", phase.replace('_', "-")))
+        })
+        .collect::<Vec<_>>();
+    (!named.is_empty()).then(|| named.join(", "))
+}
+
+fn blocking_task_ids(blocking: &Value) -> Option<String> {
+    let ids = blocking
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    (!ids.is_empty()).then(|| ids.join(","))
 }
 
 #[cfg(test)]
@@ -114,6 +145,44 @@ mod tests {
         assert!(text.contains("Snapshot only"), "{text}");
         assert!(
             text.contains("ORB-1: waiting (capacity_saturated)"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Occupied slots"),
+            "a payload without an occupancy block prints no phase line: {text}"
+        );
+    }
+
+    #[test]
+    fn readiness_payload_separates_lock_waiting_slots_from_working_ones() {
+        let text = readiness_lines(&json!({
+            "capacity": {
+                "active_leaf_runs": 10,
+                "max_active_leaf_runs": 10,
+                "free_slots": 0,
+                "occupancy": {
+                    "phases": {
+                        "implementing": 4,
+                        "lock_waiting": 5,
+                        "post_implementation": 1,
+                        "unknown": 0,
+                    }
+                }
+            },
+            "tasks": [{
+                "task_id": "ORB-1",
+                "eligible": false,
+                "reason": "conflict_deferred",
+                "blocking_task_ids": ["ORB-9", "ORB-10"],
+            }]
+        }))
+        .join("\n");
+        assert!(
+            text.contains("Occupied slots: 4 implementing, 5 lock-waiting, 1 post-implementation."),
+            "zero-count phases are omitted: {text}"
+        );
+        assert!(
+            text.contains("ORB-1: waiting (conflict_deferred) blocked-by=ORB-9,ORB-10"),
             "{text}"
         );
     }

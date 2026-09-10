@@ -6,16 +6,33 @@ spec:
   type: deterministic
   description: >
     Materialize the admissible work for one workspace drain iteration. Returns
-    the loose backlog leaves that may start right now, in `list_backlog`
-    priority/age order and one task per dispatch, plus at most one backlog epic
-    root. The two are independent answers, not a choice: an `in-progress` epic
-    root already reserves the union of its descendants' `context_files`, so
-    `list_backlog_tasks` excludes exactly the leaves that overlap it and
-    conflict-free chores keep shipping alongside it. Leaves are capped at the
-    number of free leaf-run slots (`max_active_leaf_runs` minus the live
-    `task_auto_pipeline` runs), and tasks a live child is already carrying are
-    excluded — a detached leaf stays `backlog` until its child moves it to
-    `in-progress`, so the child's run input is the only claim record until then.
+    the loose backlog leaves that may start right now, in backlog priority/age
+    order and one task per dispatch, plus at most one backlog epic root. The
+    backlog snapshot behind this is the same one `orbit run readiness` reads,
+    so the two cannot disagree about which task takes a slot. The two answers
+    are independent, not a choice: an `in-progress` epic root already reserves
+    the union of its descendants' `context_files`, so the snapshot excludes
+    exactly the leaves that overlap it and conflict-free chores keep shipping
+    alongside it. Leaves are capped at the number of free leaf-run slots
+    (`max_active_leaf_runs` minus the live `task_auto_pipeline` runs), and tasks
+    a live child is already carrying are excluded — a detached leaf stays
+    `backlog` until its child moves it to `in-progress`, so the child's run
+    input is the only claim record until then.
+    The leaves that fill those slots are pairwise conflict-free. Candidates are
+    taken in priority/age order, but one is admitted only when its effective
+    lock footprint is free of every footprint already spoken for: a task lock
+    held by an `in-progress` or `review` task, a task a live `task_auto_pipeline`
+    wrapper is already carrying, and the leaves selected earlier in this same
+    iteration. A candidate that would collide is skipped rather than allowed to
+    consume a slot and then queue at `task_gate_pipeline`, and the iteration
+    continues to independent work behind it. `deferred_conflicts` explains each
+    skip with the blocking task IDs, the overlapping selectors, and whether the
+    blocker holds the lock (`held_lock`), is a live wrapper's claim
+    (`live_claim`), or was chosen earlier this iteration (`same_wave`). Final
+    lock acquisition stays with `reserve_locks`; this is a prediction, not a
+    reservation. `max_tasks` bounds how much backlog one iteration expands
+    footprints for, and `candidate_pool_truncated` reports the case where that
+    bound, not the free slots, ended the wave.
     An epic root is offered only when no `epic_pipeline` run is pending or
     running, because that job admits one active run and a second dispatch would
     queue rather than execute; `active_epic_run_id` names the live run when one
@@ -78,6 +95,14 @@ spec:
         type: number
       pending_backlog:
         type: number
+      deferred_conflicts:
+        type: array
+        items:
+          type: object
+      candidate_pool_size:
+        type: number
+      candidate_pool_truncated:
+        type: boolean
       active_leaf_runs:
         type: number
       free_slots:
