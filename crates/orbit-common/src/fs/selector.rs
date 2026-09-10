@@ -292,15 +292,18 @@ pub fn canonical_selector_in_workspace(
     match parsed {
         ParsedScope::Selector(selector) => {
             if let Some(anchor) = selector.anchor_path() {
-                let path = normalize_workspace_anchor(anchor, workspace)?;
+                let (path, _) = normalize_workspace_anchor(anchor, workspace)?;
                 Ok(selector.with_path(path).to_string())
             } else {
                 Ok(selector.to_string())
             }
         }
         ParsedScope::LegacyPath { path, is_dir_hint } => {
-            let path = normalize_workspace_anchor(path.as_str(), workspace)?;
-            let resolved = resolve_workspace_path(workspace, Path::new(&path));
+            // Use the already-validated, canonicalized anchor for the
+            // filesystem check instead of re-deriving a path from the
+            // caller-provided string: that avoids a second, unchecked
+            // filesystem access built from tainted input.
+            let (path, resolved) = normalize_workspace_anchor(path.as_str(), workspace)?;
             if is_dir_hint || resolved.is_dir() {
                 Ok(format!("dir:{path}"))
             } else {
@@ -477,7 +480,18 @@ fn normalize_selector_path(
     })
 }
 
-fn normalize_workspace_anchor(path: &str, workspace: &Path) -> Result<String, SelectorParseError> {
+/// Validate a selector anchor against a workspace root.
+///
+/// Returns both the workspace-relative anchor string and the canonicalized,
+/// containment-checked absolute path it resolved to. Callers that need to
+/// touch the filesystem (e.g. an `is_dir()` probe) must use the returned
+/// [`PathBuf`] rather than re-joining the relative string themselves, so the
+/// only path ever handed to a filesystem call is one that already passed the
+/// workspace-containment check below.
+fn normalize_workspace_anchor(
+    path: &str,
+    workspace: &Path,
+) -> Result<(String, PathBuf), SelectorParseError> {
     let normalized = normalize_path_text(path).map_err(|reason| SelectorParseError {
         input: path.to_string(),
         reason,
@@ -523,7 +537,7 @@ fn normalize_workspace_anchor(path: &str, workspace: &Path) -> Result<String, Se
             ),
         });
     }
-    contained
+    let relative = contained
         .strip_prefix(&workspace)
         .map(|path| path.to_string_lossy().replace('\\', "/"))
         .map_err(|_| SelectorParseError {
@@ -533,7 +547,8 @@ fn normalize_workspace_anchor(path: &str, workspace: &Path) -> Result<String, Se
                 resolved.display(),
                 workspace.display()
             ),
-        })
+        })?;
+    Ok((relative, contained))
 }
 
 fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
