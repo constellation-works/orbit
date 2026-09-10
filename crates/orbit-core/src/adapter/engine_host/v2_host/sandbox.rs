@@ -314,81 +314,203 @@ fn append_linux_runtime_write_roots(
     let global = validated_linux_runtime_root(&runtime.paths().global_dir)?;
     let workspace = validated_linux_runtime_root(&runtime.paths().orbit_dir)?;
 
-    for directory in [
-        global.join("state/logs"),
-        global.join("state/audit"),
-        global.join("tasks"),
-    ] {
-        ensure_owned_directory(&directory)?;
-        append_unique_modify_root(resolved, directory.display().to_string());
+    for relative in ["state/logs", "state/audit", "tasks"] {
+        append_runtime_directory_grant(&global, relative, resolved)?;
     }
-    for file in [
-        global.join("orbit.db"),
-        global.join("orbit.db-wal"),
-        global.join("orbit.db-shm"),
-    ] {
-        if file.exists() {
-            append_unique_modify_root(resolved, file.display().to_string());
-        }
+    for relative in ["orbit.db", "orbit.db-wal", "orbit.db-shm"] {
+        append_runtime_sidecar_grant(&global, relative, resolved)?;
     }
 
     if !grants_workspace_modify {
         return Ok(());
     }
 
-    for directory in [
-        workspace.join("tasks"),
-        workspace.join("frictions"),
-        workspace.join("state/audit"),
-        workspace.join("state/logs"),
-        workspace.join("state/job-runs"),
+    for relative in [
+        "tasks",
+        "frictions",
+        "state/audit",
+        "state/logs",
+        "state/job-runs",
     ] {
-        ensure_owned_directory(&directory)?;
-        append_unique_modify_root(resolved, directory.display().to_string());
+        append_runtime_directory_grant(&workspace, relative, resolved)?;
     }
-    for file in [
-        workspace.join("state/semantic.db"),
-        workspace.join("state/semantic.db-wal"),
-        workspace.join("state/semantic.db-shm"),
+    for relative in [
+        "state/semantic.db",
+        "state/semantic.db-wal",
+        "state/semantic.db-shm",
     ] {
-        if file.exists() {
-            append_unique_modify_root(resolved, file.display().to_string());
-        }
+        append_runtime_sidecar_grant(&workspace, relative, resolved)?;
     }
 
     // Language-neutral host cache for toolchain artifacts shared across
     // worktrees (compiler caches, etc.). Implementer-only so read-only
     // profiles stay non-writers. Not a workspace `.orbit` path and not a
     // shared Cargo target directory. [ORB-11259]
-    let host_cache = global.join("cache");
-    ensure_owned_directory(&host_cache)?;
-    append_unique_modify_root(resolved, host_cache.display().to_string());
+    append_runtime_directory_grant(&global, "cache", resolved)?;
 
     Ok(())
+}
+
+/// Grant one runtime store directory, creating it when it is missing.
+///
+/// A descendant that resolves outside its runtime root is skipped instead of
+/// created: the grant only exists so nested Orbit processes can initialize
+/// their own stores, so dropping it costs a convenience, while a hard failure
+/// would break dispatch on every host that legitimately relocates a store
+/// behind a symlink [ORB-11992].
+// pub(super) widened for the sibling tests/ layout.
+#[cfg(target_os = "linux")]
+pub(super) fn append_runtime_directory_grant(
+    root: &Path,
+    relative: &str,
+    resolved: &mut ResolvedFsProfile,
+) -> Result<(), DispatchError> {
+    let Some(directory) = validated_linux_runtime_descendant(root, relative)? else {
+        tracing::warn!(
+            runtime_root = %root.display(),
+            store = relative,
+            "skipping sandbox grant for a runtime store that resolves outside its runtime root"
+        );
+        return Ok(());
+    };
+
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        DispatchError::CliInvocationPermanent(format!(
+            "create Linux sandbox runtime store `{}`: {error}",
+            directory.display()
+        ))
+    })?;
+    append_unique_modify_root(resolved, directory.display().to_string());
+    Ok(())
+}
+
+/// Grant one SQLite sidecar of a runtime store, when it is already present.
+///
+/// Sidecars are never created here — SQLite writes them next to a database it
+/// opens — so an absent one simply yields no grant. Only a regular file inside
+/// the runtime root is granted: a sidecar that is a dangling or escaping
+/// symlink would otherwise hand the sandbox a writable bind on whatever the
+/// link names.
+// pub(super) widened for the sibling tests/ layout.
+#[cfg(target_os = "linux")]
+pub(super) fn append_runtime_sidecar_grant(
+    root: &Path,
+    relative: &str,
+    resolved: &mut ResolvedFsProfile,
+) -> Result<(), DispatchError> {
+    let Some(file) = validated_linux_runtime_descendant(root, relative)? else {
+        tracing::warn!(
+            runtime_root = %root.display(),
+            sidecar = relative,
+            "skipping sandbox grant for a database sidecar that resolves outside its runtime root"
+        );
+        return Ok(());
+    };
+
+    match std::fs::symlink_metadata(&file) {
+        Ok(metadata) if metadata.is_file() => {
+            append_unique_modify_root(resolved, file.display().to_string());
+            Ok(())
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(DispatchError::CliInvocationPermanent(format!(
+            "inspect Linux sandbox runtime sidecar `{}`: {error}",
+            file.display()
+        ))),
+    }
+}
+
+/// Resolve a store Orbit owns beneath an already-validated runtime root.
+///
+/// The root is canonical, but nothing below it is. An intermediate or leaf
+/// symlink under the root — or a `..` in `relative` — would move both the
+/// directory creation in [`append_runtime_directory_grant`] and the writable
+/// grant derived from it outside the root, so the path is resolved as far as it
+/// already exists *before* any caller creates anything, and the result must
+/// still live under the root.
+///
+/// `None` means the descendant escapes the root; the caller drops that grant
+/// rather than following it.
+#[cfg(target_os = "linux")]
+pub(super) fn validated_linux_runtime_descendant(
+    root: &Path,
+    relative: &str,
+) -> Result<Option<PathBuf>, DispatchError> {
+    let Some(resolved) = resolved_existing_ancestor(&root.join(relative))? else {
+        return Ok(None);
+    };
+    Ok(resolved.starts_with(root).then_some(resolved))
+}
+
+/// Split a path into the deepest ancestor that already exists and the
+/// components that do not, canonicalize that ancestor, and rejoin them.
+///
+/// Canonicalizing resolves every symlink on the existing part, which is what
+/// makes the result usable as a containment decision: whatever the caller does
+/// next happens at the real location, not at the name it was given. `Ok(None)`
+/// means the walk ran out of ancestors; callers phrase their own rejection.
+#[cfg(target_os = "linux")]
+fn resolved_existing_ancestor(path: &Path) -> Result<Option<PathBuf>, DispatchError> {
+    let mut existing = path.to_path_buf();
+    let mut missing = Vec::<OsString>::new();
+
+    let canonical_existing = loop {
+        match existing.canonicalize() {
+            Ok(canonical) => break canonical,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = existing.file_name() else {
+                    return Ok(None);
+                };
+                missing.push(name.to_os_string());
+                if !existing.pop() {
+                    return Ok(None);
+                }
+            }
+            Err(error) => {
+                return Err(DispatchError::CliInvocationPermanent(format!(
+                    "inspect Linux sandbox path ancestor `{}`: {error}",
+                    existing.display()
+                )));
+            }
+        }
+    };
+
+    let mut resolved = canonical_existing;
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    Ok(Some(resolved))
 }
 
 /// Validate runtime roots before constructing any sandbox path beneath them.
 ///
 /// These roots can be selected through the managed-run registry locator or an
-/// explicit root override. They must already exist as directories when a
-/// runtime is resolving its executor sandbox; accepting a missing or redirected
-/// root here would let the later joins and directory creation follow an
-/// attacker-controlled filesystem path.
+/// explicit root override. Unlike a provider state root, a runtime root is
+/// never created here: it must already exist as a directory when a runtime is
+/// resolving its executor sandbox, so the root is canonicalized first and the
+/// directory check is made against the resolved location rather than the name
+/// that was supplied. A root reached through a symlinked ancestor stays
+/// supported and resolves to its real directory [ORB-11984].
+///
+/// The returned root bounds nothing on its own; every path built beneath it
+/// goes through [`validated_linux_runtime_descendant`].
 #[cfg(target_os = "linux")]
 pub(super) fn validated_linux_runtime_root(path: &Path) -> Result<PathBuf, DispatchError> {
     let validated = validated_linux_provider_state_root(path, None)?;
-    if !validated.is_dir() {
+    let canonical = validated.canonicalize().map_err(|error| {
+        DispatchError::CliInvocationPermanent(format!(
+            "canonicalize Linux sandbox runtime root `{}`: {error}",
+            path.display()
+        ))
+    })?;
+    if !canonical.is_dir() {
         return Err(DispatchError::CliInvocationPermanent(format!(
             "Linux sandbox runtime root `{}` must be an existing directory",
             path.display()
         )));
     }
-    validated.canonicalize().map_err(|error| {
-        DispatchError::CliInvocationPermanent(format!(
-            "canonicalize Linux sandbox runtime root `{}`: {error}",
-            path.display()
-        ))
-    })
+    Ok(canonical)
 }
 
 #[cfg(target_os = "linux")]
@@ -512,41 +634,15 @@ pub(super) fn validated_linux_provider_state_root(
     }
     reject_overbroad_linux_provider_state_root(path, path, home)?;
 
-    // Walk up to the deepest path that already exists. `exists` follows
-    // symlinks, so a provider directory that is itself a symlink to an existing
-    // directory counts as existing and canonicalizes to its real destination.
-    let mut existing = path.to_path_buf();
-    let mut missing = Vec::<OsString>::new();
-    let canonical_existing = loop {
-        match existing.canonicalize() {
-            Ok(canonical) => break canonical,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let Some(name) = existing.file_name() else {
-                    return Err(DispatchError::CliInvocationPermanent(format!(
-                        "Linux provider state root `{}` has no existing ancestor",
-                        path.display()
-                    )));
-                };
-                missing.push(name.to_os_string());
-                if !existing.pop() {
-                    return Err(DispatchError::CliInvocationPermanent(format!(
-                        "Linux provider state root `{}` has no existing ancestor",
-                        path.display()
-                    )));
-                }
-            }
-            Err(error) => {
-                return Err(DispatchError::CliInvocationPermanent(format!(
-                    "inspect Linux provider state root ancestor `{}`: {error}",
-                    existing.display()
-                )));
-            }
-        }
+    // Resolve the deepest part of the path that already exists, so a provider
+    // directory that is itself a symlink to an existing directory validates
+    // against its real destination.
+    let Some(validated) = resolved_existing_ancestor(path)? else {
+        return Err(DispatchError::CliInvocationPermanent(format!(
+            "Linux provider state root `{}` has no existing ancestor",
+            path.display()
+        )));
     };
-    let mut validated = canonical_existing;
-    for component in missing.iter().rev() {
-        validated.push(component);
-    }
 
     reject_overbroad_linux_provider_state_root(&validated, path, home)?;
 
@@ -603,8 +699,9 @@ fn linux_pi_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
 /// `/login` credentials, settings, saved project trust decisions, installed
 /// packages, and sessions under `$PI_CODING_AGENT_DIR` when set, otherwise
 /// `$HOME/.pi`. No other provider receives this grant — every entry in the
-/// caller's list is *created* by `ensure_owned_directory`, so an unconditional
-/// entry would mkdir a `~/.pi` on hosts that never installed Pi. [ORB-11296]
+/// caller's list is *created* by `ensure_linux_provider_directory`, so an
+/// unconditional entry would mkdir a `~/.pi` on hosts that never installed Pi.
+/// [ORB-11296]
 #[cfg(target_os = "linux")]
 pub(super) fn linux_pi_state_roots_with(
     provider: &str,
@@ -656,9 +753,9 @@ pub(super) struct OpencodeStateEnv {
 /// config, and state directories at startup, before it reads Orbit's envelope.
 /// The data root holds `auth.json` from `opencode auth login`, the session and
 /// message stores, and logs. No other provider receives this grant — every
-/// entry in the caller's list is *created* by `ensure_owned_directory`, so an
-/// unconditional entry would mkdir an `~/.local/share/opencode` on hosts that
-/// never installed OpenCode. [ORB-11295]
+/// entry in the caller's list is *created* by `ensure_linux_provider_directory`,
+/// so an unconditional entry would mkdir an `~/.local/share/opencode` on hosts
+/// that never installed OpenCode. [ORB-11295]
 #[cfg(target_os = "linux")]
 pub(super) fn linux_opencode_state_roots_with(
     provider: &str,
@@ -745,16 +842,6 @@ pub(super) fn linux_copilot_state_roots_with(
         }
     }
     roots
-}
-
-#[cfg(target_os = "linux")]
-fn ensure_owned_directory(path: &Path) -> Result<(), DispatchError> {
-    std::fs::create_dir_all(path).map_err(|error| {
-        DispatchError::CliInvocationPermanent(format!(
-            "create Linux sandbox runtime root `{}`: {error}",
-            path.display()
-        ))
-    })
 }
 
 /// Re-allow the active job-run worktree under `<workspace>/.orbit/state/worktrees/`
