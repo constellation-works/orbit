@@ -81,6 +81,7 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
             "WG",
         ],
     );
+    configure_fixture_crew(&home.join(".orbit"));
     let workspace_a = register_workspace(&repo_a, &home, "workspace-a");
     let workspace_b = register_workspace(&repo_b, &home, "workspace-b");
 
@@ -300,6 +301,11 @@ spec:
             fixture_job.to_str().expect("fixture job path is utf-8"),
             "--input",
             &format!("task_id={task_id}"),
+            // The isolated CI environment has no detected agent CLI, so its
+            // workspace config intentionally has no default crew. Select a
+            // built-in configured crew explicitly for this deterministic job.
+            "--input",
+            "crew=sol",
             "--wait",
             "--json",
         ],
@@ -348,6 +354,31 @@ fn zero_worktree_gc_age_floor(home: &Path) {
         path.display()
     );
     fs::write(&path, updated).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+}
+
+fn configure_fixture_crew(root: &Path) {
+    let path = root.join("config.toml");
+    let mut config = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+
+    if !config
+        .lines()
+        .any(|line| line.trim_start().starts_with("default_crew ="))
+    {
+        if let Some(workflow) = config.find("[workflow]\n") {
+            config.insert_str(workflow + "[workflow]\n".len(), "default_crew = \"sol\"\n");
+        } else {
+            config.push_str("\n[workflow]\ndefault_crew = \"sol\"\n");
+        }
+    }
+
+    if !config.contains("[crews.sol]") {
+        config.push_str(
+            "\n[crews.sol]\nprovider = \"codex\"\nmodel = \"gpt-5.6-sol\"\nbackend = \"cli\"\n",
+        );
+    }
+
+    fs::write(&path, config).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
 }
 
 fn enable_worktree_gc_routine(workspace: &Workspace) {
