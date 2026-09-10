@@ -127,23 +127,19 @@ pub(super) fn expand_root(repo_root: &Path, root: &str) -> Result<Vec<PathBuf>, 
         repo_root.join(root_path)
     };
     if !trimmed.contains('*') {
-        if absolute.exists() {
-            return match validated_docs_root_path(repo_root, &absolute) {
-                Ok(path) => Ok(vec![path]),
-                Err(OrbitError::InvalidInput(_)) => {
-                    // Chosen policy: out-of-workspace docs roots (such as in-repo
-                    // symlinks pointing outside the workspace, parent traversal,
-                    // or absolute paths) are skipped as unusable roots (returning
-                    // an empty list) rather than aborting the walk. This matches
-                    // the wildcard branch and the walker's documented no-op
-                    // behavior for missing roots, ensuring literal and wildcard
-                    // forms produce the same outcome.
-                    Ok(Vec::new())
-                }
-                Err(error) => Err(error),
-            };
-        }
-        return Ok(Vec::new());
+        return match validated_docs_root_path(repo_root, &absolute) {
+            Ok(path) => Ok(vec![path]),
+            Err(OrbitError::InvalidInput(_)) => {
+                // Chosen policy: out-of-workspace docs roots (such as in-repo
+                // symlinks pointing outside the workspace, parent traversal,
+                // absolute paths outside the workspace, or missing roots) are
+                // skipped as unusable roots rather than aborting the walk.
+                // This matches the wildcard branch and preserves the walker's
+                // no-op behavior.
+                Ok(Vec::new())
+            }
+            Err(error) => Err(error),
+        };
     }
 
     // Wildcard expansion is intentionally workspace-relative. Apart from
@@ -179,9 +175,21 @@ pub(super) fn validated_docs_root_path(
     let canonical_repo = repo_root.canonicalize().map_err(|error| {
         OrbitError::Io(format!("canonicalize {}: {error}", repo_root.display()))
     })?;
-    let canonical_candidate = candidate.canonicalize().map_err(|error| {
-        OrbitError::Io(format!("canonicalize {}: {error}", candidate.display()))
-    })?;
+    let canonical_candidate = match candidate.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(OrbitError::InvalidInput(format!(
+                "docs root path does not exist: {}",
+                candidate.display()
+            )));
+        }
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "canonicalize {}: {error}",
+                candidate.display()
+            )));
+        }
+    };
     if !canonical_candidate.starts_with(&canonical_repo) {
         return Err(OrbitError::InvalidInput(format!(
             "docs root path must stay inside the workspace root: {} (resolves to {})",

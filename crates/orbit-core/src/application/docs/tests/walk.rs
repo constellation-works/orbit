@@ -82,6 +82,18 @@ fn wildcard_root_rejects_paths_outside_the_workspace() {
 }
 
 #[test]
+fn missing_literal_root_is_a_noop() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path();
+
+    assert!(
+        expand_root(root, "missing/docs/")
+            .expect("expand missing root")
+            .is_empty()
+    );
+}
+
+#[test]
 fn walker_batches_git_ignore_once_per_walk() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path();
