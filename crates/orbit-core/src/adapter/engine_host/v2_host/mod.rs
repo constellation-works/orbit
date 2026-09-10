@@ -7,6 +7,7 @@
 //! HTTP agent-loop transport and CLI subprocess execution both live in
 //! `orbit-engine`, so this module never names orbit-agent types.
 
+pub(super) mod auto_admission;
 pub(super) mod backlog_exclusion;
 pub(super) mod child_dispatch;
 pub(super) mod ci_failure_admission;
@@ -15,6 +16,7 @@ pub(super) mod cli_executor;
 pub(super) mod dependabot_alert_tasks;
 pub(super) mod dispatch;
 pub(super) mod duplicate_tasks;
+pub(super) mod leaf_occupancy;
 pub(super) mod pipeline_actions;
 pub(super) mod sandbox;
 pub(super) mod scan_unresolved;

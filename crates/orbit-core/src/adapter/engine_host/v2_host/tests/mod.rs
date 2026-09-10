@@ -1,3 +1,4 @@
+mod auto_admission;
 mod backlog_exclusion;
 mod ci_failure_admission;
 mod ci_failure_cancelled;
@@ -5,6 +6,7 @@ mod ci_failure_tasks;
 mod cli_executor;
 mod dependabot_alert_tasks;
 mod dispatch;
+mod leaf_occupancy;
 mod pipeline_actions;
 mod required_tools;
 mod sandbox;

@@ -64,6 +64,11 @@ pub(super) struct BacklogSnapshot {
     pub(super) status_by_id: BTreeMap<String, TaskStatus>,
     pub(super) admissible_leaves: Vec<Task>,
     pub(super) excluded: Vec<BacklogTaskExclusion>,
+    /// Selector -> the `in-progress` / `review` tasks holding it. Carried on
+    /// the snapshot rather than recomputed by each consumer so admission
+    /// selection, exclusion reasons, and the lock-wait diagnostic all name the
+    /// same holder for the same selector [ORB-11973].
+    pub(super) lock_holders: BTreeMap<String, Vec<String>>,
 }
 
 fn active_task_lock_holders(
@@ -361,6 +366,7 @@ pub(super) fn backlog_snapshot(
         status_by_id,
         admissible_leaves: backlog,
         excluded,
+        lock_holders,
     })
 }
 

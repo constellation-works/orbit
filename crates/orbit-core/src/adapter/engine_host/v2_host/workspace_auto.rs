@@ -16,10 +16,12 @@ use crate::application::operation::{admission_state, live_admission, promote_wit
 
 use crate::runtime::engine::crew::CrewAllowlist;
 
+use super::auto_admission::{AdmissionHolders, select_admissions};
 use super::backlog_exclusion::{
     BacklogTaskExclusionReason, EpicFamilyMembership, allowlist_from_input, backlog_snapshot,
-    epic_family_membership, list_backlog_tasks, sort_tasks_for_automatic_dispatch,
+    epic_family_membership, sort_tasks_for_automatic_dispatch,
 };
+use super::leaf_occupancy::{occupancy_json, read_leaf_occupancy};
 
 /// The job that supervises one epic root. `classify_workspace_auto_tasks`
 /// reads its live runs to decide whether another root may start.
@@ -55,6 +57,11 @@ const DEFAULT_IDLE_SLEEP_SECONDS: u64 = 60;
 
 const MAX_READINESS_LIMIT: usize = 500;
 
+/// Default and ceiling for the backlog prefix one iteration examines, matching
+/// `list_backlog_tasks`'s `max_tasks` bound.
+const DEFAULT_CANDIDATE_POOL: u64 = 50;
+const MAX_CANDIDATE_POOL: u64 = 500;
+
 /// Longest drain window a caller may request, in seconds (24h). The window is
 /// the caller's, not a safety property, but an unbounded deadline would let a
 /// typo hold `workspace_auto_pipeline`'s single active-run slot indefinitely.
@@ -66,7 +73,7 @@ const MAX_DRAIN_WINDOW_SECONDS: f64 = 86_400.0;
 /// this tick". Loose leaves and an epic root are independent answers: a
 /// conflict-free chore ships in the same iteration that an epic is running,
 /// because an `in-progress` epic root already reserves the union of its
-/// descendants' `context_files` (ORB-10816) and `list_backlog_tasks` drops
+/// descendants' `context_files` (ORB-10816) and `backlog_snapshot` drops
 /// exactly the leaves that overlap it. That reservation is why the former
 /// `hold` decision is gone — a blanket freeze excluded conflict-free work the
 /// lock surface had no reason to exclude.
@@ -76,9 +83,15 @@ const MAX_DRAIN_WINDOW_SECONDS: f64 = 86_400.0;
 /// re-listed every iteration and the free slots are topped up from it, so a
 /// task that entered `backlog` a minute ago starts as soon as any one child
 /// finishes — not after the slowest member of the batch that was running when
-/// it arrived. One task per dispatch: `list_backlog_tasks` already bundles
-/// singletons, so a multi-task child bought nothing but a coarser refill unit,
-/// and a one-task child is crew-homogeneous by construction.
+/// it arrived. One task per dispatch: a multi-task child bought nothing but a
+/// coarser refill unit, and a one-task child is crew-homogeneous by
+/// construction.
+///
+/// [ORB-11973] Which leaves fill those slots is `select_admissions`' answer,
+/// not a prefix of the queue: the wave is pairwise conflict-free, so a cluster
+/// of overlapping candidates costs one slot instead of all of them. Readiness
+/// reads the same snapshot and calls the same routine, which is what keeps the
+/// diagnostic and the drain from disagreeing about who starts.
 pub(super) fn classify_workspace_auto_tasks(
     runtime: &OrbitRuntime,
     action: &str,
@@ -144,26 +157,52 @@ pub(super) fn classify_workspace_auto_tasks(
     let pools = runtime
         .auto_crew_pools_for_input(input)
         .map_err(|error| action_failed(action, error.to_string()))?;
-    let backlog = list_backlog_tasks(runtime, action, input)?;
-    // Priority/age order is `list_backlog_tasks`'s, and the truncation to the
-    // free slots has to preserve it: the slots are scarce, so they go to the
-    // front of the queue rather than to whichever tasks happen to sort last.
-    let pending: Vec<String> = backlog
-        .get("task_ids")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+    let allowlist = allowlist_from_input(runtime, action, input)?;
+    // The same snapshot readiness reads, so the two cannot disagree about the
+    // eligible population before they even reach the selection rule.
+    let snapshot = backlog_snapshot(runtime, action, allowlist.as_ref(), &pools)?;
+    // Priority/age order is the snapshot's, and everything below preserves it:
+    // the slots are scarce, so they go to the front of the queue rather than to
+    // whichever tasks happen to sort last.
+    let pending: Vec<String> = snapshot
+        .admissible_leaves
         .iter()
-        .filter_map(Value::as_str)
-        .filter(|task_id| !claimed.contains(*task_id))
+        .map(|task| task.id.clone())
+        .filter(|task_id| !claimed.contains(task_id))
         .filter(|task_id| {
             operation
                 .as_ref()
-                .is_none_or(|operation| operation.scope.contains(*task_id))
+                .is_none_or(|operation| operation.scope.contains(task_id))
         })
-        .map(ToOwned::to_owned)
         .collect();
-    let admitted = &pending[..pending.len().min(free_slots)];
+
+    // [ORB-11973] The wave used to be `pending[..free_slots]`, which could hand
+    // every slot to one cluster of overlapping tasks and leave independent work
+    // queued behind a contention it created itself. Select a mutually
+    // compatible set instead, walking past a blocked candidate to the next
+    // compatible one rather than stopping at it.
+    let max_tasks = candidate_pool_limit(action, input)?;
+    let examined = &pending[..pending.len().min(max_tasks)];
+    let holders = AdmissionHolders::new(
+        &snapshot.lock_holders,
+        &claimed,
+        &snapshot.task_lookup,
+        runtime.paths().repo_root.as_path(),
+    );
+    let selection = select_admissions(
+        examined,
+        &snapshot.task_lookup,
+        runtime.paths().repo_root.as_path(),
+        &holders,
+        free_slots,
+    );
+    // `max_tasks` bounds how much of the backlog one iteration expands lock
+    // footprints for. It only hides work when the wave ran out of *examined*
+    // candidates rather than out of slots, so report exactly that case instead
+    // of leaving a short wave looking like an empty backlog.
+    let candidate_pool_truncated =
+        pending.len() > examined.len() && selection.selected.len() < free_slots;
+    let admitted = &selection.selected;
     let loose_task_dispatches: Vec<Value> = admitted
         .iter()
         .map(|task_id| json!({ "task_ids": [task_id] }))
@@ -180,13 +219,7 @@ pub(super) fn classify_workspace_auto_tasks(
     let epic_task_id = if admissions_stopped || !operation_open || active_epic.is_some() {
         None
     } else {
-        next_admissible_epic_root(
-            runtime,
-            action,
-            allowlist_from_input(runtime, action, input)?.as_ref(),
-            &pools,
-        )?
-        .filter(|root| {
+        next_admissible_epic_root(runtime, action, allowlist.as_ref(), &pools)?.filter(|root| {
             operation
                 .as_ref()
                 .is_none_or(|operation| operation.scope.contains(root))
@@ -215,6 +248,13 @@ pub(super) fn classify_workspace_auto_tasks(
         "idle": idle,
         "sleep_seconds": sleep_seconds,
         "pending_backlog": pending.len(),
+        // [ORB-11973] Why a wave is shorter than its free slots. A deferral
+        // names the tasks and selectors it would have collided with, so a drain
+        // that looks under-filled can be read as contention rather than as an
+        // empty backlog.
+        "deferred_conflicts": selection.deferred_json(),
+        "candidate_pool_size": examined.len(),
+        "candidate_pool_truncated": candidate_pool_truncated,
         "active_leaf_runs": live_leaves.len(),
         "free_slots": free_slots,
         "max_active_leaf_runs": max_active_leaf_runs,
@@ -386,11 +426,33 @@ pub fn explain_workspace_auto_readiness(
         })
         .map(|task| task.id.clone())
         .collect::<Vec<_>>();
-    let admitted = pending
-        .iter()
-        .take(free_slots)
-        .cloned()
-        .collect::<BTreeSet<_>>();
+    // [ORB-11973] The identical routine the classifier runs, over the identical
+    // ordered pool, so readiness explains the wave the drain would actually
+    // admit rather than a second guess at it.
+    let workspace_root = runtime.paths().repo_root.as_path();
+    let claimed = claimed_by_task.keys().cloned().collect::<BTreeSet<_>>();
+    let holders = AdmissionHolders::new(
+        &snapshot.lock_holders,
+        &claimed,
+        &snapshot.task_lookup,
+        workspace_root,
+    );
+    let selection = select_admissions(
+        &pending,
+        &snapshot.task_lookup,
+        workspace_root,
+        &holders,
+        free_slots,
+    );
+    let admitted = selection.selected.iter().cloned().collect::<BTreeSet<_>>();
+    let occupancy = read_leaf_occupancy(
+        runtime,
+        &live_leaves
+            .iter()
+            .map(|run| (run.run_id.clone(), run.task_ids.clone()))
+            .collect::<Vec<_>>(),
+        &snapshot.lock_holders,
+    )?;
     let excluded_by_id = snapshot
         .excluded
         .iter()
@@ -536,6 +598,12 @@ pub fn explain_workspace_auto_readiness(
             } else if admitted.contains(&task.id) {
                 object.insert("eligible".to_string(), Value::Bool(true));
                 object.insert("reason".to_string(), Value::String("ready".to_string()));
+            } else if let Some(deferred) = selection.deferred_for(&task.id) {
+                // [ORB-11973] A slot was free and this task did not take it,
+                // which is a different problem from having no slot at all.
+                object.insert("reason".to_string(), Value::String("conflict_deferred".to_string()));
+                object.insert("blocking_task_ids".to_string(), json!(deferred.blocking_task_ids()));
+                object.insert("conflicts".to_string(), deferred.to_json()["conflicts"].clone());
             } else {
                 object.insert("reason".to_string(), Value::String("capacity_saturated".to_string()));
                 object.insert("active_run_ids".to_string(), json!(live_leaves.iter().map(|run| &run.run_id).collect::<Vec<_>>()));
@@ -553,6 +621,11 @@ pub fn explain_workspace_auto_readiness(
             "max_active_leaf_runs": max_active_leaf_runs,
             "active_leaf_runs": live_leaves.len(),
             "free_slots": free_slots,
+            // [ORB-11973] The same occupancy, broken down by what each slot is
+            // doing. A drain with every slot parked in `task_gate_pipeline` is
+            // indistinguishable from a busy one by the counts above alone.
+            "occupancy": occupancy_json(&occupancy, free_slots),
+            "deferred_conflicts": selection.deferred_json(),
             "limit_source": limit_source,
             "drain_run_id": active_drain.as_ref().map(|drain| &drain.run_id),
             "worker_limit": active_drain.as_ref().and_then(|drain| drain.limit.clone()),
@@ -742,6 +815,17 @@ fn templated_u64(
             format!("`{name}` must be a number, got {other}"),
         )),
     }
+}
+
+/// How many backlog candidates one iteration may expand lock footprints for.
+///
+/// Mirrors `list_backlog_tasks`'s `max_tasks` bound — same default, same
+/// ceiling — because the two describe the same scan. It goes through
+/// [`templated_u64`] rather than `as_u64` because the drain job templates the
+/// value, which renders `50` as `"50"`.
+fn candidate_pool_limit(action: &str, input: &Value) -> Result<usize, DispatchError> {
+    let requested = templated_u64(action, input, "max_tasks", DEFAULT_CANDIDATE_POOL)?;
+    Ok(usize::try_from(requested.clamp(1, MAX_CANDIDATE_POOL)).unwrap_or(usize::MAX))
 }
 
 /// A live `task_auto_pipeline` run and the tasks it is carrying.
