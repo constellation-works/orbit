@@ -99,3 +99,9 @@ extensions:
           "path-injection",
           "manual",
         ]
+      - [
+          "orbit_store::driver::file::scoreboard::common::validated_scoreboard_file_path",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
