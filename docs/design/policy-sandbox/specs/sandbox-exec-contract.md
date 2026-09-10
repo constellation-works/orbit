@@ -212,6 +212,10 @@ silently amend the original mandate.
 | Descendants and detached sessions | Enforce before the first untrusted instruction; use inherited/stacked confinement across fork/exec. `setsid` does not remove Landlock or AppArmor. Termination of processes escaping the original PGID is a separate supervision problem; the probe's detached child exits and is waited for explicitly. |
 | External writers or already known bytes | A denied name cannot undo copies, prior reads or malicious externally supplied hardlinks. Record the trusted-writer/acquisition boundary; do not advertise retroactive secrecy. |
 
+The descriptor limit above is supported by the Linux 6.8 implementation's cached
+permission path and lack of general revocation, not by an assumed property of a
+profile regex. [AppArmor file permission implementation](https://raw.githubusercontent.com/torvalds/linux/v6.8/security/apparmor/file.c).
+
 Linux runtime directories and SQLite sidecars are an object-authority exception
 to path-only compilation. The host must open each accepted object while it is
 validating or descriptor-relatively creating it, carry that descriptor through
@@ -226,10 +230,6 @@ root. It assumes an unprivileged peer cannot remount the runtime root or its
 host ancestors. Bubblewrap consumes and closes the inherited setup descriptors
 before provider exec; the parent closes its copies with the plan after spawn.
 Non-Linux backends do not consume this authority representation.
-
-The descriptor limit above is supported by the Linux 6.8 implementation's cached
-permission path and lack of general revocation, not by an assumed property of a
-profile regex. [AppArmor file permission implementation](https://raw.githubusercontent.com/torvalds/linux/v6.8/security/apparmor/file.c).
 
 ### Ownership and eventual implementation targets
 
