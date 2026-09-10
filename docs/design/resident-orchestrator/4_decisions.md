@@ -1,8 +1,8 @@
 ---
 title: Resident Orchestrator — Decisions
 owner: codex, grok, claude
-last_updated: 2026-08-15
-last_validated: 2026-08-15
+last_updated: 2026-09-10
+last_validated: 2026-09-10
 status: Draft
 feature: resident-orchestrator
 doc_role: decisions
@@ -85,14 +85,17 @@ wake the scan forever. A file in the knowledgebase cron repo is the wrong worksp
 
 Give the workspace an append-only `orbit.session_log` with kinds `status`, `note`, and
 `check_later`. Unresolved `check_later` entries are a `scan_unresolved_work` wake reason.
-`status`/`note` are not. Resolve is the only mutation besides append. The orchestrator
-does not edit repository files; code changes are child tasks it creates and ships.
+`status`/`note` are not. Resolve is the only mutation besides append. The session log is an
+internal Core capability; the `orbit.session_log.*` agent tools are not part of the public tool
+surface. In the v2 epic path, the finisher may edit its owned worktree directly, while child tasks
+remain the decomposition path when useful.
 
 ### Consequences
 
-- Next fire starts with `session_log.list` + the task/run scan, not a provider session id.
-- Cost: another noun and three tools. Reminders the orchestrator forgets to `resolve`
-  will keep waking the drain until someone does.
+- The workspace scan still includes unresolved `check_later` entries; no provider session id is
+  required to resume the durable work state.
+- Cost: another internal noun and durable store. Unresolved reminders still keep waking the
+  drain until the owning operator resolves them; the former public agent tools are withdrawn.
 
 ## Drain scan excludes `epic_pipeline` runs
 
@@ -140,16 +143,17 @@ Keep `orbit run ship` a leaf implementer. Auto `list_backlog` skips any task tha
 is `tag: epic` or has such an ancestor (`epic_root` / `epic_child`). Explicit ship
 of an epic root is refused before worktree setup; explicit ship of an epic child
 stays allowed (the orchestrator path). Logistics live in a new job,
-`workspace_auto_pipeline`, invoked as `orbit run auto`: drain loose leaves first;
-if an epic root is `in-progress`, hold; else start exactly one backlog epic via
-`epic_pipeline`. Do not seed a routine ([The supervisor clock is not an Orbit primitive](#the-supervisor-clock-is-not-an-orbit-primitive) still holds). Do not scope
+`workspace_auto_pipeline`, invoked as `orbit run auto`: each window iteration re-lists and drains
+loose leaves; when no epic run is active, it starts at most one backlog epic via
+`epic_pipeline`. Do not seed a routine that directly targets these resident jobs ([The supervisor clock is not an Orbit primitive](#the-supervisor-clock-is-not-an-orbit-primitive) still holds). Do not scope
 `scan_unresolved_work` to one epic in this change.
 
 ### Consequences
 
 - Two auto verbs. Muscle memory `orbit run ship` no longer starts an epic; operators
   who want logistics use `orbit run auto`.
-- An in-progress epic blocks all auto-ship, including late-arriving loose chores.
+- An in-progress epic blocks only overlapping loose leaves; conflict-free chores can continue
+  during the drain window.
 - Cost: a third catalog job and a new CLI verb. Untagged backlog can still race if
   someone fires both `orbit run ship` and `epic_pipeline` on the same workspace.
 
@@ -201,7 +205,7 @@ race that fast-forward.
 
 ## The epic agent works in the worktree instead of dispatching
 
-**Recorded:** 2026-08 · [ORB-10817] · **Not yet implemented**
+**Recorded:** 2026-08 · [ORB-10817] · **Implemented**
 
 ### Context
 
@@ -259,7 +263,7 @@ worktree via its own `worktree_setup`.
 
 ## Auto drains for a window instead of taking one action
 
-**Recorded:** 2026-08 · [ORB-10819] · **Not yet implemented** (the epic reservation it relies on is live from [ORB-10816])
+**Recorded:** 2026-08 · [ORB-10819] · **Implemented** (the epic reservation it relies on is live from [ORB-10816])
 
 ### Context
 
@@ -276,8 +280,9 @@ mid-tick.
 `orbit run auto --for <duration>` drains for a caller-supplied window: re-list admissible
 work each iteration, ship it, sleep when idle, stop starting new work when the deadline
 passes. Absent or zero preserves the one-tick behavior. The deadline gates starting work
-only; in-flight children finish because `invoke_and_wait` blocks on them. `epic_pipeline`
-is dispatched **detached** and re-observed each iteration. `decision: hold` is deleted —
+only; in-flight children finish on their own because detached child runs are not cancelled.
+`epic_pipeline` and leaf pipelines are dispatched **detached** and re-observed each iteration.
+`decision: hold` is deleted —
 an in-progress epic holds one reservation over the union of its descendants'
 `context_files`, and loose leaves are admitted by the existing overlap check.
 
