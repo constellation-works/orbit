@@ -72,6 +72,21 @@ jobs:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(calls, [["fmt", "--all", "--", "--check"]])
 
+    def test_fast_invokes_codeql_extension_schema_check(self):
+        self.prepare_ci()
+        self.write_executable(
+            self.scripts / "check-codeql-extension-schema.py",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["check-codeql-extension-schema.py"] + sys.argv[1:]) + "\\n")
+''',
+        )
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(["check-codeql-extension-schema.py"], calls)
+
     def test_full_still_checks_workflow_test_matches(self):
         self.prepare_ci()
         result = self.run_guard("ci-guardrails.sh")

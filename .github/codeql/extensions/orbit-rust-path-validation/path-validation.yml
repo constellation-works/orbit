@@ -83,6 +83,11 @@ extensions:
         ]
       - [
           "orbit_store::driver::file::friction_store::validated_friction_root",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
+      - [
           "orbit_cmd::diagnostics::validated_diagnostics_file_path",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",
