@@ -78,11 +78,16 @@ pub(super) fn assess(
         }
     }
 
+    // `validation_tool_warnings` is the deterministic boundary's own finding
+    // rather than the pilot's, but it withholds admission for the same reason
+    // the others do: the repair would be admitted with an acceptance check the
+    // implementation lane cannot run [ORB-11980].
     let warning_fields = [
         "blocked_by",
         "adr_conflicts",
         "utility_warnings",
         "surface_warnings",
+        super::task_pilot::VALIDATION_TOOL_WARNINGS,
     ];
     let warnings = warning_fields
         .iter()

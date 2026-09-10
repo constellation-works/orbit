@@ -24,9 +24,11 @@ use crate::application::task::TaskListFilter;
 
 mod apply;
 mod source;
+mod validation_tools;
 
 pub(super) use apply::apply;
 use source::{GitPathKind, SourceSnapshot, requested_base_branch, resolve_source_snapshot};
+use validation_tools::ImplementationLane;
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
 const HARD_MAX_PARTITION_SIZE: usize = 5;
@@ -39,6 +41,10 @@ const TASK_PILOT_JOB_ID: &str = "task_pilot_pipeline";
 /// only the per-task sample so evidence size stops scaling with terminal
 /// workspace history [ORB-11244].
 const MAX_EXCLUDED_SAMPLE: usize = 20;
+/// Field carrying the deterministic validation-tool feasibility findings, on
+/// both a prepared task snapshot and the assessment apply reports for it
+/// [ORB-11980].
+pub(super) const VALIDATION_TOOL_WARNINGS: &str = "validation_tool_warnings";
 
 pub(super) fn prepare(
     runtime: &OrbitRuntime,
@@ -200,25 +206,33 @@ pub(super) fn prepare(
         ));
     }
 
-    if let Some(source) = &source {
-        for snapshot in &mut task_snapshots {
-            let task = runtime
-                .get_task(snapshot["task_id"].as_str().unwrap_or_default())
-                .map_err(|error| action_failed(action, error.to_string()))?;
-            let fingerprint = crate::application::automation::preparation::fingerprint(
-                runtime,
-                &task,
-                &source.source_revision,
-            )
+    // One hydration per selected task feeds both the state-automation
+    // fingerprint and the validation-tool feasibility check. Discovery above
+    // deliberately works from envelopes, which carry no acceptance criteria,
+    // and the selection is already bounded by `max_tasks` at this point.
+    let lane = ImplementationLane::resolve(runtime);
+    for (task_id, snapshot) in task_ids.iter().zip(task_snapshots.iter_mut()) {
+        let task = runtime
+            .get_task(task_id)
             .map_err(|error| action_failed(action, error.to_string()))?;
-            if claim
-                .as_ref()
-                .is_some_and(|claim| claim.member.fingerprint != fingerprint)
-            {
-                return Err(action_failed(action, "state-trigger task meaning changed"));
-            }
-            snapshot["material_fingerprint"] = json!(fingerprint);
+        snapshot[VALIDATION_TOOL_WARNINGS] = json!(lane.validation_warnings(&task));
+
+        let Some(source) = &source else {
+            continue;
+        };
+        let fingerprint = crate::application::automation::preparation::fingerprint(
+            runtime,
+            &task,
+            &source.source_revision,
+        )
+        .map_err(|error| action_failed(action, error.to_string()))?;
+        if claim
+            .as_ref()
+            .is_some_and(|claim| claim.member.fingerprint != fingerprint)
+        {
+            return Err(action_failed(action, "state-trigger task meaning changed"));
         }
+        snapshot["material_fingerprint"] = json!(fingerprint);
     }
 
     let partitions = task_ids
@@ -496,9 +510,20 @@ fn validate_after_selectors(
 /// not sufficient: any finding that names other work, or an action outside
 /// what this repository owns — a duplicate, a repair that already landed, or
 /// an operator-reserved release action — keeps that decision with a human
-/// [ORB-11517].
+/// [ORB-11517]. A validation criterion the implementation lane cannot satisfy
+/// does the same, because promoting it admits work whose acceptance check is
+/// already known to be unreachable [ORB-11980].
 pub(super) fn member_ready(assessment: &Value) -> bool {
-    assessment["disposition"] == "selectors"
+    // Unlike the agent's own findings below, this field is injected by the
+    // deterministic apply boundary, so an assessment that predates the
+    // injection reads as "no finding" rather than as "not ready".
+    let validation_tools_feasible = assessment
+        .get(VALIDATION_TOOL_WARNINGS)
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+
+    validation_tools_feasible
+        && assessment["disposition"] == "selectors"
         && [
             "blocked_by",
             "adr_conflicts",

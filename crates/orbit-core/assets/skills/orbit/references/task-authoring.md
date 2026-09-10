@@ -98,7 +98,10 @@ job fills them from real inspection. → [orchestration.md](orchestration.md)
   any agent activity's baseline. Use only exact, active, agent-facing registered
   names; wildcards and prefixes are rejected at dispatch. The list is normalized,
   sorted, and deduplicated at creation. It is immutable afterward, and every
-  existing-task update surface rejects `required_tools`.
+  existing-task update surface rejects `required_tools` — so declare every tool
+  your acceptance criteria name **at creation**, because setting it later
+  cannot widen an already-dispatched activity. → [Validation your lane can
+  actually run](#validation-your-lane-can-actually-run)
   Inclusion grants only activity allowlist membership: caller role, host
   capability, tool policy, filesystem/subprocess policy, and external
   authentication can still deny execution. A task that names exactly
@@ -109,6 +112,37 @@ job fills them from real inspection. → [orchestration.md](orchestration.md)
   `github.auth.status` can still yield a structured `available: false` or
   `authenticated: false` capability-unavailable result when the lane has no
   GitHub client or credentials; that is not a clean CI pass.
+
+## Validation your lane can actually run
+
+A criterion that names a tool is a promise about the lane that will run it, and
+`required_tools` is the only field that can keep that promise — which is why it
+has to be right at creation. Task-pilot preparation reads each criterion
+against the registered tool surface, the canonical MCP tool list, the
+implementation activity's allowlist, and the governed-operation registry, and
+reports one `validation_tool_warnings` finding per contradiction before the
+task is admitted. A finding never rejects a task; it names the repair.
+
+- **Transport.** An MCP session reaches only MCP-advertised tools. `proc.spawn`
+  is registered CLI-only, so a criterion that requires it over MCP can never
+  pass — drive it through `orbit tool run proc.spawn` instead. Never ask for
+  the MCP surface to be widened to match a criterion's wording.
+- **Allowlist.** A tool outside the implementation activity's baseline has to
+  be in `required_tools`, or the criterion is unreachable from the lane.
+- **Operator capability.** Governed operations — workflow run observation and
+  resume, the operation grants, `orbit.command.exec`, `orbit.agent.invoke`,
+  and the other destructive surfaces — are reserved for an operator.
+  `required_tools` grants allowlist membership, not capability, and an
+  implementing agent must never set an authority environment variable to get
+  past that gate. Write the criterion as an explicit operator handoff, or scope
+  it to the registered dispatch path an agent can reach.
+- **External credentials.** `github.*` reads depend on authentication the lane
+  may not hold, so state that precondition instead of treating a
+  capability-unavailable result as a pass.
+
+A criterion that *expects* a refusal is a correct negative test, and a tool
+name inside a quoted example is a copied observation, not a requirement.
+Neither is reported, and neither grants anything.
 
 ## Quality bar
 
