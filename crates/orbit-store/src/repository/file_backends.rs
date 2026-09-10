@@ -9,9 +9,10 @@ use orbit_types::task::{
 use orbit_types::workflow::ExecutorDef;
 
 use crate::contracts::{
-    ExecutorDefStoreBackend, PolicyDefStoreBackend, TaskArtifactStoreBackend,
-    TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend, TaskDocumentUpdateParams,
-    TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskStoreBackend,
+    AtomicTaskMutationOutcome, AtomicTaskMutationParams, ExecutorDefStoreBackend,
+    PolicyDefStoreBackend, TaskArtifactStoreBackend, TaskArtifactUpdateParams, TaskCreateParams,
+    TaskDocumentStoreBackend, TaskDocumentUpdateParams, TaskHistoryStoreBackend,
+    TaskHistoryUpdateParams, TaskStoreBackend,
 };
 use crate::driver::file::executor_def_store::ExecutorDefFileStore;
 use crate::driver::file::policy_def_store::PolicyDefFileStore;
@@ -107,6 +108,14 @@ impl TaskStoreBackend for TaskV2Store {
         op: &mut dyn FnMut() -> Result<(), OrbitError>,
     ) -> Result<(), OrbitError> {
         self.with_task_lock(id, op)
+    }
+
+    fn apply_atomic_task_mutation(
+        &self,
+        id: &str,
+        params: &AtomicTaskMutationParams,
+    ) -> Result<AtomicTaskMutationOutcome, OrbitError> {
+        self.apply_atomic_task_mutation(id, params)
     }
 
     fn task_completion_by_complexity(

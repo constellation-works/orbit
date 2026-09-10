@@ -977,14 +977,32 @@ fn pipeline_wait_entry_failure(label: &str, entry: &Value) -> Option<String> {
         return None;
     }
 
-    let run_id = entry
-        .get("run_id")
-        .and_then(Value::as_str)
-        .unwrap_or("<unknown>");
     let error = entry
         .get("error")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty());
+    if entry.get("partition_decisions").is_some() {
+        let applied = entry
+            .get("applied_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let unresolved = entry
+            .get("unresolved_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        return Some(match error {
+            Some(error) => format!(
+                "{label} task-pilot apply status {status}: {error} ({applied} applied, {unresolved} unresolved)"
+            ),
+            None => format!(
+                "{label} task-pilot apply status {status} ({applied} applied, {unresolved} unresolved)"
+            ),
+        });
+    }
+    let run_id = entry
+        .get("run_id")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
     Some(match error {
         Some(error) => format!("{label} run {run_id} status {status}: {error}"),
         None => format!("{label} run {run_id} status {status}"),

@@ -626,3 +626,86 @@ fn document_update_aborts_description_when_envelope_stage_fails() {
     assert_eq!(task.description, "Detailed task description");
     assert_eq!(task.status, TaskStatus::Backlog);
 }
+
+#[test]
+fn atomic_task_mutation_commits_receipt_event_and_envelope_together() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    store
+        .create_task(create_params("Atomic", TaskStatus::Backlog))
+        .expect("create task");
+    let params = AtomicTaskMutationParams {
+        actor: "task-pilot".to_string(),
+        operation_id: "operation-one".to_string(),
+        expected_context_files: vec!["docs/design/task-artifacts/1_overview.md".to_string()],
+        expected_status: TaskStatus::Backlog,
+        context_files: vec!["file:src/lib.rs".to_string()],
+        status: TaskStatus::Backlog,
+        event_type: "task_pilot_applied".to_string(),
+        event_note: "task-pilot atomic application".to_string(),
+    };
+
+    assert_eq!(
+        store
+            .apply_atomic_task_mutation("ORB-00000", &params)
+            .expect("apply mutation"),
+        AtomicTaskMutationOutcome::Applied
+    );
+    assert_eq!(
+        store
+            .apply_atomic_task_mutation("ORB-00000", &params)
+            .expect("replay mutation"),
+        AtomicTaskMutationOutcome::AlreadyApplied
+    );
+    let task = store.get_task("ORB-00000").unwrap().unwrap();
+    assert_eq!(task.context_files, vec!["file:src/lib.rs"]);
+    let history = store.get_task_history("ORB-00000").unwrap().unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .filter(|event| event.event == "task_pilot_applied")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn atomic_task_mutation_rolls_back_receipt_when_envelope_publish_fails() {
+    use crate::driver::file::task_bundle::{BundleWriteFault, inject_bundle_write_faults};
+
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    store
+        .create_task(create_params("Atomic fault", TaskStatus::Backlog))
+        .expect("create task");
+    let history_before = store.get_task_history("ORB-00000").unwrap().unwrap();
+    inject_bundle_write_faults(&[BundleWriteFault::AfterEnvelopeStage]);
+
+    store
+        .apply_atomic_task_mutation(
+            "ORB-00000",
+            &AtomicTaskMutationParams {
+                actor: "task-pilot".to_string(),
+                operation_id: "operation-fault".to_string(),
+                expected_context_files: vec![
+                    "docs/design/task-artifacts/1_overview.md".to_string(),
+                ],
+                expected_status: TaskStatus::Backlog,
+                context_files: vec!["file:src/lib.rs".to_string()],
+                status: TaskStatus::Backlog,
+                event_type: "task_pilot_applied".to_string(),
+                event_note: "task-pilot atomic application".to_string(),
+            },
+        )
+        .expect_err("injected publish failure");
+
+    let task = store.get_task("ORB-00000").unwrap().unwrap();
+    assert_eq!(
+        task.context_files,
+        vec!["docs/design/task-artifacts/1_overview.md"]
+    );
+    assert_eq!(
+        store.get_task_history("ORB-00000").unwrap().unwrap(),
+        history_before
+    );
+}

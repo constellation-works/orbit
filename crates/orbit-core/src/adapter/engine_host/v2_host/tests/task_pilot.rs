@@ -3,7 +3,9 @@ use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 
-use super::super::task_pilot::{apply, member_ready, prepare};
+use super::super::task_pilot::{
+    apply, inject_concurrent_edit_before_locked_apply, member_ready, prepare,
+};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_layout, write_workspace_file,
@@ -550,7 +552,7 @@ fn adr_conflicts_rejects_object_array_conflict_evidence_shape() {
 }
 
 #[test]
-fn invalid_selector_in_later_assessment_prevents_every_mutation() {
+fn invalid_selector_does_not_discard_valid_sibling_in_same_partition() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "src/alpha.rs");
     let alpha = seed_task(&runtime, "alpha", TaskStatus::Backlog, &[], &[]);
@@ -578,21 +580,103 @@ fn invalid_selector_in_later_assessment_prevents_every_mutation() {
     .expect("invalid partition is reported as durable output");
 
     assert_eq!(output["status"], "failed");
-    assert_eq!(output["partition_decisions"][0]["outcome"], "failed");
+    assert_eq!(output["partition_decisions"][0]["outcome"], "partial");
     assert!(
         output["partition_decisions"][0]["error"]
             .as_str()
             .unwrap()
             .contains("does not resolve")
     );
-    assert!(
-        runtime
-            .get_task(&alpha.id)
-            .unwrap()
-            .context_files
-            .is_empty()
+    assert_eq!(
+        runtime.get_task(&alpha.id).unwrap().context_files,
+        vec!["file:src/alpha.rs"]
     );
     assert!(runtime.get_task(&beta.id).unwrap().context_files.is_empty());
+
+    let repaired = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": output["repair_prepared"],
+            "results": [partition_result(
+                0,
+                std::slice::from_ref(&beta.id),
+                vec![selector_assessment(&beta, vec!["file:src/alpha.rs"])],
+            )],
+            "workspace_path": repo_root,
+            "prior_applied_count": output["applied_count"],
+            "carried_task_outcomes": output["non_repairable_outcomes"],
+        }),
+    )
+    .expect("targeted repair reuses the deterministic apply boundary");
+    assert_eq!(output["repair_count"], 1);
+    assert_eq!(
+        output["repair_partitions"][0]["validation_errors"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(repaired["status"], "succeeded");
+    assert_eq!(repaired["applied_count"], 2);
+    assert_eq!(
+        runtime.get_task(&beta.id).unwrap().context_files,
+        vec!["file:src/alpha.rs"]
+    );
+}
+
+#[test]
+fn replay_returns_already_applied_without_a_second_mutation() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/alpha.rs");
+    write_workspace_file(&repo_root, "src/beta.rs");
+    let task = seed_task(&runtime, "replay", TaskStatus::Backlog, &[], &[]);
+    let task_ids = vec![task.id.clone()];
+    let snapshot = prepared(&runtime, &repo_root, &task_ids);
+    let result = partition_result(
+        0,
+        &task_ids,
+        vec![selector_assessment(&task, vec!["file:src/alpha.rs"])],
+    );
+    let input = json!({
+        "prepared": snapshot,
+        "results": [result],
+        "workspace_path": repo_root,
+    });
+
+    let first = apply(&runtime, "apply_task_pilot_results", &input).expect("first apply");
+    let replay = apply(&runtime, "apply_task_pilot_results", &input).expect("replay apply");
+    let changed = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": input["prepared"],
+            "results": [partition_result(
+                0,
+                &task_ids,
+                vec![selector_assessment(&task, vec!["file:src/beta.rs"])],
+            )],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("changed replay is a structured stale result");
+
+    assert_eq!(first["tasks"][0]["outcome"], "applied");
+    assert_eq!(replay["tasks"][0]["outcome"], "already_applied");
+    assert_eq!(changed["task_outcomes"][0]["outcome"], "stale");
+    assert_eq!(
+        runtime.get_task(&task.id).unwrap().context_files,
+        vec!["file:src/alpha.rs"]
+    );
+    assert_eq!(
+        runtime
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .filter(|event| event.event == "task_pilot_applied")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -657,6 +741,53 @@ fn stale_partition_does_not_discard_independent_valid_partition() {
 }
 
 #[test]
+fn edit_between_validation_and_locked_write_is_stale_and_preserved() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/new.rs");
+    let raced = seed_task(&runtime, "raced", TaskStatus::Backlog, &[], &[]);
+    let sibling = seed_task(&runtime, "sibling", TaskStatus::Backlog, &[], &[]);
+    let task_ids = vec![raced.id.clone(), sibling.id.clone()];
+    let snapshot = prepared(&runtime, &repo_root, &task_ids);
+    inject_concurrent_edit_before_locked_apply();
+
+    let output = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": snapshot,
+            "results": [partition_result(
+                0,
+                &task_ids,
+                vec![
+                    selector_assessment(&raced, vec!["file:src/new.rs"]),
+                    selector_assessment(&sibling, vec!["file:src/new.rs"]),
+                ],
+            )],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("concurrent edit is a structured task outcome");
+
+    assert_eq!(output["task_outcomes"][0]["outcome"], "stale");
+    assert_eq!(output["task_outcomes"][0]["reason"], "tags_changed");
+    assert_eq!(
+        runtime.get_task(&raced.id).unwrap().tags,
+        vec!["concurrent-edit"]
+    );
+    assert!(
+        runtime
+            .get_task(&raced.id)
+            .unwrap()
+            .context_files
+            .is_empty()
+    );
+    assert_eq!(
+        runtime.get_task(&sibling.id).unwrap().context_files,
+        vec!["file:src/new.rs"]
+    );
+}
+
+#[test]
 fn all_stale_partition_diagnostic_identifies_zero_apply() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "src/new.rs");
@@ -695,7 +826,7 @@ fn all_stale_partition_diagnostic_identifies_zero_apply() {
         output["skipped_stale_partitions"].as_array().unwrap().len(),
         1
     );
-    assert!(error.contains("1 partition(s) were skipped as stale"));
+    assert!(error.contains("1 unresolved"));
     assert!(error.contains("status_changed"));
     assert!(error.contains(&task.id));
     assert!(

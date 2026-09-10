@@ -27,6 +27,8 @@ mod source;
 mod validation_tools;
 
 pub(super) use apply::apply;
+#[cfg(test)]
+pub(super) use apply::inject_concurrent_edit_before_locked_apply;
 use source::{GitPathKind, SourceSnapshot, requested_base_branch, resolve_source_snapshot};
 use validation_tools::ImplementationLane;
 
@@ -418,6 +420,11 @@ fn task_snapshot(
     })
 }
 
+struct ValidatedSelectors {
+    values: Vec<String>,
+    normalizations: Vec<Value>,
+}
+
 fn validate_after_selectors(
     action: &str,
     task_id: &str,
@@ -426,7 +433,7 @@ fn validate_after_selectors(
     selectors: &[String],
     workspace_root: &Path,
     source: Option<&SourceSnapshot>,
-) -> Result<(), DispatchError> {
+) -> Result<ValidatedSelectors, DispatchError> {
     if selectors.is_empty() {
         if !matches!(disposition, "verified_no_diff" | "host_operational") {
             return Err(action_failed(
@@ -437,7 +444,10 @@ fn validate_after_selectors(
             ));
         }
         required_string(assessment, "evidence", action)?;
-        return Ok(());
+        return Ok(ValidatedSelectors {
+            values: Vec::new(),
+            normalizations: Vec::new(),
+        });
     }
     if disposition != "selectors" {
         return Err(action_failed(
@@ -449,24 +459,83 @@ fn validate_after_selectors(
     }
 
     let mut seen = BTreeSet::new();
+    let mut values = Vec::with_capacity(selectors.len());
+    let mut normalizations = Vec::new();
     for selector in selectors {
         let trimmed = selector.trim();
-        if !matches!(
+        let has_kind = matches!(
             trimmed.split_once(':').map(|(kind, _)| kind),
             Some("file" | "dir" | "symbol")
-        ) {
-            return Err(action_failed(
-                action,
-                format!("task {task_id} selector {selector:?} must use file:, dir:, or symbol:"),
-            ));
-        }
+        );
+        let candidate = if has_kind {
+            trimmed.to_string()
+        } else {
+            if trimmed.contains(':') {
+                return Err(action_failed(
+                    action,
+                    format!(
+                        "task {task_id} bare selector {selector:?} is ambiguous because it contains ':'"
+                    ),
+                ));
+            }
+            let source = source.ok_or_else(|| {
+                action_failed(
+                    action,
+                    format!(
+                        "task {task_id} selector {selector:?} must use file:, dir:, or symbol: when no pinned source is available"
+                    ),
+                )
+            })?;
+            let path_candidate =
+                canonical_selector(&format!("file:{trimmed}")).map_err(|error| {
+                    action_failed(
+                        action,
+                        format!("task {task_id} bare selector {selector:?} is invalid: {error}"),
+                    )
+                })?;
+            let anchor = anchor_path(&path_candidate).map_err(|error| {
+                action_failed(
+                    action,
+                    format!("task {task_id} bare selector {selector:?} is invalid: {error}"),
+                )
+            })?;
+            let kind = source.path_kind(action, workspace_root, &anchor)?;
+            let normalized = match kind {
+                GitPathKind::Blob => path_candidate,
+                GitPathKind::Tree => canonical_selector(&format!("dir:{trimmed}"))
+                    .map_err(|error| action_failed(action, error.to_string()))?,
+                GitPathKind::Missing => {
+                    return Err(action_failed(
+                        action,
+                        format!(
+                            "task {task_id} bare selector {selector:?} does not resolve at pinned source revision {}",
+                            source.source_revision
+                        ),
+                    ));
+                }
+                GitPathKind::Other => {
+                    return Err(action_failed(
+                        action,
+                        format!(
+                            "task {task_id} bare selector {selector:?} has an unsupported or ambiguous kind at pinned source revision {}",
+                            source.source_revision
+                        ),
+                    ));
+                }
+            };
+            normalizations.push(json!({
+                "original": selector,
+                "normalized": normalized,
+            }));
+            normalized
+        };
         // A dirty primary may replace an anchor with a symlink or a different
         // kind. Only syntax comes from this parser; pinned Git objects own
         // containment and target validation when source identity is present.
         let canonical = if source.is_some() {
-            canonical_selector(trimmed)
+            canonical_selector(&candidate)
         } else {
-            canonical_selector_in_workspace(trimmed, workspace_root)
+            canonical_selector_in_workspace(&candidate, workspace_root)
         }
         .map_err(|error| {
             action_failed(
@@ -474,7 +543,7 @@ fn validate_after_selectors(
                 format!("task {task_id} selector {selector:?} is invalid: {error}"),
             )
         })?;
-        if canonical != trimmed {
+        if has_kind && canonical != trimmed {
             return Err(action_failed(
                 action,
                 format!(
@@ -501,8 +570,12 @@ fn validate_after_selectors(
                 format!("task {task_id} repeats selector {selector:?}"),
             ));
         }
+        values.push(candidate);
     }
-    Ok(())
+    Ok(ValidatedSelectors {
+        values,
+        normalizations,
+    })
 }
 
 /// Whether a validated assessment leaves the task ready for the state
@@ -576,6 +649,56 @@ fn validate_recommendations(
                 format!("task {task_id} is missing {field} recommendation"),
             ));
         }
+    }
+    validate_optional_finding(
+        action,
+        task_id,
+        assessment,
+        "duplicate_of",
+        &["task_id", "evidence"],
+    )?;
+    validate_optional_finding(action, task_id, assessment, "already_landed", &["evidence"])?;
+    validate_optional_finding(
+        action,
+        task_id,
+        assessment,
+        "release_action_required",
+        &["action", "evidence"],
+    )?;
+    Ok(())
+}
+
+fn validate_optional_finding(
+    action: &str,
+    task_id: &str,
+    assessment: &Value,
+    field: &str,
+    required_fields: &[&str],
+) -> Result<(), DispatchError> {
+    let Some(value) = assessment.get(field) else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    let object = value.as_object().ok_or_else(|| {
+        action_failed(
+            action,
+            format!("task {task_id} {field} must be an object or null"),
+        )
+    })?;
+    for required in required_fields {
+        object
+            .get(*required)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                action_failed(
+                    action,
+                    format!("task {task_id} {field}.{required} must be a non-empty string"),
+                )
+            })?;
     }
     Ok(())
 }

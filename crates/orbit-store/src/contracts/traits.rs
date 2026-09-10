@@ -120,6 +120,19 @@ pub trait TaskStoreBackend: Send + Sync {
         op()
     }
 
+    /// Atomically apply a freshness-guarded task mutation and its durable
+    /// idempotency receipt. Backends that cannot provide one commit point must
+    /// reject the operation rather than emulate it with partial writes.
+    fn apply_atomic_task_mutation(
+        &self,
+        _id: &str,
+        _params: &AtomicTaskMutationParams,
+    ) -> Result<AtomicTaskMutationOutcome, OrbitError> {
+        Err(OrbitError::Store(
+            "atomic task mutation is not supported by this backend".to_string(),
+        ))
+    }
+
     /// Status counts per complexity bucket from the generated task index.
     /// Default is empty; the v2 store answers from SQLite without bundle reads.
     fn task_completion_by_complexity(&self) -> Result<Vec<TaskCompletionByComplexity>, OrbitError> {

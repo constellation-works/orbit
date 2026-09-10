@@ -464,7 +464,7 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_partial_join_partitions(
         defaults.get("crew").is_none(),
         "a job-input crew would be dead: the system-crew marker overwrites it before resolution"
     );
-    assert_eq!(asset.spec.steps.len(), 4);
+    assert_eq!(asset.spec.steps.len(), 7);
 
     let JobV2StepBody::TargetRef(prepare) = &asset.spec.steps[0].body else {
         panic!("task pilot preparation must be deterministic activity reference");
@@ -533,8 +533,19 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_partial_join_partitions(
          system-crew injection, which only runs for agent-loop targets"
     );
 
-    let JobV2StepBody::TargetRef(require_success) = &asset.spec.steps[3].body else {
-        panic!("task pilot must guard the durable partition apply result");
+    let JobV2StepBody::FanOut {
+        fan_out: repair,
+        fan_in: repair_join,
+    } = &asset.spec.steps[3].body
+    else {
+        panic!("task pilot repair must be a bounded fan-out");
+    };
+    assert_eq!(repair.items, "{{ steps.apply.output.repair_partitions }}");
+    assert_eq!(repair.max_workers, 5);
+    assert_eq!(repair_join.collect.as_deref(), Some("repair_results"));
+
+    let JobV2StepBody::TargetRef(require_success) = &asset.spec.steps[5].body else {
+        panic!("task pilot must guard the durable initial apply result");
     };
     assert_eq!(require_success.target, "activity:pipeline_success_guard");
     assert_eq!(
