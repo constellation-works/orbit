@@ -45,14 +45,63 @@ pub fn cursor_lock_path(state_path: &Path) -> PathBuf {
 /// A missing file is empty state. An existing file that cannot be read or
 /// parsed is an error; callers must not treat that as a baseline or rewrite it.
 pub fn load_cursor_state(path: &Path) -> Result<AutoTaskCursorState, OrbitError> {
-    match fs::read_to_string(path) {
-        Ok(raw) => parse_state(&raw, path),
+    let validated = match validated_cursor_state_path(path)? {
+        Some(validated) => validated,
+        None => return Ok(AutoTaskCursorState::default()),
+    };
+
+    match fs::read_to_string(&validated) {
+        Ok(raw) => parse_state(&raw, &validated),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(AutoTaskCursorState::default())
         }
         Err(error) => Err(OrbitError::Io(format!(
             "unreadable auto-task cursor state {}: {error}; file left unchanged for investigation",
-            path.display()
+            validated.display()
+        ))),
+    }
+}
+
+/// Resolve `path` through its canonical parent dir, rejecting a symlinked
+/// target. `path` is built by [`cursor_state_path`] from a caller-selected
+/// state dir (workspace discovery, `--root`, or web dashboard workspace
+/// routing), so canonicalizing the parent and refusing to follow a symlinked
+/// result keeps the read inside the selected state dir instead of a planted
+/// symlink's target [ORB-11948]. `Ok(None)` means "no existing file", which
+/// callers treat as empty baseline state, matching prior behavior for a
+/// missing state dir or a missing data file.
+fn validated_cursor_state_path(path: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let Some(parent) = path.parent() else {
+        return Ok(Some(path.to_path_buf()));
+    };
+    let Some(file_name) = path.file_name() else {
+        return Ok(Some(path.to_path_buf()));
+    };
+
+    let canonical_parent = match parent.canonicalize() {
+        Ok(dir) => dir,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "failed to canonicalize auto-task state dir {}: {error}",
+                parent.display()
+            )));
+        }
+    };
+    let candidate = canonical_parent.join(file_name);
+
+    match fs::symlink_metadata(&candidate) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(OrbitError::InvalidInput(format!(
+                "auto-task cursor state path must not be a symlink: {}",
+                candidate.display()
+            )))
+        }
+        Ok(_) => Ok(Some(candidate)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(OrbitError::Io(format!(
+            "failed to inspect auto-task cursor state path {}: {error}",
+            candidate.display()
         ))),
     }
 }

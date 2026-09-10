@@ -114,6 +114,36 @@ fn empty_existing_file_is_malformed_not_a_baseline() {
     assert_eq!(fs::read_to_string(&path).expect("raw"), "");
 }
 
+/// [ORB-11948] A symlinked cursor-state file must not be followed: resolving
+/// through it would let a planted symlink redirect the read outside the
+/// selected state dir (e.g. toward an attacker-controlled path reached via a
+/// caller-selected workspace), so `load_cursor_state` rejects it outright
+/// instead of transparently reading the symlink target.
+#[cfg(unix)]
+#[test]
+fn load_cursor_state_rejects_a_symlinked_state_file() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("tempdir");
+    let path = cursor_state_path(root.path());
+    let outside_target = root
+        .path()
+        .parent()
+        .expect("state dir has parent")
+        .join("outside-auto-tasks.json");
+    fs::write(&outside_target, r#"{"definitions":{"leaked":{}}}"#)
+        .expect("write file outside state dir");
+    symlink(&outside_target, &path).expect("symlink cursor state file");
+
+    let error = load_cursor_state(&path).expect_err("symlinked state file");
+    assert!(
+        error.to_string().contains("must not be a symlink"),
+        "{error}"
+    );
+
+    fs::remove_file(&outside_target).expect("cleanup outside target");
+}
+
 #[test]
 fn concurrent_upserts_for_different_definitions_preserve_both_cursors() {
     let root = tempdir().expect("tempdir");
