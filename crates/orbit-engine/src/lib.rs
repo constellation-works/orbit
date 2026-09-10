@@ -40,12 +40,13 @@ mod tests;
 
 pub use activity_job::{
     ActivityAsset, AssetLoadError, CatalogDirectory, CatalogDirectoryList, CatalogError,
-    DispatchError, DispatchOutcome, EnforcedAuditSink, JobAsset, JobOutcome, ResolveError,
-    ResolvedAgentSettings, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
-    V2ActivityCatalog, V2AuditWriter, V2DispatchInput, V2JobCatalog, V2SqliteSink,
-    catalog_error_to_orbit, dispatch_error_to_orbit, dispatch_v2_activity, execute_job_with_resume,
-    inject_system_crew_input, load_activity_asset, load_activity_catalog_asset, load_job_asset,
-    resolve_crew_settings, resolve_job_catalog_refs_for_execution, resolve_job_target_refs,
+    DispatchError, DispatchOutcome, EnforcedAuditSink, JobAsset, JobOutcome,
+    LinuxRuntimeWriteAuthority, ResolveError, ResolvedAgentSettings, ResolvedCliExecutor,
+    ResolvedSandbox, ResolvedShellExecutor, V2ActivityCatalog, V2AuditWriter, V2DispatchInput,
+    V2JobCatalog, V2SqliteSink, catalog_error_to_orbit, dispatch_error_to_orbit,
+    dispatch_v2_activity, execute_job_with_resume, inject_system_crew_input, load_activity_asset,
+    load_activity_catalog_asset, load_job_asset, resolve_crew_settings,
+    resolve_job_catalog_refs_for_execution, resolve_job_target_refs,
     validate_catalog_activity_tools, validate_job, validate_job_deterministic_actions,
 };
 pub use context::{

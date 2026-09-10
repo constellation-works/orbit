@@ -5,9 +5,9 @@ use std::process::{Child, Command, Stdio};
 
 use orbit_common::OrbitError;
 use orbit_exec::{
-    BwrapProbeOutcome, LinuxBwrapSpawnRequest, MacosLoginKeychainAccess, MacosSandboxSpawnRequest,
-    UnsatisfiedWriteGrant, compile_linux_bwrap_argv, compile_macos_sandbox_profile,
-    linux_bwrap_write_grant_diagnostic, macos_login_keychain_access,
+    BwrapProbeOutcome, LinuxBwrapMountAuthority, LinuxBwrapSpawnRequest, MacosLoginKeychainAccess,
+    MacosSandboxSpawnRequest, UnsatisfiedWriteGrant, compile_linux_bwrap_argv_with_authority,
+    compile_macos_sandbox_profile, linux_bwrap_write_grant_diagnostic, macos_login_keychain_access,
     prepare_linux_bwrap_write_grants, probe_bwrap, sandbox_exec_available,
     sandbox_exec_unavailable_message, spawn_under_linux_bwrap, spawn_under_macos_sandbox,
 };
@@ -502,12 +502,32 @@ fn spawn_linux_bwrap(
         }
         report_unsatisfied_grants(&prepared.unsatisfied);
     }
-    let plan = compile_linux_bwrap_argv(
+    let authority = sandbox
+        .runtime_write_authority
+        .iter()
+        .map(|grant| {
+            grant
+                .handle
+                .try_clone()
+                .map(|source| LinuxBwrapMountAuthority {
+                    destination: grant.path.clone(),
+                    source,
+                })
+                .map_err(|error| {
+                    SpawnError::permanent(format!(
+                        "duplicate Linux runtime grant descriptor `{}`: {error}",
+                        grant.path.display()
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let plan = compile_linux_bwrap_argv_with_authority(
         &sandbox.fs_profile,
         program,
         args,
         cwd,
         sandbox.managed_worktree,
+        authority,
     )
     .map_err(|error| SpawnError::permanent(error.to_string()))?;
     reject_unsatisfiable_managed_grants(sandbox.managed_worktree, &plan.dropped_grants)?;

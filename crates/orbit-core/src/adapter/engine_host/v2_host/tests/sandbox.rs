@@ -1332,7 +1332,7 @@ mod runtime_store_grants {
 
     use crate::adapter::engine_host::v2_host::sandbox::{
         append_runtime_directory_grant, append_runtime_sidecar_grant,
-        validated_linux_runtime_descendant,
+        open_or_create_runtime_directory, validated_linux_runtime_descendant,
     };
 
     fn canonical_root(root: &Path) -> std::path::PathBuf {
@@ -1428,7 +1428,9 @@ mod runtime_store_grants {
         let root = canonical_root(root.path());
         let mut profile = empty_profile();
 
-        append_runtime_directory_grant(&root, "state/logs", &mut profile).expect("grant store");
+        let mut authority = Vec::new();
+        append_runtime_directory_grant(&root, "state/logs", &mut profile, &mut authority)
+            .expect("grant store");
 
         assert!(
             root.join("state/logs").is_dir(),
@@ -1438,6 +1440,7 @@ mod runtime_store_grants {
             profile.modify,
             vec![root.join("state/logs").display().to_string()]
         );
+        assert_eq!(authority[0].path, root.join("state/logs"));
     }
 
     /// A store whose parent is redirected out of the runtime root must not be
@@ -1453,14 +1456,35 @@ mod runtime_store_grants {
         symlink(&outside, root.join("state")).expect("redirect the state store");
         let mut profile = empty_profile();
 
-        append_runtime_directory_grant(&root, "state/logs", &mut profile)
+        let mut authority = Vec::new();
+        append_runtime_directory_grant(&root, "state/logs", &mut profile, &mut authority)
             .expect("a redirected store is skipped, not a dispatch failure");
 
         assert!(profile.modify.is_empty(), "grants: {:?}", profile.modify);
+        assert!(authority.is_empty());
         assert!(
             !outside.join("logs").exists(),
             "the redirect target must be left untouched"
         );
+    }
+
+    #[test]
+    fn directory_creation_rejects_parent_replaced_after_validation() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let outside = tempfile::tempdir().expect("outside");
+        let root = canonical_root(root.path());
+        std::fs::create_dir(root.join("state")).expect("state");
+        let validated = validated_linux_runtime_descendant(&root, "state/logs")
+            .expect("validate")
+            .expect("in-root path");
+        std::fs::remove_dir(root.join("state")).expect("remove state");
+        symlink(outside.path(), root.join("state")).expect("replace state");
+
+        let error = open_or_create_runtime_directory(&root, &validated)
+            .expect_err("descriptor walk must reject replacement");
+
+        assert!(error.to_string().contains("without following links"));
+        assert!(!outside.path().join("logs").exists());
     }
 
     #[test]
@@ -1470,13 +1494,17 @@ mod runtime_store_grants {
         std::fs::write(root.join("orbit.db-wal"), b"").expect("create sidecar");
         let mut profile = empty_profile();
 
-        append_runtime_sidecar_grant(&root, "orbit.db-wal", &mut profile).expect("grant sidecar");
-        append_runtime_sidecar_grant(&root, "orbit.db-shm", &mut profile).expect("skip sidecar");
+        let mut authority = Vec::new();
+        append_runtime_sidecar_grant(&root, "orbit.db-wal", &mut profile, &mut authority)
+            .expect("grant sidecar");
+        append_runtime_sidecar_grant(&root, "orbit.db-shm", &mut profile, &mut authority)
+            .expect("skip sidecar");
 
         assert_eq!(
             profile.modify,
             vec![root.join("orbit.db-wal").display().to_string()]
         );
+        assert_eq!(authority[0].path, root.join("orbit.db-wal"));
     }
 
     /// SQLite writes its sidecars next to the database it opens, so a sidecar
@@ -1492,10 +1520,12 @@ mod runtime_store_grants {
         symlink(&target, root.join("orbit.db-wal")).expect("redirect the sidecar");
         let mut profile = empty_profile();
 
-        append_runtime_sidecar_grant(&root, "orbit.db-wal", &mut profile)
+        let mut authority = Vec::new();
+        append_runtime_sidecar_grant(&root, "orbit.db-wal", &mut profile, &mut authority)
             .expect("a redirected sidecar is skipped, not a dispatch failure");
 
         assert!(profile.modify.is_empty(), "grants: {:?}", profile.modify);
+        assert!(authority.is_empty());
     }
 
     #[test]
@@ -1505,10 +1535,27 @@ mod runtime_store_grants {
         symlink(root.join("never-created"), root.join("orbit.db-wal")).expect("dangling sidecar");
         let mut profile = empty_profile();
 
-        append_runtime_sidecar_grant(&root, "orbit.db-wal", &mut profile)
+        let mut authority = Vec::new();
+        append_runtime_sidecar_grant(&root, "orbit.db-wal", &mut profile, &mut authority)
             .expect("a dangling sidecar is skipped, not a dispatch failure");
 
         assert!(profile.modify.is_empty(), "grants: {:?}", profile.modify);
+        assert!(authority.is_empty());
+    }
+
+    #[test]
+    fn sidecar_grant_skips_a_nonregular_object() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let root = canonical_root(root.path());
+        std::fs::create_dir(root.join("orbit.db-wal")).expect("nonregular sidecar");
+        let mut profile = empty_profile();
+        let mut authority = Vec::new();
+
+        append_runtime_sidecar_grant(&root, "orbit.db-wal", &mut profile, &mut authority)
+            .expect("a nonregular sidecar is skipped");
+
+        assert!(profile.modify.is_empty());
+        assert!(authority.is_empty());
     }
 }
 

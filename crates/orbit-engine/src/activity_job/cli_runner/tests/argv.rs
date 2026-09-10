@@ -175,6 +175,7 @@ fn task_pilot_reviewer_profile_starts_direct_linux_invocation_with_env_denies() 
         fs_profile: effective.clone(),
         allow_fallback: false,
         managed_worktree: false,
+        runtime_write_authority: Vec::new(),
     };
     let argv = try_audit_argv_for_dispatch("/bin/true", &[], Some(&sandbox), Some(&workspace))
         .expect("direct task-pilot Bubblewrap plan must compile");
@@ -295,6 +296,7 @@ fn triage_reviewer_profile_starts_direct_linux_invocation_and_protects_env_paths
         fs_profile: effective.clone(),
         allow_fallback: false,
         managed_worktree: false,
+        runtime_write_authority: Vec::new(),
     };
     let argv = try_audit_argv_for_dispatch("/bin/true", &[], Some(&sandbox), Some(&workspace))
         .expect("direct triage Bubblewrap plan must compile");
