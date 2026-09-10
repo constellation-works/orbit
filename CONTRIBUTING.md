@@ -106,6 +106,24 @@ Re-review ignored advisories on or before their date and drop the entry once an
 upstream fix lands. Never ignore an advisory that has an available patched
 release — bump the dependency instead.
 
+**Isolated advisory database override.** In managed runners or sandboxed validation
+where `~/.cargo/advisory-dbs` is read-only (such as containerized workers), configure
+an explicit writable advisory database path via `CARGO_DENY_DB_PATH` (or
+`ORBIT_CARGO_DENY_DB_PATH`). The canonical wrapper (`scripts/cargo-deny.sh`)
+synthesizes an isolated configuration pointing `[advisories].db-path` to that
+directory so cargo-deny can acquire its database lock without writing to the home
+directory. Cleanup of the temporary scratch directory or fixture is owned by the
+invoking runner.
+
+**Offline validation & snapshot provenance.** To validate offline without network
+fetching, set `CARGO_DENY_DISABLE_FETCH=1` (or `ORBIT_CARGO_DENY_DISABLE_FETCH=1` /
+`CARGO_DENY_OFFLINE=1`). The advisory database snapshot is expected to be cloned
+from upstream [`https://github.com/rustsec/advisory-db`](https://github.com/rustsec/advisory-db)
+(with default target directory `advisory-db-3157b0e258782691`) or provided by the
+environment fixture. Missing, stale, or unrefreshable required data yields an explicit
+failure, never a success-by-skip.
+
+
 ## Orbit State
 
 Orbit keeps operational state under `.orbit/`. Review those changes carefully before committing.

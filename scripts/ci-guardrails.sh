@@ -36,10 +36,10 @@ if [[ "$fast" == false ]]; then
   cargo test --no-fail-fast --workspace --doc
   RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
   # Supply-chain gate: dependency advisories + license allow-list (deny.toml).
-  # [ORB-00416] Soft-presence like nextest above — CI installs a pinned version;
+  # [ORB-00416] [ORB-11983] Soft-presence like nextest above — CI installs a pinned version;
   # local runs without the tool warn instead of hard-failing.
   if command -v cargo-deny >/dev/null 2>&1; then
-    cargo deny check
+    "$repo_root/scripts/cargo-deny.sh" check
   else
     echo "cargo-deny not found; skipping supply-chain gate (install: cargo install cargo-deny --locked)" >&2
   fi
