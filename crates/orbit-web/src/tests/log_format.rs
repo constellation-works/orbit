@@ -221,6 +221,19 @@ fn reverse_scan_zero_limit_returns_empty_without_reading() {
 }
 
 #[test]
+fn reverse_scan_does_not_preallocate_from_requested_limit() {
+    let raw = join_lines(
+        &[event_line("2026-04-27T01:00:01Z", "orbit.keep", "only")],
+        true,
+    );
+
+    let events = scan(&raw, &Filters::default(), usize::MAX, 16);
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["fields"]["message"], "only");
+}
+
+#[test]
 fn missing_log_file_returns_empty() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("missing.jsonl");
