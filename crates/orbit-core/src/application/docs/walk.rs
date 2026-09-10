@@ -212,26 +212,24 @@ fn expand_wildcard_segments(
         out: &mut Vec<PathBuf>,
     ) -> Result<(), OrbitError> {
         if parts.is_empty() {
-            if base.exists() {
-                match validated_docs_root_path(repo_root, base) {
-                    Ok(path) => out.push(path),
-                    Err(OrbitError::InvalidInput(_)) => return Ok(()),
-                    Err(error) => return Err(error),
-                }
+            match validated_docs_root_path(repo_root, base) {
+                Ok(path) => out.push(path),
+                Err(OrbitError::InvalidInput(_)) => return Ok(()),
+                Err(error) => return Err(error),
             }
             return Ok(());
         }
         let head = &parts[0];
         let tail = &parts[1..];
         if head == "*" {
-            if !base.is_dir() {
-                return Ok(());
-            }
             let base = match validated_docs_root_path(repo_root, base) {
                 Ok(base) => base,
                 Err(OrbitError::InvalidInput(_)) => return Ok(()),
                 Err(error) => return Err(error),
             };
+            if !base.is_dir() {
+                return Ok(());
+            }
             let entries = fs::read_dir(&base)
                 .map_err(|error| OrbitError::Io(format!("read {}: {error}", base.display())))?;
             for entry in entries {
