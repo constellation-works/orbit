@@ -733,25 +733,23 @@ pub(crate) fn disk_space_check(path: &Path) -> WorkspaceDoctorResult {
     check("disk-space", status, message)
 }
 
-/// Lock files in the directories the file-backed stores lock in:
-/// `state/` and `tasks/` (v2 bundle locks).
-/// Non-recursive on purpose — the lock layouts are flat.
+/// Lock files in the workspace-local state directory.
+///
+/// Task bundle locks live in the registry-owned global bundle store, which is
+/// not a workspace-local diagnostic target.
 pub(crate) fn collect_lock_files(paths: &WorkspacePaths) -> Vec<PathBuf> {
-    let dirs = [paths.state_dir.clone(), paths.tasks_dir.clone()];
     let mut lock_files = Vec::new();
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let is_lock = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with(".lock"));
-            if is_lock && path.is_file() {
-                lock_files.push(path);
-            }
+    let Ok(entries) = std::fs::read_dir(&paths.state_dir) else {
+        return lock_files;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_lock = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".lock"));
+        if is_lock && path.is_file() {
+            lock_files.push(path);
         }
     }
     lock_files

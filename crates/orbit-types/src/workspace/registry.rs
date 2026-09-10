@@ -173,7 +173,6 @@ pub struct WorkspacePaths {
     pub global_dir: PathBuf,
     pub resources_dir: PathBuf,
     pub state_dir: PathBuf,
-    pub tasks_dir: PathBuf,
     pub knowledge_dir: PathBuf,
     pub activities_dir: PathBuf,
     pub jobs_dir: PathBuf,
@@ -204,7 +203,6 @@ impl WorkspacePaths {
         Self {
             resources_dir: resources_dir.clone(),
             state_dir: state_dir.clone(),
-            tasks_dir: orbit_dir.join("tasks"),
             knowledge_dir: orbit_dir.join("knowledge"),
             activities_dir: resources_dir.join("activities"),
             jobs_dir: resources_dir.join("jobs"),

@@ -59,12 +59,7 @@ fn workspace_task_backends_exposes_create_get_and_list_trait_surface() {
             repo_fingerprint: None,
         })
         .expect("bind workspace");
-    let backends = workspace_task_backends(
-        registry,
-        binding.workspace_id,
-        Some(repo_dir.to_string_lossy().into_owned()),
-        Some(repo_dir.to_string_lossy().into_owned()),
-    );
+    let backends = workspace_task_backends(registry, binding.workspace_id);
 
     let created = backends
         .task

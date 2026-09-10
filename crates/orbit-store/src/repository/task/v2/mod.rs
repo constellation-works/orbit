@@ -65,21 +65,7 @@ pub(crate) struct TaskV2Store {
 }
 
 impl TaskV2Store {
-    pub(crate) fn new(
-        registry: TaskRegistryStore,
-        workspace_id: String,
-        _workspace_path: Option<String>,
-        _repo_root: Option<String>,
-    ) -> Self {
-        Self {
-            bundle_store: TaskBundleStoreV2::new(registry.clone(), workspace_id.clone()),
-            registry,
-            workspace_id,
-            envelope_cache: EnvelopeCache::default(),
-        }
-    }
-
-    pub(crate) fn new_checkoutless(registry: TaskRegistryStore, workspace_id: String) -> Self {
+    pub(crate) fn new(registry: TaskRegistryStore, workspace_id: String) -> Self {
         Self {
             bundle_store: TaskBundleStoreV2::new(registry.clone(), workspace_id.clone()),
             registry,

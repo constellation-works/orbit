@@ -80,7 +80,7 @@ pub(super) fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigVa
     })
 }
 
-fn effective_text(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> String {
+pub(super) fn effective_text(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     let _ = writeln!(out, "source: effective layered configuration");
@@ -150,7 +150,7 @@ fn effective_text(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> St
     out
 }
 
-fn scoped_json(
+pub(super) fn scoped_json(
     runtime: &OrbitRuntime,
     store: &orbit_config::ConfigStore,
     snapshot: &orbit_config::ConfigSnapshot,
@@ -185,7 +185,7 @@ fn scoped_json(
     })
 }
 
-fn scoped_text(
+pub(super) fn scoped_text(
     runtime: &OrbitRuntime,
     store: &orbit_config::ConfigStore,
     snapshot: &orbit_config::ConfigSnapshot,

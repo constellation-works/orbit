@@ -22,7 +22,7 @@ pub(super) fn reads(store: &TaskV2Store) -> (usize, usize) {
 
 pub(super) fn corpus(temp: &TempDir, count: usize) -> TaskV2Store {
     let bound = store(temp);
-    let store = TaskV2Store::new_checkoutless(bound.registry.clone(), bound.workspace_id.clone());
+    let store = TaskV2Store::new(bound.registry.clone(), bound.workspace_id.clone());
     for index in 0..count {
         let mut params = create_params(&format!("Task {index}"), TaskStatus::Backlog);
         params.description =

@@ -87,7 +87,7 @@ pub(super) fn seed(global: &Path, workspace: &str, count: usize) -> TaskV2Store 
             repo_fingerprint: None,
         })
         .unwrap();
-    let store = TaskV2Store::new_checkoutless(registry, workspace.to_string());
+    let store = TaskV2Store::new(registry, workspace.to_string());
     for index in 0..1 {
         let mut params = create_params(&format!("Task {index}"), TaskStatus::Backlog);
         params.description =

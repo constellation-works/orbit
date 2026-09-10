@@ -167,7 +167,7 @@ fn upgraded_registry_replays_admission_after_reservation_and_bundle_creation() {
     drop(registry);
 
     let registry = TaskRegistryStore::open(&path).expect("reopen for admission");
-    let tasks = TaskV2Store::new_checkoutless(registry.clone(), WORKSPACE.into());
+    let tasks = TaskV2Store::new(registry.clone(), WORKSPACE.into());
     let created = tasks
         .create_task_with_key(params.clone(), Some(key))
         .expect("recover reserved action");
@@ -179,7 +179,7 @@ fn upgraded_registry_replays_admission_after_reservation_and_bundle_creation() {
     // repeatedly without allocating another ID or rewriting creation evidence.
     for _ in 0..2 {
         let registry = TaskRegistryStore::open(&path).expect("reopen after admission");
-        let tasks = TaskV2Store::new_checkoutless(registry.clone(), WORKSPACE.into());
+        let tasks = TaskV2Store::new(registry.clone(), WORKSPACE.into());
         let replay = tasks
             .create_task_with_key(params.clone(), Some(key))
             .expect("replay action");
@@ -349,7 +349,7 @@ fn known_v6_recovers_preserving_reservations_and_bundle_replay() {
             .expect("replay"),
         "DE-100005"
     );
-    let tasks = TaskV2Store::new_checkoutless(registry.clone(), WORKSPACE.into());
+    let tasks = TaskV2Store::new(registry.clone(), WORKSPACE.into());
     let created = tasks
         .create_task_with_key(params.clone(), Some("retained"))
         .expect("recover bundle");
@@ -358,7 +358,7 @@ fn known_v6_recovers_preserving_reservations_and_bundle_replay() {
     drop(registry);
 
     let registry = TaskRegistryStore::open(&path).expect("repeat recovery");
-    let tasks = TaskV2Store::new_checkoutless(registry.clone(), WORKSPACE.into());
+    let tasks = TaskV2Store::new(registry.clone(), WORKSPACE.into());
     assert_eq!(
         tasks
             .create_task_with_key(params, Some("retained"))
