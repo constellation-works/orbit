@@ -2023,13 +2023,18 @@ fn validated_pipeline_worker_log_directory(path: &Path) -> Result<PathBuf, Orbit
 
 /// Canonicalize the nearest existing ancestor of `parent` and rejoin any
 /// missing suffix. Unrelated ancestor symlinks are resolved; a dangling
-/// symlink at an existing component still fails closed via `canonicalize`.
+/// symlink fails closed when canonicalization reaches that component.
 fn canonical_pipeline_worker_log_parent(parent: &Path) -> Result<PathBuf, OrbitError> {
     let mut existing = parent.to_path_buf();
     let mut missing = Vec::<OsString>::new();
     loop {
-        match std::fs::symlink_metadata(&existing) {
-            Ok(_) => break,
+        match existing.canonicalize() {
+            Ok(mut canonical) => {
+                for name in missing.into_iter().rev() {
+                    canonical.push(name);
+                }
+                return Ok(canonical);
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let Some(name) = existing.file_name() else {
                     return Err(OrbitError::InvalidInput(format!(
@@ -2053,17 +2058,6 @@ fn canonical_pipeline_worker_log_parent(parent: &Path) -> Result<PathBuf, OrbitE
             }
         }
     }
-
-    let mut canonical = existing.canonicalize().map_err(|error| {
-        OrbitError::Io(format!(
-            "canonicalize pipeline worker log parent '{}': {error}",
-            existing.display()
-        ))
-    })?;
-    for name in missing.into_iter().rev() {
-        canonical.push(name);
-    }
-    Ok(canonical)
 }
 
 pub(crate) fn configure_pipeline_worker_stdio(
