@@ -312,6 +312,43 @@ fn host_identity_rejects_a_final_symlink_swapped_after_the_path_check() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn host_identity_does_not_block_on_a_fifo_swapped_after_the_path_check() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let root = tempfile::tempdir().expect("create root tempdir");
+    let path = root.path().join("host.toml");
+    std::fs::write(&path, "host_id = \"checked\"\n").expect("write checked identity");
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let result = inspect_host_identity_after_check(root.path(), |checked_path| {
+            std::fs::remove_file(checked_path).map_err(|error| {
+                orbit_common::OrbitError::Io(format!("remove checked identity: {error}"))
+            })?;
+            let status = std::process::Command::new("mkfifo")
+                .arg(checked_path)
+                .status()
+                .map_err(|error| orbit_common::OrbitError::Io(format!("create FIFO: {error}")))?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(orbit_common::OrbitError::Io(format!(
+                    "mkfifo failed: {status}"
+                )))
+            }
+        });
+        sender.send(result).expect("report identity result");
+    });
+
+    let result = receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("FIFO swap must not block the identity reader");
+    assert!(result.is_err(), "a swapped FIFO must be rejected");
+}
+
 #[test]
 fn incomplete_current_schema_file_is_rejected() {
     let dir = tempfile::tempdir().expect("tempdir");

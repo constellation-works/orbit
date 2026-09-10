@@ -568,6 +568,19 @@ pub(crate) fn open_private_file(path: &Path, options: &mut OpenOptions) -> io::R
     Ok(file)
 }
 
+/// Open `path` for a read-only inspection without following its final component.
+///
+/// On Unix the open is nonblocking as well as no-follow, so a FIFO swapped in
+/// after a caller's pathname check cannot indefinitely block the reader. The
+/// caller remains responsible for checking the opened descriptor's type and
+/// mapping errors into its domain-specific behavior.
+pub fn open_read_only_no_follow(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    apply_read_only_no_follow(&mut options);
+    options.open(path)
+}
+
 /// Resolve a private file's parent before opening it and reject a final
 /// component that would redirect the operation through a symlink.
 ///
@@ -625,6 +638,24 @@ fn apply_no_follow_final_component(options: &mut OpenOptions) {
 
     options.custom_flags(libc::O_NOFOLLOW);
 }
+
+#[cfg(unix)]
+fn apply_read_only_no_follow(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+}
+
+#[cfg(windows)]
+fn apply_read_only_no_follow(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn apply_read_only_no_follow(_options: &mut OpenOptions) {}
 
 #[cfg(not(unix))]
 fn apply_no_follow_final_component(_options: &mut OpenOptions) {}

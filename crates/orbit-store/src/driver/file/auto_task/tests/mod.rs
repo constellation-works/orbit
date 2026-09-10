@@ -281,6 +281,42 @@ fn load_cursor_state_rejects_a_symlink_swapped_in_after_the_check() {
     fs::remove_file(&outside_target).expect("cleanup outside target");
 }
 
+#[cfg(unix)]
+#[test]
+fn load_cursor_state_does_not_block_on_a_fifo_swapped_after_the_check() {
+    use std::sync::mpsc;
+
+    let root = tempdir().expect("tempdir");
+    let path = cursor_state_path(root.path());
+    fs::write(&path, state_json("local")).expect("seed regular state file");
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let result = load_cursor_state_after_check(&path, |checked_path| {
+            fs::remove_file(checked_path).map_err(|error| {
+                orbit_common::OrbitError::Io(format!("remove checked state file: {error}"))
+            })?;
+            let status = std::process::Command::new("mkfifo")
+                .arg(checked_path)
+                .status()
+                .map_err(|error| orbit_common::OrbitError::Io(format!("create FIFO: {error}")))?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(orbit_common::OrbitError::Io(format!(
+                    "mkfifo failed: {status}"
+                )))
+            }
+        });
+        sender.send(result).expect("report cursor result");
+    });
+
+    let result = receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("FIFO swap must not block the cursor reader");
+    assert!(result.is_err(), "a swapped FIFO must be rejected");
+}
+
 #[test]
 fn concurrent_upserts_for_different_definitions_preserve_both_cursors() {
     let root = tempdir().expect("tempdir");

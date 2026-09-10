@@ -211,7 +211,8 @@ fn validated_lock_holder_parent(lock_path: &Path) -> Option<PathBuf> {
 /// avoids blocking on an exotic node such as a FIFO; it is *not* the security
 /// boundary. That boundary is the open immediately after: on Unix,
 /// `O_NOFOLLOW` makes the open itself fail if the final component is a
-/// symlink, and the follow-up `metadata()` call is an `fstat` on the
+/// symlink and `O_NONBLOCK` prevents a swapped FIFO from hanging the caller;
+/// the follow-up `metadata()` call is an `fstat` on the
 /// already-open descriptor, re-checking the file that was actually opened
 /// rather than a path that could have changed again. Folding the check and
 /// the open into one function, with the open re-validating its own
@@ -227,8 +228,9 @@ fn validated_lock_holder_parent(lock_path: &Path) -> Option<PathBuf> {
 /// only the leaf-symlink swap this closes.
 ///
 /// The no-follow open is atomic against the leaf swap on Unix (`O_NOFOLLOW`)
-/// and on Windows (`FILE_FLAG_OPEN_REPARSE_POINT`, which opens a reparse
-/// point itself instead of its target). On any other platform the open
+/// and nonblocking for a swapped FIFO. On Windows,
+/// `FILE_FLAG_OPEN_REPARSE_POINT` opens a reparse point itself instead of its
+/// target. On any other platform the open
 /// follows a symlink normally, so the pathname pre-check above is the only
 /// protection and a swap landing between that check and the open is not
 /// covered there.
@@ -244,31 +246,10 @@ fn open_lock_holder_file(lock_path: &Path, before_open: impl FnOnce(&Path)) -> O
 
     before_open(&candidate);
 
-    let mut options = OpenOptions::new();
-    options.read(true);
-    apply_read_only_no_follow(&mut options);
-    let file = options.open(&candidate).ok()?;
+    let file = super::open_read_only_no_follow(&candidate).ok()?;
     let metadata = file.metadata().ok()?;
     metadata.is_file().then_some(file)
 }
-
-#[cfg(unix)]
-fn apply_read_only_no_follow(options: &mut OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    options.custom_flags(libc::O_NOFOLLOW);
-}
-
-#[cfg(windows)]
-fn apply_read_only_no_follow(options: &mut OpenOptions) {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-}
-
-#[cfg(not(any(unix, windows)))]
-fn apply_read_only_no_follow(_options: &mut OpenOptions) {}
 
 fn open_lock_file(lock_path: &Path, label: &str) -> io::Result<File> {
     let mut options = OpenOptions::new();

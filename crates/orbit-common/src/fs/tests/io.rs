@@ -216,6 +216,38 @@ fn read_file_lock_holder_rejects_a_final_symlink_swapped_after_the_path_check() 
 
 #[cfg(unix)]
 #[test]
+fn read_file_lock_holder_does_not_block_on_a_fifo_swapped_after_the_path_check() {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    use crate::fs::file_lock::read_file_lock_holder_after_resolve;
+
+    let root = tempfile::tempdir().expect("root tempdir");
+    let lock_path = root.path().join(".task.yaml.lock");
+    std::fs::write(&lock_path, br#"{"pid":1}"#).expect("write checked holder");
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let holder = read_file_lock_holder_after_resolve(&lock_path, |checked_path| {
+            std::fs::remove_file(checked_path).expect("remove checked holder");
+            let status = std::process::Command::new("mkfifo")
+                .arg(checked_path)
+                .status()
+                .expect("create FIFO");
+            assert!(status.success(), "mkfifo must succeed: {status}");
+        });
+        sender.send(holder).expect("report holder result");
+    });
+
+    let holder = receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("FIFO swap must not block the holder reader");
+    assert!(holder.is_none(), "a swapped FIFO is not holder metadata");
+}
+
+#[cfg(unix)]
+#[test]
 fn read_file_lock_holder_rejects_a_symlinked_lock_file() {
     let root = tempfile::tempdir().expect("root tempdir");
     let outside = tempfile::tempdir().expect("outside tempdir");

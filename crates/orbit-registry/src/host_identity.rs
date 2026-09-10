@@ -12,7 +12,7 @@
 //! no silent fallback to the OS hostname. Routine `hosts:` pinning,
 //! the sweep, and status all resolve through [`HostIdentity::host_id`].
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
+use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::protocol::toml::escape_basic_string;
 use orbit_types::identity::{MACHINE_ID_PREFIX, validate_machine_id};
 use serde::Deserialize;
@@ -194,9 +195,9 @@ fn validated_existing_global_root(global_root: &Path) -> Result<Option<PathBuf>,
 /// Open the fixed identity file beneath the validated root without following a
 /// swapped final symlink.
 ///
-/// Unix uses `O_NOFOLLOW`; Windows opens the reparse point itself. The descriptor
-/// is checked for a regular file before any bytes are read. Platforms without
-/// either primitive still perform both pathname and descriptor type checks, but
+/// Unix uses `O_NOFOLLOW | O_NONBLOCK`; Windows opens the reparse point itself.
+/// The descriptor is checked for a regular file before any bytes are read.
+/// Platforms without either primitive still perform both pathname and descriptor type checks, but
 /// cannot close a final-component check/open race. Canonicalization also permits
 /// trusted root aliases, so this leaf protection does not claim to prevent a
 /// privileged concurrent rename or replacement of a mutable ancestor directory.
@@ -223,10 +224,7 @@ where
         Ok(_) => {
             before_open(&path)?;
 
-            let mut options = OpenOptions::new();
-            options.read(true);
-            apply_no_follow_final_component(&mut options);
-            let file = options.open(&path).map_err(|error| {
+            let file = open_read_only_no_follow(&path).map_err(|error| {
                 OrbitError::Io(format!("failed to open '{}': {error}", path.display()))
             })?;
             let metadata = file.metadata().map_err(|error| {
@@ -249,24 +247,6 @@ where
         ))),
     }
 }
-
-#[cfg(unix)]
-fn apply_no_follow_final_component(options: &mut OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    options.custom_flags(libc::O_NOFOLLOW);
-}
-
-#[cfg(windows)]
-fn apply_no_follow_final_component(options: &mut OpenOptions) {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-}
-
-#[cfg(not(any(unix, windows)))]
-fn apply_no_follow_final_component(_options: &mut OpenOptions) {}
 
 fn non_blank(value: &Option<String>) -> Option<String> {
     value

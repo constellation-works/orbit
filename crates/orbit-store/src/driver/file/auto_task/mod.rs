@@ -16,12 +16,13 @@
 //! following the final component, so the path check and the read cannot be
 //! separated by a swap [ORB-12026].
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
+use orbit_common::fs::open_read_only_no_follow;
 use orbit_types::workflow::{AutoTaskCursor, AutoTaskCursorState};
 
 #[cfg(test)]
@@ -138,8 +139,8 @@ fn validated_cursor_state_dir(path: &Path) -> Result<Option<PathBuf>, OrbitError
 ///
 /// Both the directory and the final component are validated before the first
 /// metadata probe, so no sink here ever sees the raw caller path. Unix opens
-/// with `O_NOFOLLOW` and Windows opens the reparse point itself; the resulting
-/// descriptor is re-checked for a regular file, so a symlink planted between
+/// with `O_NOFOLLOW | O_NONBLOCK` and Windows opens the reparse point itself.
+/// The resulting descriptor is re-checked for a regular file, so a symlink planted between
 /// the probe and the open fails instead of redirecting the read. A platform
 /// with neither primitive still performs the pathname and descriptor checks
 /// but cannot close that final-component race. Because ancestors are
@@ -178,10 +179,7 @@ where
 
     before_open(&candidate)?;
 
-    let mut options = OpenOptions::new();
-    options.read(true);
-    apply_no_follow_final_component(&mut options);
-    let file = match options.open(&candidate) {
+    let file = match open_read_only_no_follow(&candidate) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) if is_symlink_open_refusal(&error) => {
@@ -237,24 +235,6 @@ fn is_symlink_open_refusal(error: &std::io::Error) -> bool {
 fn is_symlink_open_refusal(_error: &std::io::Error) -> bool {
     false
 }
-
-#[cfg(unix)]
-fn apply_no_follow_final_component(options: &mut OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    options.custom_flags(libc::O_NOFOLLOW);
-}
-
-#[cfg(windows)]
-fn apply_no_follow_final_component(options: &mut OpenOptions) {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-}
-
-#[cfg(not(any(unix, windows)))]
-fn apply_no_follow_final_component(_options: &mut OpenOptions) {}
 
 fn parse_state(raw: &str, path: &Path) -> Result<AutoTaskCursorState, OrbitError> {
     serde_json::from_str(raw.trim()).map_err(|error| {
