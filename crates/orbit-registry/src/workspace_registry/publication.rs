@@ -10,7 +10,20 @@ use orbit_types::workspace::{
     validate_publication_remote,
 };
 
-use super::{WorkspaceRegistryHostContext, find_checkout, find_workspace};
+use super::{
+    WorkspaceRegistryHostContext, find_checkout_by_id, find_workspace, find_workspace_by_id,
+};
+
+/// Locate the publication binding for an exact workspace ID.
+pub fn find_publication_binding_by_id<'a>(
+    registry: &'a WorkspaceRegistry,
+    workspace_id: &str,
+) -> Option<&'a WorkspacePublicationBinding> {
+    registry
+        .publication_bindings
+        .iter()
+        .find(|binding| binding.workspace_id == workspace_id)
+}
 
 /// Locate the publication binding for a workspace id or name.
 pub fn find_publication_binding<'a>(
@@ -20,23 +33,21 @@ pub fn find_publication_binding<'a>(
     let Some(workspace) = find_workspace(registry, id_or_name)? else {
         return Ok(None);
     };
-    Ok(registry
-        .publication_bindings
-        .iter()
-        .find(|binding| binding.workspace_id == workspace.id))
+    Ok(find_publication_binding_by_id(registry, &workspace.id))
 }
 
-/// Create a publication binding. Fails when one already exists; use
-/// [`rebind_publication`] to replace it.
-pub fn bind_publication(
+/// Create a publication binding for an exact workspace ID. Fails when one
+/// already exists; use [`rebind_publication_by_id`] to replace it.
+pub fn bind_publication_by_id(
     registry: &mut WorkspaceRegistry,
-    id_or_name: &str,
+    workspace_id: &str,
     publication_remote: &str,
     publication_branch: &str,
     publication_id: &str,
     local_machine_id: Option<&str>,
 ) -> Result<WorkspacePublicationBinding, OrbitError> {
-    let workspace_id = bindable_workspace(registry, id_or_name, local_machine_id)?.id;
+    let workspace = bindable_workspace_by_id(registry, workspace_id, local_machine_id)?;
+    let workspace_id = workspace.id.clone();
     if registry
         .publication_bindings
         .iter()
@@ -57,9 +68,9 @@ pub fn bind_publication(
     Ok(binding)
 }
 
-/// Replace an existing publication binding. Last-success state is cleared
-/// because the lineage or remote is changing.
-pub fn rebind_publication(
+/// Create a publication binding. Fails when one already exists; use
+/// [`rebind_publication`] to replace it.
+pub fn bind_publication(
     registry: &mut WorkspaceRegistry,
     id_or_name: &str,
     publication_remote: &str,
@@ -67,7 +78,31 @@ pub fn rebind_publication(
     publication_id: &str,
     local_machine_id: Option<&str>,
 ) -> Result<WorkspacePublicationBinding, OrbitError> {
-    let workspace_id = bindable_workspace(registry, id_or_name, local_machine_id)?.id;
+    let workspace = find_workspace(registry, id_or_name)?
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
+    let workspace_id = workspace.id.clone();
+    bind_publication_by_id(
+        registry,
+        &workspace_id,
+        publication_remote,
+        publication_branch,
+        publication_id,
+        local_machine_id,
+    )
+}
+
+/// Replace an existing publication binding for an exact workspace ID. Last-success
+/// state is cleared because the lineage or remote is changing.
+pub fn rebind_publication_by_id(
+    registry: &mut WorkspaceRegistry,
+    workspace_id: &str,
+    publication_remote: &str,
+    publication_branch: &str,
+    publication_id: &str,
+    local_machine_id: Option<&str>,
+) -> Result<WorkspacePublicationBinding, OrbitError> {
+    let workspace = bindable_workspace_by_id(registry, workspace_id, local_machine_id)?;
+    let workspace_id = workspace.id.clone();
     let index = registry
         .publication_bindings
         .iter()
@@ -88,13 +123,37 @@ pub fn rebind_publication(
     Ok(binding)
 }
 
-/// Remove the publication binding for a workspace.
-pub fn unbind_publication(
+/// Replace an existing publication binding. Last-success state is cleared
+/// because the lineage or remote is changing.
+pub fn rebind_publication(
     registry: &mut WorkspaceRegistry,
     id_or_name: &str,
+    publication_remote: &str,
+    publication_branch: &str,
+    publication_id: &str,
     local_machine_id: Option<&str>,
 ) -> Result<WorkspacePublicationBinding, OrbitError> {
-    let workspace_id = bindable_workspace(registry, id_or_name, local_machine_id)?.id;
+    let workspace = find_workspace(registry, id_or_name)?
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
+    let workspace_id = workspace.id.clone();
+    rebind_publication_by_id(
+        registry,
+        &workspace_id,
+        publication_remote,
+        publication_branch,
+        publication_id,
+        local_machine_id,
+    )
+}
+
+/// Remove the publication binding for an exact workspace ID.
+pub fn unbind_publication_by_id(
+    registry: &mut WorkspaceRegistry,
+    workspace_id: &str,
+    local_machine_id: Option<&str>,
+) -> Result<WorkspacePublicationBinding, OrbitError> {
+    let workspace = bindable_workspace_by_id(registry, workspace_id, local_machine_id)?;
+    let workspace_id = workspace.id.clone();
     let index = registry
         .publication_bindings
         .iter()
@@ -107,16 +166,29 @@ pub fn unbind_publication(
     Ok(registry.publication_bindings.remove(index))
 }
 
-/// Record a successful publication generation and commit without rebinding.
-pub fn record_publication_success(
+/// Remove the publication binding for a workspace.
+pub fn unbind_publication(
     registry: &mut WorkspaceRegistry,
     id_or_name: &str,
+    local_machine_id: Option<&str>,
+) -> Result<WorkspacePublicationBinding, OrbitError> {
+    let workspace = find_workspace(registry, id_or_name)?
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
+    let workspace_id = workspace.id.clone();
+    unbind_publication_by_id(registry, &workspace_id, local_machine_id)
+}
+
+/// Record a successful publication generation and commit without rebinding for an exact workspace ID.
+pub fn record_publication_success_by_id(
+    registry: &mut WorkspaceRegistry,
+    workspace_id: &str,
     generation: u64,
     commit: &str,
     local_machine_id: Option<&str>,
 ) -> Result<WorkspacePublicationBinding, OrbitError> {
     let commit = commit.to_ascii_lowercase();
-    let workspace_id = bindable_workspace(registry, id_or_name, local_machine_id)?.id;
+    let workspace = bindable_workspace_by_id(registry, workspace_id, local_machine_id)?;
+    let workspace_id = workspace.id.clone();
     let binding = registry
         .publication_bindings
         .iter_mut()
@@ -155,6 +227,26 @@ pub fn record_publication_success(
     .map_err(workspace_error)?;
     *binding = next.clone();
     Ok(next)
+}
+
+/// Record a successful publication generation and commit without rebinding.
+pub fn record_publication_success(
+    registry: &mut WorkspaceRegistry,
+    id_or_name: &str,
+    generation: u64,
+    commit: &str,
+    local_machine_id: Option<&str>,
+) -> Result<WorkspacePublicationBinding, OrbitError> {
+    let workspace = find_workspace(registry, id_or_name)?
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
+    let workspace_id = workspace.id.clone();
+    record_publication_success_by_id(
+        registry,
+        &workspace_id,
+        generation,
+        commit,
+        local_machine_id,
+    )
 }
 
 pub(crate) fn validate_publication_bindings(
@@ -242,24 +334,18 @@ pub(crate) fn validate_publication_bindings(
     Ok(())
 }
 
-struct BindableWorkspace {
-    id: String,
-}
-
-fn bindable_workspace(
-    registry: &WorkspaceRegistry,
-    id_or_name: &str,
+fn bindable_workspace_by_id<'a>(
+    registry: &'a WorkspaceRegistry,
+    workspace_id: &str,
     local_machine_id: Option<&str>,
-) -> Result<BindableWorkspace, OrbitError> {
+) -> Result<&'a Workspace, OrbitError> {
     if let Some(machine_id) = local_machine_id {
         validate_machine_id(machine_id)?;
     }
-    let workspace = find_workspace(registry, id_or_name)?
-        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
+    let workspace = find_workspace_by_id(registry, workspace_id)
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, workspace_id.to_string()))?;
     publisher_allowed(registry, workspace, local_machine_id).map_err(publication_error)?;
-    Ok(BindableWorkspace {
-        id: workspace.id.clone(),
-    })
+    Ok(workspace)
 }
 
 fn publisher_allowed(
@@ -267,9 +353,7 @@ fn publisher_allowed(
     workspace: &Workspace,
     local_machine_id: Option<&str>,
 ) -> Result<(), String> {
-    if let Some(checkout) =
-        find_checkout(registry, &workspace.id).map_err(|error| error.to_string())?
-    {
+    if let Some(checkout) = find_checkout_by_id(registry, &workspace.id) {
         if checkout.role == Some(WorkspaceCheckoutRole::Replica) {
             return Err(format!(
                 "workspace '{}' is a replica checkout; only the declared owner can manage a publication binding",
@@ -306,7 +390,7 @@ fn build_binding(
     publication_branch: &str,
     publication_id: &str,
 ) -> Result<WorkspacePublicationBinding, OrbitError> {
-    let workspace = find_workspace(registry, workspace_id)?
+    let workspace = find_workspace_by_id(registry, workspace_id)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, workspace_id.to_string()))?;
     let Some(fingerprint) = workspace.git_remote.as_deref() else {
         return Err(publication_error(format!(

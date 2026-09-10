@@ -115,15 +115,15 @@ impl Execute for TaskPublicationPublishArgs {
         let host = load_host_identity(&global_root)?;
         let registry_path = workspace_registry::registry_path_for(&global_root);
         let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-        let binding = workspace_registry::find_publication_binding(&registry, &workspace_id)?
+        let binding = workspace_registry::find_publication_binding_by_id(&registry, &workspace_id)
             .cloned()
             .ok_or_else(|| {
                 orbit_core::OrbitError::WorkspaceError(format!(
                     "workspace '{workspace_id}' has no publication binding; run `orbit workspace publication bind` first"
                 ))
             })?;
-        let checkout =
-            workspace_registry::find_checkout(&registry, &workspace_id)?.ok_or_else(|| {
+        let checkout = workspace_registry::find_checkout_by_id(&registry, &workspace_id)
+            .ok_or_else(|| {
                 orbit_core::OrbitError::WorkspaceError(format!(
                     "workspace '{workspace_id}' has no local checkout"
                 ))
@@ -158,7 +158,7 @@ impl Execute for TaskPublicationPublishArgs {
         };
         let outcome = runtime.publish_task_publication(request, &policy)?;
 
-        workspace_registry::record_publication_success(
+        workspace_registry::record_publication_success_by_id(
             &mut registry,
             &workspace_id,
             outcome.generation,
@@ -188,7 +188,7 @@ impl Execute for TaskPublicationStatusArgs {
         let registry = workspace_registry::load_registry_from(
             &workspace_registry::registry_path_for(&runtime.global_root()),
         )?;
-        let binding = workspace_registry::find_publication_binding(&registry, &workspace_id)?
+        let binding = workspace_registry::find_publication_binding_by_id(&registry, &workspace_id)
             .ok_or_else(|| {
                 orbit_core::OrbitError::WorkspaceError(format!(
                     "workspace '{workspace_id}' has no publication binding"
@@ -476,19 +476,23 @@ fn assert_restore_authority(
     let registry = workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
         &global_root,
     ))?;
-    let workspace = workspace_registry::find_workspace(&registry, &selected)?.ok_or_else(|| {
-        orbit_core::OrbitError::WorkspaceError(format!("workspace '{selected}' is not registered"))
-    })?;
+    let workspace =
+        workspace_registry::find_workspace_by_id(&registry, &selected).ok_or_else(|| {
+            orbit_core::OrbitError::WorkspaceError(format!(
+                "workspace '{selected}' is not registered"
+            ))
+        })?;
     if workspace.owner_machine_id.as_deref() != Some(local_machine_id.as_str()) {
         return Err(orbit_core::OrbitError::PolicyDenied(format!(
             "workspace '{selected}' is not owned by local machine '{local_machine_id}'"
         )));
     }
-    let checkout = workspace_registry::find_checkout(&registry, &selected)?.ok_or_else(|| {
-        orbit_core::OrbitError::WorkspaceError(format!(
-            "workspace '{selected}' has no local checkout"
-        ))
-    })?;
+    let checkout =
+        workspace_registry::find_checkout_by_id(&registry, &selected).ok_or_else(|| {
+            orbit_core::OrbitError::WorkspaceError(format!(
+                "workspace '{selected}' has no local checkout"
+            ))
+        })?;
     if checkout.role != Some(WorkspaceCheckoutRole::Owner) {
         return Err(orbit_core::OrbitError::PolicyDenied(format!(
             "workspace '{selected}' is a replica checkout; restore requires the declared owner destination"

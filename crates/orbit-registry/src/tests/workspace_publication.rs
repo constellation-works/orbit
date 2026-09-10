@@ -10,8 +10,10 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use crate::workspace_registry::{
-    bind_publication, find_publication_binding, load_registry_from, rebind_publication,
-    record_publication_success, save_registry_to, unbind_publication,
+    bind_publication, bind_publication_by_id, find_publication_binding,
+    find_publication_binding_by_id, load_registry_from, rebind_publication,
+    rebind_publication_by_id, record_publication_success, record_publication_success_by_id,
+    save_registry_to, unbind_publication, unbind_publication_by_id,
 };
 
 fn timestamp() -> chrono::DateTime<Utc> {
@@ -463,4 +465,155 @@ fn record_publication_success_is_idempotent_across_commit_hex_case() {
     assert_eq!(first, second);
     assert_eq!(first.last_success_generation, Some(3));
     assert_eq!(first.last_success_commit.as_deref(), Some(LOWER));
+}
+
+#[test]
+fn publication_lifecycle_survives_workspace_id_and_name_collision() {
+    let mut registry = owner_registry();
+    registry.workspaces.push(Workspace {
+        id: "ws_other".to_string(),
+        name: "ws_orbit".to_string(),
+        owner_machine_id: Some("hm_owner".to_string()),
+        git_remote: Some("git@github.com:example/other.git".to_string()),
+        ship_mode: Some("pr".to_string()),
+        base_branch: "agent-main".to_string(),
+        status: WorkspaceStatus::Active,
+        created_at: timestamp(),
+        updated_at: timestamp(),
+    });
+    registry.checkouts.push(owner_checkout("ws_other"));
+
+    // 1. Binding unambiguously by name "orbit" must succeed.
+    let bound = bind_publication(
+        &mut registry,
+        "orbit",
+        "git@github.com:example/tasks.git",
+        "main",
+        "tp_orbit_tasks",
+        Some("hm_owner"),
+    )
+    .expect("bind publication by unambiguous name must succeed");
+    assert_eq!(bound.workspace_id, "ws_orbit");
+
+    // 2. Lookup unambiguously by name "orbit" must succeed.
+    let found = find_publication_binding(&registry, "orbit")
+        .expect("lookup by name")
+        .expect("found binding");
+    assert_eq!(found.workspace_id, "ws_orbit");
+
+    // 3. Recording publication success unambiguously by name "orbit" must succeed.
+    let recorded = record_publication_success(
+        &mut registry,
+        "orbit",
+        1,
+        "1111111111111111111111111111111111111111",
+        Some("hm_owner"),
+    )
+    .expect("record publication success by unambiguous name must succeed");
+    assert_eq!(recorded.last_success_generation, Some(1));
+
+    // 4. Rebinding unambiguously by name "orbit" must succeed.
+    let rebound = rebind_publication(
+        &mut registry,
+        "orbit",
+        "https://github.com/example/tasks-v2.git",
+        "refs/heads/publication",
+        "tp_orbit_tasks_v2",
+        Some("hm_owner"),
+    )
+    .expect("rebind publication by unambiguous name must succeed");
+    assert_eq!(rebound.publication_id, "tp_orbit_tasks_v2");
+
+    // 5. Unbinding unambiguously by name "orbit" must succeed.
+    let unbound = unbind_publication(&mut registry, "orbit", Some("hm_owner"))
+        .expect("unbind publication by unambiguous name must succeed");
+    assert_eq!(unbound.workspace_id, "ws_orbit");
+
+    // 6. Operator-typed colliding selector "ws_orbit" genuinely matches two workspaces
+    // and must fail closed with the ambiguous-selector error.
+    let err = bind_publication(
+        &mut registry,
+        "ws_orbit",
+        "git@github.com:example/tasks.git",
+        "main",
+        "tp_orbit_tasks",
+        Some("hm_owner"),
+    )
+    .expect_err("colliding selector must fail closed on bind")
+    .to_string();
+    assert!(err.contains("ambiguous workspace selector"), "{err}");
+
+    let err = find_publication_binding(&registry, "ws_orbit")
+        .expect_err("colliding selector must fail closed on find")
+        .to_string();
+    assert!(err.contains("ambiguous workspace selector"), "{err}");
+
+    let err = rebind_publication(
+        &mut registry,
+        "ws_orbit",
+        "git@github.com:example/tasks.git",
+        "main",
+        "tp_orbit_tasks",
+        Some("hm_owner"),
+    )
+    .expect_err("colliding selector must fail closed on rebind")
+    .to_string();
+    assert!(err.contains("ambiguous workspace selector"), "{err}");
+
+    let err = unbind_publication(&mut registry, "ws_orbit", Some("hm_owner"))
+        .expect_err("colliding selector must fail closed on unbind")
+        .to_string();
+    assert!(err.contains("ambiguous workspace selector"), "{err}");
+
+    let err = record_publication_success(
+        &mut registry,
+        "ws_orbit",
+        2,
+        "2222222222222222222222222222222222222222",
+        Some("hm_owner"),
+    )
+    .expect_err("colliding selector must fail closed on record_publication_success")
+    .to_string();
+    assert!(err.contains("ambiguous workspace selector"), "{err}");
+
+    // 7. Direct exact-ID publication operations for "ws_orbit" succeed even in the presence of the collision.
+    let by_id_bound = bind_publication_by_id(
+        &mut registry,
+        "ws_orbit",
+        "git@github.com:example/tasks.git",
+        "main",
+        "tp_orbit_tasks_exact",
+        Some("hm_owner"),
+    )
+    .expect("bind publication by exact id must succeed");
+    assert_eq!(by_id_bound.workspace_id, "ws_orbit");
+
+    let by_id_found = find_publication_binding_by_id(&registry, "ws_orbit")
+        .expect("find publication binding by exact id");
+    assert_eq!(by_id_found.publication_id, "tp_orbit_tasks_exact");
+
+    let by_id_recorded = record_publication_success_by_id(
+        &mut registry,
+        "ws_orbit",
+        2,
+        "2222222222222222222222222222222222222222",
+        Some("hm_owner"),
+    )
+    .expect("record publication success by exact id must succeed");
+    assert_eq!(by_id_recorded.last_success_generation, Some(2));
+
+    let by_id_rebound = rebind_publication_by_id(
+        &mut registry,
+        "ws_orbit",
+        "https://github.com/example/tasks-v2.git",
+        "refs/heads/publication",
+        "tp_orbit_tasks_exact_v2",
+        Some("hm_owner"),
+    )
+    .expect("rebind publication by exact id must succeed");
+    assert_eq!(by_id_rebound.publication_id, "tp_orbit_tasks_exact_v2");
+
+    let by_id_unbound = unbind_publication_by_id(&mut registry, "ws_orbit", Some("hm_owner"))
+        .expect("unbind publication by exact id must succeed");
+    assert_eq!(by_id_unbound.workspace_id, "ws_orbit");
 }
