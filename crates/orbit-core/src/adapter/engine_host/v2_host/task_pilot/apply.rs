@@ -14,8 +14,9 @@ use crate::application::task::TaskUpdateParams;
 
 use super::source::SourceSnapshot;
 use super::{
-    action_failed, member_ready, requested_workspace_root, required_string, required_string_array,
-    string_array_value, validate_after_selectors, validate_recommendations,
+    VALIDATION_TOOL_WARNINGS, action_failed, member_ready, requested_workspace_root,
+    required_string, required_string_array, string_array, string_array_value,
+    validate_after_selectors, validate_recommendations,
 };
 
 #[derive(Clone)]
@@ -25,6 +26,9 @@ struct PreparedTaskSnapshot {
     title: String,
     tags: Vec<String>,
     material: Option<(String, String)>,
+    /// Deterministic feasibility findings for the tools this task's acceptance
+    /// criteria require, computed at preparation [ORB-11980].
+    validation_tool_warnings: Vec<String>,
 }
 
 struct ValidatedTask {
@@ -106,6 +110,11 @@ pub(in super::super) fn apply(
                     status,
                     title,
                     tags,
+                    validation_tool_warnings: string_array(
+                        entry,
+                        VALIDATION_TOOL_WARNINGS,
+                        action,
+                    )?,
                     material: entry
                         .get("material_fingerprint")
                         .and_then(Value::as_str)
@@ -360,13 +369,25 @@ pub(in super::super) fn apply(
                 stale.push(stale_task(task_id, reason.0, reason.1));
                 continue;
             }
+            // The pilot never sees the deterministic feasibility findings, so
+            // apply attaches them here: every downstream readiness and
+            // admission rule then reads one assessment that carries both the
+            // agent's findings and the lane's [ORB-11980].
+            let mut assessment = (*assessment).clone();
+            if let Value::Object(fields) = &mut assessment {
+                fields.insert(
+                    VALIDATION_TOOL_WARNINGS.to_string(),
+                    json!(snapshot.validation_tool_warnings),
+                );
+            }
+
             let admission = match ci_sweep_filing
                 .map(|filing| {
                     ci_failure_admission::assess(
                         action,
                         task_id,
                         &current,
-                        assessment,
+                        &assessment,
                         &after,
                         filing,
                         promotion_authorized,
@@ -386,7 +407,7 @@ pub(in super::super) fn apply(
             validated.push(ValidatedTask {
                 task_id: task_id.clone(),
                 after,
-                assessment: (*assessment).clone(),
+                assessment,
                 admission,
                 promote,
             });

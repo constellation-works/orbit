@@ -177,7 +177,21 @@ spec:
        a wrong dependency requirement, a broken manifest, a packaging script
        bug — is ordinary work, so return its selectors and leave
        `release_action_required` null.
-    5. Report recommendations only; do not apply them:
+    5. Check the task's acceptance criteria against the lane that would run
+       them. A criterion is infeasible when it requires a tool over a transport
+       that does not advertise it (an MCP session reaches only MCP-advertised
+       tools, so `proc.spawn` is CLI-only), when it names a tool outside the
+       implementation activity's allowlist that the task's immutable
+       `required_tools` never declared, or when it requires an
+       operator-reserved governed operation an implementing agent cannot
+       perform. Report each contradiction in `utility_warnings`, naming the
+       tool and the repair — declare it at creation, restate the transport, or
+       hand that validation to an operator. Never recommend widening the MCP
+       surface, relaxing an allowlist, or setting an authority environment
+       variable to make a criterion reachable. A criterion that expects a
+       refusal is a correct negative test, and a tool name inside a quoted
+       example is not a requirement; report neither.
+    6. Report recommendations only; do not apply them:
        `recommended_crew`, `recommended_complexity`, real `blocked_by` task IDs,
        `duplicate_of`, `already_landed`, `release_action_required`,
        `adr_conflicts` (a legacy output field name kept for consumer
