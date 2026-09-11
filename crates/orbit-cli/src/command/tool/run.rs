@@ -152,6 +152,7 @@ pub(super) fn local_tool_session_context(
 ) -> Result<ToolSessionContext, OrbitError> {
     let (machine_id, host_id) = local_machine_identity(&runtime.global_root())?;
     Ok(ToolSessionContext {
+        workspace: Some(runtime.paths().repo_root.to_string_lossy().into_owned()),
         workspace_id: owner
             .map(|owner| owner.id.clone())
             .or_else(|| runtime.workspace_id().ok()),

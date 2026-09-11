@@ -228,6 +228,144 @@ fn global_workspace_flag_fails_closed_on_unknown_selector() {
     );
 }
 
+#[test]
+fn tool_run_workspace_selection_uses_global_flag_and_input_precedence() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let orbit_repo = temp.path().join("orbit");
+    let other_repo = temp.path().join("other");
+    let elsewhere = temp.path().join("elsewhere");
+    fs::create_dir_all(&home).expect("home");
+    fs::create_dir_all(&elsewhere).expect("elsewhere");
+
+    init_git_repo(&orbit_repo);
+    init_git_repo(&other_repo);
+
+    run_orbit(
+        &orbit_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--host-name",
+            "selector-host",
+            "--task-prefix",
+            "SEL",
+        ],
+    )
+    .success();
+    run_orbit(
+        &orbit_repo,
+        &home,
+        &["workspace", "init", "--name", "orbit"],
+    )
+    .success();
+    run_orbit(
+        &other_repo,
+        &home,
+        &["workspace", "init", "--name", "other"],
+    )
+    .success();
+
+    let shown = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "--workspace",
+            "orbit",
+            "--format",
+            "json",
+            "workspace",
+            "show",
+        ],
+    );
+    assert_eq!(
+        Path::new(shown["checkout"]["repo_root"].as_str().expect("repo root")),
+        fs::canonicalize(&orbit_repo).expect("canonical orbit repo")
+    );
+    assert_eq!(
+        Path::new(shown["checkout"]["orbit_dir"].as_str().expect("orbit dir")),
+        fs::canonicalize(orbit_repo.join(".orbit")).expect("canonical orbit dir")
+    );
+
+    let flag_only = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "--workspace",
+            "orbit",
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            r#"{"title":"Selected by global flag","description":"Global selector","complexity":"low","model":"codex"}"#,
+        ],
+    );
+    assert_eq!(flag_only["title"], "Selected by global flag");
+
+    let input_only = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            r#"{"title":"Selected by input","description":"Input selector","workspace":"other","complexity":"low","model":"codex"}"#,
+        ],
+    );
+    assert_eq!(input_only["title"], "Selected by input");
+
+    let both_supplied = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "--workspace",
+            "other",
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            r#"{"title":"Input wins","description":"Explicit input selector","workspace":"orbit","complexity":"low","model":"codex"}"#,
+        ],
+    );
+    assert_eq!(both_supplied["title"], "Input wins");
+
+    let orbit_tasks = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "--workspace",
+            "orbit",
+            "tool",
+            "run",
+            "orbit.task.list",
+            "--input",
+            r#"{"limit":10,"model":"codex"}"#,
+        ],
+    );
+    let orbit_titles = task_titles(&orbit_tasks);
+    assert!(orbit_titles.contains(&"Selected by global flag".to_string()));
+    assert!(orbit_titles.contains(&"Input wins".to_string()));
+    assert!(!orbit_titles.contains(&"Selected by input".to_string()));
+
+    let other_tasks = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "tool",
+            "run",
+            "orbit.task.list",
+            "--input",
+            r#"{"workspace":"other","limit":10,"model":"codex"}"#,
+        ],
+    );
+    let other_titles = task_titles(&other_tasks);
+    assert!(other_titles.contains(&"Selected by input".to_string()));
+    assert!(!other_titles.contains(&"Selected by global flag".to_string()));
+    assert!(!other_titles.contains(&"Input wins".to_string()));
+}
+
 /// A workspace whose ID equals another workspace's name must still be reachable
 /// from its checkout and by absolute path. The colliding token stays fail-closed
 /// only when the operator types it as an id-or-name selector [ORB-11805].
@@ -732,6 +870,22 @@ fn task_ids(value: &Value) -> Vec<String> {
         .iter()
         .filter_map(|task| {
             task.get("id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .collect()
+}
+
+fn task_titles(value: &Value) -> Vec<String> {
+    let items = value
+        .as_array()
+        .cloned()
+        .or_else(|| value.get("tasks").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
+    items
+        .iter()
+        .filter_map(|task| {
+            task.get("title")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
