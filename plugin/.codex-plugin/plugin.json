@@ -1,6 +1,6 @@
 {
   "name": "orbit",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "Task and activity orchestration for AI coding agents. Adds Orbit's MCP task and knowledge surface plus workflow skills to Codex.",
   "author": {
     "name": "constellation-works",
@@ -20,7 +20,7 @@
   "mcpServers": {
     "orbit": {
       "command": "npx",
-      "args": ["-y", "@orbit-tools/cli@0.20.0", "mcp", "serve"]
+      "args": ["-y", "@orbit-tools/cli@0.21.0", "mcp", "serve"]
     }
   },
   "interface": {
