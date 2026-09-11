@@ -78,6 +78,37 @@ fn list_output_uses_minimal_task_projection() {
 }
 
 #[test]
+fn list_output_projects_explicit_fields_inside_envelope() {
+    let shaped = shape_tool_output(
+        "orbit.task.list",
+        json!({
+            "tasks": [{
+                "id": "T20260422-0001",
+                "title": "Backlog task",
+                "status": "backlog",
+                "description": "should be filtered out"
+            }],
+            "total": 1,
+            "truncated": false
+        }),
+        false,
+        &["id".to_string(), "title".to_string()],
+    );
+
+    assert_eq!(
+        shaped,
+        json!({
+            "tasks": [{
+                "id": "T20260422-0001",
+                "title": "Backlog task"
+            }],
+            "total": 1,
+            "truncated": false
+        })
+    );
+}
+
+#[test]
 fn show_output_preserves_task_details_by_default() {
     let output = json!({
         "id": "T20260422-0001",

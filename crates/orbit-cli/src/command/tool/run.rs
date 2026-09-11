@@ -30,7 +30,10 @@ pub struct ToolRunArgs {
     /// Validate without executing
     #[arg(long)]
     pub dry_run: bool,
-    /// Comma-separated top-level fields to keep from object output
+    /// Comma-separated top-level fields to keep from object output. For an
+    /// envelope-shaped result (e.g. `orbit.task.list`'s `{tasks, total,
+    /// truncated}`), fields project each record inside the envelope's
+    /// record array instead of the envelope's own top-level keys.
     #[arg(long, value_delimiter = ',', conflicts_with = "full")]
     pub fields: Vec<String>,
     /// Return the tool's full unfiltered JSON output
@@ -207,12 +210,15 @@ pub(super) fn shape_tool_output(
     }
 
     if !fields.is_empty() {
+        if tool_name == "orbit.task.list" {
+            return project_task_list_output(output, fields);
+        }
         return filter_top_level_fields(output, fields);
     }
 
     if should_project_minimal_task_output(tool_name) {
         if tool_name == "orbit.task.list" {
-            return project_task_list_output(output);
+            return project_task_list_output(output, MINIMAL_TASK_FIELDS);
         }
         return filter_top_level_fields(
             output,
@@ -237,16 +243,18 @@ fn should_project_minimal_task_output(tool_name: &str) -> bool {
     true
 }
 
-fn project_task_list_output(value: Value) -> Value {
+/// Projects `--fields` (or the default minimal set) inside the `tasks` array
+/// of an `orbit.task.list` envelope, leaving `total`/`truncated` intact.
+fn project_task_list_output<S: AsRef<str>>(value: Value, fields: &[S]) -> Value {
     let Value::Object(mut object) = value else {
         return value;
     };
     let Some(Value::Array(tasks)) = object.get_mut("tasks") else {
         return Value::Object(object);
     };
-    let fields = MINIMAL_TASK_FIELDS
+    let fields = fields
         .iter()
-        .map(|field| (*field).to_string())
+        .map(|field| field.as_ref().to_string())
         .collect::<Vec<_>>();
     let projected = std::mem::take(tasks)
         .into_iter()
