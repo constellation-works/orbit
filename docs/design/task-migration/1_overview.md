@@ -56,6 +56,10 @@ machine a disjoint id range).
   hosts with different prefixes cannot collide, whatever their counters say.
 - **Owner** — the host whose prefix a task carries. Only the owner mutates the
   task; any copy elsewhere is a read-only mirror.
+- **Owner-wins** — the import policy that syncs those mirrors:
+  `--on-conflict=owner-wins` replaces a colliding foreign-prefix bundle with the
+  owner's copy, leaves a colliding local-prefix bundle alone, and never
+  renumbers.
 - **`id_start`** — a forward-only floor for the allocator. Predates prefixes
   (machine A took `0–9999`, machine B `10000+`); now redundant for collision
   avoidance and kept only as a harmless floor.
@@ -74,7 +78,7 @@ machine a disjoint id range).
 | Runtime facades | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] |
 | CLI surfaces | [crates/orbit-cli/src/command/task/export.rs](../../../crates/orbit-cli/src/command/task/export.rs), [import.rs](../../../crates/orbit-cli/src/command/task/import.rs) | [ORB-00034] |
 | `[tasks] id_start` config | [crates/orbit-config/src/raw.rs](../../../crates/orbit-config/src/raw.rs) | [ORB-00034] |
-| Owner-wins sync (planned) | — | [ORB-12126] |
+| Owner-wins mirror sync | [crates/orbit-store/src/workflow/task/mod.rs](../../../crates/orbit-store/src/workflow/task/mod.rs) | [ORB-12126] |
 
 ## 4. The migration recipe
 
@@ -110,7 +114,9 @@ fresh ids. Import a renumber archive once; the printed `.idmap.json` is the
 record of what landed.
 
 `--on-conflict=skip` imports the non-colliding tasks and drops the rest;
-`--on-conflict=fail` aborts the whole import on the first collision.
+`--on-conflict=fail` aborts the whole import on the first collision;
+`--on-conflict=owner-wins` syncs mirrors from their owning host — see
+[§5](#5-multi-host-authority).
 
 ### Preventing future collisions
 
@@ -185,12 +191,24 @@ algorithm:
   [remote-access](../remote-access/1_overview.md)). A route that targets a
   specific host fails loudly when that host is down; it never falls back to the
   local prefix, because the operator chose which host runs the work.
-- **Mirrors are snapshots today.** Export/import is one-shot: a foreign task that
-  already landed and then changed on its owner is a *conflict* on re-import
-  (`renumber` duplicates it, `skip` drops the update, `fail` aborts). The
-  owner-wins import policy that turns this into a repeatable sync — overwrite
-  local bundles whose prefix is foreign, never touch local-prefix ones — is
-  tracked as [ORB-12126]; see [3_vision](./3_vision.md).
+- **Owner-wins import syncs the mirrors.** The other policies are one-shot: a
+  foreign task that already landed and then changed on its owner is a *conflict*
+  on re-import (`renumber` duplicates it, `skip` drops the update, `fail`
+  aborts). `--on-conflict=owner-wins` resolves it from the id alone — a
+  colliding foreign-prefix bundle is replaced by the owner's copy (reported
+  `updated`), a colliding local-prefix bundle is left untouched (reported
+  `skipped-local-owned`), and nothing is ever renumbered ([ORB-12126]).
+  Because it never mints, foreign relation targets survive verbatim, no
+  `.idmap.json` is written, and re-running the same archive reports every task
+  as `already-present` — so it is safe on a timer:
+
+  ```sh
+  orbit task import /tmp/peer-tasks.tar.zst --on-conflict=owner-wins
+  ```
+
+  Pull before push: a cross-host `depends_on` only resolves once its target's
+  mirror has landed. A failed run is re-runnable rather than rolled back —
+  replacements already applied stay, since the owner's copy is the newer one.
 
 The reasoning for choosing prefix ownership over a single authoritative host is
 in [4_decisions](./4_decisions.md).

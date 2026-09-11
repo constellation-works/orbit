@@ -68,6 +68,7 @@ pub(crate) fn take_artifact_payload_reads() -> usize {
 /// a creation-only primitive and refuses to write into an existing bundle
 /// directory. Use narrower update helpers for later mutations.
 pub(crate) fn write_bundle_at(bundle_dir: &Path, bundle: &TaskBundleV2) -> Result<(), OrbitError> {
+    refuse_existing_bundle(bundle_dir)?;
     write_bundle_atomically(bundle_dir, bundle, None, publish_staged_bundle)
 }
 
@@ -78,12 +79,51 @@ pub(crate) fn write_bundle_with_artifacts_at(
     bundle: &TaskBundleV2,
     source_bundle_dir: &Path,
 ) -> Result<(), OrbitError> {
+    refuse_existing_bundle(bundle_dir)?;
     write_bundle_atomically(
         bundle_dir,
         bundle,
         Some(source_bundle_dir),
         publish_staged_bundle,
     )
+}
+
+/// Replace the bundle already published at `bundle_dir` with `bundle`.
+///
+/// Used by owner-wins task import, where the incoming copy comes from the
+/// task's owning host and supersedes the local mirror wholesale. The
+/// replacement is staged and verified exactly like a fresh write, so the
+/// destination only ever holds a complete bundle; `source_bundle_dir` supplies
+/// the artifact blobs the incoming manifest references.
+pub(crate) fn replace_bundle_at(
+    bundle_dir: &Path,
+    bundle: &TaskBundleV2,
+    source_bundle_dir: &Path,
+) -> Result<(), OrbitError> {
+    if !bundle_dir.is_dir() {
+        return Err(OrbitError::Store(format!(
+            "no task bundle to replace at {}",
+            bundle_dir.display()
+        )));
+    }
+    write_bundle_atomically(
+        bundle_dir,
+        bundle,
+        Some(source_bundle_dir),
+        publish_replacement_bundle,
+    )
+}
+
+/// Creation refuses to write into a bundle directory that already exists;
+/// superseding one is [`replace_bundle_at`]'s job.
+fn refuse_existing_bundle(bundle_dir: &Path) -> Result<(), OrbitError> {
+    if bundle_dir.exists() {
+        return Err(OrbitError::Store(format!(
+            "task bundle already exists at {}",
+            bundle_dir.display()
+        )));
+    }
+    Ok(())
 }
 
 fn write_bundle_atomically<F>(
@@ -95,12 +135,6 @@ fn write_bundle_atomically<F>(
 where
     F: FnOnce(&Path, &Path) -> std::io::Result<()>,
 {
-    if bundle_dir.exists() {
-        return Err(OrbitError::Store(format!(
-            "task bundle already exists at {}",
-            bundle_dir.display()
-        )));
-    }
     validate_bundle_dir_matches_task_id(bundle_dir, &bundle.envelope.id)?;
     validate_bundle(bundle)?;
     let staging_dir = create_staging_dir(bundle_dir)?;
@@ -175,20 +209,10 @@ fn create_staging_dir(bundle_dir: &Path) -> Result<PathBuf, OrbitError> {
         ))
     })?;
     fs::create_dir_all(parent).map_err(|error| OrbitError::from_write_io(parent, error))?;
-    let bundle_name = bundle_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| {
-            OrbitError::Store(format!("invalid task bundle path {}", bundle_dir.display()))
-        })?;
 
     for _ in 0..32 {
-        let sequence = STAGING_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let candidate = parent.join(format!(
-            ".{bundle_name}.{}.{}.staging",
-            std::process::id(),
-            sequence
-        ));
+        let candidate = scratch_sibling_path(bundle_dir, "staging")
+            .map_err(|error| OrbitError::from_write_io(bundle_dir, error))?;
         match fs::create_dir(&candidate) {
             Ok(()) => return Ok(candidate),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -198,6 +222,31 @@ fn create_staging_dir(bundle_dir: &Path) -> Result<PathBuf, OrbitError> {
     Err(OrbitError::Store(format!(
         "could not allocate a staging directory for task bundle {}",
         bundle_dir.display()
+    )))
+}
+
+/// Build a unique hidden sibling path of `bundle_dir` for scratch use during
+/// publication (`.<bundle>.<pid>.<sequence>.<suffix>`). The process id and the
+/// process-wide counter keep two concurrent writers of the same bundle apart.
+fn scratch_sibling_path(bundle_dir: &Path, suffix: &str) -> std::io::Result<PathBuf> {
+    let invalid = |detail: &str| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("task bundle path {} {detail}", bundle_dir.display()),
+        )
+    };
+    let parent = bundle_dir
+        .parent()
+        .ok_or_else(|| invalid("has no parent directory"))?;
+    let bundle_name = bundle_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| invalid("has no UTF-8 file name"))?;
+
+    let sequence = STAGING_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    Ok(parent.join(format!(
+        ".{bundle_name}.{}.{sequence}.{suffix}",
+        std::process::id()
     )))
 }
 
@@ -219,6 +268,25 @@ fn sync_path_parent(path: &Path) -> Result<(), OrbitError> {
 
 fn publish_staged_bundle(staging_dir: &Path, bundle_dir: &Path) -> std::io::Result<()> {
     fs::rename(staging_dir, bundle_dir)?;
+    sync_bundle_parent(bundle_dir)
+}
+
+/// Publish a staged bundle over an existing one. `rename` cannot overwrite a
+/// non-empty directory, so the superseded bundle is moved aside first and
+/// dropped only once the replacement is in place; a failed swap puts the
+/// original back, so the destination is never left empty.
+fn publish_replacement_bundle(staging_dir: &Path, bundle_dir: &Path) -> std::io::Result<()> {
+    let retired = scratch_sibling_path(bundle_dir, "retired")?;
+    fs::rename(bundle_dir, &retired)?;
+    if let Err(error) = fs::rename(staging_dir, bundle_dir) {
+        let _ = fs::rename(&retired, bundle_dir);
+        return Err(error);
+    }
+    sync_bundle_parent(bundle_dir)?;
+    fs::remove_dir_all(&retired)
+}
+
+fn sync_bundle_parent(bundle_dir: &Path) -> std::io::Result<()> {
     let parent = bundle_dir.parent().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

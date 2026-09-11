@@ -17,7 +17,8 @@ pub struct TaskImportArgs {
     /// workspace, registering it locally if unknown).
     #[arg(long = "task-workspace", value_name = "TASK_WORKSPACE")]
     pub task_workspace: Option<String>,
-    /// How to resolve an incoming task id that already exists locally.
+    /// How to resolve an incoming task id that already exists locally. Use
+    /// owner-wins for a repeatable cross-host sync of task mirrors.
     #[arg(long = "on-conflict", value_enum, default_value_t = ConflictArg::Renumber)]
     pub on_conflict: ConflictArg,
     /// Emit machine-readable JSON instead of a human summary.
@@ -34,6 +35,10 @@ pub enum ConflictArg {
     Skip,
     /// Abort the whole import on the first collision.
     Fail,
+    /// Trust the host that minted the id: replace a colliding task whose id
+    /// prefix is foreign, keep a colliding task under this host's prefix, and
+    /// never renumber. Safe to re-run.
+    OwnerWins,
 }
 
 impl From<ConflictArg> for ImportConflictPolicy {
@@ -42,6 +47,7 @@ impl From<ConflictArg> for ImportConflictPolicy {
             ConflictArg::Renumber => ImportConflictPolicy::Renumber,
             ConflictArg::Skip => ImportConflictPolicy::Skip,
             ConflictArg::Fail => ImportConflictPolicy::Fail,
+            ConflictArg::OwnerWins => ImportConflictPolicy::OwnerWins,
         }
     }
 }
@@ -52,6 +58,8 @@ fn action_label(action: ImportAction) -> &'static str {
         ImportAction::Renumbered => "renumbered",
         ImportAction::AlreadyPresent => "already-present",
         ImportAction::SkippedConflict => "skipped",
+        ImportAction::Updated => "updated",
+        ImportAction::SkippedLocalOwned => "skipped-local-owned",
     }
 }
 

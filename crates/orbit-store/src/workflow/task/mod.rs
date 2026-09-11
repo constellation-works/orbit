@@ -24,6 +24,17 @@
 //!   so each run mints fresh ids. Import once; the printed `.idmap.json` records
 //!   what landed.
 //!
+//! # Owner-wins sync
+//! Task authority follows the id prefix: the host that minted `ORB-*` is the
+//! sole writer of those tasks, and any copy on a host that mints `DANI-*` is a
+//! read-only mirror. [`ImportConflictPolicy::OwnerWins`] makes import a
+//! repeatable sync of those mirrors — a colliding foreign-prefix id is replaced
+//! by the owner's bundle ([`ImportAction::Updated`]), a colliding local-prefix
+//! id is left alone ([`ImportAction::SkippedLocalOwned`]), and nothing is ever
+//! renumbered. Foreign relation targets therefore survive verbatim, no
+//! `.idmap.json` is written, and a second run of the same archive reports every
+//! task as already-present.
+//!
 //! # Artifact blobs
 //! Bundles carry a `artifacts/manifest.yaml` sidecar and the referenced blobs
 //! under `artifacts/files/**`. Export tars the entire canonical bundle tree, so
@@ -63,14 +74,16 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::task::{TASK_ARTIFACT_SCHEMA_VERSION, validate_orb_task_id};
+use orbit_common::fs::io::with_exclusive_file_lock;
+use orbit_types::task::{TASK_ARTIFACT_SCHEMA_VERSION, task_id_prefix, validate_orb_task_id};
 use serde::{Deserialize, Serialize};
 
 use crate::driver::file::task_bundle::{
-    TaskBundleV2, read_bundle_at, write_bundle_at, write_bundle_with_artifacts_at,
+    TaskBundleV2, bundle_lock_target, read_bundle_at, replace_bundle_at, write_bundle_at,
+    write_bundle_with_artifacts_at,
 };
 use crate::driver::sqlite::task_registry::{
-    RegisterWorkspaceParams, TaskRegistryStore, parse_orb_task_number,
+    RegisterWorkspaceParams, TaskBundleBinding, TaskRegistryStore, parse_orb_task_number,
 };
 
 mod archive;
@@ -157,6 +170,12 @@ pub enum ImportConflictPolicy {
     Skip,
     /// Abort the whole import on the first collision.
     Fail,
+    /// Prefix authority: the host that minted a task id is its sole writer.
+    /// A colliding id under a *foreign* prefix is a stale mirror, so the
+    /// incoming bundle replaces it; a colliding id under the *local* prefix is
+    /// locally owned and is never touched. Nothing is ever renumbered, which
+    /// makes a repeated sync of the same archive a no-op.
+    OwnerWins,
 }
 
 /// What happened to a single task during import.
@@ -170,6 +189,11 @@ pub enum ImportAction {
     AlreadyPresent,
     /// Collided and `--on-conflict=skip` dropped it.
     SkippedConflict,
+    /// Owner-wins: a foreign-prefix mirror was replaced by the owner's copy.
+    Updated,
+    /// Owner-wins: the id is under the local prefix, so the local copy is
+    /// authoritative and the incoming one was dropped.
+    SkippedLocalOwned,
 }
 
 /// Per-task import record.
@@ -291,6 +315,13 @@ struct StagedBundle {
     staging_dir: PathBuf,
 }
 
+/// A colliding mirror whose owner is authoritative: the staged bundle replaces
+/// the local copy at the directory the registry already binds it to.
+struct MirrorReplacement {
+    staged: StagedBundle,
+    bundle_dir: PathBuf,
+}
+
 /// Resolved import target after workspace resolution.
 struct ImportTarget {
     workspace_id: String,
@@ -327,9 +358,14 @@ pub fn import_tasks(
     let staged = stage_bundles(staging.path(), &manifest)?;
     let target = resolve_target(registry, &manifest, target_workspace_id)?;
 
+    // The prefix this host mints under decides which colliding ids are mirrors
+    // of another host's tasks and which are locally owned.
+    let local_prefix = registry.local_task_prefix()?;
+
     // Classify each staged bundle against the current registry.
     let mut kept: Vec<StagedBundle> = Vec::new();
     let mut to_renumber: Vec<StagedBundle> = Vec::new();
+    let mut to_overwrite: Vec<MirrorReplacement> = Vec::new();
     let mut records: Vec<ImportedTask> = Vec::new();
     for staged in staged {
         match registry.find_task_binding(&staged.source_id)? {
@@ -362,6 +398,23 @@ pub fn import_tasks(
                         // source id still collides with the original local task
                         // (unchanged), so a second run mints another fresh id.
                         ImportConflictPolicy::Renumber => to_renumber.push(staged),
+                        ImportConflictPolicy::OwnerWins => {
+                            match owner_wins_verdict(
+                                &staged.source_id,
+                                &existing,
+                                &target.workspace_id,
+                                &local_prefix,
+                            )? {
+                                MirrorVerdict::LocalOwned => records.push(ImportedTask {
+                                    source_id: staged.source_id.clone(),
+                                    final_id: staged.source_id,
+                                    action: ImportAction::SkippedLocalOwned,
+                                }),
+                                MirrorVerdict::Replace(bundle_dir) => {
+                                    to_overwrite.push(MirrorReplacement { staged, bundle_dir })
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -369,7 +422,7 @@ pub fn import_tasks(
     }
 
     // Nothing new to write (all ids were free-and-identical, or all skipped).
-    if kept.is_empty() && to_renumber.is_empty() {
+    if kept.is_empty() && to_renumber.is_empty() && to_overwrite.is_empty() {
         return Ok(ImportOutcome {
             workspace_id: target.workspace_id,
             registered_workspace: false,
@@ -395,18 +448,21 @@ pub fn import_tasks(
     };
 
     // Reserve headroom so renumber allocations never collide with kept ids.
-    let kept_max = kept
-        .iter()
-        .filter_map(|staged| parse_orb_task_number(&staged.source_id))
-        .max();
-    let existing_max = registry.max_registered_task_number()?;
-    let floor = [kept_max, existing_max]
-        .into_iter()
-        .flatten()
-        .max()
-        .map(|value| value + 1)
-        .unwrap_or(0);
-    registry.bump_allocator_to_at_least(floor)?;
+    // Only renumbering mints, so no other policy moves the counter here.
+    if !to_renumber.is_empty() {
+        let kept_max = kept
+            .iter()
+            .filter_map(|staged| parse_orb_task_number(&staged.source_id))
+            .max();
+        let existing_max = registry.max_registered_task_number()?;
+        let floor = [kept_max, existing_max]
+            .into_iter()
+            .flatten()
+            .max()
+            .map(|value| value + 1)
+            .unwrap_or(0);
+        registry.bump_allocator_to_at_least(floor)?;
+    }
 
     // Allocate new ids for collisions (deterministic order by source id).
     to_renumber.sort_by(|a, b| a.source_id.cmp(&b.source_id));
@@ -416,7 +472,8 @@ pub fn import_tasks(
         id_remap.insert(staged.source_id.clone(), new_id);
     }
 
-    // Write kept + renumbered bundles, rewriting relation targets in the set.
+    // Write kept + renumbered bundles, rewriting relation targets in the set,
+    // then replace the mirrors their owner has changed.
     let write_result = (|| -> Result<Vec<u32>, OrbitError> {
         let mut landed_numbers = Vec::new();
         for staged in kept.iter().chain(to_renumber.iter()) {
@@ -443,13 +500,31 @@ pub fn import_tasks(
             guard.written_dirs.push(dir.clone());
             registry.register_task_bundle(&final_id, &target.workspace_id, &dir)?;
             guard.registered_ids.push(final_id.clone());
-            if let Some(number) = parse_orb_task_number(&final_id) {
+            if let Some(number) = local_task_number(&final_id, &local_prefix) {
                 landed_numbers.push(number);
             }
             records.push(ImportedTask {
                 source_id: staged.source_id.clone(),
                 final_id,
                 action,
+            });
+        }
+
+        // Owner-wins replacements land under their own (foreign) ids, so they
+        // are already registered and never touch the local allocator.
+        for replacement in &to_overwrite {
+            let staged = &replacement.staged;
+            // Readers and writers of this bundle coordinate on the same sibling
+            // lock file, which outlives the directory swap.
+            with_exclusive_file_lock(
+                &bundle_lock_target(&replacement.bundle_dir),
+                "task migration import",
+                || replace_bundle_at(&replacement.bundle_dir, &staged.bundle, &staged.staging_dir),
+            )?;
+            records.push(ImportedTask {
+                source_id: staged.source_id.clone(),
+                final_id: staged.source_id.clone(),
+                action: ImportAction::Updated,
             });
         }
         Ok(landed_numbers)
@@ -489,6 +564,45 @@ pub fn import_tasks(
         id_remap,
         id_map_path,
     })
+}
+
+/// What owner-wins does with one colliding id.
+enum MirrorVerdict {
+    /// The id is under the local prefix, so the local copy is authoritative.
+    LocalOwned,
+    /// The owner's copy supersedes the local mirror at this bundle directory.
+    Replace(PathBuf),
+}
+
+/// Decide a colliding id from its prefix alone: this host's own ids are never
+/// overwritten, and any other host's id is refreshed in place.
+fn owner_wins_verdict(
+    source_id: &str,
+    existing: &TaskBundleBinding,
+    target_workspace_id: &str,
+    local_prefix: &str,
+) -> Result<MirrorVerdict, OrbitError> {
+    if task_id_prefix(source_id) == Some(local_prefix) {
+        return Ok(MirrorVerdict::LocalOwned);
+    }
+    // Replacing in place keeps the mirror where the registry already binds it;
+    // moving a task between workspaces is a reconciliation this rule cannot
+    // decide from the id.
+    if existing.workspace_id != target_workspace_id {
+        return Err(OrbitError::InvalidInput(format!(
+            "task id '{source_id}' is registered to workspace '{}' locally but this archive lands in '{target_workspace_id}'; resolve the workspace before syncing",
+            existing.workspace_id
+        )));
+    }
+    Ok(MirrorVerdict::Replace(existing.canonical_path.clone()))
+}
+
+/// Numeric suffix of `task_id`, but only for ids this host mints. A mirror
+/// carries its owner's numbering, which must not advance the local allocator.
+fn local_task_number(task_id: &str, local_prefix: &str) -> Option<u32> {
+    (task_id_prefix(task_id) == Some(local_prefix))
+        .then(|| parse_orb_task_number(task_id))
+        .flatten()
 }
 
 fn read_manifest(staging: &Path) -> Result<TaskMigrationManifest, OrbitError> {
@@ -671,6 +785,12 @@ impl<'a> WriteGuard<'a> {
     /// first (they reference the dirs), then the bundle directories. Failures
     /// are logged, not propagated — the caller is already returning the original
     /// error.
+    ///
+    /// Owner-wins replacements are deliberately *not* undone: the bundle they
+    /// overwrote was a mirror, the copy now on disk is the owner's current one,
+    /// and restoring the stale mirror would be the wrong direction. Their index
+    /// rows can be left behind the bundle until the next successful sync (or
+    /// `orbit task reindex`) rebuilds them.
     fn rollback(&mut self) {
         for id in self.registered_ids.drain(..) {
             // workspace_id is not needed to look up the (global) binding, but the

@@ -21,6 +21,7 @@ use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 use super::*;
 
 mod inspect;
+mod owner_wins;
 mod publication;
 mod publish;
 mod restore;

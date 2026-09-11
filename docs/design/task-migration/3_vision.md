@@ -24,10 +24,10 @@ unless it cites a task.
 
 ## 1. Open Questions
 
-1. **Policy or command?** The core deliverable of [ORB-12126] is an import
-   policy — working name `--on-conflict owner-wins` — that overwrites a local
-   bundle only when the incoming task's prefix differs from the local
-   `task_prefix`, and never touches a local-prefix bundle. A convenience wrapper
+1. **Policy or command?** *Half-answered:* the import policy shipped as
+   `--on-conflict=owner-wins` ([ORB-12126]) — it replaces a local bundle only
+   when the incoming task's prefix differs from the local `task_prefix`, and
+   never touches a local-prefix bundle. A convenience wrapper
    (`orbit task sync <ssh-dest>`: export on the peer over SSH, import locally,
    then the reverse) can come later or not at all; scripts already compose the
    two halves. Should the wrapper exist in the binary, or stay a runbook?
@@ -49,10 +49,11 @@ unless it cites a task.
    [ORB-12126]. The global frictions store has the same two-writer shape; the
    docs corpus does not (it is git). Do frictions get the same prefix-ownership
    treatment, or a simpler append-only merge?
-6. **Idempotency proof.** Owner-wins must be a no-op on a second identical run
-   and must never write an `.idmap.json`. Is byte-identical bundle comparison
-   (today's `AlreadyPresent` test) sufficient, or does the manifest need a
-   per-task content hash so the comparison is cheap over SSH?
+6. **Idempotency proof.** *Answered for now:* the shipped policy reuses the
+   byte-identical bundle comparison, so a second identical run reports every
+   task `already-present` and writes no `.idmap.json`. Open only at scale: does
+   the manifest need a per-task content hash so the comparison is cheap over
+   SSH?
 
 ## 2. Prior Work
 
