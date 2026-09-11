@@ -21,13 +21,13 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
 use orbit_common::test_env;
+#[cfg(target_os = "linux")]
+use orbit_common::test_process::retry_executable_busy;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
-#[cfg(target_os = "linux")]
-const EXEC_BUSY_RETRY_WINDOW: Duration = Duration::from_secs(2);
 #[cfg(target_os = "linux")]
 const REQUIRE_PROTECTED_SSH_REGRESSION_ENV: &str = "ORBIT_REQUIRE_PROTECTED_SSH_REGRESSION";
 
@@ -1006,31 +1006,6 @@ struct GeneratedForcedCommand {
     argv: Vec<String>,
     forced_command: String,
     acceptance_token: String,
-}
-
-/// Retry a freshly copied test launcher while another parallel test's child
-/// still has its writable descriptor inherited across `fork`.
-///
-/// The descriptor is close-on-exec, but Linux can reject a concurrent exec
-/// with `ETXTBSY` during that short pre-exec window. This is the same bounded
-/// transient the production updater handles when it launches a newly written
-/// binary; all other errors remain immediate test failures.
-#[cfg(target_os = "linux")]
-fn retry_executable_busy<T>(
-    mut operation: impl FnMut() -> std::io::Result<T>,
-) -> std::io::Result<T> {
-    let deadline = Instant::now() + EXEC_BUSY_RETRY_WINDOW;
-    loop {
-        match operation() {
-            Err(error)
-                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
-                    && Instant::now() < deadline =>
-            {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            result => return result,
-        }
-    }
 }
 
 #[cfg(target_os = "linux")]
