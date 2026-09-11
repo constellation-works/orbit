@@ -173,6 +173,69 @@ fn skip_if_open_never_files_a_second_open_instance() {
     assert_eq!(runtime.list_tasks().expect("tasks").len(), 2);
 }
 
+/// A `someday`-parked instance is an explicit "not now", not an active
+/// instance: it must not block every later mint of the auto-task [ORB-12148].
+#[test]
+fn skip_if_open_ignores_a_someday_instance() {
+    let runtime = runtime();
+    runtime
+        .auto_task_add(interval_params("chore", 60))
+        .expect("add");
+    let t0 = at(2026, 1, 1, 0, 0);
+
+    fire(&runtime, t0); // baseline
+    let first = fire(&runtime, t0 + Duration::minutes(60));
+    assert_eq!(first[0].0, "fired");
+    let task_id = first[0].1.clone().expect("task id");
+
+    runtime
+        .update_task(
+            &task_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Someday),
+                ..Default::default()
+            },
+        )
+        .expect("park task");
+
+    // The someday-parked instance does not count as open, so the next due
+    // slot fires and mints a second task.
+    let second = fire(&runtime, t0 + Duration::minutes(180));
+    assert_eq!(second[0].0, "fired");
+    assert_eq!(runtime.list_tasks().expect("tasks").len(), 2);
+}
+
+#[test]
+fn dedupe_open_report_names_the_blocking_task() {
+    let runtime = runtime();
+    runtime
+        .auto_task_add(interval_params("chore", 60))
+        .expect("add");
+    let t0 = at(2026, 1, 1, 0, 0);
+
+    fire(&runtime, t0); // baseline
+    let first = fire(&runtime, t0 + Duration::minutes(60));
+    let task_id = first[0].1.clone().expect("task id");
+
+    let outcome = run_auto_task_scheduler_at(
+        &runtime,
+        t0 + Duration::minutes(180),
+        SchedulerOptions::default(),
+    )
+    .expect("scheduler pass");
+    assert_eq!(outcome.reports[0].action, "skipped");
+    assert_eq!(
+        outcome.reports[0].reason.as_deref(),
+        Some("dedupe_open"),
+        "{:?}",
+        outcome.reports[0]
+    );
+    assert_eq!(
+        outcome.reports[0].blocking_task_id.as_deref(),
+        Some(task_id.as_str())
+    );
+}
+
 #[test]
 fn weekly_cron_fires_once_and_dedupes_while_audit_is_open() {
     let runtime = runtime();

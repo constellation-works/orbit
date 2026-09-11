@@ -25,7 +25,7 @@ struct TestDispatch {
     minted: AtomicUsize,
     mint_ids: Mutex<Vec<String>>,
     mint_should_fail: AtomicBool,
-    open_instance: AtomicBool,
+    open_instance: Mutex<Option<String>>,
 }
 
 impl TestDispatch {
@@ -36,8 +36,12 @@ impl TestDispatch {
             minted: AtomicUsize::new(0),
             mint_ids: Mutex::new(Vec::new()),
             mint_should_fail: AtomicBool::new(false),
-            open_instance: AtomicBool::new(false),
+            open_instance: Mutex::new(None),
         }
+    }
+
+    fn set_open_instance(&self, blocking_task_id: &str) {
+        *self.open_instance.lock().expect("open_instance") = Some(blocking_task_id.to_string());
     }
 }
 
@@ -59,8 +63,11 @@ impl AutoTaskDispatch for TestDispatch {
         self.state_dir.clone()
     }
 
-    fn has_open_instance(&self, _definition: &AutoTaskDefinition) -> Result<bool, OrbitError> {
-        Ok(self.open_instance.load(Ordering::SeqCst))
+    fn has_open_instance(
+        &self,
+        _definition: &AutoTaskDefinition,
+    ) -> Result<Option<String>, OrbitError> {
+        Ok(self.open_instance.lock().expect("open_instance").clone())
     }
 
     fn mint_task(&self, _definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
@@ -382,7 +389,7 @@ fn skip_if_open_does_not_claim_or_mint() {
     let state_dir = root.path().join("state");
     write_interval_definition(&definition_root, "chore", "skip_if_open");
     let dispatch = TestDispatch::new(definition_root, state_dir);
-    dispatch.open_instance.store(true, Ordering::SeqCst);
+    dispatch.set_open_instance("ORB-90001");
     let t0 = at(2026, 1, 1, 0, 0);
     upsert_cursor(
         &cursor_state_path(&dispatch.state_dir),
@@ -399,6 +406,10 @@ fn skip_if_open_does_not_claim_or_mint() {
     .expect("pass");
     assert_eq!(outcome.reports[0].action, "skipped");
     assert_eq!(outcome.reports[0].reason.as_deref(), Some("dedupe_open"));
+    assert_eq!(
+        outcome.reports[0].blocking_task_id.as_deref(),
+        Some("ORB-90001")
+    );
     assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
     let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
     assert!(state.definitions["chore"].last_slot.is_none());
@@ -508,7 +519,7 @@ fn skip_if_open_dry_run_reports_dedupe_without_writing() {
     let state_dir = root.path().join("state");
     write_interval_definition(&definition_root, "chore", "skip_if_open");
     let dispatch = TestDispatch::new(definition_root, state_dir);
-    dispatch.open_instance.store(true, Ordering::SeqCst);
+    dispatch.set_open_instance("ORB-90002");
     let t0 = at(2026, 1, 1, 0, 0);
     upsert_cursor(
         &cursor_state_path(&dispatch.state_dir),
@@ -526,6 +537,10 @@ fn skip_if_open_dry_run_reports_dedupe_without_writing() {
     .expect("dry run");
     assert_eq!(outcome.reports[0].action, "skipped");
     assert_eq!(outcome.reports[0].reason.as_deref(), Some("dedupe_open"));
+    assert_eq!(
+        outcome.reports[0].blocking_task_id.as_deref(),
+        Some("ORB-90002")
+    );
     assert_eq!(
         fs::read_to_string(cursor_state_path(&dispatch.state_dir)).expect("after"),
         before
