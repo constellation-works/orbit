@@ -55,7 +55,7 @@ fn verified_no_diff_assessment(task: &Task) -> Value {
 }
 
 #[test]
-fn minted_no_diff_auto_task_is_prepared_without_selectors_then_admitted() {
+fn minted_no_diff_auto_task_is_admitted_unassessed_and_still_assessable() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     runtime
         .auto_task_add(AutoTaskAddParams {
@@ -83,13 +83,14 @@ fn minted_no_diff_auto_task_is_prepared_without_selectors_then_admitted() {
     assert!(minted.tags.iter().any(|tag| tag == "no-diff-expected"));
     assert!(minted.tags.iter().any(|tag| tag == "auto-task:qa-review"));
 
+    // The `no-diff-expected` tag exempts the task from the assessed-complexity
+    // gate, so it is admissible before task-pilot ever sees it [ORB-12118].
     let before = classify(&runtime);
     assert!(
-        !before["loose_task_ids"]
+        before["loose_task_ids"]
             .as_array()
             .expect("admitted tasks")
-            .iter()
-            .any(|task_id| task_id == &minted.id)
+            .contains(&json!(minted.id))
     );
 
     let prepared = prepare(
@@ -1909,4 +1910,92 @@ fn classifier_uses_captured_cli_pool_instead_of_current_configuration() {
         json!({"run_id": coordinator.run_id, "allowed_crews": ["terra"]}),
     );
     assert_eq!(result["loose_task_ids"], json!([task.id]));
+}
+
+#[test]
+fn readiness_agrees_with_admission_on_the_no_diff_expected_complexity_exemption() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let exempt = seed_unassessed_task(&runtime, "Operational check", &["no-diff-expected"]);
+    let implementation = seed_unassessed_task(&runtime, "Repair the finding", &["code-review"]);
+    let blocked_dependency = seed_list_backlog_task(
+        &runtime,
+        "Unfinished dependency",
+        TaskStatus::InProgress,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        None,
+        vec![],
+    );
+    let dependent_exempt = runtime
+        .add_task(TaskAddParams {
+            title: "Operational check behind a dependency".to_string(),
+            description: "Fixture task".to_string(),
+            acceptance_criteria: vec!["Fixture outcome is observable.".to_string()],
+            dependencies: vec![blocked_dependency.id.clone()],
+            tags: vec!["no-diff-expected".to_string()],
+            plan: "Fixture plan.".to_string(),
+            workspace_path: Some(".".to_string()),
+            priority: TaskPriority::Medium,
+            complexity: TaskComplexity::Unassessed,
+            task_type: Some(TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .expect("seed dependent exempt task");
+
+    let output = readiness(
+        &runtime,
+        &[
+            exempt.id.clone(),
+            implementation.id.clone(),
+            dependent_exempt.id.clone(),
+        ],
+        None,
+    );
+
+    assert_eq!(readiness_task(&output, &exempt.id)["eligible"], json!(true));
+    assert_eq!(readiness_task(&output, &exempt.id)["reason"], "ready");
+    assert_eq!(
+        readiness_task(&output, &implementation.id)["reason"],
+        "task_pilot_preparation_required"
+    );
+    assert_eq!(
+        readiness_task(&output, &implementation.id)["eligible"],
+        json!(false)
+    );
+    // Other exclusions stay visible and enforced for an exempt task.
+    assert_eq!(
+        readiness_task(&output, &dependent_exempt.id)["reason"],
+        "unmet_dependency"
+    );
+    assert_eq!(
+        readiness_task(&output, &dependent_exempt.id)["eligible"],
+        json!(false)
+    );
+    // Admission itself never rewrites the stored non-answer.
+    assert_eq!(
+        runtime
+            .get_task(&exempt.id)
+            .expect("exempt task")
+            .complexity,
+        Some(TaskComplexity::Unassessed)
+    );
+}
+
+fn seed_unassessed_task(runtime: &OrbitRuntime, title: &str, tags: &[&str]) -> Task {
+    runtime
+        .add_task(TaskAddParams {
+            title: title.to_string(),
+            description: format!("Fixture task: {title}"),
+            acceptance_criteria: vec!["Fixture outcome is observable.".to_string()],
+            tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+            plan: "Fixture plan.".to_string(),
+            workspace_path: Some(".".to_string()),
+            priority: TaskPriority::Medium,
+            complexity: TaskComplexity::Unassessed,
+            task_type: Some(TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .expect("seed unassessed task")
 }

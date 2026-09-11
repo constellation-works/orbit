@@ -4,8 +4,8 @@ use std::path::Path;
 use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    Task, TaskComplexity, TaskPriority, TaskReferenceIndex, TaskStatus, TaskType,
-    task_dependencies_ready_with_index,
+    NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskPriority, TaskReferenceIndex, TaskStatus,
+    TaskType, task_dependencies_ready_with_index,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -44,6 +44,8 @@ pub(super) enum BacklogTaskExclusionReason {
     GroupMemberConflict,
     /// Automated work must be prepared before an implementation lane can
     /// consume it; urgency does not substitute for a complexity assessment.
+    /// Work tagged [`NO_DIFF_EXPECTED_TAG`] is exempt — see
+    /// [`clears_complexity_gate`].
     UnassessedComplexity,
 }
 
@@ -177,7 +179,7 @@ pub(super) fn list_backlog_tasks(
                     message: format!("load task {task_id}: {err}"),
                 }
             })?;
-            if task.complexity.is_some_and(TaskComplexity::is_assessed) {
+            if clears_complexity_gate(&task) {
                 tasks.push(task);
             } else {
                 excluded.push(BacklogTaskExclusion {
@@ -283,7 +285,7 @@ pub(super) fn backlog_snapshot(
     sort_tasks_for_automatic_dispatch(&mut backlog);
     let mut excluded = Vec::new();
     backlog.retain(|task| {
-        if task.complexity.is_some_and(TaskComplexity::is_assessed) {
+        if clears_complexity_gate(task) {
             return true;
         }
         excluded.push(BacklogTaskExclusion {
@@ -391,6 +393,23 @@ pub(super) fn backlog_snapshot(
         excluded,
         lock_holders,
     })
+}
+
+/// The one complexity-admission rule, shared by automatic backlog selection,
+/// explicit ship selection, and the readiness diagnostic that reports their
+/// exclusions.
+///
+/// An implementation lane needs a complexity assessment to size the work it is
+/// about to do. Work tagged exactly `no-diff-expected` produces its durable
+/// result outside the repository, so requiring task-pilot preparation only to
+/// clear this gate withholds operational work for a judgement it does not
+/// consume [ORB-12118]. The exemption is the tag alone: automated mint
+/// provenance does not grant it, and nothing here rewrites the task's stored
+/// complexity — an exempt task keeps `unassessed` and resolves its crew from
+/// the configured crew or the workspace default.
+fn clears_complexity_gate(task: &Task) -> bool {
+    task.complexity.is_some_and(TaskComplexity::is_assessed)
+        || task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
 }
 
 pub(super) fn sort_tasks_for_automatic_dispatch(tasks: &mut [Task]) {

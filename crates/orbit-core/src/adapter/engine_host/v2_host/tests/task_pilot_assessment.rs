@@ -1,6 +1,8 @@
 //! Explainable task-pilot complexity assessment and persistence fixtures.
 
+use chrono::{Duration, Utc};
 use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
 
 use super::super::task_pilot::{apply, member_ready, prepare};
@@ -8,6 +10,8 @@ use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_layout, write_workspace_file,
 };
+use crate::application::auto_tasks::AutoTaskAddParams;
+use crate::application::auto_tasks::scheduler::{SchedulerOptions, run_auto_task_scheduler_at};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 fn seed_task(runtime: &OrbitRuntime, title: &str) -> Task {
@@ -148,4 +152,141 @@ fn missing_evidence_stays_unassessed_with_an_actionable_preparation_outcome() {
     let current = runtime.get_task(&task.id).expect("unassessed task");
     assert_eq!(current.complexity, Some(TaskComplexity::Unassessed));
     assert_eq!(current.context_files, vec!["file:src/investigate.rs"]);
+}
+
+/// The operational shape behind ORB-12099: an auto-task-minted
+/// `no-diff-expected` review whose durable result lives outside the repository,
+/// so its assessment never produces selectors.
+fn host_operational_assessment(task: &Task, complexity: &str) -> Value {
+    // The selector the shared fixture proposes is replaced by the empty list
+    // this disposition requires.
+    let mut assessment = assessment(task, "file:src/unused.rs", complexity);
+    assessment["context_files_after"] = json!([]);
+    assessment["disposition"] = json!("host_operational");
+    assessment["evidence"] = json!(
+        "The task is tagged no-diff-expected; its durable deliverable is filed Orbit tasks plus a review cursor."
+    );
+    assessment["recommended_crew"] = json!("opus");
+    assessment
+}
+
+fn task_pilot_audits(runtime: &OrbitRuntime, task_id: &str) -> Vec<Value> {
+    runtime
+        .get_task_history(task_id)
+        .expect("task history")
+        .into_iter()
+        .filter(|event| event.event == "task_pilot_applied")
+        .map(|event| {
+            let note = event.note.expect("task_pilot_applied note");
+            let (_receipt, audit) = note.split_once('\n').expect("audit payload");
+            serde_json::from_str::<Value>(audit).expect("audit json")
+        })
+        .collect()
+}
+
+/// ORB-12099 reported a successful task-pilot event (`unassessed` -> `hard`)
+/// against a task that later read `unassessed`, and asked whether the
+/// assessment failed to persist. It did not: the durable history carries two
+/// `task_pilot_applied` audits, and the second one — a later pass that reported
+/// `unassessed` with evidence gaps — is the legitimate write that changed the
+/// value. This pins both halves: an applied assessment is durably readable
+/// across a runtime reopen and survives an auto-task refresh untouched, and a
+/// subsequent assessment changes it only through its own audited write.
+#[test]
+fn an_applied_assessment_is_durable_and_only_a_later_audited_pass_changes_it() {
+    let (root, runtime, repo_root) = runtime_with_workspace_layout();
+    runtime
+        .auto_task_add(AutoTaskAddParams {
+            name: "code-review".to_string(),
+            description: "Review recently merged changes".to_string(),
+            schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+            template: AutoTaskTemplate {
+                title: "[auto-task] Review recently merged changes".to_string(),
+                description: "Review the code merged since the last sweep.".to_string(),
+                acceptance_criteria: vec!["Findings are filed as tasks.".to_string()],
+                task_type: TaskType::Chore,
+                tags: vec!["code-review".to_string(), "no-diff-expected".to_string()],
+                required_tools: vec![],
+                priority: TaskPriority::Medium,
+                crew: Some("opus".to_string()),
+                status: TaskStatus::Backlog,
+            },
+            dedupe: DedupePolicy::SkipIfOpen,
+        })
+        .expect("add auto-task definition");
+    let minted = runtime.auto_task_mint("code-review").expect("mint review");
+    assert_eq!(minted.complexity, Some(TaskComplexity::Unassessed));
+
+    let prepared = prepare_task(&runtime, &repo_root, &minted);
+    let applied = apply_assessment(
+        &runtime,
+        &repo_root,
+        prepared,
+        &minted,
+        host_operational_assessment(&minted, "hard"),
+    );
+    assert_eq!(applied["status"], "succeeded");
+    assert_eq!(
+        runtime.get_task(&minted.id).expect("assessed").complexity,
+        Some(TaskComplexity::Hard)
+    );
+
+    // Durable, not merely in-memory: a second runtime over the same roots reads
+    // the assessed value back.
+    let reopened = OrbitRuntime::from_roots(
+        &root.path().join("home/.orbit"),
+        &root.path().join("repo/.orbit"),
+    )
+    .expect("reopen runtime");
+    assert_eq!(
+        reopened.get_task(&minted.id).expect("reopened").complexity,
+        Some(TaskComplexity::Hard)
+    );
+
+    // Auto-task refresh sees an open instance, skips, and rewrites nothing.
+    let outcome = run_auto_task_scheduler_at(
+        &reopened,
+        Utc::now() + Duration::hours(2),
+        SchedulerOptions::default(),
+    )
+    .expect("auto-task refresh pass");
+    assert!(
+        outcome
+            .reports
+            .iter()
+            .all(|report| report.action != "fired"),
+        "an open instance must suppress a duplicate mint"
+    );
+    assert_eq!(
+        reopened
+            .get_task(&minted.id)
+            .expect("after refresh")
+            .complexity,
+        Some(TaskComplexity::Hard)
+    );
+
+    // A later pass that cannot support a rating is a legitimate audited write,
+    // not a lost one: both audits remain readable, in order.
+    let reprepared = prepare_task(
+        &runtime,
+        &repo_root,
+        &runtime.get_task(&minted.id).expect("current"),
+    );
+    let mut regression = host_operational_assessment(&minted, "unassessed");
+    regression["confidence"] = json!("low");
+    regression["evidence_gaps"] =
+        json!(["The full cursor-to-HEAD review has not been completed at the pinned revision."]);
+    let reapplied = apply_assessment(&runtime, &repo_root, reprepared, &minted, regression);
+    assert_eq!(reapplied["status"], "succeeded");
+
+    let audits = task_pilot_audits(&runtime, &minted.id);
+    assert_eq!(audits.len(), 2);
+    assert_eq!(audits[0]["complexity_before"], json!("unassessed"));
+    assert_eq!(audits[0]["complexity_after"], json!("hard"));
+    assert_eq!(audits[1]["complexity_before"], json!("hard"));
+    assert_eq!(audits[1]["complexity_after"], json!("unassessed"));
+    assert_eq!(
+        runtime.get_task(&minted.id).expect("reassessed").complexity,
+        Some(TaskComplexity::Unassessed)
+    );
 }

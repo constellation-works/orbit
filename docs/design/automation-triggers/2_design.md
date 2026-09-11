@@ -453,7 +453,9 @@ repair's certainty, behavioral change, coupling, validation difficulty,
 rationale, confidence, evidence gaps, validation approach, and reassessment
 triggers. Its apply step commits concrete selectors, complexity, audit evidence,
 and the idempotency receipt at one task-bundle boundary. Automatic admission
-then rejects any still-unassessed task, including urgent security work; missing
+then rejects any still-unassessed task, including urgent security work, except
+one tagged exactly `no-diff-expected`, which is admitted without an assessment
+because an implementation lane sizes no diff for it [ORB-12118]; missing
 validation permission is a readiness blocker rather than a complexity or
 priority inference. The low/medium/hard examples in the activity contract are
 deterministic policy fixtures, not a claim about live-model accuracy.
