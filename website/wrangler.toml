@@ -1,6 +1,6 @@
-# Wrangler's Pages configuration validation requires a top-level name. The
-# publish workflow overrides it with --project-name from the protected
-# CLOUDFLARE_PAGES_PROJECT variable; see docs/runbooks/website-validation.md.
+# Wrangler's Pages configuration validation requires a top-level name. Daniel's
+# manual publication process may use this configuration when preparing output;
+# hosting and DNS remain externally managed.
 name = "orbit-website"
 compatibility_date = "2026-05-04"
 pages_build_output_dir = "./dist"

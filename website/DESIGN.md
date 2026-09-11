@@ -163,13 +163,12 @@ Each section has an index page that lists its children with one-line description
 - **Search:** Pagefind (built into Starlight, static, offline, no third-party account)
 - **Content:** MDX in `src/content/docs/`
 - **Styling:** Starlight's CSS custom properties, overridden in a single `custom.css`
-- **Hosting:** The public edge and DNS are on Cloudflare. The repository-supported
-  path directly uploads to the existing Pages project identified by the protected
-  production environment, and publishes only from the release/production `main`
-  branch. The `orbit-cli.com` DNS remains externally managed; publication neither
-  provisions hosting nor edits DNS. Cloudflare Pages applies the repository-owned
-  `public/_headers` policy to HTTPS responses; the externally managed Cloudflare
-  zone owns HTTP-to-HTTPS redirection. See ORB-11379.
+- **Hosting:** The public edge and DNS are on Cloudflare. Daniel manually
+  publishes the static output; the `orbit-cli.com` DNS remains externally
+  managed, and this repository neither provisions hosting nor edits DNS.
+  Cloudflare Pages applies the repository-owned `public/_headers` policy to
+  HTTPS responses; the externally managed Cloudflare zone owns HTTP-to-HTTPS
+  redirection.
 - **Repo layout:** new top-level `website/` directory, independent of the Rust workspace
 
 ### 5.1 Why Starlight over Nextra
