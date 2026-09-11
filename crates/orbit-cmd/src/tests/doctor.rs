@@ -5,7 +5,10 @@ use std::path::Path;
 
 use chrono::Utc;
 use fs2::FileExt;
+use orbit_registry::workspace_registry;
+use orbit_store::maintenance::task_registry::task_workspaces_dir;
 use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use sha2::{Digest, Sha256};
 
 use orbit_core::OrbitRuntime;
@@ -53,14 +56,45 @@ fn split_root_runtime(temp: &tempfile::TempDir) -> OrbitRuntime {
         .expect("build split-root runtime")
 }
 
+fn write_registered_workspace(global_root: &Path, workspace_id: &str, name: &str) {
+    let registry_path = workspace_registry::registry_path_for(global_root);
+    let mut registry =
+        workspace_registry::load_registry_from(&registry_path).expect("load registry");
+    let now = Utc::now();
+    workspace_registry::register_workspace(
+        &mut registry,
+        Workspace {
+            id: workspace_id.to_string(),
+            name: name.to_string(),
+            owner_machine_id: None,
+            git_remote: None,
+            ship_mode: None,
+            base_branch: "main".to_string(),
+            status: WorkspaceStatus::Active,
+            created_at: now,
+            updated_at: now,
+        },
+    )
+    .expect("register workspace");
+    workspace_registry::save_registry_to(&registry, &registry_path).expect("save registry");
+}
+
+fn write_task_bundle(global_root: &Path, workspace_id: &str, task_id: &str) {
+    let bundle = task_workspaces_dir(global_root)
+        .join(workspace_id)
+        .join(task_id);
+    fs::create_dir_all(&bundle).expect("create task bundle dir");
+    fs::write(bundle.join("task.yaml"), b"id: dummy\n").expect("write bundle file");
+}
+
 #[test]
 fn healthy_fresh_workspace_has_no_failures() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let results = runtime.doctor_workspace().expect("doctor");
 
-    // Eight infrastructure checks plus one definition-artifact row per kind
+    // Nine infrastructure checks plus one definition-artifact row per kind
     // (skills, jobs, activities, auto-tasks, routines).
-    assert_eq!(results.len(), 13, "one row per check: {results:?}");
+    assert_eq!(results.len(), 14, "one row per check: {results:?}");
     assert!(
         results
             .iter()
@@ -99,6 +133,11 @@ fn healthy_fresh_workspace_has_no_failures() {
     // No tasks yet → no unresolved relation/dependency targets.
     assert_eq!(
         status_of(&results, "task-relations").status,
+        WorkspaceDoctorStatus::Ok
+    );
+    // No task ever committed on this host → no partitions to flag as orphaned.
+    assert_eq!(
+        status_of(&results, "orphan-task-stores").status,
         WorkspaceDoctorStatus::Ok
     );
 }
@@ -855,5 +894,96 @@ fn missing_shipped_activity_default_is_an_error_not_healthy() {
             .iter()
             .any(|row| row.status == WorkspaceDoctorStatus::Error),
         "a missing shipped default must not leave the workspace looking healthy: {results:?}"
+    );
+}
+
+/// [ORB-12109] A task-store partition whose workspace is still registered on
+/// this host is healthy, not an orphan.
+#[test]
+fn registered_task_store_partition_is_not_an_orphan() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    write_registered_workspace(&global_root, "ws_registered", "registered");
+    write_task_bundle(&global_root, "ws_registered", "ORB-1");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Ok, "{row:?}");
+    assert!(
+        row.message.contains("1 task-store partition"),
+        "{}",
+        row.message
+    );
+}
+
+/// [ORB-12109] A task-store partition whose workspace id no longer resolves
+/// in the registry — left behind by `workspace teardown` on an older binary,
+/// or by deleting a checkout without running teardown — is named with its
+/// path and an exact repair command.
+#[test]
+fn orphan_task_store_partition_is_reported_with_path_and_remediation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    write_registered_workspace(&global_root, "ws_registered", "registered");
+    write_task_bundle(&global_root, "ws_registered", "ORB-1");
+    write_task_bundle(&global_root, "ws_orphan", "ORB-2");
+    write_task_bundle(&global_root, "ws_orphan", "ORB-3");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(row.message.contains("ws_orphan"), "{}", row.message);
+    assert!(
+        row.message.contains(
+            &task_workspaces_dir(&global_root)
+                .join("ws_orphan")
+                .to_string_lossy()
+                .into_owned()
+        ),
+        "message names the orphaned partition path: {}",
+        row.message
+    );
+    assert!(row.message.contains("2 task bundle(s)"), "{}", row.message);
+    assert!(
+        !row.message.contains("ws_registered"),
+        "registered partition must not be reported: {}",
+        row.message
+    );
+    assert_eq!(
+        row.remediation.as_deref(),
+        Some("Run `orbit doctor --fix-orphan-task-stores`.")
+    );
+}
+
+/// [ORB-12109] `--fix-orphan-task-stores` deletes only the unregistered
+/// partition, leaving the registered one untouched, and doctor is healthy
+/// again afterward — the teardown-then-doctor regression path.
+#[test]
+fn fix_orphan_task_stores_removes_only_the_unregistered_partition() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    write_registered_workspace(&global_root, "ws_registered", "registered");
+    write_task_bundle(&global_root, "ws_registered", "ORB-1");
+    write_task_bundle(&global_root, "ws_orphan", "ORB-2");
+
+    let removed = runtime
+        .remove_orphan_task_stores()
+        .expect("remove orphan task stores");
+    assert_eq!(removed, 1);
+    assert!(!task_workspaces_dir(&global_root).join("ws_orphan").exists());
+    assert!(
+        task_workspaces_dir(&global_root)
+            .join("ws_registered")
+            .exists()
+    );
+
+    let results = runtime.doctor_workspace().expect("doctor after fix");
+    assert_eq!(
+        status_of(&results, "orphan-task-stores").status,
+        WorkspaceDoctorStatus::Ok,
+        "{results:?}"
     );
 }

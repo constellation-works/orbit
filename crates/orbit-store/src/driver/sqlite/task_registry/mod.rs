@@ -26,6 +26,14 @@ pub fn task_registry_path(global_root: &Path) -> PathBuf {
     global_root.join("tasks").join("index.sqlite")
 }
 
+/// Root directory of the per-workspace task bundle partitions
+/// (`<global_root>/tasks/workspaces/<workspace_id>/`), mirroring the
+/// `workspaces_dir` the store itself derives from [`task_registry_path`]'s
+/// parent in `store.rs`.
+pub fn task_workspaces_dir(global_root: &Path) -> PathBuf {
+    global_root.join("tasks").join("workspaces")
+}
+
 pub use crate::contracts::{
     AllocatorSeedOutcome, BindWorkspaceParams, DanglingRelationTarget, RegisterWorkspaceParams,
     TaskBundleBinding, TaskIndexFilter, WorkspaceBinding, WorkspaceCheckoutBinding,

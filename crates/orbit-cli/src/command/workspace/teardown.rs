@@ -1,4 +1,5 @@
 use clap::Args;
+use orbit_cmd::{remove_task_store_partition, task_store_partition_path};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 
@@ -66,6 +67,13 @@ impl Execute for WorkspaceTeardownArgs {
                     "deregistered workspace '{}' from registry",
                     ws.name
                 ));
+
+                if remove_task_store_partition(&global_root, &ws_id)? {
+                    removed.push(format!(
+                        "deleted task store {}",
+                        task_store_partition_path(&global_root, &ws_id).display()
+                    ));
+                }
             }
         }
 
