@@ -12,6 +12,8 @@
 //! (ADR-0306): a zero-width sink truncates nothing, and a sink that disallows
 //! color renders the same bytes a file redirect would.
 
+use std::io::Write;
+
 use comfy_table::{
     Attribute, Cell, CellAlignment, ColumnConstraint, ContentArrangement, Row, Table as Grid,
     Width, presets,
@@ -152,20 +154,18 @@ impl Table {
         self
     }
 
-    /// Add a trailing notice — a truncation count, say — for the renderer to
-    /// print to stderr. Not printed by [`Table::emit`] itself: `output::render`
-    /// reads it via [`Table::trailing_notices`] before mode dispatch, so it
-    /// reaches a `json`/`ndjson` caller too, not only the human table view
-    /// (ORB-12203).
+    /// Add a trailing notice — a truncation count, say — to print to stderr
+    /// after the table in human modes, or for the renderer to print on
+    /// machine-readable paths.
     #[must_use]
     pub fn trailing_notice(mut self, notice: impl Into<String>) -> Self {
         self.trailing_notices.push(notice.into());
         self
     }
 
-    /// Notices for the renderer to print to stderr in every mode, ahead of
-    /// this table's own render (which may add further, rendering-specific
-    /// notices such as dropped columns).
+    /// Notices for the renderer to print to stderr in machine-readable modes
+    /// (where [`Table::emit`] is not called), or printed after the table in
+    /// human modes.
     pub(crate) fn trailing_notices(&self) -> &[String] {
         &self.trailing_notices
     }
@@ -179,9 +179,8 @@ impl Table {
     /// Write the list to stdout in the sink's mode, or the empty-state line to
     /// stderr when there are no records. Notices about dropped columns go to
     /// stderr so that they never land in a consumer's record stream. This
-    /// table's own trailing notices (a truncation count, say) are not printed
-    /// here — `output::render` prints those in every mode, human or not, so
-    /// this only handles rendering-specific notices discovered at this width.
+    /// table's own trailing notices (a truncation count, say) are printed to
+    /// stderr after the body in both table and plain modes (ORB-12206).
     ///
     /// Called only by `output::render`; a command hands its table back inside a
     /// payload rather than emitting one itself.
@@ -192,6 +191,10 @@ impl Table {
         }
         if sink.mode() == OutputMode::Plain {
             println!("{}", self.render_plain(sink));
+            std::io::stdout().flush().ok();
+            for notice in &self.trailing_notices {
+                eprintln!("{notice}");
+            }
             return;
         }
         let rendered = self.render_at(
@@ -203,6 +206,10 @@ impl Table {
             eprintln!("{notice}");
         }
         println!("{}", rendered.body);
+        std::io::stdout().flush().ok();
+        for notice in &self.trailing_notices {
+            eprintln!("{notice}");
+        }
     }
 
     /// The plain form: the same visible columns and the same cell values as
