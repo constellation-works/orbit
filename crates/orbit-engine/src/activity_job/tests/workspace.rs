@@ -3,7 +3,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use tempfile::{TempDir, tempdir};
@@ -12,7 +11,12 @@ use super::super::dispatcher::DispatchError;
 use super::super::workspace::fingerprint::{git_fingerprint, untracked_file_identity};
 use super::super::workspace::*;
 
-static GIT_SHIM_LOCK: Mutex<()> = Mutex::new(());
+/// Names the isolated child that owns the Git shim, so a future second user of
+/// the fixture cannot mistake another test's child process for its own.
+const GIT_SHIM_CHILD_ENV: &str = "ORBIT_TEST_GIT_SHIM_CHILD";
+
+/// Carries the shim's invocation log to that child.
+const GIT_SHIM_LOG_ENV: &str = "ORBIT_TEST_GIT_SHIM_LOG";
 
 #[test]
 fn resolve_subprocess_cwd_prefers_input_over_task_over_tool_ctx() {
@@ -277,13 +281,17 @@ fn fingerprint_identities_match_per_path_git_and_stay_stable() {
 
 #[test]
 fn capture_of_thousands_of_untracked_files_uses_a_constant_git_budget() {
+    let Some(shim) = GitShim::install(
+        module_path!(),
+        "capture_of_thousands_of_untracked_files_uses_a_constant_git_budget",
+    ) else {
+        return;
+    };
+
     let fixture = linked_worktree_fixture();
     write_untracked_tree(&fixture.assigned, 25);
     let pair = declared_pair(&fixture, "ORB-FINGERPRINT-BUDGET", "run-fingerprint-budget");
     let input = worktree_input(&fixture, "ORB-FINGERPRINT-BUDGET");
-
-    let _guard = lock_git_shim();
-    let shim = GitShim::install();
 
     let small_before = shim.invocation_count(&[&fixture.assigned, &fixture.primary]);
     WorktreeBoundaryGuard::capture(
@@ -462,20 +470,34 @@ fn domain_sha256(domain: &str, bytes: &[u8]) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
-fn lock_git_shim() -> MutexGuard<'static, ()> {
-    GIT_SHIM_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
+/// Child-side handle on the `git` shim installed for the isolated test
+/// process: the shim logs each invocation's cwd and arguments, then delegates
+/// to the real Git binary.
 struct GitShim {
     log_path: PathBuf,
-    previous_path: Option<std::ffi::OsString>,
-    _dir: TempDir,
 }
 
 impl GitShim {
-    fn install() -> Self {
+    /// Isolate the shim's PATH in a child test process. Prepending the shim
+    /// directory to this process's PATH would redirect `git` for every test
+    /// running concurrently in the same binary, and those tests then fail once
+    /// the shim's TempDir is removed.
+    ///
+    /// Returns the shim handle when this process is the isolated child; in the
+    /// parent it runs the child to completion and returns `None`.
+    fn install(module: &str, test: &str) -> Option<Self> {
+        let module = module
+            .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+            .unwrap_or(module);
+        let exact_test = format!("{module}::{test}");
+
+        if std::env::var(GIT_SHIM_CHILD_ENV).ok().as_deref() == Some(&exact_test) {
+            let log_path = std::env::var_os(GIT_SHIM_LOG_ENV).expect("shim log path in child");
+            return Some(Self {
+                log_path: PathBuf::from(log_path),
+            });
+        }
+
         let dir = tempdir().expect("shim dir");
         let log_path = dir.path().join("git-invocations.log");
         fs::write(&log_path, "").expect("create shim log");
@@ -498,21 +520,25 @@ impl GitShim {
             fs::set_permissions(&script, permissions).expect("shim permissions");
         }
 
-        let previous_path = std::env::var_os("PATH");
-        let mut path = dir.path().as_os_str().to_os_string();
-        path.push(":");
-        if let Some(existing) = &previous_path {
-            path.push(existing);
-        }
-        // SAFETY: the matching Drop restores PATH, and GIT_SHIM_LOCK serializes
-        // the only test that mutates it.
-        unsafe { std::env::set_var("PATH", &path) };
+        let mut paths = vec![dir.path().to_path_buf()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", &exact_test, "--nocapture"])
+            .env(GIT_SHIM_CHILD_ENV, &exact_test)
+            .env(GIT_SHIM_LOG_ENV, &log_path)
+            .env("PATH", std::env::join_paths(paths).expect("shim PATH"))
+            .output()
+            .expect("isolated git shim test");
+        assert!(
+            output.status.success(),
+            "git shim test failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
 
-        Self {
-            log_path,
-            previous_path,
-            _dir: dir,
-        }
+        None
     }
 
     fn invocation_count(&self, roots: &[&Path]) -> usize {
@@ -525,18 +551,6 @@ impl GitShim {
                 })
             })
             .count()
-    }
-}
-
-impl Drop for GitShim {
-    fn drop(&mut self) {
-        // SAFETY: restores the PATH captured in GitShim::install.
-        unsafe {
-            match &self.previous_path {
-                Some(path) => std::env::set_var("PATH", path),
-                None => std::env::remove_var("PATH"),
-            }
-        }
     }
 }
 
