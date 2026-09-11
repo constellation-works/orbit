@@ -26,11 +26,14 @@ pub(super) fn add(
 ) -> Result<Value, OrbitError> {
     let title = required_string(&input, &["title"], "title")?;
     let description = required_string(&input, &["description"], "description")?;
-    let workspace = required_string(&input, &["workspace"], "workspace")?;
+    // `workspace` is required for the existing MCP/CLI routing that selects
+    // this runtime before dispatch reaches here; context selectors always
+    // canonicalize against the repository root regardless of its value.
+    required_string(&input, &["workspace"], "workspace")?;
     let raw_context_files =
         optional_csv_or_string_list_alias(&input, &["context_files"])?.unwrap_or_default();
     if !allows_missing_context(&input)? {
-        runtime.ensure_context_selectors_exist(&raw_context_files, Some(workspace.as_str()))?;
+        runtime.ensure_context_selectors_exist(&raw_context_files, None)?;
     }
     let task = runtime.add_task_with_identity(
         TaskAddParams {
@@ -57,7 +60,7 @@ pub(super) fn add(
             plan: String::new(),
             comment: None,
             context_files: raw_context_files.clone(),
-            workspace_path: Some(workspace),
+            workspace_path: None,
             priority: optional_string(&input, "priority")?
                 .map(|value| parse_task_priority("priority", &value))
                 .transpose()?

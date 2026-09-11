@@ -165,6 +165,68 @@ fn task_add_tool_creates_proposed_tasks_for_agents() {
     );
 }
 
+/// ORB-12208: `orbit.task.add` must validate `context_files` against the same
+/// root `add_task` stores them relative to (the repository root), not against
+/// a sub-directory path-form `workspace` selector. `orbit.task.update`
+/// (ORB-12197) already passes `None`; this covers the tool that was left
+/// behind, in both directions: a selector valid only relative to the
+/// sub-directory must be rejected rather than stored dead, and a selector
+/// valid at the repository root must be accepted rather than false-rejected.
+#[test]
+fn task_add_tool_validates_context_selectors_against_repo_root_not_workspace_subdir() {
+    let (_root, runtime, repo_root) = test_runtime();
+    fs::create_dir_all(repo_root.join("src")).expect("create repo-root src dir");
+    fs::write(repo_root.join("src/main.rs"), "fn main() {}\n").expect("write repo-root file");
+    let sub_dir = repo_root.join("crates").join("orbit-cli").join("src");
+    fs::create_dir_all(&sub_dir).expect("create workspace sub-directory");
+    fs::write(sub_dir.join("lib.rs"), "pub fn ok() {}\n").expect("write sub-directory file");
+    let workspace = repo_root.join("crates").join("orbit-cli");
+
+    // A selector that only resolves relative to the sub-directory workspace
+    // (`crates/orbit-cli/src/lib.rs` as `file:src/lib.rs`) does not exist at
+    // the repository root `add_task` stores it against, so it must be
+    // rejected rather than accepted and stored dead.
+    let message = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.add",
+        json!({
+            "title": "Rejects sub-directory-only selector",
+            "description": "file:src/lib.rs only resolves under the workspace sub-directory.",
+            "complexity": "low",
+            "workspace": workspace.to_string_lossy(),
+            "context_files": ["file:src/lib.rs"],
+        }),
+        Some("codex".to_string()),
+        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+    ));
+    assert!(
+        message.contains("file:src/lib.rs") && message.contains("does not resolve"),
+        "{message}"
+    );
+
+    // A selector valid at the repository root (`file:src/main.rs`) must be
+    // accepted even though the call's `workspace` is a sub-directory, because
+    // `add_task` canonicalizes and stores selectors relative to the
+    // repository root.
+    let output = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({
+                "title": "Accepts repo-root selector",
+                "description": "file:src/main.rs resolves at the repository root.",
+                "complexity": "low",
+                "workspace": workspace.to_string_lossy(),
+                "context_files": ["file:src/main.rs"],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("repo-root-valid selector is accepted from a sub-directory workspace");
+    assert_eq!(
+        output.get("context_files"),
+        Some(&json!(["file:src/main.rs"]))
+    );
+}
+
 #[test]
 fn mcp_task_add_uses_session_workspace_from_worktree_cwd() {
     let (_root, runtime, repo_root) = test_runtime();
