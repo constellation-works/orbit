@@ -42,9 +42,12 @@ not by the Pages artifact. Daniel owns the corresponding post-publication
 checks for HSTS and redirects. See the [website validation runbook](../docs/runbooks/website-validation.md)
 for local evidence and manual-publication verification.
 
-Every published page is authored by hand under `src/content/docs/`. Nothing on
-this site is generated at build time, so `npm run build` is a pure function of
-the tracked sources. Before website commands run, a cleanup hook removes the
+Every published page is authored by hand under `src/content/docs/`, with two
+exceptions under `src/pages/`: `/changelog/` renders the repository's tracked
+`CHANGELOG.md` so the site never carries a drifting copy, and `/tasks/` is the
+landing for the task links Orbit mints into pull requests (`public/_redirects`
+sends `/tasks/<id>` there). Nothing on this site is fetched or generated at
+build time, so `npm run build` is a pure function of the tracked sources. Before website commands run, a cleanup hook removes the
 retired generated `src/content/docs/metrics/` directory left by older checkouts.
 Do not author pages in that reserved directory. This hook does not generate
 content.

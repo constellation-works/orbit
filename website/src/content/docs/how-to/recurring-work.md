@@ -10,10 +10,12 @@ Orbit has two layers of scheduling, and they answer different questions.
 | Layer | Question it answers | Where it lives |
 |---|---|---|
 | **Routines** | *Which job should fire, on what cadence, on which host?* | Versioned YAML in `.orbit/routines/` |
-| **Auto-tasks** | *Which recurring chore should become a task?* | Definitions managed by `orbit auto-task` |
+| **Auto-tasks** | *Which recurring chore should become a task?* | Versioned YAML in `.orbit/auto_tasks/`, managed by `orbit auto-task` |
 
 Both are driven by the same clock: `orbit sweep`. Nothing is scheduled until
-that clock runs.
+that clock runs. This guide is the operating procedure; the model behind it —
+why the layers are separate and what each one guarantees — is in
+[Routines and Auto-Tasks](../../concepts/scheduling/).
 
 ## 1. Start the sweep clock
 
