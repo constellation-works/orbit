@@ -1,7 +1,7 @@
 schemaVersion: 1
 name: friction-curation
 description: Daily evidence-first deduplication, verification, resolution, and task filing for open friction records
-enabled: false
+enabled: true
 schedule:
   cron: 15 7 * * *
 template:
