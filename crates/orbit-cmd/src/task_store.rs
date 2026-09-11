@@ -256,8 +256,9 @@ pub fn partition_is_bound(global_root: &Path, workspace_id: &str) -> Result<bool
 
 /// Who claims each partition on this host, and why the rest do not.
 struct PartitionClaims {
-    /// Live checkout bindings, workspace catalog ids, and the synthetic
-    /// partition every `--root <data-dir>` write lands in.
+    /// Registered task workspaces, live checkout bindings, workspace catalog
+    /// ids, and the synthetic partition every `--root <data-dir>` write lands
+    /// in.
     claimed: BTreeSet<String>,
     /// Bindings whose checkout is confirmed absent.
     gone: BTreeSet<String>,
@@ -277,6 +278,10 @@ fn partition_claims(global_root: &Path) -> Result<PartitionClaims, OrbitError> {
     };
     for workspace_id in tasks.workspace_ids()? {
         let Some(checkout) = tasks.find_workspace_checkout(&workspace_id)? else {
+            // Imported task archives register their source workspace without a
+            // machine-local checkout. That logical registration still owns its
+            // partition on this host.
+            claims.claimed.insert(workspace_id);
             continue;
         };
         match checkout_evidence(&checkout.orbit_dir) {
