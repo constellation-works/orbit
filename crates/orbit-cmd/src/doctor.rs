@@ -24,9 +24,12 @@ use fs2::FileExt;
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::artifact_health::{ArtifactFinding, RetiredActivityBackendRepair};
+use orbit_registry::workspace_registry;
 use orbit_store::maintenance::migration::SUPPORTED_SCHEMA_VERSION;
 use orbit_types::workspace::WorkspacePaths;
 use serde::Serialize;
+
+use crate::task_store::task_workspaces_dir;
 
 /// Outcome of one workspace doctor check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -125,6 +128,12 @@ pub trait DoctorCommands {
     /// files are left untouched.
     fn repair_retired_activity_backends(&self) -> Result<RetiredActivityBackendRepair, OrbitError>;
 
+    /// Delete task-store partitions under `<global_root>/tasks/workspaces/`
+    /// whose workspace id is no longer present in the registry — left behind
+    /// by a `workspace teardown` run on an older binary, or by removing a
+    /// checkout without running teardown [ORB-12109].
+    fn remove_orphan_task_stores(&self) -> Result<usize, OrbitError>;
+
     /// Cheap store write probe for health endpoints: open the store and
     /// acquire + roll back the write lock without mutating anything.
     fn health_check_store_writable(&self) -> Result<String, OrbitError>;
@@ -141,6 +150,7 @@ impl DoctorCommands for OrbitRuntime {
             doctor_check_job_runs(self),
             doctor_check_task_reservations(self),
             doctor_check_task_relations(self),
+            doctor_check_orphan_task_stores(self),
         ];
         results.extend(doctor_check_definition_artifacts(self));
         Ok(results)
@@ -166,6 +176,31 @@ impl DoctorCommands for OrbitRuntime {
 
     fn repair_retired_activity_backends(&self) -> Result<RetiredActivityBackendRepair, OrbitError> {
         OrbitRuntime::repair_retired_activity_backends(self)
+    }
+
+    fn remove_orphan_task_stores(&self) -> Result<usize, OrbitError> {
+        let global_root = self.global_root();
+        let workspaces_dir = task_workspaces_dir(&global_root);
+        let Some(entries) = read_task_workspaces_dir(&workspaces_dir)? else {
+            return Ok(0);
+        };
+        let registry = workspace_registry::load_registry_from(
+            &workspace_registry::registry_path_for(&global_root),
+        )?;
+
+        let mut removed = 0;
+        for path in entries {
+            let Some(ws_id) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if workspace_registry::find_workspace_by_id(&registry, ws_id).is_some() {
+                continue;
+            }
+            if crate::task_store::remove_task_store_partition(&global_root, ws_id)? {
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     fn remove_retired_graph_state(&self) -> Result<usize, OrbitError> {
@@ -402,6 +437,116 @@ fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
         ),
         "Run `orbit doctor --fix-stale-task-locks`.".to_string(),
     )
+}
+
+/// Task-store partitions under `<global_root>/tasks/workspaces/<ws_id>/`
+/// whose workspace id is absent from the registry — orphaned by a
+/// `workspace teardown` run on an older binary, or by deleting a checkout
+/// without running teardown [ORB-12109]. Scoped to the whole host, not just
+/// this workspace, because the partition directory is itself host-global.
+fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let global_root = runtime.global_root();
+    let workspaces_dir = task_workspaces_dir(&global_root);
+    let entries = match read_task_workspaces_dir(&workspaces_dir) {
+        Ok(Some(entries)) => entries,
+        Ok(None) => {
+            return check(
+                "orphan-task-stores",
+                WorkspaceDoctorStatus::Skipped,
+                "no task-store partitions on this host yet".to_string(),
+            );
+        }
+        Err(error) => {
+            return check(
+                "orphan-task-stores",
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot scan {}: {error}", workspaces_dir.display()),
+            );
+        }
+    };
+
+    let registry = match workspace_registry::load_registry_from(
+        &workspace_registry::registry_path_for(&global_root),
+    ) {
+        Ok(registry) => registry,
+        Err(error) => {
+            return check(
+                "orphan-task-stores",
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot read workspace registry: {error}"),
+            );
+        }
+    };
+
+    let mut orphans = Vec::new();
+    for path in &entries {
+        let Some(ws_id) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if workspace_registry::find_workspace_by_id(&registry, ws_id).is_some() {
+            continue;
+        }
+        orphans.push(format!(
+            "{ws_id} ({}, {} task bundle(s))",
+            path.display(),
+            count_task_bundles(path)
+        ));
+    }
+
+    if orphans.is_empty() {
+        return check(
+            "orphan-task-stores",
+            WorkspaceDoctorStatus::Ok,
+            format!(
+                "{} task-store partition(s) scanned, all registered",
+                entries.len()
+            ),
+        );
+    }
+
+    actionable_check(
+        "orphan-task-stores",
+        WorkspaceDoctorStatus::Warning,
+        format!(
+            "{} orphaned task-store partition(s) (workspace no longer registered on this host): {}",
+            orphans.len(),
+            orphans.join("; ")
+        ),
+        "Run `orbit doctor --fix-orphan-task-stores`.".to_string(),
+    )
+}
+
+/// Immediate subdirectories of `<global_root>/tasks/workspaces/`, one per
+/// workspace partition. `None` when the directory has never been created
+/// (fresh host, no task ever committed).
+fn read_task_workspaces_dir(workspaces_dir: &Path) -> Result<Option<Vec<PathBuf>>, OrbitError> {
+    let entries = match std::fs::read_dir(workspaces_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "read {}: {error}",
+                workspaces_dir.display()
+            )));
+        }
+    };
+    let paths = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    Ok(Some(paths))
+}
+
+/// Task bundles directly under one workspace's task-store partition — each
+/// is a subdirectory named for its task id.
+fn count_task_bundles(partition: &Path) -> usize {
+    std::fs::read_dir(partition)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .count()
 }
 
 /// Delete one dead-holder lock only after acquiring its advisory lock. A

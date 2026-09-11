@@ -28,6 +28,7 @@ pub mod migrate;
 pub mod registry_routines;
 pub mod registry_runtime;
 pub mod task_owner;
+pub mod task_store;
 pub mod update;
 pub mod workspace_catalog;
 
@@ -38,6 +39,7 @@ pub use activity_v2::{ActivityV2Commands, V2ActivityRunResult};
 pub use diagnostics::DiagnosticsCommands;
 pub use doctor::{DoctorCommands, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
+pub use task_store::{remove_task_store_partition, task_store_partition_path};
 
 /// One-stop import for every runtime extension trait this crate defines.
 pub mod prelude {

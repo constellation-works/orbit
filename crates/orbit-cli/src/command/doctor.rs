@@ -33,6 +33,10 @@ pub struct DoctorCommand {
     /// Remove known retired `spec.backend` values (`http`, `auto`) from schemaVersion 2 agent-loop activities. Unknown backends and unrelated parse failures are left untouched.
     #[arg(long)]
     pub fix_retired_activity_backends: bool,
+
+    /// Delete task-store partitions whose workspace is no longer registered on this host.
+    #[arg(long)]
+    pub fix_orphan_task_stores: bool,
 }
 
 impl Execute for DoctorCommand {
@@ -98,6 +102,16 @@ impl Execute for DoctorCommand {
                     "Removed retired spec.backend from {} activity file(s).",
                     report.repaired.len()
                 ),
+                remediation: None,
+            });
+        }
+        if self.fix_orphan_task_stores {
+            let removed = runtime.remove_orphan_task_stores()?;
+            eprintln!("Removed {removed} orphaned task-store partition(s).");
+            results.push(WorkspaceDoctorResult {
+                check_name: "fix-orphan-task-stores".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
+                message: format!("Removed {removed} orphaned task-store partition(s)."),
                 remediation: None,
             });
         }
