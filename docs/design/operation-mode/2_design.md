@@ -87,7 +87,10 @@ leaving crew recommendations advisory. The receipt event retains the complete
 assessment rationale, confidence, evidence gaps, validation approach, and
 reassessment triggers. Missing evidence leaves complexity `unassessed`, and
 automatic implementation admission excludes that task until preparation can
-produce an assessed result; priority remains an independent urgency signal.
+produce an assessed result, unless it carries the exact `no-diff-expected` tag
+— operational work whose durable result is not a repository diff is admitted on
+the tag alone and routes on its configured crew or the workspace default
+[ORB-12118]. Priority remains an independent urgency signal.
 There is no reusable general promotion-readiness certificate today.
 
 The [CI-failure admission seam](../../../crates/orbit-core/src/adapter/engine_host/v2_host/ci_failure_admission.rs)

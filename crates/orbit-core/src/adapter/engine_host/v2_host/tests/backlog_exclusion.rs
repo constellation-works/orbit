@@ -852,3 +852,209 @@ fn dispatch_order_is_independent_of_the_input_order() {
     // meaningful ordering rather than two identically-sorted no-ops.
     assert_eq!(forward[0].priority, TaskPriority::Critical);
 }
+
+/// Seed a backlog task with an exact tag set and complexity, so the
+/// complexity-admission rule can be exercised across tagged/untagged and
+/// manual/auto-task origins [ORB-12118].
+fn seed_tagged_backlog_task(
+    runtime: &OrbitRuntime,
+    title: &str,
+    complexity: TaskComplexity,
+    tags: &[&str],
+) -> Task {
+    runtime
+        .add_task(TaskAddParams {
+            title: title.to_string(),
+            description: format!("Fixture task: {title}"),
+            acceptance_criteria: vec!["Fixture task is observable.".to_string()],
+            plan: "Fixture plan.".to_string(),
+            tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+            workspace_path: Some(".".to_string()),
+            priority: TaskPriority::Medium,
+            complexity,
+            task_type: Some(TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            system_created: tags.iter().any(|tag| tag.starts_with("auto-task:")),
+            ..TaskAddParams::default()
+        })
+        .expect("seed tagged backlog task")
+}
+
+/// A record written before complexity was persisted at all: the field is
+/// absent rather than `unassessed`.
+fn seed_backlog_task_without_complexity(
+    runtime: &OrbitRuntime,
+    title: &str,
+    tags: &[&str],
+) -> String {
+    runtime
+        .stores()
+        .task_records()
+        .create(orbit_store::TaskCreateParams {
+            actor: "test".to_string(),
+            parent_id: None,
+            title: title.to_string(),
+            description: "Fixture task with no stored complexity.".to_string(),
+            acceptance_criteria: vec!["Fixture task is observable.".to_string()],
+            dependencies: Vec::new(),
+            relations: Vec::new(),
+            tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+            required_tools: Vec::new(),
+            plan: "Fixture plan.".to_string(),
+            execution_summary: String::new(),
+            context_files: Vec::new(),
+            workspace_path: Some(".".to_string()),
+            repo_root: None,
+            created_by: Some("test".to_string()),
+            planned_by: None,
+            implemented_by: None,
+            status: TaskStatus::Backlog,
+            priority: TaskPriority::Medium,
+            complexity: None,
+            task_type: TaskType::Chore,
+            external_refs: Vec::new(),
+            source_task_id: None,
+            crew: None,
+            orchestrator: None,
+            comments: Vec::new(),
+        })
+        .expect("create task without complexity")
+        .id
+}
+
+#[test]
+fn no_diff_expected_tasks_clear_the_complexity_gate_in_both_selection_modes() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let manual_unassessed = seed_tagged_backlog_task(
+        &runtime,
+        "Operational check",
+        TaskComplexity::Unassessed,
+        &["no-diff-expected"],
+    );
+    let auto_unassessed = seed_tagged_backlog_task(
+        &runtime,
+        "[auto-task] Review recently merged changes",
+        TaskComplexity::Unassessed,
+        &["code-review", "no-diff-expected", "auto-task:code-review"],
+    );
+    let absent_complexity = seed_backlog_task_without_complexity(
+        &runtime,
+        "Legacy operational check",
+        &["no-diff-expected"],
+    );
+    let assessed = seed_tagged_backlog_task(
+        &runtime,
+        "Assessed operational check",
+        TaskComplexity::Medium,
+        &["no-diff-expected"],
+    );
+
+    let automatic = list_backlog_tasks(&runtime, json!({}));
+    let selected = output_task_ids(&automatic);
+
+    for task_id in [
+        &manual_unassessed.id,
+        &auto_unassessed.id,
+        &absent_complexity,
+        &assessed.id,
+    ] {
+        assert!(
+            selected.contains(task_id),
+            "exempt task {task_id} should clear the complexity gate automatically"
+        );
+    }
+    assert_eq!(automatic["excluded"], json!([]));
+
+    let explicit = list_backlog_tasks(
+        &runtime,
+        json!({ "task_ids": [
+            manual_unassessed.id,
+            auto_unassessed.id,
+            absent_complexity,
+            assessed.id,
+        ] }),
+    );
+
+    assert_eq!(output_task_ids(&explicit).len(), 4);
+    assert_eq!(explicit["excluded"], json!([]));
+}
+
+#[test]
+fn the_complexity_gate_still_withholds_untagged_work_of_either_origin() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let auto_finding = seed_tagged_backlog_task(
+        &runtime,
+        "[auto-task] Repair the confirmed finding",
+        TaskComplexity::Unassessed,
+        &["code-review", "auto-task:code-review"],
+    );
+    let manual_unassessed = seed_tagged_backlog_task(
+        &runtime,
+        "Implementation awaiting assessment",
+        TaskComplexity::Unassessed,
+        &[],
+    );
+    let near_miss = seed_tagged_backlog_task(
+        &runtime,
+        "Nearly exempt",
+        TaskComplexity::Unassessed,
+        &["no-diff-needed"],
+    );
+    let absent_complexity =
+        seed_backlog_task_without_complexity(&runtime, "Legacy implementation", &[]);
+
+    let automatic = list_backlog_tasks(&runtime, json!({}));
+
+    assert_eq!(automatic["task_ids"], json!([]));
+    for task_id in [
+        &auto_finding.id,
+        &manual_unassessed.id,
+        &near_miss.id,
+        &absent_complexity,
+    ] {
+        assert_eq!(
+            excluded_entry(&automatic, task_id)["reason"],
+            "unassessed_complexity",
+            "task {task_id} must stay withheld without the exact no-diff-expected tag"
+        );
+    }
+
+    let explicit = list_backlog_tasks(&runtime, json!({ "task_ids": [near_miss.id] }));
+    assert_eq!(explicit["task_ids"], json!([]));
+    assert_eq!(
+        excluded_entry(&explicit, &near_miss.id)["reason"],
+        "unassessed_complexity"
+    );
+}
+
+#[test]
+fn the_no_diff_expected_exemption_does_not_relax_dependency_readiness() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let dependency = seed_task_with_dependencies(
+        &runtime,
+        "Unfinished dependency",
+        TaskStatus::InProgress,
+        vec![],
+    );
+    let exempt = runtime
+        .add_task(TaskAddParams {
+            title: "Operational check behind a dependency".to_string(),
+            description: "Fixture task".to_string(),
+            acceptance_criteria: vec!["Fixture task is observable.".to_string()],
+            dependencies: vec![dependency.id.clone()],
+            tags: vec!["no-diff-expected".to_string()],
+            plan: "Fixture plan.".to_string(),
+            workspace_path: Some(".".to_string()),
+            priority: TaskPriority::Medium,
+            complexity: TaskComplexity::Unassessed,
+            task_type: Some(TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .expect("seed dependent exempt task");
+
+    let output = list_backlog_tasks(&runtime, json!({}));
+
+    assert!(!output_task_ids(&output).contains(&exempt.id));
+    assert_eq!(output["excluded"], json!([]));
+}

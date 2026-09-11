@@ -411,3 +411,51 @@ fn explicit_run_crew_wins_and_ordinary_ship_admission_has_no_pool_policy() {
         "astra"
     );
 }
+
+/// [ORB-12118] `no-diff-expected` work is admitted without an assessed
+/// complexity, so its crew must come from the task's own configuration or the
+/// workspace default — never from a complexity-derived pool, and never by
+/// rewriting the stored non-answer to obtain one.
+#[test]
+fn exempt_no_diff_expected_tasks_route_on_their_crew_or_the_workspace_default() {
+    let (_root, runtime, _, _) =
+        test_runtime_with_workspace_config("[workflow]\nmedium_complexity_crews = [\"grok\"]\n");
+    let parent = coordinator(&runtime, json!({}));
+    let configured = no_diff_expected_task(&runtime, Some("astra"));
+    let inherited = no_diff_expected_task(&runtime, None);
+
+    let configured_input = admit(&runtime, &parent, &configured, 0);
+    assert_eq!(configured_input["crew"], "astra");
+    assert_eq!(configured_input["crew_selection"]["source"], "task.crew");
+    assert_eq!(
+        configured_input["crew_selection"]["complexity"],
+        "unassessed"
+    );
+
+    let inherited_input = admit(&runtime, &parent, &inherited, 0);
+    assert_eq!(inherited_input["crew"], "opus");
+    assert_eq!(inherited_input["crew_selection"]["source"], "default");
+
+    for task in [&configured, &inherited] {
+        assert_eq!(
+            runtime.get_task(&task.id).expect("task").complexity,
+            Some(TaskComplexity::Unassessed),
+            "admission must not fabricate an assessed complexity"
+        );
+    }
+}
+
+fn no_diff_expected_task(runtime: &OrbitRuntime, crew: Option<&str>) -> Task {
+    runtime
+        .add_task(TaskAddParams {
+            title: "Operational no-diff fixture".into(),
+            description: "Exercise crew routing without an assessment".into(),
+            plan: "Inspect admission evidence".into(),
+            tags: vec!["no-diff-expected".to_string()],
+            complexity: TaskComplexity::Unassessed,
+            crew: crew.map(ToOwned::to_owned),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("task")
+}
