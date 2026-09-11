@@ -1,16 +1,27 @@
-//! Task-store partition paths, shared by `workspace teardown` and `doctor`'s
-//! orphan-partition check/fix [ORB-12109].
+//! Task-store partition paths and ownership, shared by `workspace teardown`
+//! and `doctor`'s orphan-partition check/fix [ORB-12109].
 //!
 //! `orbit-store` owns the per-workspace bundle layout
 //! (`<global_root>/tasks/workspaces/<workspace_id>/`) but knows nothing
 //! about the workspace registry; this module is the composition seam that
 //! lets a caller resolve or remove one workspace's partition without
 //! reaching around `orbit-store` from `orbit-cli`.
+//!
+//! The partition directory name is a *task-registry* workspace id
+//! (`workspace_bindings.workspace_id` in `<global_root>/tasks/index.sqlite`),
+//! which is minted as `<slug>-<hash>` whenever a checkout binds without an
+//! explicit id. It is not the workspace catalog's `ws_*` id space, so the
+//! task registry — not `workspaces.json` — decides which partition a checkout's
+//! task state lives in and which partitions are still claimed [ORB-12119].
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_core::runtime::UNBOUND_DATA_DIR_WORKSPACE_ID;
+use orbit_registry::workspace_registry;
 pub use orbit_store::maintenance::task_registry::task_workspaces_dir;
+use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 
 /// Path to one workspace's task-store partition under
 /// `<global_root>/tasks/workspaces/<workspace_id>/`.
@@ -18,12 +29,214 @@ pub fn task_store_partition_path(global_root: &Path, workspace_id: &str) -> Path
     task_workspaces_dir(global_root).join(workspace_id)
 }
 
-/// Delete one workspace's task-store partition if present. Returns whether
-/// anything was removed.
-pub fn remove_task_store_partition(
+/// What a scan of `<global_root>/tasks/workspaces/` found.
+#[derive(Debug, Clone)]
+pub struct TaskStorePartitions {
+    /// Partition directories present on this host.
+    pub scanned: usize,
+    /// Those that no registry claims.
+    pub unclaimed: Vec<PathBuf>,
+}
+
+/// Classify every task-store partition on this host as claimed or orphaned.
+///
+/// `None` means the directory has never been created (fresh host, no task ever
+/// committed) — nothing to diagnose rather than nothing orphaned.
+pub fn inspect_task_store_partitions(
+    global_root: &Path,
+) -> Result<Option<TaskStorePartitions>, OrbitError> {
+    let Some(partitions) = task_store_partitions(global_root)? else {
+        return Ok(None);
+    };
+    let claimed = claimed_partition_ids(global_root)?;
+    let scanned = partitions.len();
+    let unclaimed = partitions
+        .into_iter()
+        .filter(|path| !path_is_claimed(path, &claimed))
+        .collect();
+    Ok(Some(TaskStorePartitions { scanned, unclaimed }))
+}
+
+/// Delete every partition no registry claims, retiring any registry rows that
+/// name it. Returns the removed partition paths.
+pub fn remove_unclaimed_task_stores(global_root: &Path) -> Result<Vec<PathBuf>, OrbitError> {
+    let Some(partitions) = inspect_task_store_partitions(global_root)? else {
+        return Ok(Vec::new());
+    };
+    let unclaimed = partitions.unclaimed;
+    let tasks = open_task_registry(global_root)?;
+
+    let mut removed = Vec::new();
+    for path in unclaimed {
+        let Some(workspace_id) = partition_id(&path) else {
+            continue;
+        };
+        if remove_partition(&tasks, global_root, workspace_id)? {
+            removed.push(path);
+        }
+    }
+    Ok(removed)
+}
+
+/// Delete the task-store partitions a torn-down checkout leaves behind:
+/// the partition its task state is actually bound to, plus a partition named
+/// for its workspace-catalog id when one exists and no other checkout is bound
+/// to it. Returns the removed partition paths.
+///
+/// The second case only arises for a checkout whose catalog id and bound
+/// partition id coincide, or for a partition left over from before the two id
+/// spaces were told apart; a partition another checkout still binds is never
+/// this checkout's to delete.
+pub fn remove_checkout_task_stores(
+    global_root: &Path,
+    orbit_dir: &Path,
+    catalog_workspace_id: Option<&str>,
+) -> Result<Vec<PathBuf>, OrbitError> {
+    let tasks = open_task_registry(global_root)?;
+    let mut targets: Vec<String> = Vec::new();
+
+    if let Some(bound) = tasks.find_checkout_by_orbit_dir(orbit_dir)? {
+        targets.push(bound.workspace_id);
+    }
+    if let Some(catalog_id) = catalog_workspace_id
+        && !targets.iter().any(|id| id == catalog_id)
+        && !bound_to_another_checkout(&tasks, catalog_id, orbit_dir)?
+    {
+        targets.push(catalog_id.to_string());
+    }
+
+    let mut removed = Vec::new();
+    for workspace_id in targets {
+        if remove_partition(&tasks, global_root, &workspace_id)? {
+            removed.push(task_store_partition_path(global_root, &workspace_id));
+        }
+    }
+    Ok(removed)
+}
+
+/// Partition the checkout at `orbit_dir` binds its task state to, when it is
+/// bound — the directory a caller must look in to find that checkout's task
+/// bundles, whatever the workspace catalog calls the same checkout.
+pub fn bound_partition_id(
+    global_root: &Path,
+    orbit_dir: &Path,
+) -> Result<Option<String>, OrbitError> {
+    Ok(open_task_registry(global_root)?
+        .find_checkout_by_orbit_dir(orbit_dir)?
+        .map(|binding| binding.workspace_id))
+}
+
+/// Whether the task registry still binds `workspace_id` as a partition.
+pub fn partition_is_bound(global_root: &Path, workspace_id: &str) -> Result<bool, OrbitError> {
+    Ok(open_task_registry(global_root)?
+        .workspace_ids()?
+        .contains(workspace_id))
+}
+
+/// Every workspace id that still claims a partition on this host: the task
+/// registry's own bindings, the workspace catalog's ids, and the synthetic
+/// partition every `--root <data-dir>` write lands in, which by construction
+/// appears in neither registry.
+fn claimed_partition_ids(global_root: &Path) -> Result<BTreeSet<String>, OrbitError> {
+    let tasks = open_task_registry(global_root)?;
+    let mut claimed = tasks.workspace_ids()?;
+    claimed.insert(UNBOUND_DATA_DIR_WORKSPACE_ID.to_string());
+
+    let registry_path = workspace_registry::registry_path_for(global_root);
+    if registry_path.exists() {
+        let registry = workspace_registry::load_registry_from(&registry_path)?;
+        claimed.extend(
+            registry
+                .workspaces
+                .into_iter()
+                .map(|workspace| workspace.id),
+        );
+    }
+    Ok(claimed)
+}
+
+/// Open the task registry that names the partitions, refusing to answer
+/// ownership questions when it is absent: without it every live partition
+/// would look unclaimed, and the caller's next step is deletion.
+fn open_task_registry(global_root: &Path) -> Result<TaskRegistryStore, OrbitError> {
+    let path = task_registry_path(global_root);
+    if !path.exists() {
+        return Err(OrbitError::Io(format!(
+            "task registry {} is missing, so no task-store partition's owner can be resolved",
+            path.display()
+        )));
+    }
+    TaskRegistryStore::open(&path)
+}
+
+/// Immediate subdirectories of `<global_root>/tasks/workspaces/`, one per
+/// partition. `None` when the directory has never been created.
+fn task_store_partitions(global_root: &Path) -> Result<Option<Vec<PathBuf>>, OrbitError> {
+    let workspaces_dir = task_workspaces_dir(global_root);
+    let entries = match std::fs::read_dir(&workspaces_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "read {}: {error}",
+                workspaces_dir.display()
+            )));
+        }
+    };
+    Ok(Some(
+        entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect(),
+    ))
+}
+
+/// Workspace id a partition directory is named for.
+pub fn partition_id(partition: &Path) -> Option<&str> {
+    partition.file_name().and_then(|name| name.to_str())
+}
+
+fn path_is_claimed(partition: &Path, claimed: &BTreeSet<String>) -> bool {
+    partition_id(partition).is_some_and(|id| claimed.contains(id))
+}
+
+/// Whether `workspace_id`'s partition holds *another* checkout's task state,
+/// and so is not this checkout's to delete. The registry normalizes the paths
+/// it stores, so the comparison canonicalizes too.
+fn bound_to_another_checkout(
+    tasks: &TaskRegistryStore,
+    workspace_id: &str,
+    orbit_dir: &Path,
+) -> Result<bool, OrbitError> {
+    let binding = match tasks.find_workspace_checkout(workspace_id) {
+        Ok(binding) => binding,
+        // Not a well-formed workspace id, so no binding can name it.
+        Err(OrbitError::InvalidInput(_)) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let canonical = std::fs::canonicalize(orbit_dir).unwrap_or_else(|_| orbit_dir.to_path_buf());
+    Ok(binding.is_some_and(|binding| binding.orbit_dir != canonical))
+}
+
+/// Retire one partition's registry bindings, then delete its directory —
+/// bindings first, so an interrupted removal leaves recoverable bundles rather
+/// than a binding pointing at a directory that is gone. Returns whether a
+/// partition directory was deleted; bindings are retired either way, including
+/// for a workspace that never wrote a bundle.
+fn remove_partition(
+    tasks: &TaskRegistryStore,
     global_root: &Path,
     workspace_id: &str,
 ) -> Result<bool, OrbitError> {
+    // A directory name that is not a well-formed workspace id can hold no
+    // bindings; its directory is still this function's to remove.
+    if let Err(error) = tasks.unbind_workspace(workspace_id)
+        && !matches!(error, OrbitError::InvalidInput(_))
+    {
+        return Err(error);
+    }
+
     let path = task_store_partition_path(global_root, workspace_id);
     if !path.is_dir() {
         return Ok(false);

@@ -66,6 +66,9 @@ pub use resolve::{
 // `pub` for the runtime-less `orbit migrate --dry-run` inspection that moved
 // to `orbit-cmd` [ORB-10016].
 pub use resolve::{is_global_orbit_root, resolve_global_root, try_resolve_initialized_roots};
+// `pub` for host task-store maintenance in `orbit-cmd`, which must recognize
+// the one partition id no registry claims [ORB-12119].
+pub use builder::UNBOUND_DATA_DIR_WORKSPACE_ID;
 pub use run_input::managed_workspace_selector_from_env;
 pub(crate) use task::{failed_run_error_context, is_workflow_failure_state};
 

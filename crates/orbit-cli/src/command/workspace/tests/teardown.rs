@@ -1,12 +1,16 @@
 //! [ORB-12109] `workspace teardown` must not leave the deregistered
 //! workspace's global task-store partition behind, and `orbit doctor` must
 //! flag it if it ever does.
+//!
+//! [ORB-12119] The partition to delete is the one the *task registry* binds to
+//! the checkout, not the one named for its workspace-catalog id, and its
+//! registry bindings must be retired with it.
 
 use std::path::Path;
 
 use chrono::Utc;
 use orbit_cmd::DoctorCommands;
-use orbit_cmd::task_store::task_workspaces_dir;
+use orbit_cmd::task_store::{bound_partition_id, partition_is_bound, task_workspaces_dir};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceStatus};
@@ -56,7 +60,7 @@ fn register(global_root: &Path, workspace_id: &str, repo_root: &Path, orbit_dir:
 }
 
 #[test]
-fn teardown_deletes_the_task_store_partition_and_doctor_confirms_no_orphan_remains() {
+fn teardown_deletes_the_bound_task_store_partition_and_retires_its_bindings() {
     let temp = tempfile::tempdir().expect("tempdir");
     let global_root = temp.path().join("global");
     let repo_root = temp.path().join("repo");
@@ -79,28 +83,60 @@ fn teardown_deletes_the_task_store_partition_and_doctor_confirms_no_orphan_remai
     write_task_bundle(&global_root, "ws_survivor", "ORB-1");
 
     register(&global_root, "ws_teardown", &repo_root, &orbit_dir);
-    write_task_bundle(&global_root, "ws_teardown", "ORB-2");
-    write_task_bundle(&global_root, "ws_teardown", "ORB-3");
-    let partition = task_workspaces_dir(&global_root).join("ws_teardown");
+    let runtime = OrbitRuntime::from_roots(&global_root, &orbit_dir).expect("build runtime");
+
+    // Opening the runtime bound this checkout in the task registry. That
+    // binding — not the catalog's `ws_teardown` — names the partition its task
+    // state lives in.
+    let bound = bound_partition_id(&global_root, &orbit_dir)
+        .expect("read checkout binding")
+        .expect("checkout is bound");
+    assert_ne!(
+        bound, "ws_teardown",
+        "fixture must exercise the two distinct id spaces"
+    );
+    write_task_bundle(&global_root, &bound, "ORB-2");
+    write_task_bundle(&global_root, &bound, "ORB-3");
+    // A partition named for the catalog id, as an older binary would have left it.
+    write_task_bundle(&global_root, "ws_teardown", "ORB-4");
+
+    let bound_partition = task_workspaces_dir(&global_root).join(&bound);
     assert!(
-        partition.is_dir(),
+        bound_partition.is_dir(),
         "fixture task store must exist before teardown"
     );
 
-    let runtime = OrbitRuntime::from_roots(&global_root, &orbit_dir).expect("build runtime");
     WorkspaceTeardownArgs { confirm: true }
         .execute(&runtime)
         .expect("teardown");
 
     assert!(
-        !partition.exists(),
-        "teardown must delete the torn-down workspace's task store"
+        !bound_partition.exists(),
+        "teardown must delete the partition this checkout's task state is bound to"
+    );
+    assert!(
+        !task_workspaces_dir(&global_root)
+            .join("ws_teardown")
+            .exists(),
+        "teardown must also delete a partition left under its catalog id"
     );
     assert!(
         task_workspaces_dir(&global_root)
             .join("ws_survivor")
             .exists(),
         "teardown must not touch another workspace's task store"
+    );
+
+    // No binding may survive pointing at a deleted bundle directory.
+    assert!(
+        !partition_is_bound(&global_root, &bound).expect("read workspace bindings"),
+        "teardown must retire the task-registry binding for the deleted partition"
+    );
+    assert!(
+        bound_partition_id(&global_root, &orbit_dir)
+            .expect("read checkout binding")
+            .is_none(),
+        "teardown must retire the checkout binding for the deleted orbit dir"
     );
 
     let registry = workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
@@ -113,7 +149,7 @@ fn teardown_deletes_the_task_store_partition_and_doctor_confirms_no_orphan_remai
     );
 
     // Doctor, run right after teardown, must report no orphaned task-store
-    // partitions — the torn-down partition is gone, and the survivor's is
+    // partitions — the torn-down partitions are gone, and the survivor's is
     // still registered.
     let results = runtime.doctor_workspace().expect("doctor after teardown");
     let row = results

@@ -6,7 +6,9 @@ use std::path::Path;
 use chrono::Utc;
 use fs2::FileExt;
 use orbit_registry::workspace_registry;
-use orbit_store::maintenance::task_registry::task_workspaces_dir;
+use orbit_store::maintenance::task_registry::{
+    BindWorkspaceParams, TaskRegistryStore, task_registry_path, task_workspaces_dir,
+};
 use orbit_types::workflow::{JobRun, JobRunState};
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use sha2::{Digest, Sha256};
@@ -77,6 +79,24 @@ fn write_registered_workspace(global_root: &Path, workspace_id: &str, name: &str
     )
     .expect("register workspace");
     workspace_registry::save_registry_to(&registry, &registry_path).expect("save registry");
+}
+
+/// Bind a checkout in the *task* registry — the id space the partition
+/// directories are named after, which a `<slug>-<hash>` id inhabits and the
+/// workspace catalog's `ws_*` ids do not [ORB-12119].
+fn bind_task_partition(global_root: &Path, workspace_id: &str, slug: &str, repo_root: &Path) {
+    let tasks =
+        TaskRegistryStore::open(&task_registry_path(global_root)).expect("open task registry");
+    tasks
+        .bind_workspace(BindWorkspaceParams {
+            workspace_id: Some(workspace_id.to_string()),
+            slug: slug.to_string(),
+            repo_root: repo_root.to_path_buf(),
+            workspace_path: repo_root.to_path_buf(),
+            orbit_dir: repo_root.join(".orbit"),
+            repo_fingerprint: None,
+        })
+        .expect("bind task-registry workspace");
 }
 
 fn write_task_bundle(global_root: &Path, workspace_id: &str, task_id: &str) {
@@ -953,7 +973,74 @@ fn orphan_task_store_partition_is_reported_with_path_and_remediation() {
     );
     assert_eq!(
         row.remediation.as_deref(),
-        Some("Run `orbit doctor --fix-orphan-task-stores`.")
+        Some("Run `orbit doctor --fix-orphan-task-stores --confirm`.")
+    );
+}
+
+/// [ORB-12119] A partition bound in the task registry under a derived
+/// `<slug>-<hash>` id is live task state, even though that id is absent from
+/// the workspace catalog, which knows the same checkout as `ws_*`. Comparing
+/// partition names against catalog ids alone flagged every such partition —
+/// the host's real task stores — as orphaned.
+#[test]
+fn task_registry_bound_partition_is_not_an_orphan() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    let drifted_root = temp.path().join("drifted");
+    fs::create_dir_all(drifted_root.join(".orbit")).expect("create drifted checkout");
+
+    write_registered_workspace(&global_root, "ws_drifted", "drifted");
+    bind_task_partition(&global_root, "drifted-a1b2c3", "drifted", &drifted_root);
+    write_task_bundle(&global_root, "drifted-a1b2c3", "ORB-1");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(
+        row.status,
+        WorkspaceDoctorStatus::Ok,
+        "a bound partition is live task state: {row:?}"
+    );
+}
+
+/// [ORB-12119] The fix deletes only partitions no registry claims: a
+/// task-registry binding, a workspace-catalog entry, and the synthetic
+/// `--root` data-dir partition each keep their bundles.
+#[test]
+fn fix_orphan_task_stores_keeps_every_claimed_partition() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    let drifted_root = temp.path().join("drifted");
+    fs::create_dir_all(drifted_root.join(".orbit")).expect("create drifted checkout");
+
+    write_registered_workspace(&global_root, "ws_registered", "registered");
+    write_task_bundle(&global_root, "ws_registered", "ORB-1");
+    bind_task_partition(&global_root, "drifted-a1b2c3", "drifted", &drifted_root);
+    write_task_bundle(&global_root, "drifted-a1b2c3", "ORB-2");
+    // Every `--root <data-dir>` write lands here, and no registry ever records it.
+    write_task_bundle(&global_root, "ws_unbound-data-dir", "ORB-3");
+    write_task_bundle(&global_root, "ws_orphan", "ORB-4");
+
+    let removed = runtime
+        .remove_orphan_task_stores()
+        .expect("remove orphan task stores");
+    assert_eq!(removed, 1, "only the unclaimed partition is removed");
+
+    let partitions = task_workspaces_dir(&global_root);
+    assert!(!partitions.join("ws_orphan").exists());
+    for claimed in ["ws_registered", "drifted-a1b2c3", "ws_unbound-data-dir"] {
+        assert!(
+            partitions.join(claimed).is_dir(),
+            "claimed partition '{claimed}' must survive the fix"
+        );
+    }
+
+    let results = runtime.doctor_workspace().expect("doctor after fix");
+    assert_eq!(
+        status_of(&results, "orphan-task-stores").status,
+        WorkspaceDoctorStatus::Ok,
+        "{results:?}"
     );
 }
 

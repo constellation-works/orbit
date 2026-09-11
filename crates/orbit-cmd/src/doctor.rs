@@ -24,12 +24,11 @@ use fs2::FileExt;
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::artifact_health::{ArtifactFinding, RetiredActivityBackendRepair};
-use orbit_registry::workspace_registry;
 use orbit_store::maintenance::migration::SUPPORTED_SCHEMA_VERSION;
 use orbit_types::workspace::WorkspacePaths;
 use serde::Serialize;
 
-use crate::task_store::task_workspaces_dir;
+use crate::task_store;
 
 /// Outcome of one workspace doctor check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -179,28 +178,8 @@ impl DoctorCommands for OrbitRuntime {
     }
 
     fn remove_orphan_task_stores(&self) -> Result<usize, OrbitError> {
-        let global_root = self.global_root();
-        let workspaces_dir = task_workspaces_dir(&global_root);
-        let Some(entries) = read_task_workspaces_dir(&workspaces_dir)? else {
-            return Ok(0);
-        };
-        let registry = workspace_registry::load_registry_from(
-            &workspace_registry::registry_path_for(&global_root),
-        )?;
-
-        let mut removed = 0;
-        for path in entries {
-            let Some(ws_id) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if workspace_registry::find_workspace_by_id(&registry, ws_id).is_some() {
-                continue;
-            }
-            if crate::task_store::remove_task_store_partition(&global_root, ws_id)? {
-                removed += 1;
-            }
-        }
-        Ok(removed)
+        let removed = crate::task_store::remove_unclaimed_task_stores(&self.global_root())?;
+        Ok(removed.len())
     }
 
     fn remove_retired_graph_state(&self) -> Result<usize, OrbitError> {
@@ -440,15 +419,20 @@ fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
 }
 
 /// Task-store partitions under `<global_root>/tasks/workspaces/<ws_id>/`
-/// whose workspace id is absent from the registry — orphaned by a
-/// `workspace teardown` run on an older binary, or by deleting a checkout
-/// without running teardown [ORB-12109]. Scoped to the whole host, not just
-/// this workspace, because the partition directory is itself host-global.
+/// that no registry claims — left behind by a `workspace teardown` run on an
+/// older binary, or by deleting a checkout without running teardown
+/// [ORB-12109]. Scoped to the whole host, not just this workspace, because the
+/// partition directory is itself host-global.
+///
+/// A partition is named for its *task-registry* workspace id, so the task
+/// registry is what claims it; the workspace catalog and the synthetic
+/// `--root` partition are the other claimants. Comparing the directory name
+/// against catalog `ws_*` ids alone reported every `<slug>-<hash>` partition —
+/// including live ones — as orphaned [ORB-12119].
 fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let global_root = runtime.global_root();
-    let workspaces_dir = task_workspaces_dir(&global_root);
-    let entries = match read_task_workspaces_dir(&workspaces_dir) {
-        Ok(Some(entries)) => entries,
+    let partitions = match task_store::inspect_task_store_partitions(&global_root) {
+        Ok(Some(partitions)) => partitions,
         Ok(None) => {
             return check(
                 "orphan-task-stores",
@@ -460,82 +444,45 @@ fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
             return check(
                 "orphan-task-stores",
                 WorkspaceDoctorStatus::Warning,
-                format!("cannot scan {}: {error}", workspaces_dir.display()),
+                format!("cannot resolve task-store partition owners: {error}"),
             );
         }
     };
 
-    let registry = match workspace_registry::load_registry_from(
-        &workspace_registry::registry_path_for(&global_root),
-    ) {
-        Ok(registry) => registry,
-        Err(error) => {
-            return check(
-                "orphan-task-stores",
-                WorkspaceDoctorStatus::Warning,
-                format!("cannot read workspace registry: {error}"),
-            );
-        }
-    };
-
-    let mut orphans = Vec::new();
-    for path in &entries {
-        let Some(ws_id) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if workspace_registry::find_workspace_by_id(&registry, ws_id).is_some() {
-            continue;
-        }
-        orphans.push(format!(
-            "{ws_id} ({}, {} task bundle(s))",
-            path.display(),
-            count_task_bundles(path)
-        ));
-    }
-
-    if orphans.is_empty() {
+    if partitions.unclaimed.is_empty() {
         return check(
             "orphan-task-stores",
             WorkspaceDoctorStatus::Ok,
             format!(
-                "{} task-store partition(s) scanned, all registered",
-                entries.len()
+                "{} task-store partition(s) scanned, all claimed by a workspace binding",
+                partitions.scanned
             ),
         );
     }
+
+    let orphans = partitions
+        .unclaimed
+        .iter()
+        .map(|path| {
+            format!(
+                "{} ({}, {} task bundle(s))",
+                task_store::partition_id(path).unwrap_or("<unnamed>"),
+                path.display(),
+                count_task_bundles(path)
+            )
+        })
+        .collect::<Vec<_>>();
 
     actionable_check(
         "orphan-task-stores",
         WorkspaceDoctorStatus::Warning,
         format!(
-            "{} orphaned task-store partition(s) (workspace no longer registered on this host): {}",
+            "{} orphaned task-store partition(s) (no workspace binding claims them): {}",
             orphans.len(),
             orphans.join("; ")
         ),
-        "Run `orbit doctor --fix-orphan-task-stores`.".to_string(),
+        "Run `orbit doctor --fix-orphan-task-stores --confirm`.".to_string(),
     )
-}
-
-/// Immediate subdirectories of `<global_root>/tasks/workspaces/`, one per
-/// workspace partition. `None` when the directory has never been created
-/// (fresh host, no task ever committed).
-fn read_task_workspaces_dir(workspaces_dir: &Path) -> Result<Option<Vec<PathBuf>>, OrbitError> {
-    let entries = match std::fs::read_dir(workspaces_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(OrbitError::Io(format!(
-                "read {}: {error}",
-                workspaces_dir.display()
-            )));
-        }
-    };
-    let paths = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
-    Ok(Some(paths))
 }
 
 /// Task bundles directly under one workspace's task-store partition — each

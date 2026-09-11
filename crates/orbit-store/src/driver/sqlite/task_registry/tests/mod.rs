@@ -1841,3 +1841,142 @@ fn bump_allocator_never_lowers() {
     store.bump_allocator_to_at_least(900).expect("bump high");
     assert_eq!(store.allocator_next_number().expect("read"), 900);
 }
+
+#[test]
+fn workspace_ids_lists_every_bound_partition() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace = bind(&store, temp.path());
+    store
+        .register_workspace(RegisterWorkspaceParams {
+            workspace_id: "ws_remote".into(),
+            slug: "remote".into(),
+            repo_fingerprint: None,
+        })
+        .expect("register logical workspace");
+
+    let ids = store.workspace_ids().expect("list workspace ids");
+    assert!(ids.contains(&workspace.workspace_id));
+    assert!(ids.contains("ws_remote"));
+}
+
+/// Deleting a workspace's bundle partition on disk is paired with retiring its
+/// registry rows, so no binding survives naming a directory that is gone
+/// [ORB-12119].
+#[test]
+fn unbind_workspace_retires_the_checkout_and_its_task_bundles() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace = bind(&store, temp.path());
+    let bundle_dir = create_canonical_bundle(&store, &workspace, "ORB-00000");
+    store
+        .register_task_bundle("ORB-00000", &workspace.workspace_id, &bundle_dir)
+        .expect("register bundle");
+    store
+        .replace_task_index(
+            &workspace.workspace_id,
+            &envelope(
+                "ORB-00000",
+                TaskStatus::Backlog,
+                vec!["v2".into()],
+                Vec::new(),
+            ),
+        )
+        .expect("index task");
+
+    assert!(
+        store
+            .unbind_workspace(&workspace.workspace_id)
+            .expect("unbind workspace")
+    );
+
+    assert!(
+        store
+            .find_workspace_binding(&workspace.workspace_id)
+            .expect("read workspace binding")
+            .is_none()
+    );
+    assert!(
+        store
+            .find_checkout_by_orbit_dir(&workspace.orbit_dir)
+            .expect("read checkout binding")
+            .is_none()
+    );
+    assert!(
+        store
+            .find_task_binding("ORB-00000")
+            .expect("read task binding")
+            .is_none(),
+        "a task binding must not outlive its partition"
+    );
+    assert!(
+        !store
+            .unbind_workspace(&workspace.workspace_id)
+            .expect("second unbind is a no-op"),
+        "unbinding an unknown workspace reports that nothing was retired"
+    );
+}
+
+/// A relation another workspace points at the retired workspace's tasks must
+/// not outlive the partition those tasks lived in [ORB-12119].
+#[test]
+fn unbind_workspace_retires_relations_pointing_into_it() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let retired = bind(&store, temp.path());
+
+    let other_root = temp.path().join("other");
+    let other_orbit_dir = other_root.join(".orbit");
+    fs::create_dir_all(&other_orbit_dir).expect("create other orbit dir");
+    let other = store
+        .bind_workspace(BindWorkspaceParams {
+            workspace_id: Some("other-654321".into()),
+            slug: "Other".into(),
+            repo_root: other_root.clone(),
+            workspace_path: other_root,
+            orbit_dir: other_orbit_dir,
+            repo_fingerprint: None,
+        })
+        .expect("bind other workspace");
+
+    for (workspace_id, task_id) in [
+        (&retired.workspace_id, "ORB-00000"),
+        (&other.workspace_id, "ORB-00001"),
+    ] {
+        let bundle_dir = store
+            .canonical_task_bundle_path(workspace_id, task_id)
+            .expect("canonical bundle path");
+        fs::create_dir_all(&bundle_dir).expect("create bundle");
+        store
+            .register_task_bundle(task_id, workspace_id, &bundle_dir)
+            .expect("register bundle");
+    }
+    store
+        .replace_task_index(
+            &other.workspace_id,
+            &envelope(
+                "ORB-00001",
+                TaskStatus::Backlog,
+                Vec::new(),
+                vec![TaskRelation {
+                    relation_type: TaskRelationType::BlockedBy,
+                    target: "ORB-00000".into(),
+                }],
+            ),
+        )
+        .expect("index the pointing task");
+
+    store
+        .unbind_workspace(&retired.workspace_id)
+        .expect("unbind workspace");
+
+    let conn = store.conn.lock().expect("lock registry");
+    let remaining: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM task_bundle_relations WHERE target_task_id = ?1",
+            ["ORB-00000"],
+            |row| row.get(0),
+        )
+        .expect("count relations");
+    assert_eq!(remaining, 0, "no edge may point into a retired partition");
+}

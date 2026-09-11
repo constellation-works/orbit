@@ -1247,6 +1247,75 @@ impl TaskRegistryStore {
         &self.workspaces_dir
     }
 
+    /// Every logical workspace id the registry binds.
+    ///
+    /// This is the id space the on-disk partitions under
+    /// `<global>/tasks/workspaces/` are named after, so a caller deciding
+    /// whether a partition directory is still claimed asks here rather than
+    /// inferring an owner from the workspace catalog, whose `ws_*` ids are a
+    /// different namespace [ORB-12119].
+    pub fn workspace_ids(&self) -> Result<BTreeSet<String>, OrbitError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let mut stmt = conn
+            .prepare("SELECT workspace_id FROM workspace_bindings")
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        rows.collect::<Result<BTreeSet<_>, _>>()
+            .map_err(|e| OrbitError::Store(e.to_string()))
+    }
+
+    /// Retire one workspace's registry rows: its checkout binding, every task
+    /// bundle bound to it, and the logical workspace itself. Returns whether a
+    /// binding existed.
+    ///
+    /// Paired with deleting the workspace's bundle partition, so that no
+    /// binding survives pointing at a directory that is gone [ORB-12119]. The
+    /// dependent rows are deleted explicitly rather than left to
+    /// `ON DELETE CASCADE`, which a connection without `foreign_keys=ON` would
+    /// silently skip.
+    pub fn unbind_workspace(&self, workspace_id: &str) -> Result<bool, OrbitError> {
+        let workspace_id = validate_workspace_id(workspace_id)?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+        for statement in [
+            // Relations are retired from both ends, like `unregister_task_bundle`:
+            // an edge another workspace points at these tasks would otherwise
+            // outlive them.
+            "DELETE FROM task_bundle_relations
+             WHERE workspace_id = ?1
+                OR target_task_id IN (
+                    SELECT task_id FROM task_bundle_bindings WHERE workspace_id = ?1
+                )",
+            "DELETE FROM task_bundle_tags WHERE workspace_id = ?1",
+            "DELETE FROM task_bundle_index WHERE workspace_id = ?1",
+            "DELETE FROM task_bundle_bindings WHERE workspace_id = ?1",
+            "DELETE FROM workspace_checkout_bindings WHERE workspace_id = ?1",
+        ] {
+            tx.execute(statement, [&workspace_id])
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+        }
+        let deleted = tx
+            .execute(
+                "DELETE FROM workspace_bindings WHERE workspace_id = ?1",
+                [&workspace_id],
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+        Ok(deleted > 0)
+    }
+
     /// Look up a logical workspace by id. Public wrapper over the internal query
     /// so migration tooling can resolve a target workspace without opening the
     /// SQLite connection directly.

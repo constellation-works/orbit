@@ -52,6 +52,7 @@ fn failing_workspace_renders_diagnostics_and_exits_nonzero() {
         fix_stale_artifacts: false,
         fix_retired_activity_backends: false,
         fix_orphan_task_stores: false,
+        confirm: false,
     }
     .execute(&runtime)
     .expect("doctor should render a failing report");
@@ -93,6 +94,7 @@ fn warning_only_workspace_keeps_zero_exit_and_structured_rows() {
         fix_stale_artifacts: false,
         fix_retired_activity_backends: false,
         fix_orphan_task_stores: false,
+        confirm: false,
     }
     .execute(&runtime)
     .expect("doctor should render a warning report");
@@ -131,6 +133,7 @@ fn fix_stale_locks_records_repair_count_in_payload_doc() {
         fix_stale_artifacts: false,
         fix_retired_activity_backends: false,
         fix_orphan_task_stores: false,
+        confirm: false,
     }
     .execute(&runtime)
     .expect("doctor should run repairs and render report");
