@@ -33,8 +33,9 @@
 //! repeatable sync of those mirrors — a colliding foreign-prefix id is replaced
 //! by the owner's bundle ([`ImportAction::Updated`]), a colliding local-prefix
 //! id is left alone ([`ImportAction::SkippedLocalOwned`]), and nothing is ever
-//! renumbered. An owner-wins import also repairs an orphaned canonical bundle
-//! whose registry binding is missing by replacing it and restoring the binding.
+//! renumbered. An owner-wins import also repairs an orphaned *foreign-prefix*
+//! canonical bundle whose registry binding is missing by replacing it and
+//! restoring the binding; an orphaned local-prefix bundle stays local-owned.
 //! Foreign relation targets therefore survive verbatim, no `.idmap.json` is
 //! written, and a second run of the same archive reports every task as
 //! already-present.
@@ -377,20 +378,30 @@ pub fn import_tasks(
     for staged in staged {
         match registry.find_task_binding(&staged.source_id)? {
             None => {
-                if policy == ImportConflictPolicy::OwnerWins {
-                    let bundle_dir = registry
-                        .canonical_task_bundle_path(&target.workspace_id, &staged.source_id)?;
-                    if bundle_dir.is_dir() {
-                        to_overwrite.push(MirrorReplacement {
-                            staged,
-                            bundle_dir,
-                            register_binding: true,
+                // An owner-wins sync repairs a canonical bundle the registry
+                // has lost track of, but authority still follows the prefix:
+                // a local-prefix bundle is ours no matter what the index says.
+                let orphan_dir = (policy == ImportConflictPolicy::OwnerWins)
+                    .then(|| {
+                        registry.canonical_task_bundle_path(&target.workspace_id, &staged.source_id)
+                    })
+                    .transpose()?
+                    .filter(|bundle_dir| bundle_dir.is_dir());
+
+                match orphan_dir {
+                    Some(_) if task_id_prefix(&staged.source_id) == Some(local_prefix.as_str()) => {
+                        records.push(ImportedTask {
+                            source_id: staged.source_id.clone(),
+                            final_id: staged.source_id,
+                            action: ImportAction::SkippedLocalOwned,
                         });
-                    } else {
-                        kept.push(staged);
                     }
-                } else {
-                    kept.push(staged);
+                    Some(bundle_dir) => to_overwrite.push(MirrorReplacement {
+                        staged,
+                        bundle_dir,
+                        register_binding: true,
+                    }),
+                    None => kept.push(staged),
                 }
             }
             Some(existing) => {
