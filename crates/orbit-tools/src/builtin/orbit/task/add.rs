@@ -64,6 +64,13 @@ impl Tool for OrbitTaskAddTool {
                 required: false,
             },
             ToolParam {
+                name: "allow_missing_context".to_string(),
+                description: "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default."
+                    .to_string(),
+                param_type: "boolean".to_string(),
+                required: false,
+            },
+            ToolParam {
                 name: "priority".to_string(),
                 description: "Optional priority level".to_string(),
                 param_type: "string".to_string(),

@@ -5,9 +5,21 @@
 use orbit_common::OrbitError;
 use tempfile::tempdir;
 
+use super::test_runtime;
+use crate::OrbitRuntime;
 use crate::application::task::paths::{
-    normalize_context_files_for_write, normalize_workspace_path, task_path_exists,
+    canonicalize_context_files_for_read, normalize_context_files_for_write,
+    normalize_workspace_path, task_path_exists,
 };
+
+/// Run one selector through the operator-surface guard and return the
+/// `InvalidInput` message it must produce.
+fn expect_selector_rejection(runtime: &OrbitRuntime, selector: &str) -> String {
+    match runtime.ensure_context_selectors_exist(&[selector.to_string()], Some(".")) {
+        Err(OrbitError::InvalidInput(message)) => message,
+        other => panic!("expected InvalidInput for `{selector}`, got {other:?}"),
+    }
+}
 
 fn expect_invalid_input(result: Result<Option<String>, OrbitError>) -> String {
     match result {
@@ -149,130 +161,104 @@ fn normalize_context_files_accepts_valid_selectors() {
     assert_eq!(normalized, selectors);
 }
 
+/// The core write path canonicalizes without resolving the target: internal
+/// callers record selectors for files the task is about to create, and symbol
+/// metadata is opaque to the filesystem. Existence is an operator-surface rule
+/// (see the `ensure_context_selectors_exist` tests below).
 #[test]
-fn normalize_context_files_rejects_missing_selectors() {
-    let workspace = tempdir().expect("create workspace");
-
-    let error = normalize_context_files_for_write(
-        vec!["file:does/not/exist.rs".to_string()],
-        workspace.path(),
-    )
-    .expect_err("missing file must be rejected");
-
-    match error {
-        OrbitError::InvalidInput(msg) => {
-            assert!(
-                msg.contains("file:does/not/exist.rs"),
-                "error must name selector: {msg}"
-            );
-        }
-        other => panic!("expected InvalidInput, got {other:?}"),
-    }
-
-    let symbol_error = normalize_context_files_for_write(
-        vec!["symbol:does/not/exist.rs#run:function".to_string()],
-        workspace.path(),
-    )
-    .expect_err("missing symbol anchor must be rejected");
-
-    match symbol_error {
-        OrbitError::InvalidInput(msg) => {
-            assert!(
-                msg.contains("symbol:does/not/exist.rs#run:function"),
-                "error must name selector: {msg}"
-            );
-        }
-        other => panic!("expected InvalidInput, got {other:?}"),
-    }
-}
-
-#[test]
-fn normalize_context_files_rejects_target_kind_mismatch() {
+fn normalize_context_files_keeps_selectors_that_do_not_exist_yet() {
     let workspace = tempdir().expect("create workspace");
     std::fs::create_dir_all(workspace.path().join("src")).expect("create src");
     std::fs::write(workspace.path().join("src/lib.rs"), b"pub fn run() {}\n")
         .expect("write anchor");
 
-    // file: pointing to a directory
-    let error = normalize_context_files_for_write(vec!["file:src".to_string()], workspace.path())
-        .expect_err("file: targeting a directory must be rejected");
-    match error {
-        OrbitError::InvalidInput(msg) => {
-            assert!(msg.contains("file:src"), "{msg}");
-            assert!(msg.contains("file/directory kind"), "{msg}");
-        }
-        other => panic!("expected InvalidInput, got {other:?}"),
-    }
+    let selectors = vec![
+        "file:src/future.rs".to_string(),
+        "symbol:src/lib.rs#not::a::real::symbol:invented-kind".to_string(),
+    ];
 
-    // dir: pointing to a file
-    let error =
-        normalize_context_files_for_write(vec!["dir:src/lib.rs".to_string()], workspace.path())
-            .expect_err("dir: targeting a file must be rejected");
-    match error {
-        OrbitError::InvalidInput(msg) => {
-            assert!(msg.contains("dir:src/lib.rs"), "{msg}");
-            assert!(msg.contains("file/directory kind"), "{msg}");
-        }
-        other => panic!("expected InvalidInput, got {other:?}"),
-    }
+    let normalized = normalize_context_files_for_write(selectors.clone(), workspace.path())
+        .expect("not-yet-existing targets must survive the core write path");
 
-    // symbol: pointing to a directory
-    let error = normalize_context_files_for_write(
-        vec!["symbol:src#run:function".to_string()],
+    assert_eq!(normalized, selectors);
+    assert!(task_path_exists(
         workspace.path(),
-    )
-    .expect_err("symbol: targeting a directory must be rejected");
-    match error {
-        OrbitError::InvalidInput(msg) => {
-            assert!(msg.contains("symbol:src#run:function"), "{msg}");
-            assert!(msg.contains("file/directory kind"), "{msg}");
-        }
-        other => panic!("expected InvalidInput, got {other:?}"),
+        "symbol:src/lib.rs#not::a::real::symbol:invented-kind"
+    ));
+    assert_eq!(
+        canonicalize_context_files_for_read(&normalized, workspace.path()),
+        normalized
+    );
+}
+
+#[test]
+fn ensure_context_selectors_exist_accepts_resolvable_selectors() {
+    let (root, runtime) = test_runtime();
+    let repo_root = root.path().join("repo");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create src");
+    std::fs::write(repo_root.join("src/lib.rs"), b"pub fn run() {}\n").expect("write anchor");
+
+    runtime
+        .ensure_context_selectors_exist(
+            &[
+                "file:src/lib.rs".to_string(),
+                "dir:src".to_string(),
+                "symbol:src/lib.rs#run:function".to_string(),
+            ],
+            Some("."),
+        )
+        .expect("resolvable selectors must be accepted");
+}
+
+#[test]
+fn ensure_context_selectors_exist_rejects_missing_selectors() {
+    let (_root, runtime) = test_runtime();
+
+    let message = expect_selector_rejection(&runtime, "file:does/not/exist.rs");
+    assert!(
+        message.contains("file:does/not/exist.rs"),
+        "error must name selector: {message}"
+    );
+
+    let message = expect_selector_rejection(&runtime, "symbol:does/not/exist.rs#run:function");
+    assert!(
+        message.contains("symbol:does/not/exist.rs#run:function"),
+        "error must name selector: {message}"
+    );
+}
+
+#[test]
+fn ensure_context_selectors_exist_rejects_target_kind_mismatch() {
+    let (root, runtime) = test_runtime();
+    let repo_root = root.path().join("repo");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create src");
+    std::fs::write(repo_root.join("src/lib.rs"), b"pub fn run() {}\n").expect("write anchor");
+
+    for selector in ["file:src", "dir:src/lib.rs", "symbol:src#run:function"] {
+        let message = expect_selector_rejection(&runtime, selector);
+        assert!(message.contains(selector), "{message}");
+        assert!(message.contains("file/directory kind"), "{message}");
     }
 }
 
 #[test]
-fn normalize_context_files_rejects_unsupported_kinds_and_malformed_selectors() {
-    let workspace = tempdir().expect("create workspace");
+fn ensure_context_selectors_exist_rejects_unsupported_kinds_and_malformed_selectors() {
+    let (_root, runtime) = test_runtime();
 
-    // module: selector is rejected
-    let error = normalize_context_files_for_write(
-        vec!["module:orbit_core::task".to_string()],
-        workspace.path(),
-    )
-    .expect_err("module: selector must be rejected");
-    match error {
-        OrbitError::InvalidInput(msg) => {
-            assert!(msg.contains("module:orbit_core::task"), "{msg}");
-            assert!(msg.contains("must use file:, dir:, or symbol:"), "{msg}");
-        }
-        other => panic!("expected InvalidInput, got {other:?}"),
+    for selector in ["module:orbit_core::task", "command:task"] {
+        let message = expect_selector_rejection(&runtime, selector);
+        assert!(message.contains(selector), "{message}");
+        assert!(
+            message.contains("must use file:, dir:, or symbol:"),
+            "{message}"
+        );
     }
 
-    // command: selector is rejected
-    let error =
-        normalize_context_files_for_write(vec!["command:task".to_string()], workspace.path())
-            .expect_err("command: selector must be rejected");
-    match error {
-        OrbitError::InvalidInput(msg) => {
-            assert!(msg.contains("command:task"), "{msg}");
-            assert!(msg.contains("must use file:, dir:, or symbol:"), "{msg}");
-        }
-        other => panic!("expected InvalidInput, got {other:?}"),
-    }
-
-    // malformed symbol selector is rejected
-    let error = normalize_context_files_for_write(
-        vec!["symbol:serve_throttled_response".to_string()],
-        workspace.path(),
-    )
-    .expect_err("malformed symbol: must be rejected");
-    match error {
-        OrbitError::InvalidInput(msg) => {
-            assert!(msg.contains("symbol:serve_throttled_response"), "{msg}");
-        }
-        other => panic!("expected InvalidInput, got {other:?}"),
-    }
+    let message = expect_selector_rejection(&runtime, "symbol:serve_throttled_response");
+    assert!(
+        message.contains("symbol:serve_throttled_response"),
+        "{message}"
+    );
 }
 
 #[test]

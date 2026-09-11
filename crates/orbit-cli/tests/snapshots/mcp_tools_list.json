@@ -615,6 +615,10 @@
           ],
           "description": "Optional acceptance criteria as a string or array of strings"
         },
+        "allow_missing_context": {
+          "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default.",
+          "type": "boolean"
+        },
         "complexity": {
           "description": "Task complexity level (low, medium, or hard)",
           "enum": [
@@ -1049,6 +1053,10 @@
             }
           ],
           "description": "New acceptance criteria as an array of strings or a single string"
+        },
+        "allow_missing_context": {
+          "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default.",
+          "type": "boolean"
         },
         "comment": {
           "description": "Task comment to append",

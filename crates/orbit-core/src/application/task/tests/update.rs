@@ -393,8 +393,11 @@ fn concurrent_explicit_edit_preserves_the_newer_status() {
     );
 }
 
+/// An explicit replacement through the core path keeps draft/future
+/// selectors; missing targets are refused on the operator surfaces (CLI `task
+/// update`, `orbit.task.update`) and pruned at read time.
 #[test]
-fn task_update_rejects_missing_context_files_and_leaves_task_unchanged() {
+fn task_update_keeps_context_selectors_that_do_not_exist_yet() {
     let (root, runtime) = test_runtime();
     let repo_dir = root.path().join("repo");
     std::fs::create_dir_all(repo_dir.join("src")).expect("create src");
@@ -409,31 +412,25 @@ fn task_update_rejects_missing_context_files_and_leaves_task_unchanged() {
         })
         .expect("add task succeeds");
 
-    let error = runtime
+    let updated = runtime
         .update_task(
             &task.id,
             TaskUpdateParams {
-                context_files: Some(vec!["file:does/not/exist.rs".to_string()]),
+                context_files: Some(vec![
+                    "file:src/lib.rs".to_string(),
+                    "file:src/future.rs".to_string(),
+                ]),
                 ..Default::default()
             },
         )
-        .expect_err("update must reject missing context file");
+        .expect("core update_task must accept a not-yet-existing file selector");
 
-    match error {
-        orbit_common::OrbitError::InvalidInput(msg) => {
-            assert!(
-                msg.contains("file:does/not/exist.rs"),
-                "error must name missing selector: {msg}"
-            );
-        }
-        other => panic!("expected InvalidInput, got {other:?}"),
-    }
-
-    let reread = runtime.get_task(&task.id).expect("get task");
     assert_eq!(
-        reread.context_files,
-        vec!["file:src/lib.rs".to_string()],
-        "task context_files must remain unchanged"
+        updated.context_files,
+        vec![
+            "file:src/lib.rs".to_string(),
+            "file:src/future.rs".to_string()
+        ]
     );
 }
 

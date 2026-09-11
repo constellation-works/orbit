@@ -397,6 +397,7 @@ fn task_add_schema_uses_trimmed_authoring_surface() {
             "tags",
             "required_tools",
             "context_files",
+            "allow_missing_context",
             "priority",
             "complexity",
             "type",

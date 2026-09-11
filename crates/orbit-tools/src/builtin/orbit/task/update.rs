@@ -148,6 +148,13 @@ impl Tool for OrbitTaskUpdateTool {
                 required: false,
             },
             ToolParam {
+                name: "allow_missing_context".to_string(),
+                description: "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default."
+                    .to_string(),
+                param_type: "boolean".to_string(),
+                required: false,
+            },
+            ToolParam {
                 name: "context".to_string(),
                 description:
                     "Legacy alias for `context_files`. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files that are only relevant background context. Prefer canonical selectors: `file:path`, `dir:path`, or `symbol:path#name:kind`."

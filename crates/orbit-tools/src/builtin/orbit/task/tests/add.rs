@@ -163,6 +163,7 @@ fn schema_exposes_only_trimmed_create_task_fields() {
             "tags",
             "required_tools",
             "context_files",
+            "allow_missing_context",
             "priority",
             "complexity",
             "type",

@@ -69,6 +69,9 @@ pub struct TaskUpdateArgs {
     /// Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded.
     #[arg(long = "context", alias = "context-files", action = ArgAction::Append, value_delimiter = ',')]
     pub context_files: Vec<String>,
+    /// Accept context selectors whose target does not exist yet (for work that creates the file)
+    #[arg(long)]
+    pub allow_missing_context: bool,
     /// Task artifact write in `path=content` form. Repeat for multiple artifacts.
     #[arg(long = "artifact")]
     pub artifacts: Vec<String>,
@@ -139,6 +142,7 @@ impl Execute for TaskUpdateArgs {
             crew,
             orchestrator,
             context_files,
+            allow_missing_context,
             artifacts,
             model,
             approve,
@@ -202,6 +206,10 @@ impl Execute for TaskUpdateArgs {
         let dependencies = parse_replacement_list(dependencies);
         let tags = (!tags.is_empty()).then_some(tags);
         let upsert_artifacts = parse_artifact_args(&artifacts)?;
+        let context_files = parse_replacement_list(context_files);
+        if !allow_missing_context && let Some(candidates) = context_files.as_deref() {
+            runtime.ensure_context_selectors_exist(candidates, None)?;
+        }
         let (agent, model) = super::mutation_identity(model);
 
         let task = runtime.update_task_with_identity(
@@ -225,7 +233,7 @@ impl Execute for TaskUpdateArgs {
                 job_run_id,
                 crew,
                 orchestrator,
-                context_files: parse_replacement_list(context_files),
+                context_files,
                 upsert_artifacts,
                 ..Default::default()
             },

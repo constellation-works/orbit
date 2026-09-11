@@ -196,6 +196,42 @@ fn task_update_and_add_accept_valid_context_selectors() {
     assert_eq!(updated["context_files"], json!(["file:existing.rs"]));
 }
 
+/// The existence guard is an operator-surface default, not a wall: work that
+/// creates a file records its selector with the explicit escape.
+#[test]
+fn allow_missing_context_accepts_a_not_yet_existing_selector() {
+    let workspace = TestWorkspace::new();
+
+    let added = workspace.task_json(&[
+        "task",
+        "add",
+        "--title",
+        "Create a new module",
+        "--complexity",
+        "low",
+        "--context",
+        "file:src/future.rs",
+        "--allow-missing-context",
+        "--json",
+    ]);
+    assert_eq!(added["context_files"], json!(["file:src/future.rs"]));
+
+    let id = added["id"].as_str().expect("task id");
+    let updated = workspace.task_json(&[
+        "task",
+        "update",
+        id,
+        "--context",
+        "file:src/other_future.rs",
+        "--allow-missing-context",
+        "--json",
+    ]);
+    assert_eq!(
+        updated["context_files"],
+        json!(["file:src/other_future.rs"])
+    );
+}
+
 #[test]
 fn locks_list_projects_files_held_by_active_tasks() {
     let workspace = TestWorkspace::new();

@@ -811,6 +811,12 @@
         "required": false
       },
       {
+        "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default.",
+        "name": "allow_missing_context",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
         "description": "Optional priority level",
         "name": "priority",
         "param_type": "string",
@@ -1274,6 +1280,12 @@
         "description": "Task context selectors as a comma-separated string or array of strings. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:path`, `dir:path`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically.",
         "name": "context_files",
         "param_type": "string_list",
+        "required": false
+      },
+      {
+        "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default.",
+        "name": "allow_missing_context",
+        "param_type": "boolean",
         "required": false
       },
       {
