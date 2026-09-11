@@ -261,6 +261,9 @@ struct PartitionClaims {
     /// Registered task workspaces, live workspace catalog ids, and the
     /// synthetic partition every `--root <data-dir>` write lands in.
     claimed: BTreeSet<String>,
+    /// Task-registry bindings that carry their own checkout paths. Their
+    /// evidence takes precedence over a catalog checkout with the same id.
+    checkout_bound: BTreeSet<String>,
     /// Bindings or catalog checkouts that are confirmed absent.
     gone: BTreeSet<String>,
     /// Bindings or catalog checkouts whose filesystem state could not be
@@ -274,6 +277,7 @@ fn partition_claims(global_root: &Path) -> Result<PartitionClaims, OrbitError> {
     let tasks = open_task_registry(global_root)?;
     let mut claims = PartitionClaims {
         claimed: BTreeSet::new(),
+        checkout_bound: BTreeSet::new(),
         gone: BTreeSet::new(),
         unreachable: BTreeMap::new(),
     };
@@ -285,7 +289,8 @@ fn partition_claims(global_root: &Path) -> Result<PartitionClaims, OrbitError> {
             claims.claimed.insert(workspace_id);
             continue;
         };
-        match checkout_evidence(&checkout.orbit_dir) {
+        claims.checkout_bound.insert(workspace_id.clone());
+        match checkout_evidence(&checkout.repo_root) {
             CheckoutEvidence::Present => {
                 claims.claimed.insert(workspace_id);
             }
@@ -325,66 +330,77 @@ fn partition_claims(global_root: &Path) -> Result<PartitionClaims, OrbitError> {
     Ok(claims)
 }
 
-/// Add a catalog checkout's claim without overriding stronger evidence from a
-/// task-registry binding that uses the same partition id.
+/// Add a catalog checkout's claim when the task registry has only a path-free
+/// logical registration for the same partition id.
 fn record_catalog_checkout_evidence(
     claims: &mut PartitionClaims,
     workspace_id: &str,
     checkout: &WorkspaceCheckout,
 ) {
-    match checkout_evidence(&checkout.orbit_dir) {
+    // A task-registry checkout binding has a more specific identity than the
+    // catalog fallback. This matters when legacy or reindexed state names the
+    // same partition with different path metadata.
+    if claims.checkout_bound.contains(workspace_id) {
+        return;
+    }
+
+    match checkout_evidence(&checkout.repo_root) {
         CheckoutEvidence::Present => {
             claims.claimed.insert(workspace_id.to_string());
             claims.gone.remove(workspace_id);
             claims.unreachable.remove(workspace_id);
         }
         CheckoutEvidence::Gone => {
-            if !claims.claimed.contains(workspace_id) {
-                claims.gone.insert(workspace_id.to_string());
-                claims.unreachable.remove(workspace_id);
-            }
+            claims.claimed.remove(workspace_id);
+            claims.gone.insert(workspace_id.to_string());
+            claims.unreachable.remove(workspace_id);
         }
         CheckoutEvidence::Unreachable(reason) => {
-            if !claims.claimed.contains(workspace_id) && !claims.gone.contains(workspace_id) {
-                claims.unreachable.insert(workspace_id.to_string(), reason);
-            }
+            claims.claimed.remove(workspace_id);
+            claims.gone.remove(workspace_id);
+            claims.unreachable.insert(workspace_id.to_string(), reason);
         }
     }
 }
 
 /// What the filesystem can testify about a bound checkout directory.
 enum CheckoutEvidence {
-    /// The bound `orbit_dir` is there: the binding is a live claim.
+    /// The bound checkout root is there: the binding is a live claim.
     Present,
-    /// The bound `orbit_dir` is absent, and a directory we could actually read
-    /// said so: the checkout is gone.
+    /// The bound checkout root is absent, and a directory we could actually
+    /// read said so: the checkout is gone.
     Gone,
     /// Neither answer was available, naming the path and the failure.
     Unreachable(String),
 }
 
-/// Classify one bound checkout directory.
+/// Classify one bound checkout's repository root.
 ///
 /// `Path::exists()` collapses every stat failure into "absent", which made an
 /// unmounted volume or an unsearchable parent directory indistinguishable from
 /// a deleted checkout — and the repair deletes task bundles on that evidence
 /// [ORB-12143]. Absence must therefore be positively confirmed rather than
-/// inferred from a failed stat.
-fn checkout_evidence(orbit_dir: &Path) -> CheckoutEvidence {
-    match std::fs::symlink_metadata(orbit_dir) {
-        Ok(_) => CheckoutEvidence::Present,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => confirm_absence(orbit_dir),
-        Err(error) => CheckoutEvidence::Unreachable(filesystem_failure(orbit_dir, &error)),
+/// inferred from a failed stat. The repository root is the per-checkout path;
+/// `orbit_dir` may be a shared external root.
+fn checkout_evidence(repo_root: &Path) -> CheckoutEvidence {
+    match std::fs::metadata(repo_root) {
+        Ok(metadata) if metadata.is_dir() => CheckoutEvidence::Present,
+        Ok(_) => CheckoutEvidence::Unreachable(format!(
+            "{}: checkout root is not a directory",
+            repo_root.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => confirm_absence(repo_root),
+        Err(error) => CheckoutEvidence::Unreachable(filesystem_failure(repo_root, &error)),
     }
 }
 
-/// Confirm that an unstat-able `orbit_dir` is genuinely missing by walking up
+/// Confirm that an unstat-able repository root is genuinely missing by walking up
 /// to the nearest ancestor that exists and listing it. Only a directory we can
 /// read can testify that the path beneath it is absent; a stat failure other
 /// than `NotFound` anywhere up the chain — `EACCES` from an unsearchable
 /// parent, `EIO`/`ENOTCONN` from a dropped mount — is not absence.
-fn confirm_absence(orbit_dir: &Path) -> CheckoutEvidence {
-    for ancestor in orbit_dir.ancestors().skip(1) {
+fn confirm_absence(repo_root: &Path) -> CheckoutEvidence {
+    for ancestor in repo_root.ancestors().skip(1) {
         match std::fs::symlink_metadata(ancestor) {
             Ok(_) => {
                 return match std::fs::read_dir(ancestor) {
@@ -402,7 +418,7 @@ fn confirm_absence(orbit_dir: &Path) -> CheckoutEvidence {
     }
     CheckoutEvidence::Unreachable(format!(
         "{}: no readable ancestor directory could confirm it is absent",
-        orbit_dir.display()
+        repo_root.display()
     ))
 }
 

@@ -104,14 +104,17 @@ partition's rows in `~/.orbit/tasks/index.sqlite` in the same step.
 A partition directory is normally named for a **task-registry** workspace id
 (`workspace_bindings.workspace_id` in `~/.orbit/tasks/index.sqlite`), minted as `<slug>-<hash>`
 for a checkout that binds without an explicit id. `orbit workspace init` may instead use its
-catalog `ws_*` id directly. A task-registry or catalog checkout claim is live while its recorded
-`orbit_dir` is present on disk; a missing checkout is reported as stale, and an unreadable path is
-reported as unreachable. Checkoutless catalog entries and the synthetic `ws_unbound-data-dir`
-partition every `--root <data-dir>` write lands in remain claims. `orphan-task-stores` names each
+catalog `ws_*` id directly. A task-registry checkout claim is live while its recorded `repo_root`
+is present on disk; a catalog checkout supplies the same per-checkout evidence when `workspace init`
+has only a path-free task-registry registration. The shared external Orbit root (`--root
+<data-dir>`) is not used as checkout evidence because several checkouts may share it. A missing
+checkout is reported as stale, and an unreadable path is reported as unreachable. Checkoutless
+catalog entries and the synthetic `ws_unbound-data-dir` partition every `--root <data-dir>` write
+lands in remain claims. `orphan-task-stores` names each
 reported workspace id, its partition path, and its task-bundle count.
 
 **Evidence rule for deleting task bundles.** A partition that holds task bundles is deleted by the
-repair only when its bound checkout is *confirmed gone*: `orbit_dir` stats as absent, and the
+repair only when its bound checkout is *confirmed gone*: `repo_root` stats as absent, and the
 nearest ancestor directory that does exist is readable and therefore able to testify that the path
 below it is missing. Any other filesystem answer — `EACCES` from an unsearchable parent, `EIO` or
 `ENOTCONN` from a dropped mount, a path that resolves through a non-directory — classifies the
