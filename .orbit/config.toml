@@ -14,7 +14,7 @@ sandbox = "danger-full-access"
 [workflow]
 auto_ship = true
 base_branch = "agent-main"
-default_crew = "sol"
+default_crew = "luna"
 system_crew = "luna"
 
 [crews.opus]

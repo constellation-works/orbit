@@ -31,7 +31,7 @@ template:
   - delivery-qa
   - no-diff-expected
   priority: medium
-  crew: grok
+  crew: luna
   status: backlog
 dedupe: skip_if_open
 created_by: system
