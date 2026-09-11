@@ -9,7 +9,8 @@
 //! from the sink `main` already resolved.
 //!
 //! Everything that is not a record goes to stderr in every mode (spec §5):
-//! empty-state lines, dropped-column notices, and progress.
+//! empty-state lines, dropped-column notices, trailing notices such as a
+//! truncation count, and progress.
 
 use std::io::Write;
 
@@ -35,11 +36,36 @@ pub fn emit(output: CommandOutput, sink: &OutputSink) -> Result<(), OrbitError> 
         return stream(sink, &mut stdout);
     }
 
+    // A list's trailing notices (a truncation count, say) are not a record,
+    // so they belong on stderr in every mode (spec §5) — not only the human
+    // one that happens to render the table carrying them (ORB-12203).
+    for notice in table_notices(&view) {
+        eprintln!("{notice}");
+    }
+
     match sink.mode() {
         OutputMode::Json => emit_json(&doc, sink.pretty_json()),
         OutputMode::Ndjson => emit_ndjson(&doc),
         OutputMode::Table | OutputMode::Plain => emit_human(doc, view, sink),
     }
+}
+
+/// The trailing notices carried by a payload's table, if it has one. Read
+/// here rather than inside `Table::emit` so a `json`/`ndjson` caller — which
+/// never reaches `emit_human` — still receives them.
+fn table_notices(view: &View) -> Vec<&str> {
+    let View::Blocks(blocks) = view else {
+        return Vec::new();
+    };
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Table(table) => Some(table.trailing_notices()),
+            Block::Text(_) => None,
+        })
+        .flatten()
+        .map(String::as_str)
+        .collect()
 }
 
 /// One document, pretty-printed only for a human (spec §3).

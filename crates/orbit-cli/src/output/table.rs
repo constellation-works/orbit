@@ -152,16 +152,21 @@ impl Table {
         self
     }
 
-    /// Add a trailing notice to print to stderr after the table.
+    /// Add a trailing notice — a truncation count, say — for the renderer to
+    /// print to stderr. Not printed by [`Table::emit`] itself: `output::render`
+    /// reads it via [`Table::trailing_notices`] before mode dispatch, so it
+    /// reaches a `json`/`ndjson` caller too, not only the human table view
+    /// (ORB-12203).
     #[must_use]
     pub fn trailing_notice(mut self, notice: impl Into<String>) -> Self {
         self.trailing_notices.push(notice.into());
         self
     }
 
-    /// Notices to be printed to stderr after the table.
-    #[cfg(test)]
-    pub fn trailing_notices(&self) -> &[String] {
+    /// Notices for the renderer to print to stderr in every mode, ahead of
+    /// this table's own render (which may add further, rendering-specific
+    /// notices such as dropped columns).
+    pub(crate) fn trailing_notices(&self) -> &[String] {
         &self.trailing_notices
     }
 
@@ -173,7 +178,10 @@ impl Table {
 
     /// Write the list to stdout in the sink's mode, or the empty-state line to
     /// stderr when there are no records. Notices about dropped columns go to
-    /// stderr so that they never land in a consumer's record stream.
+    /// stderr so that they never land in a consumer's record stream. This
+    /// table's own trailing notices (a truncation count, say) are not printed
+    /// here — `output::render` prints those in every mode, human or not, so
+    /// this only handles rendering-specific notices discovered at this width.
     ///
     /// Called only by `output::render`; a command hands its table back inside a
     /// payload rather than emitting one itself.
@@ -184,9 +192,6 @@ impl Table {
         }
         if sink.mode() == OutputMode::Plain {
             println!("{}", self.render_plain(sink));
-            for notice in &self.trailing_notices {
-                eprintln!("{notice}");
-            }
             return;
         }
         let rendered = self.render_at(
@@ -198,9 +203,6 @@ impl Table {
             eprintln!("{notice}");
         }
         println!("{}", rendered.body);
-        for notice in &self.trailing_notices {
-            eprintln!("{notice}");
-        }
     }
 
     /// The plain form: the same visible columns and the same cell values as

@@ -157,6 +157,61 @@ fn task_list_truncation_notice_and_bare_json_array_with_60_tasks() {
     );
 }
 
+/// ORB-12203: the truncation notice on a machine-readable mode must reach
+/// stderr, and stdout must stay exactly the records — a bare array for
+/// `--format json`, one record per line for `--format ndjson` — with no
+/// notice mixed in.
+#[test]
+fn task_list_truncation_notice_reaches_stderr_in_json_and_ndjson_modes() {
+    let workspace = TestWorkspace::new();
+    for i in 0..60 {
+        workspace.add_task(&format!("Task {i:02}"));
+    }
+    let truncation_notice = "showing 50 of 60 tasks (non-terminal tasks first, then terminal, each newest first); use --limit N or a filter to see more";
+
+    let json = workspace.run(
+        &["task", "list", "--format", "json"],
+        "task list --format json",
+    );
+    let json_stdout = String::from_utf8_lossy(&json.stdout);
+    let json_stderr = String::from_utf8_lossy(&json.stderr);
+    assert!(
+        json_stderr.contains(truncation_notice),
+        "--format json must report truncation on stderr:\n{json_stderr}"
+    );
+    let tasks: Value = serde_json::from_slice(&json.stdout).expect("bare json array");
+    assert_eq!(
+        tasks.as_array().expect("tasks array").len(),
+        50,
+        "--format json stdout must stay the bare array, untouched by the notice"
+    );
+    assert!(
+        !json_stdout.contains("showing"),
+        "stdout must not carry the truncation notice:\n{json_stdout}"
+    );
+
+    let ndjson = workspace.run(
+        &["task", "list", "--format", "ndjson"],
+        "task list --format ndjson",
+    );
+    let ndjson_stdout = String::from_utf8_lossy(&ndjson.stdout);
+    let ndjson_stderr = String::from_utf8_lossy(&ndjson.stderr);
+    assert!(
+        ndjson_stderr.contains(truncation_notice),
+        "--format ndjson must report truncation on stderr:\n{ndjson_stderr}"
+    );
+    let lines: Vec<&str> = ndjson_stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        50,
+        "--format ndjson stdout must stay one record per line, untouched by the notice:\n{ndjson_stdout}"
+    );
+    for line in &lines {
+        let record: Value = serde_json::from_str(line).expect("ndjson line is a JSON object");
+        assert!(record.is_object(), "each ndjson line is one task record");
+    }
+}
+
 #[test]
 fn older_someday_task_discoverable_ahead_of_50_newer_done_tasks() {
     let workspace = TestWorkspace::new();
