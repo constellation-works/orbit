@@ -46,7 +46,8 @@ Destination-side authorization is declared in the machine-global operator file `
 
 ```toml
 # Capabilities served to a caller that matches no row below.
-# Permitted values: "agent" or "deny". Operator is never a default.
+# File default values: "agent" or "deny". Operator is never a default.
+# Per-caller values: "agent", "operator", or "deny"; "deny" and [] grant none.
 default = "agent"
 
 [[callers]]
@@ -71,6 +72,10 @@ agent_invoke_mode = "cooperative"
 [[callers]]
 machine_id   = "hm_gamma"
 capabilities = ["agent"]
+
+[[callers]]
+machine_id   = "hm_denied"
+capabilities = ["deny"]
 ```
 
 Row keys:
@@ -78,7 +83,7 @@ Row keys:
 | Key | Required | Meaning |
 |---|---|---|
 | `machine_id` | yes | The calling machine's stable `hm_…` identity. Matched against the caller identity resolved below. |
-| `capabilities` | yes | The ceiling this destination will serve that caller. Values are `agent` and `operator` only. |
+| `capabilities` | yes | The ceiling this destination will serve that caller. Values are `agent` and `operator`; `deny` or an empty list grants no capabilities. `deny` must be used alone. |
 | `label` | no | Operator-facing display name. Never an identity input. |
 | `workspaces` | no | Narrows the grant to these logical `ws_*` IDs. Omitted means every workspace on this destination. |
 | `ssh_key_fingerprint` | no | Binds the row to a key sshd authenticated, in the `SHA256:…` form `ssh-keygen -l` prints. See Tier 2. |
@@ -90,7 +95,7 @@ File-level invariants:
 
 1. A missing file is valid and means `default = "agent"` with no rows.
 2. A duplicate `machine_id` makes the entire file invalid with `ambiguous_caller` at load, before any session is served — the same fail-closed shape `ambiguous_destination` has in the destinations file.
-3. An unknown key, an unknown capability value, an empty `capabilities`, a `default` other than `agent` or `deny`, a malformed `machine_id`, or an `ssh_key_fingerprint` that is not a well-formed `SHA256:` digest invalidates the file at load. A malformed file is never served as if absent. The fingerprint format is checked here rather than at comparison time because a fingerprint in the wrong shape — an `MD5:` one, most plausibly — would otherwise never match and would present as a key mismatch on every session.
+3. An unknown key, an unknown capability value, `deny` combined with a grant capability, a `default` other than `agent` or `deny`, a malformed `machine_id`, or an `ssh_key_fingerprint` that is not a well-formed `SHA256:` digest invalidates the file at load. A malformed file is never served as if absent. A row with `capabilities = ["deny"]` or `capabilities = []` is an explicit per-caller denial and overrides the file default. The fingerprint format is checked here rather than at comparison time because a fingerprint in the wrong shape — an `MD5:` one, most plausibly — would otherwise never match and would present as a key mismatch on every session.
 4. `runner` is not a grantable value. It is stamped in-process by a managed run and can never arrive over a transport.
 5. Load happens once per server process, at startup, alongside identity resolution. A session's ceiling does not change under it mid-session.
 6. `agent_invoke = true` additionally requires `operator` and an explicit workspace scope: `agent_invoke_workspaces`, or legacy `workspaces` when the new key is omitted. Both scopes reject empty or non-`ws_*` lists. Its default/key-bound mode also requires `ssh_key_fingerprint`. `agent_invoke_mode = "cooperative"` is the only mode that may omit the fingerprint; an unknown mode or invocation-only option without the operation grant invalidates the file.

@@ -181,6 +181,14 @@ fn check(path: &Path, machine_id: &str) -> CommandOut {
         }
     );
     println!("granted: [{}]", capability_list(&grant.granted));
+    println!(
+        "decision: {}",
+        if grant.granted.is_empty() {
+            "denied"
+        } else {
+            "granted"
+        }
+    );
     match &grant.pinned_fingerprint {
         Some(fingerprint) => println!(
             "identity pin: {fingerprint}, enforced where this machine can observe the \

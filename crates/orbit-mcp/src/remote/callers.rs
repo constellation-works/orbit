@@ -85,8 +85,9 @@ pub struct CallerRow {
     /// The calling machine's stable `hm_…` identity.
     pub machine_id: String,
     /// The ceiling this destination serves that caller. `agent` and
-    /// `operator` only; `runner` is stamped in-process by a managed run and
-    /// can never arrive over a transport.
+    /// `operator` grant capabilities; `deny` or an empty list grants none.
+    /// `runner` is stamped in-process by a managed run and can never arrive
+    /// over a transport.
     pub capabilities: Vec<String>,
     /// Operator-facing display name. Never an identity input.
     #[serde(default)]
@@ -275,18 +276,24 @@ fn validate_workspace_scope(
 }
 
 /// The row's capabilities, as the grantable subset of the capability
-/// vocabulary.
+/// vocabulary. `deny` and an empty list are the explicit empty-grant forms.
 ///
 /// `runner` parses as a capability everywhere else in Orbit, which is exactly
 /// why it is rejected by name here rather than left to fall through an unknown
 /// value: a run's own sanction must not be reachable over a transport.
 fn parse_capabilities(row: &CallerRow, path: &Path) -> Result<BTreeSet<McpCapability>, OrbitError> {
     if row.capabilities.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    if row.capabilities.iter().any(|value| value == "deny") {
+        if row.capabilities.len() == 1 {
+            return Ok(BTreeSet::new());
+        }
         return Err(invalid(
             path,
             format!(
-                "caller '{}' has an empty `capabilities` list; use `default = \"deny\"` or remove \
-                 the row",
+                "caller '{}' combines `deny` with grant capabilities; use `deny` alone or an \
+                 empty `capabilities` list",
                 row.machine_id
             ),
         ));
@@ -299,8 +306,8 @@ fn parse_capabilities(row: &CallerRow, path: &Path) -> Result<BTreeSet<McpCapabi
             other => Err(invalid(
                 path,
                 format!(
-                    "caller '{}' declares capability '{other}'; only `agent` and `operator` may \
-                     be granted to a caller",
+                    "caller '{}' declares capability '{other}'; use `agent`, `operator`, or \
+                     `deny` for a caller capability",
                     row.machine_id
                 ),
             )),
@@ -799,7 +806,8 @@ pub fn render_callers_seed(callers: &[SeedCaller]) -> String {
          # Raising a row to operator is a deliberate hand edit.\n\
          \n\
          # Capabilities served to a caller that matches no row below.\n\
-         # Permitted values: \"agent\" or \"deny\".\n\
+         # File default values: \"agent\" or \"deny\". Operator is never a default.\n\
+         # Per-caller values: \"agent\", \"operator\", or \"deny\"; \"deny\" and [] grant none.\n\
          default = \"agent\"\n",
     );
     for caller in callers {
