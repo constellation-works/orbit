@@ -66,9 +66,10 @@ fn format_arg() -> Arg {
 
 /// Whether this command already declares a `--format` of its own.
 ///
-/// `orbit audit export` and `orbit hook pretooluse` do, with their own value
-/// types. Those two keep their meaning; the global flag is simply not offered
-/// there.
+/// `orbit audit export` does, naming its export file's serialization with its
+/// own value type. It keeps that meaning; the global flag is simply not
+/// offered there, and its help says so. `crate::tests::cli_format` pins the
+/// list of such commands.
 fn declares_format(command: &Command) -> bool {
     command
         .get_arguments()

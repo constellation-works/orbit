@@ -200,13 +200,20 @@ impl OutputSink {
     /// Whether a column carrying the same value in every row may be dropped
     /// (`specs/table-rendering.md` §5).
     ///
-    /// Suppression is a readability heuristic for the default view. Asking for
-    /// `--format table` explicitly is asking for the table's full shape, so it
-    /// turns the heuristic off; `auto` retains it. A command that renders a
-    /// fixed-shape view rather than a result set opts out separately, via
+    /// Suppression is a readability heuristic for a human reading columns, so
+    /// it applies to the `table` rendering only. The plain form is what a pipe
+    /// receives, and there a dropped column silently shifts every later field
+    /// left with no header to say so — `orbit audit list --status denied` is
+    /// the case that found this, emitting three fields for a result set whose
+    /// timestamps happened to agree while a mixed one emitted six [ORB-12113].
+    ///
+    /// Asking for `--format table` explicitly is asking for the table's full
+    /// shape, so it turns the heuristic off too; `auto` on a terminal retains
+    /// it. A command that renders a fixed-shape view rather than a result set
+    /// opts out separately, via
     /// [`Table::keep_all_columns`](crate::output::table::Table::keep_all_columns).
     pub fn suppress_uniform_columns(&self) -> bool {
-        !self.explicit_table
+        self.mode == OutputMode::Table && !self.explicit_table
     }
 
     /// Point the `colored` crate at this sink's answer instead of its own

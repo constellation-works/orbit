@@ -25,6 +25,11 @@ fn global_search_task_hybrid_preserves_retriever_breakdown() {
             "kind": "task",
             "source": "semantic",
             "id": id,
+            // [ORB-12113] The vector index stores identifiers and scores only,
+            // so a semantic hit is completed from the task record and reads
+            // like a lexical one instead of carrying a blank title.
+            "title": "task hybrid breakdown",
+            "summary": "needle task body",
             "status": "backlog",
             "best_field": "title",
             "snippet": "semantic task snippet",

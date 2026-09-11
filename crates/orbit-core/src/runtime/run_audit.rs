@@ -212,6 +212,18 @@ impl RunExecutionProgress {
 /// handful per step; the budget only bites on a long retry history.
 const MAX_PROVIDER_PROCESSES: usize = 8;
 
+/// What one scan of a run's v2 audit trail says about its execution: every
+/// step it started, and every provider child those steps spawned.
+///
+/// Unlike [`RunExecutionProgress`], the step list is complete rather than
+/// narrowed to the open step, and the provider list is unbounded — this is the
+/// evidence `orbit run show` renders, not a live-progress summary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunAuditView {
+    pub steps: Vec<RunAuditStep>,
+    pub provider_processes: Vec<RunProviderProcess>,
+}
+
 impl OrbitRuntime {
     /// Provider subprocesses recorded for a run, oldest first, each with a
     /// liveness verdict for the ones that have not reported an exit.
@@ -238,14 +250,42 @@ impl OrbitRuntime {
     where
         P: Fn(u32, Option<&str>) -> ProcessLiveness,
     {
+        Ok(self
+            .collect_run_audit_view_with(run_id, probe)?
+            .provider_processes)
+    }
+
+    /// Both audit-derived halves of a run inspection — its reconstructed steps
+    /// and the provider children its activities spawned — from one scan.
+    ///
+    /// `orbit run show` needs the steps because a v2 pipeline run keeps them
+    /// only here: its job-run record's `steps` are empty while the same trail
+    /// answers `orbit run events` in full [ORB-12113]. Paying for one read
+    /// rather than two is the same reason [`Self::collect_run_execution_progress`]
+    /// exists.
+    pub fn collect_run_audit_view(&self, run_id: &str) -> Result<RunAuditView, OrbitError> {
+        self.collect_run_audit_view_with(run_id, probe_process_liveness)
+    }
+
+    /// Inner, testable form of [`Self::collect_run_audit_view`] with the
+    /// liveness probe injected, so pairing and projection can be asserted
+    /// without depending on real live PIDs.
+    pub(crate) fn collect_run_audit_view_with<P>(
+        &self,
+        run_id: &str,
+        probe: P,
+    ) -> Result<RunAuditView, OrbitError>
+    where
+        P: Fn(u32, Option<&str>) -> ProcessLiveness,
+    {
         let events = self.collect_run_audit_events(run_id)?;
         let steps = audit_steps_from_events(&events);
-        Ok(provider_processes_from_events(
-            run_id,
-            events,
-            &step_index_by_id(&steps),
-            probe,
-        ))
+        let provider_processes =
+            provider_processes_from_events(run_id, events, &step_index_by_id(&steps), probe);
+        Ok(RunAuditView {
+            steps,
+            provider_processes,
+        })
     }
 
     /// [ORB-11752] The run's live progress: open activity step plus a bounded,

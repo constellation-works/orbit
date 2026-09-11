@@ -7,13 +7,14 @@ use crate::command::{Block, CommandOut, Execute, Payload};
 
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::steps::{
-    activity_provenance_lines, filtered_steps, legacy_step_to_json, resolve_run, resolve_run_step,
-    run_header_text, run_header_text_with_state, step_record_payload, step_summary_table,
+    RunDisplaySteps, RunStepRecord, StepSource, activity_provenance_lines, filtered_steps,
+    legacy_step_to_json, resolve_run, resolve_run_step, run_display_steps, run_header_text,
+    run_header_text_with_state, run_step_record_to_json, step_record_payload, step_summary_table,
 };
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run\":<job-run>,\"pipeline_state\":<state|null>,\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape: {\"run\":<job-run>,\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
@@ -53,14 +54,27 @@ pub(crate) fn run_show_payload(
 
     // [ORB-10496] Provider subprocesses spawned by this run's agent steps. A
     // ship-pipeline implementation agent is a child of the pipeline worker, not
-    // of the Worker daemon, so this is the only place it is observable.
-    let provider_processes = runtime.collect_run_provider_processes(&run.run_id)?;
+    // of the Worker daemon, so this is the only place it is observable. The
+    // same scan carries the step history a pipeline run keeps nowhere else
+    // [ORB-12113].
+    let audit = runtime.collect_run_audit_view(&run.run_id)?;
+    let provider_processes = audit.provider_processes;
+
+    let RunDisplaySteps {
+        records: steps,
+        source: steps_source,
+    } = run_display_steps(&run, audit.steps);
 
     let run_projection =
         cli_job_run_to_json_with_activity_provenance(runtime, &run, state.as_ref());
     let doc = json!({
         "run": run_projection,
         "pipeline_state": state,
+        // The steps the view below renders, whichever source answered. The
+        // record's own `run.steps` stay exactly as stored, so a caller can
+        // still tell the two apart [ORB-12113].
+        "steps": steps.iter().map(run_step_record_to_json).collect::<Vec<_>>(),
+        "steps_source": steps_source.as_str(),
         // The same projection the registered/MCP run-show surface emits, so
         // both readers name a live child identically [ORB-11752].
         "provider_processes": provider_processes
@@ -88,9 +102,14 @@ pub(crate) fn run_show_payload(
     }
     header.push_str(&live_provider_process_lines(&provider_processes));
     header.push_str(&agent_invocation_lines(&doc["run"]["agent_invocation"]));
+    if steps_source == StepSource::Audit && !steps.is_empty() {
+        header.push_str(&format!(
+            "\n{} reconstructed from the run audit trail; the run record stores none",
+            crate::output::color::bold("Steps:"),
+        ));
+    }
     header.push('\n');
 
-    let steps = run.steps.iter().collect::<Vec<_>>();
     Ok(Payload::blocks(
         doc,
         vec![
@@ -192,6 +211,10 @@ pub(crate) fn legacy_logs_summary_payload(
         .iter()
         .map(|step| legacy_step_to_json(step))
         .collect::<Vec<_>>();
+    let records = steps
+        .iter()
+        .map(|step| RunStepRecord::from_job_step(step))
+        .collect::<Vec<_>>();
 
     let mut header = run_header_text(&run);
     header.push('\n');
@@ -199,7 +222,7 @@ pub(crate) fn legacy_logs_summary_payload(
         Value::Array(values),
         vec![
             Block::text(header),
-            Block::table(step_summary_table(&steps)),
+            Block::table(step_summary_table(&records)),
         ],
     )
     .into())

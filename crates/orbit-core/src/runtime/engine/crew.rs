@@ -439,6 +439,28 @@ impl OrbitRuntime {
         }
     }
 
+    /// Project one crew enrichment key for a `task show` field selector.
+    ///
+    /// The unprojected readout carries `resolved_crew` / `crew_model` /
+    /// `crew_unresolved` only in the case each describes; a projection asked
+    /// for by name always answers, with `null` where that case does not apply.
+    /// Selecting a key the full readout shows is therefore never an error
+    /// [ORB-12113]. Any other name yields `None`, so a caller keeps its own
+    /// unknown-field handling.
+    pub fn task_crew_field_json(&self, task: &Task, field: &str) -> Option<Value> {
+        if !matches!(field, "resolved_crew" | "crew_model" | "crew_unresolved") {
+            return None;
+        }
+
+        let value = match (self.task_crew_read(task), field) {
+            (TaskCrewRead::Resolved(projection), "resolved_crew") => Value::String(projection.name),
+            (TaskCrewRead::Resolved(projection), "crew_model") => Value::String(projection.model),
+            (TaskCrewRead::Unresolved { reason }, "crew_unresolved") => Value::String(reason),
+            _ => Value::Null,
+        };
+        Some(value)
+    }
+
     pub(crate) fn record_run_crew_from_input(
         &self,
         run_id: &str,

@@ -26,7 +26,9 @@ pub use types::{
     HitWorkspace, WorkspaceSearchReport,
 };
 
-use self::convert::{doc_result_to_global, lexical_task_hit, semantic_hit_to_global};
+use self::convert::{
+    doc_result_to_global, fill_task_record_fields, lexical_task_hit, semantic_hit_to_global,
+};
 use self::filters::{
     SearchStatusFilters, doc_has_all_tags, resolve_task_statuses, task_has_all_tags,
 };
@@ -106,7 +108,15 @@ impl OrbitRuntime {
             let results = related
                 .results
                 .into_iter()
-                .map(semantic_hit_to_global)
+                .map(|hit| {
+                    let mut global = semantic_hit_to_global(hit);
+                    if let Some(id) = global.id.clone()
+                        && let Ok(task) = self.get_task(&id)
+                    {
+                        fill_task_record_fields(&mut global, &task);
+                    }
+                    global
+                })
                 .collect();
             return Ok(GlobalSearchResponse {
                 mode: GlobalSearchMode::Neighbor,
@@ -272,8 +282,10 @@ impl OrbitRuntime {
             {
                 continue;
             }
-            // Override status to keep semantic hits coherent.
-            hit.status = Some(task.status.to_string());
+            // The record is the authority for the fields it owns, so a
+            // semantic hit reads like a lexical one instead of carrying an
+            // empty title and a stale status.
+            fill_task_record_fields(&mut hit, &task);
             out.push(hit);
         }
         out.truncate(limit);

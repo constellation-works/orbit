@@ -172,6 +172,7 @@ fn task_field_to_json(
             &runtime.get_task_artifact_manifest(&task.id)?,
         )),
         other => task_show_record_field_json(task, other)
+            .or_else(|| runtime.task_crew_field_json(task, other))
             .ok_or_else(|| OrbitError::InvalidInput(unknown_task_show_field_message(other))),
     }
 }

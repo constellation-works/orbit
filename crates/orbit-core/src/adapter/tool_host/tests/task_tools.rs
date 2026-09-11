@@ -2430,6 +2430,54 @@ fn task_show_public_dto_and_projection_vocabulary_cannot_drift() {
     assert_eq!(actual, expected);
 }
 
+/// [ORB-12113] A key the unprojected readout emits is a key a caller must be
+/// able to ask for. `resolved_crew` / `crew_model` / `crew_unresolved` were
+/// printed in full output and rejected as `fields` selectors, with a
+/// valid-values list that did not mention them.
+#[test]
+fn task_show_projects_every_key_its_unprojected_readout_emits() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task = create_task_with_crew(
+        &runtime,
+        &repo_root,
+        "Crew enrichment projection",
+        "The readout marks this crew unresolvable on this host.",
+        TaskStatus::Backlog,
+        &[],
+        Some("all-grok"),
+    );
+    let show = |input: Value| {
+        runtime.execute_tool_command(
+            "orbit.task.show",
+            input,
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+    };
+
+    let shown = show(json!({ "id": task.id })).expect("unprojected task readout");
+    let keys = shown
+        .as_object()
+        .expect("task readout object")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(keys.iter().any(|key| key == "crew_unresolved"));
+    for key in keys {
+        let projected = show(json!({ "id": task.id, "field": key })).unwrap_or_else(|error| {
+            panic!("`{key}` is emitted unprojected but rejected as a selector: {error}")
+        });
+        assert_eq!(projected, shown[&key], "projection of `{key}` disagrees");
+    }
+
+    // A crew key whose case does not apply answers `null` rather than failing:
+    // the readout omits it, and a projection always has an answer.
+    assert_eq!(
+        show(json!({ "id": task.id, "field": "resolved_crew" })).expect("resolved_crew projects"),
+        json!(null)
+    );
+}
+
 #[test]
 fn task_show_tool_rejects_unknown_projection_with_the_shared_vocabulary() {
     let (_root, runtime, repo_root) = test_runtime();
