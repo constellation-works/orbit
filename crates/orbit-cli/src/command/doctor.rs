@@ -34,9 +34,13 @@ pub struct DoctorCommand {
     #[arg(long)]
     pub fix_retired_activity_backends: bool,
 
-    /// Delete task-store partitions whose workspace is no longer registered on this host.
+    /// Delete task-store partitions that no workspace binding on this host claims. Requires --confirm.
     #[arg(long)]
     pub fix_orphan_task_stores: bool,
+
+    /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes task bundles.
+    #[arg(long)]
+    pub confirm: bool,
 }
 
 impl Execute for DoctorCommand {
@@ -106,6 +110,12 @@ impl Execute for DoctorCommand {
             });
         }
         if self.fix_orphan_task_stores {
+            if !self.confirm {
+                return Err(orbit_core::OrbitError::InvalidInput(
+                    "--fix-orphan-task-stores deletes task bundles. Pass --confirm to proceed."
+                        .to_string(),
+                ));
+            }
             let removed = runtime.remove_orphan_task_stores()?;
             eprintln!("Removed {removed} orphaned task-store partition(s).");
             results.push(WorkspaceDoctorResult {

@@ -35,7 +35,12 @@ use crate::skill_catalog::SkillCatalog;
 /// Job-run partition used when an explicit `--root` data directory is opened
 /// without a selected checkout. Never written to `config.yaml` and never
 /// inserted as a `workspace_checkout_bindings` row.
-const UNBOUND_DATA_DIR_WORKSPACE_ID: &str = "ws_unbound-data-dir";
+///
+/// Public because it is the one partition id no registry ever claims: host
+/// maintenance that decides whether a task-store partition is orphaned must
+/// recognize it rather than delete the tasks every `--root` write lands in
+/// [ORB-12119].
+pub const UNBOUND_DATA_DIR_WORKSPACE_ID: &str = "ws_unbound-data-dir";
 
 /// Runtime builder. Global root provides activities, jobs, executors, policies,
 /// config, global skills, and SQLite. Shared root provides existing workspace

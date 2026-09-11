@@ -1,5 +1,5 @@
 use clap::Args;
-use orbit_cmd::{remove_task_store_partition, task_store_partition_path};
+use orbit_cmd::remove_checkout_task_stores;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 
@@ -53,6 +53,7 @@ impl Execute for WorkspaceTeardownArgs {
         // 1. Deregister from workspace registry (before deleting .orbit/)
         let global_root = runtime.global_root();
         let registry_path = workspace_registry::registry_path_for(&global_root);
+        let mut catalog_workspace_id = None;
         if registry_path.exists() {
             let mut registry = workspace_registry::load_registry_from(&registry_path)?;
             let checkout = registry.checkouts.iter().find(|checkout| {
@@ -67,17 +68,21 @@ impl Execute for WorkspaceTeardownArgs {
                     "deregistered workspace '{}' from registry",
                     ws.name
                 ));
-
-                if remove_task_store_partition(&global_root, &ws_id)? {
-                    removed.push(format!(
-                        "deleted task store {}",
-                        task_store_partition_path(&global_root, &ws_id).display()
-                    ));
-                }
+                catalog_workspace_id = Some(ws_id);
             }
         }
 
-        // 2. Remove legacy repo-local skill symlinks from .agents/skills/ and .claude/skills/
+        // 2. Delete the task-store partition this checkout's task state is
+        //    bound to. The catalog id above is not that partition's name
+        //    unless the two id spaces happen to coincide, so the task registry
+        //    resolves it and retires its bindings [ORB-12119].
+        for partition in
+            remove_checkout_task_stores(&global_root, &orbit_dir, catalog_workspace_id.as_deref())?
+        {
+            removed.push(format!("deleted task store {}", partition.display()));
+        }
+
+        // 3. Remove legacy repo-local skill symlinks from .agents/skills/ and .claude/skills/
         for dir_name in &[".agents", ".claude"] {
             let skills_dir = repo_root.join(dir_name).join("skills");
             if skills_dir.is_dir() {
@@ -97,13 +102,13 @@ impl Execute for WorkspaceTeardownArgs {
             }
         }
 
-        // 3. Delete .orbit/ directory
+        // 4. Delete .orbit/ directory
         if orbit_dir.is_dir() {
             std::fs::remove_dir_all(&orbit_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
             removed.push(format!("deleted {}", orbit_dir.display()));
         }
 
-        // 4. Print summary
+        // 5. Print summary
         println!("teardown complete:");
         for item in &removed {
             println!("  - {item}");

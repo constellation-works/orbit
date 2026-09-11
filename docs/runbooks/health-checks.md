@@ -28,7 +28,7 @@ Every check degrades to a row rather than aborting unless the store itself canno
 | `job-runs` | orphaned `pending` or `running` runs with no live worker process |
 | `task-reservations` | active reservations whose owner run or terminal task association proves the reservation stale |
 | `task-relations` | unresolved relation/dependency targets that would block a task-index rebuild |
-| `orphan-task-stores` | task-store partitions (`~/.orbit/tasks/workspaces/<ws_id>/`) whose workspace is no longer registered on this host |
+| `orphan-task-stores` | task-store partitions (`~/.orbit/tasks/workspaces/<ws_id>/`) that no workspace binding on this host claims |
 | `artifacts-*` | skills, jobs, activities, auto-tasks, and routines on disk: stale, deprecated, residual, catalog-invalid, or a previously reconciled shipped default that is missing |
 
 Example:
@@ -46,7 +46,7 @@ $ orbit doctor
 │ job-runs         ok        no orphaned job runs                                              │
 │ task-reservations ok       no conclusively stale active task reservations                    │
 │ task-relations   ok        no unresolved relation/dependency targets                        │
-│ orphan-task-stores ok      2 task-store partition(s) scanned, all registered                │
+│ orphan-task-stores ok      2 task-store partition(s) scanned, all claimed …                 │
 0 failure(s), 1 warning(s).
 ```
 
@@ -98,18 +98,27 @@ individual flag; neither command upgrades the binary or pulls a remote repositor
 ### Reclaim orphaned task stores
 
 `orbit workspace teardown --confirm` deregisters the workspace and deletes both the checkout's
-`.orbit/` and its global task-store partition
-(`~/.orbit/tasks/workspaces/<ws_id>/`) in one step. `orphan-task-stores` exists for partitions a
-prior teardown on an older binary left behind, or a checkout removed without running teardown at
-all: each warning names the orphaned workspace id, its partition path, and its task-bundle
-count. Repair with:
+`.orbit/` and the global task-store partition its task state is bound to, retiring that
+partition's rows in `~/.orbit/tasks/index.sqlite` in the same step.
+
+A partition directory is named for a **task-registry** workspace id
+(`workspace_bindings.workspace_id` in `~/.orbit/tasks/index.sqlite`), minted as `<slug>-<hash>`
+for a checkout that binds without an explicit id. That is a different id space from the workspace
+catalog's `ws_*` ids in `~/.orbit/workspaces.json`, so a partition is orphaned only when neither
+registry claims it; the synthetic `ws_unbound-data-dir` partition every `--root <data-dir>` write
+lands in is never reported. `orphan-task-stores` exists for partitions a prior teardown on an
+older binary left behind, or a checkout removed without running teardown at all: each warning
+names the orphaned workspace id, its partition path, and its task-bundle count. Repair with:
 
 ```sh
-orbit doctor --fix-orphan-task-stores
+orbit doctor --fix-orphan-task-stores --confirm
 ```
 
-The repair loads the registry once, then deletes only the partitions it finds with no matching
-workspace id; it is idempotent, and running it again after a partition is gone is a no-op.
+The repair deletes task bundles, so it refuses to run without `--confirm`. It resolves the claims
+once, deletes only the partitions no binding names, retires any registry rows naming them, and is
+idempotent: running it again after a partition is gone is a no-op. When the task registry itself
+is missing, the check warns and the repair refuses rather than treating every live partition as
+unclaimed.
 
 ### Repair retired activity backends
 
