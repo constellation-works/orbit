@@ -7,7 +7,8 @@ use chrono::Utc;
 use fs2::FileExt;
 use orbit_registry::workspace_registry;
 use orbit_store::maintenance::task_registry::{
-    BindWorkspaceParams, TaskRegistryStore, task_registry_path, task_workspaces_dir,
+    BindWorkspaceParams, RegisterWorkspaceParams, TaskRegistryStore, task_registry_path,
+    task_workspaces_dir,
 };
 use orbit_types::workflow::{JobRun, JobRunState};
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceStatus};
@@ -102,6 +103,22 @@ fn write_registered_checkout(global_root: &Path, workspace_id: &str, repo_root: 
 /// directories are named after, which a `<slug>-<hash>` id inhabits and the
 /// workspace catalog's `ws_*` ids do not [ORB-12119].
 fn bind_task_partition(global_root: &Path, workspace_id: &str, slug: &str, repo_root: &Path) {
+    bind_task_partition_at(
+        global_root,
+        workspace_id,
+        slug,
+        repo_root,
+        &repo_root.join(".orbit"),
+    );
+}
+
+fn bind_task_partition_at(
+    global_root: &Path,
+    workspace_id: &str,
+    slug: &str,
+    repo_root: &Path,
+    orbit_dir: &Path,
+) {
     let tasks =
         TaskRegistryStore::open(&task_registry_path(global_root)).expect("open task registry");
     tasks
@@ -110,10 +127,38 @@ fn bind_task_partition(global_root: &Path, workspace_id: &str, slug: &str, repo_
             slug: slug.to_string(),
             repo_root: repo_root.to_path_buf(),
             workspace_path: repo_root.to_path_buf(),
-            orbit_dir: repo_root.join(".orbit"),
+            orbit_dir: orbit_dir.to_path_buf(),
             repo_fingerprint: None,
         })
         .expect("bind task-registry workspace");
+}
+
+fn register_task_workspace(global_root: &Path, workspace_id: &str, slug: &str) {
+    let tasks =
+        TaskRegistryStore::open(&task_registry_path(global_root)).expect("open task registry");
+    tasks
+        .register_workspace(RegisterWorkspaceParams {
+            workspace_id: workspace_id.to_string(),
+            slug: slug.to_string(),
+            repo_fingerprint: None,
+        })
+        .expect("register path-free task workspace");
+}
+
+fn write_registered_shared_root_checkout(global_root: &Path, workspace_id: &str, repo_root: &Path) {
+    let registry_path = workspace_registry::registry_path_for(global_root);
+    let mut registry =
+        workspace_registry::load_registry_from(&registry_path).expect("load registry");
+    workspace_registry::register_checkout(
+        &mut registry,
+        WorkspaceCheckout::owner(
+            workspace_id.to_string(),
+            repo_root.to_path_buf(),
+            global_root.to_path_buf(),
+        ),
+    )
+    .expect("register shared-root checkout");
+    workspace_registry::save_registry_to(&registry, &registry_path).expect("save registry");
 }
 
 fn write_task_bundle(global_root: &Path, workspace_id: &str, task_id: &str) {
@@ -1038,7 +1083,13 @@ fn stale_task_registry_binding_is_reported_and_removed() {
     let deleted_root = temp.path().join("deleted");
     fs::create_dir_all(deleted_root.join(".orbit")).expect("create deleted checkout");
 
-    bind_task_partition(&global_root, "deleted-a1b2c3", "deleted", &deleted_root);
+    bind_task_partition_at(
+        &global_root,
+        "deleted-a1b2c3",
+        "deleted",
+        &deleted_root,
+        &global_root,
+    );
     write_task_bundle(&global_root, "deleted-a1b2c3", "ORB-2");
     fs::remove_dir_all(&deleted_root).expect("delete checkout");
 
@@ -1114,6 +1165,47 @@ fn deleted_catalog_checkout_partition_is_reported_and_removed() {
             .exists()
     );
     assert!(!partition_is_bound(&global_root, "ws_deleted").expect("read binding"));
+}
+
+/// A shared external root is not per-checkout evidence: the catalog's
+/// repository root must be used when `workspace init` supplied only a
+/// path-free task-registry registration.
+#[test]
+fn deleted_shared_root_catalog_checkout_partition_is_reported_and_removed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    let deleted_root = temp.path().join("deleted");
+    fs::create_dir_all(&deleted_root).expect("create deleted checkout");
+
+    write_registered_workspace(&global_root, "ws_shared_deleted", "shared-deleted");
+    write_registered_shared_root_checkout(&global_root, "ws_shared_deleted", &deleted_root);
+    register_task_workspace(&global_root, "ws_shared_deleted", "shared-deleted");
+    write_task_bundle(&global_root, "ws_shared_deleted", "ORB-5");
+    fs::remove_dir_all(&deleted_root).expect("delete checkout");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(row.message.contains("ws_shared_deleted"), "{}", row.message);
+    assert!(row.message.contains("1 task bundle(s)"), "{}", row.message);
+    assert!(
+        row.message.contains("missing checkout directories"),
+        "{}",
+        row.message
+    );
+
+    let removed = runtime
+        .remove_orphan_task_stores()
+        .expect("remove stale shared-root partition");
+    assert_eq!(removed.populated_partitions, 1, "{removed:?}");
+    assert_eq!(removed.task_bundles, 1, "{removed:?}");
+    assert!(
+        !task_workspaces_dir(&global_root)
+            .join("ws_shared_deleted")
+            .exists()
+    );
+    assert!(!partition_is_bound(&global_root, "ws_shared_deleted").expect("read binding"));
 }
 
 /// A catalog checkout that cannot be stat-ed is not evidence of deletion. Its
