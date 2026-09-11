@@ -110,7 +110,7 @@ See [Delivery Workflows](../../getting-started/workflows/).
 
 | Command | Purpose |
 |---|---|
-| `orbit sweep` | The scheduler pass: fire due routines on this host. `--dry-run`, `--verbose`, `--json`. |
+| `orbit sweep` | The scheduler pass: fire due routines on this host. `--dry-run`, `--verbose`, `--json`. The global `--workspace <SELECTOR>` restricts the pass to one registered workspace's routines. |
 | `orbit routine list` \| `show` \| `pause` \| `resume` | Inspect routines and pause them host-locally. |
 | `orbit routine clock status` \| `pause` \| `enable` \| `set` | Control the host OS sweep clock. |
 | `orbit routine init [--install-clock]` | Read host identity and optionally install the OS clock unit. |

@@ -50,7 +50,13 @@ You can always run the pass by hand, which is the right way to try a change:
 orbit sweep --dry-run            # report what would fire; record and dispatch nothing
 orbit sweep --verbose            # a row per routine, including not-due ones
 orbit sweep --json
+orbit --workspace <name> sweep   # only that workspace's routines
 ```
+
+A pass visits every registered routine-source workspace on the host. The global
+`--workspace` selector narrows it to one — in both dry-run and live passes,
+nothing outside the selected workspace is evaluated, fired, or recorded. An
+unregistered selector fails instead of falling back to the whole host.
 
 By default `orbit sweep` prints only noteworthy rows — fires, retries,
 baselines, errors — so a per-minute clock does not fill the log with `not_due`

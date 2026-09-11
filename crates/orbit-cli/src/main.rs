@@ -241,7 +241,10 @@ fn main() {
             );
             let result = dispatch(
                 cli.command,
-                DispatchContext::without_runtime(root_override.as_deref()),
+                DispatchContext::without_runtime(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                ),
             );
             finish_command(result, &sink, suppress_errors, json_error_preference);
             return;
@@ -273,7 +276,11 @@ fn main() {
     }
     .with_actor(actor);
 
-    let context = DispatchContext::with_runtime(&runtime, root_override.as_deref());
+    let context = DispatchContext::with_runtime(
+        &runtime,
+        root_override.as_deref(),
+        workspace_selector.as_deref(),
+    );
     // ORB-10453: the CLI's single authorization chokepoint. Every command
     // traverses it before dispatch, so a governed operation cannot be reached
     // by adding a subcommand that forgets its own guard.

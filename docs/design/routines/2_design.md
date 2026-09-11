@@ -317,6 +317,15 @@ Per pass:
    routine provenance cannot silently resolve to a different store.
 10. Record outcomes and exit.
 
+The global `--workspace <selector>` narrows one pass to a single registered
+workspace: discovery visits only that workspace, so nothing outside it is
+evaluated, fired, or recorded, in dry-run and live passes alike. The selector is
+resolved against the local registry before the pass touches scheduler state, and
+an unknown, unregistered, or inactive selector fails the invocation rather than
+silently sweeping the host [ORB-12108]. Placement validation still reads the
+whole-host registry projection, because a routine's host pin is a host-level
+fact.
+
 `orbit routine list`, `orbit routine show`, and `orbit sweep` expose the local registry
 source (`local_workspace_registry`) plus stable diagnostic codes and severity in human and
 JSON output. Compatibility fields for cache age and staleness remain empty/false. Moving a

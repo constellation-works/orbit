@@ -29,6 +29,8 @@ use serde_json::json;
                   By default only noteworthy rows (fires, retries, baselines, errors)\n\
                   print — the per-minute clock must not grow its log with `not_due`\n\
                   churn. Use --verbose for every routine's row.\n\n\
+                  Pass the global `--workspace <selector>` to evaluate and fire only that\n\
+                  registered workspace's routines.\n\n\
                   Inspect routines with `orbit routine list`; dispatched fires appear in\n\
                   `orbit run history`."
 )]
@@ -78,13 +80,21 @@ pub(crate) fn format_report_line(report: &RoutineSweepReport) -> String {
 impl SweepCommand {
     /// Runs without a pre-initialized runtime: the sweep resolves every
     /// workspace from the global registry (per-workspace runtimes are built
-    /// inside orbit-core).
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
+    /// inside orbit-core). The global `--workspace` selector, when present,
+    /// narrows that set to one registered workspace.
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&Path>,
+        workspace_selector: Option<&str>,
+    ) -> CommandOut {
         let options = SweepOptions {
             dry_run: self.dry_run,
             ..SweepOptions::default()
         };
-        let outcome = run_sweep_for_selected_root(root_override, options)?;
+        let workspace_selector = workspace_selector
+            .map(str::trim)
+            .filter(|selector| !selector.is_empty());
+        let outcome = run_sweep_for_selected_root(root_override, workspace_selector, options)?;
 
         let doc = outcome_json(&outcome, self.dry_run);
 
@@ -159,16 +169,17 @@ impl SweepCommand {
 
 fn run_sweep_for_selected_root(
     root_override: Option<&Path>,
+    workspace_selector: Option<&str>,
     options: SweepOptions,
 ) -> Result<SweepOutcome, OrbitError> {
     let has_env_override = std::env::var("ORBIT_ROOT").is_ok_and(|root| !root.trim().is_empty());
     if root_override.is_none() && !has_env_override {
-        return run_sweep(options);
+        return run_sweep(options, workspace_selector);
     }
 
     let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
     let roots = OrbitRuntime::resolve_roots_for_cwd(&cwd, root_override)?;
-    run_sweep_at(&roots.global_root, options)
+    run_sweep_at(&roots.global_root, options, workspace_selector)
 }
 
 pub(crate) fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json::Value {

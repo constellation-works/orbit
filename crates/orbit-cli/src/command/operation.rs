@@ -50,20 +50,32 @@ pub enum RuntimeNeed {
 pub struct DispatchContext<'a> {
     runtime: Option<&'a OrbitRuntime>,
     root_override: Option<&'a Path>,
+    /// The global `--workspace` selector, for the runtime-forbidden commands
+    /// that resolve their own workspaces instead of being handed one runtime.
+    workspace_selector: Option<&'a str>,
 }
 
 impl<'a> DispatchContext<'a> {
-    pub fn with_runtime(runtime: &'a OrbitRuntime, root_override: Option<&'a Path>) -> Self {
+    pub fn with_runtime(
+        runtime: &'a OrbitRuntime,
+        root_override: Option<&'a Path>,
+        workspace_selector: Option<&'a str>,
+    ) -> Self {
         Self {
             runtime: Some(runtime),
             root_override,
+            workspace_selector,
         }
     }
 
-    pub fn without_runtime(root_override: Option<&'a Path>) -> Self {
+    pub fn without_runtime(
+        root_override: Option<&'a Path>,
+        workspace_selector: Option<&'a str>,
+    ) -> Self {
         Self {
             runtime: None,
             root_override,
+            workspace_selector,
         }
     }
 
@@ -1045,7 +1057,9 @@ fn dispatch_run(command: Commands, context: DispatchContext<'_>) -> CommandOut {
 
 fn dispatch_sweep(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Sweep(command) => command.execute_without_runtime(context.root_override),
+        Commands::Sweep(command) => {
+            command.execute_without_runtime(context.root_override, context.workspace_selector)
+        }
         _ => dispatch_mismatch("Sweep"),
     }
 }
