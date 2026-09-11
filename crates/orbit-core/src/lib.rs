@@ -73,6 +73,9 @@ pub use application::operation::{
     OperationDrainRequest, OperationDrainResult, OperationGrantControlRequest,
     OperationGrantControlResult,
 };
+pub use application::routine::{
+    RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
+};
 pub use application::search::{
     GlobalSearchHit, GlobalSearchKind, GlobalSearchParams, HitWorkspace, WorkspaceSearchReport,
     task_selectors_contain_path,

@@ -8,9 +8,12 @@
 //! - `__ORBIT_HOST_ID__` — routines v1 has no "any host", so the seeded
 //!   definition pins the host identity supplied by the feature layer.
 //! - `__ORBIT_ROUTINE_NAME__` — routine names must be unique across all
-//!   routine sources on a host, so the seeded name carries a
-//!   workspace-derived suffix (`task-triage-<workspace>`) to keep two
-//!   seeded source workspaces from colliding fail-closed.
+//!   routine sources on a host, so the seeded name carries the registered
+//!   workspace name as a suffix (`task-triage-<workspace-name>`) to keep two
+//!   seeded source workspaces from colliding fail-closed. The suffix comes
+//!   from the workspace name the operator registered, never from the checkout
+//!   directory: two checkouts whose directories share a basename would
+//!   otherwise seed the same names on one host [ORB-12107].
 //!
 //! Seeded routines are inert until the workspace opts into
 //! `[routines] role = "source"`; they exist so a fresh workspace gets
@@ -18,8 +21,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use orbit_automation::routines::loader::declared_routine_names;
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 
@@ -71,6 +75,105 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
 const HOST_ID_PLACEHOLDER: &str = "__ORBIT_HOST_ID__";
 const ROUTINE_NAME_PLACEHOLDER: &str = "__ORBIT_ROUTINE_NAME__";
 
+/// The identity a workspace's default routines are materialized against: the
+/// host they pin and the registered workspace name their names are suffixed
+/// with. Both are required, so the two halves travel together and a caller
+/// cannot seed host-pinned routines under unsuffixed, host-wide names.
+///
+/// Construction validates both halves, which is why the fields are private:
+/// an existing value always renders a loadable routine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutineSeedIdentity {
+    host_id: String,
+    name_suffix: String,
+}
+
+impl RoutineSeedIdentity {
+    /// Build the seed identity for `workspace_name` on `host_id`, rejecting a
+    /// workspace name with no characters usable in a routine name — that name
+    /// would otherwise silently fall back to a host-wide unsuffixed routine.
+    pub fn new(host_id: &str, workspace_name: &str) -> Result<Self, OrbitError> {
+        let host_id = host_id.trim();
+        if host_id.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "cannot seed default routines without a host id".to_string(),
+            ));
+        }
+
+        let name_suffix = sanitize_routine_name_part(workspace_name);
+        if name_suffix.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "workspace name '{workspace_name}' has no characters usable in a routine name; \
+                 routine names must stay unique across every routine source on this host, so \
+                 choose a workspace name containing letters or digits"
+            )));
+        }
+
+        Ok(Self {
+            host_id: host_id.to_string(),
+            name_suffix,
+        })
+    }
+
+    pub(crate) fn host_id(&self) -> &str {
+        &self.host_id
+    }
+
+    /// Compose a per-workspace routine name: `<stem>-<workspace-name>`, using
+    /// the routine name charset (lowercase alphanumeric plus `-`/`_`, starting
+    /// alphanumeric). Names must be unique across all routine sources on a
+    /// host, so the workspace suffix is what lets two seeded sources coexist.
+    pub(crate) fn routine_name(&self, file_stem: &str) -> String {
+        format!("{}-{}", file_stem.replace('_', "-"), self.name_suffix)
+    }
+
+    /// Every name this identity would seed, in [`DEFAULT_ROUTINE_FILES`] order.
+    pub fn seeded_routine_names(&self) -> Vec<String> {
+        DEFAULT_ROUTINE_FILES
+            .iter()
+            .map(|(stem, _)| self.routine_name(stem))
+            .collect()
+    }
+}
+
+/// A name this workspace's default routines would take that another workspace
+/// on the same host already declares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutineNameCollision {
+    /// The routine name claimed twice.
+    pub name: String,
+    /// The already-existing definition file that claims it.
+    pub declared_in: PathBuf,
+}
+
+/// Names that seeding for `identity` would take from routine definitions
+/// already declared under `other_orbit_dirs` (every registered checkout on
+/// this host except the one being initialized).
+///
+/// A name defined by more than one source is a load-time error that drops
+/// *every* colliding definition, so init reports this instead of writing a
+/// set of routines that can never fire [ORB-12107].
+pub fn default_routine_name_collisions(
+    identity: &RoutineSeedIdentity,
+    other_orbit_dirs: &[PathBuf],
+) -> Vec<RoutineNameCollision> {
+    let seeded: BTreeSet<String> = identity.seeded_routine_names().into_iter().collect();
+    let mut collisions: BTreeMap<String, PathBuf> = BTreeMap::new();
+
+    for orbit_dir in other_orbit_dirs {
+        for (name, path) in declared_routine_names(orbit_dir, identity.host_id()) {
+            if seeded.contains(&name) {
+                collisions.entry(name).or_insert(path);
+            }
+        }
+    }
+
+    collisions
+        .into_iter()
+        .map(|(name, declared_in)| RoutineNameCollision { name, declared_in })
+        .collect()
+}
+
 /// Seed every entry in [`DEFAULT_ROUTINE_FILES`] under `routines_dir`,
 /// resolving the host and routine-name placeholders. Mirrors the activity /
 /// job seeding convention: when `overwrite` is false (plain re-init),
@@ -91,13 +194,13 @@ const ROUTINE_NAME_PLACEHOLDER: &str = "__ORBIT_ROUTINE_NAME__";
 pub(crate) fn seed_default_routines(
     routines_dir: &Path,
     host_id: &str,
-    workspace_slug: Option<&str>,
+    workspace_name: &str,
     overwrite: bool,
 ) -> Result<ManagedAssetReconciliation, OrbitError> {
+    let identity = RoutineSeedIdentity::new(host_id, workspace_name)?;
     reconcile_default_routines(
         routines_dir,
-        host_id,
-        workspace_slug,
+        &identity,
         overwrite,
         ManagedAssetReconcileMode::Apply,
     )
@@ -105,18 +208,10 @@ pub(crate) fn seed_default_routines(
 
 pub(crate) fn reconcile_default_routines(
     routines_dir: &Path,
-    host_id: &str,
-    workspace_slug: Option<&str>,
+    identity: &RoutineSeedIdentity,
     overwrite_bindings: bool,
     mode: ManagedAssetReconcileMode,
 ) -> Result<ManagedAssetReconciliation, OrbitError> {
-    let host_id = host_id.trim();
-    if host_id.is_empty() {
-        return Err(OrbitError::InvalidInput(
-            "cannot reconcile default routines without a host id".to_string(),
-        ));
-    }
-
     let manifest_path = routines_dir.join(MANAGED_ASSET_MANIFEST_FILE);
     let previous =
         load_managed_asset_manifest(&manifest_path, "routine", ManagedAssetLayout::YamlStem)?;
@@ -191,8 +286,8 @@ pub(crate) fn reconcile_default_routines(
     for (name, template) in DEFAULT_ROUTINE_FILES {
         let path = routines_dir.join(format!("{name}.yaml"));
         let requested_binding = RoutineMaterializationBinding {
-            name: routine_name_for(name, workspace_slug),
-            hosts: vec![host_id.to_string()],
+            name: identity.routine_name(name),
+            hosts: vec![identity.host_id().to_string()],
         };
         let template_digest = sha256_hex(template.as_bytes());
         let previous_digest = previous.as_ref().and_then(|value| value.assets.get(*name));
@@ -544,18 +639,6 @@ fn render_routine_template(
     Ok(rendered)
 }
 
-/// Compose a per-workspace routine name: `<stem>-<workspace-slug>`, using
-/// the routine name charset (lowercase alphanumeric plus `-`/`_`, starting
-/// alphanumeric). Names must be unique across all routine sources on a
-/// host, so the workspace suffix is what lets two seeded sources coexist.
-fn routine_name_for(file_stem: &str, workspace_slug: Option<&str>) -> String {
-    let base = file_stem.replace('_', "-");
-    match workspace_slug.map(sanitize_routine_name_part) {
-        Some(slug) if !slug.is_empty() => format!("{base}-{slug}"),
-        _ => base,
-    }
-}
-
 fn sanitize_routine_name_part(raw: &str) -> String {
     let lowered = raw.trim().to_ascii_lowercase();
     let mut out = String::with_capacity(lowered.len());
@@ -582,7 +665,7 @@ mod tests {
     fn seeded_routines_are_valid_disabled_pinned_and_workspace_unique() {
         let root = tempdir().expect("create tempdir");
         let routines_dir = root.path().join(".orbit/routines");
-        let seeded = seed_default_routines(&routines_dir, "test-host", Some("My Repo!"), true)
+        let seeded = seed_default_routines(&routines_dir, "test-host", "My Repo!", true)
             .expect("seed default routines");
         assert_eq!(seeded.refreshed, DEFAULT_ROUTINE_FILES.len());
 
@@ -680,11 +763,12 @@ mod tests {
     fn seeding_preserves_existing_files_unless_overwrite() {
         let root = tempdir().expect("create tempdir");
         let routines_dir = root.path().join("routines");
-        seed_default_routines(&routines_dir, "host-a", None, false).expect("first seed");
+        seed_default_routines(&routines_dir, "host-a", "workspace", false).expect("first seed");
         let path = routines_dir.join("worktree_gc.yaml");
         std::fs::write(&path, "user edited").expect("simulate user edit");
 
-        let seeded = seed_default_routines(&routines_dir, "host-a", None, false).expect("re-seed");
+        let seeded =
+            seed_default_routines(&routines_dir, "host-a", "workspace", false).expect("re-seed");
         assert_eq!(seeded.refreshed, 0);
         assert_eq!(
             std::fs::read_to_string(&path).expect("read"),
@@ -692,11 +776,12 @@ mod tests {
             "plain re-init must not clobber user edits"
         );
 
-        seed_default_routines(&routines_dir, "host-b", None, true).expect("refresh defaults");
+        seed_default_routines(&routines_dir, "host-b", "workspace", true)
+            .expect("refresh defaults");
         let refreshed = std::fs::read_to_string(&path).expect("read refreshed");
         assert!(refreshed.contains("host-b"));
         let definition = parse_routine_yaml(&refreshed).expect("refreshed routine parses");
-        assert_eq!(definition.name, "worktree-gc");
+        assert_eq!(definition.name, "worktree-gc-workspace");
         assert_eq!(
             definition.target,
             RoutineTarget::Job("worktree_gc_pipeline".to_string())
@@ -710,15 +795,14 @@ mod tests {
 
         let root = tempdir().expect("create tempdir");
         let routines_dir = root.path().join("routines");
-        seed_default_routines(&routines_dir, HOST_ID, Some("workspace"), false)
-            .expect("first seed");
+        seed_default_routines(&routines_dir, HOST_ID, "workspace", false).expect("first seed");
 
         let existing = routines_dir.join("task_triage.yaml");
         let original = std::fs::read(&existing).expect("read existing routine bytes");
         let missing = routines_dir.join("task_pilot.yaml");
         std::fs::remove_file(&missing).expect("remove newly introduced routine");
 
-        let seeded = seed_default_routines(&routines_dir, HOST_ID, Some("workspace"), false)
+        let seeded = seed_default_routines(&routines_dir, HOST_ID, "workspace", false)
             .expect("plain re-init");
         assert_eq!(seeded.refreshed, 1, "only the missing default is created");
         assert_eq!(
@@ -743,8 +827,7 @@ mod tests {
     fn reseeding_unchanged_rendered_content_is_a_no_op_not_a_rewrite() {
         let root = tempdir().expect("create tempdir");
         let routines_dir = root.path().join("routines");
-        seed_default_routines(&routines_dir, "host-a", Some("workspace"), true)
-            .expect("first seed");
+        seed_default_routines(&routines_dir, "host-a", "workspace", true).expect("first seed");
 
         let before: Vec<(std::path::PathBuf, std::time::SystemTime)> = DEFAULT_ROUTINE_FILES
             .iter()
@@ -757,7 +840,7 @@ mod tests {
             })
             .collect();
 
-        let reseeded = seed_default_routines(&routines_dir, "host-a", Some("workspace"), true)
+        let reseeded = seed_default_routines(&routines_dir, "host-a", "workspace", true)
             .expect("re-seed unchanged rendered content");
         assert_eq!(reseeded.refreshed, 0, "unchanged routines must not rewrite");
         assert_eq!(reseeded.retired, 0);
@@ -777,7 +860,7 @@ mod tests {
 
         // A different host renders different content, so the digest changes
         // and an overwriting seed does refresh every file.
-        let rehosted = seed_default_routines(&routines_dir, "host-b", Some("workspace"), true)
+        let rehosted = seed_default_routines(&routines_dir, "host-b", "workspace", true)
             .expect("re-seed with a new host id");
         assert_eq!(rehosted.refreshed, DEFAULT_ROUTINE_FILES.len());
     }
@@ -786,7 +869,7 @@ mod tests {
     fn fresh_routine_seeding_matches_rendered_canonical_templates() {
         let root = tempdir().expect("create tempdir");
         let routines_dir = root.path().join("routines");
-        seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+        seed_default_routines(&routines_dir, "host-a", "workspace", false)
             .expect("seed canonical routines");
 
         for (stem, template) in DEFAULT_ROUTINE_FILES {
@@ -809,7 +892,7 @@ mod tests {
     fn task_pilot_reseeding_preserves_workspace_overrides() {
         let root = tempdir().expect("create tempdir");
         let routines_dir = root.path().join("routines");
-        seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+        seed_default_routines(&routines_dir, "host-a", "workspace", false)
             .expect("seed canonical routines");
         let path = routines_dir.join("task_pilot.yaml");
         let edited = std::fs::read_to_string(&path)
@@ -823,7 +906,7 @@ mod tests {
         assert_eq!(definition.trigger.cron, "*/15 * * * *");
         std::fs::write(&path, &edited).expect("write operator overrides");
 
-        seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+        seed_default_routines(&routines_dir, "host-a", "workspace", false)
             .expect("reseed without overwriting workspace choices");
         assert_eq!(
             std::fs::read_to_string(&path).expect("read preserved routine"),
@@ -840,7 +923,7 @@ mod tests {
     fn manifestless_customized_routines_are_adopted_rather_than_called_collisions() {
         let root = tempdir().expect("create tempdir");
         let routines_dir = root.path().join("routines");
-        seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+        seed_default_routines(&routines_dir, "host-a", "workspace", false)
             .expect("seed a pre-provenance workspace");
         let manifest_path = routines_dir.join(MANAGED_ASSET_MANIFEST_FILE);
         std::fs::remove_file(&manifest_path).expect("drop the manifest to predate provenance");
@@ -855,7 +938,7 @@ mod tests {
         );
         std::fs::write(&customized, &edited).expect("simulate the documented customization");
 
-        let adopted = seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+        let adopted = seed_default_routines(&routines_dir, "host-a", "workspace", false)
             .expect("reconcile the pre-provenance directory");
         assert!(
             adopted.warnings.is_empty(),
@@ -893,7 +976,7 @@ mod tests {
 
         // Provenance now owns the file, so convergence is a no-op instead of
         // repeating the same complaint on every run.
-        let second = seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+        let second = seed_default_routines(&routines_dir, "host-a", "workspace", false)
             .expect("second reconcile");
         assert!(second.warnings.is_empty());
         assert_eq!(second.refreshed, 0);
@@ -909,7 +992,7 @@ mod tests {
     fn user_authored_collision_is_still_reported_when_the_manifest_tracks_the_directory() {
         let root = tempdir().expect("create tempdir");
         let routines_dir = root.path().join("routines");
-        seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+        seed_default_routines(&routines_dir, "host-a", "workspace", false)
             .expect("seed default routines");
         let manifest_path = routines_dir.join(MANAGED_ASSET_MANIFEST_FILE);
         let mut manifest =
@@ -930,7 +1013,7 @@ mod tests {
             .replace("task-triage-workspace", "my-own-triage");
         std::fs::write(&user_authored, &content).expect("write a user-authored routine");
 
-        let reconciled = seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+        let reconciled = seed_default_routines(&routines_dir, "host-a", "workspace", false)
             .expect("reconcile a tracked directory");
         assert!(
             reconciled
@@ -965,7 +1048,7 @@ mod tests {
         )
         .expect("write an unmanageable file");
 
-        let reconciled = seed_default_routines(&routines_dir, "host-a", Some("workspace"), false)
+        let reconciled = seed_default_routines(&routines_dir, "host-a", "workspace", false)
             .expect("reconcile a manifest-less directory");
         assert!(
             reconciled
@@ -984,8 +1067,94 @@ mod tests {
     #[test]
     fn seeding_requires_a_host_id() {
         let root = tempdir().expect("create tempdir");
-        let err = seed_default_routines(&root.path().join("routines"), "  ", None, true)
+        let err = seed_default_routines(&root.path().join("routines"), "  ", "workspace", true)
             .expect_err("empty host id must not seed an unloadable routine");
         assert!(err.to_string().contains("host id"), "{err}");
+    }
+
+    /// Without a usable workspace suffix every workspace on the host would
+    /// seed the same bare `task-pilot` name, so seeding refuses the name
+    /// instead of writing definitions that drop each other at load time.
+    #[test]
+    fn seeding_requires_a_workspace_name_with_usable_characters() {
+        let root = tempdir().expect("create tempdir");
+        let err = seed_default_routines(&root.path().join("routines"), "host-a", " ***", true)
+            .expect_err("unusable workspace name must not seed unsuffixed routines");
+        assert!(err.to_string().contains("routine name"), "{err}");
+    }
+
+    /// The seeded suffix is the registered workspace name, so two checkouts
+    /// whose directories share a basename still seed distinct names, and a
+    /// name mismatch never leaks the directory into the routine [ORB-12107].
+    #[test]
+    fn seeded_names_follow_the_workspace_name_not_the_checkout_directory() {
+        let alpha = RoutineSeedIdentity::new("host-a", "Alpha QA")
+            .expect("workspace name renders a routine suffix");
+        let beta = RoutineSeedIdentity::new("host-a", "beta").expect("second workspace identity");
+
+        assert_eq!(alpha.routine_name("task_pilot"), "task-pilot-alpha-qa");
+        assert_eq!(beta.routine_name("task_pilot"), "task-pilot-beta");
+        assert!(
+            alpha
+                .seeded_routine_names()
+                .iter()
+                .all(|name| !beta.seeded_routine_names().contains(name)),
+            "distinct workspace names must not share a seeded routine name"
+        );
+    }
+
+    /// A name another workspace on the host already declares is reported
+    /// before seeding: routine discovery drops every colliding definition, so
+    /// writing the duplicate would disable both workspaces' routines.
+    #[test]
+    fn collisions_report_names_another_workspace_already_declares() {
+        let root = tempdir().expect("create tempdir");
+        let other_orbit = root.path().join("other/.orbit");
+        seed_default_routines(&other_orbit.join("routines"), "host-a", "server", false)
+            .expect("seed the other workspace");
+
+        let identity = RoutineSeedIdentity::new("host-a", "server").expect("seed identity");
+        let collisions =
+            default_routine_name_collisions(&identity, std::slice::from_ref(&other_orbit));
+        assert_eq!(
+            collisions.len(),
+            DEFAULT_ROUTINE_FILES.len(),
+            "every seeded name collides: {collisions:?}"
+        );
+        assert!(collisions.iter().any(|collision| {
+            collision.name == "task-pilot-server"
+                && collision.declared_in == other_orbit.join("routines/task_pilot.yaml")
+        }));
+
+        let distinct = RoutineSeedIdentity::new("host-a", "other-server").expect("seed identity");
+        assert!(
+            default_routine_name_collisions(&distinct, &[other_orbit]).is_empty(),
+            "a distinct workspace name must not collide"
+        );
+    }
+
+    /// Local definitions share the host-wide name space, so a `local/`
+    /// routine is detected too.
+    #[test]
+    fn collisions_cover_local_routine_definitions() {
+        let root = tempdir().expect("create tempdir");
+        let other_orbit = root.path().join("other/.orbit");
+        let local_dir = other_orbit.join("routines/local");
+        seed_default_routines(&other_orbit.join("routines"), "host-a", "alpha", false)
+            .expect("seed the other workspace");
+        let local = std::fs::read_to_string(other_orbit.join("routines/task_pilot.yaml"))
+            .expect("read a seeded routine to adapt")
+            .replace("task-pilot-alpha", "task-pilot-beta");
+        write_text_with_parent(&local_dir.join("pilot.yaml"), &local).expect("write local routine");
+
+        let identity = RoutineSeedIdentity::new("host-a", "beta").expect("seed identity");
+        let collisions = default_routine_name_collisions(&identity, &[other_orbit]);
+        assert_eq!(
+            collisions
+                .iter()
+                .map(|collision| collision.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-pilot-beta"]
+        );
     }
 }

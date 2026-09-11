@@ -8,7 +8,7 @@ use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use serde::Serialize;
 
 use super::job::DEFAULT_JOB_FILES;
-use super::routine::reconcile_default_routines;
+use super::routine::{RoutineSeedIdentity, reconcile_default_routines};
 use super::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
 use super::{
     ManagedAssetAction, ManagedAssetLayout, ManagedAssetOutcome, ManagedAssetReconcileMode,
@@ -96,8 +96,7 @@ impl WorkspaceManagedArtifactSyncReport {
 pub fn reconcile_workspace_managed_artifacts(
     global_root: &Path,
     workspace_orbit_root: &Path,
-    routine_host_id: Option<&str>,
-    workspace_slug: Option<&str>,
+    routine_identity: Option<&RoutineSeedIdentity>,
     check: bool,
 ) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
     let mode = if check {
@@ -186,11 +185,10 @@ pub fn reconcile_workspace_managed_artifacts(
         auto_tasks,
     );
 
-    if let Some(routine_host_id) = routine_host_id {
+    if let Some(routine_identity) = routine_identity {
         let routines = reconcile_default_routines(
             &workspace_orbit_root.join("routines"),
-            routine_host_id,
-            workspace_slug,
+            routine_identity,
             false,
             mode,
         )?;

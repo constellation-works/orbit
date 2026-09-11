@@ -124,13 +124,23 @@ Routine YAML definitions live in routine-source workspaces and converge via git 
 ORB-10129 ships the triage pipeline as a default, but routines have no global directory: discovery reads `.orbit/routines/*.yaml` from `[routines] role = "source"` workspaces, v1 requires explicit host pinning (no "any host"), and routine names must be unique across all sources on a host — so a static shipped YAML cannot work. The real alternatives were leaving defaults workspace-authored from scratch or adding a global routines directory (a discovery-model change [Routine discovery through workspace registry](#routine-discovery-via-the-workspace-registry-and-a-versioned-routines-rolesource-config-key) deliberately avoided).
 
 ### Decision
-`orbit init` (workspace branch) seeds `DEFAULT_ROUTINE_FILES` templates into `.orbit/routines/`, resolving `__ORBIT_HOST_ID__` via `resolve_host_id` and `__ORBIT_ROUTINE_NAME__` from a workspace-directory slug, validating each rendered document fail-closed before writing. Every default is disabled. The complete set is `auto_task_scheduler`, `task_triage`, `task_pilot`, `ship_sweep`, and `worktree_gc`. Plain re-init creates missing defaults while preserving existing definitions byte-for-byte; destructive `--force` recreates templates. A routine fires only after the workspace is a routine source and its versioned `enabled` field is set true. [ORB-10739]
+`orbit init` (workspace branch) seeds `DEFAULT_ROUTINE_FILES` templates into `.orbit/routines/`, resolving `__ORBIT_HOST_ID__` via `resolve_host_id` and `__ORBIT_ROUTINE_NAME__` from the **registered workspace name**, validating each rendered document fail-closed before writing. Every default is disabled. The complete set is `auto_task_scheduler`, `task_triage`, `task_pilot`, `ship_sweep`, and `worktree_gc`. Plain re-init creates missing defaults while preserving existing definitions byte-for-byte; destructive `--force` recreates templates. A routine fires only after the workspace is a routine source and its versioned `enabled` field is set true. [ORB-10739]
 
 ### Consequences
 - Fresh workspaces get reviewable routine definitions without silently granting scheduled execution.
 - Per-workspace names let multiple seeded source workspaces coexist on one host despite the global name-uniqueness rule.
 - The seeded file pins the initializing host; sharing the repo to another host needs a hand edit of `hosts:` or recreation during destructive initialization.
-- Cost: `orbit init` output depends on the machine it runs on (host id, directory name), and routine template improvements do not overwrite existing workspace-authored files.
+- Cost: `orbit init` output depends on the machine it runs on (host id, workspace name), and routine template improvements do not overwrite existing workspace-authored files.
+
+### Correction: the suffix is the workspace name, not the checkout directory [ORB-12107]
+
+The suffix was originally taken from the directory containing `.orbit/`, so `orbit workspace init --name qa-sweep` inside `.../repo` seeded `task-pilot-repo` while `orbit routine list` reported a `qa-sweep` workspace — `orbit routine show task-pilot-qa-sweep` found nothing. Worse, the directory basename is not unique on a host: any two `repo`/`src`/`app` checkouts seeded identical names, and a name defined twice drops *both* definitions at load time.
+
+`RoutineSeedIdentity` now carries the host id and the registered workspace name together, and is the only way to reach default-routine seeding, so neither `orbit workspace init` nor `orbit workspace sync` can render a name without one. A workspace name with no characters usable in a routine name is rejected rather than silently falling back to an unsuffixed, host-wide name.
+
+`orbit workspace init` also refuses a name whose seeded routines a *different* registered checkout on the host already declares (committed or `local/`), naming each conflicting file, instead of writing a duplicate set that can never fire.
+
+Existing workspaces are **left untouched**: the managed-asset manifest records each routine's materialization binding, and reconciliation keeps the recorded name. A workspace seeded before this change therefore keeps its directory-derived routine names and keeps working; `orbit workspace sync --check` reports the difference as `binding_drift`, naming the workspace-derived name it would render now. Adopting the new name is a deliberate operator action (rename in the definition and its manifest entry, or re-initialize the routines directory) — nothing renames a live routine automatically, because a rename loses the routine's run history and state, which key off the name.
 
 ## Delegate workspace ship routines through a synchronous wrapper job
 

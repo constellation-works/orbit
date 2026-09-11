@@ -68,7 +68,7 @@ fn explicit_off_survives_opens_and_sync_then_spawns_bare_without_inner_sandbox()
                 .map(|kind| kind.as_str()),
             Some("off")
         );
-        reconcile_workspace_managed_artifacts(&global, &workspace, None, None, false)
+        reconcile_workspace_managed_artifacts(&global, &workspace, None, false)
             .expect("normal managed resource sync");
         assert_eq!(
             std::fs::read(&executor_path).expect("after sync"),
