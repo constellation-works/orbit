@@ -36,11 +36,11 @@ pub struct DoctorCommand {
     #[arg(long)]
     pub fix_retired_activity_backends: bool,
 
-    /// Delete empty task-store partitions that no workspace binding on this host claims. Partitions that still hold task bundles are never deleted. Requires --confirm.
+    /// Delete empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent (including their task bundles). Unowned or unreachable populated partitions are never touched. Requires --confirm.
     #[arg(long)]
     pub fix_orphan_task_stores: bool,
 
-    /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories.
+    /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles.
     #[arg(long)]
     pub confirm: bool,
 }
@@ -114,7 +114,7 @@ impl Execute for DoctorCommand {
         if self.fix_orphan_task_stores {
             if !self.confirm {
                 return Err(orbit_core::OrbitError::InvalidInput(
-                    "--fix-orphan-task-stores deletes task-store partition directories. Pass --confirm to proceed."
+                    "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
                         .to_string(),
                 ));
             }
