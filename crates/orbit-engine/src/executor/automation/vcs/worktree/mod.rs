@@ -79,7 +79,13 @@ impl WorktreeIdentity {
         engine_run_id: Option<&str>,
     ) -> Result<Self, OrbitError> {
         let task_ids = task_ids_from_input(input)?;
+        // The stored epic_pipeline input is the one worktree-owning shape
+        // whose task and naming fields are supplied to the nested worktree
+        // step rather than persisted on the run itself.
+        let epic_run_id =
+            input_string_field(input, "epic_task_id").map(|task_id| format!("epic-{task_id}"));
         let run_id = input_string_field(input, "run_id")
+            .or(epic_run_id)
             .or_else(|| {
                 engine_run_id
                     .map(str::trim)
@@ -88,6 +94,7 @@ impl WorktreeIdentity {
             })
             .unwrap_or_else(|| fallback_run_id_for_tasks(&task_ids));
         let branch_prefix = input_string_field(input, "branch_prefix")
+            .or_else(|| input_string_field(input, "epic_task_id").map(|_| "epic".to_string()))
             .unwrap_or_else(|| DEFAULT_BRANCH_PREFIX.to_string());
         Ok(Self {
             task_ids,
@@ -143,6 +150,10 @@ fn task_ids_from_input(input: &Value) -> Result<Vec<String>, OrbitError> {
         if !task_ids.is_empty() {
             return Ok(task_ids);
         }
+    }
+
+    if let Some(epic_task_id) = input_string_field(input, "epic_task_id") {
+        return Ok(vec![epic_task_id]);
     }
 
     Ok(vec![required_input_string(input, "task_id")?.to_string()])
