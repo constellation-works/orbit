@@ -31,14 +31,25 @@ impl AutoTaskDispatch for OrbitRuntime {
         self.paths().state_dir.clone()
     }
 
-    fn has_open_instance(&self, definition: &AutoTaskDefinition) -> Result<bool, OrbitError> {
+    fn has_open_instance(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<Option<String>, OrbitError> {
         let tasks = self.list_tasks_by_tags(&[auto_task_tag(&definition.name)])?;
-        Ok(tasks.iter().any(|task| {
-            !matches!(
-                task.status,
-                TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
-            )
-        }))
+        // `someday` is an explicit "not now" park, not an active instance
+        // [ORB-12148]: it must not block every later mint of this auto-task.
+        Ok(tasks
+            .into_iter()
+            .find(|task| {
+                !matches!(
+                    task.status,
+                    TaskStatus::Done
+                        | TaskStatus::Archived
+                        | TaskStatus::Rejected
+                        | TaskStatus::Someday
+                )
+            })
+            .map(|task| task.id))
     }
 
     fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
@@ -117,6 +128,7 @@ pub fn run_scheduler_action_json(
                 "reason": report.reason,
                 "slot": report.slot,
                 "task_id": report.task_id,
+                "blocking_task_id": report.blocking_task_id,
                 "automation": report.automation,
             })
         })

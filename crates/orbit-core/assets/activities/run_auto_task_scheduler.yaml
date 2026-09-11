@@ -11,7 +11,8 @@ spec:
     under `.orbit/state/auto-tasks.json`. Catch-up collapses (a downtime gap
     yields one make-up task, never one per missed slot) and `skip_if_open`
     dedupe (never files while a prior instance created by the same definition
-    is still open) are enforced in the scheduler core. Every minted task
+    is still open; a `someday`-parked instance does not count as open) are
+    enforced in the scheduler core. Every minted task
     carries an `auto-task:<name>` provenance tag. Provider-neutral -
     definitions carry no turn-based knobs. An empty or all-skipped
     pass is a clean no-op. `dry_run` reports what would fire without recording
@@ -54,6 +55,10 @@ spec:
                 - type: string
                 - type: "null"
             task_id:
+              oneOf:
+                - type: string
+                - type: "null"
+            blocking_task_id:
               oneOf:
                 - type: string
                 - type: "null"

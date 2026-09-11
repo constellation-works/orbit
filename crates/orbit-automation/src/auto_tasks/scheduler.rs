@@ -28,7 +28,12 @@ pub trait AutoTaskDispatch {
 
     fn state_dir(&self) -> PathBuf;
 
-    fn has_open_instance(&self, definition: &AutoTaskDefinition) -> Result<bool, OrbitError>;
+    /// The id of a still-open instance of `definition`'s prior mints, if any.
+    /// `None` means `SkipIfOpen` dedupe should let the current fire proceed.
+    fn has_open_instance(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<Option<String>, OrbitError>;
 
     fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError>;
 }
@@ -47,6 +52,8 @@ pub struct AutoTaskFireReport {
     pub slot: Option<String>,
     /// Task minted by a fire.
     pub task_id: Option<String>,
+    /// The still-open task id that caused a `dedupe_open` skip.
+    pub blocking_task_id: Option<String>,
     pub automation: Option<orbit_types::workflow::automation::AutomationDiagnostic>,
 }
 
@@ -96,6 +103,7 @@ pub fn run_auto_task_scheduler_at(
                     reason: Some(format!("error: {error}")),
                     slot: None,
                     task_id: None,
+                    blocking_task_id: None,
                     automation: None,
                 }
             });
@@ -132,6 +140,7 @@ fn fire_definition(
             reason: Some(diagnostic.reason.clone()),
             slot: None,
             task_id,
+            blocking_task_id: None,
             automation: Some(diagnostic),
         });
     }
@@ -171,10 +180,11 @@ fn dry_run_definition(
         AutoTaskDueDecision::NotDue => Ok(skipped(definition, "not_due")),
         AutoTaskDueDecision::Fire { slot } => {
             if definition.dedupe == DedupePolicy::SkipIfOpen
-                && host.has_open_instance(definition)?
+                && let Some(blocking_task_id) = host.has_open_instance(definition)?
             {
                 return Ok(AutoTaskFireReport {
                     slot: Some(slot),
+                    blocking_task_id: Some(blocking_task_id),
                     ..skipped(definition, "dedupe_open")
                 });
             }
@@ -222,10 +232,11 @@ fn fire_locked(
         AutoTaskDueDecision::NotDue => Ok(skipped(definition, "not_due")),
         AutoTaskDueDecision::Fire { slot } => {
             if definition.dedupe == DedupePolicy::SkipIfOpen
-                && host.has_open_instance(definition)?
+                && let Some(blocking_task_id) = host.has_open_instance(definition)?
             {
                 return Ok(AutoTaskFireReport {
                     slot: Some(slot),
+                    blocking_task_id: Some(blocking_task_id),
                     ..skipped(definition, "dedupe_open")
                 });
             }
@@ -258,6 +269,7 @@ fn recover_pending(
                 )),
                 slot: Some(pending.slot),
                 task_id: Some(task_id),
+                blocking_task_id: None,
                 automation: None,
             })),
             Err(error) => Ok(Some(AutoTaskFireReport {
@@ -268,6 +280,7 @@ fn recover_pending(
                 )),
                 slot: Some(pending.slot),
                 task_id: Some(task_id),
+                blocking_task_id: None,
                 automation: None,
             })),
         };
@@ -313,6 +326,7 @@ fn fire_slot(
                 reason: Some(format!("mint failed; slot not consumed: {error}")),
                 slot: Some(slot),
                 task_id: None,
+                blocking_task_id: None,
                 automation: None,
             });
         }
@@ -338,6 +352,7 @@ fn fire_slot(
             reason: None,
             slot: Some(slot),
             task_id: Some(task),
+            blocking_task_id: None,
             automation: None,
         }),
         Err(error) => {
@@ -364,6 +379,7 @@ fn fire_slot(
                 )),
                 slot: Some(slot),
                 task_id: Some(task),
+                blocking_task_id: None,
                 automation: None,
             })
         }
@@ -416,6 +432,7 @@ fn skipped(definition: &AutoTaskDefinition, reason: &str) -> AutoTaskFireReport 
         reason: Some(reason.to_string()),
         slot: None,
         task_id: None,
+        blocking_task_id: None,
         automation: None,
     }
 }
@@ -427,6 +444,7 @@ fn action(definition: &AutoTaskDefinition, action: &'static str) -> AutoTaskFire
         reason: None,
         slot: None,
         task_id: None,
+        blocking_task_id: None,
         automation: None,
     }
 }

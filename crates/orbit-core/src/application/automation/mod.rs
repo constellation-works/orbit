@@ -235,6 +235,7 @@ fn auto_task_admission_deferral(
         && orbit_automation::auto_tasks::scheduler::AutoTaskDispatch::has_open_instance(
             runtime, definition,
         )?
+        .is_some()
     {
         return Ok(Some("open_instance".into()));
     }
