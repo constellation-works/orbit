@@ -1,0 +1,330 @@
+//! `orbit mcp init` / `orbit mcp remove` against an external Orbit data root.
+//!
+//! `orbit --root <dir> workspace init` registers a checkout whose Orbit root
+//! lives outside the repository, so nothing under the checkout marks it as an
+//! Orbit workspace. Only the workspace registry in that root knows the pair,
+//! and these tests pin that both setup commands resolve the checkout through
+//! it: the client config lands in the repository, carries the registered
+//! `ws_*` binding, and is removed again — while a root that names no single
+//! registered checkout refuses instead of writing somewhere else (ORB-12121).
+
+#![allow(missing_docs)]
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command as StdCommand;
+
+use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
+use serde_json::Value;
+use tempfile::{TempDir, tempdir};
+
+/// One machine with an external Orbit root and a single checkout registered
+/// against it.
+struct ExternalRootFixture {
+    _temp: TempDir,
+    home: PathBuf,
+    orbit_root: PathBuf,
+    checkout: PathBuf,
+    elsewhere: PathBuf,
+}
+
+impl ExternalRootFixture {
+    fn init() -> Self {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        // Deliberately nested, so a write to the root's parent is visible.
+        let orbit_root = temp.path().join("orbit-data").join("root");
+        let checkout = temp.path().join("checkout");
+        let elsewhere = temp.path().join("elsewhere");
+        for directory in [&home, &elsewhere] {
+            fs::create_dir_all(directory).expect("fixture directory");
+        }
+        init_git_repo(&checkout);
+
+        let fixture = Self {
+            _temp: temp,
+            home,
+            orbit_root,
+            checkout,
+            elsewhere,
+        };
+        fixture
+            .orbit(
+                &fixture.checkout,
+                &fixture.rooted(&[
+                    "init",
+                    "--non-interactive",
+                    "--host-name",
+                    "external-root-host",
+                    "--task-prefix",
+                    "EXR",
+                ]),
+            )
+            .success();
+        fixture
+            .orbit(
+                &fixture.checkout,
+                &fixture.rooted(&["workspace", "init", "--name", "wsname"]),
+            )
+            .success();
+        fixture.assert_external_root_layout();
+        fixture
+    }
+
+    /// Confirm the setup produced the layout these tests are about: the
+    /// registry in `orbit_root` binds the checkout, and the checkout itself
+    /// carries no `.orbit` for a filesystem walk-up to find.
+    fn assert_external_root_layout(&self) {
+        let assert = self
+            .orbit(
+                &self.checkout,
+                &self.rooted(&["workspace", "show", "--format", "json"]),
+            )
+            .success();
+        let shown: Value =
+            serde_json::from_slice(&assert.get_output().stdout).expect("workspace show json");
+        assert_eq!(shown["workspace"]["id"], "ws_wsname");
+        assert_eq!(
+            shown["checkout"]["repo_root"],
+            canonical_str(&self.checkout)
+        );
+        assert_eq!(
+            shown["checkout"]["orbit_dir"],
+            canonical_str(&self.orbit_root)
+        );
+        assert!(!self.checkout.join(".orbit").exists());
+    }
+
+    /// Prefix `args` with the explicit data-root selector this layout requires.
+    fn rooted(&self, args: &[&str]) -> Vec<String> {
+        let mut rooted = vec![
+            "--root".to_string(),
+            self.orbit_root
+                .to_str()
+                .expect("utf8 orbit root")
+                .to_string(),
+        ];
+        rooted.extend(argv(args));
+        rooted
+    }
+
+    fn orbit(&self, cwd: &Path, args: &[String]) -> assert_cmd::assert::Assert {
+        self.orbit_with_env(cwd, args, &[])
+    }
+
+    fn orbit_with_env(
+        &self,
+        cwd: &Path,
+        args: &[String],
+        env: &[(&str, &Path)],
+    ) -> assert_cmd::assert::Assert {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(cwd)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .args(args);
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        command.assert()
+    }
+
+    fn claude_config(&self) -> PathBuf {
+        self.checkout.join(".claude.json")
+    }
+
+    fn claude_settings(&self) -> PathBuf {
+        self.checkout.join(".claude").join("settings.json")
+    }
+
+    /// Every directory that a mis-resolved run has historically written into.
+    fn assert_no_client_config_outside_the_checkout(&self) {
+        let root_parent = self.orbit_root.parent().expect("orbit root parent");
+        for directory in [&self.orbit_root, root_parent, &self.elsewhere, &self.home] {
+            for entry in [".claude.json", ".claude"] {
+                let stray = directory.join(entry);
+                assert!(
+                    !stray.exists(),
+                    "MCP client config written outside the checkout: {}",
+                    stray.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn mcp_init_binds_an_external_root_checkout_and_remove_reverses_it() {
+    let fixture = ExternalRootFixture::init();
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "init", "--claude"]),
+        )
+        .success();
+
+    assert_eq!(
+        generated_server_args(&fixture.claude_config()),
+        vec!["mcp", "serve", "--workspace", "ws_wsname"],
+        "the generated server must carry the registered workspace binding"
+    );
+    assert!(fixture.claude_settings().is_file());
+    fixture.assert_no_client_config_outside_the_checkout();
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "remove", "--claude"]),
+        )
+        .success();
+
+    assert!(!fixture.claude_config().exists());
+    assert!(!fixture.checkout.join(".claude").exists());
+}
+
+#[test]
+fn mcp_init_resolves_the_registered_checkout_from_an_unrelated_directory() {
+    let fixture = ExternalRootFixture::init();
+
+    fixture
+        .orbit(
+            &fixture.elsewhere,
+            &fixture.rooted(&["mcp", "init", "--claude"]),
+        )
+        .success();
+
+    assert_eq!(
+        generated_server_args(&fixture.claude_config()),
+        vec!["mcp", "serve", "--workspace", "ws_wsname"]
+    );
+    fixture.assert_no_client_config_outside_the_checkout();
+
+    fixture
+        .orbit(
+            &fixture.elsewhere,
+            &fixture.rooted(&["mcp", "remove", "--claude"]),
+        )
+        .success();
+
+    assert!(!fixture.claude_config().exists());
+    assert!(!fixture.checkout.join(".claude").exists());
+}
+
+#[test]
+fn orbit_root_env_selects_the_same_checkout_as_the_root_flag() {
+    let fixture = ExternalRootFixture::init();
+    let env = [("ORBIT_ROOT", fixture.orbit_root.as_path())];
+
+    fixture
+        .orbit_with_env(&fixture.checkout, &argv(&["mcp", "init", "--claude"]), &env)
+        .success();
+
+    assert_eq!(
+        generated_server_args(&fixture.claude_config()),
+        vec!["mcp", "serve", "--workspace", "ws_wsname"]
+    );
+    fixture.assert_no_client_config_outside_the_checkout();
+
+    fixture
+        .orbit_with_env(
+            &fixture.checkout,
+            &argv(&["mcp", "remove", "--claude"]),
+            &env,
+        )
+        .success();
+
+    assert!(!fixture.claude_config().exists());
+}
+
+#[test]
+fn a_root_without_a_registered_checkout_refuses_instead_of_writing() {
+    let fixture = ExternalRootFixture::init();
+    let unrelated_root = fixture
+        .orbit_root
+        .parent()
+        .expect("orbit root parent")
+        .join("unregistered");
+    fs::create_dir_all(&unrelated_root).expect("create unregistered root");
+
+    let assert = fixture
+        .orbit(
+            &fixture.elsewhere,
+            &argv(&[
+                "--root",
+                unrelated_root.to_str().expect("utf8 root"),
+                "mcp",
+                "init",
+                "--claude",
+            ]),
+        )
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).to_string();
+    assert!(
+        stderr.contains("does not identify exactly one registered checkout"),
+        "unexpected failure message: {stderr}"
+    );
+
+    assert!(!unrelated_root.join(".claude.json").exists());
+    fixture.assert_no_client_config_outside_the_checkout();
+    assert!(!fixture.claude_config().exists());
+}
+
+fn argv(args: &[&str]) -> Vec<String> {
+    args.iter().map(|arg| (*arg).to_string()).collect()
+}
+
+fn canonical_str(path: &Path) -> String {
+    fs::canonicalize(path)
+        .expect("canonicalize fixture path")
+        .to_str()
+        .expect("utf8 fixture path")
+        .to_string()
+}
+
+fn generated_server_args(config_path: &Path) -> Vec<String> {
+    let config: Value = serde_json::from_str(
+        &fs::read_to_string(config_path).expect("read generated client config"),
+    )
+    .expect("parse generated client config");
+    config["mcpServers"]["orbit"]["args"]
+        .as_array()
+        .expect("generated args array")
+        .iter()
+        .map(|value| value.as_str().expect("arg is a string").to_string())
+        .collect()
+}
+
+fn init_git_repo(repo: &Path) {
+    fs::create_dir_all(repo).expect("create repo");
+    run_git(repo, &["init", "--initial-branch", "main"]);
+    run_git(repo, &["config", "user.name", "Orbit Test"]);
+    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(repo.join("README.md"), "# repo\n").expect("write readme");
+    run_git(repo, &["add", "README.md"]);
+    run_git(repo, &["commit", "-m", "initial"]);
+}
+
+fn run_git(cwd: &Path, args: &[&str]) {
+    let output = StdCommand::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
+        cwd.display(),
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

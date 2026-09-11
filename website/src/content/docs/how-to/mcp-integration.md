@@ -33,6 +33,17 @@ orbit mcp init --grok
 
 **Grok Build** uses the native `.grok/config.toml` format (similar to how Claude Code can use a config file). `orbit mcp init --grok` will create or update `.grok/config.toml` in your workspace root (or `~/.grok/config.toml` for global).
 
+### Workspaces with an external Orbit root
+
+`orbit --root <dir> workspace init` registers a checkout whose Orbit data root
+lives outside the repository, so nothing inside the checkout marks it as a
+workspace. Select that root on the setup commands too — `orbit --root <dir> mcp
+init --claude`, or `ORBIT_ROOT=<dir>` in the environment — and Orbit resolves
+the registered checkout from that root's catalog: the client config is written
+into the repository and bound to its `ws_*` workspace, and `orbit mcp remove`
+takes it back out. Without a root selector there is no catalog to consult, and
+both commands refuse rather than writing the config elsewhere.
+
 ## Register the federated mux
 
 Federated MCP presents one namespace over this machine's workspaces plus any

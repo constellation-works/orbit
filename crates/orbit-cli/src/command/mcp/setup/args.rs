@@ -5,7 +5,7 @@ use orbit_core::OrbitError;
 
 use super::dispatch::{print_action_summary, run_action};
 use super::providers::ServerLaunch;
-use super::workspace::{env_home_dir, registered_workspace_id, resolve_workspace_layout};
+use super::workspace::{env_home_dir, resolve_workspace_layout};
 use crate::command::{CommandOut, CommandOutput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
@@ -201,13 +201,10 @@ impl InitArgs {
         // Bare `orbit mcp init` keeps its pre-existing agent-only authority;
         // only the `orbit workspace init --mcp` bootstrap path (below, via
         // `init_auto_for_workspace`) selects operator authority.
-        let workspace_id = (!self.federated)
-            .then(|| registered_workspace_id(&layout.repo_root))
-            .flatten();
         let launch = if self.federated {
             ServerLaunch::Federated
         } else {
-            ServerLaunch::local(false, workspace_id.as_deref())
+            ServerLaunch::local(false, layout.workspace_id.as_deref())
         };
         let providers = run_action(
             McpAction::Init(launch),
