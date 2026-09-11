@@ -155,6 +155,29 @@ preserved. Unreadable or partial bundles retain their bytes and any registered
 binding/index; healthy neighbors are indexed, and reindex returns an error listing
 the unresolved task IDs rather than reporting full success.
 
+The command works from either supported layout. With a repo-local root, run it
+from the checkout whose `.orbit` directory identifies the workspace. The task
+index and bundles remain under the home Orbit root:
+
+```sh
+rm -f ~/.orbit/tasks/index.sqlite ~/.orbit/tasks/index.sqlite-wal ~/.orbit/tasks/index.sqlite-shm
+orbit task reindex
+```
+
+With an external root, keep the checkout as the current directory and pass the
+same root that was used for workspace initialization. The runtime restores the
+checkout's task-registry binding before reindexing, so `workspace init --force`
+is not required:
+
+```sh
+rm -f /path/to/orbit-root/tasks/index.sqlite /path/to/orbit-root/tasks/index.sqlite-wal /path/to/orbit-root/tasks/index.sqlite-shm
+orbit --root /path/to/orbit-root task reindex
+```
+
+If `orbit task list` reports that on-disk bundles are missing from the task
+index, run the matching reindex command before treating an empty list as task
+loss. The bundle partitions remain the recovery source until reindex completes.
+
 Full-bundle readers, writers, creation, deletion, and reindex coordinate through
 persistent `.<task-id>.bundle.lock` files beside the canonical bundles.
 These lock files must not be removed while Orbit processes run. Writers recheck

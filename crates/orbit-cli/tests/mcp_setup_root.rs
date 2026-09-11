@@ -190,6 +190,53 @@ fn mcp_init_binds_an_external_root_checkout_and_remove_reverses_it() {
 }
 
 #[test]
+fn external_root_task_index_loss_is_reported_and_reindexed() {
+    let fixture = ExternalRootFixture::init();
+    let added = fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&[
+                "task",
+                "add",
+                "--title",
+                "External task",
+                "--complexity",
+                "low",
+                "--json",
+            ]),
+        )
+        .success();
+    let task: Value = serde_json::from_slice(&added.get_output().stdout).expect("task json");
+    let task_id = task["id"].as_str().expect("task id").to_string();
+    let index = fixture.orbit_root.join("tasks/index.sqlite");
+    for suffix in ["", "-wal", "-shm"] {
+        let path = PathBuf::from(format!("{}{}", index.display(), suffix));
+        if path.exists() {
+            fs::remove_file(path).expect("remove task index");
+        }
+    }
+
+    let listed = fixture
+        .orbit(&fixture.checkout, &fixture.rooted(&["task", "list"]))
+        .failure();
+    let stderr = String::from_utf8_lossy(&listed.get_output().stderr);
+    assert!(stderr.contains("on-disk bundle"), "stderr: {stderr}");
+    assert!(stderr.contains("task reindex"), "stderr: {stderr}");
+
+    fixture
+        .orbit(&fixture.checkout, &fixture.rooted(&["task", "reindex"]))
+        .success();
+    let listed = fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["task", "list", "--json"]),
+        )
+        .success();
+    let tasks: Value = serde_json::from_slice(&listed.get_output().stdout).expect("task list json");
+    assert_eq!(tasks[0]["id"], task_id);
+}
+
+#[test]
 fn mcp_init_resolves_the_registered_checkout_from_an_unrelated_directory() {
     let fixture = ExternalRootFixture::init();
 
