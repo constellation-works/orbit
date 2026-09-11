@@ -48,12 +48,10 @@ pub const NO_DIFF_EXPECTED_TAG: &str = "no-diff-expected";
 /// represented in this machine's coordination registry.
 pub const TASK_REFERENCE_NOT_VERIFIABLE_HERE: &str = "not verifiable here";
 
-/// Default maximum number of tasks a status-neutral task listing returns
-/// (ORB-10310). Every discovery surface — the `orbit task list` CLI, the
-/// `orbit.task.list` MCP tool, and the dashboard HTTP task routes — returns the
-/// newest `DEFAULT_TASK_LIST_LIMIT` matching tasks first rather than filtering
-/// on lifecycle status, matching Orbit's existing recent-history convention
-/// (see `HISTORY_DEFAULT_LIMIT` in orbit-web).
+/// Default maximum number of tasks a task listing returns (ORB-10310). The
+/// `orbit task list` CLI and `orbit.task.list` MCP tool return at most the
+/// newest `DEFAULT_TASK_LIST_LIMIT` matching tasks, with status-aware ordering
+/// when no lifecycle status filter is supplied.
 pub const DEFAULT_TASK_LIST_LIMIT: usize = 50;
 
 /// Named bucket for an optional indexed label that nobody set.

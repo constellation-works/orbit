@@ -852,7 +852,7 @@ capabilities = ["agent", "operator"]
         &[("SSH_CONNECTION", "192.0.2.8 43100 198.51.100.2 22")],
     );
     let listed = client.call_tool_ok("orbit_task_list", json!({}));
-    assert_eq!(listed["items"], json!([]));
+    assert_eq!(listed["tasks"], json!([]));
     let created = client.call_tool_ok(
         "orbit_task_add",
         json!({
@@ -890,7 +890,7 @@ capabilities = ["agent", "operator"]
         &[("SSH_CONNECTION", "192.0.2.8 43100 198.51.100.2 22")],
     );
     let tasks = client.call_tool_ok("orbit_task_list", json!({}));
-    assert_eq!(tasks["items"], json!([]));
+    assert_eq!(tasks["tasks"], json!([]));
     let listed = client.call_tool_ok("orbit_workflow_run_list", json!({}));
     assert_eq!(listed["items"], json!([]));
 
@@ -2154,7 +2154,7 @@ fn mcp_serve_lists_the_canonical_surface_outside_any_checkout() {
         json!({ "workspace": "ws_mcp-roundtrip", "limit": 1 }),
     );
     assert!(
-        scoped.get("items").is_some() || scoped.is_array(),
+        scoped.get("tasks").is_some(),
         "an explicit selector must route an unbound session: {scoped}"
     );
     drop(client);
@@ -2678,7 +2678,7 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
     );
 
     let listed = client.call_tool_ok("orbit_task_list", json!({}));
-    let items = listed["items"].as_array().expect("task list items");
+    let items = listed["tasks"].as_array().expect("task list items");
     assert!(
         items.iter().any(|task| task["id"] == json!(task_id)),
         "created task missing from list: {items:?}"
@@ -2687,7 +2687,7 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
         "orbit_task_list",
         json!({ "workspace": "ws_mcp-roundtrip" }),
     );
-    assert!(listed_by_stable_id["items"].as_array().is_some());
+    assert!(listed_by_stable_id["tasks"].as_array().is_some());
 
     // V1 exposes one complete surface. Domain validation and mutation still run
     // on the authoritative server-side runtime.
@@ -2736,7 +2736,7 @@ fn mcp_serve_error_paths_return_tool_errors_and_keep_serving() {
 
     // The server must still answer after every error path above.
     let listed = client.call_tool_ok("orbit_task_list", json!({}));
-    assert!(listed["items"].is_array(), "server wedged: {listed}");
+    assert!(listed["tasks"].is_array(), "server wedged: {listed}");
 }
 
 #[test]
@@ -4355,7 +4355,7 @@ fn task_read_surfaces_tolerate_a_crew_this_host_does_not_define() {
         json!({ "workspace": workspace.work.to_str().expect("utf8 checkout path") }),
     );
     assert!(
-        listed["items"]
+        listed["tasks"]
             .as_array()
             .expect("task list items")
             .iter()
@@ -4651,7 +4651,7 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
     );
     let listed = client.call_tool_ok("orbit_task_list", json!({}));
     assert!(
-        listed["items"]
+        listed["tasks"]
             .as_array()
             .expect("task list items")
             .iter()

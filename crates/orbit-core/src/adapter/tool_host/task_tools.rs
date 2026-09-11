@@ -126,7 +126,8 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
                 .map(|value| parse_task_status("status", &value))
                 .collect::<Result<Vec<_>, _>>()
         })
-        .transpose()?;
+        .transpose()?
+        .filter(|values| !values.is_empty());
     let task_type = optional_string_alias(&input, &["type", "task_type", "taskType"])?
         .map(|value| parse_task_type("type", &value))
         .transpose()?;
@@ -136,7 +137,7 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     let ready = optional_bool_alias(&input, &["ready"])?;
     let path = optional_string(&input, "path")?;
     let limit = super::input::task_list_limit(&input)?;
-    let page = runtime.query_task_rows(&crate::application::task::TaskListQuery {
+    let page = runtime.query_task_rows_status_aware(&crate::application::task::TaskListQuery {
         filter: crate::application::task::TaskListFilter {
             statuses,
             task_type,
@@ -150,12 +151,18 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
         limit,
     })?;
     let status_by_id = page.status_by_id;
-    Ok(Value::Array(
-        page.items
-            .into_iter()
-            .map(|row| task_to_json(&row.task, &status_by_id))
-            .collect(),
-    ))
+    let tasks = page
+        .items
+        .into_iter()
+        .map(|row| task_to_json(&row.task, &status_by_id))
+        .collect::<Vec<_>>();
+    let total = page.total;
+    let truncated = tasks.len() < total;
+    Ok(json!({
+        "tasks": tasks,
+        "total": total,
+        "truncated": truncated,
+    }))
 }
 
 pub(super) fn reject(
