@@ -63,6 +63,34 @@ fn assert_task_titles(output: &Value, expected: &[&str]) {
     assert_eq!(titles, expected);
 }
 
+fn task_list_items(output: &Value) -> &[Value] {
+    output
+        .get("tasks")
+        .and_then(Value::as_array)
+        .expect("task list envelope")
+}
+
+fn assert_task_list_titles(output: &Value, expected: &[&str]) {
+    let mut titles = task_list_items(output)
+        .iter()
+        .map(|task| {
+            task.get("title")
+                .and_then(Value::as_str)
+                .expect("task title")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    titles.sort();
+
+    let mut expected = expected
+        .iter()
+        .map(|title| (*title).to_string())
+        .collect::<Vec<_>>();
+    expected.sort();
+
+    assert_eq!(titles, expected);
+}
+
 #[test]
 fn execute_tool_command_searches_tasks_for_agents_via_orbit_search() {
     // ORB-00202: `orbit.task.search` was deleted in phase 2; the substring
@@ -540,7 +568,7 @@ fn task_tools_roundtrip_required_tools_and_reject_updates() {
         )
         .expect("list task requirements");
     assert_eq!(
-        listed[0]["required_tools"],
+        listed["tasks"][0]["required_tools"],
         json!(["github.auth.status", "github.run.list"])
     );
 
@@ -608,7 +636,7 @@ fn task_read_tools_render_a_task_whose_stored_crew_is_undefined_here() {
             Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
         )
         .expect("task list tool stays readable with an unresolvable crew");
-    assert_task_titles(&listed, &["Legacy crew task"]);
+    assert_task_list_titles(&listed, &["Legacy crew task"]);
     let fields = runtime
         .execute_tool_command(
             "orbit.task.show",
@@ -1120,9 +1148,7 @@ fn foreign_task_references_are_marked_and_do_not_block_readiness() {
         )
         .expect("list ready tasks");
     assert!(
-        ready
-            .as_array()
-            .expect("ready task array")
+        task_list_items(&ready)
             .iter()
             .any(|task| task["id"] == task_id),
         "foreign dependencies do not gate readiness"
@@ -1980,7 +2006,7 @@ fn task_list_and_search_tools_filter_by_tags_with_and_semantics() {
             Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
         )
         .expect("list by tag");
-    assert_task_titles(&perf_list, &["Perf task", "Perf bench task"]);
+    assert_task_list_titles(&perf_list, &["Perf task", "Perf bench task"]);
 
     let both_list = runtime
         .execute_tool_command(
@@ -1990,7 +2016,7 @@ fn task_list_and_search_tools_filter_by_tags_with_and_semantics() {
             Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
         )
         .expect("list by both tags");
-    assert_task_titles(&both_list, &["Perf bench task"]);
+    assert_task_list_titles(&both_list, &["Perf bench task"]);
 
     // ORB-00202: `orbit.task.search` was deleted; the search+tag case
     // routes through `orbit.search --kind task --tag <...>`. Results land
@@ -2017,9 +2043,10 @@ fn task_list_and_search_tools_filter_by_tags_with_and_semantics() {
 }
 
 #[test]
-fn task_list_tool_is_status_neutral_recent_first_and_bounded() {
+fn task_list_tool_is_status_aware_and_bounded() {
     // ORB-10310: `orbit.task.list` must return every lifecycle status by
-    // default (no hidden `backlog,in-progress` subset), newest-first.
+    // default (no hidden `backlog,in-progress` subset), with active work first
+    // and newest-first within each status bucket.
     let (_root, runtime, repo_root) = test_runtime();
     let statuses = [
         TaskStatus::Proposed,
@@ -2034,7 +2061,7 @@ fn task_list_tool_is_status_neutral_recent_first_and_bounded() {
             &runtime,
             &repo_root,
             &format!("Task {index} in {status}"),
-            "status-neutral listing fixture",
+            "status-aware listing fixture",
             *status,
             &[],
         ));
@@ -2048,7 +2075,7 @@ fn task_list_tool_is_status_neutral_recent_first_and_bounded() {
             Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
         )
         .expect("task list tool succeeds");
-    let listed = output.as_array().expect("task array");
+    let listed = task_list_items(&output);
     assert_eq!(
         listed.len(),
         created.len(),
@@ -2057,31 +2084,32 @@ fn task_list_tool_is_status_neutral_recent_first_and_bounded() {
     for task in &created {
         assert!(
             listed.iter().any(|value| value["id"] == json!(task.id)),
-            "task {} ({}) missing from status-neutral list",
+            "task {} ({}) missing from default list",
             task.id,
             task.status
         );
     }
-    let created_ats = listed
-        .iter()
-        .map(|value| {
-            value["created_at"]
-                .as_str()
-                .expect("created_at")
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-    for pair in created_ats.windows(2) {
-        assert!(
-            pair[0] >= pair[1],
-            "list must be newest-first by created_at: {created_ats:?}"
-        );
-    }
+    assert_eq!(
+        listed
+            .iter()
+            .map(|value| value["id"].as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            Some(created[3].id.as_str()),
+            Some(created[2].id.as_str()),
+            Some(created[1].id.as_str()),
+            Some(created[0].id.as_str()),
+            Some(created[4].id.as_str()),
+        ],
+        "default ordering must put non-terminal tasks before terminal tasks"
+    );
+    assert_eq!(output["total"], json!(created.len()));
+    assert_eq!(output["truncated"], json!(false));
 }
 
 #[test]
 fn task_list_tool_default_limit_returns_newest_fifty() {
-    // ORB-10310: the status-neutral default is bounded to the 50 newest tasks.
+    // ORB-10310: the status-aware default is bounded to 50 tasks.
     let (_root, runtime, repo_root) = test_runtime();
     let mut created = Vec::new();
     for index in 0..55 {
@@ -2103,12 +2131,14 @@ fn task_list_tool_default_limit_returns_newest_fifty() {
             Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
         )
         .expect("task list tool succeeds");
-    let listed = output.as_array().expect("task array");
+    let listed = task_list_items(&output);
     assert_eq!(
         listed.len(),
         50,
         "default limit must bound the response to 50"
     );
+    assert_eq!(output["total"], json!(55));
+    assert_eq!(output["truncated"], json!(true));
     // The 50 returned are the newest; the five oldest are excluded.
     let listed_ids = listed
         .iter()
@@ -2145,7 +2175,9 @@ fn task_list_tool_limit_override_and_zero_rejection() {
             Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
         )
         .expect("task list tool succeeds");
-    assert_eq!(limited.as_array().expect("task array").len(), 2);
+    assert_eq!(task_list_items(&limited).len(), 2);
+    assert_eq!(limited["total"], json!(3));
+    assert_eq!(limited["truncated"], json!(true));
 
     let message = invalid_input_message(runtime.execute_tool_command(
         "orbit.task.list",
@@ -2197,10 +2229,12 @@ fn task_list_tool_applies_status_filter_before_limit() {
             Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
         )
         .expect("task list tool succeeds");
-    let listed = output.as_array().expect("task array");
+    let listed = task_list_items(&output);
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0]["id"], json!(newer_review.id));
     assert_eq!(listed[0]["status"], json!("review"));
+    assert_eq!(output["total"], json!(2));
+    assert_eq!(output["truncated"], json!(true));
 }
 
 #[test]
@@ -2257,9 +2291,7 @@ fn task_list_tool_accepts_comma_delimited_and_array_status_filters() {
         .expect("status array succeeds");
 
     for output in [&comma_delimited, &array] {
-        let ids = output
-            .as_array()
-            .expect("task array")
+        let ids = task_list_items(output)
             .iter()
             .map(|task| task["id"].as_str().expect("task id"))
             .collect::<std::collections::HashSet<_>>();
@@ -2267,6 +2299,8 @@ fn task_list_tool_accepts_comma_delimited_and_array_status_filters() {
         assert!(ids.contains(backlog.id.as_str()));
         assert!(ids.contains(in_progress.id.as_str()));
         assert!(ids.contains(review.id.as_str()));
+        assert_eq!(output["total"], json!(3));
+        assert_eq!(output["truncated"], json!(false));
     }
 }
 

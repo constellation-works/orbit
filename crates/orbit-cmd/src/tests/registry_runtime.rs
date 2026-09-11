@@ -632,9 +632,11 @@ fn initialize_with_workspace_selector_binds_the_named_checkout() {
 }
 
 fn task_ids(value: &Value) -> Vec<String> {
-    let Some(items) = value.as_array() else {
-        return Vec::new();
-    };
+    let items = value
+        .as_array()
+        .or_else(|| value.get("tasks").and_then(Value::as_array))
+        .cloned()
+        .unwrap_or_default();
     items
         .iter()
         .filter_map(|task| {

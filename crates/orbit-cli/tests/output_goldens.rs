@@ -605,8 +605,12 @@ fn tool_run_honors_format_ndjson_and_dry_run_json() {
         ),
         "tool run orbit.task.list --format ndjson",
     );
-    assert_eq!(listed.len(), SEED_TASKS.len());
-    assert!(listed.iter().all(|row| row.get("id").is_some()));
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["total"], SEED_TASKS.len());
+    assert_eq!(listed[0]["truncated"], false);
+    let tasks = listed[0]["tasks"].as_array().expect("task list tasks");
+    assert_eq!(tasks.len(), SEED_TASKS.len());
+    assert!(tasks.iter().all(|row| row.get("id").is_some()));
 
     let dry = parse_json_stdout(
         &fixture.run(
@@ -689,7 +693,9 @@ fn global_format_controls_tool_run_output() {
         &fixture.run(&["tool", "run", "orbit.task.list", "--format", "json"], &[]),
         "tool run --format json",
     );
-    assert!(tool_output.as_array().is_some());
+    assert!(tool_output["tasks"].is_array());
+    assert!(tool_output["total"].is_number());
+    assert!(tool_output["truncated"].is_boolean());
 
     let config = parse_json_stdout(
         &fixture.run(

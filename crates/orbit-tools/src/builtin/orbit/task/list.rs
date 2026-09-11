@@ -64,7 +64,7 @@ impl Tool for OrbitTaskListTool {
             ToolParam {
                 name: "limit".to_string(),
                 description:
-                    "Maximum number of tasks to return, newest first (default 50). Must be at least 1."
+                    "Maximum number of tasks to return (default 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first. Must be at least 1."
                         .to_string(),
                 param_type: "integer".to_string(),
                 required: false,
@@ -74,7 +74,7 @@ impl Tool for OrbitTaskListTool {
         ToolSchema {
             name: "orbit.task.list".to_string(),
             description:
-                "List Orbit tasks newest-first (default limit 50), across every lifecycle status unless a filter is supplied. Optional filters: status, parent, type, tag, dependency readiness, path."
+                "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, tag, dependency readiness, path."
                 .to_string(),
             parameters,
             builtin: true,

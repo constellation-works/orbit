@@ -9,18 +9,6 @@ use crate::command::{CommandOut, Execute, Payload};
 
 use super::output::{TaskTableFilters, task_table, task_to_json, task_to_signal_json};
 
-const NON_TERMINAL_STATUSES: [TaskStatus; 6] = [
-    TaskStatus::Proposed,
-    TaskStatus::Backlog,
-    TaskStatus::InProgress,
-    TaskStatus::Review,
-    TaskStatus::Blocked,
-    TaskStatus::Someday,
-];
-
-const TERMINAL_STATUSES: [TaskStatus; 3] =
-    [TaskStatus::Done, TaskStatus::Archived, TaskStatus::Rejected];
-
 /// List tasks with optional filters.
 ///
 /// By default (with no `--status`), tasks are listed under a status-aware rule:
@@ -117,63 +105,10 @@ impl Execute for TaskListArgs {
             task_type: task_type.is_some(),
         };
 
-        let (tasks, status_by_id, total) = if status.is_empty() {
-            let non_terminal_page =
-                runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
-                    filter: orbit_core::application::task::TaskListFilter {
-                        statuses: Some(NON_TERMINAL_STATUSES.to_vec()),
-                        priority,
-                        task_type,
-                        parent_id: parent_id.clone(),
-                        job_run_id: job_run_id.clone(),
-                        tags: tags.clone(),
-                        external_ref: external_ref.clone(),
-                        has_external_ref_system: has_ref_system.clone(),
-                        scan_before: None,
-                        search: None,
-                    },
-                    ready,
-                    path: path.clone(),
-                    limit,
-                })?;
-
-            let non_terminal_count = non_terminal_page.items.len();
-            let terminal_limit = limit.saturating_sub(non_terminal_count);
-
-            let terminal_page =
-                runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
-                    filter: orbit_core::application::task::TaskListFilter {
-                        statuses: Some(TERMINAL_STATUSES.to_vec()),
-                        priority,
-                        task_type,
-                        parent_id,
-                        job_run_id,
-                        tags,
-                        external_ref,
-                        has_external_ref_system: has_ref_system,
-                        scan_before: None,
-                        search: None,
-                    },
-                    ready,
-                    path,
-                    limit: terminal_limit,
-                })?;
-
-            let total = non_terminal_page.total + terminal_page.total;
-            let mut status_by_id = non_terminal_page.status_by_id;
-            status_by_id.extend(terminal_page.status_by_id);
-
-            let mut tasks: Vec<_> = non_terminal_page
-                .items
-                .into_iter()
-                .map(|row| row.task)
-                .collect();
-            tasks.extend(terminal_page.items.into_iter().map(|row| row.task));
-            (tasks, status_by_id, total)
-        } else {
-            let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
+        let page = runtime.query_task_rows_status_aware(
+            &orbit_core::application::task::TaskListQuery {
                 filter: orbit_core::application::task::TaskListFilter {
-                    statuses: Some(status),
+                    statuses: Some(status).filter(|statuses| !statuses.is_empty()),
                     priority,
                     task_type,
                     parent_id,
@@ -187,12 +122,11 @@ impl Execute for TaskListArgs {
                 ready,
                 path,
                 limit,
-            })?;
-            let total = page.total;
-            let status_by_id = page.status_by_id;
-            let tasks: Vec<_> = page.items.into_iter().map(|row| row.task).collect();
-            (tasks, status_by_id, total)
-        };
+            },
+        )?;
+        let total = page.total;
+        let status_by_id = page.status_by_id;
+        let tasks: Vec<_> = page.items.into_iter().map(|row| row.task).collect();
 
         if tasks.is_empty() {
             let count = runtime.unindexed_task_bundle_count()?;

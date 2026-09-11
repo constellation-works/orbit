@@ -10,6 +10,18 @@ use crate::OrbitRuntime;
 
 pub use orbit_store::contracts::{TaskCandidates, TaskListFilter, TaskPage, TaskRow};
 
+const NON_TERMINAL_STATUSES: [TaskStatus; 6] = [
+    TaskStatus::Proposed,
+    TaskStatus::Backlog,
+    TaskStatus::InProgress,
+    TaskStatus::Review,
+    TaskStatus::Blocked,
+    TaskStatus::Someday,
+];
+
+const TERMINAL_STATUSES: [TaskStatus; 3] =
+    [TaskStatus::Done, TaskStatus::Archived, TaskStatus::Rejected];
+
 #[derive(Debug)]
 pub struct TaskListQuery {
     pub filter: TaskListFilter,
@@ -55,6 +67,49 @@ impl OrbitRuntime {
             return Ok(TaskPage::default());
         }
         query_task_store(self.stores().tasks(), query)
+    }
+
+    /// Query every lifecycle status with active work first, preserving newest
+    /// first ordering within each status bucket.
+    pub fn query_task_rows_status_aware(
+        &self,
+        query: &TaskListQuery,
+    ) -> Result<TaskPage, OrbitError> {
+        if query.filter.statuses.is_some() {
+            return self.query_task_rows(query);
+        }
+
+        let non_terminal_page = self.query_task_rows(&TaskListQuery {
+            filter: TaskListFilter {
+                statuses: Some(NON_TERMINAL_STATUSES.to_vec()),
+                ..query.filter.clone()
+            },
+            ready: query.ready,
+            path: query.path.clone(),
+            limit: query.limit,
+        })?;
+        let non_terminal_count = non_terminal_page.items.len();
+
+        let terminal_page = self.query_task_rows(&TaskListQuery {
+            filter: TaskListFilter {
+                statuses: Some(TERMINAL_STATUSES.to_vec()),
+                ..query.filter.clone()
+            },
+            ready: query.ready,
+            path: query.path.clone(),
+            limit: query.limit.saturating_sub(non_terminal_count),
+        })?;
+
+        let mut status_by_id = non_terminal_page.status_by_id;
+        status_by_id.extend(terminal_page.status_by_id);
+
+        let mut items = non_terminal_page.items;
+        items.extend(terminal_page.items);
+        Ok(TaskPage {
+            items,
+            total: non_terminal_page.total + terminal_page.total,
+            status_by_id,
+        })
     }
 
     pub fn task_candidates(

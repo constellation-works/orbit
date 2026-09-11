@@ -35,37 +35,45 @@ fn task_show_id_is_read_only_from_orbit_task_show_input() {
 fn list_output_uses_minimal_task_projection() {
     let shaped = shape_tool_output(
         "orbit.task.list",
-        json!([{
-            "id": "T20260422-0001",
-            "title": "Backlog task",
-            "status": "backlog",
-            "priority": "medium",
-            "type": "feature",
-            "dependencies": [],
-            "resolved_dependencies": [],
-            "implemented_by": null,
-            "created_at": "2026-04-22T00:00:00Z",
-            "updated_at": "2026-04-22T00:00:00Z",
-            "description": "should be filtered out"
-        }]),
+        json!({
+            "tasks": [{
+                "id": "T20260422-0001",
+                "title": "Backlog task",
+                "status": "backlog",
+                "priority": "medium",
+                "type": "feature",
+                "dependencies": [],
+                "resolved_dependencies": [],
+                "implemented_by": null,
+                "created_at": "2026-04-22T00:00:00Z",
+                "updated_at": "2026-04-22T00:00:00Z",
+                "description": "should be filtered out"
+            }],
+            "total": 1,
+            "truncated": false
+        }),
         false,
         &[],
     );
 
     assert_eq!(
         shaped,
-        json!([{
-            "id": "T20260422-0001",
-            "title": "Backlog task",
-            "status": "backlog",
-            "priority": "medium",
-            "type": "feature",
-            "dependencies": [],
-            "resolved_dependencies": [],
-            "implemented_by": null,
-            "created_at": "2026-04-22T00:00:00Z",
-            "updated_at": "2026-04-22T00:00:00Z"
-        }])
+        json!({
+            "tasks": [{
+                "id": "T20260422-0001",
+                "title": "Backlog task",
+                "status": "backlog",
+                "priority": "medium",
+                "type": "feature",
+                "dependencies": [],
+                "resolved_dependencies": [],
+                "implemented_by": null,
+                "created_at": "2026-04-22T00:00:00Z",
+                "updated_at": "2026-04-22T00:00:00Z"
+            }],
+            "total": 1,
+            "truncated": false
+        })
     );
 }
 

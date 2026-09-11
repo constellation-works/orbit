@@ -211,6 +211,9 @@ pub(super) fn shape_tool_output(
     }
 
     if should_project_minimal_task_output(tool_name) {
+        if tool_name == "orbit.task.list" {
+            return project_task_list_output(output);
+        }
         return filter_top_level_fields(
             output,
             &MINIMAL_TASK_FIELDS
@@ -232,6 +235,28 @@ fn should_project_minimal_task_output(tool_name: &str) -> bool {
     }
 
     true
+}
+
+fn project_task_list_output(value: Value) -> Value {
+    let Value::Object(mut object) = value else {
+        return value;
+    };
+    let Some(Value::Array(tasks)) = object.get_mut("tasks") else {
+        return Value::Object(object);
+    };
+    let fields = MINIMAL_TASK_FIELDS
+        .iter()
+        .map(|field| (*field).to_string())
+        .collect::<Vec<_>>();
+    let projected = std::mem::take(tasks)
+        .into_iter()
+        .map(|task| match task {
+            Value::Object(map) => Value::Object(select_fields(map, &fields)),
+            other => other,
+        })
+        .collect();
+    *tasks = projected;
+    Value::Object(object)
 }
 
 fn filter_top_level_fields(value: Value, fields: &[String]) -> Value {
