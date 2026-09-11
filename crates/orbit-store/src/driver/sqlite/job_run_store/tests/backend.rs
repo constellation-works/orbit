@@ -3,12 +3,16 @@ use std::thread;
 use std::time::Duration;
 
 use chrono::Utc;
-use orbit_types::workflow::{JobRunState, JobTargetType, KnowledgeRunMetrics};
+use orbit_types::workflow::{
+    JobRunState, JobTargetType, KnowledgeRunMetrics, PipelineState, RunIdRole, run_id_role,
+};
 use tempfile::TempDir;
 
 use super::super::SqliteJobRunStore;
 use crate::Store;
-use crate::contracts::{JobRunStepParams, JobRunStoreBackend};
+use crate::contracts::{
+    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunStepParams, JobRunStoreBackend,
+};
 
 #[test]
 fn job_run_lifecycle_round_trips() {
@@ -154,4 +158,68 @@ fn update_run_serializes_concurrent_mutations_without_torn_write() {
         .expect("run");
     assert_eq!(loaded.resolved_crew.as_deref(), Some("crew-a"));
     assert!(loaded.knowledge_metrics.is_some());
+}
+
+/// [ORB-12111] Two direct submissions a second apart land in the same minute
+/// stem, and so does the first one's own child dispatch. A bare sequence
+/// number made the sibling and the child read identically, so a run listing of
+/// the three looked like one run tree when it is two. Each id now names the
+/// role it was minted for.
+#[test]
+fn same_minute_siblings_and_children_get_role_marked_ids() {
+    let backend = SqliteJobRunStore::new(Store::open_in_memory().expect("store"), "ws_a");
+    let submitted_at = Utc::now();
+
+    let first = backend
+        .insert_job_run("task_ship_pipeline", 1, submitted_at, None, None)
+        .expect("first submission");
+    let second = backend
+        .insert_job_run("task_ship_pipeline", 1, submitted_at, None, None)
+        .expect("second submission in the same minute");
+
+    assert_ne!(first.run_id, second.run_id);
+    assert_eq!(run_id_role(&first.run_id), Some(RunIdRole::TopLevel));
+    assert_eq!(run_id_role(&second.run_id), Some(RunIdRole::TopLevel));
+
+    let parent_state = PipelineState::new(
+        first.run_id.clone(),
+        first.job_id.clone(),
+        serde_json::json!({}),
+    );
+    backend
+        .write_run_state(&first.run_id, &parent_state)
+        .expect("seed parent state");
+    let child = match backend
+        .admit_child_job_run(&ChildJobRunAdmissionParams {
+            parent_run_id: first.run_id.clone(),
+            parent_step_id: Some("leaf_invoke".to_string()),
+            job_id: "task_gate_pipeline".to_string(),
+            action: "invoke_detached".to_string(),
+            blocking: false,
+            attempt: 1,
+            scheduled_at: submitted_at,
+            input: None,
+            authority: None,
+        })
+        .expect("admit child")
+    {
+        ChildJobRunAdmissionOutcome::Admitted(child) => *child,
+        other => panic!("parent was admitting, got {other:?}"),
+    };
+
+    assert_eq!(run_id_role(&child.run_id), Some(RunIdRole::Child));
+    assert_ne!(child.run_id, second.run_id);
+
+    // The id's claim and the durable lineage agree: the child belongs to the
+    // first run, and the second top-level run is nobody's child.
+    let linked = backend
+        .read_run_state(&first.run_id)
+        .expect("read parent state")
+        .expect("parent state")
+        .child_dispatches
+        .iter()
+        .map(|dispatch| dispatch.child_run_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(linked, vec![child.run_id.clone()]);
+    assert!(!linked.contains(&second.run_id));
 }

@@ -9,7 +9,7 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
     ChildDispatch, JobRun, JobRunStartOutcome, JobRunState, JobRunStep, KnowledgeRunMetrics,
-    PipelineState, RunEvent, RunStateUpdate,
+    PipelineState, RunEvent, RunIdRole, RunStateUpdate,
 };
 use rusqlite::{OptionalExtension, TransactionBehavior};
 
@@ -63,25 +63,6 @@ impl SqliteJobRunStore {
                 Ok(found)
             })
     }
-
-    fn next_run_id(&self, job_id: &str) -> Result<String, OrbitError> {
-        let base = format!("jrun-{}", Utc::now().format("%Y%m%d-%H%M"));
-        for suffix in 1..1024_u32 {
-            let candidate = if suffix == 1 {
-                base.clone()
-            } else {
-                format!("{base}-{suffix}")
-            };
-            if self
-                .store
-                .get_job_run_for_workspace(&self.workspace_id, &candidate)?
-                .is_none()
-            {
-                return Ok(candidate);
-            }
-        }
-        Ok(format!("{base}-{job_id}"))
-    }
 }
 
 impl JobRunStoreBackend for SqliteJobRunStore {
@@ -126,7 +107,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 return Ok(run);
             }
             let now=Utc::now();
-            let id=next_run_id_conn(conn,&self.workspace_id,job_id,now)?;
+            let id=next_run_id_conn(conn,&self.workspace_id,RunIdRole::TopLevel,now)?;
             let run=JobRun {run_id:id.clone(),job_id:job_id.into(),attempt:1,state:JobRunState::Pending,scheduled_at:now,started_at:None,finished_at:None,duration_ms:None,created_at:now,pid:None,pid_start_time:None,input:Some(input.clone()),retry_source_run_id:None,knowledge_metrics:None,resolved_crew:None,crew_model:None,steps:Vec::new()};
             let state=PipelineState::new(id.clone(),job_id.into(),input.clone());
             upsert_job_run_for_workspace_conn(conn,&self.workspace_id,&run,Some(&state))?;
@@ -183,28 +164,37 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         retry_source_run_id: Option<String>,
     ) -> Result<JobRun, OrbitError> {
         validate_path_stem(job_id, "job")?;
-        let run = JobRun {
-            run_id: self.next_run_id(job_id)?,
-            job_id: job_id.to_string(),
-            attempt,
-            state: JobRunState::Pending,
-            scheduled_at,
-            started_at: None,
-            finished_at: None,
-            duration_ms: None,
-            created_at: Utc::now(),
-            pid: None,
-            pid_start_time: None,
-            input,
-            retry_source_run_id,
-            knowledge_metrics: None,
-            resolved_crew: None,
-            crew_model: None,
-            steps: Vec::new(),
-        };
+        let created_at = Utc::now();
+        // [ORB-12111] Id allocation and the insert share one immediate
+        // transaction. Two top-level submissions in the same minute compete for
+        // the same sequence, and a candidate probed outside the write would let
+        // the loser upsert over the sibling that committed first.
         self.store
-            .upsert_job_run_for_workspace(&self.workspace_id, &run, None)?;
-        Ok(run)
+            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                let run_id =
+                    next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
+                let run = JobRun {
+                    run_id,
+                    job_id: job_id.to_string(),
+                    attempt,
+                    state: JobRunState::Pending,
+                    scheduled_at,
+                    started_at: None,
+                    finished_at: None,
+                    duration_ms: None,
+                    created_at,
+                    pid: None,
+                    pid_start_time: None,
+                    input,
+                    retry_source_run_id,
+                    knowledge_metrics: None,
+                    resolved_crew: None,
+                    crew_model: None,
+                    steps: Vec::new(),
+                };
+                upsert_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, &run, None)?;
+                Ok(run)
+            })
     }
 
     /// [ORB-11310] The admissions-stop flag and durable child creation share
@@ -277,7 +267,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 let run_id = next_run_id_conn(
                     &tx.tx,
                     &self.workspace_id,
-                    &params.job_id,
+                    RunIdRole::Child,
                     params.scheduled_at,
                 )?;
                 let run = JobRun {

@@ -114,11 +114,18 @@ Example after a worker was SIGKILLed mid-step:
 
 ```text
 $ orbit run history --limit 1
-│ RUN_ID                 JOB_ID            ATTEMPT   STATE         ERROR_MESSAGE                              │
-│ jrun-20260704-0927-2   demo_sleep_long   1         interrupted   job run marked interrupted because         │
-│                                                                  recorded worker process is no longer alive │
-│                                                                  (reason=process_not_found, pid=154953, …)  │
+│ RUN_ID                  ROLE        JOB_ID            ATTEMPT   STATE         ERROR_MESSAGE                  │
+│ jrun-20260704-0927-t2   top-level   demo_sleep_long   1         interrupted   job run marked interrupted     │
+│                                                                               because recorded worker        │
+│                                                                               process is no longer alive     │
+│                                                                               (reason=process_not_found, …)  │
 ```
+
+`ROLE` reads the run id itself. A directly submitted run and another run's child land in the
+same minute stem, so the marked sequence — `-t2` for the second top-level submission of that
+minute, `-c2` for a second child — is what keeps sibling runs from reading as one run tree.
+Ids minted before role markers existed report `unmarked`; use `orbit run show <parent>`, which
+names each child it dispatched, to establish their lineage.
 
 ## Cancel a conclusively stuck run
 

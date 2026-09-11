@@ -151,3 +151,13 @@ fn admissions_stop_line_names_the_actor_and_is_absent_when_unset() {
     assert!(line.contains("Admissions: stopped by operator"), "{line}");
     assert!(line.contains("reason=done for the day"), "{line}");
 }
+
+/// [ORB-12111] The role a run id declares is what keeps a `run history`
+/// listing of same-minute runs from reading as one run tree.
+#[test]
+fn run_role_reads_the_id_and_admits_when_it_cannot() {
+    assert_eq!(format_run_role("jrun-20260911-0146-t2"), "top-level");
+    assert_eq!(format_run_role("jrun-20260911-0146-c2"), "child");
+    assert_eq!(format_run_role("jrun-20260911-0146-2"), "unmarked");
+    assert_eq!(format_run_role("jrun-20260911-0146"), "unmarked");
+}

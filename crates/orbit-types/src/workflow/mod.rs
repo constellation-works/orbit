@@ -9,6 +9,7 @@ mod job;
 pub mod operation;
 mod review;
 mod routine;
+mod run_id;
 mod run_state;
 mod ship;
 mod skill;
@@ -68,6 +69,7 @@ pub use routine::{
     MissedRunPolicy, OverlapPolicy, ROUTINE_SCHEMA_VERSION, RoutineDefinition, RoutinePolicy,
     RoutineRetries, RoutineTarget, RoutineTrigger,
 };
+pub use run_id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use run_state::{
     DrainAdmissionsStop, DrainWorkerLimit, FailureActivityCheckpoint, PipelineState,
 };
