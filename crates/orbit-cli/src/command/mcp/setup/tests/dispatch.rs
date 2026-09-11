@@ -1,7 +1,11 @@
+use std::path::Path;
+
 use tempfile::tempdir;
 
 use super::super::args::{McpAction, McpProvider, ProviderSelectionMode, ScopeArg};
-use super::super::dispatch::{auto_detected_providers, run_action, vscode_home_user_dir};
+use super::super::dispatch::{
+    auto_detected_providers, format_action_summary, run_action, vscode_home_user_dir,
+};
 use super::super::providers::ServerLaunch;
 
 #[test]
@@ -409,6 +413,39 @@ fn home_scope_without_home_dir_errors() {
         err,
         orbit_core::OrbitError::InvalidInput(message) if message.contains("HOME")
     ));
+}
+
+#[test]
+fn action_summary_names_the_resolved_checkout_and_workspace_id() {
+    let summary = format_action_summary(
+        McpAction::Init(ServerLaunch::default()),
+        &[McpProvider::Claude],
+        Path::new("/tmp/qa/repoA"),
+        Some("ws_repoa"),
+    );
+    assert_eq!(summary, "mcp init: claude -> /tmp/qa/repoA (ws_repoa)");
+}
+
+#[test]
+fn action_summary_omits_workspace_id_when_unregistered() {
+    let summary = format_action_summary(
+        McpAction::Remove,
+        &[McpProvider::Claude, McpProvider::Codex],
+        Path::new("/tmp/qa/repoA"),
+        None,
+    );
+    assert_eq!(summary, "mcp remove: claude, codex -> /tmp/qa/repoA");
+}
+
+#[test]
+fn action_summary_skips_path_when_no_providers_selected() {
+    let summary = format_action_summary(
+        McpAction::Init(ServerLaunch::default()),
+        &[],
+        Path::new("/tmp/qa/repoA"),
+        Some("ws_repoa"),
+    );
+    assert_eq!(summary, "mcp init: no providers selected");
 }
 
 #[test]
