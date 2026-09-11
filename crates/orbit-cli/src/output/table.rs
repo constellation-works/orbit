@@ -112,6 +112,7 @@ pub struct Table {
     rows: Vec<Vec<Cell>>,
     empty_message: String,
     suppress_uniform: bool,
+    trailing_notices: Vec<String>,
 }
 
 /// Build a table whose columns are all plain left-aligned text. Commands with
@@ -129,6 +130,7 @@ impl Table {
             rows: Vec::new(),
             empty_message: "no results".to_string(),
             suppress_uniform: true,
+            trailing_notices: Vec::new(),
         }
     }
 
@@ -150,6 +152,19 @@ impl Table {
         self
     }
 
+    /// Add a trailing notice to print to stderr after the table.
+    #[must_use]
+    pub fn trailing_notice(mut self, notice: impl Into<String>) -> Self {
+        self.trailing_notices.push(notice.into());
+        self
+    }
+
+    /// Notices to be printed to stderr after the table.
+    #[cfg(test)]
+    pub fn trailing_notices(&self) -> &[String] {
+        &self.trailing_notices
+    }
+
     /// Add one record. The row occupies exactly one line however long its cells
     /// are; there is no unbounded variant.
     pub fn add_row<T: Into<Cell>>(&mut self, cells: Vec<T>) {
@@ -169,6 +184,9 @@ impl Table {
         }
         if sink.mode() == OutputMode::Plain {
             println!("{}", self.render_plain(sink));
+            for notice in &self.trailing_notices {
+                eprintln!("{notice}");
+            }
             return;
         }
         let rendered = self.render_at(
@@ -180,6 +198,9 @@ impl Table {
             eprintln!("{notice}");
         }
         println!("{}", rendered.body);
+        for notice in &self.trailing_notices {
+            eprintln!("{notice}");
+        }
     }
 
     /// The plain form: the same visible columns and the same cell values as

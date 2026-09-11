@@ -115,7 +115,7 @@ fn json_flag_output_is_untouched_by_the_global_format_machinery() {
 }
 
 #[test]
-fn empty_list_json_is_exactly_an_empty_array() {
+fn empty_list_json_is_envelope() {
     let fixture = fixture();
 
     let command = ["task", "list"];
@@ -124,8 +124,8 @@ fn empty_list_json_is_exactly_an_empty_array() {
 
     assert_eq!(
         run(&fixture.home, &fixture.work, &args, &[]),
-        b"[]\n",
-        "`orbit {} --json` must emit a bare empty array",
+        b"{\n  \"tasks\": [],\n  \"total\": 0,\n  \"truncated\": false\n}\n",
+        "`orbit {} --json` must emit an envelope with total and truncated",
         command.join(" ")
     );
 }
