@@ -421,8 +421,11 @@ fn action_summary_names_the_resolved_checkout_and_workspace_id() {
         McpAction::Init(ServerLaunch::default()),
         &[McpProvider::Claude],
         Path::new("/tmp/qa/repoA"),
+        None,
+        ScopeArg::Workspace,
         Some("ws_repoa"),
-    );
+    )
+    .expect("workspace scope summary");
     assert_eq!(summary, "mcp init: claude -> /tmp/qa/repoA (ws_repoa)");
 }
 
@@ -433,7 +436,10 @@ fn action_summary_omits_workspace_id_when_unregistered() {
         &[McpProvider::Claude, McpProvider::Codex],
         Path::new("/tmp/qa/repoA"),
         None,
-    );
+        ScopeArg::Workspace,
+        None,
+    )
+    .expect("workspace scope summary");
     assert_eq!(summary, "mcp remove: claude, codex -> /tmp/qa/repoA");
 }
 
@@ -443,9 +449,55 @@ fn action_summary_skips_path_when_no_providers_selected() {
         McpAction::Init(ServerLaunch::default()),
         &[],
         Path::new("/tmp/qa/repoA"),
+        None,
+        ScopeArg::Workspace,
         Some("ws_repoa"),
-    );
+    )
+    .expect("empty provider summary");
     assert_eq!(summary, "mcp init: no providers selected");
+}
+
+#[test]
+fn action_summary_names_the_resolved_home_scope_file_and_workspace_id() {
+    let home = tempdir().expect("home tempdir");
+    let summary = format_action_summary(
+        McpAction::Init(ServerLaunch::default()),
+        &[McpProvider::Claude],
+        Path::new("/tmp/qa/repoA"),
+        Some(home.path()),
+        ScopeArg::Home,
+        Some("ws_wshome"),
+    )
+    .expect("home scope summary");
+    assert_eq!(
+        summary,
+        format!(
+            "mcp init: claude -> {} (bound to ws_wshome)",
+            home.path().join(".claude").join(".mcp.json").display()
+        )
+    );
+}
+
+#[test]
+fn action_summary_omits_workspace_id_for_home_scope_when_unregistered() {
+    let home = tempdir().expect("home tempdir");
+    let summary = format_action_summary(
+        McpAction::Remove,
+        &[McpProvider::Claude, McpProvider::Codex],
+        Path::new("/tmp/qa/repoA"),
+        Some(home.path()),
+        ScopeArg::Home,
+        None,
+    )
+    .expect("home scope summary");
+    assert_eq!(
+        summary,
+        format!(
+            "mcp remove: claude -> {}, codex -> {}",
+            home.path().join(".claude").join(".mcp.json").display(),
+            home.path().join(".codex").join("config.toml").display()
+        )
+    );
 }
 
 #[test]

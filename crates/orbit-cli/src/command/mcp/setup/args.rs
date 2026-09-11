@@ -206,20 +206,23 @@ impl InitArgs {
         } else {
             ServerLaunch::local(false, layout.workspace_id.as_deref())
         };
+        let home_dir = env_home_dir();
         let providers = run_action(
             McpAction::Init(launch),
             &layout.repo_root,
             &layout.orbit_root,
             self.providers.resolve_mode()?,
-            env_home_dir(),
+            home_dir.clone(),
             self.scope,
         )?;
         print_action_summary(
             McpAction::Init(launch),
             &providers,
             &layout.repo_root,
+            home_dir.as_deref(),
+            self.scope,
             layout.workspace_id.as_deref(),
-        );
+        )?;
         Ok(CommandOutput::Silent)
     }
 }
@@ -246,20 +249,23 @@ impl RemoveArgs {
         } else {
             McpAction::Remove
         };
+        let home_dir = env_home_dir();
         let providers = run_action(
             action,
             &layout.repo_root,
             &layout.orbit_root,
             self.providers.resolve_mode()?,
-            env_home_dir(),
+            home_dir.clone(),
             self.scope,
         )?;
         print_action_summary(
             action,
             &providers,
             &layout.repo_root,
+            home_dir.as_deref(),
+            self.scope,
             layout.workspace_id.as_deref(),
-        );
+        )?;
         Ok(CommandOutput::Silent)
     }
 }

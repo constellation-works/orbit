@@ -297,46 +297,83 @@ pub(super) fn auto_detected_providers(
 /// checkout or in a `--root`-selected checkout the operator isn't standing
 /// in. Naming the path (and, when known, the bound `ws_*` id) turns that
 /// into an audit line instead of a silent no-op.
+///
+/// Workspace scope writes land under `repo_root`, so naming it is accurate.
+/// Home scope (ORB-12139) writes under `home_dir` instead — each provider's
+/// `ConfigTarget::resolve` output is named there so the line still points at
+/// the file the run actually touched, not the unrelated checkout.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn print_action_summary(
     action: McpAction<'_>,
     providers: &[McpProvider],
     repo_root: &Path,
+    home_dir: Option<&Path>,
+    scope: ScopeArg,
     workspace_id: Option<&str>,
-) {
+) -> Result<(), OrbitError> {
     println!(
         "{}",
-        format_action_summary(action, providers, repo_root, workspace_id)
+        format_action_summary(action, providers, repo_root, home_dir, scope, workspace_id)?
     );
+    Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn format_action_summary(
     action: McpAction<'_>,
     providers: &[McpProvider],
     repo_root: &Path,
+    home_dir: Option<&Path>,
+    scope: ScopeArg,
     workspace_id: Option<&str>,
-) -> String {
+) -> Result<String, OrbitError> {
     if providers.is_empty() {
-        return format!("mcp {}: no providers selected", action.label());
+        return Ok(format!("mcp {}: no providers selected", action.label()));
     }
 
-    let labels = providers
-        .iter()
-        .map(|provider| provider.label())
-        .collect::<Vec<_>>()
-        .join(", ");
-    match workspace_id {
-        Some(id) => format!(
-            "mcp {}: {} -> {} ({})",
-            action.label(),
-            labels,
-            repo_root.display(),
-            id
-        ),
-        None => format!(
-            "mcp {}: {} -> {}",
-            action.label(),
-            labels,
-            repo_root.display()
-        ),
+    match scope {
+        ScopeArg::Workspace => {
+            let labels = providers
+                .iter()
+                .map(|provider| provider.label())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(match workspace_id {
+                Some(id) => format!(
+                    "mcp {}: {} -> {} ({})",
+                    action.label(),
+                    labels,
+                    repo_root.display(),
+                    id
+                ),
+                None => format!(
+                    "mcp {}: {} -> {}",
+                    action.label(),
+                    labels,
+                    repo_root.display()
+                ),
+            })
+        }
+        ScopeArg::Home => {
+            // `run_action` already succeeded with this scope, which requires
+            // `require_home_dir` to have resolved a home directory; resolving
+            // it again here for display should not hit the missing-HOME case,
+            // but the error is still propagated rather than assumed away.
+            let home = require_home_dir(home_dir)?;
+            let mut targets = Vec::with_capacity(providers.len());
+            for provider in providers {
+                let target = ConfigTarget::resolve(scope, provider, repo_root, Some(home))?;
+                targets.push(format!(
+                    "{} -> {}",
+                    provider.label(),
+                    target.mcp_path.display()
+                ));
+            }
+            let targets = targets.join(", ");
+            Ok(match workspace_id {
+                Some(id) => format!("mcp {}: {} (bound to {})", action.label(), targets, id),
+                None => format!("mcp {}: {}", action.label(), targets),
+            })
+        }
     }
 }
