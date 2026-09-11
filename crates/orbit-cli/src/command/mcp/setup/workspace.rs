@@ -113,6 +113,10 @@ fn registered_checkout_paths(
     };
     let checkout = match explicit_root {
         Some(root) => sole_checkout_for_root(&registry, root)
+            .or_else(|| {
+                checkout_for_cwd(&registry, cwd)
+                    .filter(|checkout| paths_equivalent(&checkout.orbit_dir, root))
+            })
             .ok_or_else(|| explicit_root_resolution_error(&registry, root))?,
         None => {
             let Some(checkout) = checkout_for_cwd(&registry, cwd) else {
@@ -171,8 +175,9 @@ fn checkout_for_cwd<'a>(
 ///
 /// `--root` names a data directory, not a checkout, so it can only name a
 /// checkout when exactly one registered checkout keeps its state there. Several
-/// checkouts sharing one root stay ambiguous and resolution fails rather than
-/// writing into an arbitrary one.
+/// checkouts sharing one root are disambiguated by the current directory in
+/// `registered_checkout_paths`; an outside directory remains ambiguous rather
+/// than writing into an arbitrary checkout.
 fn sole_checkout_for_root<'a>(
     registry: &'a WorkspaceRegistry,
     root: &Path,
