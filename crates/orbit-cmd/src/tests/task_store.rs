@@ -226,7 +226,8 @@ fn an_unclaimed_partition_without_bundles_is_still_reclaimed() {
     assert!(partitions.unowned.is_empty(), "{:?}", partitions.unowned);
 
     let removed = remove_unclaimed_task_stores(&global_root).expect("run the repair");
-    assert_eq!(removed, vec![residue.clone()]);
+    assert_eq!(removed.empty, vec![residue.clone()]);
+    assert!(removed.stale.is_empty(), "{removed:?}");
     assert!(!residue.exists());
     assert!(
         task_workspaces_dir(&global_root)
@@ -385,10 +386,16 @@ fn a_confirmed_deleted_checkout_still_releases_its_populated_partition() {
     assert!(partitions.unreachable.is_empty(), "{partitions:?}");
 
     let removed = remove_unclaimed_task_stores(&global_root).expect("run the repair");
+    assert!(removed.empty.is_empty(), "{removed:?}");
     assert_eq!(
-        removed,
+        removed
+            .stale
+            .iter()
+            .map(|partition| partition.path.clone())
+            .collect::<Vec<_>>(),
         vec![task_store_partition_path(&global_root, "proj-5b631f")]
     );
+    assert_eq!(removed.task_bundles_removed(), 1);
     assert!(!partition_is_bound(&global_root, "proj-5b631f").expect("read bindings"));
 }
 
@@ -417,6 +424,8 @@ fn an_unreachable_checkout_still_reclaims_an_empty_partition() {
     let removed = remove_unclaimed_task_stores(&global_root);
     restore_search(&volume);
 
-    assert_eq!(removed.expect("run the repair"), vec![partition.clone()]);
+    let removed = removed.expect("run the repair");
+    assert_eq!(removed.empty, vec![partition.clone()]);
+    assert!(removed.stale.is_empty(), "{removed:?}");
     assert!(!partition.exists());
 }

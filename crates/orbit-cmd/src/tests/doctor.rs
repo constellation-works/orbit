@@ -18,8 +18,8 @@ use orbit_core::runtime::OrbitRuntimeRoots;
 use orbit_store::TaskReservationReserveParams;
 
 use crate::doctor::{
-    DoctorCommands, WorkspaceDoctorResult, WorkspaceDoctorStatus, collect_lock_files,
-    disk_space_check, process_is_alive,
+    DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
+    collect_lock_files, disk_space_check, process_is_alive,
 };
 use crate::task_store::partition_is_bound;
 
@@ -1033,13 +1033,24 @@ fn stale_task_registry_binding_is_reported_and_removed() {
     assert!(row.message.contains("1 task bundle(s)"), "{}", row.message);
     assert_eq!(
         row.remediation.as_deref(),
-        Some("Run `orbit doctor --fix-orphan-task-stores --confirm`.")
+        Some(
+            "Run `orbit doctor --fix-orphan-task-stores --confirm`. Populated stale partitions \
+             are deleted along with their task bundles."
+        )
     );
 
     let removed = runtime
         .remove_orphan_task_stores()
         .expect("remove stale orphan task store");
-    assert_eq!(removed, 1);
+    assert_eq!(removed.empty_partitions, 0, "{removed:?}");
+    assert_eq!(
+        removed.populated_partitions, 1,
+        "a populated stale partition was removed: {removed:?}"
+    );
+    assert_eq!(
+        removed.task_bundles, 1,
+        "the removed partition's bundle is counted: {removed:?}"
+    );
     assert!(
         !task_workspaces_dir(&global_root)
             .join("deleted-a1b2c3")
@@ -1070,7 +1081,12 @@ fn fix_orphan_task_stores_keeps_every_claimed_partition() {
     let removed = runtime
         .remove_orphan_task_stores()
         .expect("remove orphan task stores");
-    assert_eq!(removed, 1, "only the unclaimed partition is removed");
+    assert_eq!(
+        removed.empty_partitions, 1,
+        "only the unclaimed partition is removed: {removed:?}"
+    );
+    assert_eq!(removed.populated_partitions, 0, "{removed:?}");
+    assert_eq!(removed.task_bundles, 0, "{removed:?}");
 
     let partitions = task_workspaces_dir(&global_root);
     assert!(!partitions.join("ws_orphan").exists());
@@ -1104,7 +1120,8 @@ fn fix_orphan_task_stores_removes_only_the_unregistered_partition() {
     let removed = runtime
         .remove_orphan_task_stores()
         .expect("remove orphan task stores");
-    assert_eq!(removed, 1);
+    assert_eq!(removed.empty_partitions, 1, "{removed:?}");
+    assert_eq!(removed.populated_partitions, 0, "{removed:?}");
     assert!(!task_workspaces_dir(&global_root).join("ws_orphan").exists());
     assert!(
         task_workspaces_dir(&global_root)
@@ -1156,7 +1173,7 @@ fn populated_unclaimed_partition_warns_toward_reindex_not_deletion() {
 
     assert_eq!(
         runtime.remove_orphan_task_stores().expect("run the repair"),
-        0
+        OrphanTaskStoreRemoval::default()
     );
     assert!(
         populated.is_dir(),
@@ -1207,7 +1224,7 @@ fn unreachable_checkout_partition_is_reported_without_the_deletion_repair() {
 
     assert_eq!(
         runtime.remove_orphan_task_stores().expect("run the repair"),
-        0
+        OrphanTaskStoreRemoval::default()
     );
     assert!(
         task_workspaces_dir(&global_root)

@@ -1,7 +1,7 @@
-use orbit_cmd::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
+use orbit_cmd::{OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use orbit_core::OrbitRuntime;
 
-use super::super::doctor::{doctor_row_json, human_detail};
+use super::super::doctor::{doctor_row_json, human_detail, orphan_task_store_removal_message};
 use super::super::{CommandOutput, Execute};
 
 #[test]
@@ -156,5 +156,43 @@ fn fix_stale_locks_records_repair_count_in_payload_doc() {
             .contains("Removed 1 stale lock file(s)."),
         "expected repair count in fix-stale-locks row message, got: {:?}",
         fix_row["message"]
+    );
+}
+
+/// [ORB-12144] A repair that deletes a populated stale partition must not be
+/// reported the same way as an empty one: the message names both counts and
+/// the destroyed task bundles, and never calls the populated partition empty.
+#[test]
+fn orphan_task_store_removal_message_reports_populated_partitions_and_bundles_separately() {
+    let removed = OrphanTaskStoreRemoval {
+        empty_partitions: 1,
+        populated_partitions: 2,
+        task_bundles: 5,
+    };
+
+    let message = orphan_task_store_removal_message(&removed);
+
+    assert_eq!(
+        message,
+        "Removed 1 empty orphaned task-store partition(s) and 2 populated partition(s) \
+         (5 task bundle(s))."
+    );
+    assert!(
+        !message.contains("2 empty"),
+        "the populated partitions must not be reported as empty: {message}"
+    );
+}
+
+/// A repair that removes nothing still reports both counts explicitly rather
+/// than a bare "removed 0 empty partitions" that hides whether bundles were
+/// ever at risk.
+#[test]
+fn orphan_task_store_removal_message_reports_zero_of_both_kinds() {
+    let message = orphan_task_store_removal_message(&OrphanTaskStoreRemoval::default());
+
+    assert_eq!(
+        message,
+        "Removed 0 empty orphaned task-store partition(s) and 0 populated partition(s) \
+         (0 task bundle(s))."
     );
 }
