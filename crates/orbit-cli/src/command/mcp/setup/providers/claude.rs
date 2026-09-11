@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use orbit_common::fs::io::with_exclusive_file_lock;
+use orbit_common::fs::io::{LockFileNaming, with_exclusive_file_lock_named};
 use orbit_core::OrbitError;
 use orbit_types::tool::mcp_advertised_tool_name;
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -31,7 +31,15 @@ pub(in crate::command::mcp::setup) fn apply_claude_init(
         }
     };
     if target.scope == ScopeArg::Home {
-        with_exclusive_file_lock(&target.mcp_path, "Claude Code main settings", update_mcp)?;
+        // Claude Code itself locks `<mcp_path>.lock` (its own file name with
+        // `.lock` appended), not Orbit's usual dot-prefixed sibling. Locking
+        // anything else lets the two writers race past each other (ORB-12182).
+        with_exclusive_file_lock_named(
+            &target.mcp_path,
+            LockFileNaming::AppendedSuffix,
+            "Claude Code main settings",
+            update_mcp,
+        )?;
     } else {
         update_mcp()?;
     }
@@ -71,7 +79,12 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
         }
     };
     if target.scope == ScopeArg::Home {
-        with_exclusive_file_lock(&target.mcp_path, "Claude Code main settings", remove_mcp)?;
+        with_exclusive_file_lock_named(
+            &target.mcp_path,
+            LockFileNaming::AppendedSuffix,
+            "Claude Code main settings",
+            remove_mcp,
+        )?;
     } else {
         remove_mcp()?;
     }
