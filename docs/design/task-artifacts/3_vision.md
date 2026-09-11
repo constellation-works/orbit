@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Vision"
 owner: codex
 last_updated: 2026-08-29
-last_validated: 2026-08-16
+last_validated: 2026-09-11
 status: Draft
 feature: task-artifacts
 doc_role: vision

@@ -2,13 +2,14 @@
 type: design
 summary: "Spec: Self-Reported Actor Identity for Unauthenticated MCP Calls"
 tags: ["auditability"]
-last_validated: 2026-08-16
+last_validated: 2026-09-11
 ---
 
 # Spec: Self-Reported Actor Identity for Unauthenticated MCP Calls
 
 92.5% of MCP tool calls carry no actor identity. Over a 30d window on the production audit
-database, `subcommand = 'run-mcp'` splits 1373 `unverified` against 112 attributed
+database (as of 2026-08-16; not re-verified in this checkout), `subcommand = 'run-mcp'`
+splits 1373 `unverified` against 112 attributed
 (`agent` 64, `codex` 27, `claude-opus-5` 15, `sonnet` 4, `opus` 2).
 
 The cause is structural, not a bug in the trust check. `audit_role_label_for_entry_point`
