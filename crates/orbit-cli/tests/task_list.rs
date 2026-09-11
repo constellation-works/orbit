@@ -94,6 +94,32 @@ impl TestWorkspace {
         );
         output
     }
+
+    fn run_merged(&self, args: &[&str], label: &str) -> String {
+        let temp_file = tempfile::NamedTempFile::new().expect("temp file for merged output");
+        let stdout_file = temp_file
+            .as_file()
+            .try_clone()
+            .expect("clone file for stdout");
+        let stderr_file = temp_file
+            .as_file()
+            .try_clone()
+            .expect("clone file for stderr");
+        let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&self.work)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .stdout(stdout_file)
+            .stderr(stderr_file)
+            .args(args);
+        let status = command.status().expect("run orbit");
+        assert!(status.success(), "{label} failed with status {status:?}");
+        fs::read_to_string(temp_file.path()).expect("read merged output")
+    }
 }
 
 fn run_orbit(cwd: &Path, home: &Path, args: &[&str]) -> Output {
@@ -312,4 +338,94 @@ fn existing_filters_keep_behaviour() {
     let limit_payload: Value = serde_json::from_slice(&limit_filter.stdout).expect("limit json");
     let limit_tasks = limit_payload.as_array().expect("tasks array");
     assert_eq!(limit_tasks.len(), 1);
+}
+
+/// ORB-12206: in human modes (`table` and `plain`), the truncation notice
+/// must be emitted after the table body, not before it.
+#[test]
+fn task_list_truncation_notice_emitted_after_table_body_in_human_modes() {
+    let workspace = TestWorkspace::new();
+    for i in 0..5 {
+        workspace.add_task(&format!("Task {i:02}"));
+    }
+    let truncation_notice = "showing 2 of 5 tasks";
+
+    // 1. Table mode: merged streams must have header and rows before the trailing notice.
+    let table_output = workspace.run_merged(
+        &["task", "list", "--limit", "2", "--format", "table"],
+        "task list --limit 2 --format table",
+    );
+    let table_header_idx = table_output
+        .find("ID")
+        .expect("table output must contain ID header");
+    let table_last_row_idx = table_output
+        .rfind("Task 0")
+        .expect("table output must contain task row");
+    let table_notice_idx = table_output
+        .find(truncation_notice)
+        .expect("table output must contain truncation notice");
+    assert!(
+        table_header_idx < table_notice_idx,
+        "table header must appear before truncation notice in table mode, but was below it:\n{table_output}"
+    );
+    assert!(
+        table_last_row_idx < table_notice_idx,
+        "table rows must appear before truncation notice in table mode, but were below it:\n{table_output}"
+    );
+
+    // 2. Plain mode: non-tty default resolves to plain mode.
+    // Merged streams must have records before the trailing notice.
+    let plain_output = workspace.run_merged(
+        &["task", "list", "--limit", "2"],
+        "task list --limit 2 plain",
+    );
+    let plain_last_record_idx = plain_output
+        .rfind("Task 0")
+        .expect("plain output must contain task record");
+    let plain_notice_idx = plain_output
+        .find(truncation_notice)
+        .expect("plain output must contain truncation notice");
+    assert!(
+        plain_last_record_idx < plain_notice_idx,
+        "plain records must appear before truncation notice in plain mode, but were below it:\n{plain_output}"
+    );
+
+    // 3. Independent streams: stdout contains the table body and stderr contains the notice.
+    let table_cmd = workspace.run(
+        &["task", "list", "--limit", "2", "--format", "table"],
+        "task list --limit 2 --format table streams",
+    );
+    let table_stdout = String::from_utf8_lossy(&table_cmd.stdout);
+    let table_stderr = String::from_utf8_lossy(&table_cmd.stderr);
+    assert!(
+        table_stdout.contains("ID") && table_stdout.contains("Task 0"),
+        "table stdout must contain table body:\n{table_stdout}"
+    );
+    assert!(
+        !table_stdout.contains("showing"),
+        "table stdout must not contain truncation notice:\n{table_stdout}"
+    );
+    assert!(
+        table_stderr.contains(truncation_notice),
+        "table stderr must contain truncation notice:\n{table_stderr}"
+    );
+
+    let plain_cmd = workspace.run(
+        &["task", "list", "--limit", "2"],
+        "task list --limit 2 plain streams",
+    );
+    let plain_stdout = String::from_utf8_lossy(&plain_cmd.stdout);
+    let plain_stderr = String::from_utf8_lossy(&plain_cmd.stderr);
+    assert!(
+        plain_stdout.contains("Task 0"),
+        "plain stdout must contain records:\n{plain_stdout}"
+    );
+    assert!(
+        !plain_stdout.contains("showing"),
+        "plain stdout must not contain truncation notice:\n{plain_stdout}"
+    );
+    assert!(
+        plain_stderr.contains(truncation_notice),
+        "plain stderr must contain truncation notice:\n{plain_stderr}"
+    );
 }

@@ -36,16 +36,24 @@ pub fn emit(output: CommandOutput, sink: &OutputSink) -> Result<(), OrbitError> 
         return stream(sink, &mut stdout);
     }
 
-    // A list's trailing notices (a truncation count, say) are not a record,
-    // so they belong on stderr in every mode (spec §5) — not only the human
-    // one that happens to render the table carrying them (ORB-12203).
-    for notice in table_notices(&view) {
-        eprintln!("{notice}");
-    }
-
     match sink.mode() {
-        OutputMode::Json => emit_json(&doc, sink.pretty_json()),
-        OutputMode::Ndjson => emit_ndjson(&doc),
+        // A list's trailing notices (a truncation count, say) belong on
+        // stderr in every mode (spec §5). In table and plain modes,
+        // `Table::emit` prints them after the table body (ORB-12206). In
+        // machine-readable modes, `Table::emit` is not called, so we print
+        // them here (ORB-12203).
+        OutputMode::Json => {
+            for notice in table_notices(&view) {
+                eprintln!("{notice}");
+            }
+            emit_json(&doc, sink.pretty_json())
+        }
+        OutputMode::Ndjson => {
+            for notice in table_notices(&view) {
+                eprintln!("{notice}");
+            }
+            emit_ndjson(&doc)
+        }
         OutputMode::Table | OutputMode::Plain => emit_human(doc, view, sink),
     }
 }
