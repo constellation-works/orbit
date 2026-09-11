@@ -159,6 +159,8 @@ For archive migration, `orbit task export --output <archive.tar.zst> --ids <id>,
 selects tasks (omitting IDs exports all). `orbit task import <archive.tar.zst>`
 defaults to renumbering collisions and rewriting references; choose
 `--on-conflict fail` or `skip` deliberately when appropriate. Inspect the returned
-ID mapping. Import is a different operation from publication's strict
+ID mapping. To keep a read-only mirror of another host's tasks in step, use
+`--on-conflict owner-wins`: it replaces only bundles whose task-ID prefix belongs
+to that host, never touches locally minted IDs, and is safe to re-run. Import is a different operation from publication's strict
 same-authority, identical-retry recovery; do not substitute it to bypass a
 publication ownership or divergence error.

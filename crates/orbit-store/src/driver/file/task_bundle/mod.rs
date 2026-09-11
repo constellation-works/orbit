@@ -9,8 +9,8 @@ mod types;
 pub(crate) use bundle_io::{
     BundleWriteFault, PENDING_WRITE_FILE_NAME, PendingWriteGuard, append_jsonl_row,
     cleanup_partial_bundle_best_effort, fail_if_injected, publish_envelope, read_bundle_at,
-    read_bundle_lightweight_at, read_envelope_at, recover_pending_bundle_at, write_bundle_at,
-    write_bundle_with_artifacts_at,
+    read_bundle_lightweight_at, read_envelope_at, recover_pending_bundle_at, replace_bundle_at,
+    write_bundle_at, write_bundle_with_artifacts_at,
 };
 
 #[cfg(test)]

@@ -508,6 +508,22 @@ impl TaskRegistryStore {
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
     }
 
+    /// The prefix this host mints under. Task authority follows the prefix, so
+    /// this is what separates a locally-owned task from a mirror of another
+    /// host's task.
+    pub fn local_task_prefix(&self) -> Result<String, OrbitError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        conn.query_row(
+            "SELECT task_prefix FROM allocator_state WHERE authority = 'local'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| OrbitError::Store(e.to_string()))
+    }
+
     /// Prefixes recognized by the local registry: the active minting prefix
     /// plus every prefix already present in registered task bundles.
     pub fn known_task_prefixes(&self) -> Result<BTreeSet<String>, OrbitError> {

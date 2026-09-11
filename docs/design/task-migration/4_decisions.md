@@ -38,9 +38,10 @@ write set so nothing ever needs merging.
 Authority follows the id's `task_prefix` ([ORB-10721]), not the machine. Any
 host may register any workspace and mint tasks in it under its own prefix. The
 host that minted a task is its sole writer; a copy on any other host is a
-read-only mirror. `import_tasks` will grow an owner-wins conflict policy that
-overwrites foreign-prefix bundles unconditionally and never overwrites
-local-prefix ones ([ORB-12126]); until it lands, mirrors are snapshots.
+read-only mirror. `import_tasks` carries the matching owner-wins conflict
+policy: it replaces foreign-prefix bundles with the owner's copy and never
+overwrites a local-prefix one ([ORB-12126]), which makes a repeated import a
+mirror sync rather than a collision.
 
 ### Consequences
 
