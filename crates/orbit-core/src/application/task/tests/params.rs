@@ -3,20 +3,17 @@ use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use super::super::params::{TaskAddParams, TaskRecordUpdateParams, TaskUpdateParams};
 
 #[test]
-fn task_add_params_preserve_workspace_routing_and_defaults() {
+fn task_add_params_preserve_defaults() {
     let defaults = TaskAddParams::default();
-    assert_eq!(defaults.workspace_path, None);
     assert_eq!(defaults.priority, TaskPriority::Medium);
     assert_eq!(defaults.complexity, TaskComplexity::Unassessed);
     assert!(defaults.acceptance_criteria.is_empty());
 
     let params = TaskAddParams {
         title: "Workspace-scoped task".to_string(),
-        workspace_path: Some("packages/orbit".to_string()),
         ..defaults
     };
     assert_eq!(params.title, "Workspace-scoped task");
-    assert_eq!(params.workspace_path.as_deref(), Some("packages/orbit"));
 }
 
 #[test]

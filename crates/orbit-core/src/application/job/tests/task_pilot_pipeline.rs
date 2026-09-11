@@ -331,7 +331,6 @@ spec:
                     description: "pipeline repair fixture".to_string(),
                     acceptance_criteria: vec!["repair completes".to_string()],
                     plan: "run pilot".to_string(),
-                    workspace_path: Some(".".to_string()),
                     priority: TaskPriority::Medium,
                     task_type: Some(TaskType::Bug),
                     status: Some(TaskStatus::Backlog),

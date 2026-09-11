@@ -108,7 +108,6 @@ fn published_completion_pipeline(
             acceptance_criteria: vec!["Completion retry remains safe.".to_string()],
             plan: "Exercise completion failure recovery.".to_string(),
             context_files: vec!["src/lib.rs".to_string()],
-            workspace_path: Some(".".to_string()),
             status: Some(TaskStatus::Review),
             external_refs: vec![
                 ExternalRef::try_new(

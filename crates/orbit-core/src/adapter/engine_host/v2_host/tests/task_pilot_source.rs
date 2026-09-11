@@ -36,7 +36,6 @@ fn seed_task(runtime: &OrbitRuntime, title: &str) -> Task {
             description: format!("Fixture task: {title}"),
             acceptance_criteria: vec!["The fixture outcome is observable.".to_string()],
             plan: "Inspect and update the fixture.".to_string(),
-            workspace_path: Some(".".to_string()),
             priority: TaskPriority::Medium,
             task_type: Some(TaskType::Chore),
             status: Some(TaskStatus::Backlog),

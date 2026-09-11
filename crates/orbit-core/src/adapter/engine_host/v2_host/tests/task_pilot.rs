@@ -30,7 +30,6 @@ fn seed_task(
                 .iter()
                 .map(|selector| (*selector).to_string())
                 .collect(),
-            workspace_path: Some(".".to_string()),
             priority: TaskPriority::Medium,
             task_type: Some(TaskType::Chore),
             status: Some(status),

@@ -86,7 +86,6 @@ pub(super) fn seed_gate_task(
             acceptance_criteria: vec!["Gate behavior is observable.".to_string()],
             plan: "Fixture execution plan.".to_string(),
             context_files: vec!["src/lib.rs".to_string()],
-            workspace_path: Some(".".to_string()),
             priority: TaskPriority::Medium,
             task_type: Some(TaskType::Chore),
             status: Some(status),

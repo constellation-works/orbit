@@ -195,7 +195,6 @@ fn worktree_setup_materializes_no_orbit_targets_from_context_files() {
             title: "Create versioned Orbit config".to_string(),
             description: "Exercise trusted missing-target preparation.".to_string(),
             plan: "Prepare the exact scoped targets and validate the sandbox.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -251,7 +250,6 @@ fn apply_task_automation_update_does_not_touch_context_files_when_unset() {
             title: "Preserve context_files".to_string(),
             description: "Exercise context_files preservation across automation updates."
                 .to_string(),
-            workspace_path: Some(".".to_string()),
             context_files: vec!["README.md".to_string(), "CLAUDE.md".to_string()],
             ..Default::default()
         })
@@ -291,7 +289,6 @@ fn apply_task_automation_update_replaces_context_files_when_set() {
         .add_task(TaskAddParams {
             title: "Replace context_files".to_string(),
             description: "Exercise context_files replacement via automation update.".to_string(),
-            workspace_path: Some(".".to_string()),
             context_files: vec!["Cargo.toml".to_string()],
             ..Default::default()
         })
@@ -324,7 +321,6 @@ fn automation_can_restamp_in_progress_task_without_plan() {
         .add_task(TaskAddParams {
             title: "Restamp task metadata".to_string(),
             description: "Exercise idempotent in-progress automation updates.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -370,7 +366,6 @@ fn worktree_setup_admits_backlog_and_refuses_withdrawn_statuses() {
             .add_task(TaskAddParams {
                 title: "Backlog workflow task".to_string(),
                 description: "Starts from backlog without a plan.".to_string(),
-                workspace_path: Some(".".to_string()),
                 ..Default::default()
             })
             .expect("create backlog candidate"),
@@ -430,7 +425,6 @@ fn withdrawn_task_fixtures(runtime: &OrbitRuntime) -> Vec<(&'static str, String)
             .add_task(TaskAddParams {
                 title: title.to_string(),
                 description: "Exercises a status workflow admission must refuse.".to_string(),
-                workspace_path: Some(".".to_string()),
                 ..Default::default()
             })
             .expect("create admission fixture")
@@ -473,7 +467,6 @@ fn direct_update_to_in_progress_is_classification_without_a_plan() {
         .add_task(TaskAddParams {
             title: "Direct update remains gated".to_string(),
             description: "A direct update is not workflow admission.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("create proposed task");
@@ -498,7 +491,6 @@ fn direct_start_from_proposed_still_requires_plan() {
         .add_task(TaskAddParams {
             title: "Direct start remains gated".to_string(),
             description: "A human start is not workflow admission.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("create proposed task");
@@ -520,7 +512,6 @@ fn generic_automation_update_does_not_unarchive_empty_plan_tasks() {
         .add_task(TaskAddParams {
             title: "Archived generic automation".to_string(),
             description: "Generic metadata stamping is not workflow admission.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("create task");
@@ -549,7 +540,6 @@ fn update_task_automation_records_status_history_as_system() {
         .add_task(TaskAddParams {
             title: "Review automated update".to_string(),
             description: "Exercise update_task automation attribution.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -603,7 +593,6 @@ fn v2_update_task_activity_uses_resolved_crew_identity() {
         .add_task(TaskAddParams {
             title: "Review attributed update".to_string(),
             description: "Exercise update_task activity crew attribution.".to_string(),
-            workspace_path: Some(".".to_string()),
             crew: Some("claude-team".to_string()),
             ..Default::default()
         })
@@ -659,7 +648,6 @@ fn v2_update_task_activity_preserves_existing_implemented_by() {
         .add_task(TaskAddParams {
             title: "Preserve existing implementer".to_string(),
             description: "Exercise review to done automation attribution.".to_string(),
-            workspace_path: Some(".".to_string()),
             crew: Some("codex-team".to_string()),
             ..Default::default()
         })
@@ -719,7 +707,6 @@ fn direct_review_status_is_classification_without_execution_evidence() {
         .add_task(TaskAddParams {
             title: "Review guard".to_string(),
             description: "Exercise review summary requirement.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -749,7 +736,6 @@ fn activity_update_comment_records_comment_as_system() {
         .add_task(TaskAddParams {
             title: "Activity comment".to_string(),
             description: "Exercise activity comment attribution.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -792,7 +778,6 @@ fn automation_update_under_agent_runtime_uses_model_identity_for_attribution() {
         .add_task(TaskAddParams {
             title: "Agent-driven automation".to_string(),
             description: "Exercise agent runtime attribution.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -837,7 +822,6 @@ fn automation_update_without_agent_runtime_falls_back_to_system_attribution() {
         .add_task(TaskAddParams {
             title: "System automation".to_string(),
             description: "Exercise non-agent workflow attribution.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -869,7 +853,6 @@ fn automation_review_done_transitions_preserve_existing_implemented_by_without_m
         .add_task(TaskAddParams {
             title: "Preserve implementer".to_string(),
             description: "Exercise existing implementer preservation.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -928,7 +911,6 @@ fn generic_automation_status_update_uses_system_history_and_preserves_implemente
         .add_task(TaskAddParams {
             title: "Generic automation".to_string(),
             description: "Exercise TaskAutomationUpdate attribution.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -970,7 +952,6 @@ fn apply_task_automation_update_keeps_external_refs_written_after_locked_read() 
         .add_task(TaskAddParams {
             title: "Concurrent refs".to_string(),
             description: "Exercise automation external_ref merge under the task lock.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -1037,7 +1018,6 @@ fn apply_task_automation_update_refuses_done_when_status_changes_after_locked_re
         .add_task(TaskAddParams {
             title: "Operator withdrawal".to_string(),
             description: "Exercise automation expected_status compare-and-set.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -1106,7 +1086,6 @@ fn direct_update_task_uses_unknown_attribution_without_an_actor_envelope() {
         .add_task(TaskAddParams {
             title: "Unenveloped comment".to_string(),
             description: "Exercise direct update attribution.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -1143,7 +1122,6 @@ fn source_task_id_change_history_records_previous_and_replacement() {
         .add_task(TaskAddParams {
             title: "Source of regression".to_string(),
             description: "Origin task referenced by a regression.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add source task");
@@ -1151,7 +1129,6 @@ fn source_task_id_change_history_records_previous_and_replacement() {
         .add_task(TaskAddParams {
             title: "Regressed task".to_string(),
             description: "Exercise source_task_id change history enrichment.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -1207,7 +1184,6 @@ fn direct_update_identity_prefers_model_for_authored_roles() {
         .add_task(TaskAddParams {
             title: "Human update identity precedence".to_string(),
             description: "Exercise direct update authored-role precedence.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");

@@ -421,7 +421,6 @@ fn seed_task(
             // which that surface spells `Unassessed` and which the reporting
             // buckets fold into `unset` [ORB-10895].
             complexity: complexity.unwrap_or(TaskComplexity::Unassessed),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("seed task")

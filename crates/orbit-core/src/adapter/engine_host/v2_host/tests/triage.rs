@@ -34,7 +34,7 @@ fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, std::path::PathBuf) {
 
 fn create_backlog_task(
     runtime: &OrbitRuntime,
-    repo_root: &std::path::Path,
+    _repo_root: &std::path::Path,
     id_hint: &str,
 ) -> String {
     runtime
@@ -53,7 +53,6 @@ fn create_backlog_task(
             plan: "test plan".to_string(),
             execution_summary: String::new(),
             context_files: Vec::new(),
-            workspace_path: Some(repo_root.to_string_lossy().into_owned()),
             repo_root: None,
             created_by: Some("test".to_string()),
             planned_by: None,

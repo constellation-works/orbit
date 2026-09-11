@@ -50,7 +50,6 @@ pub(super) fn seed_workspace(global_root: &Path, base: &Path, name: &str) -> (Pa
         .add_task(TaskAddParams {
             title: format!("{name} task"),
             description: "seed".to_string(),
-            workspace_path: Some(".".to_string()),
             status: Some(TaskStatus::InProgress),
             ..Default::default()
         })
@@ -108,7 +107,6 @@ async fn tasks_all_in_single_mode_tags_default_workspace() {
         .add_task(TaskAddParams {
             title: "solo".to_string(),
             description: "seed".to_string(),
-            workspace_path: Some(".".to_string()),
             status: Some(TaskStatus::InProgress),
             ..Default::default()
         })
@@ -223,7 +221,6 @@ async fn tasks_all_reports_aggregate_total_when_global_limit_truncates() {
                 .add_task(TaskAddParams {
                     title: format!("{name} task {index}"),
                     description: "seed".to_string(),
-                    workspace_path: Some(".".to_string()),
                     status: Some(TaskStatus::InProgress),
                     ..Default::default()
                 })
@@ -598,7 +595,6 @@ async fn cross_workspace_dependency_resolves_global_status_not_missing() {
             .add_task(TaskAddParams {
                 title: "beta dependency".to_string(),
                 description: "seed".to_string(),
-                workspace_path: Some(".".to_string()),
                 status: Some(TaskStatus::Done),
                 ..Default::default()
             })
@@ -622,7 +618,6 @@ async fn cross_workspace_dependency_resolves_global_status_not_missing() {
             .add_task(TaskAddParams {
                 title: "alpha dependent".to_string(),
                 description: "seed".to_string(),
-                workspace_path: Some(".".to_string()),
                 status: Some(TaskStatus::InProgress),
                 dependencies: vec![beta_task.id.clone()],
                 ..Default::default()

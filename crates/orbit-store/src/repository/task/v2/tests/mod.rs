@@ -51,7 +51,6 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
         plan: "1. Do the work".to_string(),
         execution_summary: String::new(),
         context_files: vec!["docs/design/task-artifacts/1_overview.md".to_string()],
-        workspace_path: None,
         repo_root: None,
         created_by: Some("codex:gpt-5.5".to_string()),
         planned_by: None,

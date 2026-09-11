@@ -116,7 +116,6 @@ impl OrbitRuntime {
                     plan: params.plan.clone(),
                     execution_summary: String::new(),
                     context_files,
-                    workspace_path: None,
                     repo_root: None,
                     created_by: Some(create_label.clone()),
                     planned_by,

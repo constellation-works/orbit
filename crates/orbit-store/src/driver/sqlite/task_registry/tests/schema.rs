@@ -125,7 +125,6 @@ fn admission_params() -> TaskCreateParams {
         plan: String::new(),
         execution_summary: String::new(),
         context_files: vec![],
-        workspace_path: None,
         repo_root: None,
         created_by: Some("codex".into()),
         planned_by: None,

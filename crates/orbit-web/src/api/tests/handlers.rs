@@ -270,7 +270,6 @@ default_crew = "beta"
             description: "Fixture with an explicit crew removed from config.".to_string(),
             status: Some(TaskStatus::Backlog),
             crew: Some("all-codex".to_string()),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("create stale crew task");
@@ -305,7 +304,6 @@ fn seed_task(
             description: format!("Fixture for {title}."),
             status: Some(status),
             dependencies,
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("create task")

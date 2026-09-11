@@ -779,7 +779,6 @@ fn backlog_task(runtime: &OrbitRuntime, title: &str) -> String {
         .add_task(TaskAddParams {
             title: title.to_string(),
             description: "Admitted while backlog.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("create task");

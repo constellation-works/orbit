@@ -80,7 +80,7 @@ fn preparation_trigger() -> StateTrigger {
     }
 }
 
-fn create_backlog_task(runtime: &OrbitRuntime, repo_root: &Path, id_hint: &str) -> String {
+fn create_backlog_task(runtime: &OrbitRuntime, _repo_root: &Path, id_hint: &str) -> String {
     runtime
         .stores()
         .task_records()
@@ -97,7 +97,6 @@ fn create_backlog_task(runtime: &OrbitRuntime, repo_root: &Path, id_hint: &str) 
             plan: "test plan".into(),
             execution_summary: String::new(),
             context_files: Vec::new(),
-            workspace_path: Some(repo_root.to_string_lossy().into_owned()),
             repo_root: None,
             created_by: Some("test".into()),
             planned_by: None,
@@ -116,7 +115,7 @@ fn create_backlog_task(runtime: &OrbitRuntime, repo_root: &Path, id_hint: &str) 
         .id
 }
 
-fn create_proposed_task(runtime: &OrbitRuntime, repo_root: &Path, id_hint: &str) -> String {
+fn create_proposed_task(runtime: &OrbitRuntime, _repo_root: &Path, id_hint: &str) -> String {
     runtime
         .stores()
         .task_records()
@@ -133,7 +132,6 @@ fn create_proposed_task(runtime: &OrbitRuntime, repo_root: &Path, id_hint: &str)
             plan: "test plan".into(),
             execution_summary: String::new(),
             context_files: Vec::new(),
-            workspace_path: Some(repo_root.to_string_lossy().into_owned()),
             repo_root: None,
             created_by: Some("test".into()),
             planned_by: None,

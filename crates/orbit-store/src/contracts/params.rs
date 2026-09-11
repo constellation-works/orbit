@@ -26,10 +26,6 @@ pub struct TaskCreateParams {
     pub plan: String,
     pub execution_summary: String,
     pub context_files: Vec<String>,
-    /// Deprecated compatibility metadata. Task bundles do not persist a
-    /// task-specific working directory; task context selectors are stored
-    /// relative to the repository root by the application layer.
-    pub workspace_path: Option<String>,
     /// Deprecated compatibility metadata retained for callers that still
     /// construct the v2 create contract.
     pub repo_root: Option<String>,

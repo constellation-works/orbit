@@ -56,7 +56,6 @@ fn artifact_put_writes_to_task_artifact_store() {
         .add_task(TaskAddParams {
             title: "Artifact store".to_string(),
             description: "Store a task artifact".to_string(),
-            workspace_path: Some(repo_root.to_string_lossy().into_owned()),
             ..Default::default()
         })
         .expect("create task");
@@ -121,7 +120,6 @@ fn artifact_get_writes_binary_bytes_back_out_byte_for_byte() {
         .add_task(TaskAddParams {
             title: "Image artifact".to_string(),
             description: "Store and read back an image".to_string(),
-            workspace_path: Some(repo_root.to_string_lossy().into_owned()),
             ..Default::default()
         })
         .expect("create task");
@@ -160,7 +158,6 @@ fn artifact_get_refuses_to_print_binary_content_without_an_output_file() {
         .add_task(TaskAddParams {
             title: "Image artifact".to_string(),
             description: "Refuse to print binary".to_string(),
-            workspace_path: Some(repo_root.to_string_lossy().into_owned()),
             ..Default::default()
         })
         .expect("create task");
@@ -205,7 +202,6 @@ fn task_show_and_artifacts_command_are_metadata_only_and_lazy() {
         .add_task(TaskAddParams {
             title: "Metadata only test".to_string(),
             description: "Artifact listing must be metadata only".to_string(),
-            workspace_path: Some(repo_root.to_string_lossy().into_owned()),
             ..Default::default()
         })
         .expect("create task");

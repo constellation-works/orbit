@@ -208,7 +208,7 @@ impl Execute for TaskUpdateArgs {
         let upsert_artifacts = parse_artifact_args(&artifacts)?;
         let context_files = parse_replacement_list(context_files);
         if !allow_missing_context && let Some(candidates) = context_files.as_deref() {
-            runtime.ensure_context_selectors_exist(candidates, None)?;
+            runtime.ensure_context_selectors_exist(candidates)?;
         }
         let (agent, model) = super::mutation_identity(model);
 

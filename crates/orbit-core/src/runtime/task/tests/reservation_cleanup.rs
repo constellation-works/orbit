@@ -46,7 +46,7 @@ fn create_context_task(
 
 fn create_context_task_with_status(
     runtime: &OrbitRuntime,
-    repo_root: &std::path::Path,
+    _repo_root: &std::path::Path,
     id_hint: &str,
     context_file: &str,
     status: TaskStatus,
@@ -67,7 +67,6 @@ fn create_context_task_with_status(
             plan: String::new(),
             execution_summary: String::new(),
             context_files: vec![context_file.to_string()],
-            workspace_path: Some(repo_root.to_string_lossy().into_owned()),
             repo_root: None,
             created_by: Some("test".to_string()),
             planned_by: None,

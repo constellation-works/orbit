@@ -29,11 +29,11 @@ pub(super) fn add(
     // `workspace` is required for the existing MCP/CLI routing that selects
     // this runtime before dispatch reaches here; context selectors always
     // canonicalize against the repository root regardless of its value.
-    required_string(&input, &["workspace"], "workspace")?;
+    let _ = required_string(&input, &["workspace"], "workspace")?;
     let raw_context_files =
         optional_csv_or_string_list_alias(&input, &["context_files"])?.unwrap_or_default();
     if !allows_missing_context(&input)? {
-        runtime.ensure_context_selectors_exist(&raw_context_files, None)?;
+        runtime.ensure_context_selectors_exist(&raw_context_files)?;
     }
     let task = runtime.add_task_with_identity(
         TaskAddParams {
@@ -60,7 +60,6 @@ pub(super) fn add(
             plan: String::new(),
             comment: None,
             context_files: raw_context_files.clone(),
-            workspace_path: None,
             priority: optional_string(&input, "priority")?
                 .map(|value| parse_task_priority("priority", &value))
                 .transpose()?
@@ -309,7 +308,7 @@ pub(super) fn update(
     if !allows_missing_context(&input)?
         && let Some(candidates) = context_files.as_deref()
     {
-        runtime.ensure_context_selectors_exist(candidates, None)?;
+        runtime.ensure_context_selectors_exist(candidates)?;
     }
     let task = runtime.update_task_with_owner(
         &id,

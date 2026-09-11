@@ -18,7 +18,6 @@ fn add_task(runtime: &crate::OrbitRuntime, title: &str) -> orbit_types::task::Ta
                 "The transition must not overwrite a newer status.".to_string(),
             ],
             plan: "Use the transition lock.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task")

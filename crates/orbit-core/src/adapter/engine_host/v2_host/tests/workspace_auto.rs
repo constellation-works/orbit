@@ -1043,7 +1043,6 @@ fn a_live_epic_excludes_only_the_leaves_that_overlap_its_reservation() {
             acceptance_criteria: vec!["Supervised".to_string()],
             tags: vec!["epic".to_string()],
             plan: "Delegate children".to_string(),
-            workspace_path: Some(".".to_string()),
             status: Some(TaskStatus::InProgress),
             ..Default::default()
         })
@@ -1934,7 +1933,6 @@ fn readiness_agrees_with_admission_on_the_no_diff_expected_complexity_exemption(
             dependencies: vec![blocked_dependency.id.clone()],
             tags: vec!["no-diff-expected".to_string()],
             plan: "Fixture plan.".to_string(),
-            workspace_path: Some(".".to_string()),
             priority: TaskPriority::Medium,
             complexity: TaskComplexity::Unassessed,
             task_type: Some(TaskType::Chore),
@@ -1990,7 +1988,6 @@ fn seed_unassessed_task(runtime: &OrbitRuntime, title: &str, tags: &[&str]) -> T
             acceptance_criteria: vec!["Fixture outcome is observable.".to_string()],
             tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
             plan: "Fixture plan.".to_string(),
-            workspace_path: Some(".".to_string()),
             priority: TaskPriority::Medium,
             complexity: TaskComplexity::Unassessed,
             task_type: Some(TaskType::Chore),

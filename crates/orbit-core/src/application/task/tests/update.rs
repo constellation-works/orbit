@@ -13,7 +13,6 @@ fn add_proposed_task(runtime: &OrbitRuntime, title: &str) -> Task {
             title: title.to_string(),
             description: "Exercise guarded update transitions.".to_string(),
             acceptance_criteria: vec!["status lands where the update says.".to_string()],
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add proposed task")
@@ -407,7 +406,6 @@ fn task_update_keeps_context_selectors_that_do_not_exist_yet() {
         .add_task(TaskAddParams {
             title: "Original context".to_string(),
             context_files: vec!["file:src/lib.rs".to_string()],
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task succeeds");
@@ -444,7 +442,6 @@ fn task_update_accepts_valid_context_selectors() {
     let task = runtime
         .add_task(TaskAddParams {
             title: "Initial task".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task succeeds");

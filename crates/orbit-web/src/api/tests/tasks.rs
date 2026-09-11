@@ -45,7 +45,6 @@ pub(super) fn seed_backlog_task(runtime: &OrbitRuntime, title: &str) -> orbit_co
             title: title.to_string(),
             description: format!("Fixture task: {title}."),
             status: Some(TaskStatus::Backlog),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("seed backlog task")
@@ -71,7 +70,6 @@ fn seed_task_with_artifact_payload(
             title: "Artifact task".to_string(),
             description: "Fixture task with an artifact.".to_string(),
             status: Some(TaskStatus::Backlog),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("create task");
@@ -115,7 +113,6 @@ fn seed_lock_task(
             description: format!("Fixture for {title}."),
             status: Some(status),
             context_files: context_files.into_iter().map(str::to_string).collect(),
-            workspace_path: Some(runtime.data_root().to_string_lossy().into_owned()),
             ..Default::default()
         })
         .expect("create lock task");
@@ -675,7 +672,6 @@ async fn patch_api_accepts_in_progress_hyphen_from_dashboard_and_returns_in_prog
             title: "Dashboard status update test".to_string(),
             description: "backlog task to be moved via PATCH with hyphen spelling".to_string(),
             status: Some(TaskStatus::Backlog),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("seed backlog task");
@@ -725,7 +721,6 @@ async fn patch_api_persists_pr_status_with_status_and_execution_summary() {
             title: "Dashboard PR status update".to_string(),
             description: "An HTTP update must persist every supplied field.".to_string(),
             status: Some(TaskStatus::InProgress),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("seed in-progress task");
@@ -844,7 +839,6 @@ async fn list_tasks_includes_complexity_when_set() {
             title: "Hard task for complexity display".to_string(),
             description: "Task with explicit complexity for dashboard test.".to_string(),
             status: Some(TaskStatus::Backlog),
-            workspace_path: Some(".".to_string()),
             complexity: TaskComplexity::Hard,
             ..Default::default()
         })
@@ -855,7 +849,6 @@ async fn list_tasks_includes_complexity_when_set() {
             title: "Plain task no complexity".to_string(),
             description: "no complexity set".to_string(),
             status: Some(TaskStatus::Backlog),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("seed plain task");
@@ -885,7 +878,6 @@ async fn task_api_projects_orchestrator_separately_from_execution_crew() {
             status: Some(TaskStatus::Backlog),
             crew: Some("sol".to_string()),
             orchestrator: Some("terra".to_string()),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("seed attributed task");
@@ -929,7 +921,6 @@ fn seed_filterable_task(
             title: title.to_string(),
             description: format!("Fixture task: {title}."),
             status: Some(status),
-            workspace_path: Some(".".to_string()),
             tags: tags.into_iter().map(str::to_string).collect(),
             task_type,
             ..Default::default()
@@ -1362,7 +1353,6 @@ async fn update_task_replaces_relation_set() {
             title: "Task with an initial relation".to_string(),
             description: "relation set will be replaced over HTTP".to_string(),
             status: Some(TaskStatus::Backlog),
-            workspace_path: Some(".".to_string()),
             relations: vec![TaskRelation {
                 relation_type: TaskRelationType::RelatedTo,
                 target: first.id.clone(),
@@ -1401,7 +1391,6 @@ async fn update_task_clears_relations_with_empty_array() {
             title: "Task whose relations get cleared".to_string(),
             description: "empty array clears the relation set".to_string(),
             status: Some(TaskStatus::Backlog),
-            workspace_path: Some(".".to_string()),
             relations: vec![TaskRelation {
                 relation_type: TaskRelationType::RelatedTo,
                 target: target.id.clone(),
