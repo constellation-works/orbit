@@ -5,7 +5,7 @@ use orbit_core::{
 };
 use serde_json::Value;
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::output::{TaskTableFilters, task_table, task_to_json, task_to_signal_json};
 
@@ -91,6 +91,7 @@ pub struct TaskListArgs {
 impl Execute for TaskListArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let status = self.status;
+        let status_aware_order = status.is_empty();
         let limit = self.limit;
         let priority = self.priority;
         let task_type = self.task_type;
@@ -218,19 +219,22 @@ impl Execute for TaskListArgs {
 
         let mut table = task_table(&tasks, self.full, filtered);
         if truncated {
+            // The default listing is status-aware (non-terminal tasks, then
+            // terminal), so "newest first" only holds within each bucket, not
+            // across the whole result; an explicit `--status` filter runs one
+            // query and is newest first throughout (ORB-12200).
+            let ordering = if status_aware_order {
+                "non-terminal tasks first, then terminal, each newest first"
+            } else {
+                "newest first"
+            };
             table = table.trailing_notice(format!(
-                "showing {} of {total} tasks (newest first); use --limit N or a filter to see more",
+                "showing {} of {total} tasks ({ordering}); use --limit N or a filter to see more",
                 tasks.len()
             ));
         }
 
-        let doc = serde_json::json!({
-            "tasks": records,
-            "total": total,
-            "truncated": truncated,
-        });
-
-        Ok(Payload::blocks(doc, vec![Block::table(table)]).into())
+        Ok(Payload::list(records, table).into())
     }
 }
 

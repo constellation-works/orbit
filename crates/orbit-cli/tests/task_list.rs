@@ -110,20 +110,23 @@ fn run_orbit(cwd: &Path, home: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
-fn task_list_truncation_notice_and_json_fields_with_60_tasks() {
+fn task_list_truncation_notice_and_bare_json_array_with_60_tasks() {
     let workspace = TestWorkspace::new();
     for i in 0..60 {
         workspace.add_task(&format!("Task {i:02}"));
     }
 
-    // Default limit (50) on 60 tasks emits a truncation notice to stderr
+    // Default limit (50) on 60 tasks emits a truncation notice to stderr. All
+    // 60 tasks are non-terminal (`proposed`), so the default status-aware
+    // listing is a single bucket here, but the notice still states the
+    // general rule rather than a blanket "newest first" (ORB-12200).
     let output = workspace.run(&["task", "list"], "default task list");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(
         stderr.contains(
-            "showing 50 of 60 tasks (newest first); use --limit N or a filter to see more"
+            "showing 50 of 60 tasks (non-terminal tasks first, then terminal, each newest first); use --limit N or a filter to see more"
         ),
         "stderr must contain truncation notice:\n{stderr}"
     );
@@ -132,26 +135,18 @@ fn task_list_truncation_notice_and_json_fields_with_60_tasks() {
         "stdout must not contain truncation notice:\n{stdout}"
     );
 
-    // Default JSON carries total and truncated
+    // Default JSON stays the bare array the frozen `--json` contract pins.
     let json_output = workspace.run(&["task", "list", "--json"], "task list --json");
-    let payload: Value =
-        serde_json::from_slice(&json_output.stdout).expect("task list json payload");
-    assert_eq!(payload["total"], 60);
-    assert_eq!(payload["truncated"], true);
-    assert_eq!(payload["tasks"].as_array().expect("tasks array").len(), 50);
+    let tasks: Value = serde_json::from_slice(&json_output.stdout).expect("task list json payload");
+    assert_eq!(tasks.as_array().expect("tasks array").len(), 50);
 
-    // Raising --limit to 100 shows all 60 tasks and sets truncated: false
+    // Raising --limit to 100 shows all 60 tasks.
     let full_json = workspace.run(
         &["task", "list", "--limit", "100", "--json"],
         "task list --limit 100 --json",
     );
-    let full_payload: Value = serde_json::from_slice(&full_json.stdout).expect("full json payload");
-    assert_eq!(full_payload["total"], 60);
-    assert_eq!(full_payload["truncated"], false);
-    assert_eq!(
-        full_payload["tasks"].as_array().expect("tasks array").len(),
-        60
-    );
+    let full_tasks: Value = serde_json::from_slice(&full_json.stdout).expect("full json payload");
+    assert_eq!(full_tasks.as_array().expect("tasks array").len(), 60);
 
     // Raising --limit to 60 emits no notice on stderr
     let unconstrained = workspace.run(&["task", "list", "--limit", "60"], "task list --limit 60");
@@ -184,13 +179,22 @@ fn older_someday_task_discoverable_ahead_of_50_newer_done_tasks() {
         "older someday task must be in default listing:\n{stdout}"
     );
 
+    // The truncation notice states the real status-aware rule rather than a
+    // blanket "newest first": the someday task below is older than every done
+    // task, yet it is shown first (ORB-12200).
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "showing 50 of 51 tasks (non-terminal tasks first, then terminal, each newest first); use --limit N or a filter to see more"
+        ),
+        "stderr must contain truncation notice:\n{stderr}"
+    );
+
     // In JSON output, the someday task is listed first ahead of done tasks
     let json_output = workspace.run(&["task", "list", "--json"], "task list JSON");
     let payload: Value =
         serde_json::from_slice(&json_output.stdout).expect("task list json payload");
-    assert_eq!(payload["total"], 51);
-    assert_eq!(payload["truncated"], true);
-    let tasks = payload["tasks"].as_array().expect("tasks array");
+    let tasks = payload.as_array().expect("tasks array");
     assert_eq!(tasks.len(), 50);
     assert_eq!(tasks[0]["id"], someday_id);
     assert_eq!(tasks[0]["status"], "someday");
@@ -231,11 +235,9 @@ fn existing_filters_keep_behaviour() {
         "filter status done",
     );
     let status_payload: Value = serde_json::from_slice(&status_filter.stdout).expect("status json");
-    let status_tasks = status_payload["tasks"].as_array().expect("tasks array");
+    let status_tasks = status_payload.as_array().expect("tasks array");
     assert_eq!(status_tasks.len(), 1);
     assert_eq!(status_tasks[0]["id"], id2);
-    assert_eq!(status_payload["total"], 1);
-    assert_eq!(status_payload["truncated"], false);
 
     // --tag filter
     let tag_filter = workspace.run(
@@ -243,11 +245,9 @@ fn existing_filters_keep_behaviour() {
         "filter tag alpha",
     );
     let tag_payload: Value = serde_json::from_slice(&tag_filter.stdout).expect("tag json");
-    let tag_tasks = tag_payload["tasks"].as_array().expect("tasks array");
+    let tag_tasks = tag_payload.as_array().expect("tasks array");
     assert_eq!(tag_tasks.len(), 1);
     assert_eq!(tag_tasks[0]["id"], id1);
-    assert_eq!(tag_payload["total"], 1);
-    assert_eq!(tag_payload["truncated"], false);
 
     // --limit filter
     let limit_filter = workspace.run(
@@ -255,8 +255,6 @@ fn existing_filters_keep_behaviour() {
         "filter limit 1",
     );
     let limit_payload: Value = serde_json::from_slice(&limit_filter.stdout).expect("limit json");
-    let limit_tasks = limit_payload["tasks"].as_array().expect("tasks array");
+    let limit_tasks = limit_payload.as_array().expect("tasks array");
     assert_eq!(limit_tasks.len(), 1);
-    assert_eq!(limit_payload["total"], 2);
-    assert_eq!(limit_payload["truncated"], true);
 }

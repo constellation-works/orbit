@@ -254,15 +254,8 @@ fn external_root_task_index_loss_is_reported_and_reindexed() {
             &fixture.rooted(&["task", "list", "--json"]),
         )
         .success();
-    let payload: Value =
-        serde_json::from_slice(&listed.get_output().stdout).expect("task list json");
-    let task_id_found = payload
-        .get("tasks")
-        .and_then(|tasks| tasks.get(0))
-        .or_else(|| payload.get(0))
-        .and_then(|task| task.get("id"))
-        .and_then(Value::as_str);
-    assert_eq!(task_id_found, Some(task_id.as_str()));
+    let tasks: Value = serde_json::from_slice(&listed.get_output().stdout).expect("task list json");
+    assert_eq!(tasks[0]["id"], task_id);
 }
 
 #[test]

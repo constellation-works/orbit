@@ -385,16 +385,7 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
     assert_eq!(after, before, "ambient sentinel workspace was modified");
 
     let fixture_tasks = workspace.task_json(&["task", "list", "--json"]);
-    let fixture_tasks = fixture_tasks
-        .as_array()
-        .cloned()
-        .or_else(|| {
-            fixture_tasks
-                .get("tasks")
-                .and_then(Value::as_array)
-                .cloned()
-        })
-        .expect("fixture task list");
+    let fixture_tasks = fixture_tasks.as_array().expect("fixture task list");
     assert_eq!(fixture_tasks.len(), 3);
     assert_eq!(
         fixture_tasks
