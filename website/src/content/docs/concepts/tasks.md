@@ -48,10 +48,11 @@ These two gates are independent, and so is the authority that can satisfy them:
   `--complete`, which never reaches back and approves `proposed` work. See
   [Completing work with `--complete`](../../getting-started/workflows/#completing-work-with---complete).
 
-Recurring work minted by an [auto-task
-definition](../../how-to/recurring-work/#3-define-recurring-chores-as-auto-tasks)
-enters at whichever status that definition declares — `backlog` by default, or
-`proposed` when you want to review each instance.
+Recurring work minted by an [auto-task](../scheduling/#auto-task) enters at
+whichever status its definition declares — `backlog` by default, or `proposed`
+when you want to review each instance. See [Schedule Recurring
+Work](../../how-to/recurring-work/#3-define-recurring-chores-as-auto-tasks) for
+defining one.
 
 ### Statuses
 

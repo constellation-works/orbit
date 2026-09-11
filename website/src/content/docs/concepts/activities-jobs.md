@@ -27,7 +27,7 @@ are all included in the same union. The effective list is included in the CLI en
 
 ## Job
 
-A job is a workflow. It has schedule state, optional default input, concurrency limits, and ordered steps.
+A job is a workflow. It has schedule state, optional default input, concurrency limits, and ordered steps. A job runs when something invokes it — `orbit run`, a task ship, or a [routine](../scheduling/#routine) firing on the sweep clock.
 
 Step bodies can reference an activity, inline an activity spec, or compose control flow:
 

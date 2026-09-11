@@ -1,0 +1,50 @@
+---
+// Landing for the task links Orbit mints into pull-request descriptions
+// (`[pr] task_url_template`). Task records are workspace-local and are not
+// published, so `/tasks/<id>` used to be a dead surface. `public/_redirects`
+// sends those links here with the ID as a query parameter; the page explains
+// what the ID is and where the delivery can actually be found.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Task records are not published',
+    description:
+      'Orbit task IDs in pull requests point at workspace-local state. Find the delivery on GitHub instead.',
+    tableOfContents: false,
+  }}
+>
+  <p>
+    You followed a link of the form <code>orbit-cli.com/tasks/&lt;id&gt;</code>. Orbit writes
+    those links into pull-request descriptions so a merged change stays attributable to the
+    task it was delivered under. The task record itself lives in the owning repository's
+    <code>.orbit/</code> state and is not published on this site.
+  </p>
+  <p class="orbit-task-lookup" hidden>
+    Looking for <code data-task-id></code>? Its merged pull request is on <a
+      data-task-search
+      href="https://github.com/constellation-works/orbit/pulls?q=is%3Apr+is%3Amerged">GitHub</a
+    >, and the release that shipped it is in the <a href="/changelog/">changelog</a>.
+  </p>
+  <p>
+    To see what an ID delivered, search merged pull requests for it, or open the
+    <a href="/changelog/">changelog</a>, where each entry cites the task IDs it was compiled from.
+    To inspect a task record in a workspace you have access to, run
+    <code>orbit task show &lt;id&gt;</code>. See <a href="/concepts/tasks/">Tasks</a> for what a
+    record contains.
+  </p>
+</StarlightPage>
+
+<script>
+  // The redirect carries the original ID as `?id=`. Only a well-formed task ID
+  // is echoed back into the page, and only into text and a URL-encoded query.
+  const id = new URLSearchParams(window.location.search).get('id') ?? '';
+  const lookup = document.querySelector<HTMLElement>('.orbit-task-lookup');
+  if (lookup && /^[A-Z][A-Z0-9]{1,15}-\d{1,8}$/.test(id)) {
+    lookup.querySelector('[data-task-id]')!.textContent = id;
+    const search = lookup.querySelector<HTMLAnchorElement>('[data-task-search]')!;
+    search.href = `https://github.com/constellation-works/orbit/pulls?q=${encodeURIComponent(`is:pr is:merged "${id}"`)}`;
+    lookup.hidden = false;
+  }
+</script>

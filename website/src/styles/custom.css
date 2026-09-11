@@ -1189,6 +1189,164 @@ html:not([data-has-sidebar]) header.header {
   }
 }
 
+/* The changelog page renders the repository's CHANGELOG.md verbatim. Its own
+   H1 duplicates the page title, so it is hidden rather than edited out — the
+   file stays byte-identical to what a release compiles. */
+.orbit-changelog > h1 {
+  display: none;
+}
+
+.orbit-changelog > h2 {
+  border-top: 1px solid var(--sl-color-hairline-light);
+  font-family: var(--sl-font-mono);
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+}
+
+/* Concept-page diagrams. Both are plain HTML so they inherit the theme tokens
+   and stay readable to screen readers; neither depends on JavaScript. */
+
+/* The layer stack on the Concepts overview: one row per layer, top to bottom,
+   with the question each layer answers pinned in the left column. */
+.orbit-stack {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  margin: 1.5rem 0 2rem;
+  overflow: hidden;
+}
+
+.orbit-stack > * {
+  margin-top: 0;
+}
+
+.orbit-stack-layer {
+  align-items: baseline;
+  background: var(--sl-color-bg-inline-code);
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+  color: var(--sl-color-text);
+  column-gap: 1.25rem;
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 12rem) minmax(0, 1fr);
+  padding: 0.85rem 1.25rem;
+  text-decoration: none;
+  transition: background-color 150ms ease;
+}
+
+.orbit-stack-layer:last-child {
+  border-bottom: 0;
+}
+
+.orbit-stack-layer:hover,
+.orbit-stack-layer:focus-visible {
+  background: var(--sl-color-accent-low);
+}
+
+.orbit-stack-layer:focus-visible {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: -2px;
+}
+
+.orbit-stack-layer:hover .orbit-stack-name,
+.orbit-stack-layer:focus-visible .orbit-stack-name {
+  color: var(--sl-color-text-accent);
+}
+
+/* Policies wrap every other layer rather than sitting under them; a top rule
+   in the accent colour marks it as the boundary instead of the next step. */
+.orbit-stack-layer-guard {
+  background: var(--sl-color-bg);
+  border-top: 2px solid var(--sl-color-accent);
+}
+
+.orbit-stack-q {
+  color: var(--sl-color-text-accent);
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.orbit-stack-name {
+  font-size: 0.95rem;
+  font-weight: 650;
+  transition: color 120ms ease;
+}
+
+.orbit-stack-desc {
+  color: var(--sl-color-gray-3);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+/* The fire path on the scheduling page: an ordered list rendered as a chain
+   of steps, each with a one-line note under it. */
+.orbit-pipeline {
+  counter-reset: orbit-pipeline;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  list-style: none;
+  margin: 1.5rem 0 2rem;
+  padding: 0;
+}
+
+.orbit-pipeline > * {
+  margin-top: 0;
+}
+
+.orbit-pipeline li {
+  background: var(--sl-color-bg-inline-code);
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 6px;
+  counter-increment: orbit-pipeline;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+  padding: 0.85rem 0.9rem 0.85rem 0.9rem;
+  position: relative;
+}
+
+.orbit-pipeline li::before {
+  color: var(--sl-color-text-accent);
+  content: counter(orbit-pipeline, decimal-leading-zero);
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+}
+
+/* The connector between steps, drawn in the gap so it never overlaps text. */
+.orbit-pipeline li:not(:last-child)::after {
+  border-color: var(--sl-color-text-accent);
+  border-style: solid;
+  border-width: 1.5px 1.5px 0 0;
+  content: "";
+  height: 0.5rem;
+  position: absolute;
+  right: -0.45rem;
+  top: 50%;
+  transform: translateY(-50%) rotate(45deg);
+  width: 0.5rem;
+}
+
+.orbit-pipeline-step {
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+
+.orbit-pipeline-note {
+  color: var(--sl-color-gray-3);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.orbit-pipeline-note code {
+  font-size: 0.75rem;
+}
+
 @media (max-width: 54rem) {
   .sl-markdown-content table {
     display: block;
@@ -1216,6 +1374,20 @@ html:not([data-has-sidebar]) header.header {
   .orbit-card-grid-4,
   .orbit-docs-index {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Five steps in a row is unreadable this narrow; stack them and turn the
+     connector into a down arrow drawn in the row gap. */
+  .orbit-pipeline {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .orbit-pipeline li:not(:last-child)::after {
+    bottom: -0.45rem;
+    left: 1.25rem;
+    right: auto;
+    top: auto;
+    transform: rotate(135deg);
   }
 
   .orbit-dash-frame {
@@ -1283,6 +1455,15 @@ html:not([data-has-sidebar]) header.header {
     grid-template-columns: 1fr;
   }
 
+  .orbit-stack-layer {
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+    row-gap: 0.2rem;
+  }
+
+  .orbit-stack-desc {
+    grid-column: 2;
+  }
+
   .orbit-flow-tab {
     border-right: 0;
   }
@@ -1307,7 +1488,9 @@ html:not([data-has-sidebar]) header.header {
   .orbit-card h3,
   .orbit-copy,
   .orbit-flow-tab,
-  .orbit-flow-tab-name {
+  .orbit-flow-tab-name,
+  .orbit-stack-layer,
+  .orbit-stack-name {
     transition: none;
   }
 

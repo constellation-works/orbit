@@ -1,0 +1,36 @@
+---
+// The public "what shipped" surface. It renders the repository's tracked
+// CHANGELOG.md directly so the site never carries a second, drifting copy;
+// the file is compiled at release time (see RELEASING.md), so this page only
+// ever describes released behavior. The build stays a pure function of tracked
+// sources — the import is resolved at build time, nothing is fetched.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { Content as ChangelogContent, getHeadings } from '../../../CHANGELOG.md';
+
+// The changelog's own H1 ("Changelog") duplicates the page title; the release
+// sections underneath it are the useful table of contents.
+const headings = getHeadings().filter((heading) => heading.depth >= 2);
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Changelog',
+    description: 'Every released Orbit version, newest first, with breaking changes and highlights.',
+    tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },
+  }}
+  headings={headings}
+>
+  <p>
+    Releases tag on <code>agent-main</code> and merge to <code>main</code>. Each entry below is
+    compiled from the work merged for that version. Task IDs in brackets identify the Orbit task
+    a change was delivered under; searching one on <a
+      href="https://github.com/constellation-works/orbit/pulls?q=is%3Apr+is%3Amerged"
+      >GitHub</a
+    > finds its pull request. Install the current release from <a
+      href="/getting-started/install/">Install Orbit</a
+    >.
+  </p>
+  <div class="orbit-changelog">
+    <ChangelogContent />
+  </div>
+</StarlightPage>

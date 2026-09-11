@@ -3,6 +3,12 @@ import starlight from '@astrojs/starlight';
 
 export default defineConfig({
   site: 'https://orbit-cli.com',
+  vite: {
+    // src/pages/changelog.astro imports the repository's CHANGELOG.md, one
+    // directory above the site root; the dev server refuses that path unless
+    // it is allow-listed. The build resolves it without this.
+    server: { fs: { allow: ['..'] } },
+  },
   integrations: [
     starlight({
       title: 'Orbit',
@@ -65,6 +71,7 @@ export default defineConfig({
             { slug: 'concepts', label: 'Overview' },
             { slug: 'concepts/tasks', label: 'Tasks' },
             { slug: 'concepts/activities-jobs', label: 'Activities and Jobs' },
+            { slug: 'concepts/scheduling', label: 'Routines and Auto-Tasks' },
             { slug: 'concepts/policies', label: 'Policies' },
             { slug: 'concepts/agents', label: 'Agents' },
           ],
@@ -102,6 +109,10 @@ export default defineConfig({
             { slug: 'contributing/crate-layout', label: 'Crate Layout' },
             { slug: 'contributing/pr-workflow', label: 'PR Workflow' },
           ],
+        },
+        {
+          label: 'Releases',
+          items: [{ label: 'Changelog', link: '/changelog/' }],
         },
       ],
       head: [

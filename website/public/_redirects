@@ -1,0 +1,6 @@
+# Orbit mints `/tasks/<id>` links into pull-request descriptions, but task
+# records are workspace-local and never published here. Land those links on the
+# explainer page with the ID preserved. `:id` matches one path segment, so
+# `/tasks/` itself is not rewritten. A true 410 needs a zone rule, which this
+# artifact does not own.
+/tasks/:id  /tasks/?id=:id  302

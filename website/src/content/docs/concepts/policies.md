@@ -2,7 +2,7 @@
 title: Policies
 description: "How Orbit uses filesystem profiles and global deny rules to scope execution."
 sidebar:
-  order: 4
+  order: 5
 ---
 
 ## Definition
