@@ -2,6 +2,7 @@ mod add;
 mod artifact;
 mod command;
 mod flow;
+mod list;
 mod output;
 mod publication;
 mod show;

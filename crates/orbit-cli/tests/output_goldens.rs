@@ -231,10 +231,14 @@ fn fixture_ignores_inherited_managed_routing_and_identity() {
         "sentinel workspace was modified"
     );
 
-    let tasks: Value =
+    let payload: Value =
         serde_json::from_slice(&fixture.run(&["task", "list", "--json"], &[]).stdout)
             .expect("fixture task list JSON");
-    let tasks = tasks.as_array().expect("fixture task list");
+    let tasks = payload
+        .as_array()
+        .cloned()
+        .or_else(|| payload.get("tasks").and_then(Value::as_array).cloned())
+        .expect("fixture task list");
     assert_eq!(tasks.len(), SEED_TASKS.len());
     assert!(
         tasks
@@ -357,8 +361,9 @@ fn plain_and_json_forms_match_their_goldens() {
 fn task_show_relations_and_artifacts_match_golden() {
     let fixture = Fixture::new();
     let listed = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
-    let task_id = listed[0]["id"].as_str().expect("task id");
-    let blocker_id = listed[1]["id"].as_str().expect("blocker id");
+    let tasks = listed.get("tasks").unwrap_or(&listed);
+    let task_id = tasks[0]["id"].as_str().expect("task id");
+    let blocker_id = tasks[1]["id"].as_str().expect("blocker id");
     let update = serde_json::to_string(&json!({
         "id": task_id,
         "relations": [{"type": "blocked_by", "target": blocker_id}],
@@ -462,7 +467,8 @@ fn parse_ndjson_stdout(output: &std::process::Output, label: &str) -> Vec<Value>
 
 fn first_listed_task(fixture: &Fixture) -> (String, String) {
     let listed = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
-    let task = &listed[0];
+    let tasks = listed.get("tasks").unwrap_or(&listed);
+    let task = &tasks[0];
     (
         task["id"].as_str().expect("task id").to_string(),
         task["title"].as_str().expect("task title").to_string(),
