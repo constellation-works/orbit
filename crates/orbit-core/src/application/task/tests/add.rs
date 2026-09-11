@@ -32,6 +32,61 @@ fn task_add_enters_proposed_and_requires_approval_before_backlog() {
 }
 
 #[test]
+fn task_context_selector_round_trips_from_repository_root() {
+    let (root, runtime) = test_runtime();
+    let repo_root = root.path().join("repo");
+    std::fs::create_dir_all(repo_root.join("docs")).expect("create docs directory");
+    std::fs::write(repo_root.join("docs/readme.md"), b"# readme\n").expect("write context file");
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Read back a subdirectory selector".to_string(),
+            description: "Keep the selector rooted at the repository.".to_string(),
+            context_files: vec!["file:docs/readme.md".to_string()],
+            // Retained for internal parameter compatibility; it must not
+            // change the canonical root used by task selectors.
+            workspace_path: Some("docs".to_string()),
+            ..Default::default()
+        })
+        .expect("create task with repository-relative context selector");
+
+    assert_eq!(task.context_files, ["file:docs/readme.md"]);
+    assert_eq!(
+        runtime
+            .get_task(&task.id)
+            .expect("read task back")
+            .context_files,
+        ["file:docs/readme.md"]
+    );
+
+    let page = runtime
+        .query_task_rows(&crate::application::task::TaskListQuery {
+            path: Some("docs/readme.md".to_string()),
+            ..Default::default()
+        })
+        .expect("filter tasks by the selector path");
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|row| &row.task.id)
+            .collect::<Vec<_>>(),
+        [&task.id]
+    );
+    assert!(runtime.dry_run_prune_context_files(&task).is_empty());
+
+    let updated = runtime
+        .update_task(
+            &task.id,
+            crate::application::task::TaskUpdateParams {
+                context_files: Some(vec!["file:docs/readme.md".to_string()]),
+                ..Default::default()
+            },
+        )
+        .expect("update the selector through the same repository root");
+    assert_eq!(updated.context_files, ["file:docs/readme.md"]);
+}
+
+#[test]
 fn task_start_event_records_when_start_approves_a_proposal() {
     let (_root, runtime) = test_runtime();
 

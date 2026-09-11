@@ -49,9 +49,6 @@ pub struct TaskAddArgs {
     /// Accept context selectors whose target does not exist yet (for work that creates the file)
     #[arg(long)]
     pub allow_missing_context: bool,
-    /// Workspace path for the task, relative to the selected workspace
-    #[arg(long = "workspace-path")]
-    pub workspace_path: Option<String>,
     /// Priority level
     #[arg(long, value_enum, default_value_t = TaskPriority::Medium)]
     pub priority: TaskPriority,
@@ -85,8 +82,7 @@ impl Execute for TaskAddArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let (agent, model) = super::mutation_identity(self.model);
         if !self.allow_missing_context {
-            runtime
-                .ensure_context_selectors_exist(&self.context, self.workspace_path.as_deref())?;
+            runtime.ensure_context_selectors_exist(&self.context, None)?;
         }
         if let Some(parent_id) = self.parent_id.as_deref()
             && runtime.get_task(parent_id).is_err()
@@ -107,7 +103,7 @@ impl Execute for TaskAddArgs {
                 plan: self.plan,
                 comment: None,
                 context_files: self.context,
-                workspace_path: self.workspace_path,
+                workspace_path: None,
                 priority: self.priority,
                 complexity: self.complexity,
                 task_type: self.task_type,
