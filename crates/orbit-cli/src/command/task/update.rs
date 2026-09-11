@@ -1,6 +1,6 @@
 use clap::{ArgAction, Args};
 use orbit_core::application::task::TaskUpdateParams;
-use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
+use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::task::TaskArtifact;
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -41,6 +41,9 @@ pub struct TaskUpdateArgs {
     /// New task type
     #[arg(long = "type", value_enum)]
     pub task_type: Option<TaskType>,
+    /// New dispatch priority
+    #[arg(long, value_enum)]
+    pub priority: Option<TaskPriority>,
     /// Task complexity
     #[arg(long, value_enum)]
     pub complexity: Option<TaskComplexity>,
@@ -91,7 +94,7 @@ pub struct TaskUpdateArgs {
 /// same invocation, and `--status` would be a direct contradiction of the
 /// transition being requested. Rejecting the combination in the parser keeps
 /// approval one write with one history entry.
-const APPROVE_CONFLICTS: [&str; 18] = [
+const APPROVE_CONFLICTS: [&str; 19] = [
     "title",
     "description",
     "acceptance_criteria",
@@ -101,6 +104,7 @@ const APPROVE_CONFLICTS: [&str; 18] = [
     "execution_summary",
     "status",
     "task_type",
+    "priority",
     "complexity",
     "planned_by",
     "implemented_by",
@@ -126,6 +130,7 @@ impl Execute for TaskUpdateArgs {
             comment,
             status,
             task_type,
+            priority,
             complexity,
             planned_by,
             implemented_by,
@@ -212,6 +217,7 @@ impl Execute for TaskUpdateArgs {
                 comment,
                 status: status.map(Into::into),
                 task_type,
+                priority,
                 complexity,
                 planned_by,
                 implemented_by,

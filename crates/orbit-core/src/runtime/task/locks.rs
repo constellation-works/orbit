@@ -190,7 +190,31 @@ pub(crate) fn reserve(
     reservation_owner: Option<ReservationOwnerContext>,
 ) -> Result<Value, OrbitError> {
     let index = TaskLockIndex::load(runtime)?;
-    reserve_with_index(runtime, input, agent, model, reservation_owner, &index)
+    reserve_with_index(
+        runtime,
+        input,
+        agent,
+        model,
+        reservation_owner,
+        &index,
+        EmptyTaskSurfacePolicy::Refuse,
+    )
+}
+
+/// Whether a task-scope reservation that resolves to zero files is a mistake
+/// to refuse, or a legitimate no-op to admit.
+///
+/// An operator claiming a task's surface before starting work almost
+/// certainly wants a real claim: a task with nothing declared should be told
+/// so, not handed a reservation ID that holds nothing ([`Self::Refuse`]). The
+/// v2 dispatch admission gate reserves the same way to decide whether a task
+/// can start, and a task that has not declared any context yet has nothing to
+/// serialize against — admitting it trivially is correct there
+/// ([`Self::Admit`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmptyTaskSurfacePolicy {
+    Refuse,
+    Admit,
 }
 
 /// Reserve a task-lock scope using an index loaded by the calling operation.
@@ -206,6 +230,7 @@ pub(crate) fn reserve_with_index(
     model: Option<String>,
     reservation_owner: Option<ReservationOwnerContext>,
     index: &TaskLockIndex,
+    empty_task_surface_policy: EmptyTaskSurfacePolicy,
 ) -> Result<Value, OrbitError> {
     let reservation_scope = parse_task_lock_reservation_scope(&input)?;
     let ttl_seconds =
@@ -220,10 +245,20 @@ pub(crate) fn reserve_with_index(
     let workspace_id = workspace_task_reservation_id(runtime)?;
     let repo_root = runtime.paths().repo_root.as_path();
     let (task_ids, requested_files) = match &reservation_scope {
-        TaskLockReservationScope::TaskIds(task_ids) => (
-            task_ids.clone(),
-            requested_task_files_indexed(index, task_ids, repo_root)?,
-        ),
+        TaskLockReservationScope::TaskIds(task_ids) => {
+            // Validate every id exists before judging whether the bundle
+            // declares a surface, so an unknown task id is still reported as
+            // not-found rather than folded into this refusal.
+            let requested_files = requested_task_files_indexed(index, task_ids, repo_root)?;
+            if empty_task_surface_policy == EmptyTaskSurfacePolicy::Refuse
+                && task_ids
+                    .iter()
+                    .all(|task_id| !index.declares_context_surface(task_id))
+            {
+                return Err(no_lock_surface_error(task_ids));
+            }
+            (task_ids.clone(), requested_files)
+        }
         TaskLockReservationScope::Files(files) => (
             Vec::new(),
             canonicalize_file_lock_selectors(files, repo_root)?,
@@ -563,6 +598,35 @@ impl TaskLockIndex {
         }
         files.into_iter().collect()
     }
+
+    /// Whether `task_id` (or, for an epic root, any descendant) has declared
+    /// any `context_files` entries at all, independent of whether those
+    /// selectors currently resolve to an existing path.
+    ///
+    /// This is deliberately not [`Self::lock_context_files`]: a task can
+    /// declare a real selector for a file it hasn't created yet, and that is
+    /// an existing, unrelated no-op the domain already tolerates (the
+    /// selector is simply pruned when computing the lock surface). Only the
+    /// narrower case — nothing declared at all — is what a task-scope
+    /// reservation should refuse.
+    pub(crate) fn declares_context_surface(&self, task_id: &str) -> bool {
+        let Some(task) = self.tasks.get(task_id) else {
+            return false;
+        };
+        if !task.context_files.is_empty() {
+            return true;
+        }
+        if task.tags.iter().any(|tag| tag == "epic") {
+            return self
+                .epic_descendants
+                .get(&task.id)
+                .into_iter()
+                .flatten()
+                .filter_map(|id| self.tasks.get(id))
+                .any(|descendant| !descendant.context_files.is_empty());
+        }
+        false
+    }
 }
 
 /// Every epic-tagged ancestor on `task`'s parent chain, under the same hop
@@ -750,6 +814,25 @@ fn record_task_lock_audit_event(
             payload,
         },
     )
+}
+
+/// A task-scope reservation whose bundle declares no `context_files` at all
+/// would otherwise mint a real reservation ID that holds nothing — a silent
+/// "0 file(s)" success that looks like a claim was taken when it was not.
+/// Refuse it by name instead so the caller declares context or falls back to
+/// explicit `--file` selectors.
+fn no_lock_surface_error(task_ids: &[String]) -> OrbitError {
+    let (subject, verb) = if task_ids.len() == 1 {
+        ("task", "declares")
+    } else {
+        ("tasks", "declare")
+    };
+    OrbitError::InvalidInput(format!(
+        "{subject} {} {verb} no context surface to reserve (no `context_files` declared); \
+         nothing would be locked. Add context with `orbit task update --context`, or reserve \
+         explicit selectors with `--file` instead",
+        task_ids.join(", ")
+    ))
 }
 
 fn first_task_id(task_ids: &[String]) -> Option<&str> {
