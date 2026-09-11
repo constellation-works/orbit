@@ -4,8 +4,9 @@ use orbit_common::fs::selector::{
     anchor_path, canonical_selector_in_workspace, exists_in_workspace,
 };
 use orbit_types::task::{TaskHistoryEntry, TaskType};
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+use crate::OrbitRuntime;
 
 pub(super) fn normalize_workspace_path(
     repo_root: &Path,
@@ -79,76 +80,117 @@ pub(super) fn context_files_pruned_history_entry(
     }
 }
 
+/// Canonicalize context selectors for a task write, leaving selectors that do
+/// not exist yet in place.
+///
+/// The core write path stays permissive on purpose: task-pilot apply,
+/// automation seeding, and runtime host updates legitimately record targets the
+/// task is about to create, and read paths prune what is missing. Operator
+/// surfaces guard typos separately through
+/// [`OrbitRuntime::ensure_context_selectors_exist`].
 pub(crate) fn normalize_context_files_for_write(
     candidates: Vec<String>,
     workspace_root: &Path,
 ) -> Result<Vec<String>, OrbitError> {
-    let canonical_workspace = workspace_root.canonicalize().map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "failed to resolve workspace root '{}': {error}",
-            workspace_root.display()
-        ))
-    })?;
+    candidates
+        .into_iter()
+        .map(|entry| {
+            canonical_selector_in_workspace(entry.as_str(), workspace_root)
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+        })
+        .collect()
+}
 
-    let mut seen = BTreeSet::new();
-    let mut normalized = Vec::with_capacity(candidates.len());
-
-    for entry in candidates {
-        let trimmed = entry.trim();
-        if trimmed.is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "selector input must not be empty".to_string(),
-            ));
+impl OrbitRuntime {
+    /// Reject context selectors that do not name an existing target in the
+    /// workspace the task write will use.
+    ///
+    /// This is an operator-surface guard: `orbit task add` / `orbit task
+    /// update` and the `orbit.task.add` / `orbit.task.update` tools call it so
+    /// a mistyped selector cannot ship a task whose context is dead on
+    /// arrival. Both surfaces expose an explicit escape for the deliberate
+    /// not-yet-created target. `add_task` and `update_task` themselves stay
+    /// permissive so internal callers are unaffected.
+    pub fn ensure_context_selectors_exist(
+        &self,
+        selectors: &[String],
+        workspace_path: Option<&str>,
+    ) -> Result<(), OrbitError> {
+        if selectors.is_empty() {
+            return Ok(());
         }
 
-        if trimmed.starts_with("module:") || trimmed.starts_with("command:") {
-            return Err(OrbitError::InvalidInput(format!(
-                "selector `{entry}` must use file:, dir:, or symbol:"
-            )));
-        }
-
-        let canonical =
-            canonical_selector_in_workspace(trimmed, &canonical_workspace).map_err(|error| {
-                OrbitError::InvalidInput(format!("selector `{entry}` is invalid: {error}"))
-            })?;
-
-        if canonical.starts_with("module:") || canonical.starts_with("command:") {
-            return Err(OrbitError::InvalidInput(format!(
-                "selector `{entry}` must use file:, dir:, or symbol:"
-            )));
-        }
-
-        if !exists_in_workspace(&canonical, &canonical_workspace) {
-            return Err(OrbitError::InvalidInput(format!(
-                "selector `{entry}` does not resolve to an existing in-workspace target"
-            )));
-        }
-
-        let anchor = anchor_path(&canonical).map_err(|error| {
+        let repo_root = &self.paths().repo_root;
+        let normalized_workspace = normalize_workspace_path(repo_root, workspace_path)?;
+        let workspace_root = context_workspace_root(repo_root, normalized_workspace.as_deref());
+        let canonical_workspace = workspace_root.canonicalize().map_err(|error| {
             OrbitError::InvalidInput(format!(
-                "selector `{entry}` has no filesystem anchor: {error}"
+                "failed to resolve workspace root '{}': {error}",
+                workspace_root.display()
             ))
         })?;
 
-        let resolved = canonical_workspace.join(anchor);
-        let correct_kind = if canonical.starts_with("dir:") {
-            resolved.is_dir()
-        } else {
-            resolved.is_file()
-        };
+        selectors
+            .iter()
+            .try_for_each(|selector| ensure_selector_resolves(selector, &canonical_workspace))
+    }
+}
 
-        if !correct_kind {
-            return Err(OrbitError::InvalidInput(format!(
-                "selector `{entry}` does not match the target's file/directory kind"
-            )));
-        }
-
-        if seen.insert(canonical.clone()) {
-            normalized.push(canonical);
-        }
+/// Check one operator-supplied selector against the canonicalized workspace:
+/// it must be a supported kind, name an existing anchor, and match that
+/// target's file/directory kind.
+fn ensure_selector_resolves(entry: &str, canonical_workspace: &Path) -> Result<(), OrbitError> {
+    let trimmed = entry.trim();
+    if trimmed.is_empty() {
+        return Err(OrbitError::InvalidInput(
+            "selector input must not be empty".to_string(),
+        ));
     }
 
-    Ok(normalized)
+    if trimmed.starts_with("module:") || trimmed.starts_with("command:") {
+        return Err(unsupported_selector_kind(entry));
+    }
+
+    let canonical =
+        canonical_selector_in_workspace(trimmed, canonical_workspace).map_err(|error| {
+            OrbitError::InvalidInput(format!("selector `{entry}` is invalid: {error}"))
+        })?;
+
+    if canonical.starts_with("module:") || canonical.starts_with("command:") {
+        return Err(unsupported_selector_kind(entry));
+    }
+
+    if !exists_in_workspace(&canonical, canonical_workspace) {
+        return Err(OrbitError::InvalidInput(format!(
+            "selector `{entry}` does not resolve to an existing in-workspace target"
+        )));
+    }
+
+    let anchor = anchor_path(&canonical).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "selector `{entry}` has no filesystem anchor: {error}"
+        ))
+    })?;
+    let resolved = canonical_workspace.join(anchor);
+    let matches_target_kind = if canonical.starts_with("dir:") {
+        resolved.is_dir()
+    } else {
+        resolved.is_file()
+    };
+
+    if !matches_target_kind {
+        return Err(OrbitError::InvalidInput(format!(
+            "selector `{entry}` does not match the target's file/directory kind"
+        )));
+    }
+
+    Ok(())
+}
+
+fn unsupported_selector_kind(entry: &str) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "selector `{entry}` must use file:, dir:, or symbol:"
+    ))
 }
 
 pub(crate) use crate::runtime::task::canonicalize_context_files_for_read;

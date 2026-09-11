@@ -352,34 +352,24 @@ fn task_add_preserves_auto_task_title_prefix_behavior() {
     }
 }
 
+/// `add_task` is the shared core write path: task-pilot apply, automation
+/// seeding, and the runtime host all create tasks whose context names files
+/// the task will produce. Existence is enforced on the operator surfaces
+/// instead (CLI `task add`, `orbit.task.add`).
 #[test]
-fn task_add_validates_context_files_rejecting_missing_selectors() {
+fn task_add_keeps_context_selectors_that_do_not_exist_yet() {
     let (_root, runtime) = test_runtime();
 
-    let error = runtime
+    let task = runtime
         .add_task(TaskAddParams {
-            title: "Missing context".to_string(),
-            context_files: vec!["file:does/not/exist.rs".to_string()],
+            title: "Future context".to_string(),
+            context_files: vec!["file:src/future.rs".to_string()],
             workspace_path: Some(".".to_string()),
             ..Default::default()
         })
-        .expect_err("task add must reject missing file selector");
+        .expect("core add_task must accept a not-yet-existing file selector");
 
-    match error {
-        OrbitError::InvalidInput(msg) => {
-            assert!(
-                msg.contains("file:does/not/exist.rs"),
-                "error must name missing selector: {msg}"
-            );
-        }
-        other => panic!("expected InvalidInput, got {other:?}"),
-    }
-
-    let tasks = runtime.list_tasks().expect("list tasks");
-    assert!(
-        tasks.is_empty(),
-        "no task should be created on invalid context"
-    );
+    assert_eq!(task.context_files, vec!["file:src/future.rs".to_string()]);
 }
 
 #[test]

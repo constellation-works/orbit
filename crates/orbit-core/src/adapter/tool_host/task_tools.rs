@@ -29,6 +29,9 @@ pub(super) fn add(
     let workspace = required_string(&input, &["workspace"], "workspace")?;
     let raw_context_files =
         optional_csv_or_string_list_alias(&input, &["context_files"])?.unwrap_or_default();
+    if !allows_missing_context(&input)? {
+        runtime.ensure_context_selectors_exist(&raw_context_files, Some(workspace.as_str()))?;
+    }
     let task = runtime.add_task_with_identity(
         TaskAddParams {
             parent_id: None,
@@ -292,6 +295,12 @@ pub(super) fn update(
         ));
     }
     let id = required_string(&input, &["id"], "id")?;
+    let context_files = optional_csv_or_string_list_alias(&input, &["context_files", "context"])?;
+    if !allows_missing_context(&input)?
+        && let Some(candidates) = context_files.as_deref()
+    {
+        runtime.ensure_context_selectors_exist(candidates, None)?;
+    }
     let task = runtime.update_task_with_owner(
         &id,
         TaskUpdateParams {
@@ -349,10 +358,7 @@ pub(super) fn update(
             job_run_id: optional_raw_string(&input, "job_run_id")?.map(empty_string_to_none),
             crew: optional_raw_string(&input, "crew")?.map(empty_string_to_none),
             orchestrator: optional_raw_string(&input, "orchestrator")?.map(empty_string_to_none),
-            context_files: optional_csv_or_string_list_alias(
-                &input,
-                &["context_files", "context"],
-            )?,
+            context_files,
             upsert_artifacts: parse_artifacts(&input)?,
         },
         agent,
@@ -360,6 +366,17 @@ pub(super) fn update(
         owner.map(|owner| owner.owner_run_id),
     )?;
     serialize_task(runtime, &task)
+}
+
+/// Whether the caller explicitly opted out of the operator-surface check that
+/// every `context_files` selector already exists. Internal callers never reach
+/// these handlers, so the escape is the only way for an agent to record a
+/// target the task is about to create.
+fn allows_missing_context(input: &Value) -> Result<bool, OrbitError> {
+    Ok(
+        optional_bool_alias(input, &["allow_missing_context", "allowMissingContext"])?
+            .unwrap_or(false),
+    )
 }
 
 fn optional_raw_string_alias(input: &Value, keys: &[&str]) -> Result<Option<String>, OrbitError> {

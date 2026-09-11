@@ -1823,12 +1823,16 @@ fn task_update_tool_replaces_context_files_and_keeps_future_paths() {
         .expect("created updated_at")
         .to_string();
 
+    // `file:src/future.rs` does not exist yet, so the tool's default existence
+    // guard would refuse it; the explicit escape is how a caller records a
+    // target the task is about to create.
     let output = runtime
         .execute_tool_command(
             "orbit.task.update",
             json!({
                 "id": task_id,
                 "context_files": ["[\"file:src/main.rs\", \"file:src/future.rs\"]"],
+                "allow_missing_context": true,
             }),
             Some("codex".to_string()),
             Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
@@ -1868,6 +1872,79 @@ fn task_update_tool_replaces_context_files_and_keeps_future_paths() {
             .iter()
             .any(|event| event.payload["data"]["id"] == shown["id"]),
         "{events:#?}"
+    );
+}
+
+/// The existence guard lives on the tool surface, not in `add_task` /
+/// `update_task`: an agent typo must not ship a task whose context is dead on
+/// arrival, and the rejected write must leave the task untouched.
+#[test]
+fn task_tools_reject_context_selectors_that_do_not_exist() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let src_dir = repo_root.join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(src_dir.join("lib.rs"), "pub fn before() {}\n").expect("write source file");
+
+    let add_error = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({
+                "title": "Missing context",
+                "description": "Exercise the tool-surface existence guard.",
+                "complexity": "low",
+                "workspace": repo_root.to_string_lossy(),
+                "context_files": ["file:src/typo.rs"],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect_err("task add tool must reject a missing selector");
+    assert!(
+        add_error.to_string().contains("file:src/typo.rs"),
+        "{add_error}"
+    );
+    assert!(
+        runtime.list_tasks().expect("list tasks").is_empty(),
+        "a rejected add must not create a task"
+    );
+
+    let added = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({
+                "title": "Existing context",
+                "description": "Exercise the tool-surface existence guard.",
+                "complexity": "low",
+                "workspace": repo_root.to_string_lossy(),
+                "context_files": ["file:src/lib.rs"],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("task add tool accepts an existing selector");
+    let task_id = added["id"].as_str().expect("task id").to_string();
+
+    let update_error = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": task_id,
+                "context_files": ["file:src/typo.rs"],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect_err("task update tool must reject a missing selector");
+    assert!(
+        update_error.to_string().contains("file:src/typo.rs"),
+        "{update_error}"
+    );
+
+    let preserved = runtime.get_task(&task_id).expect("reload task");
+    assert_eq!(
+        preserved.context_files,
+        vec!["file:src/lib.rs".to_string()],
+        "a rejected update must leave context_files unchanged"
     );
 }
 
