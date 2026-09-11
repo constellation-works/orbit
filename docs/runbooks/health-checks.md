@@ -108,17 +108,32 @@ catalog's `ws_*` ids in `~/.orbit/workspaces.json`, so a partition is orphaned o
 registry claims it; the synthetic `ws_unbound-data-dir` partition every `--root <data-dir>` write
 lands in is never reported. `orphan-task-stores` exists for partitions a prior teardown on an
 older binary left behind, or a checkout removed without running teardown at all: each warning
-names the orphaned workspace id, its partition path, and its task-bundle count. Repair with:
+names the orphaned workspace id, its partition path, and its task-bundle count.
+
+An unclaimed partition that **still holds task bundles** is reported on its own terms and is never
+deleted by the repair. On disk it is indistinguishable from a live checkout's partition whose
+registry row was lost, and every `orbit` subcommand recreates an empty `~/.orbit/tasks/index.sqlite`
+before any check runs — so a lost or restored-without-`index.sqlite` registry makes every checkout
+other than the one you are standing in look abandoned. That warning points at recovery instead:
+
+```sh
+cd <the checkout that owns the bundles>
+orbit task reindex
+```
+
+`orbit task reindex` rebuilds the registry rows for one partition from its bundle directories, so
+it must be run once per affected checkout. Only after confirming a checkout is genuinely gone
+should you delete its populated partition directory by hand.
+
+An unclaimed partition with **no task bundles** carries nothing to recover. Repair those with:
 
 ```sh
 orbit doctor --fix-orphan-task-stores --confirm
 ```
 
-The repair deletes task bundles, so it refuses to run without `--confirm`. It resolves the claims
-once, deletes only the partitions no binding names, retires any registry rows naming them, and is
-idempotent: running it again after a partition is gone is a no-op. When the task registry itself
-is missing, the check warns and the repair refuses rather than treating every live partition as
-unclaimed.
+The repair deletes partition directories, so it refuses to run without `--confirm`. It resolves the
+claims once, deletes only the empty partitions no binding names, retires any registry rows naming
+them, and is idempotent: running it again after a partition is gone is a no-op.
 
 ### Repair retired activity backends
 
