@@ -119,13 +119,22 @@ fn companion_install_reports_a_dead_connection() {
 
 /// Serves `body` in 64 KiB chunks separated by `delay_between_chunks`, so the
 /// whole transfer takes far longer than any single quiet period.
+///
+/// The listener stays open and accepts in a loop (see
+/// [`accept_real_request`]) rather than a single `accept()`, because reqwest
+/// may open and drop a pre-flight/probe connection before the connection
+/// that actually carries the request (ORB-12141 / F2026-09-080): a
+/// single-accept fixture races that probe for the one accepted stream and,
+/// under concurrent load that widens the race window, loses it often enough
+/// to flake `cargo test` runs that share the host with other jobs.
 fn serve_throttled_response(body: Vec<u8>, delay_between_chunks: Duration) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind throttled HTTP server");
     let address = listener.local_addr().expect("throttled server address");
 
     thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept companion download");
-        consume_request_head(&mut stream);
+        let Some(mut stream) = accept_real_request(&listener) else {
+            return;
+        };
         std::io::Write::write_all(
             &mut stream,
             format!(
@@ -150,6 +159,9 @@ fn serve_throttled_response(body: Vec<u8>, delay_between_chunks: Duration) -> St
 /// Serves response headers and one 64 KiB chunk of a body that promises one
 /// more byte, then holds the socket open without ever sending it. The client
 /// must therefore observe a stalled read rather than a premature EOF.
+///
+/// See [`serve_throttled_response`] for why this loops on accept rather than
+/// taking exactly one connection.
 fn serve_stalled_response() -> String {
     const DELIVERED_PREFIX: usize = 64 * 1024;
 
@@ -157,8 +169,9 @@ fn serve_stalled_response() -> String {
     let address = listener.local_addr().expect("stalled server address");
 
     thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept companion download");
-        consume_request_head(&mut stream);
+        let Some(mut stream) = accept_real_request(&listener) else {
+            return;
+        };
         std::io::Write::write_all(
             &mut stream,
             format!(
@@ -179,21 +192,54 @@ fn serve_stalled_response() -> String {
     format!("http://{address}/companion")
 }
 
+/// Accepts connections until one sends a complete request head, then returns
+/// that stream. Connections that never complete a head — a dropped probe, a
+/// connect that the client abandons, one that idles past
+/// `PROBE_HEAD_TIMEOUT` — are discarded and the loop keeps accepting, so the
+/// fixture tolerates any number of non-request connections ahead of the real
+/// one. Returns `None` only if the listener itself errors out, which does not
+/// happen in these tests short of process teardown.
+fn accept_real_request(listener: &TcpListener) -> Option<TcpStream> {
+    for stream in listener.incoming() {
+        let mut stream = stream.ok()?;
+        if consume_request_head(&mut stream) {
+            return Some(stream);
+        }
+    }
+    None
+}
+
+/// Bounds how long [`accept_real_request`] waits for a single connection to
+/// send its request head before giving up on it and accepting the next one.
+/// Far below every assertion window in this module, so even a few discarded
+/// probes cannot push a test past its elapsed-time bounds.
+const PROBE_HEAD_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Reads and discards the request head so a fixture responds only after the
 /// client has finished sending its request. hyper rejects a response that
 /// overlaps the request it is still writing (`UnexpectedMessage`), which makes
 /// an eager fixture fail the exchange at random (ORB-11761).
-fn consume_request_head(stream: &mut TcpStream) {
+///
+/// Returns whether a complete head (`\r\n\r\n`) was received. A connection
+/// that closes early or sends nothing within `PROBE_HEAD_TIMEOUT` is treated
+/// as a probe, not an error, so the caller can move on to the next accepted
+/// connection instead of panicking.
+fn consume_request_head(stream: &mut TcpStream) -> bool {
+    stream
+        .set_read_timeout(Some(PROBE_HEAD_TIMEOUT))
+        .expect("set probe read timeout");
+
     let mut head = Vec::new();
     let mut byte = [0; 1];
 
     while !head.ends_with(b"\r\n\r\n") {
         match std::io::Read::read(stream, &mut byte) {
-            Ok(0) => break,
+            Ok(0) => return false,
             Ok(_) => head.push(byte[0]),
-            Err(error) => panic!("read companion request head: {error}"),
+            Err(_) => return false,
         }
     }
+    true
 }
 
 #[test]
