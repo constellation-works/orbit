@@ -5,7 +5,8 @@ use std::fs;
 use std::path::Path;
 
 use orbit_store::maintenance::task_registry::{
-    BindWorkspaceParams, TaskRegistryStore, task_registry_path, task_workspaces_dir,
+    BindWorkspaceParams, RegisterWorkspaceParams, TaskRegistryStore, task_registry_path,
+    task_workspaces_dir,
 };
 
 use crate::task_store::{
@@ -26,6 +27,18 @@ fn bind(global_root: &Path, workspace_id: &str, slug: &str, repo_root: &Path) {
             repo_fingerprint: None,
         })
         .expect("bind task-registry workspace");
+}
+
+fn register_logical_workspace(global_root: &Path, workspace_id: &str, slug: &str) {
+    let tasks =
+        TaskRegistryStore::open(&task_registry_path(global_root)).expect("open task registry");
+    tasks
+        .register_workspace(RegisterWorkspaceParams {
+            workspace_id: workspace_id.to_string(),
+            slug: slug.to_string(),
+            repo_fingerprint: None,
+        })
+        .expect("register logical workspace");
 }
 
 /// Delete the task registry the way a corrupted restore or a manual rebuild
@@ -199,6 +212,42 @@ fn losing_the_task_registry_leaves_populated_partitions_for_reindex() {
             .join("ORB-2")
             .is_dir(),
         "the unclaimed checkout's task bundle must survive the repair"
+    );
+}
+
+/// An imported workspace is registered on the host without a machine-local
+/// checkout. Its partition is still owned task state and must survive the
+/// orphan-store scan and repair.
+#[test]
+fn registered_checkoutless_workspace_claims_its_partition() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    fs::create_dir_all(&global_root).expect("create global root");
+
+    register_logical_workspace(&global_root, "ws_mirror", "mirror");
+    write_task_bundle(&global_root, "ws_mirror", "ORB-1");
+
+    let partitions = inspect_task_store_partitions(&global_root)
+        .expect("inspect partitions")
+        .expect("partitions directory exists");
+    assert_eq!(partitions.scanned, 1);
+    assert!(partitions.removable.is_empty(), "{partitions:?}");
+    assert!(partitions.stale.is_empty(), "{partitions:?}");
+    assert!(partitions.unowned.is_empty(), "{partitions:?}");
+    assert!(partitions.unreachable.is_empty(), "{partitions:?}");
+
+    let removed = remove_unclaimed_task_stores(&global_root).expect("run the repair");
+    assert!(removed.is_empty(), "the repair removed {removed:?}");
+    assert!(
+        task_workspaces_dir(&global_root)
+            .join("ws_mirror")
+            .join("ORB-1")
+            .is_dir(),
+        "a registered checkout-less workspace's task bundle must survive"
+    );
+    assert!(
+        partition_is_bound(&global_root, "ws_mirror").expect("read bindings"),
+        "the logical workspace registration must survive"
     );
 }
 
