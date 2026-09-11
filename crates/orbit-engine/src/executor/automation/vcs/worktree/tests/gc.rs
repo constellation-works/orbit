@@ -456,6 +456,64 @@ fn setup_and_gc_derive_the_same_worktree_path() {
     );
 }
 
+#[test]
+fn stored_epic_pipeline_input_matches_worktree_setup_path() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let run = epic_pipeline_run("jrun-epic-derivation", JobRunState::Success, "ORB-EPIC");
+    let stored_input = run.input.clone().unwrap();
+
+    let gc_identity = WorktreeIdentity::from_input(&stored_input, Some(&run.run_id)).unwrap();
+    let setup_input = json!({
+        "task_ids": ["ORB-EPIC"],
+        "run_id": "epic-ORB-EPIC",
+        "branch_prefix": "epic",
+    });
+    let setup_identity = WorktreeIdentity::from_input(&setup_input, None).unwrap();
+
+    assert_eq!(gc_identity.task_ids, vec!["ORB-EPIC".to_string()]);
+    assert_eq!(gc_identity.branch_prefix, "epic");
+    assert_eq!(gc_identity.run_id, "epic-ORB-EPIC");
+    assert_eq!(
+        gc_identity.path(&repo).unwrap(),
+        setup_identity.path(&repo).unwrap()
+    );
+}
+
+#[test]
+fn epic_pipeline_worktree_is_collected_from_stored_run_input() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let run = epic_pipeline_run("jrun-epic-gc", JobRunState::Success, "ORB-EPIC-GC");
+    let worktree = resolve_worktree_path_from_prefix(&repo, "epic", "epic-ORB-EPIC-GC").unwrap();
+    add_worktree(&repo, &worktree, "epic/ORB-EPIC-GC");
+    let host = FakeTaskHost::new(vec![task_fixture("ORB-EPIC-GC", TaskStatus::Done)]);
+
+    let result = collect_worktrees(
+        &repo,
+        std::slice::from_ref(&run),
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let report = result
+        .reports
+        .iter()
+        .find(|report| report.path == worktree)
+        .expect("the epic worktree must be classified from the stored run input");
+    assert_eq!(report.action, "removed");
+    assert_eq!(report.run_id.as_deref(), Some("jrun-epic-gc"));
+    assert_eq!(report.task_id.as_deref(), Some("ORB-EPIC-GC"));
+    assert_eq!(report.task_status, Some(TaskStatus::Done));
+    assert!(report.bytes_reclaimed > 0);
+    assert!(!worktree.exists());
+}
+
 /// Stored runs from before `task_ids` existed still carry the singular key.
 #[test]
 fn legacy_singular_task_id_run_is_still_recognized() {
@@ -803,6 +861,12 @@ fn pipeline_run(id: &str, state: JobRunState, task_ids: &[&str]) -> JobRun {
 /// the singular key, and gc must keep recognizing them.
 fn legacy_task_id_run(id: &str, state: JobRunState, task_id: &str) -> JobRun {
     job_run(id, state, json!({ "task_id": task_id }))
+}
+
+fn epic_pipeline_run(id: &str, state: JobRunState, epic_task_id: &str) -> JobRun {
+    let mut run = job_run(id, state, json!({ "epic_task_id": epic_task_id }));
+    run.job_id = "epic_pipeline".to_string();
+    run
 }
 
 /// A run that names no task at all — it never went through `setup_worktree`.
