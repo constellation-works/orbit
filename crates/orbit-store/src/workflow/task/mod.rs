@@ -48,7 +48,7 @@
 //!   <global>/tasks/workspaces/<ws-id>/ORB-XXXXX/artifacts/files/
 //!
 //! # 3. Re-index to validate the restored bundles end-to-end.
-//! orbit task reindex --workspace <ws-id>
+//! orbit task reindex --task-workspace <task-workspace-id>
 //! ```
 //!
 //! The manifest hashes are the source of truth — `orbit task reindex` reads
@@ -568,7 +568,7 @@ fn resolve_target(
     if let Some(requested) = target_workspace_id {
         let binding = registry.find_workspace_binding(requested)?.ok_or_else(|| {
             OrbitError::InvalidInput(format!(
-                "target workspace '{requested}' is not registered in the coordination registry; register it first or omit --workspace to register the source workspace"
+                "target workspace '{requested}' is not registered in the coordination registry; register it first or omit --task-workspace to register the source workspace"
             ))
         })?;
         return Ok(ImportTarget {

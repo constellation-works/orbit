@@ -32,7 +32,7 @@ impl OrbitRuntime {
     }
 
     /// Resolve the workspace id a migration command targets: an explicit
-    /// `--workspace <id>` (a task-registry workspace id like `orbit-8fb91e`) or,
+    /// `--task-workspace <id>` (a task-registry workspace id like `orbit-8fb91e`) or,
     /// when absent, the current workspace.
     fn resolve_migration_workspace(
         &self,

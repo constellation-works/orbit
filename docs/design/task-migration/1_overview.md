@@ -81,21 +81,24 @@ machine a disjoint id range).
 Move a workspace's tasks from machine A to machine B:
 
 ```sh
-# On A — pack the workspace's tasks (omit --workspace to use the current one)
+# On A — pack the workspace's tasks (omit --task-workspace to use the current one)
 orbit task export --all -o tasks.tar.zst            # or --ids ORB-00001,ORB-00007
 
 # Move the archive
 scp tasks.tar.zst B:/tmp/
 
-# On B — import, renumbering any id that already exists locally
-orbit task import /tmp/tasks.tar.zst --on-conflict=renumber
+# On B — import into B's task-registry workspace, renumbering any id that already exists locally
+orbit task import /tmp/tasks.tar.zst \
+  --task-workspace <target-task-workspace-id> --on-conflict=renumber
 ```
 
 Import is transactional: it validates the manifest version and every bundle's
 integrity *before* touching state, so a corrupt or version-incompatible archive
-fails with no partial writes. It resolves the target workspace (the archive's
-source workspace if registered locally, else `--workspace <id>`, else it
-registers the source workspace id), keeps ids that are free, renumbers the rest,
+fails with no partial writes. `--task-workspace` selects the task-registry
+partition, whose id is the `workspace_id` in B's checkout `.orbit/config.yaml`;
+the checkout must already be registered locally. If omitted, import resolves the
+archive's source workspace if registered locally, otherwise it registers the
+source workspace id without a checkout. It keeps ids that are free, renumbers the rest,
 rebuilds the index rows from bundle YAML, and bumps the allocator past the highest
 landed id. When anything is
 renumbered, an `<archive>.idmap.json` old→new map is written and printed.
@@ -135,7 +138,7 @@ padding is a minimum display width, not an exhaustion boundary.
 If bundles were `rsync`'d or moved by hand, rebuild the index from disk:
 
 ```sh
-orbit task reindex --workspace <ws-id>   # default: the current workspace
+orbit task reindex --task-workspace <task-workspace-id>   # default: the current workspace
 ```
 
 Reindex treats the on-disk bundles as the source of truth: it registers any

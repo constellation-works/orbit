@@ -15,8 +15,8 @@ pub struct TaskImportArgs {
     pub archive: PathBuf,
     /// Target task-registry workspace id (default: the archive's source
     /// workspace, registering it locally if unknown).
-    #[arg(long)]
-    pub workspace: Option<String>,
+    #[arg(long = "task-workspace", value_name = "TASK_WORKSPACE")]
+    pub task_workspace: Option<String>,
     /// How to resolve an incoming task id that already exists locally.
     #[arg(long = "on-conflict", value_enum, default_value_t = ConflictArg::Renumber)]
     pub on_conflict: ConflictArg,
@@ -59,7 +59,7 @@ impl Execute for TaskImportArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let outcome = runtime.import_tasks(
             &self.archive,
-            self.workspace.as_deref(),
+            self.task_workspace.as_deref(),
             self.on_conflict.into(),
         )?;
 

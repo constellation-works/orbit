@@ -14,8 +14,8 @@ pub struct TaskExportArgs {
     #[arg(short = 'o', long = "output", value_name = "ARCHIVE")]
     pub output: PathBuf,
     /// Task-registry workspace id to export from (default: current workspace).
-    #[arg(long)]
-    pub workspace: Option<String>,
+    #[arg(long = "task-workspace", value_name = "TASK_WORKSPACE")]
+    pub task_workspace: Option<String>,
     /// Export only these task ids (comma-separated). Defaults to all tasks.
     #[arg(long, value_delimiter = ',', conflicts_with = "all")]
     pub ids: Vec<String>,
@@ -34,7 +34,8 @@ impl Execute for TaskExportArgs {
         } else {
             ExportSelection::Ids(self.ids)
         };
-        let outcome = runtime.export_tasks(self.workspace.as_deref(), selection, &self.output)?;
+        let outcome =
+            runtime.export_tasks(self.task_workspace.as_deref(), selection, &self.output)?;
 
         Ok(Payload::detail(
             json!({
