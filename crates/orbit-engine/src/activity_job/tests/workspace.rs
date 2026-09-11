@@ -531,12 +531,19 @@ impl GitShim {
             .env("PATH", std::env::join_paths(paths).expect("shim PATH"))
             .output()
             .expect("isolated git shim test");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         assert!(
             output.status.success(),
             "git shim test failed:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
+            stdout,
             String::from_utf8_lossy(&output.stderr)
         );
+        // A libtest `--exact` filter that matches nothing still exits 0, which
+        // would let a stale `test` literal (e.g. after the enclosing test was
+        // renamed) make this fixture pass without ever running the child's
+        // assertions. Require the harness summary to confirm the one test we
+        // asked for actually ran.
+        assert_exactly_one_test_ran(&exact_test, &stdout);
 
         None
     }
@@ -561,4 +568,40 @@ fn which_git() -> PathBuf {
         .expect("locate git");
     assert!(output.status.success(), "git must be on PATH");
     PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
+}
+
+/// Fails unless the child's libtest summary reports exactly one test run.
+/// `--exact <filter>` exits 0 whether it matched one test or filtered out
+/// every test, so `output.status.success()` alone cannot tell a real run
+/// apart from a stale `exact_test` that no longer names any function.
+fn assert_exactly_one_test_ran(exact_test: &str, child_stdout: &str) {
+    let passed = child_stdout.lines().find_map(|line| {
+        let rest = line.strip_prefix("test result: ok. ")?;
+        let (count, _) = rest.split_once(" passed;")?;
+        count.parse::<usize>().ok()
+    });
+    assert_eq!(
+        passed,
+        Some(1),
+        "git shim child must run exactly one test ({exact_test}); got:\n{child_stdout}"
+    );
+}
+
+#[test]
+fn zero_matched_tests_are_rejected_instead_of_passing_silently() {
+    let stdout = "running 0 tests\n\n\
+        test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s\n";
+    let result =
+        std::panic::catch_unwind(|| assert_exactly_one_test_ran("module::renamed_away", stdout));
+    assert!(
+        result.is_err(),
+        "a filter that matched no tests must fail the git shim fixture, not pass silently"
+    );
+}
+
+#[test]
+fn one_matched_test_is_accepted() {
+    let stdout = "running 1 test\ntest module::real_test ... ok\n\n\
+        test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n";
+    assert_exactly_one_test_ran("module::real_test", stdout);
 }
