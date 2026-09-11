@@ -120,8 +120,8 @@ fn task_add_acceptance_criteria_does_not_split_on_commas() {
 }
 
 #[test]
-fn task_add_separates_global_workspace_selector_from_task_workspace_path() {
-    let cli = Cli::parse_from([
+fn task_add_rejects_removed_workspace_path_hint() {
+    let result = Cli::try_parse_from([
         "orbit",
         "task",
         "add",
@@ -135,16 +135,7 @@ fn task_add_separates_global_workspace_selector_from_task_workspace_path() {
         "packages/orbit",
     ]);
 
-    assert_eq!(cli.workspace.as_deref(), Some("ws_nebula"));
-
-    let Commands::Task(task) = cli.command else {
-        panic!("expected task command");
-    };
-    let TaskSubcommand::Add(args) = task.command else {
-        panic!("expected task add command");
-    };
-
-    assert_eq!(args.workspace_path.as_deref(), Some("packages/orbit"));
+    assert!(result.is_err());
 }
 
 #[test]

@@ -124,17 +124,13 @@ pub(super) struct CreateTaskBody {
     context_files: Vec<String>,
     #[serde(default)]
     external_refs: Vec<ExternalRef>,
-    #[serde(default)]
-    workspace_path: Option<String>,
     /// Trap field (ORB-00042): `workspace` is a *workspace selector* and this
     /// endpoint takes it as the `?workspace=<id>` query parameter, never as a
     /// body field. Historically bridge sent `{"workspace": <path>}` here and
     /// serde silently dropped the unknown key, so every task landed in the
     /// default workspace. Deserializing the key just to reject it makes the
-    /// mistake a loud 400. A `#[serde(alias = "workspace")]` on
-    /// `workspace_path` would be wrong semantics (a selector is not a sub-path
-    /// hint), and `#[serde(deny_unknown_fields)]` would break every tolerant
-    /// caller that sends extra keys.
+    /// mistake a loud 400. A `#[serde(deny_unknown_fields)]` would break every
+    /// tolerant caller that sends extra keys.
     #[serde(default)]
     workspace: Option<String>,
     #[serde(default = "default_priority")]
@@ -510,10 +506,9 @@ fn validate_artifact_request_path(path: &str) -> Result<String, String> {
 /// Workspace selection is the [`Ws`] extractor's: the `?workspace=<id>` query
 /// parameter picks the target workspace; omitting it falls back to the
 /// server's configured default workspace; an unknown id is a 404 and an
-/// inactive (stale-path) one a 400 — never a silent fallback. The body's
-/// `workspace_path` is *not* a selector: it is an optional sub-path hint
-/// within the already-selected workspace. A stray `workspace` body key is
-/// rejected with a 400 (see [`CreateTaskBody::workspace`], ORB-00042).
+/// inactive (stale-path) one a 400 — never a silent fallback. A stray
+/// `workspace` body key is rejected with a 400 (see
+/// [`CreateTaskBody::workspace`], ORB-00042).
 pub(super) async fn create_task_action(
     Ws(runtime): Ws,
     Json(body): Json<CreateTaskBody>,
@@ -521,8 +516,7 @@ pub(super) async fn create_task_action(
     if body.workspace.is_some() {
         return bad_request(
             "unsupported body field `workspace`: select the target workspace with the \
-             `?workspace=<id>` query parameter (`workspace_path` is a sub-path hint \
-             within the selected workspace, not a workspace selector)"
+             `?workspace=<id>` query parameter"
                 .to_string(),
         );
     }
@@ -557,7 +551,7 @@ pub(super) async fn create_task_action(
         plan: body.plan,
         comment: None,
         context_files: body.context_files,
-        workspace_path: body.workspace_path,
+        workspace_path: None,
         priority: body.priority,
         complexity,
         task_type: body.task_type,

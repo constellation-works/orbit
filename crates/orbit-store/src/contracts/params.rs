@@ -26,14 +26,12 @@ pub struct TaskCreateParams {
     pub plan: String,
     pub execution_summary: String,
     pub context_files: Vec<String>,
-    /// The working directory the agent should use when executing this task.
-    /// Typically the root of the repository being modified. Used to set `cwd`
-    /// for tool calls and to resolve relative `context_files` paths.
+    /// Deprecated compatibility metadata. Task bundles do not persist a
+    /// task-specific working directory; task context selectors are stored
+    /// relative to the repository root by the application layer.
     pub workspace_path: Option<String>,
-    /// The git repository root for this task, when it differs from
-    /// `workspace_path`. Most tasks leave this `None` (the repo root is the
-    /// same as the workspace). Set explicitly when the task targets a
-    /// sub-directory of a monorepo and git operations must run from the root.
+    /// Deprecated compatibility metadata retained for callers that still
+    /// construct the v2 create contract.
     pub repo_root: Option<String>,
     pub created_by: Option<String>,
     pub planned_by: Option<String>,

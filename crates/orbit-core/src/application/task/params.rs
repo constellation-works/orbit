@@ -93,6 +93,9 @@ pub struct TaskAddParams {
     pub plan: String,
     pub comment: Option<String>,
     pub context_files: Vec<String>,
+    /// Deprecated internal compatibility field. Task context selectors are
+    /// always canonicalized against the repository root; user-facing add
+    /// surfaces no longer accept a sub-directory hint.
     pub workspace_path: Option<String>,
     pub priority: TaskPriority,
     /// Required at create time. Human/agent surfaces must pass an assessed

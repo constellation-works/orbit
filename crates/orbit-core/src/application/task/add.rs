@@ -11,9 +11,7 @@ use crate::OrbitRuntime;
 
 use super::helpers::{authored_role_value, build_task_comments, effective_actor_label};
 use super::params::TaskAddParams;
-use super::paths::{
-    context_workspace_root, normalize_context_files_for_write, normalize_workspace_path,
-};
+use super::paths::normalize_context_files_for_write;
 
 const AUTO_TASK_TITLE_PREFIX: &str = "[auto-task] ";
 
@@ -84,8 +82,6 @@ impl OrbitRuntime {
         };
         let planned_by = authored_role_value(params.plan.as_str(), &create_label);
         let comments = build_task_comments(params.comment.clone(), create_label.as_str())?;
-        let workspace_path =
-            normalize_workspace_path(&self.paths().repo_root, params.workspace_path.as_deref())?;
         let dependencies = normalize_task_dependencies(params.dependencies.clone())?;
         self.validate_crew_name(params.crew.as_deref())?;
         params.orchestrator = self.canonical_crew_name(params.orchestrator.as_deref())?;
@@ -97,10 +93,13 @@ impl OrbitRuntime {
             )));
         }
 
-        let context_root =
-            context_workspace_root(&self.paths().repo_root, workspace_path.as_deref());
-        let context_files =
-            normalize_context_files_for_write(params.context_files.clone(), &context_root)?;
+        // Context selectors are stored relative to the repository root. The
+        // former `--workspace-path` hint changed validation roots without
+        // being persisted, leaving every reader with a different root.
+        let context_files = normalize_context_files_for_write(
+            params.context_files.clone(),
+            &self.paths().repo_root,
+        )?;
 
         let task = self.with_mutation(|| {
             let task = self.stores().task_records().create_with_key(
@@ -117,7 +116,7 @@ impl OrbitRuntime {
                     plan: params.plan.clone(),
                     execution_summary: String::new(),
                     context_files,
-                    workspace_path: workspace_path.clone(),
+                    workspace_path: None,
                     repo_root: None,
                     created_by: Some(create_label.clone()),
                     planned_by,
