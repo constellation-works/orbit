@@ -47,7 +47,7 @@ TASK_ID=$(orbit task add --title "..." --description "..." \
   --acceptance-criteria "..." --complexity medium --workspace .)
 orbit task update "$TASK_ID" --status backlog   # approve into the backlog
 
-orbit run ship                             # conflict-aware parallel flush of the backlog to PRs
+orbit run auto --for 2h --concurrency 10   # conflict-aware parallel flush of the backlog to PRs; pass --complete for auto-merge
 orbit run show <RUN_ID>                    # step-by-step progress
 orbit web serve                            # dashboard over every registered workspace
 orbit web connect my-server                # ...or a remote workspace over an SSH tunnel
