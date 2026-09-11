@@ -445,12 +445,13 @@ fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
 /// [ORB-12109]. Scoped to the whole host, not just this workspace, because the
 /// partition directory is itself host-global.
 ///
-/// A partition is named for its *task-registry* workspace id, so the task
-/// registry is what claims it while the bound checkout's `orbit_dir` exists.
-/// The workspace catalog and the synthetic `--root` partition are the other
-/// claimants. Comparing the directory name against catalog `ws_*` ids alone
-/// reported every `<slug>-<hash>` partition — including live ones — as
-/// orphaned [ORB-12119].
+/// A partition is normally named for its *task-registry* workspace id, so the
+/// task registry claims it while the bound checkout's `orbit_dir` exists.
+/// `orbit workspace init` may use the catalog's `ws_*` id directly; that
+/// catalog claim is live only while its recorded checkout is present. The
+/// synthetic `--root` partition is the other permanent claimant. Comparing
+/// the directory name against catalog `ws_*` ids alone reported every
+/// `<slug>-<hash>` partition — including live ones — as orphaned [ORB-12119].
 ///
 /// Partitions that still hold task bundles are reported without inviting a
 /// deletion unless their checkout is confirmed gone. A lost or rebuilt

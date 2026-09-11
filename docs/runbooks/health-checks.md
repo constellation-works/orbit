@@ -101,14 +101,14 @@ individual flag; neither command upgrades the binary or pulls a remote repositor
 `.orbit/` and the global task-store partition its task state is bound to, retiring that
 partition's rows in `~/.orbit/tasks/index.sqlite` in the same step.
 
-A partition directory is named for a **task-registry** workspace id
+A partition directory is normally named for a **task-registry** workspace id
 (`workspace_bindings.workspace_id` in `~/.orbit/tasks/index.sqlite`), minted as `<slug>-<hash>`
-for a checkout that binds without an explicit id. That is a different id space from the workspace
-catalog's `ws_*` ids in `~/.orbit/workspaces.json`. A task-registry binding claims its partition
-while the binding's recorded `orbit_dir` is present on disk. Catalog `ws_*` ids and the synthetic
-`ws_unbound-data-dir` partition every `--root <data-dir>` write lands in remain claims, so they are
-never reported. `orphan-task-stores` names each reported workspace id, its partition path, and its
-task-bundle count.
+for a checkout that binds without an explicit id. `orbit workspace init` may instead use its
+catalog `ws_*` id directly. A task-registry or catalog checkout claim is live while its recorded
+`orbit_dir` is present on disk; a missing checkout is reported as stale, and an unreadable path is
+reported as unreachable. Checkoutless catalog entries and the synthetic `ws_unbound-data-dir`
+partition every `--root <data-dir>` write lands in remain claims. `orphan-task-stores` names each
+reported workspace id, its partition path, and its task-bundle count.
 
 **Evidence rule for deleting task bundles.** A partition that holds task bundles is deleted by the
 repair only when its bound checkout is *confirmed gone*: `orbit_dir` stats as absent, and the
@@ -142,7 +142,16 @@ readable becomes a confirmed-stale binding, which the repair can then remove.
 
 For a partition whose binding is confirmed stale, the missing `orbit_dir` is the evidence that the
 checkout is gone. The confirmed repair removes that partition, including its task bundles, and
-retires the stale registry rows — as it does for every empty unclaimed partition:
+retires the stale registry rows — as it does for every empty unclaimed partition. If the deleted
+checkout is still listed in the workspace catalog, first deregister it with its name, `ws_*` id, or
+recorded absolute checkout path:
+
+```sh
+ORBIT_OPERATOR=1 orbit workspace remove <workspace-name-or-id-or-absolute-checkout-path>
+```
+
+That command changes only the catalog; it does not delete `.orbit` or task bundles. The subsequent
+doctor repair removes the now-confirmed stale task-store partition:
 
 ```sh
 orbit doctor --fix-orphan-task-stores --confirm
