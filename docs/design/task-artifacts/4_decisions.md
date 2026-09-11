@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Decisions"
 owner: codex
 last_updated: 2026-08-11
-last_validated: 2026-08-16
+last_validated: 2026-09-11
 status: Draft
 feature: task-artifacts
 doc_role: decisions
@@ -102,6 +102,10 @@ Store lifecycle/history events in `events.jsonl`, task comments in `comments.jso
 - Audit readers can stream events without parsing the envelope.
 - Review prose can be stored as Markdown while thread metadata stays structured.
 - Cost: reads that need the complete task now load several files. Event-log corruption handling and partial-write recovery become part of the store contract.
+
+**Superseded 2026-09-11:** The current task-bundle contract treats legacy `review-threads/`
+directories as inert sidecars and the review-thread surface as retired; see [Retired Review-Thread Sidecars](./specs/task-bundle-v2.md#retired-review-thread-sidecars).
+This note preserves the historical decision above.
 
 
 ## Typed relations over scattered link fields

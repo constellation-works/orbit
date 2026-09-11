@@ -2,13 +2,14 @@
 type: design
 summary: "Spec: Canonical Audit Actor Identity"
 tags: ["auditability"]
-last_validated: 2026-08-16
+last_validated: 2026-09-11
 ---
 
 # Spec: Canonical Audit Actor Identity
 
 `audit_events.role` is a single free-text label that conflates five unrelated kinds of
-value. Measured over a 30d window on the production audit database:
+value. Measured over a 30d window on the production audit database (as of 2026-08-16;
+not re-verified in this checkout):
 
 | kind | observed values |
 |---|---|
@@ -118,6 +119,6 @@ that is the grain the raw role aggregate already splits on.
 The role-grouped aggregate is retained: it is the raw, un-normalized view, and keeping
 both makes the normalization auditable rather than implicit.
 
-The dashboard summary emits `actor_split` beside `role_split`, and
+The dashboard summary emits `actor_split` beside `role_split`, and `orbit-web`'s
 `audit_event_to_json` exposes `actor`, `actor_kind`, `actor_vendor`, `actor_family`, and
 `actor_model` next to the untouched `role`.
