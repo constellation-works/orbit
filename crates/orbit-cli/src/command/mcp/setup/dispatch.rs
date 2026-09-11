@@ -244,8 +244,16 @@ pub(super) fn auto_detected_providers(
 ) -> Vec<McpProvider> {
     let mut providers = Vec::new();
     let claude_repo = repo_root.join(".claude").is_dir();
+    // A bare `~/.claude` directory is not evidence that Claude Code is
+    // installed: `orbit init` creates `~/.claude/skills/` for its own skill
+    // links (`orbit_core::bootstrap::init`), so a directory test would detect
+    // Claude on every host Orbit has ever touched. Require a config file
+    // Claude Code itself writes, the way every other home probe below does.
     let claude_home = home_dir
-        .map(|home| home.join(".claude").is_dir())
+        .map(|home| {
+            home.join(".claude.json").is_file()
+                || home.join(".claude").join("settings.json").is_file()
+        })
         .unwrap_or(false);
     if claude_repo || claude_home {
         providers.push(McpProvider::Claude);
