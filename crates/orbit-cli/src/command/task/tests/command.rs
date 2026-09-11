@@ -1,6 +1,7 @@
 use clap::{CommandFactory, Parser, error::ErrorKind};
 
-use crate::command::Cli;
+use crate::command::task::TaskSubcommand;
+use crate::command::{Cli, Commands};
 
 /// The trimmed `orbit task` surface has 11 subcommands. ORB-10428 returns lock
 /// administration here.
@@ -97,6 +98,47 @@ fn task_help_describes_update_status_transitions() {
     );
     assert!(!help.contains("proposed → archived"), "{help}");
     assert!(!help.contains("review → backlog"), "{help}");
+}
+
+#[test]
+fn task_migration_workspace_selector_is_distinct_from_global_workspace() {
+    let cli = Cli::try_parse_from([
+        "orbit",
+        "--workspace",
+        "catalog-workspace",
+        "task",
+        "import",
+        "tasks.tar.zst",
+        "--task-workspace",
+        "repo-abc123",
+    ])
+    .expect("task import should accept both workspace selectors");
+
+    assert_eq!(cli.workspace.as_deref(), Some("catalog-workspace"));
+    let Commands::Task(task) = cli.command else {
+        panic!("expected task command");
+    };
+    let TaskSubcommand::Import(args) = task.command else {
+        panic!("expected task import command");
+    };
+    assert_eq!(args.task_workspace.as_deref(), Some("repo-abc123"));
+
+    for (subcommand, args) in [
+        ("export", vec!["--output", "tasks.tar.zst"]),
+        ("reindex", Vec::new()),
+    ] {
+        let mut argv = vec![
+            "orbit",
+            "task",
+            subcommand,
+            "--task-workspace",
+            "repo-abc123",
+        ];
+        argv.extend(args);
+        Cli::try_parse_from(argv).unwrap_or_else(|error| {
+            panic!("task {subcommand} should accept --task-workspace: {error}")
+        });
+    }
 }
 
 #[test]

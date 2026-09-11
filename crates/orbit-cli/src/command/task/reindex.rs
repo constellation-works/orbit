@@ -8,8 +8,8 @@ use crate::command::{CommandOut, Execute, Payload};
 #[derive(Args)]
 pub struct TaskReindexArgs {
     /// Task-registry workspace id to reindex (default: current workspace).
-    #[arg(long)]
-    pub workspace: Option<String>,
+    #[arg(long = "task-workspace", value_name = "TASK_WORKSPACE")]
+    pub task_workspace: Option<String>,
     /// Emit machine-readable JSON instead of a human summary.
     #[arg(long)]
     pub json: bool,
@@ -17,7 +17,7 @@ pub struct TaskReindexArgs {
 
 impl Execute for TaskReindexArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let outcome = runtime.reindex_tasks(self.workspace.as_deref())?;
+        let outcome = runtime.reindex_tasks(self.task_workspace.as_deref())?;
 
         let doc = json!({
             "workspace_id": outcome.workspace_id,
