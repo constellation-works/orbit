@@ -99,12 +99,51 @@ capabilities = ["agent", "runner"]
 }
 
 #[test]
+fn a_caller_can_be_denied_with_an_explicit_or_empty_capability_list() {
+    for capabilities in [r#"["deny"]"#, "[]"] {
+        let (_dir, path) = write(&format!(
+            r#"
+default = "agent"
+
+[[callers]]
+machine_id = "hm_denied"
+capabilities = {capabilities}
+"#
+        ));
+        let file = load_callers(&path).expect("a denied row must parse");
+        let grant = file.resolve(&caller("hm_denied"));
+
+        assert!(grant.matched);
+        assert!(grant.granted.is_empty());
+        assert!(
+            SessionCapabilityPolicy::from_grant(McpSessionAuthority::Operator, grant)
+                .effective_for(None)
+                .is_empty(),
+            "a denied row must override the agent default"
+        );
+    }
+}
+
+#[test]
+fn deny_cannot_be_combined_with_a_grant_capability() {
+    let (_dir, path) = write(
+        r#"
+[[callers]]
+machine_id = "hm_denied"
+capabilities = ["deny", "agent"]
+"#,
+    );
+
+    let error = load_callers(&path).expect_err("mixed deny and grant must be rejected");
+
+    assert!(error.to_string().contains("deny"), "{error}");
+}
+
+#[test]
 fn a_malformed_file_is_never_served_as_if_absent() {
     for contents in [
         // Unknown key.
         "[[callers]]\nmachine_id = \"hm_alpha\"\ncapabilities = [\"agent\"]\nallow = true\n",
-        // Empty capabilities.
-        "[[callers]]\nmachine_id = \"hm_alpha\"\ncapabilities = []\n",
         // Unknown default.
         "default = \"operator\"\n",
         // Malformed machine_id.
@@ -514,7 +553,7 @@ fn the_seeder_never_writes_an_operator_grant() {
         },
     ]);
 
-    assert!(!seeded.contains("\"operator\""));
+    assert!(!seeded.contains("capabilities = [\"operator\"]"));
     assert!(seeded.contains("machine_id   = \"hm_alpha\""));
     assert!(seeded.contains("label        = \"daniels-mac-mini\""));
     assert!(seeded.contains("capabilities = [\"agent\"]"));
