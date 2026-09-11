@@ -1676,6 +1676,7 @@ async fn update_task_response_fields_survive_a_read_back() {
             "complexity": "hard",
             "task_type": "bug",
             "context_files": ["file:src/lib.rs"],
+            "allow_missing_context": true,
         }),
     )
     .await;
@@ -1844,6 +1845,117 @@ async fn update_task_requires_assessed_complexity() {
         Some(TaskComplexity::Medium),
         "a rejected update leaves the stored complexity alone"
     );
+}
+
+/// ORB-12199: the dashboard API applies the same operator-surface guard as
+/// `orbit task add` and `orbit.task.add` — a `context_files` selector with no
+/// existing in-workspace target is a 400, not a task whose context is dead on
+/// arrival.
+#[tokio::test]
+async fn create_task_rejects_a_dead_context_selector() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+
+    let response = post_task(
+        runtime.clone(),
+        json!({
+            "title": "dash ctx",
+            "description": "d",
+            "complexity": "low",
+            "context_files": ["file:does/not/exist.rs"],
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let message = body_json(response).await["error"]
+        .as_str()
+        .expect("error message")
+        .to_string();
+    assert!(
+        message.contains("file:does/not/exist.rs"),
+        "error must name the dead selector: {message}"
+    );
+    assert!(
+        runtime.list_tasks().expect("list tasks").is_empty(),
+        "a rejected create writes nothing"
+    );
+}
+
+/// ORB-12199: `allow_missing_context` is the same escape as the CLI's
+/// `--allow-missing-context` and the tool's `allow_missing_context` input, for
+/// the deliberate not-yet-created target.
+#[tokio::test]
+async fn create_task_allow_missing_context_permits_a_dead_selector() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+
+    let response = post_task(
+        runtime.clone(),
+        json!({
+            "title": "dash ctx",
+            "description": "d",
+            "complexity": "low",
+            "context_files": ["file:does/not/exist.rs"],
+            "allow_missing_context": true,
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = body_json(response).await;
+    assert_eq!(created["context_files"], json!(["file:does/not/exist.rs"]));
+}
+
+/// ORB-12199: `PATCH /api/tasks/:id` carries the same guard as create.
+#[tokio::test]
+async fn update_task_rejects_a_dead_context_selector() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    let task = seed_backlog_task(&runtime, "Untouched context task");
+
+    let response = patch_task(
+        runtime.clone(),
+        &task.id,
+        json!({ "context_files": ["file:also/missing.rs"] }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let message = body_json(response).await["error"]
+        .as_str()
+        .expect("error message")
+        .to_string();
+    assert!(
+        message.contains("file:also/missing.rs"),
+        "error must name the dead selector: {message}"
+    );
+    assert!(
+        runtime
+            .get_task(&task.id)
+            .expect("read task")
+            .context_files
+            .is_empty(),
+        "a rejected update leaves stored context_files alone"
+    );
+}
+
+/// ORB-12199: the same escape applies to update.
+#[tokio::test]
+async fn update_task_allow_missing_context_permits_a_dead_selector() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    let task = seed_backlog_task(&runtime, "Escaped context task");
+
+    let response = patch_task(
+        runtime.clone(),
+        &task.id,
+        json!({
+            "context_files": ["file:also/missing.rs"],
+            "allow_missing_context": true,
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let patched = body_json(response).await;
+    assert_eq!(patched["context_files"], json!(["file:also/missing.rs"]));
 }
 
 /// ORB-10648: the same contract on create — `POST /api/tasks` no longer absorbs

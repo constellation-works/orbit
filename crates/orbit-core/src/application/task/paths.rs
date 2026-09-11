@@ -107,11 +107,13 @@ impl OrbitRuntime {
     /// workspace the task write will use.
     ///
     /// This is an operator-surface guard: `orbit task add` / `orbit task
-    /// update` and the `orbit.task.add` / `orbit.task.update` tools call it so
-    /// a mistyped selector cannot ship a task whose context is dead on
-    /// arrival. Both surfaces expose an explicit escape for the deliberate
-    /// not-yet-created target. `add_task` and `update_task` themselves stay
-    /// permissive so internal callers are unaffected.
+    /// update`, the `orbit.task.add` / `orbit.task.update` tools, and the
+    /// dashboard `POST /api/tasks` / `PATCH /api/tasks/:id` handlers all call
+    /// it so a mistyped selector cannot ship a task whose context is dead on
+    /// arrival. Every surface exposes an explicit `allow_missing_context`
+    /// escape for the deliberate not-yet-created target. `add_task` and
+    /// `update_task` themselves stay permissive so internal callers are
+    /// unaffected.
     pub fn ensure_context_selectors_exist(
         &self,
         selectors: &[String],

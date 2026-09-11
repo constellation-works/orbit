@@ -122,6 +122,12 @@ pub(super) struct CreateTaskBody {
     plan: String,
     #[serde(default)]
     context_files: Vec<String>,
+    /// Escape for a `context_files` selector that names a target this task is
+    /// about to create, mirroring `orbit task add --allow-missing-context` and
+    /// the `orbit.task.add` tool's `allow_missing_context` input. See
+    /// [`OrbitRuntime::ensure_context_selectors_exist`](orbit_core::OrbitRuntime::ensure_context_selectors_exist).
+    #[serde(default)]
+    allow_missing_context: bool,
     #[serde(default)]
     external_refs: Vec<ExternalRef>,
     /// Trap field (ORB-00042): `workspace` is a *workspace selector* and this
@@ -264,6 +270,10 @@ pub(super) struct UpdateTaskBody {
     pr_status: Option<Option<String>>,
     #[serde(default)]
     context_files: Option<Vec<String>>,
+    /// Escape for a `context_files` selector that names a target this task is
+    /// about to create. See [`CreateTaskBody::allow_missing_context`].
+    #[serde(default)]
+    allow_missing_context: bool,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
     crew: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
@@ -539,6 +549,7 @@ pub(super) async fn create_task_action(
         Err(message) => return bad_request(message),
     };
     let model = body.model.as_deref().and_then(non_empty_string);
+    let allow_missing_context = body.allow_missing_context;
     let params = TaskAddParams {
         parent_id: body.parent_id,
         title: body.title,
@@ -563,6 +574,9 @@ pub(super) async fn create_task_action(
         orchestrator: body.orchestrator,
     };
     task_mutation_response(runtime, "task creation", move |runtime| {
+        if !allow_missing_context {
+            runtime.ensure_context_selectors_exist(&params.context_files, None)?;
+        }
         runtime.add_task_with_identity(params, None, model)
     })
     .await
@@ -599,6 +613,7 @@ pub(super) async fn update_task_action(
         Err(message) => return bad_request(message),
     };
     let model = body.model.as_deref().and_then(non_empty_string);
+    let allow_missing_context = body.allow_missing_context;
     let params = TaskUpdateParams {
         title: body.title,
         description: body.description,
@@ -625,6 +640,9 @@ pub(super) async fn update_task_action(
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task update", move |runtime| {
+        if !allow_missing_context && let Some(candidates) = params.context_files.as_deref() {
+            runtime.ensure_context_selectors_exist(candidates, None)?;
+        }
         runtime.update_task_with_identity(&id, params, None, model)
     })
     .await
