@@ -433,6 +433,12 @@ fn deletion_fault(_fault: DeletionFault) -> Result<(), OrbitError> {
 /// place atomically, so one file is always self-consistent, and the index
 /// validation that reads it on every listing pays nothing here.
 fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    // A missing bundle cannot be in a lifecycle transition. Avoid asking the
+    // shared-lock helper to create a stable lock target for a filtered miss.
+    if !bundle_dir.try_exists()? {
+        return read_bundle_at(bundle_dir);
+    }
+
     with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
         read_bundle_at(bundle_dir)
     })
@@ -440,6 +446,10 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
 
 /// Same lock as [`read_bundle_consistently`], without hashing artifact blobs.
 fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    if !bundle_dir.try_exists()? {
+        return read_bundle_lightweight_at(bundle_dir);
+    }
+
     with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
         read_bundle_lightweight_at(bundle_dir)
     })

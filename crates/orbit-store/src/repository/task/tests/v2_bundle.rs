@@ -123,6 +123,31 @@ fn bundle_store_lists_registered_bundles_from_registry() {
 }
 
 #[test]
+fn missing_bundle_read_does_not_create_lock_artifact() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = bundle_store(&temp);
+    store
+        .create_bundle(&sample_bundle("ORB-00000"))
+        .expect("create existing bundle");
+    let missing_bundle = store.bundle_path("ORB-00001").expect("missing bundle path");
+    let tasks_dir = missing_bundle.parent().expect("bundle parent");
+    let entries_before = lock_entries_for_task(tasks_dir, "ORB-00001");
+
+    assert!(matches!(
+        store.read_bundle("ORB-00001"),
+        Err(OrbitError::NotFound {
+            kind: NotFoundKind::Task,
+            ..
+        })
+    ));
+
+    assert_eq!(
+        lock_entries_for_task(tasks_dir, "ORB-00001"),
+        entries_before
+    );
+}
+
+#[test]
 fn delete_bundle_removes_canonical_bundle_and_registry_rows() {
     let temp = TempDir::new().expect("tempdir");
     let store = bundle_store(&temp);
