@@ -11,7 +11,7 @@ use chrono::Utc;
 use clap::{Parser, error::ErrorKind};
 use orbit_core::runtime::run_audit::RunAuditEvent;
 use orbit_core::{OrbitRuntime, V2AuditEventInsertParams};
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use crate::command::{Cli, CommandOutput, Commands, Execute};
@@ -568,6 +568,72 @@ fn parses_run_show_step() {
         }
         _ => panic!("expected show"),
     }
+}
+
+#[test]
+fn run_show_human_view_reports_backlog_exclusions() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    let now = Utc::now();
+    let run = JobRun {
+        run_id: "jrun-cli-exclusions".to_string(),
+        job_id: "task_auto_pipeline".to_string(),
+        attempt: 1,
+        state: JobRunState::Success,
+        scheduled_at: now,
+        started_at: Some(now),
+        finished_at: Some(now),
+        duration_ms: Some(1),
+        created_at: now,
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+    };
+    runtime
+        .sqlite_store()
+        .expect("store")
+        .upsert_job_run_for_workspace(&workspace_id, &run, None)
+        .expect("insert run");
+
+    let state = PipelineState::new(
+        run.run_id.clone(),
+        run.job_id.clone(),
+        json!({
+            "list_backlog": {
+                "excluded": [{
+                    "id": "QAB-00003",
+                    "reason": "unassessed_complexity",
+                    "conflicts": [],
+                }],
+            },
+        }),
+    );
+    runtime
+        .write_run_state(&run.run_id, &state)
+        .expect("write pipeline state");
+
+    let output =
+        super::run_show_payload(&runtime, Some(&run.run_id), None).expect("show run payload");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("show should produce a payload");
+    };
+    let (_, view) = payload.into_view();
+    let crate::output::payload::View::Blocks(blocks) = view else {
+        panic!("show keeps a human view");
+    };
+    let crate::output::payload::Block::Text(header) = &blocks[0] else {
+        panic!("show opens with prose");
+    };
+    assert!(header.contains("Excluded backlog tasks (1)"), "{header}");
+    assert!(
+        header.contains("Excluded task QAB-00003: unassessed_complexity"),
+        "{header}"
+    );
 }
 
 #[test]

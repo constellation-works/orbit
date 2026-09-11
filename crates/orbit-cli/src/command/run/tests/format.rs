@@ -110,6 +110,52 @@ fn no_child_dispatches_prints_nothing() {
     assert!(format_child_dispatch_lines(None).is_empty());
 }
 
+#[test]
+fn backlog_exclusion_lines_name_tasks_and_reasons() {
+    let state = PipelineState::new(
+        "jrun-test".to_string(),
+        "task_auto_pipeline".to_string(),
+        json!({
+            "list_backlog": {
+                "excluded": [
+                    {
+                        "id": "ORB-1",
+                        "reason": "unassessed_complexity",
+                        "conflicts": [],
+                    },
+                    {
+                        "id": "ORB-2",
+                        "reason": "crew_not_allowed",
+                        "crew": "luna",
+                        "conflicts": [{"locking_task_id": "ORB-9"}],
+                    },
+                ],
+            },
+        }),
+    );
+
+    assert_eq!(
+        format_backlog_exclusion_lines(Some(&state)),
+        vec![
+            "Excluded backlog tasks (2):".to_string(),
+            "Excluded task ORB-1: unassessed_complexity".to_string(),
+            "Excluded task ORB-2: crew_not_allowed crew=luna blocked-by=ORB-9".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn absent_or_empty_backlog_exclusions_print_nothing() {
+    let state = PipelineState::new(
+        "jrun-test".to_string(),
+        "task_auto_pipeline".to_string(),
+        json!({"list_backlog": {"excluded": []}}),
+    );
+
+    assert!(format_backlog_exclusion_lines(Some(&state)).is_empty());
+    assert!(format_backlog_exclusion_lines(None).is_empty());
+}
+
 /// [ORB-11253] A retuned drain says so in `orbit run show`; an untouched one
 /// stays quiet, because its submitted input already answers the question.
 #[test]
