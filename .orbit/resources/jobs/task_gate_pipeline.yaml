@@ -68,6 +68,12 @@ spec:
     landing_branch: ""
     # ORB-11187: forwarded to the leaf pipeline unchanged.
     completion: review
+    # ORB-12102: forwarded to the child pipeline, never pinned here. A gated
+    # local run publishes nothing by default — `task_local_pipeline` gates its
+    # `push` step on this value and defaults it to false — so a checkout with
+    # no usable `origin` no longer fails a push it never asked for. A caller
+    # that does want the child to publish passes `auto_push: true` to this job.
+    auto_push: false
     # ORB-11242: opt-in, run-scoped crew restriction. Empty means unrestricted,
     # which is the behavior of every caller that does not pass it. Forwarded
     # unchanged so the leaf/epic jobs this run admits inherit the same window.
@@ -114,7 +120,7 @@ spec:
           landing_branch: "{{ input.landing_branch }}"
           completion: "{{ input.completion }}"
           allowed_crews: "{{ input.allowed_crews }}"
-          auto_push: true
+          auto_push: "{{ input.auto_push }}"
         admission_task_ids: "{{ input.task_ids }}"
         admission_workflow: worktree_setup
         timeout_seconds: "{{ input.dispatch_timeout_seconds }}"
