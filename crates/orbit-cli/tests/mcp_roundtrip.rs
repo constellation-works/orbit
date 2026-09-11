@@ -4643,6 +4643,101 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
     drop(registry_holder);
 }
 
+/// ORB-12097: `readonly_orbit_command` must scrub the managed-run authority a
+/// job worker exports into every process it launches before it ever launches
+/// `bwrap` — otherwise bwrap forwards its own (inherited) environment into the
+/// sandboxed `orbit` child, and `ORBIT_REGISTRY_ROOT` there outranks the
+/// `--root canonical_root` argument the mutation below passes explicitly.
+///
+/// The sentinel registry stands in for that live authority. It is never bound
+/// into the sandbox, so only the scrub — not the mount — can keep the child
+/// off it: `--bind / /` leaves everything outside `canonical_root` and
+/// `workspace_state_root` fully writable.
+#[cfg(target_os = "linux")]
+#[test]
+fn readonly_orbit_command_scrubs_inherited_managed_run_authority() {
+    if !bubblewrap_mount_namespaces_available() {
+        return;
+    }
+
+    let sentinel = McpWorkspace::init_with_workspace_name("orb-12097-sentinel");
+    let sentinel_registry_root = sentinel.home.join(".orbit");
+    let sentinel_before = snapshot_fixture_state(&[&sentinel_registry_root]);
+
+    let workspace = McpWorkspace::init();
+    let created = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &json!({
+                "title": "Scrub regression fixture",
+                "description": "Guards ORB-12097",
+                "workspace": workspace.work,
+                "complexity": "low",
+                "model": "codex",
+            })
+            .to_string(),
+        ])
+        .output()
+        .expect("create the fixture task");
+    assert_command_succeeded("fixture task add", &created);
+    let created: Value = serde_json::from_slice(&created.stdout).expect("parse fixture task");
+    let task_id = created["id"].as_str().expect("fixture task id");
+
+    let worktree = add_linked_worktree(&workspace.work);
+    let canonical_root = workspace.home.join(".orbit");
+    let workspace_state_root = workspace.work.join(".orbit");
+
+    // Present the sentinel exactly the way a managed Orbit run presents live
+    // authority to every process it launches, including the test binary
+    // itself. Held only for the mutation attempt below, under the process-wide
+    // lock `test_env::scoped` takes.
+    let _ambient_authority = test_env::scoped([
+        ("ORBIT_MANAGED_RUN_CONTEXT", Some("1")),
+        ("ORBIT_RUN_ID", Some("jrun-orb-12097-regression")),
+        (
+            "ORBIT_REGISTRY_ROOT",
+            Some(
+                sentinel_registry_root
+                    .to_str()
+                    .expect("utf8 sentinel registry root"),
+            ),
+        ),
+    ]);
+
+    let mutation = readonly_orbit_command(
+        &worktree,
+        &workspace.home,
+        &canonical_root,
+        &workspace_state_root,
+    )
+    .args([
+        "tool",
+        "run",
+        "orbit.task.update",
+        "--root",
+        canonical_root.to_str().expect("utf8 Orbit root"),
+        "--input",
+        &json!({
+            "id": task_id,
+            "execution_summary": "must not persist",
+            "model": "codex"
+        })
+        .to_string(),
+    ])
+    .output()
+    .expect("attempt task mutation with ambient managed-run authority present");
+
+    assert_readonly_mutation_failed("CLI", &canonical_root, &mutation);
+    assert_eq!(
+        snapshot_fixture_state(&[&sentinel_registry_root]),
+        sentinel_before,
+        "the ambient ORBIT_REGISTRY_ROOT must never reach the sandboxed orbit child"
+    );
+}
+
 /// The mount test above needs user and mount namespaces, which nested
 /// container runners deny. This carries the same WAL-aware read contract on
 /// every Unix runner by making the registry file set itself unwritable: the
@@ -4920,6 +5015,13 @@ fn readonly_orbit_command(
     workspace_state_root: &Path,
 ) -> Command {
     let mut command = Command::new("bwrap");
+    // ORB-12097: bwrap forwards its own process environment into the sandbox
+    // unless told otherwise, so a managed run's ORBIT_RUN_ID/REGISTRY_ROOT/
+    // WORKSPACE would otherwise reach the `orbit` child through bwrap rather
+    // than through this fixture's deliberate --setenv values below.
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
         .args(["--die-with-parent", "--bind", "/", "/"])
         .arg("--ro-bind")
