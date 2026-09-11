@@ -1,5 +1,7 @@
 use clap::Args;
-use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_cmd::registry_runtime::{
+    RegisteredRuntimeFactory, global_root_for, workspace_runtime_binding,
+};
 use orbit_cmd::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
@@ -32,20 +34,42 @@ pub struct MigrateCommand {
 impl MigrateCommand {
     /// `--dry-run` dispatches before the runtime bootstrap in `main.rs`:
     /// opening a runtime would auto-apply the very migrations being listed.
-    pub fn execute_without_runtime(self, root_override: Option<&std::path::Path>) -> CommandOut {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let Some(resolved) =
-            RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?
-        else {
-            return Err(OrbitError::WorkspaceError(
-                "no initialized orbit workspace found from the current directory; run `orbit init` first"
-                    .to_string(),
-            ));
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&std::path::Path>,
+        workspace_selector: Option<&str>,
+    ) -> CommandOut {
+        let (global_root, orbit_dir) = match workspace_selector
+            .map(str::trim)
+            .filter(|selector| !selector.is_empty())
+        {
+            Some(selector) => {
+                let global_root = global_root_for(root_override)?;
+                let selected =
+                    RegisteredRuntimeFactory::resolve_workspace_selector(&global_root, selector)?;
+                // Validate the checkout-local identity without opening a
+                // runtime: missing or malformed identity is a re-homing
+                // boundary, not permission to inspect a different root.
+                workspace_runtime_binding(&selected.workspace, &selected.checkout)?;
+                (global_root, selected.checkout.orbit_dir)
+            }
+            None => {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let Some(resolved) =
+                    RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?
+                else {
+                    return Err(OrbitError::WorkspaceError(
+                        "no initialized orbit workspace found from the current directory; run `orbit init` first"
+                            .to_string(),
+                    ));
+                };
+                let global_root =
+                    RegisteredRuntimeFactory::resolve_bootstrap_roots_for_cwd(&cwd, root_override)?
+                        .global_root;
+                (global_root, resolved.shared_root)
+            }
         };
-        let global_root =
-            RegisteredRuntimeFactory::resolve_bootstrap_roots_for_cwd(&cwd, root_override)?
-                .global_root;
-        let status = migrate_dry_run_at(&global_root, &resolved.shared_root)?;
+        let status = migrate_dry_run_at(&global_root, &orbit_dir)?;
 
         // `--dry-run` exits nonzero when there is anything pending, and a
         // failing command has no payload — stdout carries records only
