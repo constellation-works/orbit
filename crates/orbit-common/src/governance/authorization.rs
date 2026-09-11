@@ -73,6 +73,17 @@ use orbit_types::tool::{McpCapability, RemoteCallerGrant, ToolSessionContext};
 /// trail rather than indistinguishable from an ordinary operator session.
 pub const OPERATOR_OVERRIDE_ENV: &str = "ORBIT_OPERATOR";
 
+/// Whether [`OPERATOR_OVERRIDE_ENV`] is set to a truthy value in this
+/// process's environment.
+///
+/// Exposed so a caller outside this module — actor-identity resolution, in
+/// particular — can tell "an operator deliberately raised this" apart from
+/// "nothing identified the caller" without re-deriving the truthy spellings
+/// this module already owns.
+pub fn operator_override_active() -> bool {
+    env_truthy(OPERATOR_OVERRIDE_ENV)
+}
+
 /// Process-envelope variables that declare the caller to be an agent.
 const AGENT_ENVELOPE_ENV: &[&str] = &["ORBIT_AGENT_NAME", "ORBIT_AGENT_MODEL"];
 

@@ -100,6 +100,92 @@ fn claude_workspace_scope_init_and_remove_preserve_unrelated_entries() {
 }
 
 #[test]
+fn claude_remove_deletes_empty_directory_init_created() {
+    // ORB-12115: `init` calls `write_json_object`, which `create_dir_all`s
+    // `.claude/` when it does not already exist. `remove` deleting only the
+    // settings file it wrote left that directory behind, orphaned and empty.
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    let orbit_root = repo.path().join(".orbit");
+    std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+    assert!(!repo.path().join(".claude").exists(), "precondition");
+
+    run_action(
+        McpAction::Init(ServerLaunch::default()),
+        repo.path(),
+        &orbit_root,
+        ProviderSelectionMode::Explicit(vec![McpProvider::Claude]),
+        Some(home.path().to_path_buf()),
+        ScopeArg::Workspace,
+    )
+    .expect("init claude");
+    assert!(
+        repo.path().join(".claude").is_dir(),
+        "init must create .claude/ when it is absent"
+    );
+
+    run_action(
+        McpAction::Remove,
+        repo.path(),
+        &orbit_root,
+        ProviderSelectionMode::Explicit(vec![McpProvider::Claude]),
+        Some(home.path().to_path_buf()),
+        ScopeArg::Workspace,
+    )
+    .expect("remove claude");
+
+    assert!(
+        !repo.path().join(".claude").exists(),
+        "remove must not leave behind the now-empty directory it created"
+    );
+}
+
+#[test]
+fn claude_remove_preserves_directory_with_unrelated_content() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    std::fs::create_dir_all(repo.path().join(".claude").join("commands"))
+        .expect("create unrelated .claude subdirectory");
+    std::fs::write(
+        repo.path().join(".claude").join("commands").join("foo.md"),
+        "unrelated command",
+    )
+    .expect("write unrelated file");
+
+    let orbit_root = repo.path().join(".orbit");
+    std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+
+    run_action(
+        McpAction::Init(ServerLaunch::default()),
+        repo.path(),
+        &orbit_root,
+        ProviderSelectionMode::Explicit(vec![McpProvider::Claude]),
+        Some(home.path().to_path_buf()),
+        ScopeArg::Workspace,
+    )
+    .expect("init claude");
+
+    run_action(
+        McpAction::Remove,
+        repo.path(),
+        &orbit_root,
+        ProviderSelectionMode::Explicit(vec![McpProvider::Claude]),
+        Some(home.path().to_path_buf()),
+        ScopeArg::Workspace,
+    )
+    .expect("remove claude");
+
+    assert!(
+        repo.path()
+            .join(".claude")
+            .join("commands")
+            .join("foo.md")
+            .exists(),
+        "remove must not touch directory content it did not create"
+    );
+}
+
+#[test]
 fn claude_operator_init_writes_single_operator_flag_and_refresh_is_idempotent() {
     let repo = tempdir().expect("repo tempdir");
     let home = tempdir().expect("home tempdir");
