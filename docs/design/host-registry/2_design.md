@@ -61,6 +61,8 @@ Each file write is atomic, but the two files are not one transaction: host.toml 
 
 RegisteredRuntimeFactory projects task_prefix into the global task allocator before opening a runtime. A pristine legacy allocator may adopt the configured prefix. Once allocation or task bindings have begun, a conflicting prefix fails closed rather than renaming issued IDs.
 
+The prefix is also the unit of task *authority* across hosts: the host whose prefix an id carries is that task's sole writer, and copies on other hosts are read-only mirrors. That model, and the export/import consequences, live in [task-migration](../task-migration/4_decisions.md).
+
 ## 3. Workspace catalog
 
 ~/.orbit/workspaces.json has schema version 1 and three distinct parts:
