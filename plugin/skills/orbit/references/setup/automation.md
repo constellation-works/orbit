@@ -134,7 +134,12 @@ orbit routine list                 # every routine: enabled / pinned / paused, n
 orbit routine show <name>          # definition, effective state, recent fires
 orbit sweep --dry-run              # what would fire; records and dispatches nothing
 orbit sweep --dry-run --verbose    # include not-due rows
+orbit --workspace <name> sweep --dry-run   # restrict the pass to one workspace
 ```
+
+The global `--workspace` selector narrows a sweep — dry-run or live — to one
+registered workspace's routines; without it the pass covers every routine-source
+workspace on the host.
 
 ## Observe and control
 

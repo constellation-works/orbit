@@ -122,7 +122,7 @@ fn workspace_discovery_builds_bound_runtimes() {
     )
     .expect("registry");
 
-    let discovered = discover_registered_workspaces(&global).expect("discovery");
+    let discovered = discover_registered_workspaces(&global, None).expect("discovery");
     assert!(discovered.errors.is_empty());
     assert_eq!(discovered.entries.len(), 1);
     let binding = discovered.entries[0]
