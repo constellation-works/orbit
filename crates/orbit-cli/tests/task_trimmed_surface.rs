@@ -85,6 +85,7 @@ fn task_update_repeats_dependencies_and_clears_context() {
     let dependency_a = workspace.add_task("First dependency");
     let dependency_b = workspace.add_task("Second dependency");
     let id = workspace.add_task("List update");
+    fs::write(workspace.work.join("one.rs"), "// one\n").expect("write one file");
 
     workspace.run(
         &[
@@ -109,6 +110,90 @@ fn task_update_repeats_dependencies_and_clears_context() {
     let context =
         workspace.task_json(&["task", "show", &id, "--fields", "context_files", "--json"]);
     assert_eq!(context, json!([]));
+}
+
+#[test]
+fn task_update_rejects_missing_context_file_and_leaves_task_unchanged() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task("Target task");
+    let before = workspace.task_json(&["task", "show", &id, "--json"]);
+
+    let output = workspace.run_raw(&["task", "update", &id, "--context", "file:does/not/exist.rs"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("file:does/not/exist.rs"),
+        "stderr must name selector: {stderr}"
+    );
+
+    let after = workspace.task_json(&["task", "show", &id, "--json"]);
+    assert_eq!(
+        before, after,
+        "task must be unchanged after rejected context update"
+    );
+}
+
+#[test]
+fn task_add_rejects_missing_context_file() {
+    let workspace = TestWorkspace::new();
+    let output = workspace.run_raw(&[
+        "task",
+        "add",
+        "--title",
+        "Add with missing context",
+        "--complexity",
+        "low",
+        "--context",
+        "file:does/not/exist.rs",
+    ]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("file:does/not/exist.rs"),
+        "stderr must name selector: {stderr}"
+    );
+}
+
+#[test]
+fn task_update_and_add_accept_valid_context_selectors() {
+    let workspace = TestWorkspace::new();
+    fs::write(
+        workspace.work.join("existing.rs"),
+        "pub fn my_symbol() {}\n",
+    )
+    .expect("write existing file");
+    fs::create_dir_all(workspace.work.join("existing_dir")).expect("create existing dir");
+
+    let added = workspace.task_json(&[
+        "task",
+        "add",
+        "--title",
+        "Add with valid context",
+        "--complexity",
+        "low",
+        "--context",
+        "file:existing.rs,dir:existing_dir,symbol:existing.rs#my_symbol:function",
+        "--json",
+    ]);
+    assert_eq!(
+        added["context_files"],
+        json!([
+            "file:existing.rs",
+            "dir:existing_dir",
+            "symbol:existing.rs#my_symbol:function"
+        ])
+    );
+
+    let id = added["id"].as_str().unwrap();
+    let updated = workspace.task_json(&[
+        "task",
+        "update",
+        id,
+        "--context",
+        "file:existing.rs",
+        "--json",
+    ]);
+    assert_eq!(updated["context_files"], json!(["file:existing.rs"]));
 }
 
 #[test]

@@ -2740,6 +2740,79 @@ fn mcp_serve_error_paths_return_tool_errors_and_keep_serving() {
 }
 
 #[test]
+fn mcp_task_add_and_update_validate_context_selectors() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+
+    // 1. Task add with missing context file fails
+    let add_err = client.call_tool_err(
+        "orbit_task_add",
+        json!({
+            "title": "Add with invalid context",
+            "description": "testing invalid context rejection",
+            "context_files": ["file:does/not/exist.rs"],
+            "complexity": "low",
+            "model": "codex"
+        }),
+    );
+    assert_eq!(add_err["code"], "invalid_input");
+    assert!(
+        add_err["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("file:does/not/exist.rs")),
+        "error should name missing selector: {add_err}"
+    );
+
+    // 2. Task add with valid context succeeds
+    std::fs::write(workspace.work.join("existing.rs"), "pub fn run() {}\n").expect("write file");
+    let added = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Add with valid context",
+            "description": "testing valid context acceptance",
+            "context_files": ["file:existing.rs", "symbol:existing.rs#run:function"],
+            "complexity": "low",
+            "model": "codex"
+        }),
+    );
+    let task_id = added["id"].as_str().expect("task id");
+    assert_eq!(
+        added["context_files"],
+        json!(["file:existing.rs", "symbol:existing.rs#run:function"])
+    );
+
+    // 3. Task update with missing context file fails and leaves task unchanged
+    let update_err = client.call_tool_err(
+        "orbit_task_update",
+        json!({
+            "id": task_id,
+            "context_files": ["file:does/not/exist.rs"],
+            "model": "codex"
+        }),
+    );
+    assert_eq!(update_err["code"], "invalid_input");
+    assert!(
+        update_err["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("file:does/not/exist.rs")),
+        "error should name missing selector: {update_err}"
+    );
+
+    let shown = client.call_tool_ok(
+        "orbit_task_show",
+        json!({
+            "id": task_id,
+            "model": "codex"
+        }),
+    );
+    assert_eq!(
+        shown["context_files"],
+        json!(["file:existing.rs", "symbol:existing.rs#run:function"]),
+        "task context_files must remain unchanged"
+    );
+}
+
+#[test]
 fn mcp_hybrid_search_without_companion_returns_lexical_results() {
     let workspace = McpWorkspace::init();
     let companion_state = workspace.home.join(".orbit").join("embed");

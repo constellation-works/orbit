@@ -176,7 +176,6 @@ impl OrbitRuntime {
             params.context_files.take()
         {
             let normalized = normalize_context_files_for_write(candidates, &prune_root)?;
-            // L-0030: explicit replacements preserve draft/future selectors; pruning stays read-time.
             params.context_files = Some(normalized);
             Vec::new()
         } else {

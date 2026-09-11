@@ -392,3 +392,86 @@ fn concurrent_explicit_edit_preserves_the_newer_status() {
         "the serialized edit must not restore its earlier status snapshot"
     );
 }
+
+#[test]
+fn task_update_rejects_missing_context_files_and_leaves_task_unchanged() {
+    let (root, runtime) = test_runtime();
+    let repo_dir = root.path().join("repo");
+    std::fs::create_dir_all(repo_dir.join("src")).expect("create src");
+    std::fs::write(repo_dir.join("src/lib.rs"), b"pub fn run() {}\n").expect("write lib.rs");
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Original context".to_string(),
+            context_files: vec!["file:src/lib.rs".to_string()],
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("add task succeeds");
+
+    let error = runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                context_files: Some(vec!["file:does/not/exist.rs".to_string()]),
+                ..Default::default()
+            },
+        )
+        .expect_err("update must reject missing context file");
+
+    match error {
+        orbit_common::OrbitError::InvalidInput(msg) => {
+            assert!(
+                msg.contains("file:does/not/exist.rs"),
+                "error must name missing selector: {msg}"
+            );
+        }
+        other => panic!("expected InvalidInput, got {other:?}"),
+    }
+
+    let reread = runtime.get_task(&task.id).expect("get task");
+    assert_eq!(
+        reread.context_files,
+        vec!["file:src/lib.rs".to_string()],
+        "task context_files must remain unchanged"
+    );
+}
+
+#[test]
+fn task_update_accepts_valid_context_selectors() {
+    let (root, runtime) = test_runtime();
+    let repo_dir = root.path().join("repo");
+    std::fs::create_dir_all(repo_dir.join("src")).expect("create src");
+    std::fs::write(repo_dir.join("src/lib.rs"), b"pub fn run() {}\n").expect("write lib.rs");
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Initial task".to_string(),
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("add task succeeds");
+
+    let updated = runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                context_files: Some(vec![
+                    "file:src/lib.rs".to_string(),
+                    "dir:src".to_string(),
+                    "symbol:src/lib.rs#run:function".to_string(),
+                ]),
+                ..Default::default()
+            },
+        )
+        .expect("update with valid context selectors succeeds");
+
+    assert_eq!(
+        updated.context_files,
+        vec![
+            "file:src/lib.rs".to_string(),
+            "dir:src".to_string(),
+            "symbol:src/lib.rs#run:function".to_string(),
+        ]
+    );
+}
