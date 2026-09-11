@@ -130,6 +130,46 @@ fn task_update_acceptance_criteria_does_not_split_on_commas() {
 }
 
 #[test]
+fn task_update_accepts_priority() {
+    for priority in ["low", "medium", "high", "critical"] {
+        let cli = Cli::try_parse_from([
+            "orbit",
+            "task",
+            "update",
+            "ORB-00001",
+            "--priority",
+            priority,
+        ])
+        .unwrap_or_else(|error| panic!("priority {priority} must parse: {error}"));
+
+        let Commands::Task(task) = cli.command else {
+            panic!("expected task command");
+        };
+        let TaskSubcommand::Update(args) = task.command else {
+            panic!("expected task update command");
+        };
+        assert_eq!(args.priority.expect("priority").to_string(), priority);
+    }
+}
+
+#[test]
+fn task_update_approve_conflicts_with_priority() {
+    let err = match Cli::try_parse_from([
+        "orbit",
+        "task",
+        "update",
+        "ORB-00001",
+        "--approve",
+        "--priority",
+        "high",
+    ]) {
+        Ok(_) => panic!("--approve with --priority should conflict"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+}
+
+#[test]
 fn task_update_complexity_uses_add_spellings() {
     for complexity in ["low", "medium", "hard"] {
         let cli = Cli::try_parse_from([

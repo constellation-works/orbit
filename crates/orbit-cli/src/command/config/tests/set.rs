@@ -137,6 +137,20 @@ fn set_rejects_unknown_key() {
     assert!(error.did_you_mean().is_some());
 }
 
+#[test]
+fn set_rejects_unknown_key_before_asking_about_seeding_a_missing_workspace_config() {
+    let (_root, runtime, _global_root, workspace_root) = test_runtime();
+    assert!(!workspace_root.join("config.toml").exists());
+
+    let error = set_args("workflow.not_a_real_key", "value", false, false, false)
+        .execute(&runtime)
+        .expect_err("unknown key must be rejected even with no workspace config yet");
+    let message = error.to_string();
+    assert!(message.contains("unknown config key"), "{message}");
+    assert!(!message.contains("--seed-from-global"), "{message}");
+    assert!(!workspace_root.join("config.toml").exists());
+}
+
 fn write_sol_crew(path: &std::path::Path) {
     fs::write(
         path,

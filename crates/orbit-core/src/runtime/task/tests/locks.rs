@@ -282,6 +282,60 @@ fn task_lock_conflicts_use_selector_anchor_overlap() {
 }
 
 #[test]
+fn task_scope_reserve_refuses_a_task_with_no_context_surface() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+
+    let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &[]);
+
+    let message = invalid_input_message(runtime.run_tool(
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [task.id.clone()],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    ));
+    assert!(message.contains("no context surface"), "{message}");
+    assert!(message.contains(&task.id), "{message}");
+
+    let locks = runtime
+        .run_tool("orbit.task.locks", json!({}))
+        .expect("list task locks");
+    assert_eq!(locks["total_reservations"], 0);
+}
+
+/// A declared selector for a not-yet-created file is a different situation
+/// than declaring nothing at all: the domain already tolerates it elsewhere
+/// (pruned from the lock surface), so a task-scope reservation must still
+/// admit it rather than folding it into the "no context surface" refusal.
+#[test]
+fn task_scope_reserve_still_admits_a_task_whose_declared_file_does_not_exist_yet() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+
+    let task = create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::Backlog,
+        &["docs/design/missing.md"],
+    );
+
+    let reserved = runtime
+        .run_tool(
+            "orbit.task.locks.reserve",
+            json!({
+                "task_ids": [task.id],
+                "ttl_seconds": 3600,
+                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+            }),
+        )
+        .expect("a declared-but-not-yet-created file must still reserve");
+    assert_eq!(reserved["reserved"], true);
+    assert_eq!(reserved["reserved_files"], json!([]));
+}
+
+#[test]
 fn reservation_conflicts_clear_immediately_after_release() {
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, repo_root) = test_runtime();

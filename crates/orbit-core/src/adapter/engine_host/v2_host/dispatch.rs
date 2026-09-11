@@ -16,9 +16,9 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::runtime::task::locks::{
-    TaskLockIndex, emit_expired_reservation_events, merge_task_lock_conflicts, parse_task_ids,
-    requested_task_files_indexed, reserve_with_index, task_lock_conflicts_indexed,
-    workspace_orbit_dir, workspace_task_reservation_id,
+    EmptyTaskSurfacePolicy, TaskLockIndex, emit_expired_reservation_events,
+    merge_task_lock_conflicts, parse_task_ids, requested_task_files_indexed, reserve_with_index,
+    task_lock_conflicts_indexed, workspace_orbit_dir, workspace_task_reservation_id,
 };
 
 use super::{
@@ -399,6 +399,7 @@ pub(crate) fn run_deterministic(
                 tool_context.model_name.clone(),
                 tool_context.reservation_owner.clone(),
                 &lock_index,
+                EmptyTaskSurfacePolicy::Admit,
             )
             .map_err(|err| DispatchError::DeterministicActionFailed {
                 action: action.to_string(),
