@@ -8,7 +8,7 @@ spec:
   kind: workflow
   max_active_runs: 1
   default_input:
-    older_than_hours: 24
+    older_than_hours: 1
   steps:
     - id: reap
       target: activity:worktree_gc
