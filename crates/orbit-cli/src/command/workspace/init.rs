@@ -5,8 +5,10 @@ use clap::Args;
 use orbit_cmd::agent_rules::{InjectionAction, InjectionOutcome, inject_agent_rules};
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::fs::io::{atomic_write_bytes, atomic_write_text};
-use orbit_core::OrbitError;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
+use orbit_core::{
+    OrbitError, RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
+};
 use orbit_registry::workspace_registry;
 use orbit_registry::{HostIdentityState, inspect_host_identity};
 use orbit_types::identity::validate_machine_id;
@@ -169,6 +171,13 @@ impl WorkspaceInitArgs {
 
         let name = self.name.unwrap_or_else(|| dir_name_or_fallback(cwd));
         let id = canonical_workspace_id(&name);
+        // Seeded routine names are suffixed with the registered workspace name,
+        // not the checkout directory, so two checkouts sharing a basename stay
+        // distinct on one host [ORB-12107]. Validate the name before any write.
+        let routine_identity = local_host_id
+            .as_deref()
+            .map(|host_id| RoutineSeedIdentity::new(host_id, &name))
+            .transpose()?;
         let git_remote = detect_git_remote(cwd);
         let default_base_branch = checked_out_branch(cwd);
         // Every read of the registry below feeds the write at the end; the lock
@@ -242,12 +251,16 @@ impl WorkspaceInitArgs {
                     }
                 }
 
+                if let Some(identity) = routine_identity.as_ref() {
+                    reject_colliding_routine_names(&registry, &id, orbit_dir, identity, &name)?;
+                }
+
                 init_workspace_at_root(
                     orbit_dir,
                     InitOptions {
                         refresh_defaults: true,
                         global_root_override: Some(global_root.to_path_buf()),
-                        routine_host_id: local_host_id.clone(),
+                        routine_seed_identity: routine_identity.clone(),
                         // Host detection is a CLI concern: Core seeds config from the
                         // families this adapter reports, never by probing PATH itself.
                         config_seed: Some(config_seed_from_detection(&detect(&RealAgentEnvProbe))),
@@ -403,6 +416,54 @@ pub(super) fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> Stri
         Some(task_prefix) => format!("{task_prefix}-{next:05}"),
         None => format!("{next:05}"),
     }
+}
+
+/// Refuse to seed routines whose names another registered workspace on this
+/// host already declares.
+///
+/// Routine discovery drops *every* definition sharing a name, so a silent
+/// duplicate would disable the colliding workspace's routines too. Checkouts
+/// of the workspace being initialized are excluded: re-initializing rebinds
+/// them rather than adding a second source [ORB-12107].
+fn reject_colliding_routine_names(
+    registry: &WorkspaceRegistry,
+    workspace_id: &str,
+    orbit_dir: &Path,
+    identity: &RoutineSeedIdentity,
+    name: &str,
+) -> Result<(), OrbitError> {
+    let other_orbit_dirs: Vec<PathBuf> = registry
+        .checkouts
+        .iter()
+        .filter(|checkout| checkout.workspace_id != workspace_id && checkout.orbit_dir != orbit_dir)
+        .map(|checkout| checkout.orbit_dir.clone())
+        .collect();
+
+    let collisions = default_routine_name_collisions(identity, &other_orbit_dirs);
+    if collisions.is_empty() {
+        return Ok(());
+    }
+
+    Err(OrbitError::WorkspaceError(format!(
+        "workspace '{name}' would seed routine names another workspace on this host already \
+         defines ({}); routine names must be unique across every routine source on a host, so \
+         rerun `orbit workspace init --name <other-name>`",
+        describe_routine_collisions(&collisions)
+    )))
+}
+
+fn describe_routine_collisions(collisions: &[RoutineNameCollision]) -> String {
+    collisions
+        .iter()
+        .map(|collision| {
+            format!(
+                "'{}' at {}",
+                collision.name,
+                collision.declared_in.display()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(super) fn canonical_workspace_id(name: &str) -> String {

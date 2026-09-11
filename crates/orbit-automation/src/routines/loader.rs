@@ -201,6 +201,57 @@ fn yaml_files_in(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+/// Every routine name the workspace rooted at `orbit_dir` already claims,
+/// across both origins, mapped to the file that declares it.
+///
+/// Names must be unique across every routine source on a host, so a caller
+/// that is about to write new definitions uses this to detect a collision
+/// before it becomes a load-time error that drops *both* definitions. Files
+/// that fail to parse are skipped: [`collect_routines`] treats them as absent,
+/// so they claim no name.
+pub fn declared_routine_names(orbit_dir: &Path, host_id: &str) -> BTreeMap<String, PathBuf> {
+    let routines_dir = orbit_dir.join(ROUTINES_DIR);
+    let mut declared = BTreeMap::new();
+
+    collect_declared_names(
+        &routines_dir,
+        RoutineOrigin::Committed,
+        host_id,
+        &mut declared,
+    );
+    collect_declared_names(
+        &routines_dir.join(LOCAL_ROUTINES_SUBDIR),
+        RoutineOrigin::Local,
+        host_id,
+        &mut declared,
+    );
+
+    declared
+}
+
+fn collect_declared_names(
+    dir: &Path,
+    origin: RoutineOrigin,
+    host_id: &str,
+    declared: &mut BTreeMap<String, PathBuf>,
+) {
+    let Ok(paths) = yaml_files_in(dir) else {
+        return;
+    };
+    for path in paths {
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let parsed = match origin {
+            RoutineOrigin::Committed => parse_routine_yaml(&raw).ok(),
+            RoutineOrigin::Local => parse_local_routine_yaml(&raw, host_id).ok(),
+        };
+        if let Some(definition) = parsed {
+            declared.entry(definition.name).or_insert(path);
+        }
+    }
+}
+
 fn load_routine_file(
     path: &Path,
     origin: RoutineOrigin,

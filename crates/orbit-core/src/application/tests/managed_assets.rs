@@ -12,6 +12,7 @@ use super::super::MANAGED_ASSET_MANIFEST_FILE;
 use super::super::job::seed_default_jobs;
 use crate::OrbitRuntime;
 use crate::application::job::JobCatalogFilter;
+use crate::application::routine::RoutineSeedIdentity;
 use crate::bootstrap::activity::seed_default_activities;
 use crate::bootstrap::global_defaults::stamp_path;
 use crate::bootstrap::init::{InitOptions, InitResult, init_workspace_at_root};
@@ -414,7 +415,9 @@ mod artifacts {
             InitOptions {
                 refresh_defaults: true,
                 global_root_override: Some(global_root.clone()),
-                routine_host_id: Some("test-host".to_string()),
+                routine_seed_identity: Some(
+                    RoutineSeedIdentity::new("test-host", "repo").expect("routine seed identity"),
+                ),
                 config_seed: Some(ConfigSeed::default()),
                 ..Default::default()
             },

@@ -961,13 +961,6 @@ fn workspace_init_seeds_disabled_routines_and_reinit_preserves_authored_files() 
         .expect("first workspace init");
 
     let routines_dir = workspace.path().join(".orbit/routines");
-    let workspace_slug = workspace
-        .path()
-        .file_name()
-        .expect("workspace directory name")
-        .to_string_lossy()
-        .trim_start_matches('.')
-        .to_ascii_lowercase();
     for (stem, target) in [
         ("auto_task_scheduler", "auto_task_scheduler_pipeline"),
         ("task_triage", "task_triage_pipeline"),
@@ -978,7 +971,7 @@ fn workspace_init_seeds_disabled_routines_and_reinit_preserves_authored_files() 
         let definition = parse_routine_yaml(&yaml).expect("parse seeded routine");
         assert_eq!(
             definition.name,
-            format!("{}-{workspace_slug}", stem.replace('_', "-"))
+            format!("{}-routine-seed-test", stem.replace('_', "-"))
         );
         assert_eq!(definition.hosts, ["init-host"]);
         assert_eq!(definition.target, RoutineTarget::Job(target.to_string()));
@@ -1021,6 +1014,163 @@ policy:
             .expect("parse recreated routine")
             .enabled
     );
+}
+
+/// Routine names are host-wide identifiers, so their per-workspace suffix must
+/// come from the registered workspace name. Seeding from the checkout directory
+/// left `orbit routine show <routine>-<workspace-name>` with nothing to find and
+/// made two `repo`/`src`/`app` checkouts collide on one host [ORB-12107].
+#[test]
+fn seeded_routine_names_follow_the_workspace_name_not_the_checkout_directory() {
+    let base = tempdir().expect("base tempdir");
+    let home = tempdir().expect("home tempdir");
+    seed_host_identity(home.path());
+    let checkout = base.path().join("repo");
+    std::fs::create_dir_all(&checkout).expect("create checkout directory");
+
+    let _env = EnvGuard::acquire().home(home.path()).cwd(&checkout);
+    routine_seed_init("qa-sweep")
+        .execute_without_runtime(None)
+        .expect("workspace init");
+
+    for name in seeded_routine_names(&checkout) {
+        assert!(
+            name.ends_with("-qa-sweep"),
+            "routine '{name}' must be suffixed with the registered workspace name"
+        );
+        assert!(
+            !name.contains("repo"),
+            "routine '{name}' must not carry the checkout directory name"
+        );
+    }
+}
+
+/// Two checkouts whose directories share a basename are the collision the
+/// directory-derived suffix could not survive; distinct workspace names must
+/// keep their seeded routines distinct [ORB-12107].
+#[test]
+fn same_basename_checkouts_with_distinct_names_seed_distinct_routine_names() {
+    let base = tempdir().expect("base tempdir");
+    let home = tempdir().expect("home tempdir");
+    seed_host_identity(home.path());
+    let alpha = base.path().join("a/server");
+    let beta = base.path().join("b/server");
+    std::fs::create_dir_all(&alpha).expect("create first checkout");
+    std::fs::create_dir_all(&beta).expect("create second checkout");
+
+    let env = EnvGuard::acquire().home(home.path()).cwd(&alpha);
+    routine_seed_init("alpha")
+        .execute_without_runtime(None)
+        .expect("first workspace init");
+    let _env = env.cwd(&beta);
+    routine_seed_init("beta")
+        .execute_without_runtime(None)
+        .expect("second workspace init with the same directory basename");
+
+    let alpha_names = seeded_routine_names(&alpha);
+    let beta_names = seeded_routine_names(&beta);
+    assert!(alpha_names.iter().all(|name| name.ends_with("-alpha")));
+    assert!(beta_names.iter().all(|name| name.ends_with("-beta")));
+    assert!(
+        alpha_names.iter().all(|name| !beta_names.contains(name)),
+        "same-basename checkouts must not seed colliding routine names: {alpha_names:?} / {beta_names:?}"
+    );
+}
+
+/// Routine discovery drops *every* definition sharing a name, so a duplicate
+/// would silently disable both workspaces' routines. Init reports it instead,
+/// and leaves the second checkout uninitialized [ORB-12107].
+#[test]
+fn workspace_init_refuses_a_name_whose_seeded_routines_already_exist() {
+    let base = tempdir().expect("base tempdir");
+    let home = tempdir().expect("home tempdir");
+    seed_host_identity(home.path());
+    let alpha = base.path().join("a/server");
+    let beta = base.path().join("b/server");
+    std::fs::create_dir_all(&alpha).expect("create first checkout");
+    std::fs::create_dir_all(&beta).expect("create second checkout");
+
+    let env = EnvGuard::acquire().home(home.path()).cwd(&alpha);
+    routine_seed_init("alpha")
+        .execute_without_runtime(None)
+        .expect("first workspace init");
+
+    // The registered workspace already claims a name the next one would seed —
+    // the shape a directory-derived seed left behind on a host with two
+    // `server` checkouts.
+    let claimed = std::fs::read_to_string(alpha.join(".orbit/routines/task_pilot.yaml"))
+        .expect("read seeded routine")
+        .replace("task-pilot-alpha", "task-pilot-beta");
+    std::fs::write(alpha.join(".orbit/routines/claimed.yaml"), &claimed)
+        .expect("author the claiming routine");
+
+    let _env = env.cwd(&beta);
+    let error = routine_seed_init("beta")
+        .execute_without_runtime(None)
+        .expect_err("a colliding routine name must fail workspace init");
+    let message = error.to_string();
+    assert!(message.contains("task-pilot-beta"), "{message}");
+    assert!(message.contains("--name"), "{message}");
+
+    assert!(
+        !beta.join(".orbit/routines").exists(),
+        "a refused init must not seed routines into the second checkout"
+    );
+    let registry =
+        workspace_registry::load_registry_from(&home.path().join(".orbit").join("workspaces.json"))
+            .expect("load registry");
+    assert!(
+        !registry
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == canonical_workspace_id("beta")),
+        "a refused init must not register the workspace"
+    );
+}
+
+fn seed_host_identity(home: &std::path::Path) {
+    let global = home.join(".orbit");
+    std::fs::create_dir_all(&global).expect("create global orbit");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_inithost\"\nhost_id = \"init-host\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("write host identity");
+}
+
+fn routine_seed_init(name: &str) -> WorkspaceInitArgs {
+    WorkspaceInitArgs {
+        name: Some(name.to_string()),
+        base_branch: Some("main".to_string()),
+        ship_mode: None,
+        role: None,
+        owner: None,
+        task_id_start: None,
+        mcp: false,
+        inject_agent_rules: false,
+        refresh_defaults: false,
+        force: false,
+    }
+}
+
+/// Names of every managed routine seeded into `checkout`, read back from the
+/// definitions themselves rather than from the seeding inputs.
+fn seeded_routine_names(checkout: &std::path::Path) -> Vec<String> {
+    let routines_dir = checkout.join(".orbit/routines");
+    let mut names: Vec<String> = std::fs::read_dir(&routines_dir)
+        .expect("read seeded routines directory")
+        .map(|entry| entry.expect("routines directory entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
+        .map(|path| {
+            let yaml = std::fs::read_to_string(&path).expect("read seeded routine");
+            parse_routine_yaml(&yaml)
+                .expect("seeded routine parses")
+                .name
+        })
+        .collect();
+    assert!(!names.is_empty(), "init must seed routines");
+    names.sort();
+    names
 }
 
 #[test]

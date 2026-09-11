@@ -11,6 +11,7 @@ use crate::OrbitRuntime;
 use crate::application::MANAGED_ASSET_MANIFEST_FILE;
 use crate::application::executor::seed_default_executors;
 use crate::application::job::seed_default_jobs;
+use crate::application::routine::RoutineSeedIdentity;
 use crate::application::skill::{
     default_skill_ids, is_default_skill_file_for_root, seed_default_skills,
 };
@@ -57,9 +58,11 @@ pub struct InitOptions {
     pub global_only: bool,
     /// Explicit global root to seed when preparing a workspace root.
     pub global_root_override: Option<PathBuf>,
-    /// Host id to pin into newly seeded workspace routines. Higher-level
-    /// composition owns host identity and supplies this value explicitly.
-    pub routine_host_id: Option<String>,
+    /// Host and registered workspace name to materialize newly seeded
+    /// workspace routines against. Higher-level composition owns both halves
+    /// of that identity and supplies them explicitly; `None` skips routine
+    /// seeding entirely.
+    pub routine_seed_identity: Option<RoutineSeedIdentity>,
     /// When true, create/update user-level skill symlinks for global skills.
     pub link_global_skills: bool,
     /// Explicit inputs for seeding a fresh `config.toml`: which provider
@@ -290,8 +293,7 @@ pub fn init_workspace_at_root(
                 let reconciliation = reconcile_workspace_managed_artifacts(
                     &global_root,
                     &orbit_root,
-                    options.routine_host_id.as_deref(),
-                    workspace_slug_from_orbit_root(&orbit_root).as_deref(),
+                    options.routine_seed_identity.as_ref(),
                     false,
                 )?;
                 refreshed_default_routines = reconciliation
@@ -367,15 +369,6 @@ pub fn init_workspace_at_root(
         refreshed_default_routines,
         seeded_default_auto_tasks,
     })
-}
-
-/// Derive the routine-name suffix for seeded default routines from the
-/// workspace directory containing `.orbit/`.
-fn workspace_slug_from_orbit_root(orbit_root: &Path) -> Option<String> {
-    orbit_root
-        .parent()
-        .and_then(Path::file_name)
-        .map(|name| name.to_string_lossy().into_owned())
 }
 
 pub(crate) fn global_skills_dir(global_root: &Path) -> PathBuf {
@@ -860,7 +853,9 @@ mod tests {
             InitOptions {
                 global_root_override: Some(global_root.clone()),
                 refresh_defaults: true,
-                routine_host_id: Some("host-a".to_string()),
+                routine_seed_identity: Some(
+                    RoutineSeedIdentity::new("host-a", "repo").expect("routine seed identity"),
+                ),
                 ..Default::default()
             },
         )
@@ -893,7 +888,9 @@ mod tests {
             InitOptions {
                 global_root_override: Some(global_root.clone()),
                 refresh_defaults: true,
-                routine_host_id: Some("host-a".to_string()),
+                routine_seed_identity: Some(
+                    RoutineSeedIdentity::new("host-a", "repo").expect("routine seed identity"),
+                ),
                 ..Default::default()
             },
         )
@@ -910,7 +907,9 @@ mod tests {
                 global_root_override: Some(global_root),
                 force: true,
                 refresh_defaults: true,
-                routine_host_id: Some("host-b".to_string()),
+                routine_seed_identity: Some(
+                    RoutineSeedIdentity::new("host-b", "repo").expect("routine seed identity"),
+                ),
                 ..Default::default()
             },
         )

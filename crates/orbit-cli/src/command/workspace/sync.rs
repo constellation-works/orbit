@@ -5,8 +5,8 @@ use std::path::Path;
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_core::{
-    ManagedArtifactOutcome, ManagedArtifactScope, OrbitError, WorkspaceManagedArtifactSyncReport,
-    reconcile_workspace_managed_artifacts,
+    ManagedArtifactOutcome, ManagedArtifactScope, OrbitError, RoutineSeedIdentity,
+    WorkspaceManagedArtifactSyncReport, reconcile_workspace_managed_artifacts,
 };
 use orbit_registry::workspace_registry;
 use orbit_registry::{HostIdentityState, inspect_host_identity};
@@ -42,9 +42,8 @@ impl WorkspaceSyncArgs {
             })
             .max_by_key(|checkout| checkout.repo_root.components().count())
             .ok_or_else(workspace_init_required)?;
-        if workspace_registry::find_workspace_by_id(&registry, &checkout.workspace_id).is_none() {
-            return Err(workspace_init_required());
-        }
+        let workspace = workspace_registry::find_workspace_by_id(&registry, &checkout.workspace_id)
+            .ok_or_else(workspace_init_required)?;
         let host_id = match inspect_host_identity(&global_root)? {
             HostIdentityState::Present(identity) => identity.host_id,
             HostIdentityState::Legacy { .. } | HostIdentityState::Absent => {
@@ -53,15 +52,14 @@ impl WorkspaceSyncArgs {
                 ));
             }
         };
-        let slug = checkout
-            .repo_root
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned());
+        // Routine names carry the registered workspace name, not the checkout
+        // directory basename, so convergence renders the same binding that
+        // `orbit workspace init` recorded [ORB-12107].
+        let routine_identity = RoutineSeedIdentity::new(&host_id, &workspace.name)?;
         let report = reconcile_workspace_managed_artifacts(
             &global_root,
             &checkout.orbit_dir,
-            Some(&host_id),
-            slug.as_deref(),
+            Some(&routine_identity),
             self.check,
         )?;
         let exit_code = if self.check && report.has_pending_changes() {

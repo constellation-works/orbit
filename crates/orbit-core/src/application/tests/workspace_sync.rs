@@ -5,10 +5,15 @@ use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use crate::application::MANAGED_ASSET_MANIFEST_FILE;
+use crate::application::routine::RoutineSeedIdentity;
 use crate::application::workspace_sync::{
     ManagedArtifactOutcome, reconcile_workspace_managed_artifacts,
 };
 use crate::bootstrap::init::{InitOptions, init_workspace_at_root};
+
+fn seed_identity(host_id: &str, workspace_name: &str) -> RoutineSeedIdentity {
+    RoutineSeedIdentity::new(host_id, workspace_name).expect("routine seed identity")
+}
 
 fn initialized_roots(base: &Path) -> (PathBuf, PathBuf) {
     let global = base.join("global");
@@ -26,7 +31,9 @@ fn initialized_roots(base: &Path) -> (PathBuf, PathBuf) {
         &workspace,
         InitOptions {
             global_root_override: Some(global.clone()),
-            routine_host_id: Some("host-a".to_string()),
+            routine_seed_identity: Some(
+                RoutineSeedIdentity::new("host-a", "alpha").expect("routine seed identity"),
+            ),
             refresh_defaults: true,
             ..Default::default()
         },
@@ -43,6 +50,10 @@ fn sha256(content: &str) -> String {
     format!("{:x}", Sha256::digest(content.as_bytes()))
 }
 
+/// A workspace seeded under an earlier binding — including one whose routine
+/// names came from the checkout directory before [ORB-12107] — keeps the
+/// recorded name and bytes. Convergence reports the drift and renames nothing,
+/// because a routine's run history and state key off its name.
 #[test]
 fn binding_drift_does_not_claim_template_drift_or_rewrite_routines() {
     let root = tempdir().expect("create tempdir");
@@ -54,8 +65,7 @@ fn binding_drift_does_not_claim_template_drift_or_rewrite_routines() {
     let report = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some("renamed-host"),
-        Some("different-checkout"),
+        Some(&seed_identity("renamed-host", "different-workspace")),
         false,
     )
     .expect("sync with drifted current binding");
@@ -101,8 +111,7 @@ fn legacy_routine_manifest_check_is_read_only_and_apply_migrates_only_exact_inst
     let checked = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some("new-host"),
-        Some("new-suffix"),
+        Some(&seed_identity("new-host", "new-suffix")),
         true,
     )
     .expect("check legacy migration");
@@ -123,8 +132,7 @@ fn legacy_routine_manifest_check_is_read_only_and_apply_migrates_only_exact_inst
     let applied = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some("new-host"),
-        Some("new-suffix"),
+        Some(&seed_identity("new-host", "new-suffix")),
         false,
     )
     .expect("apply legacy migration");
@@ -171,8 +179,10 @@ fn real_template_refresh_uses_recorded_binding_and_second_run_is_a_no_op() {
     let applied = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some("different-current-host"),
-        Some("different-current-suffix"),
+        Some(&seed_identity(
+            "different-current-host",
+            "different-current-suffix",
+        )),
         false,
     )
     .expect("refresh true template drift");
@@ -184,15 +194,17 @@ fn real_template_refresh_uses_recorded_binding_and_second_run_is_a_no_op() {
             .expect("read refreshed routine"),
     )
     .expect("parse refreshed routine");
-    assert_eq!(routine.name, "task-triage-repo");
+    assert_eq!(routine.name, "task-triage-alpha");
     assert_eq!(routine.hosts, vec!["host-a".to_string()]);
 
     let before = std::fs::read(&manifest_path).expect("snapshot converged manifest");
     let second = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some("different-current-host"),
-        Some("different-current-suffix"),
+        Some(&seed_identity(
+            "different-current-host",
+            "different-current-suffix",
+        )),
         false,
     )
     .expect("second sync");
@@ -222,8 +234,7 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
     let checked = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some("host-a"),
-        Some("repo"),
+        Some(&seed_identity("host-a", "alpha")),
         true,
     )
     .expect("check a pre-provenance workspace");
@@ -242,8 +253,7 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
     let applied = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some("host-a"),
-        Some("repo"),
+        Some(&seed_identity("host-a", "alpha")),
         false,
     )
     .expect("adopt a pre-provenance workspace");
@@ -280,8 +290,7 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
     let refreshed = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some("host-a"),
-        Some("repo"),
+        Some(&seed_identity("host-a", "alpha")),
         false,
     )
     .expect("refresh the adopted routine");
@@ -322,8 +331,7 @@ fn sync_refreshes_only_provenance_clean_non_routine_assets_and_retires_safely() 
     let checked = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some("host-a"),
-        Some("repo"),
+        Some(&seed_identity("host-a", "alpha")),
         true,
     )
     .expect("check non-routine convergence");
@@ -339,8 +347,13 @@ fn sync_refreshes_only_provenance_clean_non_routine_assets_and_retires_safely() 
     );
     assert!(retired_path.exists());
 
-    reconcile_workspace_managed_artifacts(&global, &workspace, Some("host-a"), Some("repo"), false)
-        .expect("apply non-routine convergence");
+    reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("host-a", "alpha")),
+        false,
+    )
+    .expect("apply non-routine convergence");
     assert_eq!(
         std::fs::read_to_string(&current_path).expect("refreshed activity"),
         current
@@ -351,8 +364,7 @@ fn sync_refreshes_only_provenance_clean_non_routine_assets_and_retires_safely() 
     let second = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some("host-a"),
-        Some("repo"),
+        Some(&seed_identity("host-a", "alpha")),
         false,
     )
     .expect("second convergence");
