@@ -33,7 +33,7 @@ enabled: true
 hosts:
   - dk-server-1
 trigger:
-  cron: "*/20 * * * *"
+  cron: "*/30 * * * *"
   missed_run: skip
 target: job:ci_failure_sweep_pipeline
 policy:

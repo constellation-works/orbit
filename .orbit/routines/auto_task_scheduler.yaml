@@ -26,7 +26,7 @@ enabled: true
 hosts:
   - dk-server-1
 trigger:
-  cron: "*/10 * * * *"
+  cron: "*/30 * * * *"
   missed_run: skip
 target: job:auto_task_scheduler_pipeline
 policy:

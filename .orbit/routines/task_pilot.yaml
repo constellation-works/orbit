@@ -18,7 +18,7 @@ description: >
   Preflight unscoped proposed/backlog tasks through the bounded task-pilot
   pipeline. Disabled by default; set enabled to true in this versioned
   definition to opt this workspace into scheduled task preflight.
-enabled: false
+enabled: true
 hosts:
   - dk-server-1
 trigger:

@@ -6,11 +6,11 @@ name: dependabot-alert-sweep-orbit
 description: >
   Daily host-side collection of bounded, redacted Dependabot alert evidence,
   followed by deterministic filing of deduped dependency-remediation tasks.
-enabled: false
+enabled: true
 hosts:
   - dk-server-1
 trigger:
-  cron: "*/15 * * * *"
+  cron: "25 3 * * *"
   missed_run: skip
 target: job:dependabot_alert_sweep_pipeline
 policy:
