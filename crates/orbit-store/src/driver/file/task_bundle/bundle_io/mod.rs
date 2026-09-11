@@ -88,24 +88,20 @@ pub(crate) fn write_bundle_with_artifacts_at(
     )
 }
 
-/// Replace the bundle already published at `bundle_dir` with `bundle`.
+/// Replace the bundle published at `bundle_dir` with `bundle`.
 ///
 /// Used by owner-wins task import, where the incoming copy comes from the
 /// task's owning host and supersedes the local mirror wholesale. The
 /// replacement is staged and verified exactly like a fresh write, so the
-/// destination only ever holds a complete bundle; `source_bundle_dir` supplies
-/// the artifact blobs the incoming manifest references.
+/// destination only ever holds a complete bundle. A missing canonical path is
+/// recreated because its registry binding still identifies the owner-wins
+/// mirror. `source_bundle_dir` supplies the artifact blobs the incoming
+/// manifest references.
 pub(crate) fn replace_bundle_at(
     bundle_dir: &Path,
     bundle: &TaskBundleV2,
     source_bundle_dir: &Path,
 ) -> Result<(), OrbitError> {
-    if !bundle_dir.is_dir() {
-        return Err(OrbitError::Store(format!(
-            "no task bundle to replace at {}",
-            bundle_dir.display()
-        )));
-    }
     write_bundle_atomically(
         bundle_dir,
         bundle,
@@ -271,19 +267,66 @@ fn publish_staged_bundle(staging_dir: &Path, bundle_dir: &Path) -> std::io::Resu
     sync_bundle_parent(bundle_dir)
 }
 
-/// Publish a staged bundle over an existing one. `rename` cannot overwrite a
-/// non-empty directory, so the superseded bundle is moved aside first and
-/// dropped only once the replacement is in place; a failed swap puts the
-/// original back, so the destination is never left empty.
+/// Publish a staged bundle over an existing one, or recreate a missing one.
+/// `rename` cannot overwrite a non-empty directory, so the superseded bundle
+/// is moved aside first and dropped only once the replacement is in place; a
+/// failed swap puts the original back, so the destination is never left empty.
 fn publish_replacement_bundle(staging_dir: &Path, bundle_dir: &Path) -> std::io::Result<()> {
-    let retired = scratch_sibling_path(bundle_dir, "retired")?;
-    fs::rename(bundle_dir, &retired)?;
+    let retired = if bundle_dir.exists() {
+        let retired = scratch_sibling_path(bundle_dir, "retired")?;
+        fs::rename(bundle_dir, &retired)?;
+        Some(retired)
+    } else {
+        None
+    };
+
     if let Err(error) = fs::rename(staging_dir, bundle_dir) {
-        let _ = fs::rename(&retired, bundle_dir);
+        if let Some(retired) = &retired {
+            let _ = fs::rename(retired, bundle_dir);
+        }
         return Err(error);
     }
     sync_bundle_parent(bundle_dir)?;
-    fs::remove_dir_all(&retired)
+
+    for retired in retired_bundle_paths(bundle_dir)? {
+        fs::remove_dir_all(retired)?;
+    }
+    Ok(())
+}
+
+/// Find interrupted replacement directories for `bundle_dir`.
+///
+/// These siblings are deliberately ignored while resolving a bundle. Once a
+/// replacement has been published and synced, they are safe to remove: the
+/// canonical path now contains the complete owner copy.
+fn retired_bundle_paths(bundle_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let parent = bundle_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("no parent dir for {}", bundle_dir.display()),
+        )
+    })?;
+    let bundle_name = bundle_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("no UTF-8 file name for {}", bundle_dir.display()),
+            )
+        })?;
+    let prefix = format!(".{bundle_name}.");
+
+    let mut retired = Vec::new();
+    for entry in parent.read_dir()? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(&prefix) && name.ends_with(".retired") && entry.file_type()?.is_dir() {
+            retired.push(entry.path());
+        }
+    }
+    Ok(retired)
 }
 
 fn sync_bundle_parent(bundle_dir: &Path) -> std::io::Result<()> {
