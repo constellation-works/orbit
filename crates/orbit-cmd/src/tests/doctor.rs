@@ -21,6 +21,7 @@ use crate::doctor::{
     DoctorCommands, WorkspaceDoctorResult, WorkspaceDoctorStatus, collect_lock_files,
     disk_space_check, process_is_alive,
 };
+use crate::task_store::partition_is_bound;
 
 fn status_of<'a>(results: &'a [WorkspaceDoctorResult], name: &str) -> &'a WorkspaceDoctorResult {
     results
@@ -1008,6 +1009,43 @@ fn task_registry_bound_partition_is_not_an_orphan() {
         WorkspaceDoctorStatus::Ok,
         "a bound partition is live task state: {row:?}"
     );
+}
+
+/// A task-registry binding to a deleted checkout is stale rather than a live
+/// claim. Doctor reports it, and the confirmed repair removes its partition
+/// and the binding's task data.
+#[test]
+fn stale_task_registry_binding_is_reported_and_removed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    let deleted_root = temp.path().join("deleted");
+    fs::create_dir_all(deleted_root.join(".orbit")).expect("create deleted checkout");
+
+    bind_task_partition(&global_root, "deleted-a1b2c3", "deleted", &deleted_root);
+    write_task_bundle(&global_root, "deleted-a1b2c3", "ORB-2");
+    fs::remove_dir_all(&deleted_root).expect("delete checkout");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(row.message.contains("deleted-a1b2c3"), "{}", row.message);
+    assert!(row.message.contains("1 task bundle(s)"), "{}", row.message);
+    assert_eq!(
+        row.remediation.as_deref(),
+        Some("Run `orbit doctor --fix-orphan-task-stores --confirm`.")
+    );
+
+    let removed = runtime
+        .remove_orphan_task_stores()
+        .expect("remove stale orphan task store");
+    assert_eq!(removed, 1);
+    assert!(
+        !task_workspaces_dir(&global_root)
+            .join("deleted-a1b2c3")
+            .exists()
+    );
+    assert!(!partition_is_bound(&global_root, "deleted-a1b2c3").expect("read binding"));
 }
 
 /// [ORB-12119] The fix deletes only partitions no registry claims: a
