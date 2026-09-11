@@ -1,8 +1,9 @@
+use clap::CommandFactory;
 use orbit_cmd::{OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use orbit_core::OrbitRuntime;
 
 use super::super::doctor::{doctor_row_json, human_detail, orphan_task_store_removal_message};
-use super::super::{CommandOutput, Execute};
+use super::super::{Cli, CommandOutput, Execute};
 
 #[test]
 fn doctor_warning_renders_structured_and_human_remediation() {
@@ -194,5 +195,63 @@ fn orphan_task_store_removal_message_reports_zero_of_both_kinds() {
         message,
         "Removed 0 empty orphaned task-store partition(s) and 0 populated partition(s) \
          (0 task bundle(s))."
+    );
+}
+
+/// [ORB-12171] The help text for `--fix-orphan-task-stores` and `--confirm`
+/// must accurately document that populated partitions whose checkout binding
+/// is confirmed absent are deleted along with their task bundles, rather than
+/// promising that partitions with task bundles are never deleted.
+#[test]
+fn fix_orphan_task_stores_help_documents_bundle_deletion_on_confirmed_absent_checkouts() {
+    let mut command = Cli::command();
+    let doctor = command
+        .find_subcommand_mut("doctor")
+        .expect("doctor subcommand");
+    let help = doctor.render_long_help().to_string();
+
+    assert!(
+        help.contains("--fix-orphan-task-stores"),
+        "expected --fix-orphan-task-stores in doctor help: {help}"
+    );
+    assert!(
+        help.contains("Delete empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent (including their task bundles)."),
+        "expected accurate fix-orphan-task-stores description in help: {help}"
+    );
+    assert!(
+        help.contains("Unowned or unreachable populated partitions are never touched."),
+        "expected guard documentation in help: {help}"
+    );
+    assert!(
+        !help.contains("Partitions that still hold task bundles are never deleted"),
+        "help must not promise populated partitions are never deleted: {help}"
+    );
+    assert!(
+        help.contains("Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles"),
+        "expected --confirm help to mention task bundle deletion: {help}"
+    );
+}
+
+#[test]
+fn fix_orphan_task_stores_without_confirm_fails_with_bundle_loss_message() {
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    let err = super::super::doctor::DoctorCommand {
+        json: false,
+        fix_stale_locks: false,
+        fix_stale_task_locks: false,
+        remove_graph: false,
+        fix_stale_artifacts: false,
+        fix_retired_activity_backends: false,
+        fix_orphan_task_stores: true,
+        confirm: false,
+    }
+    .execute(&runtime)
+    .expect_err("fix_orphan_task_stores must require confirm");
+
+    assert!(
+        err.to_string().contains(
+            "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
+        ),
+        "expected error message to mention bundle loss, got: {err}"
     );
 }
