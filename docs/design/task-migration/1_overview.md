@@ -1,17 +1,17 @@
 ---
 title: Task Migration — Overview
 owner: claude
-last_updated: 2026-07-04
-last_validated: 2026-08-16
+last_updated: 2026-09-11
+last_validated: 2026-09-11
 status: Draft
 feature: task-migration
 doc_role: overview
 type: design
-summary: Move orbit tasks between machines with export/import (tar.zst) and disjoint id ranges, without hand-written SQL.
-tags: [task-migration]
-paths: ["crates/orbit-store/src/task_migration/**", "crates/orbit-cli/src/command/task/**"]
-related_features: [task-migration, task-artifacts]
-related_artifacts: [ORB-00034]
+summary: Move orbit tasks between hosts with export/import (tar.zst); hosts stay disjoint by task_prefix, and the minting host owns each task.
+tags: [task-migration, multi-host, task-prefix]
+paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cli/src/command/task/**", "crates/orbit-core/src/bootstrap/task_migration.rs", "crates/orbit-cmd/src/registry_runtime.rs"]
+related_features: [task-migration, task-artifacts, host-registry]
+related_artifacts: [ORB-00034, ORB-10721, ORB-12126]
 ---
 
 # Task Migration — Overview
@@ -20,11 +20,13 @@ Orbit tasks live as portable canonical bundles under
 `~/.orbit/tasks/workspaces/<ws-id>/<ORB-xxxxx>/`, but the global index
 (`~/.orbit/tasks/index.sqlite` — workspace bindings, task/index/tag/relation
 rows, and a single monotonic id allocator) had no import/export/rebuild path.
-Because every machine allocates task ids from the same local `ORB-00000`
-counter, merging two machines' tasks guaranteed id collisions. Task migration
-adds `orbit task export`/`import`/`reindex` plus a `tasks.id_start` allocator
-floor so tasks move between machines as a three-command operation with a printed
-id mapping and no hand-written SQL. ([ORB-00034])
+Task migration adds `orbit task export`/`import`/`reindex` so tasks move between
+hosts as a three-command operation with a printed id mapping and no hand-written
+SQL ([ORB-00034]). Hosts no longer share an id space: each mints under its own
+`task_prefix` from `~/.orbit/host.toml` ([ORB-10721],
+[host-registry](../host-registry/2_design.md)), and the host that minted a task
+is its sole writer — see [§5](#5-multi-host-authority) and
+[4_decisions](./4_decisions.md).
 
 ## 1. Motivation
 
@@ -49,8 +51,14 @@ machine a disjoint id range).
 - **Renumber** — on an id collision, `--on-conflict=renumber` allocates a fresh
   local id and rewrites every relation target (including the `ChildOf` parent
   link) *within the imported set*, then writes an old→new mapping file.
-- **`id_start`** — a forward-only floor for the allocator, so machine A takes
-  `0–9999` and machine B `10000+` and neither ever re-issues the other's ids.
+- **`task_prefix`** — the per-host id namespace (`ORB-`, `DANI-`, …), chosen once
+  at `orbit init` and projected into the allocator before any runtime opens. Two
+  hosts with different prefixes cannot collide, whatever their counters say.
+- **Owner** — the host whose prefix a task carries. Only the owner mutates the
+  task; any copy elsewhere is a read-only mirror.
+- **`id_start`** — a forward-only floor for the allocator. Predates prefixes
+  (machine A took `0–9999`, machine B `10000+`); now redundant for collision
+  avoidance and kept only as a harmless floor.
 - **Reindex** — rebuild `index.sqlite` rows from the on-disk bundles (source of
   truth), recovering from rsync/manual moves and index drift.
 
@@ -58,13 +66,15 @@ machine a disjoint id range).
 
 | Concern | File | Task |
 |---------|------|------|
-| Archive pack/unpack (tar.zst) | [crates/orbit-store/src/task_migration/archive.rs](../../../crates/orbit-store/src/task_migration/archive.rs) | [ORB-00034] |
-| Export / transactional import + renumber | [crates/orbit-store/src/task_migration/mod.rs](../../../crates/orbit-store/src/task_migration/mod.rs) | [ORB-00034] |
-| Reindex from disk | [crates/orbit-store/src/task_migration/reindex.rs](../../../crates/orbit-store/src/task_migration/reindex.rs) | [ORB-00034] |
-| Allocator seed/bump primitives | [crates/orbit-store/src/sqlite/task_registry/store.rs](../../../crates/orbit-store/src/sqlite/task_registry/store.rs) | [ORB-00034] |
-| Runtime facades | [crates/orbit-core/src/command/task_migration.rs](../../../crates/orbit-core/src/command/task_migration.rs) | [ORB-00034] |
-| CLI surfaces | [crates/orbit-cli/src/command/task/export.rs](../../../crates/orbit-cli/src/command/task/export.rs) | [ORB-00034] |
+| Archive pack/unpack (tar.zst) | [crates/orbit-store/src/workflow/task/archive.rs](../../../crates/orbit-store/src/workflow/task/archive.rs) | [ORB-00034] |
+| Export / transactional import + renumber | [crates/orbit-store/src/workflow/task/mod.rs](../../../crates/orbit-store/src/workflow/task/mod.rs) | [ORB-00034] |
+| Reindex from disk | [crates/orbit-store/src/workflow/task/reindex.rs](../../../crates/orbit-store/src/workflow/task/reindex.rs) | [ORB-00034] |
+| Allocator seed/bump + prefix primitives | [crates/orbit-store/src/driver/sqlite/task_registry/store.rs](../../../crates/orbit-store/src/driver/sqlite/task_registry/store.rs) | [ORB-00034], [ORB-10721] |
+| Prefix projection into the allocator | [crates/orbit-cmd/src/registry_runtime.rs](../../../crates/orbit-cmd/src/registry_runtime.rs) | [ORB-10721] |
+| Runtime facades | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] |
+| CLI surfaces | [crates/orbit-cli/src/command/task/export.rs](../../../crates/orbit-cli/src/command/task/export.rs), [import.rs](../../../crates/orbit-cli/src/command/task/import.rs) | [ORB-00034] |
 | `[tasks] id_start` config | [crates/orbit-config/src/raw.rs](../../../crates/orbit-config/src/raw.rs) | [ORB-00034] |
+| Owner-wins sync (planned) | — | [ORB-12126] |
 
 ## 4. The migration recipe
 
@@ -101,21 +111,24 @@ record of what landed.
 
 ### Preventing future collisions
 
-Hand each machine a disjoint id range so cross-machine tasks never collide in
-the first place:
+Each host mints under its own `task_prefix` ([ORB-10721]): `orbit init` asks
+for it once, `host.toml` holds it, and `RegisteredRuntimeFactory` projects it
+into the allocator before any runtime opens. Two hosts with different prefixes
+share no id, so cross-host imports keep their ids and `--on-conflict` never
+fires on a well-formed fleet. A conflicting prefix after allocation has begun
+fails closed rather than renaming issued ids.
+
+The older range-splitting knob still exists and is harmless:
 
 ```sh
-# On the box: start its allocator at 10000 (the Mac keeps 0–9999)
-orbit workspace init --task-id-start 10000
+orbit workspace init --task-id-start 10000     # or [tasks] id_start in config.toml
 ```
 
-The counter only moves forward — a lower `--task-id-start` is refused. For a
-sticky floor across a shared config, set `[tasks] id_start = 10000` in
-`config.toml` (see [../../CONFIG.md](../../CONFIG.md)); it is applied as a
-forward-only floor on every runtime build and never errors on an already-
-advanced counter. Both paths cap at the allocator's `ORB_TASK_ID_MAX`
-(`u32::MAX`): five-digit padding is a minimum display width, not an exhaustion
-boundary.
+The counter only moves forward — a lower `--task-id-start` is refused; the
+config form (see [../../CONFIG.md](../../CONFIG.md)) is applied as a forward-only
+floor on every runtime build and never errors on an already-advanced counter.
+Both paths cap at the allocator's `ORB_TASK_ID_MAX` (`u32::MAX`): five-digit
+padding is a minimum display width, not an exhaustion boundary.
 
 ### Recovering a drifted index
 
@@ -150,8 +163,39 @@ remaining contents. If both canonical and tombstone paths exist, recovery
 reports a conflict and retains both for explicit repair. Tombstones are never
 registered as live tasks.
 
+## 5. Multi-host authority
+
+Prefixes make it safe for the same repository to be a workspace on more than
+one host — the usual case is a box that runs the bulk of the fleet plus a
+laptop that wants to mint and run its own work when the box is saturated or
+unreachable. The rules that keep two live stores coherent without a merge
+algorithm:
+
+- **The minting host owns the task.** Status, verdicts, relations, artifacts —
+  every mutation happens on the host whose prefix the id carries. A copy of the
+  task on any other host is a mirror and is never written locally.
+- **Execute where you mint.** A task is dispatched and run by its owner. Minting
+  `DANI-*` on the laptop and expecting the box to pick it up would make the box a
+  second writer of laptop-owned state; the model forbids it by construction.
+- **Off-host clients that own no checkout reach the owner over MCP** rather than
+  minting locally (`orbit mcp serve --mode remote <host>`,
+  [remote-access](../remote-access/1_overview.md)). A route that targets a
+  specific host fails loudly when that host is down; it never falls back to the
+  local prefix, because the operator chose which host runs the work.
+- **Mirrors are snapshots today.** Export/import is one-shot: a foreign task that
+  already landed and then changed on its owner is a *conflict* on re-import
+  (`renumber` duplicates it, `skip` drops the update, `fail` aborts). The
+  owner-wins import policy that turns this into a repeatable sync — overwrite
+  local bundles whose prefix is foreign, never touch local-prefix ones — is
+  tracked as [ORB-12126]; see [3_vision](./3_vision.md).
+
+The reasoning for choosing prefix ownership over a single authoritative host is
+in [4_decisions](./4_decisions.md).
+
 ## Task References
 
 - [ORB-00034] — task migration tooling: `orbit task export/import/reindex`, `tasks.id_start` allocator config.
+- [ORB-10721] — per-host `task_prefix` in `host.toml`, projected into the allocator.
+- [ORB-12126] — owner-wins cross-host sync: import policy that overwrites only foreign-prefix bundles.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
