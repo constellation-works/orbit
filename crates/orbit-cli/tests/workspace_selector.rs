@@ -229,6 +229,154 @@ fn global_workspace_flag_fails_closed_on_unknown_selector() {
 }
 
 #[test]
+fn migrate_dry_run_honors_selected_checkout_and_confirm_uses_the_same_one() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let alpha_repo = temp.path().join("alpha");
+    let beta_repo = temp.path().join("beta");
+    fs::create_dir_all(&home).expect("home");
+    init_git_repo(&alpha_repo);
+    init_git_repo(&beta_repo);
+
+    run_orbit(
+        &alpha_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--host-name",
+            "migration-selector-host",
+            "--task-prefix",
+            "MIG",
+        ],
+    )
+    .success();
+    run_orbit(
+        &alpha_repo,
+        &home,
+        &["workspace", "init", "--name", "alpha"],
+    )
+    .success();
+    run_orbit(&alpha_repo, &home, &["migrate", "--confirm"]).success();
+    run_orbit(&beta_repo, &home, &["workspace", "init", "--name", "beta"]).success();
+    run_orbit(&beta_repo, &home, &["migrate", "--confirm"]).success();
+
+    let alpha_marker = alpha_repo.join(".orbit/state/layout.version");
+    let beta_marker = beta_repo.join(".orbit/state/layout.version");
+    fs::write(&alpha_marker, "3\n").expect("make alpha current");
+    fs::write(&beta_marker, "1\n").expect("make beta pending");
+
+    let alpha_path = alpha_repo.to_str().expect("alpha path");
+    let preview = run_orbit(
+        &beta_repo,
+        &home,
+        &["--workspace", alpha_path, "migrate", "--dry-run", "--json"],
+    )
+    .success();
+    let preview: Value = serde_json::from_slice(&preview.get_output().stdout)
+        .expect("selected migration preview JSON");
+    assert_eq!(
+        preview["orbit_dir"],
+        alpha_repo.join(".orbit").to_string_lossy().as_ref()
+    );
+    assert_eq!(preview["up_to_date"], true);
+    assert_eq!(
+        fs::read_to_string(&beta_marker).expect("read beta marker after preview"),
+        "1\n",
+        "selected dry-run must not mutate the other workspace"
+    );
+
+    let pending = run_orbit(
+        &beta_repo,
+        &home,
+        &["--workspace", "beta", "migrate", "--dry-run", "--json"],
+    )
+    .failure();
+    let pending_stderr = String::from_utf8_lossy(&pending.get_output().stderr);
+    assert!(pending_stderr.contains(&beta_repo.join(".orbit").display().to_string()));
+    assert!(pending_stderr.contains("layout v2"), "{pending_stderr}");
+    assert!(
+        !pending_stderr.contains(&alpha_repo.join(".orbit").display().to_string()),
+        "pending preview must not report alpha: {pending_stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&beta_marker).expect("read beta marker after pending preview"),
+        "1\n",
+        "pending dry-run must not advance the selected layout"
+    );
+
+    let confirmed = run_orbit(
+        &beta_repo,
+        &home,
+        &["--workspace", "alpha", "migrate", "--confirm", "--json"],
+    )
+    .success();
+    let confirmed: Value = serde_json::from_slice(&confirmed.get_output().stdout)
+        .expect("selected migration confirmation JSON");
+    assert_eq!(
+        confirmed["orbit_dir"],
+        alpha_repo.join(".orbit").to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        fs::read_to_string(&alpha_marker).expect("read alpha marker after confirm"),
+        "3\n"
+    );
+
+    let unknown = run_orbit(
+        &beta_repo,
+        &home,
+        &[
+            "--workspace",
+            "no-such-workspace",
+            "migrate",
+            "--dry-run",
+            "--json",
+        ],
+    )
+    .failure();
+    let unknown_stderr = String::from_utf8_lossy(&unknown.get_output().stderr);
+    assert!(
+        unknown_stderr.contains("no-such-workspace"),
+        "{unknown_stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&beta_marker).expect("read beta marker after unknown selector"),
+        "1\n"
+    );
+
+    let config = alpha_repo.join(".orbit/config.yaml");
+    let original_config = fs::read(&config).expect("read alpha workspace config");
+    fs::write(&config, "schema_version: 1\nworkspace_id: [\n")
+        .expect("corrupt alpha workspace config");
+    let malformed = run_orbit(
+        &beta_repo,
+        &home,
+        &["--workspace", "alpha", "migrate", "--dry-run", "--json"],
+    )
+    .failure();
+    let malformed_stderr = String::from_utf8_lossy(&malformed.get_output().stderr);
+    assert!(
+        malformed_stderr.contains("invalid workspace config"),
+        "{malformed_stderr}"
+    );
+    fs::write(&config, &original_config).expect("restore alpha workspace config");
+
+    fs::remove_file(&config).expect("remove alpha workspace config");
+    let missing = run_orbit(
+        &beta_repo,
+        &home,
+        &["--workspace", "alpha", "migrate", "--dry-run", "--json"],
+    )
+    .failure();
+    let missing_stderr = String::from_utf8_lossy(&missing.get_output().stderr);
+    assert!(
+        missing_stderr.contains("workspace config is missing"),
+        "{missing_stderr}"
+    );
+    fs::write(&config, original_config).expect("restore alpha workspace config after missing");
+}
+
+#[test]
 fn tool_run_workspace_selection_uses_global_flag_and_input_precedence() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");

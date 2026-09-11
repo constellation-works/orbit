@@ -1030,7 +1030,7 @@ fn dispatch_mcp(command: Commands, context: DispatchContext<'_>) -> CommandOut {
 fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Migrate(command) if !command.confirm => {
-            command.execute_without_runtime(context.root_override)
+            command.execute_without_runtime(context.root_override, context.workspace_selector)
         }
         Commands::Migrate(command) => command.execute(context.runtime()?),
         _ => dispatch_mismatch("Migrate"),
