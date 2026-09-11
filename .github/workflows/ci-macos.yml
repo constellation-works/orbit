@@ -53,9 +53,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # PR head SHA, not the branch name GitHub deletes on merge, and
-          # not github.sha (the ephemeral merge commit).
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }}
+          # On pull_request, use the PR head SHA: not the branch name
+          # GitHub deletes on merge, and not github.sha (the ephemeral
+          # merge commit). On push, use github.sha directly so a run that
+          # sat queued still builds and reports on the commit that
+          # triggered it, not whatever the branch points to once it starts.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-05-07)
