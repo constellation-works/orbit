@@ -105,17 +105,27 @@ A partition directory is named for a **task-registry** workspace id
 (`workspace_bindings.workspace_id` in `~/.orbit/tasks/index.sqlite`), minted as `<slug>-<hash>`
 for a checkout that binds without an explicit id. That is a different id space from the workspace
 catalog's `ws_*` ids in `~/.orbit/workspaces.json`. A task-registry binding claims its partition
-only while the binding's recorded `orbit_dir` still exists on disk; a binding to a deleted checkout
-is stale and is reported as orphaned. Catalog `ws_*` ids and the synthetic `ws_unbound-data-dir`
-partition every `--root <data-dir>` write lands in remain claims, so they are never reported.
-`orphan-task-stores` names each orphaned workspace id, its partition path, and its task-bundle count.
+while the binding's recorded `orbit_dir` is present on disk. Catalog `ws_*` ids and the synthetic
+`ws_unbound-data-dir` partition every `--root <data-dir>` write lands in remain claims, so they are
+never reported. `orphan-task-stores` names each reported workspace id, its partition path, and its
+task-bundle count.
 
-An unclaimed partition that **still holds task bundles** and has no stale checkout binding is
-reported on its own terms and is never deleted by the repair. On disk it is indistinguishable from
-a live checkout's partition whose registry row was lost, and every `orbit` subcommand recreates an
-empty `~/.orbit/tasks/index.sqlite` before any check runs — so a lost or restored-without
-`index.sqlite` registry makes every checkout other than the one you are standing in look abandoned.
-That warning points at recovery instead:
+**Evidence rule for deleting task bundles.** A partition that holds task bundles is deleted by the
+repair only when its bound checkout is *confirmed gone*: `orbit_dir` stats as absent, and the
+nearest ancestor directory that does exist is readable and therefore able to testify that the path
+below it is missing. Any other filesystem answer — `EACCES` from an unsearchable parent, `EIO` or
+`ENOTCONN` from a dropped mount, a path that resolves through a non-directory — classifies the
+binding as **unreachable**: the checkout may be intact behind the failure, so the partition is
+retained, reported with the failing path and error, and never deleted by
+`--fix-orphan-task-stores`. A partition with **no task bundles** carries nothing to recover, so the
+older rule still applies to it: any binding that is not a live claim reclaims the directory.
+
+An unclaimed partition that **still holds task bundles** and has no checkout binding at all is
+likewise never deleted by the repair. On disk it is indistinguishable from a live checkout's
+partition whose registry row was lost, and every `orbit` subcommand recreates an empty
+`~/.orbit/tasks/index.sqlite` before any check runs — so a lost or restored-without `index.sqlite`
+registry makes every checkout other than the one you are standing in look abandoned. That warning
+points at recovery instead:
 
 ```sh
 cd <the checkout that owns the bundles>
@@ -123,26 +133,29 @@ orbit task reindex
 ```
 
 `orbit task reindex` rebuilds the registry rows for one partition from its bundle directories, so
-it must be run once per affected checkout. For a partition whose task-registry binding points at a
-missing `orbit_dir`, the stale binding is the evidence that the checkout is genuinely gone. The
-confirmed repair removes that partition, including its task bundles, and retires the stale registry
-rows:
+it must be run once per affected checkout.
+
+For an **unreachable** partition, restore access first — remount the volume, repair the directory
+permissions that hide the checkout — and re-run `orbit doctor`. A reachable checkout becomes a live
+claim again and the row clears itself; a checkout that is genuinely gone once its parent is
+readable becomes a confirmed-stale binding, which the repair can then remove.
+
+For a partition whose binding is confirmed stale, the missing `orbit_dir` is the evidence that the
+checkout is gone. The confirmed repair removes that partition, including its task bundles, and
+retires the stale registry rows — as it does for every empty unclaimed partition:
 
 ```sh
 orbit doctor --fix-orphan-task-stores --confirm
 ```
 
-Do not use that repair for an unknown populated partition; reindex it first.
-
-An unclaimed partition with **no task bundles** carries nothing to recover. Repair those with:
-
-```sh
-orbit doctor --fix-orphan-task-stores --confirm
-```
+Do not use that repair for an unknown or unreachable populated partition; reindex or restore it
+first. One residual limitation: a volume unmounted from a mountpoint that is itself still present
+and readable reports its checkout as absent, and the partition is then treated as confirmed stale.
+Remount before running the repair on a host with removable or network-mounted checkouts.
 
 The repair deletes partition directories, so it refuses to run without `--confirm`. It resolves the
-claims once, deletes empty partitions with no binding and partitions whose binding is stale, retires
-any registry rows naming them, and is idempotent: running it again after a partition is gone is a
+claims once, deletes empty unclaimed partitions and populated partitions whose checkout is
+confirmed gone, retires any registry rows naming them, and is idempotent: running it again after a partition is gone is a
 no-op.
 
 ### Repair retired activity backends

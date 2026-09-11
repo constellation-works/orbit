@@ -1163,3 +1163,57 @@ fn populated_unclaimed_partition_warns_toward_reindex_not_deletion() {
         "the repair must not delete task bundles"
     );
 }
+
+/// [ORB-12143] A populated partition whose bound checkout cannot be stat-ed —
+/// here because the checkout path resolves through a non-directory, as an
+/// unmounted volume or an unsearchable parent does — is reported with the
+/// filesystem failure and is never pointed at the deletion repair.
+#[test]
+fn unreachable_checkout_partition_is_reported_without_the_deletion_repair() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    let unreachable_root = temp.path().join("unreachable");
+    fs::create_dir_all(unreachable_root.join(".orbit")).expect("create checkout");
+
+    bind_task_partition(
+        &global_root,
+        "unreachable-a1b2c3",
+        "unreachable",
+        &unreachable_root,
+    );
+    write_task_bundle(&global_root, "unreachable-a1b2c3", "ORB-7");
+    fs::remove_dir_all(&unreachable_root).expect("remove checkout directory");
+    fs::write(&unreachable_root, b"not a directory").expect("write a file where the checkout was");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(
+        row.message.contains("could not be reached")
+            && row.message.contains("unreachable-a1b2c3")
+            && row.message.contains("1 task bundle(s)"),
+        "message names the partition, its bundles, and why it was kept: {}",
+        row.message
+    );
+    let remediation = row
+        .remediation
+        .as_deref()
+        .expect("actionable row has remediation");
+    assert!(
+        !remediation.contains("--fix-orphan-task-stores --confirm"),
+        "remediation must not advertise the deletion repair: {remediation}"
+    );
+
+    assert_eq!(
+        runtime.remove_orphan_task_stores().expect("run the repair"),
+        0
+    );
+    assert!(
+        task_workspaces_dir(&global_root)
+            .join("unreachable-a1b2c3")
+            .join("ORB-7")
+            .is_dir(),
+        "the repair must not delete task bundles it cannot prove are abandoned"
+    );
+}
