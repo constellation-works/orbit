@@ -1337,6 +1337,66 @@ fn gate_pipeline_default_reservation_ttl_covers_child_wait_budget() {
     );
 }
 
+/// [ORB-12102] The gate forwards its own `auto_push` value instead of pinning
+/// the child's push on. Pinning `true` overrode `task_local_pipeline`'s
+/// `auto_push: false` default, so every gated local run pushed — and failed —
+/// on a checkout with no usable `origin`.
+#[test]
+fn gate_pipeline_threads_auto_push_instead_of_pinning_it() {
+    let yaml = DEFAULT_JOB_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "task_gate_pipeline").then_some(*yaml))
+        .expect("task gate pipeline default exists");
+    let asset = load_job_asset(yaml).expect("parse task gate pipeline");
+    let default_input = asset
+        .spec
+        .default_input
+        .as_ref()
+        .expect("task gate pipeline default input");
+    assert_eq!(
+        default_input["auto_push"],
+        Value::Bool(false),
+        "an unattended gate run must default to the leaf's own no-push behavior"
+    );
+
+    let dispatch = asset
+        .spec
+        .steps
+        .iter()
+        .find(|step| step.id == "dispatch_child")
+        .expect("task gate pipeline has child dispatch step");
+    let JobV2StepBody::TargetRef(target) = &dispatch.body else {
+        panic!("expected dispatch target ref, got {:?}", dispatch.body);
+    };
+    let run_input = &target.default_input.as_ref().expect("dispatch input")["run_input"];
+    assert_eq!(
+        run_input["auto_push"],
+        Value::String("{{ input.auto_push }}".to_string()),
+        "the child's push must come from this run's input, not a literal"
+    );
+
+    // PR delivery is unaffected: `task_pr_pipeline` publishes its branch
+    // regardless of the forwarded value, so only the local leaf's push
+    // changes behavior here.
+    let pr_yaml = DEFAULT_JOB_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "task_pr_pipeline").then_some(*yaml))
+        .expect("task pr pipeline default exists");
+    let pr_push = load_job_asset(pr_yaml)
+        .expect("parse task pr pipeline")
+        .spec
+        .steps
+        .iter()
+        .find(|step| step.id == "push")
+        .expect("task pr pipeline has a push step")
+        .when
+        .clone();
+    assert!(
+        !pr_push.unwrap_or_default().contains("auto_push"),
+        "PR publication must not become conditional on the gate's auto_push input"
+    );
+}
+
 /// [ORB-10129] Structural invariants of the triage pipeline: it is
 /// single-flight (`max_active_runs: 1` — one half of the overlap
 /// guarantee, the routine's `overlap: forbid` is the other), an empty

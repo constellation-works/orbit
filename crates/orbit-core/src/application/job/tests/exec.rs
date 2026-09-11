@@ -8,6 +8,7 @@ mod already_landed;
 mod ci_sweep;
 mod completion;
 mod epic_review_gate;
+mod local_ship;
 mod review_gate;
 
 use chrono::Utc;
@@ -1308,6 +1309,11 @@ fn epic_pipeline_reenters_drain_when_finisher_authors_a_child() {
     assert!(host.current_descendants().is_empty());
 }
 
+/// Rename the engine's own deterministic actions so a scripted host sees
+/// them. The v2 dispatcher routes a known engine action straight into
+/// `execute_engine_action`, never through `RuntimeHost::run_deterministic`,
+/// so a host override alone cannot intercept `worktree_setup`, the `git_*`
+/// actions, or `update_task`.
 pub(super) fn retarget_engine_actions_for_scripted_host(
     job: &mut orbit_types::workflow::activity_job::JobV2,
 ) {
