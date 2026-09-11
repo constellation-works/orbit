@@ -62,11 +62,43 @@ fn auto_detects_grok_from_home_when_repo_lacks_dotgrok() {
 fn auto_detects_claude_from_home_when_repo_lacks_dotclaude() {
     let repo = tempdir().expect("repo tempdir");
     let home = tempdir().expect("home tempdir");
-    std::fs::create_dir_all(home.path().join(".claude")).expect("create claude home dir");
+    std::fs::write(home.path().join(".claude.json"), "{}\n").expect("write claude home config");
 
     let providers = auto_detected_providers(repo.path(), Some(home.path()));
 
     assert_eq!(providers, vec![McpProvider::Claude]);
+}
+
+#[test]
+fn auto_detects_claude_from_home_settings_when_repo_lacks_dotclaude() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    std::fs::create_dir_all(home.path().join(".claude")).expect("create claude home dir");
+    std::fs::write(home.path().join(".claude").join("settings.json"), "{}\n")
+        .expect("write claude home settings");
+
+    let providers = auto_detected_providers(repo.path(), Some(home.path()));
+
+    assert_eq!(providers, vec![McpProvider::Claude]);
+}
+
+#[test]
+fn orbit_own_home_skill_links_do_not_auto_detect_claude() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    // Exactly what `orbit init` leaves behind in a home that has never run
+    // Claude Code: skill-link directories and nothing else.
+    for provider_dir in [".claude", ".agents"] {
+        std::fs::create_dir_all(home.path().join(provider_dir).join("skills"))
+            .expect("create orbit skill link dir");
+    }
+
+    let providers = auto_detected_providers(repo.path(), Some(home.path()));
+
+    assert!(
+        !providers.contains(&McpProvider::Claude),
+        "orbit-created ~/.claude/skills must not count as a Claude install: {providers:?}"
+    );
 }
 
 #[test]
