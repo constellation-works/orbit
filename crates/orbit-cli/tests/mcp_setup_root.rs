@@ -285,6 +285,66 @@ fn explicit_root_outranks_a_different_registered_cwd_checkout() {
 }
 
 #[test]
+fn shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove() {
+    let fixture = SharedRootCheckoutPairFixture::init();
+    let root = fixture.orbit_root.to_str().expect("utf8 shared Orbit root");
+
+    let outside = fixture
+        .orbit(
+            &fixture.elsewhere,
+            &argv(&["--root", root, "mcp", "init", "--claude"]),
+        )
+        .failure();
+    let stderr = String::from_utf8_lossy(&outside.get_output().stderr);
+    assert!(
+        stderr.contains("does not identify exactly one registered checkout"),
+        "unexpected outside-checkout failure: {stderr}"
+    );
+    assert!(!fixture.checkout_a.join(".claude.json").exists());
+    assert!(!fixture.checkout_b.join(".claude.json").exists());
+
+    fixture
+        .orbit(
+            &fixture.checkout_a,
+            &argv(&["--root", root, "mcp", "init", "--claude"]),
+        )
+        .success();
+    assert_eq!(
+        generated_server_args(&fixture.checkout_a.join(".claude.json")),
+        vec!["mcp", "serve", "--workspace", "ws_alpha"]
+    );
+    assert!(!fixture.checkout_b.join(".claude.json").exists());
+
+    fixture
+        .orbit(
+            &fixture.checkout_b,
+            &argv(&["--root", root, "mcp", "init", "--claude"]),
+        )
+        .success();
+    assert_eq!(
+        generated_server_args(&fixture.checkout_b.join(".claude.json")),
+        vec!["mcp", "serve", "--workspace", "ws_beta"]
+    );
+
+    fixture
+        .orbit(
+            &fixture.checkout_a,
+            &argv(&["--root", root, "mcp", "remove", "--claude"]),
+        )
+        .success();
+    assert!(!fixture.checkout_a.join(".claude.json").exists());
+    assert!(fixture.checkout_b.join(".claude.json").exists());
+
+    fixture
+        .orbit(
+            &fixture.checkout_b,
+            &argv(&["--root", root, "mcp", "remove", "--claude"]),
+        )
+        .success();
+    assert!(!fixture.checkout_b.join(".claude.json").exists());
+}
+
+#[test]
 fn a_root_without_a_registered_checkout_refuses_instead_of_writing() {
     let fixture = ExternalRootFixture::init();
     let unrelated_root = fixture
@@ -341,6 +401,113 @@ fn an_unregistered_root_reports_the_root_and_registered_candidates() {
             && stderr.contains(fixture.checkout_b.to_str().expect("utf8 checkout B")),
         "failure must name candidate checkouts: {stderr}"
     );
+}
+
+struct SharedRootCheckoutPairFixture {
+    _temp: TempDir,
+    home: PathBuf,
+    orbit_root: PathBuf,
+    checkout_a: PathBuf,
+    checkout_b: PathBuf,
+    elsewhere: PathBuf,
+}
+
+impl SharedRootCheckoutPairFixture {
+    fn init() -> Self {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let orbit_root = temp.path().join("shared-root");
+        let checkout_a = temp.path().join("checkout-a");
+        let checkout_b = temp.path().join("checkout-b");
+        let elsewhere = temp.path().join("elsewhere");
+        for directory in [&home, &elsewhere] {
+            fs::create_dir_all(directory).expect("fixture directory");
+        }
+        init_git_repo(&checkout_a);
+        init_git_repo(&checkout_b);
+
+        let fixture = Self {
+            _temp: temp,
+            home,
+            orbit_root,
+            checkout_a,
+            checkout_b,
+            elsewhere,
+        };
+        let root = fixture.orbit_root.to_str().expect("utf8 shared Orbit root");
+        fixture
+            .orbit(
+                &fixture.checkout_a,
+                &argv(&[
+                    "--root",
+                    root,
+                    "init",
+                    "--non-interactive",
+                    "--host-name",
+                    "shared-root-host",
+                    "--task-prefix",
+                    "SHR",
+                ]),
+            )
+            .success();
+        fixture
+            .orbit(
+                &fixture.checkout_a,
+                &argv(&["--root", root, "workspace", "init", "--name", "alpha"]),
+            )
+            .success();
+        fixture
+            .orbit(
+                &fixture.checkout_b,
+                &argv(&["--root", root, "workspace", "init", "--name", "beta"]),
+            )
+            .success();
+        fixture.assert_shared_root_layout();
+        fixture
+    }
+
+    fn orbit(&self, cwd: &Path, args: &[String]) -> assert_cmd::assert::Assert {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(cwd)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .args(args)
+            .assert()
+    }
+
+    fn assert_shared_root_layout(&self) {
+        for (checkout, workspace_id) in [
+            (&self.checkout_a, "ws_alpha"),
+            (&self.checkout_b, "ws_beta"),
+        ] {
+            let assert = self
+                .orbit(
+                    checkout,
+                    &argv(&[
+                        "--root",
+                        self.orbit_root.to_str().expect("utf8 shared Orbit root"),
+                        "workspace",
+                        "show",
+                        "--format",
+                        "json",
+                    ]),
+                )
+                .success();
+            let shown: Value =
+                serde_json::from_slice(&assert.get_output().stdout).expect("workspace show json");
+            assert_eq!(shown["workspace"]["id"], workspace_id);
+            assert_eq!(shown["checkout"]["repo_root"], canonical_str(checkout));
+            assert_eq!(
+                shown["checkout"]["orbit_dir"],
+                canonical_str(&self.orbit_root)
+            );
+            assert!(!checkout.join(".orbit").exists());
+        }
+    }
 }
 
 struct RegisteredCheckoutPairFixture {
