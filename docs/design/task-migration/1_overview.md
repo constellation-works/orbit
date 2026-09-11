@@ -71,7 +71,7 @@ machine a disjoint id range).
 | Concern | File | Task |
 |---------|------|------|
 | Archive pack/unpack (tar.zst) | [crates/orbit-store/src/workflow/task/archive.rs](../../../crates/orbit-store/src/workflow/task/archive.rs) | [ORB-00034] |
-| Export / transactional import + renumber | [crates/orbit-store/src/workflow/task/mod.rs](../../../crates/orbit-store/src/workflow/task/mod.rs) | [ORB-00034] |
+| Export / validated import + renumber | [crates/orbit-store/src/workflow/task/mod.rs](../../../crates/orbit-store/src/workflow/task/mod.rs) | [ORB-00034] |
 | Reindex from disk | [crates/orbit-store/src/workflow/task/reindex.rs](../../../crates/orbit-store/src/workflow/task/reindex.rs) | [ORB-00034] |
 | Allocator seed/bump + prefix primitives | [crates/orbit-store/src/driver/sqlite/task_registry/store.rs](../../../crates/orbit-store/src/driver/sqlite/task_registry/store.rs) | [ORB-00034], [ORB-10721] |
 | Prefix projection into the allocator | [crates/orbit-cmd/src/registry_runtime.rs](../../../crates/orbit-cmd/src/registry_runtime.rs) | [ORB-10721] |
@@ -96,9 +96,12 @@ orbit task import /tmp/tasks.tar.zst \
   --task-workspace <target-task-workspace-id> --on-conflict=renumber
 ```
 
-Import is transactional: it validates the manifest version and every bundle's
-integrity *before* touching state, so a corrupt or version-incompatible archive
-fails with no partial writes. `--task-workspace` selects the task-registry
+Import validates the manifest version and every bundle's integrity *before*
+touching state, so a corrupt or version-incompatible archive fails with no
+partial writes. During the mutation phase, fresh bundles and a source workspace
+registration created by the import are rolled back if a later write fails;
+owner-wins replacements remain because the owner's copy is authoritative.
+`--task-workspace` selects the task-registry
 partition, whose id is the `workspace_id` in B's checkout `.orbit/config.yaml`;
 the checkout must already be registered locally. If omitted, import resolves the
 archive's source workspace if registered locally, otherwise it registers the
@@ -220,18 +223,22 @@ algorithm:
   aborts). `--on-conflict=owner-wins` resolves it from the id alone — a
   colliding foreign-prefix bundle is replaced by the owner's copy (reported
   `updated`), a colliding local-prefix bundle is left untouched (reported
-  `skipped-local-owned`), and nothing is ever renumbered ([ORB-12126]).
-  Because it never mints, foreign relation targets survive verbatim, no
-  `.idmap.json` is written, and re-running the same archive reports every task
-  as `already-present` — so it is safe on a timer:
+  `skipped-local-owned`), and nothing is ever renumbered ([ORB-12126]). If the
+  task id has no registry binding but its canonical bundle directory remains,
+  owner-wins refreshes that orphaned mirror and restores its binding; `reindex`
+  remains the recovery command for other index drift. Because it never mints,
+  foreign relation targets survive verbatim, no `.idmap.json` is written, and
+  re-running the same archive reports every task as `already-present` — so it
+  is safe on a timer:
 
   ```sh
   orbit task import /tmp/peer-tasks.tar.zst --on-conflict=owner-wins
   ```
 
   Pull before push: a cross-host `depends_on` only resolves once its target's
-  mirror has landed. A failed run is re-runnable rather than rolled back —
-  replacements already applied stay, since the owner's copy is the newer one.
+  mirror has landed. A failed run is re-runnable: fresh bundles and any
+  workspace registration created by that run are rolled back, while owner-wins
+  replacements already applied stay because the owner's copy is the newer one.
 
 The reasoning for choosing prefix ownership over a single authoritative host is
 in [4_decisions](./4_decisions.md).
