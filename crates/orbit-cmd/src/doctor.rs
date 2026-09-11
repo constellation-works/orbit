@@ -426,18 +426,19 @@ fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
 /// partition directory is itself host-global.
 ///
 /// A partition is named for its *task-registry* workspace id, so the task
-/// registry is what claims it while the bound checkout's `orbit_dir` exists;
-/// a binding to a missing checkout is stale. The workspace catalog and the
-/// synthetic `--root` partition are the other claimants. Comparing the
-/// directory name against catalog `ws_*` ids alone reported every
-/// `<slug>-<hash>` partition — including live ones — as orphaned [ORB-12119].
+/// registry is what claims it while the bound checkout's `orbit_dir` exists.
+/// The workspace catalog and the synthetic `--root` partition are the other
+/// claimants. Comparing the directory name against catalog `ws_*` ids alone
+/// reported every `<slug>-<hash>` partition — including live ones — as
+/// orphaned [ORB-12119].
 ///
-/// An unknown populated partition gets its own non-destructive row: a lost or
-/// rebuilt registry leaves every other checkout's live partition looking
-/// exactly like abandoned residue, and the recovery for it is `orbit task
-/// reindex` in the owning checkout, not a deletion this check invites
-/// [ORB-12131]. A stale checkout binding is separately actionable because its
-/// missing `orbit_dir` proves the checkout is gone.
+/// Partitions that still hold task bundles are reported without inviting a
+/// deletion unless their checkout is confirmed gone. A lost or rebuilt
+/// registry leaves every other checkout's live partition looking like
+/// abandoned residue, and the recovery for that is `orbit task reindex` in the
+/// owning checkout [ORB-12131]; a checkout that merely failed to stat may be
+/// intact behind an unmounted volume or an unreadable parent directory, and
+/// the recovery is to restore access [ORB-12143].
 fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let global_root = runtime.global_root();
     let partitions = match task_store::inspect_task_store_partitions(&global_root) {
@@ -458,10 +459,51 @@ fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
         }
     };
 
-    if partitions.removable.is_empty()
-        && partitions.stale.is_empty()
-        && partitions.unowned.is_empty()
-    {
+    // Each category gets its own clause, so one row can describe a host that
+    // has several at once, and its own remediation step in reporting order.
+    let mut clauses: Vec<String> = Vec::new();
+    let mut steps: Vec<String> = Vec::new();
+
+    if !partitions.unowned.is_empty() {
+        clauses.push(format!(
+            "{} task-store partition(s) hold task bundles that no workspace binding claims: {}",
+            partitions.unowned.len(),
+            describe_partitions(&partitions.unowned)
+        ));
+        steps.push(
+            "Run `orbit task reindex` from each checkout that owns those bundles to rebind them."
+                .to_string(),
+        );
+    }
+    if !partitions.unreachable.is_empty() {
+        clauses.push(format!(
+            "{} populated partition(s) whose bound checkout could not be reached: {}",
+            partitions.unreachable.len(),
+            describe_unreachable_partitions(&partitions.unreachable)
+        ));
+        steps.push(
+            "Restore access to the unreachable checkouts (remount the volume, repair directory \
+             permissions) and re-run `orbit doctor`; a populated partition is never deleted while \
+             its checkout cannot be stat-ed."
+                .to_string(),
+        );
+    }
+    if !partitions.stale.is_empty() {
+        clauses.push(format!(
+            "{} stale task-store partition(s) point at missing checkout directories: {}",
+            partitions.stale.len(),
+            describe_partitions(&partitions.stale)
+        ));
+    }
+    if !partitions.removable.is_empty() {
+        clauses.push(format!(
+            "{} orphaned empty task-store partition(s) (no workspace binding claims them): {}",
+            partitions.removable.len(),
+            describe_partitions(&partitions.removable)
+        ));
+    }
+
+    if clauses.is_empty() {
         return check(
             "orphan-task-stores",
             WorkspaceDoctorStatus::Ok,
@@ -472,80 +514,38 @@ fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
         );
     }
 
-    // Unknown populated partitions decide the recovery guidance: their data is
-    // recoverable, so the operator must not be pointed at a repair that would
-    // delete it. A stale checkout binding is different evidence: the checkout
-    // is gone, so its partition is safe to remove after confirmation.
-    if !partitions.unowned.is_empty() {
-        let mut message = format!(
-            "{} task-store partition(s) hold task bundles that no workspace binding claims: {}",
-            partitions.unowned.len(),
-            describe_partitions(&partitions.unowned)
-        );
-        if !partitions.removable.is_empty() {
-            message.push_str(&format!(
-                "; {} empty unclaimed partition(s): {}",
-                partitions.removable.len(),
-                describe_partitions(&partitions.removable)
-            ));
-        }
-        if !partitions.stale.is_empty() {
-            message.push_str(&format!(
-                "; {} stale checkout-binding partition(s): {}",
-                partitions.stale.len(),
-                describe_partitions(&partitions.stale)
-            ));
-        }
-        let remediation = if partitions.stale.is_empty() {
-            "Run `orbit task reindex` from each checkout that owns these bundles to rebind them; \
-             `orbit doctor --fix-orphan-task-stores` never deletes a populated partition, so \
-             remove one by hand only after confirming its checkout is gone."
-                .to_string()
+    if !partitions.stale.is_empty() || !partitions.removable.is_empty() {
+        steps.push(if steps.is_empty() {
+            "Run `orbit doctor --fix-orphan-task-stores --confirm`.".to_string()
         } else {
-            "Run `orbit task reindex` from each checkout that owns the unknown bundles; \
-             then run `orbit doctor --fix-orphan-task-stores --confirm` to remove partitions \
-             whose checkout binding is stale."
+            "Then run `orbit doctor --fix-orphan-task-stores --confirm`, which removes only the \
+             empty partitions and the partitions whose checkout is confirmed gone."
                 .to_string()
-        };
-        return actionable_check(
-            "orphan-task-stores",
-            WorkspaceDoctorStatus::Warning,
-            message,
-            remediation,
-        );
-    }
-
-    if !partitions.stale.is_empty() {
-        let mut message = format!(
-            "{} stale task-store partition(s) point at missing checkout directories: {}",
-            partitions.stale.len(),
-            describe_partitions(&partitions.stale)
-        );
-        if !partitions.removable.is_empty() {
-            message.push_str(&format!(
-                "; {} empty unclaimed partition(s): {}",
-                partitions.removable.len(),
-                describe_partitions(&partitions.removable)
-            ));
-        }
-        return actionable_check(
-            "orphan-task-stores",
-            WorkspaceDoctorStatus::Warning,
-            message,
-            "Run `orbit doctor --fix-orphan-task-stores --confirm`.".to_string(),
-        );
+        });
     }
 
     actionable_check(
         "orphan-task-stores",
         WorkspaceDoctorStatus::Warning,
-        format!(
-            "{} orphaned empty task-store partition(s) (no workspace binding claims them): {}",
-            partitions.removable.len(),
-            describe_partitions(&partitions.removable)
-        ),
-        "Run `orbit doctor --fix-orphan-task-stores --confirm`.".to_string(),
+        clauses.join("; "),
+        steps.join(" "),
     )
+}
+
+/// Render partitions whose checkout could not be resolved, adding the
+/// filesystem failure that stopped the answer to the usual description.
+fn describe_unreachable_partitions(partitions: &[task_store::UnreachablePartition]) -> String {
+    partitions
+        .iter()
+        .map(|unreachable| {
+            format!(
+                "{} [{}]",
+                describe_partitions(std::slice::from_ref(&unreachable.partition)),
+                unreachable.reason
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Render unclaimed partitions for a diagnostic line: each one's workspace id,

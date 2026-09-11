@@ -14,7 +14,7 @@
 //! task registry — not `workspaces.json` — decides which partition a checkout's
 //! task state lives in and which partitions are still claimed [ORB-12119].
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -40,29 +40,45 @@ pub struct UnclaimedPartition {
     pub task_bundles: usize,
 }
 
+/// A populated partition whose bound checkout the filesystem could not answer
+/// for — neither present nor confirmed absent.
+#[derive(Debug, Clone)]
+pub struct UnreachablePartition {
+    /// The partition and the task data deleting it would cost.
+    pub partition: UnclaimedPartition,
+    /// The path that could not be resolved and what the filesystem said.
+    pub reason: String,
+}
+
 /// What a scan of `<global_root>/tasks/workspaces/` found.
 ///
-/// Unclaimed partitions are split into stale checkout bindings, empty residue,
-/// and populated partitions with no binding. A missing checkout binding is
-/// sufficient evidence for cleanup; an unknown populated partition remains
-/// recoverable with `orbit task reindex` [ORB-12131].
+/// Unclaimed partitions are split into confirmed-dead checkout bindings, empty
+/// residue, populated partitions with no binding, and populated partitions
+/// whose checkout could not be reached. Deleting task bundles requires
+/// evidence a transient filesystem condition cannot forge: a confirmed-absent
+/// checkout [ORB-12143]. Anything else populated stays recoverable with
+/// `orbit task reindex` [ORB-12131].
 #[derive(Debug, Clone)]
 pub struct TaskStorePartitions {
     /// Partition directories present on this host.
     pub scanned: usize,
     /// Unclaimed and empty of task bundles: nothing to lose by deleting them.
     pub removable: Vec<UnclaimedPartition>,
-    /// Partitions whose task-registry checkout binding points at a missing
-    /// orbit directory. The missing checkout is sufficient evidence to remove
-    /// the partition, including its bundles.
+    /// Partitions whose task-registry checkout binding points at an orbit
+    /// directory confirmed absent. That the checkout is gone is sufficient
+    /// evidence to remove the partition, including its bundles.
     pub stale: Vec<UnclaimedPartition>,
     /// Unclaimed but still holding task bundles, which `orbit task reindex`
     /// can rebind from the bundles themselves. Never deleted automatically.
     pub unowned: Vec<UnclaimedPartition>,
+    /// Populated partitions whose bound checkout could not be stat-ed — an
+    /// unmounted volume, an unsearchable parent, an offline share. Never
+    /// deleted automatically: the checkout may be intact behind the failure.
+    pub unreachable: Vec<UnreachablePartition>,
 }
 
-/// Classify every task-store partition on this host as claimed, removable, or
-/// unowned-but-populated.
+/// Classify every task-store partition on this host as claimed, removable,
+/// confirmed stale, unowned-but-populated, or unreachable.
 ///
 /// `None` means the directory has never been created (fresh host, no task ever
 /// committed) — nothing to diagnose rather than nothing orphaned.
@@ -72,17 +88,18 @@ pub fn inspect_task_store_partitions(
     let Some(partitions) = task_store_partitions(global_root)? else {
         return Ok(None);
     };
-    let (claimed, stale_bindings) = partition_claims(global_root)?;
+    let claims = partition_claims(global_root)?;
     let scanned = partitions.len();
 
     let mut removable = Vec::new();
     let mut stale = Vec::new();
     let mut unowned = Vec::new();
+    let mut unreachable = Vec::new();
     for path in partitions {
         let Some(id) = partition_id(&path).map(str::to_owned) else {
             continue;
         };
-        if claimed.contains(&id) {
+        if claims.claimed.contains(&id) {
             continue;
         }
 
@@ -90,12 +107,19 @@ pub fn inspect_task_store_partitions(
             task_bundles: count_task_bundles(&path),
             path,
         };
-        if stale_bindings.contains(&id) {
-            stale.push(partition);
-        } else if partition.task_bundles > 0 {
-            unowned.push(partition);
-        } else {
+        // An empty partition costs nothing to delete, so any binding that is
+        // not a live claim reclaims it; only bundles need stronger evidence.
+        if partition.task_bundles == 0 {
             removable.push(partition);
+        } else if claims.gone.contains(&id) {
+            stale.push(partition);
+        } else if let Some(reason) = claims.unreachable.get(&id) {
+            unreachable.push(UnreachablePartition {
+                partition,
+                reason: reason.clone(),
+            });
+        } else {
+            unowned.push(partition);
         }
     }
 
@@ -104,19 +128,24 @@ pub fn inspect_task_store_partitions(
         removable,
         stale,
         unowned,
+        unreachable,
     }))
 }
 
-/// Delete every stale-bound or empty unclaimed partition, retiring any
-/// registry rows that name it. Returns the removed partition paths.
+/// Delete every empty unclaimed partition and every partition whose bound
+/// checkout is confirmed gone, retiring any registry rows that name it.
+/// Returns the removed partition paths.
 ///
-/// A partition that still holds bundles is left alone however the registry
-/// answers: an unclaimed populated partition is exactly the state a lost or
-/// rebuilt `tasks/index.sqlite` produces for every checkout other than the one
-/// the command runs from, and deleting it would destroy task data that
-/// `orbit task reindex` can otherwise recover from the bundles [ORB-12131].
-/// Reclaiming a genuinely dead populated partition stays a deliberate manual
-/// step, or `orbit workspace teardown` while the checkout still exists.
+/// A partition that still holds bundles is deleted only on evidence a
+/// transient filesystem condition cannot forge. An unclaimed populated
+/// partition is exactly the state a lost or rebuilt `tasks/index.sqlite`
+/// produces for every checkout other than the one the command runs from, and
+/// deleting it would destroy task data that `orbit task reindex` can otherwise
+/// recover from the bundles [ORB-12131]. A populated partition whose checkout
+/// merely failed to stat — an unmounted volume, an unsearchable parent — is
+/// kept for the same reason: the checkout may still be there [ORB-12143].
+/// Reclaiming such a partition stays a deliberate manual step, or
+/// `orbit workspace teardown` while the checkout still exists.
 pub fn remove_unclaimed_task_stores(global_root: &Path) -> Result<Vec<PathBuf>, OrbitError> {
     let Some(partitions) = inspect_task_store_partitions(global_root)? else {
         return Ok(Vec::new());
@@ -190,40 +219,116 @@ pub fn partition_is_bound(global_root: &Path, workspace_id: &str) -> Result<bool
         .contains(workspace_id))
 }
 
-/// Every workspace id that claims a partition on this host, plus task-registry
-/// bindings whose checkout has disappeared. Live checkout bindings, workspace
-/// catalog ids, and the synthetic partition every `--root <data-dir>` write
-/// lands in are claims; a binding to a missing orbit directory is stale.
-fn partition_claims(
-    global_root: &Path,
-) -> Result<(BTreeSet<String>, BTreeSet<String>), OrbitError> {
+/// Who claims each partition on this host, and why the rest do not.
+struct PartitionClaims {
+    /// Live checkout bindings, workspace catalog ids, and the synthetic
+    /// partition every `--root <data-dir>` write lands in.
+    claimed: BTreeSet<String>,
+    /// Bindings whose checkout is confirmed absent.
+    gone: BTreeSet<String>,
+    /// Bindings whose checkout the filesystem could not answer for, mapped to
+    /// the failure that stopped the answer.
+    unreachable: BTreeMap<String, String>,
+}
+
+/// Resolve every partition claim, classifying each task-registry binding by
+/// what the filesystem says about the checkout it names.
+fn partition_claims(global_root: &Path) -> Result<PartitionClaims, OrbitError> {
     let tasks = open_task_registry(global_root)?;
-    let mut claimed = BTreeSet::new();
-    let mut stale_bindings = BTreeSet::new();
+    let mut claims = PartitionClaims {
+        claimed: BTreeSet::new(),
+        gone: BTreeSet::new(),
+        unreachable: BTreeMap::new(),
+    };
     for workspace_id in tasks.workspace_ids()? {
-        match tasks.find_workspace_checkout(&workspace_id)? {
-            Some(checkout) if checkout.orbit_dir.exists() => {
-                claimed.insert(workspace_id);
+        let Some(checkout) = tasks.find_workspace_checkout(&workspace_id)? else {
+            continue;
+        };
+        match checkout_evidence(&checkout.orbit_dir) {
+            CheckoutEvidence::Present => {
+                claims.claimed.insert(workspace_id);
             }
-            Some(_) => {
-                stale_bindings.insert(workspace_id);
+            CheckoutEvidence::Gone => {
+                claims.gone.insert(workspace_id);
             }
-            None => {}
+            CheckoutEvidence::Unreachable(reason) => {
+                claims.unreachable.insert(workspace_id, reason);
+            }
         }
     }
-    claimed.insert(UNBOUND_DATA_DIR_WORKSPACE_ID.to_string());
+    claims
+        .claimed
+        .insert(UNBOUND_DATA_DIR_WORKSPACE_ID.to_string());
 
     let registry_path = workspace_registry::registry_path_for(global_root);
     if registry_path.exists() {
         let registry = workspace_registry::load_registry_from(&registry_path)?;
-        claimed.extend(
+        claims.claimed.extend(
             registry
                 .workspaces
                 .into_iter()
                 .map(|workspace| workspace.id),
         );
     }
-    Ok((claimed, stale_bindings))
+    Ok(claims)
+}
+
+/// What the filesystem can testify about a bound checkout directory.
+enum CheckoutEvidence {
+    /// The bound `orbit_dir` is there: the binding is a live claim.
+    Present,
+    /// The bound `orbit_dir` is absent, and a directory we could actually read
+    /// said so: the checkout is gone.
+    Gone,
+    /// Neither answer was available, naming the path and the failure.
+    Unreachable(String),
+}
+
+/// Classify one bound checkout directory.
+///
+/// `Path::exists()` collapses every stat failure into "absent", which made an
+/// unmounted volume or an unsearchable parent directory indistinguishable from
+/// a deleted checkout — and the repair deletes task bundles on that evidence
+/// [ORB-12143]. Absence must therefore be positively confirmed rather than
+/// inferred from a failed stat.
+fn checkout_evidence(orbit_dir: &Path) -> CheckoutEvidence {
+    match std::fs::symlink_metadata(orbit_dir) {
+        Ok(_) => CheckoutEvidence::Present,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => confirm_absence(orbit_dir),
+        Err(error) => CheckoutEvidence::Unreachable(filesystem_failure(orbit_dir, &error)),
+    }
+}
+
+/// Confirm that an unstat-able `orbit_dir` is genuinely missing by walking up
+/// to the nearest ancestor that exists and listing it. Only a directory we can
+/// read can testify that the path beneath it is absent; a stat failure other
+/// than `NotFound` anywhere up the chain — `EACCES` from an unsearchable
+/// parent, `EIO`/`ENOTCONN` from a dropped mount — is not absence.
+fn confirm_absence(orbit_dir: &Path) -> CheckoutEvidence {
+    for ancestor in orbit_dir.ancestors().skip(1) {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(_) => {
+                return match std::fs::read_dir(ancestor) {
+                    Ok(_) => CheckoutEvidence::Gone,
+                    Err(error) => {
+                        CheckoutEvidence::Unreachable(filesystem_failure(ancestor, &error))
+                    }
+                };
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return CheckoutEvidence::Unreachable(filesystem_failure(ancestor, &error));
+            }
+        }
+    }
+    CheckoutEvidence::Unreachable(format!(
+        "{}: no readable ancestor directory could confirm it is absent",
+        orbit_dir.display()
+    ))
+}
+
+fn filesystem_failure(path: &Path, error: &std::io::Error) -> String {
+    format!("{}: {error}", path.display())
 }
 
 /// Open the task registry that names the partitions, rather than creating one
