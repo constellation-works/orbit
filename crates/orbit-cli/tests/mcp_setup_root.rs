@@ -220,8 +220,30 @@ fn external_root_task_index_loss_is_reported_and_reindexed() {
         .orbit(&fixture.checkout, &fixture.rooted(&["task", "list"]))
         .failure();
     let stderr = String::from_utf8_lossy(&listed.get_output().stderr);
-    assert!(stderr.contains("on-disk bundle"), "stderr: {stderr}");
-    assert!(stderr.contains("task reindex"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("error: store error: task index is missing 1 on-disk bundle(s); run `orbit task reindex` to recover them"),
+        "stderr: {stderr}"
+    );
+    assert!(!stderr.contains("invalid input"), "stderr: {stderr}");
+
+    let listed_json = fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["task", "list", "--format", "json"]),
+        )
+        .failure();
+    let stderr_json = String::from_utf8_lossy(&listed_json.get_output().stderr);
+    let error_payload: Value = serde_json::from_str(stderr_json.trim()).expect("error json");
+    assert_eq!(error_payload["code"], "store_error", "json: {stderr_json}");
+    assert_eq!(
+        error_payload["error"],
+        "store error: task index is missing 1 on-disk bundle(s); run `orbit task reindex` to recover them",
+        "json: {stderr_json}"
+    );
+    assert!(
+        !stderr_json.contains("invalid_input"),
+        "json: {stderr_json}"
+    );
 
     fixture
         .orbit(&fixture.checkout, &fixture.rooted(&["task", "reindex"]))

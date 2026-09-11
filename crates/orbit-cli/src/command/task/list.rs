@@ -119,7 +119,7 @@ impl Execute for TaskListArgs {
         if tasks.is_empty() {
             let count = runtime.unindexed_task_bundle_count()?;
             if count > 0 {
-                return Err(OrbitError::InvalidInput(format!(
+                return Err(OrbitError::Store(format!(
                     "task index is missing {count} on-disk bundle(s); run `orbit task reindex` to recover them"
                 )));
             }
