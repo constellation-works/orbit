@@ -262,16 +262,21 @@ impl OrbitRuntime {
             return Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()));
         }
 
+        let existing = self.stores().tools().get_tool(name)?;
         if !self.tool_registry().is_active(name) {
-            let verb = if enabled { "enable" } else { "disable" };
-            return Err(OrbitError::InvalidInput(format!(
-                "tool '{name}' is inactive on the agent tool surface; that availability is fixed \
-                 at registration, so {verb} would report success without changing whether the \
-                 tool can run"
-            )));
+            let changes_stored_state = existing
+                .as_ref()
+                .map_or(!enabled, |stored| stored.enabled != enabled);
+            if !changes_stored_state {
+                let state = if enabled { "enabled" } else { "disabled" };
+                let verb = if enabled { "enable" } else { "disable" };
+                return Err(OrbitError::InvalidInput(format!(
+                    "tool '{name}' is inactive on the agent tool surface and is already {state}; \
+                     `orbit tool {verb}` would be a no-op"
+                )));
+            }
         }
 
-        let existing = self.stores().tools().get_tool(name)?;
         if existing.is_none() {
             let schema = self
                 .tool_registry()
