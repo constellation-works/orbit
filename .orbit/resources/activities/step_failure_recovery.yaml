@@ -7,7 +7,9 @@ spec:
   description: >
     Generic v2 task workflow recovery hook. It diagnoses incomplete work
     conservatively, but for a completed implementation it repairs the normal
-    delivery path or, as a last resort, publishes the candidate itself.
+    delivery path or, as a last resort, publishes the candidate itself. It never
+    writes persistent Git configuration, so a precondition it cannot restore
+    honestly is reported as unrecovered.
   input_schema_json:
     type: object
     additionalProperties: false
@@ -101,6 +103,17 @@ spec:
     commit, the PR — so that the pipeline's remaining steps, or an operator
     reading the world afterwards, find it repaired. Judge every decision below
     against that durable state, never against something you plan to report.
+
+    Repository configuration is out of bounds. Never add, rename, retarget, or
+    remove a Git remote, and never write persistent Git configuration by any
+    other route — `git config` writes, an edited `.git/config`, or an equivalent
+    command. A linked worktree shares `.git/config` with its primary checkout,
+    so such a change outlives the run and rewrites a repository nobody handed
+    you. Orbit refuses these commands at its tool boundary; do not route around
+    them. If the failed step could only succeed after such a change, recovery is
+    not possible: file the friction, report `recovered: false` with the blocker,
+    and let the step fail. Manufacturing a step's precondition is not recovery —
+    it makes a failed publication indistinguishable from a real one.
 
     Input is a JSON object with exactly these keys:
     - failed_step_id: the job step id that failed

@@ -56,6 +56,8 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
         ));
     }
 
+    ensure_origin_publishes_elsewhere(workspace_path, &branch)?;
+
     let local_sha = commit_sha(workspace_path, &branch)?;
     let remote_sha = remote_branch_sha(workspace_path, &branch)?;
     let decision = push_decision(workspace_path, &branch, &local_sha, remote_sha.as_deref())?;
@@ -99,6 +101,60 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
         remote_sha.as_deref(),
         force_with_lease,
     ))
+}
+
+/// Refuse to push into the repository we are pushing from.
+///
+/// A push step proves publication only when `origin` is some other repository.
+/// When `origin` points back at this checkout — the primary checkout a linked
+/// worktree shares its `.git` with, for instance — `ls-remote` echoes the local
+/// branch straight back, and the step would report `reused_current` for a branch
+/// that reached no publication target at all. Failing here keeps a failed push
+/// distinguishable from a successful one even if something outside the pipeline
+/// wrote that remote into the repository's configuration [ORB-12103].
+fn ensure_origin_publishes_elsewhere(
+    workspace_path: &Path,
+    branch: &str,
+) -> Result<(), OrbitError> {
+    let url = git_output(workspace_path, &["remote", "get-url", "origin"]).map_err(|error| {
+        OrbitError::Execution(format!(
+            "git_push: workspace '{}' has no usable 'origin' remote to publish '{branch}' to: {error}",
+            workspace_path.display()
+        ))
+    })?;
+    let Some(local_remote) = local_remote_path(workspace_path, &url) else {
+        return Ok(());
+    };
+    let (Some(remote_repository), Some(local_repository)) = (
+        repository_identity(&local_remote),
+        repository_identity(workspace_path),
+    ) else {
+        return Ok(());
+    };
+    if remote_repository != local_repository {
+        return Ok(());
+    }
+    Err(OrbitError::Execution(format!(
+        "git_push: remote 'origin' ('{url}') is this same repository ('{}'), so pushing '{branch}' \
+         there publishes nothing; point 'origin' at a real publication remote",
+        local_repository.display()
+    )))
+}
+
+/// The filesystem path `url` names, when it names one. A transport URL or an
+/// `scp`-style address resolves to no existing directory and yields `None`.
+fn local_remote_path(workspace_path: &Path, url: &str) -> Option<PathBuf> {
+    let candidate = url.strip_prefix("file://").unwrap_or(url);
+    let resolved = workspace_path.join(candidate);
+    resolved.is_dir().then_some(resolved)
+}
+
+/// The repository a path belongs to, identified by its common Git directory so
+/// that a linked worktree and its primary checkout compare equal.
+fn repository_identity(path: &Path) -> Option<PathBuf> {
+    let common_dir = git_output(path, &["rev-parse", "--git-common-dir"]).ok()?;
+    let resolved = path.join(common_dir);
+    Some(std::fs::canonicalize(&resolved).unwrap_or(resolved))
 }
 
 fn resolve_workspace_path<H: RuntimeHost + ?Sized>(

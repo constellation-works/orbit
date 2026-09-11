@@ -13,6 +13,7 @@ use orbit_types::policy::{FsOperation, ResolvedFsProfile};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
+use super::git_config::enforce_no_persistent_git_config;
 use crate::{TIMEOUT_DEFAULT_MS, TIMEOUT_LONG_MS, Tool, ToolContext};
 
 pub struct ProcSpawnTool;
@@ -67,6 +68,8 @@ impl Tool for ProcSpawnTool {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+
+        enforce_no_persistent_git_config("proc.spawn", &program, &args)?;
 
         let request = spawn_request(ctx, program, args, proc_spawn_timeout_ms(&input));
         let exec_result = run_process(&request, &ActivityFsSandbox::new(ctx)?)?;
