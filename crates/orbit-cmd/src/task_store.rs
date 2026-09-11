@@ -132,9 +132,36 @@ pub fn inspect_task_store_partitions(
     }))
 }
 
+/// Partitions actually deleted by [`remove_unclaimed_task_stores`], split by
+/// whether removing them cost any task data — so a caller can report each
+/// count honestly instead of collapsing both into one "empty" figure
+/// [ORB-12144].
+#[derive(Debug, Clone, Default)]
+pub struct RemovedTaskStores {
+    /// Empty partitions removed — deleting these cost no task data.
+    pub empty: Vec<PathBuf>,
+    /// Populated partitions removed because their bound checkout was
+    /// confirmed gone, each with the task bundles it held.
+    pub stale: Vec<UnclaimedPartition>,
+}
+
+impl RemovedTaskStores {
+    /// Whether the repair removed no partitions at all.
+    pub fn is_empty(&self) -> bool {
+        self.empty.is_empty() && self.stale.is_empty()
+    }
+
+    /// Task bundles destroyed by removing [`Self::stale`] partitions.
+    pub fn task_bundles_removed(&self) -> usize {
+        self.stale
+            .iter()
+            .map(|partition| partition.task_bundles)
+            .sum()
+    }
+}
+
 /// Delete every empty unclaimed partition and every partition whose bound
 /// checkout is confirmed gone, retiring any registry rows that name it.
-/// Returns the removed partition paths.
 ///
 /// A partition that still holds bundles is deleted only on evidence a
 /// transient filesystem condition cannot forge. An unclaimed populated
@@ -146,19 +173,27 @@ pub fn inspect_task_store_partitions(
 /// kept for the same reason: the checkout may still be there [ORB-12143].
 /// Reclaiming such a partition stays a deliberate manual step, or
 /// `orbit workspace teardown` while the checkout still exists.
-pub fn remove_unclaimed_task_stores(global_root: &Path) -> Result<Vec<PathBuf>, OrbitError> {
+pub fn remove_unclaimed_task_stores(global_root: &Path) -> Result<RemovedTaskStores, OrbitError> {
     let Some(partitions) = inspect_task_store_partitions(global_root)? else {
-        return Ok(Vec::new());
+        return Ok(RemovedTaskStores::default());
     };
     let tasks = open_task_registry(global_root)?;
 
-    let mut removed = Vec::new();
-    for partition in partitions.stale.into_iter().chain(partitions.removable) {
+    let mut removed = RemovedTaskStores::default();
+    for partition in partitions.stale {
         let Some(workspace_id) = partition_id(&partition.path) else {
             continue;
         };
         if remove_partition(&tasks, global_root, workspace_id)? {
-            removed.push(partition.path);
+            removed.stale.push(partition);
+        }
+    }
+    for partition in partitions.removable {
+        let Some(workspace_id) = partition_id(&partition.path) else {
+            continue;
+        };
+        if remove_partition(&tasks, global_root, workspace_id)? {
+            removed.empty.push(partition.path);
         }
     }
     Ok(removed)

@@ -37,7 +37,9 @@ mod tests;
 
 pub use activity_v2::{ActivityV2Commands, V2ActivityRunResult};
 pub use diagnostics::DiagnosticsCommands;
-pub use doctor::{DoctorCommands, WorkspaceDoctorResult, WorkspaceDoctorStatus};
+pub use doctor::{
+    DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
+};
 pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
 pub use task_store::{
     TaskStorePartitions, bound_partition_id, inspect_task_store_partitions,

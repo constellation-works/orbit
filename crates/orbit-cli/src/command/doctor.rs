@@ -1,5 +1,7 @@
 use clap::Args;
-use orbit_cmd::{DoctorCommands, WorkspaceDoctorResult, WorkspaceDoctorStatus};
+use orbit_cmd::{
+    DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
+};
 use orbit_core::OrbitRuntime;
 use serde_json::{Value, json};
 
@@ -117,11 +119,12 @@ impl Execute for DoctorCommand {
                 ));
             }
             let removed = runtime.remove_orphan_task_stores()?;
-            eprintln!("Removed {removed} empty orphaned task-store partition(s).");
+            let message = orphan_task_store_removal_message(&removed);
+            eprintln!("{message}");
             results.push(WorkspaceDoctorResult {
                 check_name: "fix-orphan-task-stores".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
-                message: format!("Removed {removed} empty orphaned task-store partition(s)."),
+                message,
                 remediation: None,
             });
         }
@@ -292,6 +295,17 @@ fn status_label(status: WorkspaceDoctorStatus) -> &'static str {
         WorkspaceDoctorStatus::Error => "ERROR",
         WorkspaceDoctorStatus::Skipped => "skipped",
     }
+}
+
+/// Render `--fix-orphan-task-stores --confirm`'s outcome, naming the empty
+/// and populated partition counts separately so a run that deleted task
+/// bundles is never described as removing only empty partitions [ORB-12144].
+pub(crate) fn orphan_task_store_removal_message(removed: &OrphanTaskStoreRemoval) -> String {
+    format!(
+        "Removed {} empty orphaned task-store partition(s) and {} populated partition(s) \
+         ({} task bundle(s)).",
+        removed.empty_partitions, removed.populated_partitions, removed.task_bundles
+    )
 }
 
 pub(crate) fn human_detail(row: &WorkspaceDoctorResult) -> String {

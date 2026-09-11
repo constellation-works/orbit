@@ -88,6 +88,20 @@ fn actionable_check(
     }
 }
 
+/// Outcome of `--fix-orphan-task-stores`, split by whether a removed
+/// partition held task bundles, so the operator-facing report never calls a
+/// populated partition empty [ORB-12144].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OrphanTaskStoreRemoval {
+    /// Empty partitions removed — deleting these cost no task data.
+    pub empty_partitions: usize,
+    /// Populated partitions removed because their bound checkout was
+    /// confirmed gone.
+    pub populated_partitions: usize,
+    /// Task bundles destroyed by removing `populated_partitions`.
+    pub task_bundles: usize,
+}
+
 /// Warn when the volume holding `.orbit` has less than this many free bytes.
 const DISK_WARN_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
 /// Fail when the volume holding `.orbit` has less than this many free bytes.
@@ -130,9 +144,11 @@ pub trait DoctorCommands {
     /// Delete task-store partitions under `<global_root>/tasks/workspaces/`
     /// whose workspace id is no longer present in the registry — left behind
     /// by a `workspace teardown` run on an older binary, or by removing a
-    /// checkout without running teardown [ORB-12109]. Partitions that still
-    /// hold task bundles are reported but never deleted [ORB-12131].
-    fn remove_orphan_task_stores(&self) -> Result<usize, OrbitError>;
+    /// checkout without running teardown [ORB-12109]. Partitions that are
+    /// unowned and still hold task bundles are reported but never deleted
+    /// [ORB-12131]; partitions whose bound checkout is confirmed gone are
+    /// deleted along with their task bundles [ORB-12143].
+    fn remove_orphan_task_stores(&self) -> Result<OrphanTaskStoreRemoval, OrbitError>;
 
     /// Cheap store write probe for health endpoints: open the store and
     /// acquire + roll back the write lock without mutating anything.
@@ -178,9 +194,13 @@ impl DoctorCommands for OrbitRuntime {
         OrbitRuntime::repair_retired_activity_backends(self)
     }
 
-    fn remove_orphan_task_stores(&self) -> Result<usize, OrbitError> {
+    fn remove_orphan_task_stores(&self) -> Result<OrphanTaskStoreRemoval, OrbitError> {
         let removed = crate::task_store::remove_unclaimed_task_stores(&self.global_root())?;
-        Ok(removed.len())
+        Ok(OrphanTaskStoreRemoval {
+            empty_partitions: removed.empty.len(),
+            populated_partitions: removed.stale.len(),
+            task_bundles: removed.task_bundles_removed(),
+        })
     }
 
     fn remove_retired_graph_state(&self) -> Result<usize, OrbitError> {
@@ -515,12 +535,23 @@ fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
     }
 
     if !partitions.stale.is_empty() || !partitions.removable.is_empty() {
-        steps.push(if steps.is_empty() {
-            "Run `orbit doctor --fix-orphan-task-stores --confirm`.".to_string()
+        // Every entry in `stale` is populated by construction (empty
+        // partitions land in `removable` instead), so its deletion always
+        // destroys task bundles; the remediation must say so up front rather
+        // than let the operator discover it from the repair's own report.
+        let bundle_note = if partitions.stale.is_empty() {
+            ""
         } else {
-            "Then run `orbit doctor --fix-orphan-task-stores --confirm`, which removes only the \
-             empty partitions and the partitions whose checkout is confirmed gone."
-                .to_string()
+            " Populated stale partitions are deleted along with their task bundles."
+        };
+        steps.push(if steps.is_empty() {
+            format!("Run `orbit doctor --fix-orphan-task-stores --confirm`.{bundle_note}")
+        } else {
+            format!(
+                "Then run `orbit doctor --fix-orphan-task-stores --confirm`, which removes only \
+                 the empty partitions and the partitions whose checkout is confirmed \
+                 gone.{bundle_note}"
+            )
         });
     }
 
