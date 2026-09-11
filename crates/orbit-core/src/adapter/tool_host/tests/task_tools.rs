@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use orbit_store::maintenance::task_registry::read_workspace_config;
-use orbit_types::task::{TASK_SHOW_PUBLIC_DTO_FIELDS, TaskStatus};
+use orbit_types::task::{TASK_SHOW_PUBLIC_DTO_FIELDS, TaskComplexity, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::{Value, json};
 
@@ -764,6 +764,81 @@ fn task_update_tool_persists_complexity_without_adding_history() {
         )
         .expect("update omitting complexity succeeds");
     assert_eq!(omitted.get("complexity"), Some(&json!("medium")));
+}
+
+/// ORB-12116: the create-time assessment contract also holds on update, so an
+/// agent cannot assess a task at creation and clear it one call later.
+#[test]
+fn task_update_tool_rejects_unassessed_complexity_and_keeps_the_stored_value() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let added = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({
+                "title": "Assessed on create",
+                "description": "Update must not be able to undo the assessment.",
+                "complexity": "low",
+                "workspace": ".",
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("task add tool succeeds");
+    let task_id = added["id"].as_str().expect("task id");
+
+    let message = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({ "id": task_id, "complexity": "unassessed" }),
+        Some("codex".to_string()),
+        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+    ));
+    assert_eq!(
+        message,
+        TaskComplexity::Unassessed
+            .require_assessed()
+            .expect_err("unassessed is not an assessed value")
+    );
+
+    let shown = runtime
+        .execute_tool_command(
+            "orbit.task.show",
+            json!({ "id": task_id }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("task show succeeds");
+    assert_eq!(
+        shown.get("complexity"),
+        Some(&json!("low")),
+        "a rejected update leaves the stored complexity alone"
+    );
+}
+
+/// Automated callers write through the application layer, not the tool
+/// surface, so task-pilot, auto-task mint and other system paths keep the
+/// ability to store the explicit non-answer.
+#[test]
+fn automated_update_paths_may_still_store_unassessed_complexity() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task = create_task(
+        &runtime,
+        &repo_root,
+        "System owned complexity",
+        "Automated paths keep the explicit non-answer.",
+        TaskStatus::Backlog,
+        &[],
+    );
+
+    let updated = runtime
+        .update_task(
+            &task.id,
+            crate::application::task::TaskUpdateParams {
+                complexity: Some(TaskComplexity::Unassessed),
+                ..Default::default()
+            },
+        )
+        .expect("application-layer update succeeds");
+    assert_eq!(updated.complexity, Some(TaskComplexity::Unassessed));
 }
 
 /// An MCP session started with `orbit mcp serve --orchestrator <crew>` and

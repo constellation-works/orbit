@@ -596,6 +596,14 @@ pub(super) async fn update_task_action(
     ) {
         return response;
     }
+    let complexity = match body
+        .complexity
+        .map(TaskComplexity::require_assessed)
+        .transpose()
+    {
+        Ok(complexity) => complexity,
+        Err(message) => return bad_request(message),
+    };
     let model = body.model.as_deref().and_then(non_empty_string);
     let params = TaskUpdateParams {
         title: body.title,
@@ -609,7 +617,7 @@ pub(super) async fn update_task_action(
         comment: body.comment,
         status: body.status,
         priority: body.priority,
-        complexity: body.complexity,
+        complexity,
         task_type: body.task_type,
         source_task_id: None,
         planned_by: None,

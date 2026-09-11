@@ -21,8 +21,9 @@ Every `orbit.task.*` call needs `model` — your agent family. Never use bare
    inspection step, or an output. "Works correctly" is not a criterion.
 4. **Optionally fill `context_files`** (see below).
 5. **Set `complexity`** (`low` / `medium` / `hard`). It is required at
-   creation. `unassessed` is reserved for automated mint/import and is not
-   an operator create value.
+   creation and on every human or agent update — `orbit.task.update`, `orbit
+   task update`, and the dashboard all reject `unassessed`, which is reserved
+   for automated mint/import and system callers.
 6. **Add assumptions, risks, and rollback notes** to the description when they
    matter.
 7. **Call `orbit.task.add`.** Confirm via the result, or re-fetch with
@@ -65,6 +66,9 @@ job fills them from real inspection. → [orchestration.md](orchestration.md)
   allocates them).
 - Required: `title`, `description`, `workspace`, `complexity`. Strongly prefer
   `acceptance_criteria`.
+- `complexity` stays assessed for its whole life: an update may move it between
+  `low`, `medium`, and `hard`, but a human or agent can never set it back to
+  `unassessed`.
 - `description` should be multi-line markdown for anything non-trivial.
 - Valid `type`: `feature`, `bug`, `refactor`, `chore`.
 - Do not pass `plan` to task creation; author it later through task update.

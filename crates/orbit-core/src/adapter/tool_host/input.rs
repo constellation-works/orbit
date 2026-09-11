@@ -303,14 +303,15 @@ pub(super) fn parse_task_priority(field: &str, raw: &str) -> Result<TaskPriority
         .map_err(|error| OrbitError::InvalidInput(format!("`{field}` {error}")))
 }
 
-pub(super) fn parse_task_complexity(field: &str, raw: &str) -> Result<TaskComplexity, OrbitError> {
+fn parse_task_complexity(field: &str, raw: &str) -> Result<TaskComplexity, OrbitError> {
     TaskComplexity::from_str(raw)
         .map_err(|error| OrbitError::InvalidInput(format!("`{field}` {error}")))
 }
 
-/// Parse a complexity that a human or agent may assign at create time.
+/// Parse a complexity that a human or agent may assign on create or update.
 ///
-/// [`TaskComplexity::Unassessed`] is reserved for automated mint/import.
+/// [`TaskComplexity::Unassessed`] is reserved for automated mint/import, so an
+/// agent cannot pass the create assessment and then clear it one update later.
 pub(super) fn parse_assessed_task_complexity(
     field: &str,
     raw: &str,

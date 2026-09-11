@@ -1810,6 +1810,42 @@ async fn create_task_requires_assessed_complexity() {
     );
 }
 
+/// ORB-12116: update carries the same contract as create, so an operator or
+/// agent cannot assess a task and then clear the assessment through PATCH.
+#[tokio::test]
+async fn update_task_requires_assessed_complexity() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    let task = seed_backlog_task(&runtime, "Assessed through PATCH");
+
+    let assessed = patch_task(runtime.clone(), &task.id, json!({ "complexity": "medium" })).await;
+    assert_eq!(assessed.status(), StatusCode::OK);
+
+    let unassessed = patch_task(
+        runtime.clone(),
+        &task.id,
+        json!({ "complexity": "unassessed" }),
+    )
+    .await;
+    assert_eq!(unassessed.status(), StatusCode::BAD_REQUEST);
+    let message = body_json(unassessed).await["error"]
+        .as_str()
+        .expect("error message")
+        .to_string();
+    assert_eq!(
+        message,
+        TaskComplexity::Unassessed
+            .require_assessed()
+            .expect_err("unassessed is not an assessed value"),
+        "update must reuse the create error"
+    );
+
+    assert_eq!(
+        runtime.get_task(&task.id).expect("read task").complexity,
+        Some(TaskComplexity::Medium),
+        "a rejected update leaves the stored complexity alone"
+    );
+}
+
 /// ORB-10648: the same contract on create — `POST /api/tasks` no longer absorbs
 /// keys it cannot apply. The tailored `workspace` diagnostic (ORB-00042) still
 /// wins for that key, since it is a declared trap field.

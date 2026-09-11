@@ -1,4 +1,4 @@
-use clap::{Parser, error::ErrorKind};
+use clap::{CommandFactory, Parser, error::ErrorKind};
 
 use crate::command::{Cli, Commands};
 
@@ -191,6 +191,36 @@ fn task_update_complexity_uses_add_spellings() {
 
         assert_eq!(args.complexity.expect("complexity").to_string(), complexity);
     }
+}
+
+/// ORB-12116: `unassessed` is reserved for automated creation, so clap must not
+/// offer it on update either — matching `orbit task add`.
+#[test]
+fn task_update_rejects_unassessed_complexity() {
+    assert!(
+        Cli::try_parse_from([
+            "orbit",
+            "task",
+            "update",
+            "ORB-00001",
+            "--complexity",
+            "unassessed",
+        ])
+        .is_err(),
+        "unassessed is not a CLI update value"
+    );
+
+    let mut command = Cli::command();
+    let update = command
+        .find_subcommand_mut("task")
+        .expect("task command")
+        .find_subcommand_mut("update")
+        .expect("task update command");
+    let rendered = update.render_long_help().to_string();
+    assert!(
+        !rendered.contains("unassessed"),
+        "unassessed is reserved for automated creation: {rendered}"
+    );
 }
 
 #[test]

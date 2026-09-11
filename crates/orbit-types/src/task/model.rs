@@ -276,8 +276,10 @@ impl FromStr for TaskPriority {
 /// `Low` / `Medium` / `Hard` are operator assessments. `Unassessed` is the
 /// explicit non-answer for automated creation (auto-task mint, unlabeled
 /// import). It is never a silent stand-in for `Medium`. Human and agent
-/// create surfaces accept only assessed values. Persisted `Task.complexity`
-/// stays `Option` so the historical unlabeled set remains `None`.
+/// create *and update* surfaces accept only assessed values, so an agent
+/// cannot satisfy the create assessment and clear it on the next update.
+/// Persisted `Task.complexity` stays `Option` so the historical unlabeled set
+/// remains `None`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "snake_case")]
@@ -286,8 +288,8 @@ pub enum TaskComplexity {
     Medium,
     Hard,
     /// Explicit non-answer for automated creation. Not offered on CLI
-    /// `--complexity` (clap skips it) and rejected on human/agent create
-    /// surfaces so agents cannot dodge an assessment.
+    /// `--complexity` (clap skips it) and rejected on human/agent create and
+    /// update surfaces so agents cannot dodge an assessment.
     #[cfg_attr(feature = "clap", value(skip))]
     Unassessed,
 }
@@ -327,7 +329,8 @@ impl TaskComplexity {
         !matches!(self, TaskComplexity::Unassessed)
     }
 
-    /// Reject [`TaskComplexity::Unassessed`] on human/agent create surfaces.
+    /// Reject [`TaskComplexity::Unassessed`] on human/agent create and update
+    /// surfaces.
     pub fn require_assessed(self) -> Result<Self, String> {
         if self.is_assessed() {
             Ok(self)
