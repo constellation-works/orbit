@@ -284,7 +284,11 @@ fn init_migrates_legacy_host_toml() {
     );
 }
 
-/// A fresh host initialized non-interactively without --host-name fails closed.
+/// A fresh host initialized non-interactively without --host-name fails closed
+/// and writes nothing at all to the target root — skills, activities, jobs,
+/// executors, and config.toml all seed ahead of the host identity check, so a
+/// late failure previously left a half-initialized `.orbit` behind
+/// [ORB-12112].
 #[test]
 fn non_interactive_missing_host_name_fails_closed() {
     let home = tempdir().expect("home tempdir");
@@ -294,12 +298,13 @@ fn non_interactive_missing_host_name_fails_closed() {
     let error = init_host(&root, None, Some("DE")).expect_err("missing host name must fail closed");
     assert!(error.to_string().contains("--host-name"), "{error}");
     assert!(
-        !root.join("host.toml").exists(),
-        "no identity should be written on the failure path"
+        !root.exists(),
+        "no file should be written to the target root on the failure path"
     );
 }
 
-/// A fresh non-interactive init requires an explicit task prefix.
+/// A fresh non-interactive init requires an explicit task prefix, and rejects
+/// it before writing anything to the target root.
 #[test]
 fn non_interactive_missing_task_prefix_fails_closed() {
     let home = tempdir().expect("home tempdir");
@@ -308,10 +313,17 @@ fn non_interactive_missing_task_prefix_fails_closed() {
 
     let error = init_host(&root, Some("dk-mac"), None).expect_err("missing prefix must fail");
     assert!(error.to_string().contains("--task-prefix"), "{error}");
-    assert!(!root.join("host.toml").exists());
+    assert!(
+        !root.exists(),
+        "no file should be written to the target root on the failure path"
+    );
 }
 
-/// Reserved and malformed fresh task-prefix choices fail before identity write.
+/// Reserved and malformed fresh task-prefix choices fail before any file is
+/// written to the target root — not just before the host identity write. The
+/// 28 skills, 46 activities, 14 jobs, 10 executors, and config.toml all seed
+/// ahead of host identity, so validating the prefix only at that point left a
+/// half-initialized root on a typo [ORB-12112].
 #[test]
 fn invalid_task_prefixes_fail_closed() {
     for prefix in ["ORB", "ADR", "L", "F", "de", "D", "ABCDEF", " DE"] {
@@ -320,8 +332,27 @@ fn invalid_task_prefixes_fail_closed() {
         let root = home.path().join(".orbit");
 
         init_host(&root, Some("dk-mac"), Some(prefix)).expect_err("invalid prefix must fail");
-        assert!(!root.join("host.toml").exists(), "prefix {prefix}");
+        assert!(
+            !root.exists(),
+            "prefix {prefix}: no file should be written to the target root on the failure path"
+        );
     }
+}
+
+/// An empty --host-name is rejected on a fresh host before anything is
+/// written to the target root.
+#[test]
+fn empty_host_name_fails_closed() {
+    let home = tempdir().expect("home tempdir");
+    let _env = EnvGuard::acquire().home(home.path());
+    let root = home.path().join(".orbit");
+
+    let error = init_host(&root, Some("   "), Some("DE")).expect_err("blank host name must fail");
+    assert!(error.to_string().contains("host name"), "{error}");
+    assert!(
+        !root.exists(),
+        "no file should be written to the target root on the failure path"
+    );
 }
 
 /// Ordinary CLI `orbit init` (refresh_defaults, no --force) must keep an

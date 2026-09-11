@@ -3,11 +3,11 @@ use orbit_core::bootstrap::init::{InitOptions, init_global};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry::global_orbit_dir;
 use orbit_registry::{
-    HostIdentityOutcome, NewHostIdentity, ensure_host_identity, os_hostname,
-    validate_new_task_prefix,
+    HostIdentityOutcome, HostIdentityState, NewHostIdentity, ensure_host_identity,
+    inspect_host_identity, os_hostname, validate_new_task_prefix,
 };
 use std::io::{self, BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::collect_config_seed_for_init;
 use crate::command::{CommandOut, CommandOutput, Execute};
@@ -57,6 +57,17 @@ impl InitCommand {
     }
 
     fn run(self, root_override: Option<&Path>) -> Result<(), OrbitError> {
+        // Reject a malformed or (non-interactively) missing --host-name/
+        // --task-prefix before anything is written: skills, activities, jobs,
+        // executors, and config.toml all seed ahead of the host identity, so
+        // a late validation error left a half-initialized root behind
+        // [ORB-12112].
+        reject_invalid_fresh_identity_inputs(
+            root_override,
+            self.non_interactive,
+            self.host_name.as_deref(),
+            self.task_prefix.as_deref(),
+        )?;
         let config_seed =
             collect_config_seed_for_init(root_override, self.force, self.non_interactive)?;
         let result = init_global(
@@ -96,6 +107,78 @@ impl InitCommand {
     }
 }
 
+fn resolve_global_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
+    match root_override {
+        Some(root) => Ok(root.to_path_buf()),
+        None => global_orbit_dir(),
+    }
+}
+
+/// Validate operator-supplied `--host-name`/`--task-prefix` inputs for a fresh
+/// host identity. Called both before `orbit init` writes anything (so a
+/// rejected or, under `--non-interactive`, missing value leaves no partial
+/// root [ORB-12112]) and again inside the identity-creation closure, which
+/// stays self-sufficient against a racing concurrent create. A present or
+/// legacy identity never reaches this function — both callers only consult it
+/// when the identity is confirmed absent.
+fn validate_fresh_identity_flags(
+    non_interactive: bool,
+    host_name: Option<&str>,
+    task_prefix: Option<&str>,
+) -> Result<(), OrbitError> {
+    match host_name {
+        Some(name) if name.trim().is_empty() => {
+            return Err(OrbitError::InvalidInput(
+                "host name must not be empty".to_string(),
+            ));
+        }
+        None if non_interactive => {
+            return Err(OrbitError::InvalidInput(
+                "host identity is absent; pass --host-name and --task-prefix \
+                 to initialize a fresh host non-interactively"
+                    .to_string(),
+            ));
+        }
+        _ => {}
+    }
+    match task_prefix {
+        Some(prefix) => {
+            validate_new_task_prefix(prefix)?;
+        }
+        None if non_interactive => {
+            return Err(OrbitError::InvalidInput(
+                "host identity is absent; pass --task-prefix <PREFIX> (2-5 uppercase ASCII letters) \
+                 to initialize a fresh host non-interactively"
+                    .to_string(),
+            ));
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+/// Reject a malformed, or under `--non-interactive` missing, `--host-name`/
+/// `--task-prefix` before `orbit init` writes anything. These flags are only
+/// consulted when the host identity is absent (a fresh create) — a present or
+/// legacy identity ignores them entirely, so this check is skipped on the
+/// idempotent re-init path, matching [`ensure_host_identity_for_init`]'s own
+/// condition.
+fn reject_invalid_fresh_identity_inputs(
+    root_override: Option<&Path>,
+    non_interactive: bool,
+    host_name: Option<&str>,
+    task_prefix: Option<&str>,
+) -> Result<(), OrbitError> {
+    let global_root = resolve_global_root(root_override)?;
+    if !matches!(
+        inspect_host_identity(&global_root)?,
+        HostIdentityState::Absent
+    ) {
+        return Ok(());
+    }
+    validate_fresh_identity_flags(non_interactive, host_name, task_prefix)
+}
+
 /// Create or migrate this machine's host identity. Host name and task prefix are only
 /// consulted when the identity is absent (a fresh create); a present identity
 /// is preserved unchanged and a legacy file is migrated without prompting.
@@ -105,31 +188,19 @@ fn ensure_host_identity_for_init(
     host_name: Option<String>,
     task_prefix: Option<String>,
 ) -> Result<(), OrbitError> {
-    let global_root = match root_override {
-        Some(root) => root.to_path_buf(),
-        None => global_orbit_dir()?,
-    };
+    let global_root = resolve_global_root(root_override)?;
     let outcome = ensure_host_identity(&global_root, move || {
+        validate_fresh_identity_flags(
+            non_interactive,
+            host_name.as_deref(),
+            task_prefix.as_deref(),
+        )?;
         let host_id = match host_name {
             Some(name) => name,
-            None if non_interactive => {
-                return Err(OrbitError::InvalidInput(
-                    "host identity is absent; pass --host-name and --task-prefix \
-                     to initialize a fresh host non-interactively"
-                        .to_string(),
-                ));
-            }
             None => prompt_host_name()?,
         };
         let task_prefix = match task_prefix {
-            Some(prefix) => validate_new_task_prefix(&prefix)?,
-            None if non_interactive => {
-                return Err(OrbitError::InvalidInput(
-                    "host identity is absent; pass --task-prefix <PREFIX> (2-5 uppercase ASCII letters) \
-                     to initialize a fresh host non-interactively"
-                        .to_string(),
-                ));
-            }
+            Some(prefix) => prefix,
             None => prompt_task_prefix()?,
         };
         Ok(NewHostIdentity {
