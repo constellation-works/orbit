@@ -9,8 +9,10 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
+use orbit_engine::LinuxRuntimeWriteAuthority;
 use orbit_engine::RuntimeHost;
-use orbit_engine::{DispatchError, LinuxRuntimeWriteAuthority, ResolvedSandbox};
+use orbit_engine::{DispatchError, ResolvedSandbox};
 use orbit_types::policy::{ResolvedFsProfile, UNRESTRICTED_FS_PROFILE};
 use orbit_types::workflow::ExecutorSandboxKind;
 
