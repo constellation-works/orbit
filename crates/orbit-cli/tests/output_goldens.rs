@@ -234,11 +234,7 @@ fn fixture_ignores_inherited_managed_routing_and_identity() {
     let payload: Value =
         serde_json::from_slice(&fixture.run(&["task", "list", "--json"], &[]).stdout)
             .expect("fixture task list JSON");
-    let tasks = payload
-        .as_array()
-        .cloned()
-        .or_else(|| payload.get("tasks").and_then(Value::as_array).cloned())
-        .expect("fixture task list");
+    let tasks = payload.as_array().cloned().expect("fixture task list");
     assert_eq!(tasks.len(), SEED_TASKS.len());
     assert!(
         tasks
@@ -360,8 +356,7 @@ fn plain_and_json_forms_match_their_goldens() {
 #[test]
 fn task_show_relations_and_artifacts_match_golden() {
     let fixture = Fixture::new();
-    let listed = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
-    let tasks = listed.get("tasks").unwrap_or(&listed);
+    let tasks = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
     let task_id = tasks[0]["id"].as_str().expect("task id");
     let blocker_id = tasks[1]["id"].as_str().expect("blocker id");
     let update = serde_json::to_string(&json!({
@@ -466,8 +461,7 @@ fn parse_ndjson_stdout(output: &std::process::Output, label: &str) -> Vec<Value>
 }
 
 fn first_listed_task(fixture: &Fixture) -> (String, String) {
-    let listed = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
-    let tasks = listed.get("tasks").unwrap_or(&listed);
+    let tasks = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
     let task = &tasks[0];
     (
         task["id"].as_str().expect("task id").to_string(),

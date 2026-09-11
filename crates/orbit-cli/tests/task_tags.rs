@@ -71,10 +71,7 @@ fn task_list_is_status_neutral_and_bounded_by_limit() {
 
     let default_list = workspace.run(&["task", "list", "--json"], None, "default list");
     let default_tasks: Value = serde_json::from_slice(&default_list.stdout).expect("list JSON");
-    let default_items = default_tasks
-        .as_array()
-        .or_else(|| default_tasks.get("tasks").and_then(Value::as_array))
-        .expect("array");
+    let default_items = default_tasks.as_array().expect("array");
     assert_eq!(
         default_items.len(),
         3,
@@ -88,10 +85,7 @@ fn task_list_is_status_neutral_and_bounded_by_limit() {
         "limited list",
     );
     let limited_tasks: Value = serde_json::from_slice(&limited.stdout).expect("list JSON");
-    let limited_items = limited_tasks
-        .as_array()
-        .or_else(|| limited_tasks.get("tasks").and_then(Value::as_array))
-        .expect("array");
+    let limited_items = limited_tasks.as_array().expect("array");
     assert_eq!(limited_items.len(), 2);
 
     // A zero limit is a clear input error, not an empty success.
@@ -115,10 +109,7 @@ fn task_list_is_status_neutral_and_bounded_by_limit() {
 
 fn assert_task_titles(output: &Output, expected: &[&str]) {
     let value: Value = serde_json::from_slice(&output.stdout).expect("task array JSON");
-    let tasks = value
-        .as_array()
-        .or_else(|| value.get("tasks").and_then(Value::as_array))
-        .expect("task array");
+    let tasks = value.as_array().expect("task array");
     let mut titles = tasks
         .iter()
         .map(|task| task["title"].as_str().expect("task title").to_string())
