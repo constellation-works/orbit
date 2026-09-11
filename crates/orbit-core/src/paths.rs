@@ -81,6 +81,34 @@ pub(crate) fn find_git_worktree_root(start: &Path) -> Option<PathBuf> {
     })
 }
 
+/// Resolve the linked worktree a call is running in, when that worktree is a
+/// *different* checkout of the repository rooted at `canonical_repo_root`.
+///
+/// Returns `None` when the caller stands in the registered checkout itself,
+/// outside any Git checkout, or in a checkout of another repository. A path
+/// prefix test cannot answer this: managed job-run worktrees live under
+/// `<repo>/.orbit/state/worktrees/**`, so they sit inside the registered
+/// checkout's directory tree while being separate checkouts. Git's shared
+/// directory is the identity that actually distinguishes the two.
+pub(crate) fn find_linked_worktree_root(
+    start: &Path,
+    canonical_repo_root: &Path,
+) -> Option<PathBuf> {
+    let checkout = find_git_worktree_root(start)?.canonicalize().ok()?;
+    if checkout == canonical_repo_root {
+        return None;
+    }
+
+    let caller_git_dir = shared_git_dir(&checkout)?;
+    let registered_git_dir = shared_git_dir(canonical_repo_root)?;
+    (caller_git_dir == registered_git_dir).then_some(checkout)
+}
+
+fn shared_git_dir(checkout: &Path) -> Option<PathBuf> {
+    let common_dir = orbit_common::fs::git::git_common_dir(checkout).ok()?;
+    Some(common_dir.canonicalize().unwrap_or(common_dir))
+}
+
 pub(crate) fn find_git_main_worktree_root(start: &Path) -> Option<PathBuf> {
     find_git_main_worktree_root_with_git(start)
         .or_else(|| find_git_main_worktree_root_from_gitfile(start))

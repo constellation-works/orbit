@@ -7,6 +7,7 @@ use orbit_types::task::{TaskHistoryEntry, TaskType};
 use std::path::{Path, PathBuf};
 
 use crate::OrbitRuntime;
+use crate::paths::find_linked_worktree_root;
 
 pub(super) fn normalize_workspace_path(
     repo_root: &Path,
@@ -120,26 +121,83 @@ impl OrbitRuntime {
             return Ok(());
         }
 
+        let roots = self.context_selector_roots(workspace_path)?;
+
+        selectors
+            .iter()
+            .try_for_each(|selector| ensure_selector_resolves(selector, &roots))
+    }
+
+    /// Resolve the checkouts this call may validate selectors against.
+    fn context_selector_roots(
+        &self,
+        workspace_path: Option<&str>,
+    ) -> Result<ContextSelectorRoots, OrbitError> {
         let repo_root = &self.paths().repo_root;
+        let canonical_repo_root = repo_root.canonicalize().map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "failed to resolve repository root '{}': {error}",
+                repo_root.display()
+            ))
+        })?;
+
         let normalized_workspace = normalize_workspace_path(repo_root, workspace_path)?;
-        let workspace_root = context_workspace_root(repo_root, normalized_workspace.as_deref());
-        let canonical_workspace = workspace_root.canonicalize().map_err(|error| {
+        let workspace_root =
+            context_workspace_root(&canonical_repo_root, normalized_workspace.as_deref());
+        let workspace = workspace_root.canonicalize().map_err(|error| {
             OrbitError::InvalidInput(format!(
                 "failed to resolve workspace root '{}': {error}",
                 workspace_root.display()
             ))
         })?;
 
-        selectors
-            .iter()
-            .try_for_each(|selector| ensure_selector_resolves(selector, &canonical_workspace))
+        let caller_worktree = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| find_linked_worktree_root(&cwd, &canonical_repo_root))
+            .and_then(|worktree| {
+                mirrored_workspace_root(&workspace, &canonical_repo_root, &worktree)
+            });
+
+        Ok(ContextSelectorRoots {
+            workspace,
+            caller_worktree,
+        })
     }
 }
 
-/// Check one operator-supplied selector against the canonicalized workspace:
-/// it must be a supported kind, name an existing anchor, and match that
+/// The checkouts an operator-supplied context selector may resolve against.
+struct ContextSelectorRoots {
+    /// Workspace root inside the registered checkout.
+    workspace: PathBuf,
+    /// The same workspace root inside the linked worktree the call runs in,
+    /// when the caller is in one and that directory exists there. A managed
+    /// job run executes in such a worktree, so a file it just created exists
+    /// only here until the work merges.
+    caller_worktree: Option<PathBuf>,
+}
+
+/// Place the registered checkout's workspace root at the same relative
+/// position inside `worktree`, so a sub-directory workspace keeps its meaning
+/// there. Returns `None` when that directory does not exist in the worktree.
+fn mirrored_workspace_root(
+    workspace: &Path,
+    canonical_repo_root: &Path,
+    worktree: &Path,
+) -> Option<PathBuf> {
+    let relative = workspace.strip_prefix(canonical_repo_root).ok()?;
+    let mirrored = worktree.join(relative).canonicalize().ok()?;
+    mirrored.is_dir().then_some(mirrored)
+}
+
+/// Check one operator-supplied selector against the checkouts this call may
+/// use: it must be a supported kind, name an existing anchor, and match that
 /// target's file/directory kind.
-fn ensure_selector_resolves(entry: &str, canonical_workspace: &Path) -> Result<(), OrbitError> {
+///
+/// The registered checkout answers first, so its message is the one an
+/// operator sees for a genuinely dead selector. The caller's worktree answers
+/// second: a file created there does not exist in the registered checkout yet,
+/// and declaring it must not require turning the guard off for the whole call.
+fn ensure_selector_resolves(entry: &str, roots: &ContextSelectorRoots) -> Result<(), OrbitError> {
     let trimmed = entry.trim();
     if trimmed.is_empty() {
         return Err(OrbitError::InvalidInput(
@@ -151,6 +209,24 @@ fn ensure_selector_resolves(entry: &str, canonical_workspace: &Path) -> Result<(
         return Err(unsupported_selector_kind(entry));
     }
 
+    match resolve_selector_in(entry, trimmed, &roots.workspace) {
+        Ok(()) => Ok(()),
+        Err(registered_failure) => match roots.caller_worktree.as_deref() {
+            Some(worktree) => {
+                resolve_selector_in(entry, trimmed, worktree).map_err(|_| registered_failure)
+            }
+            None => Err(registered_failure),
+        },
+    }
+}
+
+/// Resolve one already-screened selector against a single canonicalized
+/// checkout root.
+fn resolve_selector_in(
+    entry: &str,
+    trimmed: &str,
+    canonical_workspace: &Path,
+) -> Result<(), OrbitError> {
     let canonical =
         canonical_selector_in_workspace(trimmed, canonical_workspace).map_err(|error| {
             OrbitError::InvalidInput(format!("selector `{entry}` is invalid: {error}"))
