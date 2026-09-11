@@ -3,6 +3,7 @@
 //! [`LOCAL_PREFIX`], so every `ORB-` id is a mirror of the peer's task and
 //! every `DANI-` id is locally owned.
 
+use std::fs;
 use std::path::Path;
 use std::slice;
 
@@ -252,6 +253,115 @@ fn owner_wins_second_run_changes_nothing() {
     assert_eq!(landed_bundle(&registry, ws, "ORB-00000"), owner_copy);
     assert_eq!(registry.tasks_for_workspace(ws).unwrap().len(), 1);
     assert_eq!(registry.allocator_next_number().unwrap(), 0);
+}
+
+#[test]
+fn owner_wins_recreates_a_missing_bound_mirror_and_is_rerunnable() {
+    let first_export = TempDir::new().unwrap();
+    let second_export = TempDir::new().unwrap();
+    let dst = TempDir::new().unwrap();
+    let ws = "orbit-owner-fefefe";
+
+    let mirrored = make_bundle("ORB-00000", "root task", Vec::new());
+    let first_archive = first_export.path().join("tasks.tar.zst");
+    export_owner_archive(
+        first_export.path(),
+        ws,
+        &first_archive,
+        slice::from_ref(&mirrored),
+    );
+
+    let registry = open_mirror_registry(dst.path());
+    bind(&registry, dst.path(), ws);
+    import_tasks(
+        &registry,
+        &first_archive,
+        None,
+        ImportConflictPolicy::OwnerWins,
+    )
+    .expect("first sync");
+
+    let canonical = registry
+        .canonical_task_bundle_path(ws, "ORB-00000")
+        .expect("canonical path");
+    let retired = canonical
+        .parent()
+        .expect("bundle parent")
+        .join(".ORB-00000.9999.0.retired");
+    fs::rename(&canonical, &retired).expect("simulate an interrupted replacement");
+    assert!(!canonical.exists());
+    assert!(retired.is_dir());
+
+    let refreshed = advanced_to(&mirrored, TaskStatus::Review);
+    let second_archive = second_export.path().join("tasks.tar.zst");
+    export_owner_archive(
+        second_export.path(),
+        ws,
+        &second_archive,
+        &[
+            refreshed.clone(),
+            make_bundle("ORB-00003", "new peer task", Vec::new()),
+        ],
+    );
+
+    let repaired = import_tasks(
+        &registry,
+        &second_archive,
+        None,
+        ImportConflictPolicy::OwnerWins,
+    )
+    .expect("owner-wins repairs the missing mirror and lands the rest");
+    assert_eq!(repaired.tasks.len(), 2);
+    assert_eq!(
+        repaired
+            .tasks
+            .iter()
+            .find(|task| task.source_id == "ORB-00000")
+            .expect("record for the repaired mirror")
+            .action,
+        ImportAction::Updated
+    );
+    assert_eq!(
+        repaired
+            .tasks
+            .iter()
+            .find(|task| task.source_id == "ORB-00003")
+            .expect("record for the new mirror")
+            .action,
+        ImportAction::Kept
+    );
+    assert_eq!(landed_bundle(&registry, ws, "ORB-00000"), refreshed);
+    assert_eq!(
+        landed_bundle(&registry, ws, "ORB-00003").envelope.id,
+        "ORB-00003"
+    );
+    assert!(
+        !retired.exists(),
+        "successful replacement cleans retired siblings"
+    );
+    assert_eq!(
+        registry
+            .global_task_status_index()
+            .unwrap()
+            .get("ORB-00000"),
+        Some(&TaskStatus::Review),
+        "rebuilding the index sees the recreated canonical path"
+    );
+
+    let repeated = import_tasks(
+        &registry,
+        &second_archive,
+        None,
+        ImportConflictPolicy::OwnerWins,
+    )
+    .expect("the repaired owner-wins import is rerunnable");
+    assert!(
+        repeated
+            .tasks
+            .iter()
+            .all(|task| task.action == ImportAction::AlreadyPresent)
+    );
+    assert_eq!(registry.tasks_for_workspace(ws).unwrap().len(), 2);
 }
 
 #[test]
