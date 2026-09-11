@@ -10,9 +10,10 @@
 //! The partition directory name is a *task-registry* workspace id
 //! (`workspace_bindings.workspace_id` in `<global_root>/tasks/index.sqlite`),
 //! which is minted as `<slug>-<hash>` whenever a checkout binds without an
-//! explicit id. It is not the workspace catalog's `ws_*` id space, so the
-//! task registry — not `workspaces.json` — decides which partition a checkout's
-//! task state lives in and which partitions are still claimed [ORB-12119].
+//! explicit id. `orbit workspace init` may instead bind the catalog's `ws_*`
+//! id directly. The task registry and the workspace catalog therefore both
+//! contribute claims, using checkout evidence to distinguish live, stale, and
+//! unreachable state [ORB-12119].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -23,6 +24,7 @@ use orbit_registry::workspace_registry;
 pub use orbit_store::maintenance::task_registry::task_workspaces_dir;
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::is_valid_orb_task_id;
+use orbit_types::workspace::WorkspaceCheckout;
 
 /// Path to one workspace's task-store partition under
 /// `<global_root>/tasks/workspaces/<workspace_id>/`.
@@ -256,14 +258,13 @@ pub fn partition_is_bound(global_root: &Path, workspace_id: &str) -> Result<bool
 
 /// Who claims each partition on this host, and why the rest do not.
 struct PartitionClaims {
-    /// Registered task workspaces, live checkout bindings, workspace catalog
-    /// ids, and the synthetic partition every `--root <data-dir>` write lands
-    /// in.
+    /// Registered task workspaces, live workspace catalog ids, and the
+    /// synthetic partition every `--root <data-dir>` write lands in.
     claimed: BTreeSet<String>,
-    /// Bindings whose checkout is confirmed absent.
+    /// Bindings or catalog checkouts that are confirmed absent.
     gone: BTreeSet<String>,
-    /// Bindings whose checkout the filesystem could not answer for, mapped to
-    /// the failure that stopped the answer.
+    /// Bindings or catalog checkouts whose filesystem state could not be
+    /// answered, mapped to the failure that stopped the answer.
     unreachable: BTreeMap<String, String>,
 }
 
@@ -303,14 +304,52 @@ fn partition_claims(global_root: &Path) -> Result<PartitionClaims, OrbitError> {
     let registry_path = workspace_registry::registry_path_for(global_root);
     if registry_path.exists() {
         let registry = workspace_registry::load_registry_from(&registry_path)?;
-        claims.claimed.extend(
-            registry
-                .workspaces
-                .into_iter()
-                .map(|workspace| workspace.id),
-        );
+        for workspace in registry.workspaces {
+            let Some(checkout) = registry
+                .checkouts
+                .iter()
+                .find(|checkout| checkout.workspace_id == workspace.id)
+            else {
+                // A checkoutless catalog entry is an imported logical
+                // workspace. Its partition remains recoverable task state.
+                claims.claimed.insert(workspace.id);
+                continue;
+            };
+
+            // `workspace init` uses the catalog id as its task partition id.
+            // Do not let that catalog claim mask stale or unreachable checkout
+            // evidence when both id spaces name the same partition.
+            record_catalog_checkout_evidence(&mut claims, &workspace.id, checkout);
+        }
     }
     Ok(claims)
+}
+
+/// Add a catalog checkout's claim without overriding stronger evidence from a
+/// task-registry binding that uses the same partition id.
+fn record_catalog_checkout_evidence(
+    claims: &mut PartitionClaims,
+    workspace_id: &str,
+    checkout: &WorkspaceCheckout,
+) {
+    match checkout_evidence(&checkout.orbit_dir) {
+        CheckoutEvidence::Present => {
+            claims.claimed.insert(workspace_id.to_string());
+            claims.gone.remove(workspace_id);
+            claims.unreachable.remove(workspace_id);
+        }
+        CheckoutEvidence::Gone => {
+            if !claims.claimed.contains(workspace_id) {
+                claims.gone.insert(workspace_id.to_string());
+                claims.unreachable.remove(workspace_id);
+            }
+        }
+        CheckoutEvidence::Unreachable(reason) => {
+            if !claims.claimed.contains(workspace_id) && !claims.gone.contains(workspace_id) {
+                claims.unreachable.insert(workspace_id.to_string(), reason);
+            }
+        }
+    }
 }
 
 /// What the filesystem can testify about a bound checkout directory.

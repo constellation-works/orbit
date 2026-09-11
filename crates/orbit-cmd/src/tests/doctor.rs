@@ -10,7 +10,7 @@ use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path, task_workspaces_dir,
 };
 use orbit_types::workflow::{JobRun, JobRunState};
-use orbit_types::workspace::{Workspace, WorkspaceStatus};
+use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceStatus};
 use sha2::{Digest, Sha256};
 
 use orbit_core::OrbitRuntime;
@@ -79,6 +79,22 @@ fn write_registered_workspace(global_root: &Path, workspace_id: &str, name: &str
         },
     )
     .expect("register workspace");
+    workspace_registry::save_registry_to(&registry, &registry_path).expect("save registry");
+}
+
+fn write_registered_checkout(global_root: &Path, workspace_id: &str, repo_root: &Path) {
+    let registry_path = workspace_registry::registry_path_for(global_root);
+    let mut registry =
+        workspace_registry::load_registry_from(&registry_path).expect("load registry");
+    workspace_registry::register_checkout(
+        &mut registry,
+        WorkspaceCheckout::owner(
+            workspace_id.to_string(),
+            repo_root.to_path_buf(),
+            repo_root.join(".orbit"),
+        ),
+    )
+    .expect("register checkout");
     workspace_registry::save_registry_to(&registry, &registry_path).expect("save registry");
 }
 
@@ -1057,6 +1073,93 @@ fn stale_task_registry_binding_is_reported_and_removed() {
             .exists()
     );
     assert!(!partition_is_bound(&global_root, "deleted-a1b2c3").expect("read binding"));
+}
+
+/// `orbit workspace init` uses the catalog `ws_*` id as the task partition in
+/// this layout. A deleted checkout must therefore be stale even while the
+/// catalog entry remains present.
+#[test]
+fn deleted_catalog_checkout_partition_is_reported_and_removed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    let deleted_root = temp.path().join("deleted");
+    fs::create_dir_all(deleted_root.join(".orbit")).expect("create deleted checkout");
+
+    write_registered_workspace(&global_root, "ws_deleted", "deleted");
+    write_registered_checkout(&global_root, "ws_deleted", &deleted_root);
+    bind_task_partition(&global_root, "ws_deleted", "deleted", &deleted_root);
+    write_task_bundle(&global_root, "ws_deleted", "ORB-3");
+    fs::remove_dir_all(&deleted_root).expect("delete checkout");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(row.message.contains("ws_deleted"), "{}", row.message);
+    assert!(row.message.contains("1 task bundle(s)"), "{}", row.message);
+    assert!(
+        row.message.contains("missing checkout directories"),
+        "{}",
+        row.message
+    );
+
+    let removed = runtime
+        .remove_orphan_task_stores()
+        .expect("remove stale catalog partition");
+    assert_eq!(removed.populated_partitions, 1, "{removed:?}");
+    assert_eq!(removed.task_bundles, 1, "{removed:?}");
+    assert!(
+        !task_workspaces_dir(&global_root)
+            .join("ws_deleted")
+            .exists()
+    );
+    assert!(!partition_is_bound(&global_root, "ws_deleted").expect("read binding"));
+}
+
+/// A catalog checkout that cannot be stat-ed is not evidence of deletion. Its
+/// populated task partition remains recoverable until the path is resolved.
+#[test]
+fn unreachable_catalog_checkout_partition_is_not_deleted() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    let unreachable_root = temp.path().join("unreachable");
+    fs::create_dir_all(unreachable_root.join(".orbit")).expect("create checkout");
+
+    write_registered_workspace(&global_root, "ws_unreachable", "unreachable");
+    write_registered_checkout(&global_root, "ws_unreachable", &unreachable_root);
+    bind_task_partition(
+        &global_root,
+        "ws_unreachable",
+        "unreachable",
+        &unreachable_root,
+    );
+    write_task_bundle(&global_root, "ws_unreachable", "ORB-4");
+    fs::remove_dir_all(&unreachable_root).expect("remove checkout directory");
+    fs::write(&unreachable_root, b"not a directory").expect("write path obstruction");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(
+        row.message.contains("could not be reached"),
+        "{}",
+        row.message
+    );
+    assert!(row.message.contains("ws_unreachable"), "{}", row.message);
+    assert!(row.message.contains("1 task bundle(s)"), "{}", row.message);
+
+    assert_eq!(
+        runtime.remove_orphan_task_stores().expect("run repair"),
+        OrphanTaskStoreRemoval::default()
+    );
+    assert!(
+        task_workspaces_dir(&global_root)
+            .join("ws_unreachable")
+            .join("ORB-4")
+            .is_dir(),
+        "the repair must not delete a catalog partition without absence evidence"
+    );
 }
 
 /// [ORB-12119] The fix deletes only partitions no registry claims: a
