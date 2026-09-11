@@ -27,12 +27,11 @@ pub(super) fn resolve_workspace_layout(
 
 /// Resolve the checkout these MCP setup commands operate on.
 ///
-/// The workspace registry answers first, because it is the only source that
-/// knows a checkout whose Orbit root lives outside the repository — the
-/// `orbit --root <dir> workspace init` layout, where neither the repository nor
-/// its ancestors contain a `.orbit` directory. The filesystem walk-up stays
-/// behind it for a checkout that carries its own `.orbit` without being
-/// registered on this machine.
+/// An explicit `--root` or `ORBIT_ROOT` answers first, matching the precedence
+/// used by the other root-aware surfaces. When no root is selected, the
+/// workspace registry identifies relocated checkouts before filesystem
+/// walk-up, because it is the only source that knows a checkout whose Orbit
+/// root lives outside the repository.
 pub(super) fn resolve_workspace_layout_for_cwd(
     cwd: &Path,
     root_override: Option<&Path>,
@@ -41,10 +40,12 @@ pub(super) fn resolve_workspace_layout_for_cwd(
     let explicit_root = explicit_root.as_deref();
     let registry_root = registry_root(explicit_root);
 
-    let (repo_root, orbit_root) = match registry_root
+    let registered_paths = registry_root
         .as_deref()
-        .and_then(|registry_root| registered_checkout_paths(registry_root, cwd, explicit_root))
-    {
+        .map(|registry_root| registered_checkout_paths(registry_root, cwd, explicit_root))
+        .transpose()?
+        .flatten();
+    let (repo_root, orbit_root) = match registered_paths {
         Some(paths) => paths,
         None => unregistered_checkout_paths(cwd, explicit_root)?,
     };
@@ -106,15 +107,53 @@ fn registered_checkout_paths(
     registry_root: &Path,
     cwd: &Path,
     explicit_root: Option<&Path>,
-) -> Option<(PathBuf, PathBuf)> {
-    let registry = load_registry(registry_root)?;
-    let checkout = checkout_for_cwd(&registry, cwd)
-        .or_else(|| explicit_root.and_then(|root| sole_checkout_for_root(&registry, root)))?;
-    Some((checkout.repo_root.clone(), checkout.orbit_dir.clone()))
+) -> Result<Option<(PathBuf, PathBuf)>, OrbitError> {
+    let Some(registry) = load_registry(registry_root) else {
+        return Ok(None);
+    };
+    let checkout = match explicit_root {
+        Some(root) => sole_checkout_for_root(&registry, root)
+            .ok_or_else(|| explicit_root_resolution_error(&registry, root))?,
+        None => {
+            let Some(checkout) = checkout_for_cwd(&registry, cwd) else {
+                return Ok(None);
+            };
+            checkout
+        }
+    };
+    Ok(Some((
+        checkout.repo_root.clone(),
+        checkout.orbit_dir.clone(),
+    )))
 }
 
 fn load_registry(global_root: &Path) -> Option<WorkspaceRegistry> {
     workspace_registry::load_registry_from(&workspace_registry::registry_path_for(global_root)).ok()
+}
+
+fn explicit_root_resolution_error(registry: &WorkspaceRegistry, root: &Path) -> OrbitError {
+    let candidates = registry
+        .checkouts
+        .iter()
+        .map(|checkout| {
+            format!(
+                "{} (Orbit root {})",
+                checkout.repo_root.display(),
+                checkout.orbit_dir.display()
+            )
+        })
+        .collect::<Vec<_>>();
+    let candidates = if candidates.is_empty() {
+        "none".to_string()
+    } else {
+        candidates.join(", ")
+    };
+
+    OrbitError::InvalidInput(format!(
+        "explicit Orbit root '{}' does not identify exactly one registered checkout; candidate checkouts: {}",
+        root.display(),
+        candidates
+    ))
 }
 
 fn checkout_for_cwd<'a>(
