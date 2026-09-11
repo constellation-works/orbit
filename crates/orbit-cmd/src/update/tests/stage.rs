@@ -59,6 +59,7 @@ fn a_failed_atomic_restore_keeps_both_complete_files_and_cleans_staging() {
 #[test]
 fn rollback_replaces_a_running_executable_atomically() {
     use crate::update::stage::restore_backup;
+    use orbit_common::test_process::retry_executable_busy;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
     use std::time::{Duration, Instant};
@@ -78,16 +79,17 @@ fn rollback_replaces_a_running_executable_atomically() {
     std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o751))
         .expect("make previous executable runnable");
 
-    let mut running = Command::new(&destination)
+    let mut command = Command::new(&destination);
+    command
         .args([
             "--ignored",
             "--exact",
             "update::tests::stage::running_replacement_process_fixture",
         ])
         .env("ORBIT_TEST_REPLACEMENT_READY", &ready)
-        .env("ORBIT_TEST_REPLACEMENT_RELEASE", &release)
-        .spawn()
-        .expect("launch installed replacement");
+        .env("ORBIT_TEST_REPLACEMENT_RELEASE", &release);
+    let mut running =
+        retry_executable_busy(|| command.spawn()).expect("launch installed replacement");
     wait_for_path(&ready, Duration::from_secs(5));
 
     restore_backup(&destination, &backup).expect("atomically restore previous executable");
