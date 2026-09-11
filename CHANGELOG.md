@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.21.0
+
+### Breaking Changes
+
+- **Layout-v3 checkout task projections removed**: `.orbit/tasks` symlink projections and projection fields are removed in favor of canonical storage; stop older binaries before running layout migration v3 to prevent recreating obsolete links. ([ORB-11994], [ORB-12078])
+- **Worktree GC activity schema updated**: custom `worktree_gc` invocations and automations must supply `target_run_id` instead of `run_id` for single-run scoping. ([ORB-11998])
+- **Public config path Result API**: `OrbitRuntime::config_path` now returns `Result<PathBuf, OrbitError>` instead of an infallible `PathBuf`; callers must handle config validation errors. ([ORB-12023])
+- **Linux runtime sandbox requires descriptor mounts**: Linux runtime write sandboxes now require Bubblewrap `--bind-fd` support; environments lacking descriptor-binding cannot mount writable runtime roots. ([ORB-12042], [ORB-12063])
+- **Task-pilot admission contract enforced**: automatic and explicit implementation admission now withhold unassessed tasks until complexity is evaluated, while `no-diff-expected` tasks are exempt. ([ORB-11991], [ORB-12053], [ORB-12118])
+- **Task complexity required on update**: human and agent `task.update` surfaces now reject `complexity: unassessed` with the create-time validation error; only automated system pipelines may assign unassessed status. ([ORB-12116])
+- **Strict new-file delivery declarations**: task delivery now enforces explicit new-file intent declarations and rejects unknown untracked paths before index mutation; declare new files via `file:` selectors. ([ORB-12050])
+
+### Highlights
+
+- **Read-only observational Orbit modes**: SQLite databases can be safely observed without write locks even when uncheckpointed WAL frames exist, and workspaces can start without requiring semantic indexing. ([ORB-12090], [ORB-12092], [ORB-12093])
+- **Rust path-validation and descriptor hardening**: file inspection and sandbox directory creation hold file descriptors through verification and mount operations, closing race conditions across runtime roots. ([ORB-12048], [ORB-12051], [ORB-12054], [ORB-12065])
+- **Task-pilot automated repair assessment**: code-scanning tasks are minted without speculative selectors, while task-pilot evaluates repair complexity and persists modification targets atomically before implementation. ([ORB-11991], [ORB-12118])
+- **CLI and MCP surface reliability**: fixes across tool execution, workspace filtering, MCP caller authorization, routine naming, credential redaction, and CLI output consistency improve agent ergonomics. ([ORB-12104], [ORB-12106], [ORB-12108], [ORB-12113])
+- **End-to-end full-QA coverage**: comprehensive QA verification suites, deterministic process fixtures, and browser capability evidence retention ensure stability across supported platforms. ([ORB-12010], [ORB-12047], [ORB-12062], [ORB-12085], [ORB-12086])
+
 ## 0.20.0
 
 ### Breaking Changes
