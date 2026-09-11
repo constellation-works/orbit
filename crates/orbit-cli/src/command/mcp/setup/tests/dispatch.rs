@@ -59,6 +59,17 @@ fn auto_detects_grok_from_home_when_repo_lacks_dotgrok() {
 }
 
 #[test]
+fn auto_detects_claude_from_home_when_repo_lacks_dotclaude() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    std::fs::create_dir_all(home.path().join(".claude")).expect("create claude home dir");
+
+    let providers = auto_detected_providers(repo.path(), Some(home.path()));
+
+    assert_eq!(providers, vec![McpProvider::Claude]);
+}
+
+#[test]
 fn home_scope_writes_to_home_paths_and_skips_repo_files() {
     let repo = tempdir().expect("repo tempdir");
     let home = tempdir().expect("home tempdir");
@@ -81,8 +92,7 @@ fn home_scope_writes_to_home_paths_and_skips_repo_files() {
     .expect("init home scope");
 
     let claude_mcp: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(home.path().join(".claude").join(".mcp.json"))
-            .expect("read claude home mcp"),
+        &std::fs::read_to_string(home.path().join(".claude.json")).expect("read claude home mcp"),
     )
     .expect("parse claude mcp");
     let claude_args = claude_mcp["mcpServers"]["orbit"]["args"]
@@ -152,6 +162,7 @@ fn home_scope_writes_to_home_paths_and_skips_repo_files() {
     assert!(grok_parsed["mcp_servers"]["orbit"].get("cwd").is_none());
 
     // Repo-local files should not have been touched.
+    assert!(!repo.path().join(".mcp.json").exists());
     assert!(!repo.path().join(".claude.json").exists());
     assert!(!repo.path().join(".codex").join("config.toml").exists());
     assert!(!repo.path().join(".gemini").join("settings.json").exists());
@@ -192,8 +203,7 @@ fn federated_home_scope_preserves_v1_entries() {
     .expect("init federated home scope");
 
     let claude: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(home.path().join(".claude").join(".mcp.json"))
-            .expect("read claude mcp"),
+        &std::fs::read_to_string(home.path().join(".claude.json")).expect("read claude mcp"),
     )
     .expect("parse claude mcp");
     assert_eq!(
@@ -267,7 +277,7 @@ fn federated_home_scope_preserves_v1_entries() {
     .expect("remove federated home scope");
 
     let claude: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(home.path().join(".claude").join(".mcp.json"))
+        &std::fs::read_to_string(home.path().join(".claude.json"))
             .expect("read claude after remove"),
     )
     .expect("parse claude after remove");
@@ -473,7 +483,7 @@ fn action_summary_names_the_resolved_home_scope_file_and_workspace_id() {
         summary,
         format!(
             "mcp init: claude -> {} (bound to ws_wshome)",
-            home.path().join(".claude").join(".mcp.json").display()
+            home.path().join(".claude.json").display()
         )
     );
 }
@@ -494,7 +504,7 @@ fn action_summary_omits_workspace_id_for_home_scope_when_unregistered() {
         summary,
         format!(
             "mcp remove: claude -> {}, codex -> {}",
-            home.path().join(".claude").join(".mcp.json").display(),
+            home.path().join(".claude.json").display(),
             home.path().join(".codex").join("config.toml").display()
         )
     );

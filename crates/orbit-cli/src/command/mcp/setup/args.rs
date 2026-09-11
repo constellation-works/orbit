@@ -12,7 +12,7 @@ use crate::command::{CommandOut, CommandOutput};
 pub enum ScopeArg {
     /// Write to user-level config (~/.claude, ~/.codex, ~/.gemini, ~/.grok, Antigravity mcp_config).
     Home,
-    /// Write to repo-local config (.claude.json, .codex/, .gemini/, .grok/). Default.
+    /// Write to repo-local config (.mcp.json, .codex/, .gemini/, .grok/). Default.
     #[default]
     Workspace,
 }
