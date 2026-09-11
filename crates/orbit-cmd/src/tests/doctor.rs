@@ -107,6 +107,13 @@ fn write_task_bundle(global_root: &Path, workspace_id: &str, task_id: &str) {
     fs::write(bundle.join("task.yaml"), b"id: dummy\n").expect("write bundle file");
 }
 
+/// A partition directory emptied of its bundles, as `workspace teardown` on an
+/// older binary left it behind.
+fn write_empty_partition(global_root: &Path, workspace_id: &str) {
+    fs::create_dir_all(task_workspaces_dir(global_root).join(workspace_id))
+        .expect("create empty partition dir");
+}
+
 #[test]
 fn healthy_fresh_workspace_has_no_failures() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
@@ -940,7 +947,8 @@ fn registered_task_store_partition_is_not_an_orphan() {
 /// [ORB-12109] A task-store partition whose workspace id no longer resolves
 /// in the registry — left behind by `workspace teardown` on an older binary,
 /// or by deleting a checkout without running teardown — is named with its
-/// path and an exact repair command.
+/// path and an exact repair command. Emptied of bundles, it carries nothing to
+/// recover, so the repair is the right next step [ORB-12131].
 #[test]
 fn orphan_task_store_partition_is_reported_with_path_and_remediation() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -948,8 +956,7 @@ fn orphan_task_store_partition_is_reported_with_path_and_remediation() {
     let global_root = temp.path().join("global");
     write_registered_workspace(&global_root, "ws_registered", "registered");
     write_task_bundle(&global_root, "ws_registered", "ORB-1");
-    write_task_bundle(&global_root, "ws_orphan", "ORB-2");
-    write_task_bundle(&global_root, "ws_orphan", "ORB-3");
+    write_empty_partition(&global_root, "ws_orphan");
 
     let results = runtime.doctor_workspace().expect("doctor");
     let row = status_of(&results, "orphan-task-stores");
@@ -965,7 +972,7 @@ fn orphan_task_store_partition_is_reported_with_path_and_remediation() {
         "message names the orphaned partition path: {}",
         row.message
     );
-    assert!(row.message.contains("2 task bundle(s)"), "{}", row.message);
+    assert!(row.message.contains("0 task bundle(s)"), "{}", row.message);
     assert!(
         !row.message.contains("ws_registered"),
         "registered partition must not be reported: {}",
@@ -1020,7 +1027,7 @@ fn fix_orphan_task_stores_keeps_every_claimed_partition() {
     write_task_bundle(&global_root, "drifted-a1b2c3", "ORB-2");
     // Every `--root <data-dir>` write lands here, and no registry ever records it.
     write_task_bundle(&global_root, "ws_unbound-data-dir", "ORB-3");
-    write_task_bundle(&global_root, "ws_orphan", "ORB-4");
+    write_empty_partition(&global_root, "ws_orphan");
 
     let removed = runtime
         .remove_orphan_task_stores()
@@ -1054,7 +1061,7 @@ fn fix_orphan_task_stores_removes_only_the_unregistered_partition() {
     let global_root = temp.path().join("global");
     write_registered_workspace(&global_root, "ws_registered", "registered");
     write_task_bundle(&global_root, "ws_registered", "ORB-1");
-    write_task_bundle(&global_root, "ws_orphan", "ORB-2");
+    write_empty_partition(&global_root, "ws_orphan");
 
     let removed = runtime
         .remove_orphan_task_stores()
@@ -1072,5 +1079,49 @@ fn fix_orphan_task_stores_removes_only_the_unregistered_partition() {
         status_of(&results, "orphan-task-stores").status,
         WorkspaceDoctorStatus::Ok,
         "{results:?}"
+    );
+}
+
+/// [ORB-12131] A partition that still holds task bundles is reported without
+/// pointing the operator at the deletion repair: the same picture is what a
+/// lost `tasks/index.sqlite` paints for every live checkout, and `orbit task
+/// reindex` restores those bundles.
+#[test]
+fn populated_unclaimed_partition_warns_toward_reindex_not_deletion() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let populated = task_workspaces_dir(&runtime.global_root())
+        .join("elsewhere-d4e5f6")
+        .join("ORB-77");
+    fs::create_dir_all(&populated).expect("create task bundle in an unclaimed partition");
+
+    let row = status_of(
+        &runtime.doctor_workspace().expect("doctor"),
+        "orphan-task-stores",
+    )
+    .clone();
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(
+        row.message.contains("elsewhere-d4e5f6") && row.message.contains("1 task bundle(s)"),
+        "message names the partition and its bundles: {}",
+        row.message
+    );
+    let remediation = row.remediation.expect("actionable row has remediation");
+    assert!(
+        remediation.contains("orbit task reindex"),
+        "remediation points at recovery: {remediation}"
+    );
+    assert!(
+        !remediation.contains("--fix-orphan-task-stores --confirm"),
+        "remediation must not advertise the deletion repair: {remediation}"
+    );
+
+    assert_eq!(
+        runtime.remove_orphan_task_stores().expect("run the repair"),
+        0
+    );
+    assert!(
+        populated.is_dir(),
+        "the repair must not delete task bundles"
     );
 }

@@ -22,6 +22,7 @@ use orbit_core::runtime::UNBOUND_DATA_DIR_WORKSPACE_ID;
 use orbit_registry::workspace_registry;
 pub use orbit_store::maintenance::task_registry::task_workspaces_dir;
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_types::task::is_valid_orb_task_id;
 
 /// Path to one workspace's task-store partition under
 /// `<global_root>/tasks/workspaces/<workspace_id>/`.
@@ -29,16 +30,35 @@ pub fn task_store_partition_path(global_root: &Path, workspace_id: &str) -> Path
     task_workspaces_dir(global_root).join(workspace_id)
 }
 
+/// One partition directory that no registry claims, with the amount of task
+/// data it still holds.
+#[derive(Debug, Clone)]
+pub struct UnclaimedPartition {
+    /// The partition directory itself.
+    pub path: PathBuf,
+    /// Task bundles directly inside it — each a directory named for a task id.
+    pub task_bundles: usize,
+}
+
 /// What a scan of `<global_root>/tasks/workspaces/` found.
+///
+/// Unclaimed partitions are split by whether they still hold task bundles,
+/// because on disk a partition abandoned by `workspace teardown` and a live
+/// partition whose registry row was lost are the same thing. Only the empty
+/// ones can be deleted from that evidence alone [ORB-12131].
 #[derive(Debug, Clone)]
 pub struct TaskStorePartitions {
     /// Partition directories present on this host.
     pub scanned: usize,
-    /// Those that no registry claims.
-    pub unclaimed: Vec<PathBuf>,
+    /// Unclaimed and empty of task bundles: nothing to lose by deleting them.
+    pub removable: Vec<UnclaimedPartition>,
+    /// Unclaimed but still holding task bundles, which `orbit task reindex`
+    /// can rebind from the bundles themselves. Never deleted automatically.
+    pub unowned: Vec<UnclaimedPartition>,
 }
 
-/// Classify every task-store partition on this host as claimed or orphaned.
+/// Classify every task-store partition on this host as claimed, removable, or
+/// unowned-but-populated.
 ///
 /// `None` means the directory has never been created (fresh host, no task ever
 /// committed) — nothing to diagnose rather than nothing orphaned.
@@ -50,29 +70,46 @@ pub fn inspect_task_store_partitions(
     };
     let claimed = claimed_partition_ids(global_root)?;
     let scanned = partitions.len();
-    let unclaimed = partitions
+
+    let (unowned, removable) = partitions
         .into_iter()
         .filter(|path| !path_is_claimed(path, &claimed))
-        .collect();
-    Ok(Some(TaskStorePartitions { scanned, unclaimed }))
+        .map(|path| UnclaimedPartition {
+            task_bundles: count_task_bundles(&path),
+            path,
+        })
+        .partition(|partition| partition.task_bundles > 0);
+
+    Ok(Some(TaskStorePartitions {
+        scanned,
+        removable,
+        unowned,
+    }))
 }
 
-/// Delete every partition no registry claims, retiring any registry rows that
-/// name it. Returns the removed partition paths.
+/// Delete every unclaimed partition that holds no task bundles, retiring any
+/// registry rows that name it. Returns the removed partition paths.
+///
+/// A partition that still holds bundles is left alone however the registry
+/// answers: an unclaimed populated partition is exactly the state a lost or
+/// rebuilt `tasks/index.sqlite` produces for every checkout other than the one
+/// the command runs from, and deleting it would destroy task data that
+/// `orbit task reindex` can otherwise recover from the bundles [ORB-12131].
+/// Reclaiming a genuinely dead populated partition stays a deliberate manual
+/// step, or `orbit workspace teardown` while the checkout still exists.
 pub fn remove_unclaimed_task_stores(global_root: &Path) -> Result<Vec<PathBuf>, OrbitError> {
     let Some(partitions) = inspect_task_store_partitions(global_root)? else {
         return Ok(Vec::new());
     };
-    let unclaimed = partitions.unclaimed;
     let tasks = open_task_registry(global_root)?;
 
     let mut removed = Vec::new();
-    for path in unclaimed {
-        let Some(workspace_id) = partition_id(&path) else {
+    for partition in partitions.removable {
+        let Some(workspace_id) = partition_id(&partition.path) else {
             continue;
         };
         if remove_partition(&tasks, global_root, workspace_id)? {
-            removed.push(path);
+            removed.push(partition.path);
         }
     }
     Ok(removed)
@@ -155,9 +192,16 @@ fn claimed_partition_ids(global_root: &Path) -> Result<BTreeSet<String>, OrbitEr
     Ok(claimed)
 }
 
-/// Open the task registry that names the partitions, refusing to answer
-/// ownership questions when it is absent: without it every live partition
-/// would look unclaimed, and the caller's next step is deletion.
+/// Open the task registry that names the partitions, rather than creating one
+/// as a side effect of asking who owns a directory. An absent registry answers
+/// "nothing is claimed" for every partition on the host, so report it instead.
+///
+/// This only catches a caller that reaches the registry before any runtime has
+/// built it. Every `orbit` subcommand bootstraps the global root first, which
+/// recreates an empty `tasks/index.sqlite`, so a registry lost since the last
+/// command is indistinguishable here from a legitimately empty one; refusing
+/// to delete populated partitions is what protects that case
+/// ([`remove_unclaimed_task_stores`]) [ORB-12131].
 fn open_task_registry(global_root: &Path) -> Result<TaskRegistryStore, OrbitError> {
     let path = task_registry_path(global_root);
     if !path.exists() {
@@ -195,6 +239,23 @@ fn task_store_partitions(global_root: &Path) -> Result<Option<Vec<PathBuf>>, Orb
 /// Workspace id a partition directory is named for.
 pub fn partition_id(partition: &Path) -> Option<&str> {
     partition.file_name().and_then(|name| name.to_str())
+}
+
+/// Task bundles directly under one partition: subdirectories named for a task
+/// id, counting a `<task-id>.deleted` tombstone as data the way
+/// `orbit task reindex` does when it rebuilds the index from these directories.
+fn count_task_bundles(partition: &Path) -> usize {
+    std::fs::read_dir(partition)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter(|entry| {
+            entry.file_name().to_str().is_some_and(|name| {
+                is_valid_orb_task_id(name.strip_suffix(".deleted").unwrap_or(name))
+            })
+        })
+        .count()
 }
 
 fn path_is_claimed(partition: &Path, claimed: &BTreeSet<String>) -> bool {

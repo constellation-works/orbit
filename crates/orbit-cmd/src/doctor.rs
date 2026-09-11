@@ -130,7 +130,8 @@ pub trait DoctorCommands {
     /// Delete task-store partitions under `<global_root>/tasks/workspaces/`
     /// whose workspace id is no longer present in the registry — left behind
     /// by a `workspace teardown` run on an older binary, or by removing a
-    /// checkout without running teardown [ORB-12109].
+    /// checkout without running teardown [ORB-12109]. Partitions that still
+    /// hold task bundles are reported but never deleted [ORB-12131].
     fn remove_orphan_task_stores(&self) -> Result<usize, OrbitError>;
 
     /// Cheap store write probe for health endpoints: open the store and
@@ -429,6 +430,12 @@ fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
 /// `--root` partition are the other claimants. Comparing the directory name
 /// against catalog `ws_*` ids alone reported every `<slug>-<hash>` partition —
 /// including live ones — as orphaned [ORB-12119].
+///
+/// An unclaimed partition that still holds task bundles gets its own
+/// non-destructive row: a lost or rebuilt registry leaves every other
+/// checkout's live partition looking exactly like abandoned residue, and the
+/// recovery for it is `orbit task reindex` in the owning checkout, not a
+/// deletion this check invites [ORB-12131].
 fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let global_root = runtime.global_root();
     let partitions = match task_store::inspect_task_store_partitions(&global_root) {
@@ -449,7 +456,7 @@ fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
         }
     };
 
-    if partitions.unclaimed.is_empty() {
+    if partitions.removable.is_empty() && partitions.unowned.is_empty() {
         return check(
             "orphan-task-stores",
             WorkspaceDoctorStatus::Ok,
@@ -460,40 +467,60 @@ fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
         );
     }
 
-    let orphans = partitions
-        .unclaimed
-        .iter()
-        .map(|path| {
-            format!(
-                "{} ({}, {} task bundle(s))",
-                task_store::partition_id(path).unwrap_or("<unnamed>"),
-                path.display(),
-                count_task_bundles(path)
-            )
-        })
-        .collect::<Vec<_>>();
+    // Populated partitions decide the row: their data is recoverable, so the
+    // operator must not be pointed at a repair that would delete it, even when
+    // empty residue is present too and would be safe to reclaim.
+    if !partitions.unowned.is_empty() {
+        let mut message = format!(
+            "{} task-store partition(s) hold task bundles that no workspace binding claims: {}",
+            partitions.unowned.len(),
+            describe_partitions(&partitions.unowned)
+        );
+        if !partitions.removable.is_empty() {
+            message.push_str(&format!(
+                "; {} empty unclaimed partition(s): {}",
+                partitions.removable.len(),
+                describe_partitions(&partitions.removable)
+            ));
+        }
+        return actionable_check(
+            "orphan-task-stores",
+            WorkspaceDoctorStatus::Warning,
+            message,
+            "Run `orbit task reindex` from each checkout that owns these bundles to rebind them; \
+             `orbit doctor --fix-orphan-task-stores` never deletes a populated partition, so \
+             remove one by hand only after confirming its checkout is gone."
+                .to_string(),
+        );
+    }
 
     actionable_check(
         "orphan-task-stores",
         WorkspaceDoctorStatus::Warning,
         format!(
-            "{} orphaned task-store partition(s) (no workspace binding claims them): {}",
-            orphans.len(),
-            orphans.join("; ")
+            "{} orphaned empty task-store partition(s) (no workspace binding claims them): {}",
+            partitions.removable.len(),
+            describe_partitions(&partitions.removable)
         ),
         "Run `orbit doctor --fix-orphan-task-stores --confirm`.".to_string(),
     )
 }
 
-/// Task bundles directly under one workspace's task-store partition — each
-/// is a subdirectory named for its task id.
-fn count_task_bundles(partition: &Path) -> usize {
-    std::fs::read_dir(partition)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| entry.path().is_dir())
-        .count()
+/// Render unclaimed partitions for a diagnostic line: each one's workspace id,
+/// its path on disk, and how much task data deleting it would cost.
+fn describe_partitions(partitions: &[task_store::UnclaimedPartition]) -> String {
+    partitions
+        .iter()
+        .map(|partition| {
+            format!(
+                "{} ({}, {} task bundle(s))",
+                task_store::partition_id(&partition.path).unwrap_or("<unnamed>"),
+                partition.path.display(),
+                partition.task_bundles
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Delete one dead-holder lock only after acquiring its advisory lock. A
