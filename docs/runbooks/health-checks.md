@@ -104,17 +104,18 @@ partition's rows in `~/.orbit/tasks/index.sqlite` in the same step.
 A partition directory is named for a **task-registry** workspace id
 (`workspace_bindings.workspace_id` in `~/.orbit/tasks/index.sqlite`), minted as `<slug>-<hash>`
 for a checkout that binds without an explicit id. That is a different id space from the workspace
-catalog's `ws_*` ids in `~/.orbit/workspaces.json`, so a partition is orphaned only when neither
-registry claims it; the synthetic `ws_unbound-data-dir` partition every `--root <data-dir>` write
-lands in is never reported. `orphan-task-stores` exists for partitions a prior teardown on an
-older binary left behind, or a checkout removed without running teardown at all: each warning
-names the orphaned workspace id, its partition path, and its task-bundle count.
+catalog's `ws_*` ids in `~/.orbit/workspaces.json`. A task-registry binding claims its partition
+only while the binding's recorded `orbit_dir` still exists on disk; a binding to a deleted checkout
+is stale and is reported as orphaned. Catalog `ws_*` ids and the synthetic `ws_unbound-data-dir`
+partition every `--root <data-dir>` write lands in remain claims, so they are never reported.
+`orphan-task-stores` names each orphaned workspace id, its partition path, and its task-bundle count.
 
-An unclaimed partition that **still holds task bundles** is reported on its own terms and is never
-deleted by the repair. On disk it is indistinguishable from a live checkout's partition whose
-registry row was lost, and every `orbit` subcommand recreates an empty `~/.orbit/tasks/index.sqlite`
-before any check runs — so a lost or restored-without-`index.sqlite` registry makes every checkout
-other than the one you are standing in look abandoned. That warning points at recovery instead:
+An unclaimed partition that **still holds task bundles** and has no stale checkout binding is
+reported on its own terms and is never deleted by the repair. On disk it is indistinguishable from
+a live checkout's partition whose registry row was lost, and every `orbit` subcommand recreates an
+empty `~/.orbit/tasks/index.sqlite` before any check runs — so a lost or restored-without
+`index.sqlite` registry makes every checkout other than the one you are standing in look abandoned.
+That warning points at recovery instead:
 
 ```sh
 cd <the checkout that owns the bundles>
@@ -122,8 +123,16 @@ orbit task reindex
 ```
 
 `orbit task reindex` rebuilds the registry rows for one partition from its bundle directories, so
-it must be run once per affected checkout. Only after confirming a checkout is genuinely gone
-should you delete its populated partition directory by hand.
+it must be run once per affected checkout. For a partition whose task-registry binding points at a
+missing `orbit_dir`, the stale binding is the evidence that the checkout is genuinely gone. The
+confirmed repair removes that partition, including its task bundles, and retires the stale registry
+rows:
+
+```sh
+orbit doctor --fix-orphan-task-stores --confirm
+```
+
+Do not use that repair for an unknown populated partition; reindex it first.
 
 An unclaimed partition with **no task bundles** carries nothing to recover. Repair those with:
 
@@ -132,8 +141,9 @@ orbit doctor --fix-orphan-task-stores --confirm
 ```
 
 The repair deletes partition directories, so it refuses to run without `--confirm`. It resolves the
-claims once, deletes only the empty partitions no binding names, retires any registry rows naming
-them, and is idempotent: running it again after a partition is gone is a no-op.
+claims once, deletes empty partitions with no binding and partitions whose binding is stale, retires
+any registry rows naming them, and is idempotent: running it again after a partition is gone is a
+no-op.
 
 ### Repair retired activity backends
 

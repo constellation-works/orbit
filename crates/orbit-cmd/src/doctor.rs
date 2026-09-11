@@ -420,22 +420,24 @@ fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
 }
 
 /// Task-store partitions under `<global_root>/tasks/workspaces/<ws_id>/`
-/// that no registry claims — left behind by a `workspace teardown` run on an
-/// older binary, or by deleting a checkout without running teardown
+/// that no live registry claim covers — left behind by a `workspace teardown`
+/// run on an older binary, or by deleting a checkout without running teardown
 /// [ORB-12109]. Scoped to the whole host, not just this workspace, because the
 /// partition directory is itself host-global.
 ///
 /// A partition is named for its *task-registry* workspace id, so the task
-/// registry is what claims it; the workspace catalog and the synthetic
-/// `--root` partition are the other claimants. Comparing the directory name
-/// against catalog `ws_*` ids alone reported every `<slug>-<hash>` partition —
-/// including live ones — as orphaned [ORB-12119].
+/// registry is what claims it while the bound checkout's `orbit_dir` exists;
+/// a binding to a missing checkout is stale. The workspace catalog and the
+/// synthetic `--root` partition are the other claimants. Comparing the
+/// directory name against catalog `ws_*` ids alone reported every
+/// `<slug>-<hash>` partition — including live ones — as orphaned [ORB-12119].
 ///
-/// An unclaimed partition that still holds task bundles gets its own
-/// non-destructive row: a lost or rebuilt registry leaves every other
-/// checkout's live partition looking exactly like abandoned residue, and the
-/// recovery for it is `orbit task reindex` in the owning checkout, not a
-/// deletion this check invites [ORB-12131].
+/// An unknown populated partition gets its own non-destructive row: a lost or
+/// rebuilt registry leaves every other checkout's live partition looking
+/// exactly like abandoned residue, and the recovery for it is `orbit task
+/// reindex` in the owning checkout, not a deletion this check invites
+/// [ORB-12131]. A stale checkout binding is separately actionable because its
+/// missing `orbit_dir` proves the checkout is gone.
 fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let global_root = runtime.global_root();
     let partitions = match task_store::inspect_task_store_partitions(&global_root) {
@@ -456,7 +458,10 @@ fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
         }
     };
 
-    if partitions.removable.is_empty() && partitions.unowned.is_empty() {
+    if partitions.removable.is_empty()
+        && partitions.stale.is_empty()
+        && partitions.unowned.is_empty()
+    {
         return check(
             "orphan-task-stores",
             WorkspaceDoctorStatus::Ok,
@@ -467,9 +472,10 @@ fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
         );
     }
 
-    // Populated partitions decide the row: their data is recoverable, so the
-    // operator must not be pointed at a repair that would delete it, even when
-    // empty residue is present too and would be safe to reclaim.
+    // Unknown populated partitions decide the recovery guidance: their data is
+    // recoverable, so the operator must not be pointed at a repair that would
+    // delete it. A stale checkout binding is different evidence: the checkout
+    // is gone, so its partition is safe to remove after confirmation.
     if !partitions.unowned.is_empty() {
         let mut message = format!(
             "{} task-store partition(s) hold task bundles that no workspace binding claims: {}",
@@ -483,14 +489,50 @@ fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
                 describe_partitions(&partitions.removable)
             ));
         }
+        if !partitions.stale.is_empty() {
+            message.push_str(&format!(
+                "; {} stale checkout-binding partition(s): {}",
+                partitions.stale.len(),
+                describe_partitions(&partitions.stale)
+            ));
+        }
+        let remediation = if partitions.stale.is_empty() {
+            "Run `orbit task reindex` from each checkout that owns these bundles to rebind them; \
+             `orbit doctor --fix-orphan-task-stores` never deletes a populated partition, so \
+             remove one by hand only after confirming its checkout is gone."
+                .to_string()
+        } else {
+            "Run `orbit task reindex` from each checkout that owns the unknown bundles; \
+             then run `orbit doctor --fix-orphan-task-stores --confirm` to remove partitions \
+             whose checkout binding is stale."
+                .to_string()
+        };
         return actionable_check(
             "orphan-task-stores",
             WorkspaceDoctorStatus::Warning,
             message,
-            "Run `orbit task reindex` from each checkout that owns these bundles to rebind them; \
-             `orbit doctor --fix-orphan-task-stores` never deletes a populated partition, so \
-             remove one by hand only after confirming its checkout is gone."
-                .to_string(),
+            remediation,
+        );
+    }
+
+    if !partitions.stale.is_empty() {
+        let mut message = format!(
+            "{} stale task-store partition(s) point at missing checkout directories: {}",
+            partitions.stale.len(),
+            describe_partitions(&partitions.stale)
+        );
+        if !partitions.removable.is_empty() {
+            message.push_str(&format!(
+                "; {} empty unclaimed partition(s): {}",
+                partitions.removable.len(),
+                describe_partitions(&partitions.removable)
+            ));
+        }
+        return actionable_check(
+            "orphan-task-stores",
+            WorkspaceDoctorStatus::Warning,
+            message,
+            "Run `orbit doctor --fix-orphan-task-stores --confirm`.".to_string(),
         );
     }
 

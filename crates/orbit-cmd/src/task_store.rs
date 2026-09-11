@@ -42,16 +42,20 @@ pub struct UnclaimedPartition {
 
 /// What a scan of `<global_root>/tasks/workspaces/` found.
 ///
-/// Unclaimed partitions are split by whether they still hold task bundles,
-/// because on disk a partition abandoned by `workspace teardown` and a live
-/// partition whose registry row was lost are the same thing. Only the empty
-/// ones can be deleted from that evidence alone [ORB-12131].
+/// Unclaimed partitions are split into stale checkout bindings, empty residue,
+/// and populated partitions with no binding. A missing checkout binding is
+/// sufficient evidence for cleanup; an unknown populated partition remains
+/// recoverable with `orbit task reindex` [ORB-12131].
 #[derive(Debug, Clone)]
 pub struct TaskStorePartitions {
     /// Partition directories present on this host.
     pub scanned: usize,
     /// Unclaimed and empty of task bundles: nothing to lose by deleting them.
     pub removable: Vec<UnclaimedPartition>,
+    /// Partitions whose task-registry checkout binding points at a missing
+    /// orbit directory. The missing checkout is sufficient evidence to remove
+    /// the partition, including its bundles.
+    pub stale: Vec<UnclaimedPartition>,
     /// Unclaimed but still holding task bundles, which `orbit task reindex`
     /// can rebind from the bundles themselves. Never deleted automatically.
     pub unowned: Vec<UnclaimedPartition>,
@@ -68,26 +72,42 @@ pub fn inspect_task_store_partitions(
     let Some(partitions) = task_store_partitions(global_root)? else {
         return Ok(None);
     };
-    let claimed = claimed_partition_ids(global_root)?;
+    let (claimed, stale_bindings) = partition_claims(global_root)?;
     let scanned = partitions.len();
 
-    let (unowned, removable) = partitions
-        .into_iter()
-        .filter(|path| !path_is_claimed(path, &claimed))
-        .map(|path| UnclaimedPartition {
+    let mut removable = Vec::new();
+    let mut stale = Vec::new();
+    let mut unowned = Vec::new();
+    for path in partitions {
+        let Some(id) = partition_id(&path).map(str::to_owned) else {
+            continue;
+        };
+        if claimed.contains(&id) {
+            continue;
+        }
+
+        let partition = UnclaimedPartition {
             task_bundles: count_task_bundles(&path),
             path,
-        })
-        .partition(|partition| partition.task_bundles > 0);
+        };
+        if stale_bindings.contains(&id) {
+            stale.push(partition);
+        } else if partition.task_bundles > 0 {
+            unowned.push(partition);
+        } else {
+            removable.push(partition);
+        }
+    }
 
     Ok(Some(TaskStorePartitions {
         scanned,
         removable,
+        stale,
         unowned,
     }))
 }
 
-/// Delete every unclaimed partition that holds no task bundles, retiring any
+/// Delete every stale-bound or empty unclaimed partition, retiring any
 /// registry rows that name it. Returns the removed partition paths.
 ///
 /// A partition that still holds bundles is left alone however the registry
@@ -104,7 +124,7 @@ pub fn remove_unclaimed_task_stores(global_root: &Path) -> Result<Vec<PathBuf>, 
     let tasks = open_task_registry(global_root)?;
 
     let mut removed = Vec::new();
-    for partition in partitions.removable {
+    for partition in partitions.stale.into_iter().chain(partitions.removable) {
         let Some(workspace_id) = partition_id(&partition.path) else {
             continue;
         };
@@ -170,13 +190,27 @@ pub fn partition_is_bound(global_root: &Path, workspace_id: &str) -> Result<bool
         .contains(workspace_id))
 }
 
-/// Every workspace id that still claims a partition on this host: the task
-/// registry's own bindings, the workspace catalog's ids, and the synthetic
-/// partition every `--root <data-dir>` write lands in, which by construction
-/// appears in neither registry.
-fn claimed_partition_ids(global_root: &Path) -> Result<BTreeSet<String>, OrbitError> {
+/// Every workspace id that claims a partition on this host, plus task-registry
+/// bindings whose checkout has disappeared. Live checkout bindings, workspace
+/// catalog ids, and the synthetic partition every `--root <data-dir>` write
+/// lands in are claims; a binding to a missing orbit directory is stale.
+fn partition_claims(
+    global_root: &Path,
+) -> Result<(BTreeSet<String>, BTreeSet<String>), OrbitError> {
     let tasks = open_task_registry(global_root)?;
-    let mut claimed = tasks.workspace_ids()?;
+    let mut claimed = BTreeSet::new();
+    let mut stale_bindings = BTreeSet::new();
+    for workspace_id in tasks.workspace_ids()? {
+        match tasks.find_workspace_checkout(&workspace_id)? {
+            Some(checkout) if checkout.orbit_dir.exists() => {
+                claimed.insert(workspace_id);
+            }
+            Some(_) => {
+                stale_bindings.insert(workspace_id);
+            }
+            None => {}
+        }
+    }
     claimed.insert(UNBOUND_DATA_DIR_WORKSPACE_ID.to_string());
 
     let registry_path = workspace_registry::registry_path_for(global_root);
@@ -189,7 +223,7 @@ fn claimed_partition_ids(global_root: &Path) -> Result<BTreeSet<String>, OrbitEr
                 .map(|workspace| workspace.id),
         );
     }
-    Ok(claimed)
+    Ok((claimed, stale_bindings))
 }
 
 /// Open the task registry that names the partitions, rather than creating one
@@ -256,10 +290,6 @@ fn count_task_bundles(partition: &Path) -> usize {
             })
         })
         .count()
-}
-
-fn path_is_claimed(partition: &Path, claimed: &BTreeSet<String>) -> bool {
-    partition_id(partition).is_some_and(|id| claimed.contains(id))
 }
 
 /// Whether `workspace_id`'s partition holds *another* checkout's task state,
