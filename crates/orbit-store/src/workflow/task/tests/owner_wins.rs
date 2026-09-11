@@ -428,6 +428,61 @@ fn owner_wins_repairs_an_unbound_existing_bundle_and_lands_the_rest() {
 }
 
 #[test]
+fn owner_wins_leaves_an_unbound_locally_owned_bundle_untouched() {
+    let src = TempDir::new().unwrap();
+    let dst = TempDir::new().unwrap();
+    let ws = "orbit-owner-acacac";
+
+    // The peer's archive carries a stale mirror of our task. Locally that task
+    // has lost its registry binding (a partial index rebuild) but its bundle
+    // is still on disk — the unbound repair path must not let the mirror
+    // overwrite it.
+    let archive = src.path().join("tasks.tar.zst");
+    export_owner_archive(
+        src.path(),
+        ws,
+        &archive,
+        &[make_bundle(
+            "DANI-00042",
+            "stale mirror of our task",
+            Vec::new(),
+        )],
+    );
+
+    let registry = open_mirror_registry(dst.path());
+    let binding = bind(&registry, dst.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    let local = make_bundle("DANI-00042", "local truth", Vec::new());
+    seed(&store, &registry, ws, &local);
+    registry
+        .unregister_task_bundle("DANI-00042", ws)
+        .expect("remove only our task's registry binding");
+    assert!(
+        registry
+            .canonical_task_bundle_path(ws, "DANI-00042")
+            .unwrap()
+            .is_dir()
+    );
+
+    let outcome =
+        import_tasks(&registry, &archive, None, ImportConflictPolicy::OwnerWins).expect("sync");
+
+    assert_eq!(outcome.tasks.len(), 1);
+    assert_eq!(outcome.tasks[0].source_id, "DANI-00042");
+    assert_eq!(outcome.tasks[0].final_id, "DANI-00042");
+    assert_eq!(outcome.tasks[0].action, ImportAction::SkippedLocalOwned);
+    assert_eq!(
+        landed_bundle(&registry, ws, "DANI-00042"),
+        local,
+        "the local bundle's contents are preserved"
+    );
+    assert!(
+        registry.find_task_binding("DANI-00042").unwrap().is_none(),
+        "a skipped local task is not rebound by the sync"
+    );
+}
+
+#[test]
 fn owner_wins_preserves_foreign_relation_targets() {
     let first_export = TempDir::new().unwrap();
     let second_export = TempDir::new().unwrap();

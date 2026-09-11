@@ -225,8 +225,10 @@ algorithm:
   `updated`), a colliding local-prefix bundle is left untouched (reported
   `skipped-local-owned`), and nothing is ever renumbered ([ORB-12126]). If the
   task id has no registry binding but its canonical bundle directory remains,
-  owner-wins refreshes that orphaned mirror and restores its binding; `reindex`
-  remains the recovery command for other index drift. Because it never mints,
+  owner-wins refreshes that orphaned mirror and restores its binding — but only
+  for a foreign-prefix id, because a local-prefix bundle is locally owned
+  whether or not the index still binds it ([ORB-12164]); `reindex` remains the
+  recovery command for other index drift. Because it never mints,
   foreign relation targets survive verbatim, no `.idmap.json` is written, and
   re-running the same archive reports every task as `already-present` — so it
   is safe on a timer:
@@ -248,5 +250,6 @@ in [4_decisions](./4_decisions.md).
 - [ORB-00034] — task migration tooling: `orbit task export/import/reindex`, `tasks.id_start` allocator config.
 - [ORB-10721] — per-host `task_prefix` in `host.toml`, projected into the allocator.
 - [ORB-12126] — owner-wins cross-host sync: import policy that overwrites only foreign-prefix bundles.
+- [ORB-12164] — the unbound-bundle repair path honors the local-prefix guard.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
