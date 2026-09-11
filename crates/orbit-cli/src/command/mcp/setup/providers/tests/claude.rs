@@ -12,10 +12,15 @@ fn claude_workspace_scope_init_and_remove_preserve_unrelated_entries() {
     let home = tempdir().expect("home tempdir");
     std::fs::create_dir_all(repo.path().join(".claude")).expect("create .claude");
     std::fs::write(
-        repo.path().join(".claude.json"),
+        repo.path().join(".mcp.json"),
         "{\n  \"mcpServers\": {\n    \"other\": {\"command\": \"demo\"}\n  }\n}\n",
     )
     .expect("write mcp file");
+    std::fs::write(
+        repo.path().join(".claude.json"),
+        "{\n  \"mcpServers\": {\n    \"orbit\": {\"command\": \"orbit\"},\n    \"legacy-other\": {\"command\": \"demo\"}\n  }\n}\n",
+    )
+    .expect("write legacy mcp file");
     std::fs::write(
         repo.path().join(".claude").join("settings.json"),
         "{\n  \"permissions\": {\n    \"allow\": [\"OtherTool\"]\n  },\n  \"theme\": \"light\"\n}\n",
@@ -37,7 +42,7 @@ fn claude_workspace_scope_init_and_remove_preserve_unrelated_entries() {
     assert_eq!(providers, vec![McpProvider::Claude]);
 
     let mcp: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(repo.path().join(".claude.json")).expect("read mcp"),
+        &std::fs::read_to_string(repo.path().join(".mcp.json")).expect("read mcp"),
     )
     .expect("parse mcp");
     assert!(mcp["mcpServers"]["orbit"].is_object());
@@ -48,6 +53,13 @@ fn claude_workspace_scope_init_and_remove_preserve_unrelated_entries() {
     assert_eq!(args.len(), 2);
     assert_eq!(args[0].as_str(), Some("mcp"));
     assert_eq!(args[1].as_str(), Some("serve"));
+
+    let legacy_mcp: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo.path().join(".claude.json")).expect("read legacy mcp"),
+    )
+    .expect("parse legacy mcp");
+    assert!(legacy_mcp["mcpServers"]["orbit"].is_null());
+    assert!(legacy_mcp["mcpServers"]["legacy-other"].is_object());
 
     let settings: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(repo.path().join(".claude").join("settings.json"))
@@ -92,11 +104,68 @@ fn claude_workspace_scope_init_and_remove_preserve_unrelated_entries() {
     .expect("remove claude");
 
     let mcp: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(repo.path().join(".claude.json")).expect("read mcp"),
+        &std::fs::read_to_string(repo.path().join(".mcp.json")).expect("read mcp"),
     )
     .expect("parse mcp");
     assert!(mcp["mcpServers"]["orbit"].is_null());
     assert!(mcp["mcpServers"]["other"].is_object());
+}
+
+#[test]
+fn claude_home_scope_uses_documented_user_file_and_cleans_legacy_file() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    std::fs::create_dir_all(home.path().join(".claude")).expect("create claude home");
+    std::fs::write(
+        home.path().join(".claude").join(".mcp.json"),
+        "{\n  \"mcpServers\": {\n    \"orbit\": {\"command\": \"orbit\"},\n    \"legacy-other\": {\"command\": \"demo\"}\n  }\n}\n",
+    )
+    .expect("write legacy home mcp file");
+    let orbit_root = repo.path().join(".orbit");
+    std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+
+    run_action(
+        McpAction::Init(ServerLaunch::default()),
+        repo.path(),
+        &orbit_root,
+        ProviderSelectionMode::Explicit(vec![McpProvider::Claude]),
+        Some(home.path().to_path_buf()),
+        ScopeArg::Home,
+    )
+    .expect("init claude home scope");
+
+    let mcp: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(home.path().join(".claude.json")).expect("read user mcp"),
+    )
+    .expect("parse user mcp");
+    assert!(mcp["mcpServers"]["orbit"].is_object());
+
+    let legacy: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(home.path().join(".claude").join(".mcp.json"))
+            .expect("read legacy user mcp"),
+    )
+    .expect("parse legacy user mcp");
+    assert!(legacy["mcpServers"]["orbit"].is_null());
+    assert!(legacy["mcpServers"]["legacy-other"].is_object());
+
+    run_action(
+        McpAction::Remove,
+        repo.path(),
+        &orbit_root,
+        ProviderSelectionMode::Explicit(vec![McpProvider::Claude]),
+        Some(home.path().to_path_buf()),
+        ScopeArg::Home,
+    )
+    .expect("remove claude home scope");
+
+    assert!(!home.path().join(".claude.json").exists());
+    let legacy: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(home.path().join(".claude").join(".mcp.json"))
+            .expect("read legacy user mcp after remove"),
+    )
+    .expect("parse legacy user mcp after remove");
+    assert!(legacy["mcpServers"]["orbit"].is_null());
+    assert!(legacy["mcpServers"]["legacy-other"].is_object());
 }
 
 #[test]
@@ -207,7 +276,7 @@ fn claude_operator_init_writes_single_operator_flag_and_refresh_is_idempotent() 
 
     let assert_single_operator_entry = || {
         let mcp: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(repo.path().join(".claude.json")).expect("read mcp"),
+            &std::fs::read_to_string(repo.path().join(".mcp.json")).expect("read mcp"),
         )
         .expect("parse mcp");
         let args = mcp["mcpServers"]["orbit"]["args"]

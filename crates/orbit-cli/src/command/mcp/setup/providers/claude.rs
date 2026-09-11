@@ -16,6 +16,8 @@ pub(in crate::command::mcp::setup) fn apply_claude_init(
     launch: ServerLaunch<'_>,
 ) -> Result<(), OrbitError> {
     let server_id = server_id(launch);
+    cleanup_legacy_mcp_path(target, server_id)?;
+
     let mut root = load_json_object(&target.mcp_path)?;
     let mcp_servers = ensure_json_object(&mut root, "mcpServers")?;
     mcp_servers.insert(server_id.to_string(), claude_mcp_server_value(launch));
@@ -46,6 +48,7 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
         }
     }
     write_or_remove_json_object(&target.mcp_path, &root)?;
+    cleanup_legacy_mcp_path(target, server_id)?;
 
     if let Some(settings_path) = &target.settings_path {
         let mut settings = load_json_object(settings_path)?;
@@ -85,6 +88,24 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
         }
     }
     Ok(())
+}
+
+fn cleanup_legacy_mcp_path(target: &ConfigTarget, server_id: &str) -> Result<(), OrbitError> {
+    let Some(legacy_path) = &target.legacy_mcp_path else {
+        return Ok(());
+    };
+
+    let mut root = load_json_object(legacy_path)?;
+    if let Some(mcp_servers) = root
+        .get_mut("mcpServers")
+        .and_then(JsonValue::as_object_mut)
+    {
+        mcp_servers.remove(server_id);
+        if mcp_servers.is_empty() {
+            root.remove("mcpServers");
+        }
+    }
+    write_or_remove_json_object(legacy_path, &root)
 }
 
 /// Remove `dir` if it exists and is now empty.

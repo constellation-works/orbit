@@ -136,7 +136,7 @@ impl ExternalRootFixture {
     }
 
     fn claude_config(&self) -> PathBuf {
-        self.checkout.join(".claude.json")
+        self.checkout.join(".mcp.json")
     }
 
     fn claude_settings(&self) -> PathBuf {
@@ -147,7 +147,7 @@ impl ExternalRootFixture {
     fn assert_no_client_config_outside_the_checkout(&self) {
         let root_parent = self.orbit_root.parent().expect("orbit root parent");
         for directory in [&self.orbit_root, root_parent, &self.elsewhere, &self.home] {
-            for entry in [".claude.json", ".claude"] {
+            for entry in [".mcp.json", ".claude.json", ".claude"] {
                 let stray = directory.join(entry);
                 assert!(
                     !stray.exists(),
@@ -265,9 +265,9 @@ fn explicit_root_outranks_a_different_registered_cwd_checkout() {
         )
         .success();
 
-    assert!(!fixture.checkout_a.join(".claude.json").exists());
+    assert!(!fixture.checkout_a.join(".mcp.json").exists());
     assert_eq!(
-        generated_server_args(&fixture.checkout_b.join(".claude.json")),
+        generated_server_args(&fixture.checkout_b.join(".mcp.json")),
         vec!["mcp", "serve", "--workspace", "ws_beta"]
     );
 
@@ -280,8 +280,8 @@ fn explicit_root_outranks_a_different_registered_cwd_checkout() {
         )
         .success();
 
-    assert!(!fixture.checkout_a.join(".claude.json").exists());
-    assert!(!fixture.checkout_b.join(".claude.json").exists());
+    assert!(!fixture.checkout_a.join(".mcp.json").exists());
+    assert!(!fixture.checkout_b.join(".mcp.json").exists());
 }
 
 #[test]
@@ -300,8 +300,8 @@ fn shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove() {
         stderr.contains("does not identify exactly one registered checkout"),
         "unexpected outside-checkout failure: {stderr}"
     );
-    assert!(!fixture.checkout_a.join(".claude.json").exists());
-    assert!(!fixture.checkout_b.join(".claude.json").exists());
+    assert!(!fixture.checkout_a.join(".mcp.json").exists());
+    assert!(!fixture.checkout_b.join(".mcp.json").exists());
 
     fixture
         .orbit(
@@ -310,10 +310,10 @@ fn shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove() {
         )
         .success();
     assert_eq!(
-        generated_server_args(&fixture.checkout_a.join(".claude.json")),
+        generated_server_args(&fixture.checkout_a.join(".mcp.json")),
         vec!["mcp", "serve", "--workspace", "ws_alpha"]
     );
-    assert!(!fixture.checkout_b.join(".claude.json").exists());
+    assert!(!fixture.checkout_b.join(".mcp.json").exists());
 
     fixture
         .orbit(
@@ -322,7 +322,7 @@ fn shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove() {
         )
         .success();
     assert_eq!(
-        generated_server_args(&fixture.checkout_b.join(".claude.json")),
+        generated_server_args(&fixture.checkout_b.join(".mcp.json")),
         vec!["mcp", "serve", "--workspace", "ws_beta"]
     );
 
@@ -332,8 +332,8 @@ fn shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove() {
             &argv(&["--root", root, "mcp", "remove", "--claude"]),
         )
         .success();
-    assert!(!fixture.checkout_a.join(".claude.json").exists());
-    assert!(fixture.checkout_b.join(".claude.json").exists());
+    assert!(!fixture.checkout_a.join(".mcp.json").exists());
+    assert!(fixture.checkout_b.join(".mcp.json").exists());
 
     fixture
         .orbit(
@@ -341,7 +341,7 @@ fn shared_root_mcp_setup_uses_cwd_checkout_for_init_and_remove() {
             &argv(&["--root", root, "mcp", "remove", "--claude"]),
         )
         .success();
-    assert!(!fixture.checkout_b.join(".claude.json").exists());
+    assert!(!fixture.checkout_b.join(".mcp.json").exists());
 }
 
 #[test]
@@ -371,7 +371,7 @@ fn a_root_without_a_registered_checkout_refuses_instead_of_writing() {
         stderr.contains("does not identify exactly one registered checkout"),
         "unexpected failure message: {stderr}"
     );
-    assert!(!unrelated_root.join(".claude.json").exists());
+    assert!(!unrelated_root.join(".mcp.json").exists());
     fixture.assert_no_client_config_outside_the_checkout();
     assert!(!fixture.claude_config().exists());
 }

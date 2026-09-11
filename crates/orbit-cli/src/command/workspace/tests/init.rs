@@ -1226,7 +1226,7 @@ fn workspace_init_seeds_auto_detected_mcp_configs() {
     // bootstrap path (ORB-10960): every auto-detected client must launch the
     // Orbit server with `mcp serve --operator`, exactly.
     let claude_mcp: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(workspace.path().join(".claude.json")).expect("read claude mcp"),
+        &std::fs::read_to_string(workspace.path().join(".mcp.json")).expect("read claude mcp"),
     )
     .expect("parse claude mcp");
     let workspace_id = registered_workspace_id(home.path());
@@ -1326,7 +1326,7 @@ fn workspace_reinit_with_force_mcp_refreshes_operator_argv_without_duplicating_i
     };
 
     init(false);
-    let claude_path = workspace.path().join(".claude.json");
+    let claude_path = workspace.path().join(".mcp.json");
     let first: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&claude_path).expect("read claude mcp"))
             .expect("parse claude mcp");

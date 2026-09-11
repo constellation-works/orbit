@@ -2059,7 +2059,7 @@ fn workspace_init_mcp_config_reaches_a_governed_tool_over_the_real_transport() {
 
     let read_generated_args = || -> Vec<String> {
         let claude_mcp: Value = serde_json::from_str(
-            &std::fs::read_to_string(workspace.work.join(".claude.json"))
+            &std::fs::read_to_string(workspace.work.join(".mcp.json"))
                 .expect("read generated claude mcp config"),
         )
         .expect("parse generated claude mcp config");
@@ -3768,7 +3768,7 @@ fn generate_agent_mcp_config(workspace: &McpWorkspace) -> Vec<String> {
 
 fn read_generated_claude_args(workspace: &McpWorkspace) -> Vec<String> {
     let claude_mcp: Value = serde_json::from_str(
-        &std::fs::read_to_string(workspace.work.join(".claude.json"))
+        &std::fs::read_to_string(workspace.work.join(".mcp.json"))
             .expect("read generated claude mcp config"),
     )
     .expect("parse generated claude mcp config");
