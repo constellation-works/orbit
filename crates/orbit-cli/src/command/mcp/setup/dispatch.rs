@@ -68,6 +68,7 @@ pub(super) struct ConfigTarget {
     pub(super) mcp_path: PathBuf,
     pub(super) legacy_mcp_path: Option<PathBuf>,
     pub(super) settings_path: Option<PathBuf>,
+    pub(super) scope: ScopeArg,
 }
 
 impl ConfigTarget {
@@ -84,12 +85,14 @@ impl ConfigTarget {
                     mcp_path: home.join(".claude.json"),
                     legacy_mcp_path: Some(home.join(".claude").join(".mcp.json")),
                     settings_path: Some(home.join(".claude").join("settings.json")),
+                    scope,
                 })
             }
             (ScopeArg::Workspace, McpProvider::Claude) => Ok(Self {
                 mcp_path: repo_root.join(".mcp.json"),
                 legacy_mcp_path: Some(repo_root.join(".claude.json")),
                 settings_path: Some(repo_root.join(".claude").join("settings.json")),
+                scope,
             }),
             (ScopeArg::Home, McpProvider::Codex) => {
                 let home = require_home_dir(home_dir)?;
@@ -97,12 +100,14 @@ impl ConfigTarget {
                     mcp_path: home.join(".codex").join("config.toml"),
                     legacy_mcp_path: None,
                     settings_path: None,
+                    scope,
                 })
             }
             (ScopeArg::Workspace, McpProvider::Codex) => Ok(Self {
                 mcp_path: repo_root.join(".codex").join("config.toml"),
                 legacy_mcp_path: None,
                 settings_path: None,
+                scope,
             }),
             (ScopeArg::Home, McpProvider::Gemini) => {
                 let home = require_home_dir(home_dir)?;
@@ -110,12 +115,14 @@ impl ConfigTarget {
                     mcp_path: home.join(".gemini").join("settings.json"),
                     legacy_mcp_path: None,
                     settings_path: None,
+                    scope,
                 })
             }
             (ScopeArg::Workspace, McpProvider::Gemini) => Ok(Self {
                 mcp_path: repo_root.join(".gemini").join("settings.json"),
                 legacy_mcp_path: None,
                 settings_path: None,
+                scope,
             }),
             (ScopeArg::Home, McpProvider::Antigravity) => {
                 let home = require_home_dir(home_dir)?;
@@ -123,12 +130,14 @@ impl ConfigTarget {
                     mcp_path: home.join(".gemini").join("config").join("mcp_config.json"),
                     legacy_mcp_path: None,
                     settings_path: None,
+                    scope,
                 })
             }
             (ScopeArg::Workspace, McpProvider::Antigravity) => Ok(Self {
                 mcp_path: repo_root.join(".agents").join("mcp_config.json"),
                 legacy_mcp_path: None,
                 settings_path: None,
+                scope,
             }),
             (ScopeArg::Home, McpProvider::Grok) => {
                 let home = require_home_dir(home_dir)?;
@@ -136,12 +145,14 @@ impl ConfigTarget {
                     mcp_path: home.join(".grok").join("config.toml"),
                     legacy_mcp_path: None,
                     settings_path: None,
+                    scope,
                 })
             }
             (ScopeArg::Workspace, McpProvider::Grok) => Ok(Self {
                 mcp_path: repo_root.join(".grok").join("config.toml"),
                 legacy_mcp_path: None,
                 settings_path: None,
+                scope,
             }),
             (ScopeArg::Home, McpProvider::Cursor) => {
                 let home = require_home_dir(home_dir)?;
@@ -149,12 +160,14 @@ impl ConfigTarget {
                     mcp_path: home.join(".cursor").join("mcp.json"),
                     legacy_mcp_path: None,
                     settings_path: None,
+                    scope,
                 })
             }
             (ScopeArg::Workspace, McpProvider::Cursor) => Ok(Self {
                 mcp_path: repo_root.join(".cursor").join("mcp.json"),
                 legacy_mcp_path: None,
                 settings_path: None,
+                scope,
             }),
             (ScopeArg::Home, McpProvider::Vscode) => {
                 let home = require_home_dir(home_dir)?;
@@ -162,12 +175,14 @@ impl ConfigTarget {
                     mcp_path: vscode_home_user_dir(home).join("mcp.json"),
                     legacy_mcp_path: None,
                     settings_path: None,
+                    scope,
                 })
             }
             (ScopeArg::Workspace, McpProvider::Vscode) => Ok(Self {
                 mcp_path: repo_root.join(".vscode").join("mcp.json"),
                 legacy_mcp_path: None,
                 settings_path: None,
+                scope,
             }),
             (ScopeArg::Home, McpProvider::Windsurf) => {
                 let home = require_home_dir(home_dir)?;
@@ -178,6 +193,7 @@ impl ConfigTarget {
                         .join("mcp_config.json"),
                     legacy_mcp_path: None,
                     settings_path: None,
+                    scope,
                 })
             }
             (ScopeArg::Workspace, McpProvider::Windsurf) => Ok(Self {
@@ -187,6 +203,7 @@ impl ConfigTarget {
                     .join("mcp_config.json"),
                 legacy_mcp_path: None,
                 settings_path: None,
+                scope,
             }),
         }
     }
