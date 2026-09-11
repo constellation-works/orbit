@@ -408,11 +408,56 @@ impl OrbitRuntime {
             duration_ms,
             TaskReservationReleaseReason::RunTerminal,
         )?;
+        if final_state == JobRunState::Success {
+            self.record_delivered_worktree_cleanup(&run.run_id);
+        }
         self.record_event(OrbitEvent::JobRunCompleted {
             job_id: run.job_id.clone(),
             run_id: run.run_id.clone(),
             state: final_state.to_string(),
         })
+    }
+
+    /// Reap a delivered run only after its terminal state is durable. Cleanup
+    /// is best-effort: a retained report makes a failed Git safety check
+    /// visible to `run show`, while the hourly GC routine remains the backstop
+    /// for an infrastructure error here.
+    fn record_delivered_worktree_cleanup(&self, run_id: &str) {
+        let cleanup = match self.cleanup_delivered_worktree(run_id) {
+            Ok(Some(result)) => serde_json::to_value(result).unwrap_or_else(|error| {
+                json!({
+                    "dry_run": false,
+                    "bytes_reclaimed": 0,
+                    "reports": [],
+                    "error": format!("failed to serialize delivery cleanup report: {error}"),
+                })
+            }),
+            Ok(None) => return,
+            Err(error) => json!({
+                "dry_run": false,
+                "bytes_reclaimed": 0,
+                "reports": [],
+                "error": error.to_string(),
+            }),
+        };
+
+        let Ok(Some(mut state)) = self.read_run_state(run_id) else {
+            tracing::warn!(
+                run_id,
+                "delivery cleanup completed but its report could not read the pipeline state",
+            );
+            return;
+        };
+        if let Some(object) = state.pipeline.as_object_mut() {
+            object.insert("worktree_cleanup".to_string(), cleanup);
+            if let Err(error) = self.write_run_state(run_id, &state) {
+                tracing::warn!(
+                    run_id,
+                    %error,
+                    "delivery cleanup completed but its report could not be persisted",
+                );
+            }
+        }
     }
 
     fn persist_v2_run_state(

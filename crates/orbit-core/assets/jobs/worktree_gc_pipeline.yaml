@@ -8,7 +8,10 @@ spec:
   kind: workflow
   max_active_runs: 1
   default_input:
-    older_than_hours: 24
+    # Delivery reaps successful task worktrees immediately. Keep one hour as
+    # the bounded backstop for a cleanup report that could not be persisted or
+    # an interrupted delivery path; this is no longer the normal lifetime.
+    older_than_hours: 1
   steps:
     - id: reap
       target: activity:worktree_gc

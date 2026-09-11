@@ -207,6 +207,42 @@ its result. It never calls the legacy cross-workspace CLI sweep or consults
 Waiting keeps the wrapper run active for the whole shipment, so routine overlap protection
 covers the child rather than only submission ([Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job)).
 
+### Delivered worktree cleanup
+
+Successful delivery runs remove their own task worktree after the run has been
+durably terminalized. `task_pr_pipeline` does this only after `pr_complete` has
+verified the PR's merged state and completed the task; `task_local_pipeline` and
+`epic_pipeline` use the same boundary after local delivery. The
+`workspace_auto_pipeline` and `task_gate_pipeline` jobs are coordinators: their
+child delivery run owns the worktree and performs the removal, so a drain does
+not need to wait for a separate GC fire.
+
+This boundary delegates to the same `collect_worktrees` classifier used by the
+`worktree_gc_pipeline` job. It therefore requires a terminal run, a settled task
+(`done`, `rejected`, or `archived`), a registered real worktree, and a clean Git
+status before removing the directory and branch. `review`, failed/non-terminal
+runs, unresolved tasks, and dirty trees remain on disk as evidence. The removal
+report is written into the run pipeline state under `worktree_cleanup`, with the
+same path, task id, action, and `bytes_reclaimed` fields as scheduled GC; it is
+visible from `orbit run show` even after the run is terminal.
+
+The earlier unexplained removals were the setup recovery path, not delivery GC:
+`ensure_worktree` removes an owned incomplete checkout during path reuse, and
+`recover_worktree_add_timeout` removes an owned incomplete checkout left by a
+timed-out `git worktree add`. Both use the sanctioned cleanup helper and may
+force removal because setup has proved the checkout incomplete and without
+retained work. That path explains why leftovers such as `0518-c2`, `0544-c5`,
+`0544-c6`, and `0548-c3` could disappear between 06:11 and 06:46 UTC, but it
+never considered a successfully delivered, complete checkout. The six later
+worktrees therefore remained until manual GC: successful delivery released task
+reservations but had no terminal cleanup hook. This change closes that gap while
+leaving setup recovery's evidence-preserving gates unchanged.
+
+The embedded GC job keeps the hourly routine as a backstop, with
+`older_than_hours: 1`. Immediate delivery cleanup is the normal lifetime; the
+one-hour threshold bounds the exceptional lifetime after a cleanup/reporting
+failure without making scheduled GC the delivery path.
+
 ---
 
 ## 2. Discovery and Registration
