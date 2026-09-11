@@ -89,8 +89,10 @@ workspace/task/checkout identity and refusing publication-bound changes until
 the operator resolves them. ORB-11427 updates active constellation-works
 distribution references and adds a pre-cutover checklist; it did not transfer
 credentials, publish a release, mutate a registry, or tag a commit. ORB-11379
-adds a release-gated website publication path. ORB-11354 adds an operator-only
-agent-invocation path, and ORB-11418 closes recursive test-worker spawning.
+added a release-gated website publication path during this survey window; that
+automation is retired, and Daniel now deploys the website manually. ORB-11354
+adds an operator-only agent-invocation path, and ORB-11418 closes recursive
+test-worker spawning.
 
 Evidence:
 
@@ -98,7 +100,7 @@ Evidence:
 - `crates/orbit-registry/src/workspace_registry/`
 - `RELEASING.md:72-117`
 - `docs/runbooks/state-and-backup.md:163-218`
-- `.github/workflows/website.yml`
+- `website/README.md` and `docs/runbooks/website-validation.md`
 
 ## Breaking-change candidates for human confirmation
 

@@ -217,99 +217,29 @@ wait "$PREVIEW_PID" 2>/dev/null || true
 
 ## Production publication and evidence
 
-The supported production path is the repository's `Website` GitHub Actions
-workflow. Pull requests run only the `Check and build` job. Publication is
-release-gated: a `main` push that changes `website/**` or the workflow launches
-the distinct `Publish to Cloudflare Pages` job. A maintainer may also dispatch
-the workflow against `main` to recover from a failed or missed publication.
-Selecting another ref builds it but cannot enter the production job.
-
-The checked-in and public evidence identifies Cloudflare as the intended
-publication boundary, but does not expose the current origin project. Public
-responses from `orbit-cli.com` and its authoritative nameservers are
-Cloudflare. Repository history previously used Wrangler direct upload, and
-`website/wrangler.toml` configures Pages static output. However, every one of
-the 26 public GitHub Deployment records from that workflow ended in failure.
-The former hard-coded project name is not trustworthy:
-`https://orbit-website.pages.dev` served an unrelated social-video site when
-ORB-11379 was investigated. The repaired workflow therefore obtains the exact
-existing project name from the protected `production` environment instead of
-guessing it. This evidence supports the repository mechanism; it does not prove
-who currently owns the external account, which project owns the custom domain,
-or that repository secrets exist. Do not create a project, rotate or invent
-credentials, or edit DNS as part of website publication.
-
-Wrangler's Pages configuration validation still requires a top-level `name`, so
-`website/wrangler.toml` keeps `name = "orbit-website"`. Treat that value as a
-validation placeholder rather than the deployment target: the publish job always
-passes `--project-name` from the protected `CLOUDFLARE_PAGES_PROJECT` variable,
-which overrides the configured name, so the project still comes from the
-environment instead of the repository. Deleting the field to avoid restating an
-untrusted name breaks publication rather than hardening it. ORB-11379 removed it
-in commit `86d48ebd212a9a7d6f2f36ae25312f6e81e11105` (PR #1425), and `main`
-publication then failed Pages configuration validation with `Missing top-level
-field "name" in configuration file` until ORB-11511 restored it.
-
-ORB-11379 recorded the publication gap on 2026-09-06:
-
-- `.github/workflows/website.yml` had only a pull-request build trigger and no
-  upload step.
-- GitHub's newest deployment record was production deployment `4604816061` for
-  `agent-main` revision `ec8545b4de696a5b714fe344c9d2d1bca9d21f01`.
-  Its build step succeeded, its Cloudflare Pages upload step failed, and its
-  workflow/job log is
-  `https://github.com/danieljhkim/orbit/actions/runs/25479096320/job/74759046156`.
-- The separate deploy workflow that created that record was deleted immediately
-  afterward in `fc2ae9d4ef26c92d0e10dc4aff63934d3c007b09`.
-- The live homepage still contained the old `v0.9.2` headline and Architecture
-  navigation. Successful Website checks on newer commits therefore proved
-  buildability, not publication.
-
-The repaired workflow uploads one immutable build artifact and writes
-`deployment.json` into it with the full source revision, source ref, and Actions
-run URL. Wrangler receives the same revision through `--commit-hash`. Production
-deployments are serialized, use only `contents: read` and `deployments: write`,
-and are recorded in both the Actions run and GitHub Deployments. The final step
-checks the unique homepage headline, the delivery-mode setup explorer, the
-install route, and the expected source revision at both the deployment URL and
-`orbit-cli.com`. It also checks the Pages `_headers` artifact during build, then
-checks the deployed custom domain for `Strict-Transport-Security:
-max-age=31536000` on homepage and install-route 200 responses and on a 404
-response. Finally, it checks that `http://orbit-cli.com/` redirects to the
-canonical HTTPS domain.
+Daniel deploys `orbit-cli.com` manually. The repository contains the source,
+static build, and validation procedures, but no GitHub Actions publication path.
+Do not dispatch or recreate a website deployment workflow. Run the local checks
+above, provide the resulting `website/dist/` output to Daniel, and keep hosting,
+Cloudflare account access, and DNS changes outside this repository task.
 
 The static `website/public/_headers` file is the sole repository-owned HSTS
 policy. Its one-year max-age intentionally does not use `includeSubDomains` or
 `preload`; the repository has not established that every subdomain is HTTPS-ready
 and under compatible operational ownership. HTTP redirect behavior belongs to the
-externally managed Cloudflare zone rather than the Pages artifact. Treat a failed
-redirect check as an external-zone configuration issue, not a reason to add a
-second redirect mechanism to the site.
+externally managed Cloudflare zone rather than the Pages artifact. A failed
+redirect check is an external-zone issue, not a reason to add a second redirect
+mechanism to the site.
 
-### Operate and recover
+After Daniel's manual publication, verify the public result independently:
 
-1. Open the `Website` workflow run for the `main` revision. Confirm `Check and
-   build` completed before interpreting `Publish to Cloudflare Pages`.
-2. Follow the failed step and GitHub Deployment links. A green build with a red
-   or absent publication job is not a deployed site.
-3. Before the first repaired publication, an authorized Cloudflare account
-   owner must identify the existing Pages project whose custom domains include
-   `orbit-cli.com`. Set that exact name as the production environment variable
-   `CLOUDFLARE_PAGES_PROJECT`. If authentication fails, the owner must restore
-   `CLOUDFLARE_ACCOUNT_ID` and a `CLOUDFLARE_API_TOKEN` scoped to Pages edit
-   access for that same project. Record the external action; do not replace the
-   project or DNS.
-4. After correcting an external cause, dispatch `Website` from the `main` ref.
-   This rebuilds tracked sources and uploads them; no manual or untracked source
-   upload is part of recovery.
-5. Require the verification step to pass, then independently open
-   `https://orbit-cli.com/`, its delivery-mode explorer, and
-   `https://orbit-cli.com/getting-started/install/`. Fetch
-   `https://orbit-cli.com/deployment.json` and compare `sourceRevision` with the
-   workflow's `github.sha` before declaring publication successful.
-
-For the security document, independently check the canonical endpoint after the
-production workflow succeeds:
+1. Open `https://orbit-cli.com/`, the delivery-mode explorer, and
+   `https://orbit-cli.com/getting-started/install/`; confirm each returns a
+   successful response and the expected rendered content.
+2. Fetch `https://orbit-cli.com/deployment.json` only when Daniel's deployment
+   process intentionally provides that provenance file; compare its revision
+   with the source revision being published.
+3. Check the canonical security document:
 
 ```bash
 curl --fail --show-error --silent --dump-header /tmp/security-txt.headers \
@@ -317,19 +247,10 @@ curl --fail --show-error --silent --dump-header /tmp/security-txt.headers \
 grep -Eiq '^content-type:[[:space:]]*text/plain(?:;|$)' /tmp/security-txt.headers
 ```
 
-Then rerun the security scan. A 404, HTML response, stale `Expires`, or failed
-scan remains an external publication issue until the exact `main` artifact is
-published and verified. The production workflow performs the same status,
-`text/plain`, and body validation against both the deployment URL and the
-custom domain. Do not treat the local `dist/.well-known/security.txt` check as
+Then rerun the security scan. A 404, HTML response, stale `Expires`, failed
+HSTS check, or missing redirect is evidence that Daniel's external publication
+or hosting configuration needs attention. Do not treat the local `dist/` check as
 public deployment evidence.
-
-If the workflow has not yet reached `main`, the exact existing project mapping
-has not been confirmed, or the environment credentials are missing or invalid,
-repository-side validation can still succeed but a real publication is
-externally blocked. Report the precise missing promotion, environment
-ownership, project mapping, or credential repair and never claim that the live
-site was updated.
 
 ## Preferred long-term fix
 

@@ -1,0 +1,57 @@
+name: Website checks
+
+on:
+  pull_request:
+    paths:
+      - "website/**"
+      - ".github/workflows/website-check.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "website/**"
+      - ".github/workflows/website-check.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    name: Check and build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      ASTRO_TELEMETRY_DISABLED: "1"
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe502c # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check website
+        run: npm run check
+
+      - name: Build website
+        run: npm run build
+
+      - name: Validate security.txt
+        run: |
+          npm run validate:security-txt -- public/.well-known/security.txt
+          npm run validate:security-txt -- dist/.well-known/security.txt
+
+      - name: Check transport-security policy
+        run: |
+          set -euo pipefail
+          test -f dist/_headers
+          # ORB-11461 / e2454bcb0: Cloudflare emits the policy with indentation.
+          grep -E '^[[:space:]]*Strict-Transport-Security: max-age=31536000$' dist/_headers
