@@ -56,6 +56,7 @@ impl DuplicateTaskLookup for crate::OrbitRuntime {
 pub(in crate::adapter::engine_host::v2_host) struct DuplicateCandidate {
     exact_tag: String,
     fingerprints: Vec<CoverageFingerprint>,
+    completed_fingerprints: Vec<CoverageFingerprint>,
 }
 
 impl DuplicateCandidate {
@@ -66,7 +67,16 @@ impl DuplicateCandidate {
         Self {
             exact_tag,
             fingerprints,
+            completed_fingerprints: Vec::new(),
         }
+    }
+
+    pub(in crate::adapter::engine_host::v2_host) fn with_completed_fingerprints(
+        mut self,
+        fingerprints: Vec<CoverageFingerprint>,
+    ) -> Self {
+        self.completed_fingerprints = fingerprints;
+        self
     }
 }
 
@@ -144,14 +154,19 @@ where
     let mut open_tasks = lookup
         .list_tasks()?
         .into_iter()
-        .filter(|task| is_open_status(task.status))
+        .filter(|task| is_open_status(task.status) || recently_completed(task))
         .collect::<Vec<_>>();
     open_tasks.sort_by(|left, right| left.id.cmp(&right.id));
 
     for task in open_tasks {
-        let searchable = searchable_task_text(&task);
-        if let Some(fingerprint) = candidate
-            .fingerprints
+        let comments = lookup.get_task_comments(&task.id)?;
+        let searchable = searchable_task_text(&task, &comments);
+        let fingerprints = if is_open_status(task.status) {
+            &candidate.fingerprints
+        } else {
+            &candidate.completed_fingerprints
+        };
+        if let Some(fingerprint) = fingerprints
             .iter()
             .find(|fingerprint| fingerprint_matches(&searchable, fingerprint))
         {
@@ -295,7 +310,7 @@ fn fingerprint_matches(searchable: &str, fingerprint: &CoverageFingerprint) -> b
     })
 }
 
-fn searchable_task_text(task: &Task) -> String {
+fn searchable_task_text(task: &Task, comments: &[TaskComment]) -> String {
     let mut text = String::new();
     for value in std::iter::once(task.title.as_str())
         .chain(std::iter::once(task.description.as_str()))
@@ -303,6 +318,14 @@ fn searchable_task_text(task: &Task) -> String {
         .chain(std::iter::once(task.plan.as_str()))
         .chain(task.tags.iter().map(String::as_str))
         .chain(task.context_files.iter().map(String::as_str))
+        .chain(task.external_refs.iter().flat_map(|reference| {
+            [
+                reference.system.as_str(),
+                reference.id.as_str(),
+                reference.url.as_deref().unwrap_or(""),
+            ]
+        }))
+        .chain(comments.iter().map(|comment| comment.message.as_str()))
     {
         text.push(' ');
         text.push_str(value);
@@ -359,6 +382,11 @@ pub(in crate::adapter::engine_host::v2_host) fn is_open_status(status: TaskStatu
         status,
         TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
     )
+}
+
+fn recently_completed(task: &Task) -> bool {
+    task.status == TaskStatus::Done
+        && task.updated_at >= chrono::Utc::now() - chrono::Duration::days(30)
 }
 
 #[cfg(test)]

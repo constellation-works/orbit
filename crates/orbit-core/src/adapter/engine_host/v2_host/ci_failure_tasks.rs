@@ -256,6 +256,8 @@ where
         ));
     }
     let (complete, mut deferred) = split_deferred_failures(&failures, &run_errors, schema_version);
+    let (complete, already_repaired) = exclude_already_repaired(complete, evidence);
+    let audit = repaired_audit(audit, &already_repaired);
     // A run-scoped retryable error whose run never made it into
     // `current_failures` at all — an in-flight run with an observed failed
     // job but logs collection could not read yet — has no failure row for
@@ -331,6 +333,7 @@ where
             "skipped_over_cap": [],
             "deferred": [],
             "inconclusive": inconclusive,
+            "already_repaired": already_repaired,
             "audit": audit,
             "detail": if inconclusive.is_empty() {
                 "the queries ran and found no current, non-superseded failure"
@@ -538,6 +541,7 @@ where
         "skipped_over_cap": skipped_over_cap,
         "deferred": deferred,
         "inconclusive": inconclusive,
+        "already_repaired": already_repaired,
         "max_tasks": max_tasks,
         "audit": final_audit,
     }))
@@ -754,6 +758,113 @@ fn split_deferred_failures(
     (complete, deferred)
 }
 
+/// A newer green push on the same branch is stronger evidence than an older
+/// red finding. The collector normally moves that red run to
+/// `stale_or_superseded`; retaining this check at filing keeps a replayed or
+/// hand-constructed snapshot from filing a repair after the branch is already
+/// green.
+fn exclude_already_repaired(failures: Vec<Value>, evidence: &Value) -> (Vec<Value>, Vec<Value>) {
+    let mut remaining = Vec::new();
+    let mut repaired = Vec::new();
+    for failure in failures {
+        let Some(green) = newer_green_push_run(&failure, evidence) else {
+            remaining.push(failure);
+            continue;
+        };
+        repaired.push(json!({
+            "run_id": failure.get("run_id"),
+            "workflow": failure.get("workflow"),
+            "head_branch": failure.get("head_branch"),
+            "reason": "newer_push_run_green",
+            "superseded_by": green,
+        }));
+    }
+    let mut repaired_ids = repaired
+        .iter()
+        .filter_map(run_id_key)
+        .collect::<BTreeSet<_>>();
+    for stale in evidence
+        .get("stale_or_superseded")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if repaired_ids.contains(&run_id_key(stale).unwrap_or_default()) {
+            continue;
+        }
+        let Some(green) = newer_green_push_run(stale, evidence) else {
+            continue;
+        };
+        repaired.push(json!({
+            "run_id": stale.get("run_id"),
+            "workflow": stale.get("workflow"),
+            "head_branch": stale.get("head_branch"),
+            "reason": "newer_push_run_green",
+            "superseded_by": green,
+        }));
+        if let Some(run_id) = run_id_key(stale) {
+            repaired_ids.insert(run_id);
+        }
+    }
+    (remaining, repaired)
+}
+
+fn newer_green_push_run<'a>(failure: &Value, evidence: &'a Value) -> Option<&'a Value> {
+    let workflow = value_string(failure, "workflow");
+    let branch = value_string(failure, "head_branch");
+    let failure_order = run_order(failure);
+    let runs = evidence
+        .get("latest_runs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten();
+    runs.filter(|run| {
+        value_string(run, "workflow") == workflow
+            && value_string(run, "head_branch") == branch
+            && value_string(run, "event") == "push"
+            && run_order(run) > failure_order
+            && run_is_completed_success(run)
+    })
+    .max_by_key(|run| run_order(run))
+    .or_else(|| superseding_green_run(failure, evidence))
+}
+
+fn superseding_green_run<'a>(failure: &Value, evidence: &'a Value) -> Option<&'a Value> {
+    let stale = evidence
+        .get("stale_or_superseded")
+        .and_then(Value::as_array)?;
+    stale.iter().find_map(|entry| {
+        if run_id_key(entry) != run_id_key(failure)
+            || value_string(entry, "workflow") != value_string(failure, "workflow")
+            || value_string(entry, "head_branch") != value_string(failure, "head_branch")
+        {
+            return None;
+        }
+        let superseded_by = entry.get("superseded_by")?;
+        (value_string(superseded_by, "event") == "push" && run_is_completed_success(superseded_by))
+            .then_some(superseded_by)
+    })
+}
+
+fn run_is_completed_success(run: &Value) -> bool {
+    run.get("status").and_then(Value::as_str) == Some("completed")
+        && matches!(
+            run.get("conclusion").and_then(Value::as_str),
+            Some("success" | "neutral" | "skipped")
+        )
+}
+
+fn repaired_audit(mut audit: Value, already_repaired: &[Value]) -> Value {
+    audit["already_repaired_count"] = json!(already_repaired.len());
+    audit["already_repaired_run_ids"] = json!(
+        already_repaired
+            .iter()
+            .filter_map(|entry| entry.get("run_id").cloned())
+            .collect::<Vec<_>>()
+    );
+    audit
+}
+
 /// Old snapshots did not bind the run log or its checkout scan to the named
 /// job. They remain readable audit evidence, but must be recollected before
 /// filing; inferring attribution from job order would repeat the original bug.
@@ -933,6 +1044,8 @@ fn audit_summary(evidence: &Value, failures: &[Value]) -> Value {
         "deferred_failures": 0,
         "deferred_failure_run_ids": [],
         "retryable_errors": 0,
+        "already_repaired_count": 0,
+        "already_repaired_run_ids": [],
     })
 }
 
@@ -1001,6 +1114,7 @@ struct FailureCluster {
     cluster_key: String,
     workflow: String,
     job: String,
+    jobs: BTreeSet<String>,
     step: String,
     tested_commit: String,
     signature: String,
@@ -1076,16 +1190,16 @@ impl FailureCluster {
     fn duplicate_candidate(&self) -> DuplicateCandidate {
         let exact_tag = format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", self.failure_key);
         if let Some(cause) = &self.compiler_cause {
-            return DuplicateCandidate::new(
-                exact_tag,
-                vec![CoverageFingerprint::new(
-                    "ci_compiler_cause",
-                    vec![
-                        CoverageAnchor::new("compiler_cause", digest(&[cause])),
-                        CoverageAnchor::new("tested_commit", &self.tested_commit),
-                    ],
-                )],
-            );
+            let mut fingerprints = vec![CoverageFingerprint::new(
+                "ci_compiler_cause",
+                vec![
+                    CoverageAnchor::new("compiler_cause", digest(&[cause])),
+                    CoverageAnchor::new("tested_commit", &self.tested_commit),
+                ],
+            )];
+            fingerprints.extend(self.provenance_fingerprints());
+            return DuplicateCandidate::new(exact_tag, fingerprints)
+                .with_completed_fingerprints(self.provenance_fingerprints());
         }
         let mut fingerprints = if self.signature_is_step_fallback {
             // A step-name fallback contains no diagnostic. It is sufficient
@@ -1126,7 +1240,44 @@ impl FailureCluster {
                 fingerprints.push(fingerprint);
             }
         }
+        fingerprints.extend(self.provenance_fingerprints());
         DuplicateCandidate::new(exact_tag, fingerprints)
+            .with_completed_fingerprints(self.provenance_fingerprints())
+    }
+
+    fn provenance_fingerprints(&self) -> Vec<CoverageFingerprint> {
+        let mut fingerprints = Vec::new();
+        let mut seen = BTreeSet::new();
+        for run in &self.runs {
+            let run_id = value_string(run, "run_id");
+            if !run_id.is_empty() && seen.insert(("run_id", run_id.clone())) {
+                fingerprints.push(CoverageFingerprint::new(
+                    "ci_failure_run_id",
+                    vec![CoverageAnchor::new("run_id", run_id)],
+                ));
+            }
+            for sha in [
+                value_string(run, "event_reported_head_sha"),
+                value_string(run, "current_ref_head_sha"),
+                tested_commit(run),
+            ] {
+                if !sha.is_empty() && seen.insert(("head_sha", sha.clone())) {
+                    fingerprints.push(CoverageFingerprint::new(
+                        "ci_failure_head_sha",
+                        vec![CoverageAnchor::new("head_sha", sha)],
+                    ));
+                }
+            }
+            for name in failure_test_names(run) {
+                if seen.insert(("test_name", name.clone())) {
+                    fingerprints.push(CoverageFingerprint::new(
+                        "ci_failure_test_name",
+                        vec![CoverageAnchor::new("test_name", name)],
+                    ));
+                }
+            }
+        }
+        fingerprints
     }
 
     fn run_urls(&self) -> Vec<String> {
@@ -1152,6 +1303,7 @@ impl FailureCluster {
             "workflow": self.workflow,
             "job": self.job,
             "step": self.step,
+            "jobs": self.jobs,
             "tested_commit": self.tested_commit,
             "sources": self.runs.iter().map(|run| json!({
                 "run_id": run["run_id"], "job_id": run["job_id"],
@@ -1227,6 +1379,18 @@ impl FailureCluster {
         out.push_str("## Failure\n\n");
         out.push_str(&format!("- Workflow: `{}`\n", display(&self.workflow)));
         out.push_str(&format!("- Failing job: `{}`\n", display(&self.job)));
+        if self.jobs.len() > 1 {
+            let additional = self
+                .jobs
+                .iter()
+                .filter(|job| *job != &self.job)
+                .map(|job| format!("`{}`", display(job)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "- Other failing jobs in this test cluster: {additional}\n"
+            ));
+        }
         out.push_str(&format!("- Failing step: `{}`\n", display(&self.step)));
         out.push_str(&format!(
             "- Commit the runner actually checked out: `{}`\n",
@@ -1531,6 +1695,13 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| value_string(failure, "log_excerpt"));
         let signature = error_signature(&log_excerpt, &step);
+        let test_names = failure_test_names(failure);
+        let test_identity = test_names.join("\u{1f}");
+        let grouping_identity = if test_identity.is_empty() {
+            format!("signature:{}", signature.text)
+        } else {
+            format!("test:{test_identity}")
+        };
         let tested_commit = tested_commit(failure);
 
         let regions = valid_failure_regions(&failure["diagnostic_unit"]);
@@ -1551,7 +1722,7 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         let cluster_key = if compiler_cause.is_some() {
             digest(&[&failure_key, &tested_commit])
         } else {
-            digest(&[&workflow, &job, &step, &signature.text, &tested_commit])
+            digest(&[&workflow, &step, &grouping_identity, &tested_commit])
         };
 
         let cluster = grouped.entry(cluster_key.clone()).or_insert_with(|| {
@@ -1560,7 +1731,8 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
                 failure_key,
                 cluster_key: cluster_key.clone(),
                 workflow,
-                job,
+                job: job.clone(),
+                jobs: BTreeSet::new(),
                 step,
                 tested_commit,
                 signature: signature.text,
@@ -1584,6 +1756,9 @@ fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
                 runs: Vec::new(),
             }
         });
+        if !job.is_empty() {
+            cluster.jobs.insert(job);
+        }
         if let Some(key) = legacy_key {
             cluster.legacy_keys.insert(key);
         }
@@ -1624,6 +1799,92 @@ fn tested_commit(failure: &Value) -> String {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .unwrap_or_default()
+}
+
+/// Extract stable test identities from the diagnostic or an explicit
+/// collector field. These are intentionally separate from the normalized
+/// error signature: a manual task may name the test without copying the CI
+/// wrapper labels or the exact diagnostic wording.
+fn failure_test_names(failure: &Value) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    for key in ["test_name", "failing_test", "failed_test"] {
+        if let Some(name) = failure.get(key).and_then(Value::as_str)
+            && !name.trim().is_empty()
+        {
+            names.insert(name.trim().to_string());
+        }
+    }
+    for key in ["test_names", "failing_tests", "failed_tests"] {
+        if let Some(values) = failure.get(key).and_then(Value::as_array) {
+            names.extend(
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(ToOwned::to_owned),
+            );
+        }
+    }
+
+    let log = {
+        let excerpt = value_string(failure, "log_excerpt");
+        if excerpt.is_empty() {
+            value_string(&failure["diagnostic_unit"], "text")
+        } else {
+            excerpt
+        }
+    };
+    let mut after_failures_header = false;
+    for line in log.lines() {
+        let payload = signature_payload(line);
+        let line = payload.trim().to_string();
+        if line == "failures:" || line == "errors:" {
+            after_failures_header = true;
+            continue;
+        }
+        if is_libtest_stdout_header(&line) || line.starts_with("test result:") {
+            after_failures_header = false;
+        }
+        if let Some(rest) = line.strip_prefix("test ")
+            && let Some((name, suffix)) = rest.split_once(" ... ")
+            && matches!(suffix.split_whitespace().next(), Some("failed"))
+            && !name.trim().is_empty()
+        {
+            names.insert(name.trim().to_string());
+        }
+        if let Some(rest) = line.strip_prefix("thread '")
+            && let Some((name, suffix)) = rest.split_once("' panicked")
+            && !name.trim().is_empty()
+            && !suffix.trim().is_empty()
+        {
+            names.insert(name.trim().to_string());
+        }
+        if let Some(rest) = line.strip_prefix("thread \"")
+            && let Some((name, suffix)) = rest.split_once("\" panicked")
+            && !name.trim().is_empty()
+            && !suffix.trim().is_empty()
+        {
+            names.insert(name.trim().to_string());
+        }
+        if let Some(rest) = line.strip_prefix("fail [")
+            && let Some((_, name)) = rest.split_once(']')
+            && !name.trim().is_empty()
+        {
+            names.insert(name.trim().to_string());
+        }
+        if after_failures_header
+            && (payload.starts_with(' ') || payload.starts_with('\t'))
+            && !line.contains(' ')
+            && !line.starts_with("----")
+            && !line.starts_with("thread")
+            && !line.starts_with("error")
+            && !line.starts_with("assertion")
+        {
+            names.insert(line.trim().to_string());
+        }
+    }
+    names.into_iter().collect()
 }
 
 /// Generated descriptions shipped these exact provenance labels. This is a
@@ -2517,6 +2778,13 @@ fn value_string(value: &Value, key: &str) -> String {
         Some(Value::Number(number)) => number.to_string(),
         _ => String::new(),
     }
+}
+
+fn run_order(run: &Value) -> (String, u64) {
+    (
+        value_string(run, "created_at"),
+        run.get("run_id").and_then(Value::as_u64).unwrap_or(0),
+    )
 }
 
 fn display(value: &str) -> &str {

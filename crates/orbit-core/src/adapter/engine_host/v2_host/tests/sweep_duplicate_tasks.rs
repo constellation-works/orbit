@@ -197,6 +197,115 @@ fn ci_reports_an_untagged_manual_task_with_bounded_match_evidence() {
 }
 
 #[test]
+fn ci_run_reference_dedupes_open_and_recently_completed_manual_tasks() {
+    for status in [TaskStatus::InProgress, TaskStatus::Done] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let task_id = seed_manual_task(
+            &runtime,
+            "Investigate the failing CI test",
+            "The incident is tracked by GitHub Actions run 10; preserve its evidence.",
+            status,
+        );
+
+        let output = file_ci(&runtime, ci_evidence());
+
+        assert_eq!(output["filed_count"], json!(0), "{output}");
+        assert_eq!(output["skipped_existing"][0]["task_id"], json!(task_id));
+        assert_eq!(
+            output["skipped_existing"][0]["match_evidence"]["fingerprint"],
+            json!("ci_failure_run_id")
+        );
+    }
+}
+
+#[test]
+fn ci_run_reference_in_a_manual_comment_dedupes_without_sweep_metadata() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let task_id = seed_manual_task(
+        &runtime,
+        "Investigate the CI regression",
+        "Follow up on the reported failure after the incident review.",
+        TaskStatus::InProgress,
+    );
+    runtime
+        .update_task(
+            &task_id,
+            TaskUpdateParams {
+                comment: Some("The owner is tracking Actions run 10.".to_string()),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("add manual ownership comment");
+
+    let output = file_ci(&runtime, ci_evidence());
+
+    assert_eq!(output["filed_count"], json!(0), "{output}");
+    assert_eq!(output["skipped_existing"][0]["task_id"], json!(task_id));
+}
+
+#[test]
+fn failures_from_two_jobs_for_one_test_form_one_repair_task() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let log = "ci\tjob\t2026-08-30T01:00:00Z test init_report::requested_mcp_records_none_detected_when_no_providers_exist ... FAILED\n";
+    let first = failure(10, "CI", "Linux", "Run tests", log, CHECKOUT);
+    let mut second = failure(
+        10,
+        "CI",
+        "macOS",
+        "Run tests",
+        &format!("{log}assertion failed: platform-specific output\n"),
+        CHECKOUT,
+    );
+    second["job_id"] = json!(9910);
+    second["log_job_id"] = json!(9910);
+    second["checkout_identity"]["provenance"]["job_id"] = json!(9910);
+    second["failed_jobs"][0]["job_id"] = json!(9910);
+    second["failed_jobs"][0]["url"] =
+        json!("https://github.com/acme/orbit/actions/runs/10/job/9910");
+
+    let output = file_ci(&runtime, ci_snapshot(vec![first, second]));
+
+    assert_eq!(output["filed_count"], json!(1), "{output}");
+    let task = runtime
+        .get_task(output["filed"][0]["task_id"].as_str().expect("task id"))
+        .expect("filed task");
+    assert!(task.description.contains("Linux"), "{}", task.description);
+    assert!(task.description.contains("macOS"), "{}", task.description);
+    assert_eq!(output["filed"][0]["jobs"], json!(["Linux", "macOS"]));
+}
+
+#[test]
+fn newer_green_push_run_marks_an_older_red_run_already_repaired() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let old = failure(10, "CI", "Linux", "Run tests", CI_LOG, CHECKOUT);
+    let mut green = failure(11, "CI", "Linux", "Run tests", "", CHECKOUT);
+    green["created_at"] = json!("2026-08-30T02:00:00Z");
+    green["conclusion"] = json!("success");
+    green["failed_jobs"] = json!([]);
+
+    let mut evidence = ci_snapshot(vec![old.clone()]);
+    evidence["latest_runs"] = json!([green]);
+
+    let output = file_ci(&runtime, evidence.clone());
+
+    assert_eq!(output["filed_count"], json!(0), "{output}");
+    assert_eq!(output["already_repaired"].as_array().map(Vec::len), Some(1));
+    assert_eq!(output["already_repaired"][0]["run_id"], json!(10));
+    assert_eq!(output["audit"]["already_repaired_run_ids"], json!([10]));
+    assert!(runtime.list_tasks().expect("list tasks").is_empty());
+
+    let mut stale_evidence = ci_snapshot(Vec::new());
+    stale_evidence["latest_runs"] = json!([evidence["latest_runs"][0].clone()]);
+    stale_evidence["stale_or_superseded"] = json!([old]);
+    let stale_output = file_ci(&runtime, stale_evidence);
+    assert_eq!(stale_output["filed_count"], json!(0), "{stale_output}");
+    assert_eq!(
+        stale_output["audit"]["already_repaired_run_ids"],
+        json!([10])
+    );
+}
+
+#[test]
 fn ci_does_not_suppress_a_distinct_error_signature() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     seed_manual_ci_task(&runtime, "error: cannot find type Widget in this scope");
@@ -600,10 +709,14 @@ fn shared_workflow_generic_npx_or_same_file_do_not_suppress_unrelated_failures()
 #[test]
 fn a_done_manual_repair_does_not_hide_a_later_recurrence() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let prior_incident = orb_11511_manual_brief().replace(
+        "a93caa13890764380e184d996fa709b1bcbe278c",
+        "4444444444444444444444444444444444444444",
+    );
     seed_manual_task(
         &runtime,
         "Fix website Pages deployment failing on missing Wrangler project name",
-        orb_11511_manual_brief(),
+        &prior_incident,
         TaskStatus::Done,
     );
 
