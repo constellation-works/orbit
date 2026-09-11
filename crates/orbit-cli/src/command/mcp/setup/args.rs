@@ -214,7 +214,12 @@ impl InitArgs {
             env_home_dir(),
             self.scope,
         )?;
-        print_action_summary(McpAction::Init(launch), &providers);
+        print_action_summary(
+            McpAction::Init(launch),
+            &providers,
+            &layout.repo_root,
+            layout.workspace_id.as_deref(),
+        );
         Ok(CommandOutput::Silent)
     }
 }
@@ -249,7 +254,12 @@ impl RemoveArgs {
             env_home_dir(),
             self.scope,
         )?;
-        print_action_summary(action, &providers);
+        print_action_summary(
+            action,
+            &providers,
+            &layout.repo_root,
+            layout.workspace_id.as_deref(),
+        );
         Ok(CommandOutput::Silent)
     }
 }

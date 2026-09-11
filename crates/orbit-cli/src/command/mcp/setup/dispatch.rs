@@ -291,10 +291,32 @@ pub(super) fn auto_detected_providers(
     providers
 }
 
-pub(super) fn print_action_summary(action: McpAction<'_>, providers: &[McpProvider]) {
+/// Print which providers were touched and, crucially, where — resolution now
+/// goes through the workspace registry (ORB-12121) rather than always
+/// matching cwd, so the write can land in a linked worktree's primary
+/// checkout or in a `--root`-selected checkout the operator isn't standing
+/// in. Naming the path (and, when known, the bound `ws_*` id) turns that
+/// into an audit line instead of a silent no-op.
+pub(super) fn print_action_summary(
+    action: McpAction<'_>,
+    providers: &[McpProvider],
+    repo_root: &Path,
+    workspace_id: Option<&str>,
+) {
+    println!(
+        "{}",
+        format_action_summary(action, providers, repo_root, workspace_id)
+    );
+}
+
+pub(super) fn format_action_summary(
+    action: McpAction<'_>,
+    providers: &[McpProvider],
+    repo_root: &Path,
+    workspace_id: Option<&str>,
+) -> String {
     if providers.is_empty() {
-        println!("mcp {}: no providers selected", action.label());
-        return;
+        return format!("mcp {}: no providers selected", action.label());
     }
 
     let labels = providers
@@ -302,5 +324,19 @@ pub(super) fn print_action_summary(action: McpAction<'_>, providers: &[McpProvid
         .map(|provider| provider.label())
         .collect::<Vec<_>>()
         .join(", ");
-    println!("mcp {}: {}", action.label(), labels);
+    match workspace_id {
+        Some(id) => format!(
+            "mcp {}: {} -> {} ({})",
+            action.label(),
+            labels,
+            repo_root.display(),
+            id
+        ),
+        None => format!(
+            "mcp {}: {} -> {}",
+            action.label(),
+            labels,
+            repo_root.display()
+        ),
+    }
 }
