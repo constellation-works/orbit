@@ -351,3 +351,63 @@ fn task_add_preserves_auto_task_title_prefix_behavior() {
         assert_eq!(task.title, "[auto-task] Scheduled work");
     }
 }
+
+#[test]
+fn task_add_validates_context_files_rejecting_missing_selectors() {
+    let (_root, runtime) = test_runtime();
+
+    let error = runtime
+        .add_task(TaskAddParams {
+            title: "Missing context".to_string(),
+            context_files: vec!["file:does/not/exist.rs".to_string()],
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect_err("task add must reject missing file selector");
+
+    match error {
+        OrbitError::InvalidInput(msg) => {
+            assert!(
+                msg.contains("file:does/not/exist.rs"),
+                "error must name missing selector: {msg}"
+            );
+        }
+        other => panic!("expected InvalidInput, got {other:?}"),
+    }
+
+    let tasks = runtime.list_tasks().expect("list tasks");
+    assert!(
+        tasks.is_empty(),
+        "no task should be created on invalid context"
+    );
+}
+
+#[test]
+fn task_add_accepts_valid_context_selectors() {
+    let (root, runtime) = test_runtime();
+    let repo_dir = root.path().join("repo");
+    std::fs::create_dir_all(repo_dir.join("src")).expect("create src");
+    std::fs::write(repo_dir.join("src/lib.rs"), b"pub fn run() {}\n").expect("write lib.rs");
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Valid context".to_string(),
+            context_files: vec![
+                "file:src/lib.rs".to_string(),
+                "dir:src".to_string(),
+                "symbol:src/lib.rs#run:function".to_string(),
+            ],
+            workspace_path: Some(".".to_string()),
+            ..Default::default()
+        })
+        .expect("task add with valid selectors succeeds");
+
+    assert_eq!(
+        task.context_files,
+        vec![
+            "file:src/lib.rs".to_string(),
+            "dir:src".to_string(),
+            "symbol:src/lib.rs#run:function".to_string(),
+        ]
+    );
+}

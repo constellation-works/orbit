@@ -4,6 +4,7 @@ use orbit_common::fs::selector::{
     anchor_path, canonical_selector_in_workspace, exists_in_workspace,
 };
 use orbit_types::task::{TaskHistoryEntry, TaskType};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub(super) fn normalize_workspace_path(
@@ -82,13 +83,72 @@ pub(crate) fn normalize_context_files_for_write(
     candidates: Vec<String>,
     workspace_root: &Path,
 ) -> Result<Vec<String>, OrbitError> {
-    candidates
-        .into_iter()
-        .map(|entry| {
-            canonical_selector_in_workspace(entry.as_str(), workspace_root)
-                .map_err(|error| OrbitError::InvalidInput(error.to_string()))
-        })
-        .collect()
+    let canonical_workspace = workspace_root.canonicalize().map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "failed to resolve workspace root '{}': {error}",
+            workspace_root.display()
+        ))
+    })?;
+
+    let mut seen = BTreeSet::new();
+    let mut normalized = Vec::with_capacity(candidates.len());
+
+    for entry in candidates {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "selector input must not be empty".to_string(),
+            ));
+        }
+
+        if trimmed.starts_with("module:") || trimmed.starts_with("command:") {
+            return Err(OrbitError::InvalidInput(format!(
+                "selector `{entry}` must use file:, dir:, or symbol:"
+            )));
+        }
+
+        let canonical =
+            canonical_selector_in_workspace(trimmed, &canonical_workspace).map_err(|error| {
+                OrbitError::InvalidInput(format!("selector `{entry}` is invalid: {error}"))
+            })?;
+
+        if canonical.starts_with("module:") || canonical.starts_with("command:") {
+            return Err(OrbitError::InvalidInput(format!(
+                "selector `{entry}` must use file:, dir:, or symbol:"
+            )));
+        }
+
+        if !exists_in_workspace(&canonical, &canonical_workspace) {
+            return Err(OrbitError::InvalidInput(format!(
+                "selector `{entry}` does not resolve to an existing in-workspace target"
+            )));
+        }
+
+        let anchor = anchor_path(&canonical).map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "selector `{entry}` has no filesystem anchor: {error}"
+            ))
+        })?;
+
+        let resolved = canonical_workspace.join(anchor);
+        let correct_kind = if canonical.starts_with("dir:") {
+            resolved.is_dir()
+        } else {
+            resolved.is_file()
+        };
+
+        if !correct_kind {
+            return Err(OrbitError::InvalidInput(format!(
+                "selector `{entry}` does not match the target's file/directory kind"
+            )));
+        }
+
+        if seen.insert(canonical.clone()) {
+            normalized.push(canonical);
+        }
+    }
+
+    Ok(normalized)
 }
 
 pub(crate) use crate::runtime::task::canonicalize_context_files_for_read;

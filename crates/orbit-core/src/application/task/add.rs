@@ -1,5 +1,4 @@
 use orbit_common::OrbitError;
-use orbit_common::fs::task_io::prune_missing_context_files;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
 use orbit_types::record::OrbitEvent;
@@ -8,14 +7,12 @@ use orbit_types::task::{
     normalize_task_tags,
 };
 
-use super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
 
 use super::helpers::{authored_role_value, build_task_comments, effective_actor_label};
 use super::params::TaskAddParams;
 use super::paths::{
-    context_files_pruned_history_entry, context_workspace_root, normalize_context_files_for_write,
-    normalize_workspace_path,
+    context_workspace_root, normalize_context_files_for_write, normalize_workspace_path,
 };
 
 const AUTO_TASK_TITLE_PREFIX: &str = "[auto-task] ";
@@ -100,11 +97,10 @@ impl OrbitRuntime {
             )));
         }
 
-        let prune_root = context_workspace_root(&self.paths().repo_root, workspace_path.as_deref());
-        let normalized_context_files =
-            normalize_context_files_for_write(params.context_files.clone(), &prune_root)?;
-        let (kept_context_files, dropped_context_files) =
-            prune_missing_context_files(&prune_root, normalized_context_files);
+        let context_root =
+            context_workspace_root(&self.paths().repo_root, workspace_path.as_deref());
+        let context_files =
+            normalize_context_files_for_write(params.context_files.clone(), &context_root)?;
 
         let task = self.with_mutation(|| {
             let task = self.stores().task_records().create_with_key(
@@ -120,7 +116,7 @@ impl OrbitRuntime {
                     required_tools: normalize_required_tools(params.required_tools.clone()),
                     plan: params.plan.clone(),
                     execution_summary: String::new(),
-                    context_files: kept_context_files.clone(),
+                    context_files,
                     workspace_path: workspace_path.clone(),
                     repo_root: None,
                     created_by: Some(create_label.clone()),
@@ -145,22 +141,6 @@ impl OrbitRuntime {
                 },
             ))
         })?;
-
-        let task = if dropped_context_files.is_empty() {
-            task
-        } else {
-            self.stores().task_records().update(
-                &task.id,
-                TaskRecordUpdateParams {
-                    actor: create_label.clone(),
-                    append_history: vec![context_files_pruned_history_entry(
-                        &create_label,
-                        &dropped_context_files,
-                    )],
-                    ..Default::default()
-                },
-            )?
-        };
 
         Ok(task)
     }
