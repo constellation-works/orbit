@@ -11,6 +11,93 @@ use serde_json::Value;
 use tempfile::tempdir;
 
 #[test]
+fn workspace_remove_deregisters_deleted_checkout_by_name_id_and_path() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let survivor_repo = temp.path().join("survivor");
+    let deleted_by_name = temp.path().join("deleted-by-name");
+    let deleted_by_id = temp.path().join("deleted-by-id");
+    let deleted_by_path = temp.path().join("deleted-by-path");
+    fs::create_dir_all(&home).expect("home");
+
+    for repo in [
+        &survivor_repo,
+        &deleted_by_name,
+        &deleted_by_id,
+        &deleted_by_path,
+    ] {
+        init_git_repo(repo);
+    }
+
+    run_orbit(
+        &survivor_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--host-name",
+            "remove-host",
+            "--task-prefix",
+            "REM",
+        ],
+    )
+    .success();
+    run_orbit(
+        &survivor_repo,
+        &home,
+        &["workspace", "init", "--name", "survivor"],
+    )
+    .success();
+
+    for (repo, name) in [
+        (&deleted_by_name, "deleted-by-name"),
+        (&deleted_by_id, "deleted-by-id"),
+        (&deleted_by_path, "deleted-by-path"),
+    ] {
+        run_orbit(repo, &home, &["workspace", "init", "--name", name]).success();
+    }
+
+    fs::remove_dir_all(&deleted_by_name).expect("delete name-selected checkout");
+    fs::remove_dir_all(&deleted_by_id).expect("delete id-selected checkout");
+    fs::remove_dir_all(&deleted_by_path).expect("delete path-selected checkout");
+
+    run_orbit_as_operator(
+        &survivor_repo,
+        &home,
+        &["workspace", "remove", "deleted-by-name"],
+    )
+    .success();
+    run_orbit_as_operator(
+        &survivor_repo,
+        &home,
+        &["workspace", "remove", "ws_deleted-by-id"],
+    )
+    .success();
+    run_orbit_as_operator(
+        &survivor_repo,
+        &home,
+        &[
+            "workspace",
+            "remove",
+            deleted_by_path.to_str().expect("deleted path is utf8"),
+        ],
+    )
+    .success();
+
+    let registry: Value = serde_json::from_slice(
+        &fs::read(home.join(".orbit/workspaces.json")).expect("read workspace registry"),
+    )
+    .expect("parse workspace registry");
+    let workspace_names = registry["workspaces"]
+        .as_array()
+        .expect("workspace array")
+        .iter()
+        .filter_map(|workspace| workspace["name"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(workspace_names, vec!["survivor"]);
+}
+
+#[test]
 fn global_workspace_flag_selects_by_name_and_id_from_a_foreign_checkout() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -613,7 +700,11 @@ fn checkout_path_and_cwd_resolve_an_id_that_collides_with_another_workspace_name
         ["workspace", "remove", "ws_alpha"].as_slice(),
         ["workspace", "role", "ws_alpha", "owner"].as_slice(),
     ] {
-        let assert = run_orbit(&alpha_repo, &home, args).failure();
+        let assert = if args[1] == "remove" {
+            run_orbit_as_operator(&alpha_repo, &home, args).failure()
+        } else {
+            run_orbit(&alpha_repo, &home, args).failure()
+        };
         let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
         let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
         let combined = format!("{stdout}{stderr}");
@@ -1052,6 +1143,20 @@ fn run_orbit(cwd: &Path, home: &Path, args: &[&str]) -> assert_cmd::assert::Asse
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
+        .args(args);
+    command.assert()
+}
+
+fn run_orbit_as_operator(cwd: &Path, home: &Path, args: &[&str]) -> assert_cmd::assert::Assert {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("ORBIT_OPERATOR", "1")
         .args(args);
     command.assert()
 }
