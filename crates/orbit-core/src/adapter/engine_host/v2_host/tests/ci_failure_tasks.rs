@@ -666,7 +666,7 @@ fn a_second_sweep_over_a_still_red_run_does_not_file_a_second_task() {
 #[test]
 fn a_closed_task_does_not_suppress_a_recurrence() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
-    let log = "ci\tbuild\t2026-08-30T01:00:00Z error: expected 3 arguments, found 2\n";
+    let log = "ci\tbuild\t2026-08-30T01:00:00Z test suite::probe_case ... FAILED\nci\tbuild\t2026-08-30T01:00:01Z error: assertion failed: left == right\n";
     let evidence = snapshot(vec![failure(
         10,
         "ci",
@@ -699,6 +699,26 @@ fn a_closed_task_does_not_suppress_a_recurrence() {
             },
         )
         .expect("close the first task");
+
+    let same_run = file(&runtime, json!({"ci_evidence": evidence.clone()}));
+    assert_eq!(same_run["filed_count"], json!(0));
+    assert_eq!(
+        same_run["skipped_existing"][0]["match_evidence"]["fingerprint"],
+        json!("ci_failure_run_id")
+    );
+
+    let mut same_commit = failure(12, "ci", "build", "cargo build", log, CHECKOUT);
+    same_commit["event_reported_head_sha"] = json!(NEXT_HEAD);
+    same_commit["current_ref_head_sha"] = json!(NEXT_HEAD);
+    let same_commit = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![same_commit])}),
+    );
+    assert_eq!(same_commit["filed_count"], json!(0));
+    assert_eq!(
+        same_commit["skipped_existing"][0]["match_evidence"]["fingerprint"],
+        json!("ci_failure_head_sha")
+    );
 
     let mut second_failure = failure(11, "ci", "build", "cargo build", log, NEXT_HEAD);
     second_failure["event_reported_head_sha"] = json!(NEXT_HEAD);

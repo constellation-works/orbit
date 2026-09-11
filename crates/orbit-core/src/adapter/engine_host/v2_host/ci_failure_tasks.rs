@@ -1199,7 +1199,7 @@ impl FailureCluster {
             )];
             fingerprints.extend(self.provenance_fingerprints());
             return DuplicateCandidate::new(exact_tag, fingerprints)
-                .with_completed_fingerprints(self.provenance_fingerprints());
+                .with_completed_fingerprints(self.completed_provenance_fingerprints());
         }
         let mut fingerprints = if self.signature_is_step_fallback {
             // A step-name fallback contains no diagnostic. It is sufficient
@@ -1242,10 +1242,21 @@ impl FailureCluster {
         }
         fingerprints.extend(self.provenance_fingerprints());
         DuplicateCandidate::new(exact_tag, fingerprints)
-            .with_completed_fingerprints(self.provenance_fingerprints())
+            .with_completed_fingerprints(self.completed_provenance_fingerprints())
     }
 
     fn provenance_fingerprints(&self) -> Vec<CoverageFingerprint> {
+        self.provenance_fingerprints_with_test_names(true)
+    }
+
+    fn completed_provenance_fingerprints(&self) -> Vec<CoverageFingerprint> {
+        self.provenance_fingerprints_with_test_names(false)
+    }
+
+    fn provenance_fingerprints_with_test_names(
+        &self,
+        include_test_names: bool,
+    ) -> Vec<CoverageFingerprint> {
         let mut fingerprints = Vec::new();
         let mut seen = BTreeSet::new();
         for run in &self.runs {
@@ -1268,12 +1279,14 @@ impl FailureCluster {
                     ));
                 }
             }
-            for name in failure_test_names(run) {
-                if seen.insert(("test_name", name.clone())) {
-                    fingerprints.push(CoverageFingerprint::new(
-                        "ci_failure_test_name",
-                        vec![CoverageAnchor::new("test_name", name)],
-                    ));
+            if include_test_names {
+                for name in failure_test_names(run) {
+                    if seen.insert(("test_name", name.clone())) {
+                        fingerprints.push(CoverageFingerprint::new(
+                            "ci_failure_test_name",
+                            vec![CoverageAnchor::new("test_name", name)],
+                        ));
+                    }
                 }
             }
         }
