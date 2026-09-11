@@ -14,7 +14,6 @@ fn task_context_for_agent_input_embeds_canonical_task_with_input_overrides() {
             description: "Task description for agent context.".to_string(),
             acceptance_criteria: vec!["Agent can recover the task id.".to_string()],
             plan: "Read the task and implement it.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -103,7 +102,6 @@ fn task_context_for_agent_input_marks_write_gated_statuses_terminal() {
         .add_task(TaskAddParams {
             title: "Already finished by a prior attempt".to_string(),
             description: "Task description for agent context.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -137,7 +135,6 @@ fn task_context_for_agent_input_has_empty_comments_when_none_posted() {
         .add_task(TaskAddParams {
             title: "No comments yet".to_string(),
             description: "Task description for agent context.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -163,7 +160,6 @@ fn task_context_for_agent_input_includes_ordered_comments_with_author_and_timest
         .add_task(TaskAddParams {
             title: "Suggested direction gets superseded".to_string(),
             description: "## Suggested direction\n\nDo the naive thing.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -229,7 +225,6 @@ fn task_context_for_agent_input_truncates_oldest_comments_over_the_count_cap() {
         .add_task(TaskAddParams {
             title: "Long comment history".to_string(),
             description: "Task description for agent context.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");
@@ -287,7 +282,6 @@ fn task_context_for_agent_input_truncates_a_single_oversized_comment_body() {
         .add_task(TaskAddParams {
             title: "One enormous comment".to_string(),
             description: "Task description for agent context.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task");

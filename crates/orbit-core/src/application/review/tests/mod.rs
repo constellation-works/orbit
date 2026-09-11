@@ -103,7 +103,6 @@ pub(super) fn seed_task(runtime: &OrbitRuntime, title: &str) -> Task {
             acceptance_criteria: vec!["The fixture outcome is observable.".to_string()],
             plan: "Change the source file.".to_string(),
             context_files: vec!["file:src.txt".to_string()],
-            workspace_path: Some(".".to_string()),
             priority: TaskPriority::Medium,
             task_type: Some(TaskType::Chore),
             status: Some(TaskStatus::InProgress),

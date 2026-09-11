@@ -35,7 +35,6 @@ fn run_tool_context_allowlist_honors_task_wildcard() {
             plan: String::new(),
             execution_summary: String::new(),
             context_files: Vec::new(),
-            workspace_path: Some(runtime.paths().repo_root.to_string_lossy().into_owned()),
             repo_root: None,
             created_by: Some("test".to_string()),
             planned_by: None,
@@ -307,7 +306,7 @@ impl GitRuntimeFixture {
     }
 }
 
-fn create_task(runtime: &OrbitRuntime, workspace_path: &Path, title: &str) -> Task {
+fn create_task(runtime: &OrbitRuntime, _workspace_path: &Path, title: &str) -> Task {
     runtime
         .stores()
         .task_records()
@@ -324,7 +323,6 @@ fn create_task(runtime: &OrbitRuntime, workspace_path: &Path, title: &str) -> Ta
             plan: String::new(),
             execution_summary: String::new(),
             context_files: Vec::new(),
-            workspace_path: Some(workspace_path.to_string_lossy().into_owned()),
             repo_root: None,
             created_by: Some("test".to_string()),
             planned_by: None,

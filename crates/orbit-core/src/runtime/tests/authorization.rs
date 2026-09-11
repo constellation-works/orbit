@@ -48,7 +48,6 @@ fn seed_task(runtime: &OrbitRuntime) -> String {
             plan: String::new(),
             execution_summary: String::new(),
             context_files: Vec::new(),
-            workspace_path: Some(runtime.paths().repo_root.to_string_lossy().into_owned()),
             repo_root: None,
             created_by: Some("test".to_string()),
             planned_by: None,

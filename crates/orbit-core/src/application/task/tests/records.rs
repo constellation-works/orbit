@@ -7,7 +7,7 @@ use orbit_types::task::{
 use super::super::params::TaskRecordUpdateParams;
 use super::test_runtime;
 
-fn create_params(runtime: &crate::OrbitRuntime) -> TaskCreateParams {
+fn create_params(_runtime: &crate::OrbitRuntime) -> TaskCreateParams {
     TaskCreateParams {
         actor: "test".to_string(),
         parent_id: None,
@@ -21,7 +21,6 @@ fn create_params(runtime: &crate::OrbitRuntime) -> TaskCreateParams {
         plan: "Initial plan".to_string(),
         execution_summary: String::new(),
         context_files: vec!["file:src/lib.rs".to_string()],
-        workspace_path: Some(runtime.paths().repo_root.to_string_lossy().into_owned()),
         repo_root: None,
         created_by: Some("test".to_string()),
         planned_by: None,

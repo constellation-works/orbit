@@ -74,7 +74,6 @@ pub(super) fn seed_task(runtime: &OrbitRuntime, title: &str, status: TaskStatus)
             acceptance_criteria: vec!["The fixture outcome is observable.".to_string()],
             plan: "Inspect and update the fixture.".to_string(),
             context_files: vec!["README.md".to_string()],
-            workspace_path: Some(".".to_string()),
             priority: TaskPriority::Medium,
             task_type: Some(TaskType::Chore),
             status: Some(status),

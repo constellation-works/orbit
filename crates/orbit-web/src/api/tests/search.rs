@@ -32,7 +32,6 @@ fn seed_search_task(runtime: &OrbitRuntime) {
             status: Some(TaskStatus::Backlog),
             tags: vec!["search".to_string(), "api".to_string()],
             context_files: vec!["file:crates/orbit-web/src/api/search.rs".to_string()],
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("seed task");

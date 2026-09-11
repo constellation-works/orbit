@@ -13,7 +13,6 @@ fn task_add_enters_proposed_and_requires_approval_before_backlog() {
             title: "Create orbit hello".to_string(),
             description: "Add a small hello file.".to_string(),
             acceptance_criteria: vec!["orbit-hello.txt exists.".to_string()],
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("human task add succeeds");
@@ -45,7 +44,6 @@ fn task_context_selector_round_trips_from_repository_root() {
             context_files: vec!["file:docs/readme.md".to_string()],
             // Retained for internal parameter compatibility; it must not
             // change the canonical root used by task selectors.
-            workspace_path: Some("docs".to_string()),
             ..Default::default()
         })
         .expect("create task with repository-relative context selector");
@@ -95,7 +93,6 @@ fn task_start_event_records_when_start_approves_a_proposal() {
             title: "Start a proposed task".to_string(),
             description: "Exercise the approval-start audit event.".to_string(),
             plan: "Start the task.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("create proposed task");
@@ -107,7 +104,6 @@ fn task_start_event_records_when_start_approves_a_proposal() {
         .add_task(TaskAddParams {
             title: "Start a backlog task".to_string(),
             description: "Exercise the ordinary start audit event.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("create backlog task");
@@ -151,7 +147,6 @@ fn task_add_does_not_scan_unrelated_corrupt_bundles() {
         .add_task(TaskAddParams {
             title: "Readable A".to_string(),
             description: "A remains readable.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("create task A");
@@ -159,7 +154,6 @@ fn task_add_does_not_scan_unrelated_corrupt_bundles() {
         .add_task(TaskAddParams {
             title: "Corrupt C".to_string(),
             description: "C will be malformed.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("create task C");
@@ -185,7 +179,6 @@ fn task_add_does_not_scan_unrelated_corrupt_bundles() {
         .add_task(TaskAddParams {
             title: "New B".to_string(),
             description: "B must not scan C.".to_string(),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("add task B despite corrupt task C");
@@ -281,7 +274,6 @@ fn task_add_redacts_secrets_in_stored_fields() {
             acceptance_criteria: vec![format!("no leak of {sk_key}")],
             plan: format!("call the API with {sk_key}"),
             comment: Some(format!("context: reproduce with {sk_key}")),
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("task add succeeds");
@@ -345,7 +337,6 @@ fn task_add_applies_normalized_provenance_title_prefixes() {
             .add_task(TaskAddParams {
                 title: "Confirmed finding".to_string(),
                 tags: vec![tag.to_string()],
-                workspace_path: Some(".".to_string()),
                 ..Default::default()
             })
             .expect("task add succeeds");
@@ -362,7 +353,6 @@ fn task_add_does_not_double_the_applicable_provenance_prefix() {
         .add_task(TaskAddParams {
             title: "[code-review] Confirmed finding".to_string(),
             tags: vec!["code-review".to_string()],
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("task add succeeds");
@@ -381,7 +371,6 @@ fn task_add_uses_fixed_provenance_precedence_independent_of_tag_order() {
             .add_task(TaskAddParams {
                 title: "Confirmed finding".to_string(),
                 tags: tags.into_iter().map(str::to_string).collect(),
-                workspace_path: Some(".".to_string()),
                 ..Default::default()
             })
             .expect("task add succeeds");
@@ -398,7 +387,6 @@ fn task_add_preserves_auto_task_title_prefix_behavior() {
             .add_task(TaskAddParams {
                 title: title.to_string(),
                 tags: vec!["auto-task:qa-sweep".to_string(), "qa-sweep".to_string()],
-                workspace_path: Some(".".to_string()),
                 ..Default::default()
             })
             .expect("task add succeeds");
@@ -419,7 +407,6 @@ fn task_add_keeps_context_selectors_that_do_not_exist_yet() {
         .add_task(TaskAddParams {
             title: "Future context".to_string(),
             context_files: vec!["file:src/future.rs".to_string()],
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("core add_task must accept a not-yet-existing file selector");
@@ -442,7 +429,6 @@ fn task_add_accepts_valid_context_selectors() {
                 "dir:src".to_string(),
                 "symbol:src/lib.rs#run:function".to_string(),
             ],
-            workspace_path: Some(".".to_string()),
             ..Default::default()
         })
         .expect("task add with valid selectors succeeds");

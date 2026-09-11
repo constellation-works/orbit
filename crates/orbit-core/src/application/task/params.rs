@@ -93,10 +93,6 @@ pub struct TaskAddParams {
     pub plan: String,
     pub comment: Option<String>,
     pub context_files: Vec<String>,
-    /// Deprecated internal compatibility field. Task context selectors are
-    /// always canonicalized against the repository root; user-facing add
-    /// surfaces no longer accept a sub-directory hint.
-    pub workspace_path: Option<String>,
     pub priority: TaskPriority,
     /// Required at create time. Human/agent surfaces must pass an assessed
     /// value; automated mint and `Default` use [`TaskComplexity::Unassessed`].
@@ -127,7 +123,6 @@ impl Default for TaskAddParams {
             plan: String::new(),
             comment: None,
             context_files: Vec::new(),
-            workspace_path: None,
             priority: TaskPriority::Medium,
             complexity: TaskComplexity::Unassessed,
             task_type: None,

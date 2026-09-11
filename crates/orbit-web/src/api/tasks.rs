@@ -562,7 +562,6 @@ pub(super) async fn create_task_action(
         plan: body.plan,
         comment: None,
         context_files: body.context_files,
-        workspace_path: None,
         priority: body.priority,
         complexity,
         task_type: body.task_type,
@@ -575,7 +574,7 @@ pub(super) async fn create_task_action(
     };
     task_mutation_response(runtime, "task creation", move |runtime| {
         if !allow_missing_context {
-            runtime.ensure_context_selectors_exist(&params.context_files, None)?;
+            runtime.ensure_context_selectors_exist(&params.context_files)?;
         }
         runtime.add_task_with_identity(params, None, model)
     })
@@ -641,7 +640,7 @@ pub(super) async fn update_task_action(
     let id = id.to_string();
     task_mutation_response(runtime, "task update", move |runtime| {
         if !allow_missing_context && let Some(candidates) = params.context_files.as_deref() {
-            runtime.ensure_context_selectors_exist(candidates, None)?;
+            runtime.ensure_context_selectors_exist(candidates)?;
         }
         runtime.update_task_with_identity(&id, params, None, model)
     })

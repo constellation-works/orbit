@@ -9,53 +9,6 @@ use std::path::{Path, PathBuf};
 use crate::OrbitRuntime;
 use crate::paths::find_linked_worktree_root;
 
-pub(super) fn normalize_workspace_path(
-    repo_root: &Path,
-    workspace: Option<&str>,
-) -> Result<Option<String>, OrbitError> {
-    let Some(workspace) = workspace.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-
-    let canonical_repo_root = repo_root.canonicalize().map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "failed to resolve repository root '{}': {error}",
-            repo_root.display()
-        ))
-    })?;
-    let candidate = if Path::new(workspace).is_absolute() {
-        PathBuf::from(workspace)
-    } else {
-        canonical_repo_root.join(workspace)
-    };
-    let canonical_workspace = candidate.canonicalize().map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "workspace (`workspace_path` on the dashboard API) '{}' must be a filesystem path to \
-             an existing directory inside the repository — e.g. the repository root '.' — never a \
-             logical workspace id such as a bridge `ws_*` id: {error}",
-            candidate.display()
-        ))
-    })?;
-    if !canonical_workspace.is_dir() {
-        return Err(OrbitError::InvalidInput(format!(
-            "workspace (`workspace_path` on the dashboard API) '{}' must be a directory inside \
-             the repository, not a file",
-            canonical_workspace.display()
-        )));
-    }
-
-    if !canonical_workspace.starts_with(&canonical_repo_root) {
-        return Err(OrbitError::InvalidInput(format!(
-            "workspace (`workspace_path` on the dashboard API) '{}' must be a filesystem path \
-             inside repository '{}', not outside it",
-            canonical_workspace.display(),
-            canonical_repo_root.display()
-        )));
-    }
-
-    Ok(Some(canonical_workspace.to_string_lossy().into_owned()))
-}
-
 pub(crate) fn context_workspace_root(repo_root: &Path, workspace_path: Option<&str>) -> PathBuf {
     workspace_path
         .map(str::trim)
@@ -114,16 +67,12 @@ impl OrbitRuntime {
     /// escape for the deliberate not-yet-created target. `add_task` and
     /// `update_task` themselves stay permissive so internal callers are
     /// unaffected.
-    pub fn ensure_context_selectors_exist(
-        &self,
-        selectors: &[String],
-        workspace_path: Option<&str>,
-    ) -> Result<(), OrbitError> {
+    pub fn ensure_context_selectors_exist(&self, selectors: &[String]) -> Result<(), OrbitError> {
         if selectors.is_empty() {
             return Ok(());
         }
 
-        let roots = self.context_selector_roots(workspace_path)?;
+        let roots = self.context_selector_roots()?;
 
         selectors
             .iter()
@@ -131,10 +80,7 @@ impl OrbitRuntime {
     }
 
     /// Resolve the checkouts this call may validate selectors against.
-    fn context_selector_roots(
-        &self,
-        workspace_path: Option<&str>,
-    ) -> Result<ContextSelectorRoots, OrbitError> {
+    fn context_selector_roots(&self) -> Result<ContextSelectorRoots, OrbitError> {
         let repo_root = &self.paths().repo_root;
         let canonical_repo_root = repo_root.canonicalize().map_err(|error| {
             OrbitError::InvalidInput(format!(
@@ -143,25 +89,14 @@ impl OrbitRuntime {
             ))
         })?;
 
-        let normalized_workspace = normalize_workspace_path(repo_root, workspace_path)?;
-        let workspace_root =
-            context_workspace_root(&canonical_repo_root, normalized_workspace.as_deref());
-        let workspace = workspace_root.canonicalize().map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "failed to resolve workspace root '{}': {error}",
-                workspace_root.display()
-            ))
-        })?;
-
         let caller_worktree = std::env::current_dir()
             .ok()
             .and_then(|cwd| find_linked_worktree_root(&cwd, &canonical_repo_root))
-            .and_then(|worktree| {
-                mirrored_workspace_root(&workspace, &canonical_repo_root, &worktree)
-            });
+            .and_then(|worktree| worktree.canonicalize().ok())
+            .filter(|worktree| worktree.is_dir());
 
         Ok(ContextSelectorRoots {
-            workspace,
+            workspace: canonical_repo_root,
             caller_worktree,
         })
     }
@@ -171,24 +106,10 @@ impl OrbitRuntime {
 struct ContextSelectorRoots {
     /// Workspace root inside the registered checkout.
     workspace: PathBuf,
-    /// The same workspace root inside the linked worktree the call runs in,
-    /// when the caller is in one and that directory exists there. A managed
-    /// job run executes in such a worktree, so a file it just created exists
-    /// only here until the work merges.
+    /// The linked worktree the call runs in, when the caller is in one and
+    /// that directory exists there. A managed job run executes in such a
+    /// worktree, so a file it just created exists only here until the work merges.
     caller_worktree: Option<PathBuf>,
-}
-
-/// Place the registered checkout's workspace root at the same relative
-/// position inside `worktree`, so a sub-directory workspace keeps its meaning
-/// there. Returns `None` when that directory does not exist in the worktree.
-fn mirrored_workspace_root(
-    workspace: &Path,
-    canonical_repo_root: &Path,
-    worktree: &Path,
-) -> Option<PathBuf> {
-    let relative = workspace.strip_prefix(canonical_repo_root).ok()?;
-    let mirrored = worktree.join(relative).canonicalize().ok()?;
-    mirrored.is_dir().then_some(mirrored)
 }
 
 /// Check one operator-supplied selector against the checkouts this call may

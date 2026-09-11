@@ -79,7 +79,7 @@ pub(super) fn create_task(
 /// created on another machine (ORB-10968).
 pub(super) fn create_task_with_crew(
     runtime: &OrbitRuntime,
-    workspace_path: &Path,
+    _workspace_path: &Path,
     title: &str,
     description: &str,
     status: TaskStatus,
@@ -105,7 +105,6 @@ pub(super) fn create_task_with_crew(
                 .iter()
                 .map(|path| (*path).to_string())
                 .collect(),
-            workspace_path: Some(workspace_path.to_string_lossy().into_owned()),
             repo_root: None,
             created_by: Some("test".to_string()),
             planned_by: None,

@@ -82,7 +82,6 @@ fn epic_pipeline(config: &str) -> EpicPipeline {
             plan: "Edit src.txt.".to_string(),
             tags: vec!["epic".to_string()],
             context_files: vec!["file:src.txt".to_string()],
-            workspace_path: Some(".".to_string()),
             priority: TaskPriority::Medium,
             task_type: Some(TaskType::Chore),
             status: Some(TaskStatus::InProgress),
