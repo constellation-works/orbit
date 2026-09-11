@@ -323,17 +323,17 @@ fn already_landed_release_stays_proposed_but_distinct_current_regression_advance
         old_filing["task_id"]
     );
 
-    let current = file(
-        &runtime,
-        vec![failure(
-            11,
-            "ci",
-            "build",
-            "cargo build",
-            "ci\tbuild\terror: distinct current type failure\n",
-            NEXT_HEAD,
-        )],
+    let mut current_failure = failure(
+        11,
+        "ci",
+        "build",
+        "cargo build",
+        "ci\tbuild\terror: distinct current type failure\n",
+        NEXT_HEAD,
     );
+    current_failure["event_reported_head_sha"] = json!(NEXT_HEAD);
+    current_failure["current_ref_head_sha"] = json!(NEXT_HEAD);
+    let current = file(&runtime, vec![current_failure]);
     let current_filing = &current["filed"][0];
     apply_pilot(
         &runtime,
@@ -448,17 +448,17 @@ fn pending_release_publication_withholds_promotion_and_names_the_operator_action
 
     // No filename denylist: a repository-owned dependency contract defect in
     // the same kind of manifest stays eligible once a pilot establishes it.
-    let owned = file(
-        &runtime,
-        vec![failure(
-            22,
-            "ci",
-            "build",
-            "cargo build",
-            "ci\tbuild\terror: failed to select a version for the requirement\n",
-            CHECKOUT,
-        )],
+    let mut owned_failure = failure(
+        22,
+        "ci",
+        "build",
+        "cargo build",
+        "ci\tbuild\terror: failed to select a version for the requirement\n",
+        NEXT_HEAD,
     );
+    owned_failure["event_reported_head_sha"] = json!(NEXT_HEAD);
+    owned_failure["current_ref_head_sha"] = json!(NEXT_HEAD);
+    let owned = file(&runtime, vec![owned_failure]);
     let owned_filing = &owned["filed"][0];
     let admitted = apply_pilot(
         &runtime,

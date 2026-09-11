@@ -700,7 +700,13 @@ fn a_closed_task_does_not_suppress_a_recurrence() {
         )
         .expect("close the first task");
 
-    let second = file(&runtime, json!({"ci_evidence": evidence}));
+    let mut second_failure = failure(11, "ci", "build", "cargo build", log, NEXT_HEAD);
+    second_failure["event_reported_head_sha"] = json!(NEXT_HEAD);
+    second_failure["current_ref_head_sha"] = json!(NEXT_HEAD);
+    let second = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![second_failure])}),
+    );
 
     assert_eq!(second["filed_count"], json!(1));
     assert_ne!(filed_task_ids(&second).first(), Some(&task_id));
@@ -1736,18 +1742,19 @@ fn wrangler_error_outranks_generic_npx_process_failed() {
         "generic process/action trailers must not be the signature: {signature}"
     );
 
+    let mut second_failure = failure(
+        11,
+        "Website",
+        "Publish to Cloudflare Pages",
+        "Deploy static site",
+        &missing_pages,
+        NEXT_HEAD,
+    );
+    second_failure["event_reported_head_sha"] = json!(NEXT_HEAD);
+    second_failure["current_ref_head_sha"] = json!(NEXT_HEAD);
     let second = file(
         &runtime,
-        json!({"ci_evidence": snapshot(vec![
-            failure(
-                11,
-                "Website",
-                "Publish to Cloudflare Pages",
-                "Deploy static site",
-                &missing_pages,
-                CHECKOUT,
-            ),
-        ])}),
+        json!({"ci_evidence": snapshot(vec![second_failure])}),
     );
     assert_eq!(second["filed_count"], json!(1));
     assert_ne!(
