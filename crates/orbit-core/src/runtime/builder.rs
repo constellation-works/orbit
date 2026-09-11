@@ -246,6 +246,7 @@ fn build_v2_task_backends(
     if is_explicit_data_dir(global_root, &paths.orbit_dir)
         && let Some(binding) = runtime_binding
     {
+        ensure_explicit_root_task_binding(&registry, paths, binding)?;
         return Ok(coordination_task_backends(
             registry,
             binding.logical_workspace_id.clone(),
@@ -328,6 +329,33 @@ fn build_v2_task_backends(
     }
 
     Ok(workspace_task_backends(registry, binding.workspace_id))
+}
+
+/// Recreate the selected checkout's task-registry binding after its index was
+/// lost. An explicit root has no checkout-local bootstrap path, so the
+/// registry binding supplied by the workspace catalog is the authoritative
+/// identity to restore.
+fn ensure_explicit_root_task_binding(
+    registry: &TaskRegistryStore,
+    paths: &WorkspacePaths,
+    binding: &WorkspaceRuntimeBinding,
+) -> Result<(), OrbitError> {
+    if registry
+        .find_workspace_binding(&binding.logical_workspace_id)?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    registry.bind_workspace(BindWorkspaceParams {
+        workspace_id: Some(binding.logical_workspace_id.clone()),
+        slug: workspace_slug(&binding.repo_root),
+        repo_root: binding.repo_root.clone(),
+        workspace_path: binding.repo_root.clone(),
+        orbit_dir: paths.orbit_dir.clone(),
+        repo_fingerprint: None,
+    })?;
+    Ok(())
 }
 
 fn rebind_candidate_workspace_id(

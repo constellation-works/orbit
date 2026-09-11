@@ -116,6 +116,15 @@ impl Execute for TaskListArgs {
         let status_by_id = page.status_by_id;
         let tasks: Vec<_> = page.items.into_iter().map(|row| row.task).collect();
 
+        if tasks.is_empty() {
+            let count = runtime.unindexed_task_bundle_count()?;
+            if count > 0 {
+                return Err(OrbitError::InvalidInput(format!(
+                    "task index is missing {count} on-disk bundle(s); run `orbit task reindex` to recover them"
+                )));
+            }
+        }
+
         // `--ops` selects a narrower record shape, not a different output
         // channel: the table is the same either way, and the renderer decides
         // whether the caller sees records or rows.
