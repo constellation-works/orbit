@@ -4536,6 +4536,10 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         assert_command_succeeded(name, &output);
     }
 
+    // `TaskUpdateParams` has no workspace selector, so `--root canonical_root`
+    // is the only routing this mutation gets: it always lands in the unbound
+    // canonical partition (`UNBOUND_DATA_DIR_WORKSPACE_ID`), not the checkout's
+    // bound workspace. The denial below must therefore name that partition.
     let mutation = readonly_orbit_command(
         &worktree,
         &workspace.home,
@@ -4558,7 +4562,7 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
     ])
     .output()
     .expect("attempt task mutation through the read-only mount");
-    assert_readonly_mutation_failed("CLI", &mutation);
+    assert_readonly_mutation_failed("CLI", &canonical_root, &mutation);
 
     let mut child = readonly_orbit_command(
         &worktree,
@@ -4613,6 +4617,9 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         )["mode"],
         "lexical"
     );
+    // Same unbound-partition routing as the CLI mutation above: the server was
+    // started with `--root canonical_root` and `orbit_task_update` has no
+    // workspace selector to route it elsewhere.
     let mutation = client.call_tool_err(
         "orbit_task_update",
         json!({
@@ -4621,7 +4628,11 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
             "model": "codex"
         }),
     );
-    assert_readonly_diagnostic("MCP", mutation["message"].as_str().unwrap_or_default());
+    assert_readonly_diagnostic(
+        "MCP",
+        &canonical_root,
+        mutation["message"].as_str().unwrap_or_default(),
+    );
     drop(client);
 
     assert_eq!(
@@ -4981,19 +4992,36 @@ fn assert_command_succeeded(label: &str, output: &std::process::Output) {
 }
 
 #[cfg(target_os = "linux")]
-fn assert_readonly_mutation_failed(label: &str, output: &std::process::Output) {
+fn assert_readonly_mutation_failed(
+    label: &str,
+    canonical_root: &Path,
+    output: &std::process::Output,
+) {
     assert!(
         !output.status.success(),
         "{label} mutation unexpectedly succeeded"
     );
-    assert_readonly_diagnostic(label, &String::from_utf8_lossy(&output.stderr));
+    assert_readonly_diagnostic(
+        label,
+        canonical_root,
+        &String::from_utf8_lossy(&output.stderr),
+    );
 }
 
+/// Both CLI and MCP mutations above route through `--root canonical_root`
+/// with no workspace selector, so the denial must name the unbound canonical
+/// partition (`UNBOUND_DATA_DIR_WORKSPACE_ID` in `orbit-core`'s runtime
+/// builder) that write actually targeted, not a stale pre-layout-v3 lock path.
 #[cfg(target_os = "linux")]
-fn assert_readonly_diagnostic(label: &str, diagnostic: &str) {
+fn assert_readonly_diagnostic(label: &str, canonical_root: &Path, diagnostic: &str) {
+    let unbound_partition = canonical_root
+        .join("tasks")
+        .join("workspaces")
+        .join("ws_unbound-data-dir");
+    let unbound_partition = unbound_partition.to_str().expect("utf8 partition path");
     assert!(
-        diagnostic.contains(".task.yaml.lock"),
-        "{label} diagnostic must attribute the task path: {diagnostic}"
+        diagnostic.contains(unbound_partition),
+        "{label} diagnostic must attribute the unbound canonical partition {unbound_partition}: {diagnostic}"
     );
     let normalized = diagnostic.to_ascii_lowercase();
     assert!(
