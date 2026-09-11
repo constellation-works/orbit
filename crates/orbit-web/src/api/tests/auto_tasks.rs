@@ -6,6 +6,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
 use orbit_core::application::auto_tasks::cursor_state_path;
+use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{AutoTaskAddParams, OrbitRuntime};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::automation::{CoverageClass, DeliveryTrigger};
@@ -845,4 +846,76 @@ async fn toggle_both_directions_reads_back_persisted_state() {
         .await;
         assert_eq!(listed["definitions"][0]["enabled"], enabled);
     }
+}
+
+#[tokio::test]
+async fn list_reports_no_open_duplicate_when_only_instance_is_someday() {
+    let runtime = runtime();
+    runtime
+        .auto_task_add(chore_params("parked-chore"))
+        .expect("add");
+
+    // Mint an instance and park it in Someday.
+    let task = runtime.auto_task_mint("parked-chore").expect("mint");
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Someday),
+                ..Default::default()
+            },
+        )
+        .expect("park task");
+
+    let (app_state, runtime) = state(runtime);
+    let response = send(
+        app_state.clone(),
+        Method::GET,
+        "/auto-tasks?workspace=default",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let item = json["definitions"]
+        .as_array()
+        .expect("definitions")
+        .iter()
+        .find(|item| item["name"] == "parked-chore")
+        .expect("parked-chore");
+
+    assert_eq!(item["open_duplicate"], false);
+    assert_eq!(item["may_create_open_duplicate"], false);
+    assert_eq!(item["last_minted_task_status"], "someday");
+
+    // Once an active instance exists, the same query marks open_duplicate as true.
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+        )
+        .expect("activate task");
+
+    let response = send(
+        app_state,
+        Method::GET,
+        "/auto-tasks?workspace=default",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let item = json["definitions"]
+        .as_array()
+        .expect("definitions")
+        .iter()
+        .find(|item| item["name"] == "parked-chore")
+        .expect("parked-chore");
+
+    assert_eq!(item["open_duplicate"], true);
+    assert_eq!(item["may_create_open_duplicate"], true);
+    assert_eq!(item["last_minted_task_status"], "backlog");
 }

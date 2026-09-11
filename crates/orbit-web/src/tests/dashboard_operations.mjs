@@ -36,7 +36,7 @@ globalThis.fetch = async (path, options = {}) => {
   }
   if (url.pathname === '/api/auto-tasks') {
     if (readbackError) throw new Error('Fixture readback unavailable');
-    const payload = { workspace, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'backlog', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, pending: [], pending_commits: [], waived: [], excluded: [], unresolved: {} } } }] };
+    const payload = { workspace, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'backlog', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, pending: [], pending_commits: [], waived: [], excluded: [], unresolved: {} } } }, { name: `Someday ${workspace}`, enabled: true, template: { title: 'Parked chore' }, template_summary: 'Parked chore', schedule_summary: 'every 60 minutes', description: 'Auto-task whose only instance is parked in someday.', dedupe: 'skip_if_open', may_create_open_duplicate: false, open_duplicate: false, last_minted_task_id: 'ORB-00100', last_minted_task_status: 'someday', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00100', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } }] };
     if (delayGet) await new Promise(resolve => { releaseGet = resolve; });
     return response(payload);
   }
@@ -200,4 +200,17 @@ else autoDetails.listeners?.toggle?.();
 await fetchAndRenderOperations();
 const restored = descendants(get('auto-tasks-body')).find(node => node.className === 'operation-details');
 assert(restored?.open, 'details stay open across rerender');
+
+// A skip_if_open auto-task whose only instance is parked in someday reports no open duplicate and mint confirmation does not claim an open instance exists [ORB-12158].
+const autoCards = descendants(get('auto-tasks-body')).filter(node => String(node.className || '').includes('auto-task-card'));
+const somedayCard = autoCards.find(node => node.textContent?.includes('Someday one'));
+assert(somedayCard, 'someday auto-task card is present');
+assert(somedayCard.textContent.includes('Open duplicate No'), 'someday auto-task card reports no open duplicate');
+assert(!somedayCard.textContent.includes('Yes — mint will create another'), 'someday card does not report duplicate warning');
+const somedayMint = descendants(somedayCard).find(node => node.textContent === 'Mint now' && node.type === 'button');
+somedayMint.click(); await tick(); await tick();
+const somedayConfirm = confirmations.at(-1);
+assert(somedayConfirm.includes('No open instance is currently tagged for this definition.'), 'someday mint confirmation reports no open instance');
+assert(!somedayConfirm.includes('An open instance already exists'), 'someday mint confirmation does not claim open instance exists');
+
 globalThis.operationsTestsPassed = true;

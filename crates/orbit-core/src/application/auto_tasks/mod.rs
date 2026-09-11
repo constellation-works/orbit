@@ -31,8 +31,8 @@ pub use loader::{
 };
 pub use schedule::{AutoTaskDueDecision, decide_due, validate_schedule};
 pub use scheduler::{
-    AutoTaskFireReport, AutoTaskSchedulerOutcome, SchedulerOptions, run_auto_task_scheduler_at,
-    run_scheduler_action_json,
+    AutoTaskFireReport, AutoTaskSchedulerOutcome, SchedulerOptions, open_auto_task_instance,
+    run_auto_task_scheduler_at, run_scheduler_action_json,
 };
 pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cursor_state};
 

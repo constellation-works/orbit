@@ -16,7 +16,6 @@ use orbit_core::application::auto_tasks::{
     AutoTaskCursor, collect_auto_tasks, cursor_state_path, load_cursor_state,
 };
 use orbit_core::application::routines::ScheduleDisplayState;
-use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag,
 };
@@ -398,9 +397,9 @@ fn definition_json(
         _ => None,
     };
     let minted = tagged_instances(runtime, &definition.name);
-    let open_duplicate = minted
-        .as_ref()
-        .is_ok_and(|tasks| tasks.iter().any(|task| is_open_status(task.status)));
+    let open_duplicate = runtime
+        .open_auto_task_instance(definition)
+        .is_ok_and(|id| id.is_some());
     let last_minted = minted.as_ref().ok().and_then(|tasks| tasks.first());
     let last_minted_task_id = last_minted
         .map(|task| task.id.to_string())
@@ -457,13 +456,6 @@ fn tagged_instances(
 ) -> Result<Vec<orbit_core::Task>, orbit_core::OrbitError> {
     let tag = auto_task_tag(name);
     runtime.list_tasks_by_tags(std::slice::from_ref(&tag))
-}
-
-fn is_open_status(status: TaskStatus) -> bool {
-    !matches!(
-        status,
-        TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
-    )
 }
 
 fn schedule_summary(schedule: &AutoTaskSchedule) -> String {

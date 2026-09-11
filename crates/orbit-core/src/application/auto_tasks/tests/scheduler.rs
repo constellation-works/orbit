@@ -188,6 +188,17 @@ fn skip_if_open_ignores_a_someday_instance() {
     assert_eq!(first[0].0, "fired");
     let task_id = first[0].1.clone().expect("task id");
 
+    let definition = runtime
+        .auto_task_show("chore")
+        .expect("show")
+        .expect("chore");
+    assert_eq!(
+        runtime
+            .open_auto_task_instance(&definition)
+            .expect("open check"),
+        Some(task_id.clone())
+    );
+
     runtime
         .update_task(
             &task_id,
@@ -198,8 +209,14 @@ fn skip_if_open_ignores_a_someday_instance() {
         )
         .expect("park task");
 
-    // The someday-parked instance does not count as open, so the next due
-    // slot fires and mints a second task.
+    // The someday-parked instance does not count as open, so open_auto_task_instance
+    // returns None and the next due slot fires and mints a second task.
+    assert_eq!(
+        runtime
+            .open_auto_task_instance(&definition)
+            .expect("open check"),
+        None
+    );
     let second = fire(&runtime, t0 + Duration::minutes(180));
     assert_eq!(second[0].0, "fired");
     assert_eq!(runtime.list_tasks().expect("tasks").len(), 2);

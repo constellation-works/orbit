@@ -232,10 +232,7 @@ fn auto_task_admission_deferral(
     definition: &AutoTaskDefinition,
 ) -> Result<Option<String>, OrbitError> {
     if definition.dedupe == orbit_types::workflow::DedupePolicy::SkipIfOpen
-        && orbit_automation::auto_tasks::scheduler::AutoTaskDispatch::has_open_instance(
-            runtime, definition,
-        )?
-        .is_some()
+        && runtime.open_auto_task_instance(definition)?.is_some()
     {
         return Ok(Some("open_instance".into()));
     }

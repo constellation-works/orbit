@@ -35,26 +35,50 @@ impl AutoTaskDispatch for OrbitRuntime {
         &self,
         definition: &AutoTaskDefinition,
     ) -> Result<Option<String>, OrbitError> {
-        let tasks = self.list_tasks_by_tags(&[auto_task_tag(&definition.name)])?;
-        // `someday` is an explicit "not now" park, not an active instance
-        // [ORB-12148]: it must not block every later mint of this auto-task.
-        Ok(tasks
-            .into_iter()
-            .find(|task| {
-                !matches!(
-                    task.status,
-                    TaskStatus::Done
-                        | TaskStatus::Archived
-                        | TaskStatus::Rejected
-                        | TaskStatus::Someday
-                )
-            })
-            .map(|task| task.id))
+        open_auto_task_instance(self, definition)
     }
 
     fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
         mint_task(self, definition).map(|task| task.id)
     }
+}
+
+impl OrbitRuntime {
+    /// The id of a still-open instance of `definition`'s prior mints, if any.
+    /// Returns `None` if no prior mint is open, meaning `skip_if_open` dedupe
+    /// will permit minting and the dashboard reports no open duplicate [ORB-12158].
+    pub fn open_auto_task_instance(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<Option<String>, OrbitError> {
+        open_auto_task_instance(self, definition)
+    }
+}
+
+/// The id of a still-open instance of `definition`'s prior mints, if any.
+///
+/// Exactly one definition of "still-open auto-task instance" exists in the
+/// system [ORB-12158]. Both scheduler dedupe (`skip_if_open`) and the dashboard
+/// (`open_duplicate`, `may_create_open_duplicate`) consume this query.
+pub fn open_auto_task_instance(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Result<Option<String>, OrbitError> {
+    let tasks = runtime.list_tasks_by_tags(&[auto_task_tag(&definition.name)])?;
+    // `someday` is an explicit "not now" park, not an active instance
+    // [ORB-12148]: it must not block every later mint of this auto-task.
+    Ok(tasks
+        .into_iter()
+        .find(|task| {
+            !matches!(
+                task.status,
+                TaskStatus::Done
+                    | TaskStatus::Archived
+                    | TaskStatus::Rejected
+                    | TaskStatus::Someday
+            )
+        })
+        .map(|task| task.id))
 }
 
 pub fn run_auto_task_scheduler_at(
