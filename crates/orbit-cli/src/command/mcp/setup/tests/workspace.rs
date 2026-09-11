@@ -13,8 +13,8 @@ fn resolve_workspace_layout_skips_global_home_orbit_during_walk_up() {
     std::fs::create_dir_all(&nested).expect("create nested cwd");
     let _env = EnvGuard::acquire().home(home.path());
 
-    let err =
-        resolve_workspace_layout_for_cwd(&nested).expect_err("walk-up to $HOME/.orbit should fail");
+    let err = resolve_workspace_layout_for_cwd(&nested, None)
+        .expect_err("walk-up to $HOME/.orbit should fail");
 
     assert!(matches!(
         err,
