@@ -251,7 +251,7 @@ impl OrbitRuntime {
         }
         if self.tool_registry().has(name) {
             return Err(OrbitError::Execution(format!(
-                "tool '{name}' is inactive on the agent tool surface; it is an admin/human-only operation — use the equivalent Orbit CLI or dashboard workflow"
+                "tool '{name}' is inactive on the agent tool surface; it is an admin/human-only operation not reachable by agents"
             )));
         }
         Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()))
@@ -260,6 +260,15 @@ impl OrbitRuntime {
     fn set_tool_enabled_state(&self, name: &str, enabled: bool) -> Result<(), OrbitError> {
         if !self.tool_registry().has(name) {
             return Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()));
+        }
+
+        if !self.tool_registry().is_active(name) {
+            let verb = if enabled { "enable" } else { "disable" };
+            return Err(OrbitError::InvalidInput(format!(
+                "tool '{name}' is inactive on the agent tool surface; that availability is fixed \
+                 at registration, so {verb} would report success without changing whether the \
+                 tool can run"
+            )));
         }
 
         let existing = self.stores().tools().get_tool(name)?;

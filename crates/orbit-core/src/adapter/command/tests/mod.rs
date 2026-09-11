@@ -2,4 +2,5 @@
 
 mod dispatch;
 mod global_dispatch;
+mod registry;
 mod support;
