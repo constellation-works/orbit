@@ -17,7 +17,9 @@
 //! - Import validates everything *before* mutating state, then keeps free ids,
 //!   renumbers collisions (rewriting relation targets within the imported set),
 //!   rebuilds index rows from bundle YAML, bumps the allocator past the max
-//!   landed id.
+//!   landed id. Fresh bundles and a workspace registration created by a failed
+//!   run are rolled back; owner-wins replacements remain because the incoming
+//!   owner's copy is authoritative.
 //! - Idempotency is scoped to *kept* ids: re-importing an archive whose ids are
 //!   free (or already landed unchanged) is a no-op. A `--on-conflict=renumber`
 //!   run is **not** idempotent — a collision means "these are new local tasks,"
@@ -31,9 +33,11 @@
 //! repeatable sync of those mirrors — a colliding foreign-prefix id is replaced
 //! by the owner's bundle ([`ImportAction::Updated`]), a colliding local-prefix
 //! id is left alone ([`ImportAction::SkippedLocalOwned`]), and nothing is ever
-//! renumbered. Foreign relation targets therefore survive verbatim, no
-//! `.idmap.json` is written, and a second run of the same archive reports every
-//! task as already-present.
+//! renumbered. An owner-wins import also repairs an orphaned canonical bundle
+//! whose registry binding is missing by replacing it and restoring the binding.
+//! Foreign relation targets therefore survive verbatim, no `.idmap.json` is
+//! written, and a second run of the same archive reports every task as
+//! already-present.
 //!
 //! # Artifact blobs
 //! Bundles carry a `artifacts/manifest.yaml` sidecar and the referenced blobs
@@ -320,6 +324,9 @@ struct StagedBundle {
 struct MirrorReplacement {
     staged: StagedBundle,
     bundle_dir: PathBuf,
+    /// The canonical directory existed without its registry binding, so the
+    /// successful refresh must restore that binding.
+    register_binding: bool,
 }
 
 /// Resolved import target after workspace resolution.
@@ -369,7 +376,23 @@ pub fn import_tasks(
     let mut records: Vec<ImportedTask> = Vec::new();
     for staged in staged {
         match registry.find_task_binding(&staged.source_id)? {
-            None => kept.push(staged),
+            None => {
+                if policy == ImportConflictPolicy::OwnerWins {
+                    let bundle_dir = registry
+                        .canonical_task_bundle_path(&target.workspace_id, &staged.source_id)?;
+                    if bundle_dir.is_dir() {
+                        to_overwrite.push(MirrorReplacement {
+                            staged,
+                            bundle_dir,
+                            register_binding: true,
+                        });
+                    } else {
+                        kept.push(staged);
+                    }
+                } else {
+                    kept.push(staged);
+                }
+            }
             Some(existing) => {
                 let identical = existing.workspace_id == target.workspace_id
                     && read_bundle_at(&existing.canonical_path)
@@ -411,7 +434,11 @@ pub fn import_tasks(
                                     action: ImportAction::SkippedLocalOwned,
                                 }),
                                 MirrorVerdict::Replace(bundle_dir) => {
-                                    to_overwrite.push(MirrorReplacement { staged, bundle_dir })
+                                    to_overwrite.push(MirrorReplacement {
+                                        staged,
+                                        bundle_dir,
+                                        register_binding: false,
+                                    })
                                 }
                             }
                         }
@@ -435,13 +462,13 @@ pub fn import_tasks(
     // ---- Phase 2: mutate. Track writes for best-effort rollback. ----
     // Note: the monotonic allocator bumps below are intentionally never rolled
     // back — the counter only moves forward and holes are expected. A newly
-    // created workspace *binding* is likewise left in place on rollback (an
-    // empty binding is benign and idempotent to re-create); only the synthetic
-    // directory we created for it is cleaned up.
+    // created workspace binding is tracked and retired on rollback, while
+    // pre-existing workspace bindings are never touched.
     let mut guard = WriteGuard::new(registry);
 
     let registered_workspace = if let Some(params) = &target.register {
         registry.register_workspace(params.clone())?;
+        guard.registered_workspace = Some(target.workspace_id.clone());
         true
     } else {
         false
@@ -521,6 +548,14 @@ pub fn import_tasks(
                 "task migration import",
                 || replace_bundle_at(&replacement.bundle_dir, &staged.bundle, &staged.staging_dir),
             )?;
+            if replacement.register_binding {
+                registry.register_task_bundle(
+                    &staged.source_id,
+                    &target.workspace_id,
+                    &replacement.bundle_dir,
+                )?;
+                guard.registered_ids.push(staged.source_id.clone());
+            }
             records.push(ImportedTask {
                 source_id: staged.source_id.clone(),
                 final_id: staged.source_id.clone(),
@@ -764,6 +799,7 @@ struct WriteGuard<'a> {
     registry: &'a TaskRegistryStore,
     written_dirs: Vec<PathBuf>,
     registered_ids: Vec<String>,
+    registered_workspace: Option<String>,
     armed: bool,
 }
 
@@ -773,6 +809,7 @@ impl<'a> WriteGuard<'a> {
             registry,
             written_dirs: Vec::new(),
             registered_ids: Vec::new(),
+            registered_workspace: None,
             armed: true,
         }
     }
@@ -792,6 +829,9 @@ impl<'a> WriteGuard<'a> {
     /// rows can be left behind the bundle until the next successful sync (or
     /// `orbit task reindex`) rebuilds them.
     fn rollback(&mut self) {
+        if let Some(workspace_id) = self.registered_workspace.take() {
+            let _ = self.registry.unbind_workspace(&workspace_id);
+        }
         for id in self.registered_ids.drain(..) {
             // workspace_id is not needed to look up the (global) binding, but the
             // API takes it; recover it from the binding.

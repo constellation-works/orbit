@@ -470,6 +470,44 @@ fn import_into_unregistered_workspace_registers_it() {
 }
 
 #[test]
+fn failed_import_removes_workspace_registered_by_that_run() {
+    let src = TempDir::new().unwrap();
+    let dst = TempDir::new().unwrap();
+    let archive = src.path().join("tasks.tar.zst");
+    let ws = "orbit-src-bbbbbb";
+    build_source_archive(src.path(), ws, &archive);
+
+    let registry = open_registry(dst.path());
+    let binding = bind(&registry, dst.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("ORB-00000", "orphaned bundle", Vec::new()),
+    );
+    registry
+        .unbind_workspace(ws)
+        .expect("remove the index while retaining the canonical bundle");
+    assert!(registry.find_workspace_binding(ws).unwrap().is_none());
+
+    let error = import_tasks(&registry, &archive, None, ImportConflictPolicy::Fail)
+        .expect_err("creation-only import must reject the orphaned directory");
+    assert!(error.to_string().contains("task bundle already exists"));
+    assert!(
+        registry.find_workspace_binding(ws).unwrap().is_none(),
+        "a failed import must not leave its newly registered workspace behind"
+    );
+    assert!(
+        registry
+            .canonical_task_bundle_path(ws, "ORB-00000")
+            .unwrap()
+            .is_dir(),
+        "rollback must preserve the pre-existing orphaned bundle"
+    );
+}
+
+#[test]
 fn allocator_bumped_past_max_imported_id() {
     let src = TempDir::new().unwrap();
     let dst = TempDir::new().unwrap();

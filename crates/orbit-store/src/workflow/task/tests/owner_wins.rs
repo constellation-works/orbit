@@ -365,6 +365,69 @@ fn owner_wins_recreates_a_missing_bound_mirror_and_is_rerunnable() {
 }
 
 #[test]
+fn owner_wins_repairs_an_unbound_existing_bundle_and_lands_the_rest() {
+    let src = TempDir::new().unwrap();
+    let dst = TempDir::new().unwrap();
+    let ws = "orbit-owner-ababab";
+    let archive = src.path().join("tasks.tar.zst");
+    let incoming = make_bundle("ORB-00000", "owner truth", Vec::new());
+    export_owner_archive(
+        src.path(),
+        ws,
+        &archive,
+        &[
+            incoming.clone(),
+            make_bundle("ORB-00003", "new peer task", Vec::new()),
+        ],
+    );
+
+    let registry = open_mirror_registry(dst.path());
+    let binding = bind(&registry, dst.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("ORB-00000", "orphaned mirror", Vec::new()),
+    );
+    registry
+        .unregister_task_bundle("ORB-00000", ws)
+        .expect("remove only the orphan's registry binding");
+    assert!(
+        registry
+            .canonical_task_bundle_path(ws, "ORB-00000")
+            .unwrap()
+            .is_dir()
+    );
+
+    let outcome =
+        import_tasks(&registry, &archive, None, ImportConflictPolicy::OwnerWins).expect("sync");
+
+    assert_eq!(outcome.tasks.len(), 2);
+    assert_eq!(
+        outcome
+            .tasks
+            .iter()
+            .find(|task| task.source_id == "ORB-00000")
+            .unwrap()
+            .action,
+        ImportAction::Updated
+    );
+    assert_eq!(
+        outcome
+            .tasks
+            .iter()
+            .find(|task| task.source_id == "ORB-00003")
+            .unwrap()
+            .action,
+        ImportAction::Kept
+    );
+    assert_eq!(landed_bundle(&registry, ws, "ORB-00000"), incoming);
+    assert!(registry.find_task_binding("ORB-00000").unwrap().is_some());
+    assert_eq!(registry.tasks_for_workspace(ws).unwrap().len(), 2);
+}
+
+#[test]
 fn owner_wins_preserves_foreign_relation_targets() {
     let first_export = TempDir::new().unwrap();
     let second_export = TempDir::new().unwrap();
