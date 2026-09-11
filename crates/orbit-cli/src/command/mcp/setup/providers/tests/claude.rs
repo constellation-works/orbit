@@ -1,6 +1,8 @@
+use std::path::PathBuf;
+
 use tempfile::tempdir;
 
-use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
+use orbit_common::fs::io::{FileLockOptions, acquire_exclusive_file_lock, atomic_write_text};
 
 use super::super::super::args::{McpAction, McpProvider, ProviderSelectionMode, ScopeArg};
 use super::super::super::dispatch::run_action;
@@ -192,18 +194,29 @@ fn claude_home_scope_waits_for_concurrent_state_update_before_reading() {
     std::fs::write(&mcp_path, "{\n  \"userState\": \"before\"\n}\n")
         .expect("write initial Claude state");
 
+    // Simulate Claude Code itself, which locks `<mcp_path>.lock` — the full
+    // file name with `.lock` appended, not Orbit's usual dot-prefixed
+    // sibling. Holding that literal path (independent of the production
+    // helper) is what proves Orbit actually waits on Claude Code's own lock
+    // rather than a differently-named file neither process contends on.
+    let mut claude_lock_path = mcp_path.clone().into_os_string();
+    claude_lock_path.push(".lock");
+    let claude_lock_path = PathBuf::from(claude_lock_path);
+
     let (lock_ready_tx, lock_ready_rx) = std::sync::mpsc::sync_channel(0);
     let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
-    let held_path = mcp_path.clone();
+    let held_path = claude_lock_path.clone();
     let holder = std::thread::spawn(move || {
-        with_exclusive_file_lock(&held_path, "test Claude Code writer", || {
-            lock_ready_tx
-                .send(())
-                .expect("notify that Claude lock is held");
-            release_rx.recv().expect("wait for test release");
-            Ok::<(), std::io::Error>(())
-        })
+        let _guard = acquire_exclusive_file_lock(
+            &held_path,
+            "test Claude Code writer",
+            FileLockOptions::default(),
+        )
         .expect("hold Claude lock");
+        lock_ready_tx
+            .send(())
+            .expect("notify that Claude lock is held");
+        release_rx.recv().expect("wait for test release");
     });
     lock_ready_rx.recv().expect("wait for Claude lock holder");
 
@@ -240,6 +253,47 @@ fn claude_home_scope_waits_for_concurrent_state_update_before_reading() {
             .expect("parse final Claude state");
     assert_eq!(mcp["userState"], "during");
     assert!(mcp["mcpServers"]["orbit"].is_object());
+}
+
+#[test]
+fn claude_home_scope_locks_claude_codes_exact_lock_file() {
+    // ORB-12182: the home-scope read-modify-write must serialize against the
+    // literal lock file Claude Code itself uses (`<mcp_path>.lock`), not a
+    // dot-prefixed sibling of Orbit's own invention. Compute the expected
+    // path independently of the production lock-naming helper so a rename of
+    // that helper's convention fails this test instead of passing vacuously.
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    let orbit_root = repo.path().join(".orbit");
+    std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+    let mcp_path = home.path().join(".claude.json");
+
+    run_action(
+        McpAction::Init(ServerLaunch::default()),
+        repo.path(),
+        &orbit_root,
+        ProviderSelectionMode::Explicit(vec![McpProvider::Claude]),
+        Some(home.path().to_path_buf()),
+        ScopeArg::Home,
+    )
+    .expect("init claude home scope");
+
+    let mut expected_lock_path = mcp_path.clone().into_os_string();
+    expected_lock_path.push(".lock");
+    let expected_lock_path = PathBuf::from(expected_lock_path);
+    assert!(
+        expected_lock_path.is_file(),
+        "expected Claude Code's lock file at {}",
+        expected_lock_path.display()
+    );
+
+    let stray_lock_path = home.path().join("..claude.json.lock");
+    assert!(
+        !stray_lock_path.exists(),
+        "must not create the generic dot-prefixed sibling lock file \
+         Claude Code does not recognize: {}",
+        stray_lock_path.display()
+    );
 }
 
 #[test]

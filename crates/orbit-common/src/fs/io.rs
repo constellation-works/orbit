@@ -428,6 +428,81 @@ where
     F: FnOnce() -> Result<T, E>,
     E: From<io::Error>,
 {
+    with_exclusive_file_lock_named_options(
+        target_path,
+        LockFileNaming::DotPrefixedSibling,
+        label,
+        options,
+        op,
+    )
+}
+
+/// Naming convention for the sibling lock file [`with_exclusive_file_lock`]
+/// and [`with_exclusive_file_lock_named`] acquire relative to a target path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockFileNaming {
+    /// `.{file_name}.lock` — Orbit's own private sibling, invisible to the
+    /// target's other consumers. Correct whenever Orbit owns both ends of the
+    /// lock protocol.
+    DotPrefixedSibling,
+    /// `{file_name}.lock` — the target's exact file name with `.lock`
+    /// appended, no extra leading dot. Required when another process already
+    /// defines the lock file it expects beside a target Orbit does not
+    /// exclusively own (for example Claude Code locking `~/.claude.json.lock`
+    /// beside its own `~/.claude.json`); acquiring anything else lets the two
+    /// writers race past each other.
+    AppendedSuffix,
+}
+
+impl LockFileNaming {
+    fn lock_path_for(self, path: &Path) -> io::Result<PathBuf> {
+        let file_name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("path '{}' has no file name", path.display()),
+            )
+        })?;
+        let lock_name = match self {
+            LockFileNaming::DotPrefixedSibling => format!(".{file_name}.lock"),
+            LockFileNaming::AppendedSuffix => format!("{file_name}.lock"),
+        };
+        Ok(path.with_file_name(lock_name))
+    }
+}
+
+/// [`with_exclusive_file_lock`] with an explicit [`LockFileNaming`] instead of
+/// Orbit's default dot-prefixed sibling.
+pub fn with_exclusive_file_lock_named<T, E, F>(
+    target_path: &Path,
+    naming: LockFileNaming,
+    label: &str,
+    op: F,
+) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    with_exclusive_file_lock_named_options(
+        target_path,
+        naming,
+        label,
+        FileLockOptions::default(),
+        op,
+    )
+}
+
+/// [`with_exclusive_file_lock_named`] with an explicit, testable acquisition policy.
+pub fn with_exclusive_file_lock_named_options<T, E, F>(
+    target_path: &Path,
+    naming: LockFileNaming,
+    label: &str,
+    options: FileLockOptions,
+    op: F,
+) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
     let parent = target_path.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -447,7 +522,7 @@ where
     // indistinguishable, which is why this only ever deadlocked where a symlink
     // sat above the target.
     create_private_dir_all(parent).map_err(|e| classify_lock_io(parent, e))?;
-    let lock_path = resolved_lock_path(target_path)?;
+    let lock_path = resolved_lock_path(target_path, naming)?;
     let Some(_held) = claim_lock_path(&lock_path) else {
         return op();
     };
@@ -507,7 +582,7 @@ where
     if !parent.is_dir() {
         return op();
     }
-    let lock_path = resolved_lock_path(target_path)?;
+    let lock_path = resolved_lock_path(target_path, LockFileNaming::DotPrefixedSibling)?;
     let Some(_held) = claim_lock_path(&lock_path) else {
         return op();
     };
@@ -538,8 +613,8 @@ where
 /// deadlock on a second descriptor to the same file. Resolving the parent
 /// collapses those routes to one key. An unresolvable parent means the
 /// directory does not exist yet, so nothing can be holding a lock inside it.
-fn resolved_lock_path(target_path: &Path) -> io::Result<PathBuf> {
-    let lock_path = lock_path_for(target_path)?;
+fn resolved_lock_path(target_path: &Path, naming: LockFileNaming) -> io::Result<PathBuf> {
+    let lock_path = naming.lock_path_for(target_path)?;
     let Some(file_name) = lock_path.file_name() else {
         return Ok(lock_path);
     };
@@ -547,16 +622,6 @@ fn resolved_lock_path(target_path: &Path) -> io::Result<PathBuf> {
         Some(Ok(parent)) => Ok(parent.join(file_name)),
         _ => Ok(lock_path),
     }
-}
-
-fn lock_path_for(path: &Path) -> io::Result<PathBuf> {
-    let file_name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("path '{}' has no file name", path.display()),
-        )
-    })?;
-    Ok(path.with_file_name(format!(".{file_name}.lock")))
 }
 
 pub(crate) fn open_private_file(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
