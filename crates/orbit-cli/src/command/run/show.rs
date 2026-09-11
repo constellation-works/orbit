@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
 
+use super::format::format_backlog_exclusion_lines;
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::steps::{
     RunDisplaySteps, RunStepRecord, StepSource, activity_provenance_lines, filtered_steps,
@@ -102,6 +103,11 @@ pub(crate) fn run_show_payload(
     }
     header.push_str(&live_provider_process_lines(&provider_processes));
     header.push_str(&agent_invocation_lines(&doc["run"]["agent_invocation"]));
+    let exclusion_lines = format_backlog_exclusion_lines(state.as_ref());
+    if !exclusion_lines.is_empty() {
+        header.push('\n');
+        header.push_str(&exclusion_lines.join("\n"));
+    }
     if steps_source == StepSource::Audit && !steps.is_empty() {
         header.push_str(&format!(
             "\n{} reconstructed from the run audit trail; the run record stores none",

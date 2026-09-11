@@ -144,3 +144,62 @@ pub(crate) fn format_child_dispatch_lines(state: Option<&PipelineState>) -> Vec<
         })
         .collect()
 }
+
+/// Show backlog admission exclusions retained in the pipeline checkpoint.
+///
+/// The structured state remains the source of truth; this projection is only
+/// for the human-readable `orbit run show` view. Older or partially written
+/// checkpoints are ignored so inspection remains available when the optional
+/// diagnostic data is absent.
+pub(crate) fn format_backlog_exclusion_lines(state: Option<&PipelineState>) -> Vec<String> {
+    let Some(excluded) = state
+        .and_then(|state| state.pipeline.get("list_backlog"))
+        .and_then(|step| step.get("excluded"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let lines = excluded
+        .iter()
+        .filter_map(|entry| {
+            let task_id = entry.get("id").and_then(serde_json::Value::as_str)?;
+            let reason = entry
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let crew = entry
+                .get("crew")
+                .and_then(serde_json::Value::as_str)
+                .map(|crew| format!(" crew={crew}"))
+                .unwrap_or_default();
+            let conflicts = entry
+                .get("conflicts")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|conflict| {
+                    conflict
+                        .get("locking_task_id")
+                        .and_then(serde_json::Value::as_str)
+                })
+                .collect::<Vec<_>>();
+            let blocked_by = if conflicts.is_empty() {
+                String::new()
+            } else {
+                format!(" blocked-by={}", conflicts.join(","))
+            };
+            Some(format!(
+                "Excluded task {task_id}: {reason}{crew}{blocked_by}"
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    if lines.is_empty() {
+        return Vec::new();
+    }
+
+    let mut output = vec![format!("Excluded backlog tasks ({}):", lines.len())];
+    output.extend(lines);
+    output
+}
