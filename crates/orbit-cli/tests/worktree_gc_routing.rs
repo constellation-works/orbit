@@ -346,14 +346,45 @@ fn zero_worktree_gc_age_floor(home: &Path) {
     let path = home.join(".orbit/resources/jobs/worktree_gc_pipeline.yaml");
     let content = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    let updated = content.replace("older_than_hours: 24", "older_than_hours: 0");
-    assert_ne!(
-        content,
-        updated,
-        "expected an `older_than_hours: 24` default in {}",
+    let updated = replace_seeded_older_than_hours_default(&content);
+    assert!(
+        updated.contains("older_than_hours: 0"),
+        "expected an `older_than_hours: 0` default after rewriting the seeded job in {}",
         path.display()
     );
     fs::write(&path, updated).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+}
+
+/// Rewrites the seeded pipeline's own `older_than_hours: <integer>` default to
+/// `0`, whatever integer it currently holds — independent of the exact seeded
+/// value so a future default change doesn't desync this fixture. Leaves the
+/// step config's templated passthrough (`older_than_hours: "{{ input.older_than_hours }}"`)
+/// untouched: its value isn't a bare integer, so it never matches.
+fn replace_seeded_older_than_hours_default(content: &str) -> String {
+    let mut replaced_any = false;
+    let mut updated: String = content
+        .lines()
+        .map(|line| {
+            let Some(key_start) = line.find("older_than_hours:") else {
+                return line.to_string();
+            };
+            let value = line[key_start + "older_than_hours:".len()..].trim();
+            if value.parse::<u64>().is_err() {
+                return line.to_string();
+            }
+            replaced_any = true;
+            format!("{}older_than_hours: 0", &line[..key_start])
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        replaced_any,
+        "found no numeric `older_than_hours:` default to rewrite in seeded job"
+    );
+    if content.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated
 }
 
 fn configure_fixture_crew(root: &Path) {
