@@ -22,6 +22,10 @@ use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy, PersistenceConfig};
 const ORBIT_AGENT_NAME: &str = "ORBIT_AGENT_NAME";
 const ORBIT_AGENT_MODEL: &str = "ORBIT_AGENT_MODEL";
 
+/// Actor label recorded when [`OPERATOR_OVERRIDE_ENV`](orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV)
+/// is the only signal identifying the caller.
+const OPERATOR_ACTOR_LABEL: &str = "operator";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActorKind {
     Unknown,
@@ -61,9 +65,12 @@ impl ActorIdentity {
     /// entry points.
     ///
     /// The environment is not an authentication boundary. Agent values are
-    /// therefore reduced to the same canonical family used by tool dispatch,
-    /// and an absent or inconsistent envelope is recorded as `unknown` rather
-    /// than claiming that a human was present.
+    /// therefore reduced to the same canonical family used by tool dispatch.
+    /// Absent an agent envelope, an explicit operator override is recorded as
+    /// a named human actor rather than `unknown` — the override is itself a
+    /// deliberate, audited act, so the actor it authorizes (a grant, a task
+    /// mutation, …) should say who enabled it instead of claiming nobody did.
+    /// Only a caller with neither signal is recorded as `unknown`.
     pub fn from_env() -> Self {
         let agent = std::env::var(ORBIT_AGENT_NAME)
             .ok()
@@ -72,11 +79,19 @@ impl ActorIdentity {
             .ok()
             .filter(|value| !value.trim().is_empty());
 
-        normalize_agent_family_for_model(agent.as_deref(), model.as_deref())
+        if let Some(actor) = normalize_agent_family_for_model(agent.as_deref(), model.as_deref())
             .ok()
             .flatten()
             .map(Self::agent)
-            .unwrap_or_default()
+        {
+            return actor;
+        }
+
+        if orbit_common::governance::authorization::operator_override_active() {
+            return Self::human(OPERATOR_ACTOR_LABEL);
+        }
+
+        Self::default()
     }
 }
 

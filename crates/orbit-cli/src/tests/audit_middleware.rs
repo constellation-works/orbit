@@ -89,12 +89,30 @@ fn cli_agent_envelope_records_canonical_actor_family() {
 
 #[test]
 fn cli_without_agent_envelope_records_unknown_actor() {
-    let _env = test_env::unset(AGENT_IDENTITY_ENV.iter().copied());
+    let _env = test_env::unset(AGENT_IDENTITY_ENV.iter().copied().chain(["ORBIT_OPERATOR"]));
 
     let actor = ActorIdentity::from_env();
     assert_eq!(actor.kind, ActorKind::Unknown);
     assert_eq!(actor.label, "unknown");
     assert_eq!(audit_event_for_actor(actor).role, "unknown");
+}
+
+#[test]
+fn cli_operator_override_without_agent_envelope_records_operator_actor() {
+    // ORB-12115: a grant enabled under `ORBIT_OPERATOR=1` previously recorded
+    // `actor: "unknown"` even though the override is itself an audited,
+    // deliberate act — it should name who enabled it.
+    let _env = test_env::scoped(
+        AGENT_IDENTITY_ENV
+            .iter()
+            .map(|name| (*name, None))
+            .chain([("ORBIT_OPERATOR", Some("1"))]),
+    );
+
+    let actor = ActorIdentity::from_env();
+    assert_eq!(actor.kind, ActorKind::Human);
+    assert_eq!(actor.label, "operator");
+    assert_eq!(audit_event_for_actor(actor).role, "operator");
 }
 
 #[test]

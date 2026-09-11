@@ -1,3 +1,6 @@
+use std::fs;
+use std::path::Path;
+
 use orbit_core::OrbitError;
 use orbit_types::tool::mcp_advertised_tool_name;
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -76,8 +79,35 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
             settings.remove(&key);
         }
         write_or_remove_json_object(settings_path, &settings)?;
+
+        if let Some(settings_dir) = settings_path.parent() {
+            remove_dir_if_empty(settings_dir)?;
+        }
     }
     Ok(())
+}
+
+/// Remove `dir` if it exists and is now empty.
+///
+/// `apply_claude_init` calls `write_json_object`, which `create_dir_all`s the
+/// settings file's parent on demand — for a workspace or home root with no
+/// prior `.claude/`, that is this directory. A clean `remove` should leave the
+/// tree as it found it, so once the settings file this function owns is gone,
+/// an empty directory is one `remove` itself created and should go with it.
+/// Any remaining content (a user's `commands/`, unrelated settings, …) means
+/// this directory predates `init` or serves another purpose, so it is left
+/// alone.
+fn remove_dir_if_empty(dir: &Path) -> Result<(), OrbitError> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(dir)
+        .map_err(|err| OrbitError::Io(format!("failed to read '{}': {err}", dir.display())))?;
+    if entries.next().is_some() {
+        return Ok(());
+    }
+    fs::remove_dir(dir)
+        .map_err(|err| OrbitError::Io(format!("failed to remove '{}': {err}", dir.display())))
 }
 
 pub(super) fn claude_mcp_server_value(launch: ServerLaunch<'_>) -> JsonValue {
