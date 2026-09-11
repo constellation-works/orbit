@@ -5,7 +5,10 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType, PipelineState};
+use orbit_types::workflow::{
+    JobRun, JobRunState, JobRunStep, JobTargetType, PipelineState, RunIdRole, run_id_candidate,
+    run_id_minute_stem,
+};
 use rusqlite::OptionalExtension;
 
 use crate::contracts::{JobRunOrder, JobRunQuery};
@@ -249,19 +252,30 @@ pub(super) fn upsert_job_run_for_workspace_conn(
     Ok(())
 }
 
+/// Sequence ceiling for one role inside one minute stem.
+const MAX_RUN_ID_SEQUENCE: u32 = 1023;
+
+/// Allocate the next free run id of `role` for the minute `submitted_at` falls
+/// in.
+///
+/// Each role numbers its own sequence, so a run's children never consume the
+/// numbers its top-level siblings would take and neither borrows the other's
+/// shape [ORB-12111]. Call this inside the same transaction that inserts the
+/// run: the probe below is only as good as the write it commits with.
+///
+/// Exhausting the sequence is an error rather than a fallback id. Roughly a
+/// thousand runs of one role in one workspace inside one minute is already
+/// pathological, and any id returned without a free-slot probe behind it would
+/// upsert over the live run already holding it.
 pub(super) fn next_run_id_conn(
     conn: &rusqlite::Connection,
     workspace_id: &str,
-    job_id: &str,
+    role: RunIdRole,
     submitted_at: DateTime<Utc>,
 ) -> Result<String, OrbitError> {
-    let base = format!("jrun-{}", submitted_at.format("%Y%m%d-%H%M"));
-    for suffix in 1..1024_u32 {
-        let candidate = if suffix == 1 {
-            base.clone()
-        } else {
-            format!("{base}-{suffix}")
-        };
+    let stem = run_id_minute_stem(submitted_at);
+    for sequence in 1..=MAX_RUN_ID_SEQUENCE {
+        let candidate = run_id_candidate(&stem, role, sequence);
         let exists = conn
             .query_row(
                 "SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
@@ -275,7 +289,10 @@ pub(super) fn next_run_id_conn(
             return Ok(candidate);
         }
     }
-    Ok(format!("{base}-{job_id}"))
+
+    Err(OrbitError::Store(format!(
+        "run id sequence exhausted: {MAX_RUN_ID_SEQUENCE} {role} runs already recorded for {stem}"
+    )))
 }
 
 pub(super) fn get_job_run_for_workspace_conn(

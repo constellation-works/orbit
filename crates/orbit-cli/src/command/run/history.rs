@@ -6,14 +6,16 @@ use serde_json::json;
 use crate::command::{Block, CommandOut, Execute, Payload};
 use crate::output::color::Domain;
 
-use super::format::{format_timestamp, format_waiting_line, summarize_error_message};
+use super::format::{
+    format_run_role, format_timestamp, format_waiting_line, summarize_error_message,
+};
 use super::job::cli_job_run_to_json;
 
 pub(crate) const DEFAULT_HISTORY_LIMIT: usize = 50;
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"runs\":[<job-run>]}\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --json"
+    after_help = "JSON shape: {\"runs\":[<job-run>]}\nROLE says how a run was submitted: top-level directly, child by a parent run.\nRun ids minted before role markers existed read as unmarked.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --json"
 )]
 pub struct RunHistoryArgs {
     /// Filter to one job ID
@@ -66,7 +68,13 @@ pub(crate) fn run_history_payload(
 
     use crate::output::table::{Column, Table};
     let include_job_id = job_id.is_none();
-    let mut columns = vec![Column::new("RUN_ID").fixed()];
+    let mut columns = vec![
+        Column::new("RUN_ID").fixed(),
+        // Sibling top-level runs and one run's children share a minute stem, so
+        // the id's own role marker is what keeps a listing from reading as a
+        // single run tree when it is several [ORB-12111].
+        Column::new("ROLE").fixed(),
+    ];
     if include_job_id {
         columns.push(Column::new("JOB_ID").fixed());
     }
@@ -83,7 +91,10 @@ pub(crate) fn run_history_payload(
     for run in &runs {
         use comfy_table::Cell;
         let last = run.steps.last();
-        let mut row = vec![Cell::new(&run.run_id)];
+        let mut row = vec![
+            Cell::new(&run.run_id),
+            Cell::new(format_run_role(&run.run_id)),
+        ];
         if include_job_id {
             row.push(Cell::new(&run.job_id));
         }

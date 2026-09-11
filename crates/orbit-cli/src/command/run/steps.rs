@@ -8,8 +8,8 @@ use crate::command::{CommandOut, Payload};
 use crate::output::color::Domain;
 
 use super::format::{
-    format_admissions_stop_line, format_child_dispatch_lines, format_duration, format_timestamp,
-    format_waiting_line, format_worker_limit_line, summarize_error_message,
+    format_admissions_stop_line, format_child_dispatch_lines, format_duration, format_run_role,
+    format_timestamp, format_waiting_line, format_worker_limit_line, summarize_error_message,
 };
 
 pub(crate) fn resolve_run(
@@ -164,7 +164,12 @@ pub(crate) fn run_header_text(run: &JobRun) -> String {
 pub(crate) fn run_header_text_with_state(run: &JobRun, state: Option<&PipelineState>) -> String {
     use crate::output::color::{Domain, bold, dimmed, text};
     let mut lines = vec![
-        format!("{} {}", bold("Run ID:"), run.run_id),
+        format!(
+            "{} {} ({})",
+            bold("Run ID:"),
+            run.run_id,
+            format_run_role(&run.run_id)
+        ),
         format!("{} {}", bold("Job ID:"), run.job_id),
         format!(
             "{} {}",
@@ -305,7 +310,12 @@ pub(crate) fn step_record_payload(
 
     use crate::output::color::{Domain, bold, dimmed, text};
     let mut lines = vec![
-        format!("{} {}", bold("Run ID:"), run.run_id),
+        format!(
+            "{} {} ({})",
+            bold("Run ID:"),
+            run.run_id,
+            format_run_role(&run.run_id)
+        ),
         format!("{} {}", bold("Job ID:"), run.job_id),
         format!("{} {}", bold("Target ID:"), step.target_id),
         format!("{} {}", bold("Target Type:"), step.target_type),

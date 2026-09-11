@@ -1,6 +1,6 @@
 //! Shared JSON projection for persisted job runs.
 
-use orbit_types::workflow::{JobRun, PipelineState};
+use orbit_types::workflow::{JobRun, PipelineState, run_id_role};
 use serde_json::{Value, json};
 
 /// Durable provider/model evidence for one completed agent invocation.
@@ -23,6 +23,11 @@ pub struct ActivityInvocationEvidence {
 /// actually admitting under, which a reader needs exactly when explaining a
 /// finished drain. Waiting reasons are momentary, so terminal runs omit them.
 /// Presentation adapters may add intentionally surface-specific fields.
+///
+/// `run_role` is the run id's own claim about how the run was submitted, and is
+/// null for ids minted before role markers existed [ORB-12111]. It never
+/// overrides `child_dispatches`, which remains the record of who dispatched
+/// whom.
 pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     let last = run.steps.last();
     let child_dispatches = serde_json::to_value(
@@ -71,6 +76,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         "drain_worker_limit": drain_worker_limit,
         "drain_admissions_stop": drain_admissions_stop,
         "run_id": run.run_id,
+        "run_role": run_id_role(&run.run_id).map(|role| role.to_string()),
         "job_id": run.job_id,
         "attempt": run.attempt,
         "state": run.state.to_string(),

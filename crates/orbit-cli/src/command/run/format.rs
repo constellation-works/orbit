@@ -1,4 +1,14 @@
-use orbit_types::workflow::{JobRunState, PipelineState};
+use orbit_types::workflow::{JobRunState, PipelineState, run_id_role};
+
+/// Which side of a parent/child relationship a run id declares.
+///
+/// Sibling top-level runs and a run's own children share a minute stem, so the
+/// marked sequence in the id is what tells them apart [ORB-12111]. An id minted
+/// before the markers existed reads as unmarked rather than being assigned a
+/// role its suffix never encoded.
+pub(crate) fn format_run_role(run_id: &str) -> String {
+    run_id_role(run_id).map_or_else(|| "unmarked".to_string(), |role| role.to_string())
+}
 
 pub(crate) fn summarize_error_message(raw: Option<&str>) -> String {
     let value = raw.unwrap_or("-").replace('\n', " ");
