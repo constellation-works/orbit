@@ -244,6 +244,47 @@ fn orbit_root_env_selects_the_same_checkout_as_the_root_flag() {
 }
 
 #[test]
+fn explicit_root_outranks_a_different_registered_cwd_checkout() {
+    let fixture = RegisteredCheckoutPairFixture::init();
+    let root = fixture
+        .checkout_b
+        .join(".orbit")
+        .canonicalize()
+        .expect("canonicalize B Orbit root");
+
+    fixture
+        .orbit(
+            &fixture.checkout_a,
+            &argv(&[
+                "--root",
+                root.to_str().expect("utf8 B Orbit root"),
+                "mcp",
+                "init",
+                "--claude",
+            ]),
+        )
+        .success();
+
+    assert!(!fixture.checkout_a.join(".claude.json").exists());
+    assert_eq!(
+        generated_server_args(&fixture.checkout_b.join(".claude.json")),
+        vec!["mcp", "serve", "--workspace", "ws_beta"]
+    );
+
+    let env = [("ORBIT_ROOT", root.as_path())];
+    fixture
+        .orbit_with_env(
+            &fixture.checkout_a,
+            &argv(&["mcp", "remove", "--claude"]),
+            &env,
+        )
+        .success();
+
+    assert!(!fixture.checkout_a.join(".claude.json").exists());
+    assert!(!fixture.checkout_b.join(".claude.json").exists());
+}
+
+#[test]
 fn a_root_without_a_registered_checkout_refuses_instead_of_writing() {
     let fixture = ExternalRootFixture::init();
     let unrelated_root = fixture
@@ -270,10 +311,122 @@ fn a_root_without_a_registered_checkout_refuses_instead_of_writing() {
         stderr.contains("does not identify exactly one registered checkout"),
         "unexpected failure message: {stderr}"
     );
-
     assert!(!unrelated_root.join(".claude.json").exists());
     fixture.assert_no_client_config_outside_the_checkout();
     assert!(!fixture.claude_config().exists());
+}
+
+#[test]
+fn an_unregistered_root_reports_the_root_and_registered_candidates() {
+    let fixture = RegisteredCheckoutPairFixture::init();
+    let root = fixture.checkout_a.join("not-registered");
+    let assert = fixture.orbit(
+        &fixture.checkout_a,
+        &argv(&[
+            "--root",
+            root.to_str().expect("utf8 unregistered root"),
+            "mcp",
+            "init",
+            "--claude",
+        ]),
+    );
+    let stderr = String::from_utf8_lossy(&assert.failure().get_output().stderr).to_string();
+
+    assert!(
+        stderr.contains(root.to_str().expect("utf8 unregistered root")),
+        "failure must name the explicit root: {stderr}"
+    );
+    assert!(
+        stderr.contains(fixture.checkout_a.to_str().expect("utf8 checkout A"))
+            && stderr.contains(fixture.checkout_b.to_str().expect("utf8 checkout B")),
+        "failure must name candidate checkouts: {stderr}"
+    );
+}
+
+struct RegisteredCheckoutPairFixture {
+    _temp: TempDir,
+    home: PathBuf,
+    checkout_a: PathBuf,
+    checkout_b: PathBuf,
+}
+
+impl RegisteredCheckoutPairFixture {
+    fn init() -> Self {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let checkout_a = temp.path().join("checkout-a");
+        let checkout_b = temp.path().join("checkout-b");
+        fs::create_dir_all(&home).expect("fixture home");
+        init_git_repo(&checkout_a);
+        init_git_repo(&checkout_b);
+
+        let fixture = Self {
+            _temp: temp,
+            home,
+            checkout_a,
+            checkout_b,
+        };
+        fixture
+            .orbit(
+                &fixture.checkout_a,
+                &argv(&[
+                    "init",
+                    "--non-interactive",
+                    "--host-name",
+                    "local-root-host",
+                    "--task-prefix",
+                    "LCL",
+                ]),
+            )
+            .success();
+        fixture
+            .orbit(
+                &fixture.checkout_a,
+                &argv(&["workspace", "init", "--name", "alpha"]),
+            )
+            .success();
+        fixture
+            .orbit(
+                &fixture.checkout_b,
+                &argv(&["workspace", "init", "--name", "beta"]),
+            )
+            .success();
+        fixture
+    }
+
+    fn orbit(&self, cwd: &Path, args: &[String]) -> assert_cmd::assert::Assert {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(cwd)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .args(args)
+            .assert()
+    }
+
+    fn orbit_with_env(
+        &self,
+        cwd: &Path,
+        args: &[String],
+        env: &[(&str, &Path)],
+    ) -> assert_cmd::assert::Assert {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(cwd)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .args(args);
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        command.assert()
+    }
 }
 
 fn argv(args: &[&str]) -> Vec<String> {
