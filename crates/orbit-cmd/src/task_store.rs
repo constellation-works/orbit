@@ -66,9 +66,9 @@ pub struct TaskStorePartitions {
     pub scanned: usize,
     /// Unclaimed and empty of task bundles: nothing to lose by deleting them.
     pub removable: Vec<UnclaimedPartition>,
-    /// Partitions whose task-registry checkout binding points at an orbit
-    /// directory confirmed absent. That the checkout is gone is sufficient
-    /// evidence to remove the partition, including its bundles.
+    /// Partitions whose task-registry checkout binding points at a repository
+    /// root (`repo_root`) confirmed absent. That the checkout is gone is
+    /// sufficient evidence to remove the partition, including its bundles.
     pub stale: Vec<UnclaimedPartition>,
     /// Unclaimed but still holding task bundles, which `orbit task reindex`
     /// can rebind from the bundles themselves. Never deleted automatically.

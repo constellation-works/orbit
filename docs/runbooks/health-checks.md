@@ -143,7 +143,7 @@ permissions that hide the checkout — and re-run `orbit doctor`. A reachable ch
 claim again and the row clears itself; a checkout that is genuinely gone once its parent is
 readable becomes a confirmed-stale binding, which the repair can then remove.
 
-For a partition whose binding is confirmed stale, the missing `orbit_dir` is the evidence that the
+For a partition whose binding is confirmed stale, the missing `repo_root` is the evidence that the
 checkout is gone. The confirmed repair removes that partition, including its task bundles, and
 retires the stale registry rows — as it does for every empty unclaimed partition. If the deleted
 checkout is still listed in the workspace catalog, first deregister it with its name, `ws_*` id, or
