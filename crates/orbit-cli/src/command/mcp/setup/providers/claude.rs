@@ -1,12 +1,14 @@
 use std::fs;
 use std::path::Path;
 
+use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_core::OrbitError;
 use orbit_types::tool::mcp_advertised_tool_name;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::command::mcp::{ORBIT_MCP_SERVER_ID, safe_mcp_tool_names};
 
+use super::super::args::ScopeArg;
 use super::super::dispatch::ConfigTarget;
 use super::super::format::*;
 use super::common::{ServerLaunch, server_args, server_id};
@@ -18,10 +20,21 @@ pub(in crate::command::mcp::setup) fn apply_claude_init(
     let server_id = server_id(launch);
     cleanup_legacy_mcp_path(target, server_id)?;
 
-    let mut root = load_json_object(&target.mcp_path)?;
-    let mcp_servers = ensure_json_object(&mut root, "mcpServers")?;
-    mcp_servers.insert(server_id.to_string(), claude_mcp_server_value(launch));
-    write_json_object(&target.mcp_path, &root)?;
+    let update_mcp = || {
+        let mut root = load_json_object(&target.mcp_path)?;
+        let mcp_servers = ensure_json_object(&mut root, "mcpServers")?;
+        mcp_servers.insert(server_id.to_string(), claude_mcp_server_value(launch));
+        if target.scope == ScopeArg::Home {
+            write_json_object_atomic(&target.mcp_path, &root)
+        } else {
+            write_json_object(&target.mcp_path, &root)
+        }
+    };
+    if target.scope == ScopeArg::Home {
+        with_exclusive_file_lock(&target.mcp_path, "Claude Code main settings", update_mcp)?;
+    } else {
+        update_mcp()?;
+    }
 
     if let Some(settings_path) = &target.settings_path {
         let mut settings = load_json_object(settings_path)?;
@@ -37,17 +50,31 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
     target: &ConfigTarget,
     server_id: &str,
 ) -> Result<(), OrbitError> {
-    let mut root = load_json_object(&target.mcp_path)?;
-    if let Some(mcp_servers) = root
-        .get_mut("mcpServers")
-        .and_then(JsonValue::as_object_mut)
-    {
-        mcp_servers.remove(server_id);
-        if mcp_servers.is_empty() {
-            root.remove("mcpServers");
+    let remove_mcp = || {
+        let mut root = load_json_object(&target.mcp_path)?;
+        if let Some(mcp_servers) = root
+            .get_mut("mcpServers")
+            .and_then(JsonValue::as_object_mut)
+        {
+            mcp_servers.remove(server_id);
+            if mcp_servers.is_empty() {
+                root.remove("mcpServers");
+            }
         }
+        if target.scope == ScopeArg::Home {
+            if target.mcp_path.exists() {
+                write_json_object_atomic(&target.mcp_path, &root)?;
+            }
+            Ok(())
+        } else {
+            write_or_remove_json_object(&target.mcp_path, &root)
+        }
+    };
+    if target.scope == ScopeArg::Home {
+        with_exclusive_file_lock(&target.mcp_path, "Claude Code main settings", remove_mcp)?;
+    } else {
+        remove_mcp()?;
     }
-    write_or_remove_json_object(&target.mcp_path, &root)?;
     cleanup_legacy_mcp_path(target, server_id)?;
 
     if let Some(settings_path) = &target.settings_path {
