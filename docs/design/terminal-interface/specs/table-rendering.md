@@ -48,8 +48,9 @@ Widths are computed from the result set, never declared as literals.
 
 ## 5. Column Selection
 
-- **Uniform-value suppression.** In `auto`/`table` mode, a column whose value is identical across every row of the result set is not rendered. It stays present in `json`. This is what removes `BUILTIN` from an all-builtin `orbit tool list` without a per-command decision.
+- **Uniform-value suppression.** In the `table` rendering `auto` chooses for a terminal, a column whose value is identical across every row of the result set is not rendered. It stays present in `json`. This is what removes `BUILTIN` from an all-builtin `orbit tool list` without a per-command decision.
 - Suppression is computed per invocation, so a filtered result set may show fewer columns than an unfiltered one. That is intended: the column carried no information *for this result set*.
+- **The plain form is never suppressed.** It has no header, so a dropped column is invisible: every later field simply shifts one position left, and `cut -f4` silently reads a different field than it did for the previous result set. `orbit audit list --status denied` emitted three fields where a mixed-status listing emitted six, because the denied rows' timestamps agreed to the second [ORB-12113]. Suppression is a readability heuristic for a human reading columns; a pipe gets the table's full shape.
 - `--format table` (explicit) disables suppression, so a caller who wants stable columns can ask for them.
 - Never suppress a column the user filtered on — if `--status done` was passed, `STATUS` renders even though it is uniform.
 

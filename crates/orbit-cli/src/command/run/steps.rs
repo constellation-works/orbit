@@ -115,7 +115,7 @@ pub(crate) struct RunStepRecord {
 }
 
 impl RunStepRecord {
-    fn from_job_step(step: &JobRunStep) -> Self {
+    pub(crate) fn from_job_step(step: &JobRunStep) -> Self {
         Self {
             step_index: step.step_index,
             target_type: step.target_type.to_string(),
@@ -266,7 +266,59 @@ pub(crate) fn activity_provenance_lines(value: &Value) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn step_summary_table(steps: &[&JobRunStep]) -> crate::output::table::Table {
+/// Where the steps a run view renders came from.
+///
+/// A v2 pipeline run keeps its step history in the audit trail rather than in
+/// the job-run record, so `JobRun::steps` is empty for exactly the runs whose
+/// header reports `step_outputs=N` and whose `orbit run events` lists every
+/// step. `orbit run show` used to answer "no steps recorded" for those; it now
+/// reconstructs them from the same trail and names the source [ORB-12113].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StepSource {
+    /// The job-run record carried its own steps.
+    Record,
+    /// Reconstructed from the run's v2 audit trail.
+    Audit,
+}
+
+impl StepSource {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Record => "record",
+            Self::Audit => "audit",
+        }
+    }
+}
+
+/// The steps a run view should render, and where they came from.
+pub(crate) struct RunDisplaySteps {
+    pub(crate) records: Vec<RunStepRecord>,
+    pub(crate) source: StepSource,
+}
+
+/// Choose the steps a run view renders: the record's own when it has them,
+/// and the ones reconstructed from its audit trail otherwise.
+///
+/// `audit_steps` come from the caller's existing audit scan, so recovering
+/// them costs no extra read.
+pub(crate) fn run_display_steps(run: &JobRun, audit_steps: Vec<RunAuditStep>) -> RunDisplaySteps {
+    if !run.steps.is_empty() {
+        return RunDisplaySteps {
+            records: run.steps.iter().map(RunStepRecord::from_job_step).collect(),
+            source: StepSource::Record,
+        };
+    }
+
+    RunDisplaySteps {
+        records: audit_steps
+            .into_iter()
+            .map(RunStepRecord::from_audit_step)
+            .collect(),
+        source: StepSource::Audit,
+    }
+}
+
+pub(crate) fn step_summary_table(steps: &[RunStepRecord]) -> crate::output::table::Table {
     use crate::output::table::{Column, Table};
     // `orbit run show <run_id> -s <step>` prints one step's untruncated record.
     let mut table = Table::new(vec![
@@ -277,13 +329,13 @@ pub(crate) fn step_summary_table(steps: &[&JobRunStep]) -> crate::output::table:
         Column::new("ERROR CODE").fixed(),
         Column::new("ERROR MESSAGE"),
     ])
-    .empty_message("no steps recorded");
+    .empty_message("no steps recorded in the run record or its audit trail");
     for step in steps {
         use comfy_table::Cell;
         table.add_row(vec![
             Cell::new(step.step_index),
             Cell::new(&step.target_id),
-            crate::output::color::cell(&step.state.to_string(), Domain::JobState),
+            crate::output::color::cell(&step.state, Domain::JobState),
             Cell::new(
                 step.duration_ms
                     .map(|ms| ms.to_string())
@@ -363,7 +415,7 @@ pub(crate) fn step_record_payload(
     Ok(Payload::detail(doc.clone(), lines.join("\n")).into())
 }
 
-fn run_step_record_to_json(step: &RunStepRecord) -> Value {
+pub(crate) fn run_step_record_to_json(step: &RunStepRecord) -> Value {
     json!({
         "step_index": step.step_index,
         "target_id": step.target_id,

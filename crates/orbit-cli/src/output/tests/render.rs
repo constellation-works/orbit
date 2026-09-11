@@ -51,7 +51,7 @@ fn plain_has_no_header_and_separates_fields_with_one_tab() {
         2,
         "header leaked into the plain form: {lines:?}"
     );
-    assert_eq!(lines[0], "alpha\tthe first record");
+    assert_eq!(lines[0], "alpha\tactive\tthe first record");
     assert!(
         !rendered.contains("  "),
         "plain padded its columns: {rendered:?}"
@@ -62,17 +62,41 @@ fn plain_has_no_header_and_separates_fields_with_one_tab() {
     );
 }
 
+/// Spec §5: uniform-value suppression is a readability heuristic for the
+/// `table` rendering. The plain form a pipe receives keeps every column,
+/// whatever the values happen to be, so `cut -f4` names the same field for one
+/// result set as for the next [ORB-12113].
+#[test]
+fn plain_keeps_a_uniform_column_the_table_rendering_drops() {
+    let piped = sink(false, None);
+    assert_eq!(piped.mode(), OutputMode::Plain);
+    assert!(
+        !piped.suppress_uniform_columns(),
+        "the plain form suppressed a column"
+    );
+    assert_eq!(
+        uniform_status_table().render_plain(&piped).lines().next(),
+        Some("alpha\tactive\tthe first record"),
+    );
+
+    let terminal = sink(true, None);
+    assert!(terminal.suppress_uniform_columns());
+    let rendered = uniform_status_table().render_at(
+        terminal.truncate_width(),
+        terminal.color_allowed(),
+        terminal.suppress_uniform_columns(),
+    );
+    assert!(
+        !rendered.body.contains("STATUS"),
+        "auto kept the uniform STATUS column: {}",
+        rendered.body
+    );
+}
+
 /// The `auto` rung keeps the readability heuristic; naming `table` explicitly
 /// asks for the table's full shape and turns it off (spec §5).
 #[test]
 fn explicit_format_table_keeps_a_uniform_column_that_auto_drops() {
-    let auto = uniform_status_table().render_plain(&sink(false, None));
-    assert_eq!(
-        auto.lines().next(),
-        Some("alpha\tthe first record"),
-        "auto kept the uniform STATUS column"
-    );
-
     let explicit = sink(false, Some(FormatArg::Table));
     assert!(!explicit.suppress_uniform_columns());
     let rendered = uniform_status_table().render_at(
@@ -92,10 +116,15 @@ fn explicit_format_table_keeps_a_uniform_column_that_auto_drops() {
 /// field.
 #[test]
 fn a_fixed_shape_view_keeps_every_column_under_auto() {
+    let terminal = sink(true, None);
+    assert!(
+        terminal.suppress_uniform_columns(),
+        "auto on a terminal is the sink answer under test"
+    );
     let rendered = uniform_status_table().keep_all_columns().render_at(
         None,
         false,
-        sink(false, None).suppress_uniform_columns(),
+        terminal.suppress_uniform_columns(),
     );
     assert!(rendered.body.contains("STATUS"), "{}", rendered.body);
 }
@@ -104,9 +133,6 @@ fn a_fixed_shape_view_keeps_every_column_under_auto() {
 /// a pipe — the failure the `width == 0` encoding exists to prevent.
 #[test]
 fn plain_never_truncates() {
-    // The two bodies must differ: identical values in every row make the
-    // column uniform, and `auto` suppresses it before truncation is even
-    // reached.
     let long = format!("alpha-{}", "x".repeat(400));
     let other = format!("beta-{}", "x".repeat(400));
     let mut table = Table::new(vec![Column::new("NAME").fixed(), Column::new("BODY")]);

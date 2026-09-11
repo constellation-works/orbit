@@ -2,10 +2,12 @@
 //!
 //! CLI help, MCP/tool schema text, validation errors, and JSON projectors
 //! must all draw from this list. Every stable key in the public task DTO is
-//! projectable. Sidecars (`comments`, `history`, `artifacts`) and fields whose
-//! canonical form depends on other tasks (`resolved_dependencies`,
-//! `relations`) still need a runtime fetch; the remaining fields are projected
-//! from the record itself.
+//! projectable, and so is every enrichment the unprojected readout adds to it.
+//! Sidecars (`comments`, `history`, `artifacts`), fields whose canonical form
+//! depends on other tasks (`resolved_dependencies`, `relations`), and the
+//! host-local crew enrichments (`resolved_crew`, `crew_model`,
+//! `crew_unresolved`) still need a runtime fetch; the remaining fields are
+//! projected from the record itself.
 
 use serde_json::{Value, json};
 
@@ -16,7 +18,7 @@ use crate::task::Task;
 #[macro_export]
 macro_rules! task_show_projection_fields_csv {
     () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, crew, orchestrator, created_at, updated_at, comments, history, artifacts"
+        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts"
     };
 }
 
@@ -47,6 +49,9 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "source_task_id",
     "job_run_id",
     "crew",
+    "resolved_crew",
+    "crew_model",
+    "crew_unresolved",
     "orchestrator",
     "created_at",
     "updated_at",
@@ -91,11 +96,16 @@ pub const TASK_SHOW_PUBLIC_DTO_FIELDS: &[&str] = &[
     "updated_at",
 ];
 
-/// Response enrichments that are intentionally not task-field projections.
+/// Response envelope keys that are intentionally not task-field projections.
 ///
-/// These keys describe the read environment or an explicitly requested
-/// enrichment rather than stable task data, so asking for them alone could
-/// produce host-dependent results.
+/// These describe the read itself — who resolved it, what else was asked for —
+/// rather than the task, so a caller selecting one alone would be projecting
+/// the response rather than the record.
+///
+/// The crew enrichments are deliberately *not* here. They are host-local and
+/// conditional, but the unprojected readout emits them, and a key a reader can
+/// see is a key it must be able to ask for: rejecting `resolved_crew` while
+/// printing it was the defect in [ORB-12113].
 pub const TASK_SHOW_DERIVED_RESPONSE_FIELDS: &[(&str, &str)] = &[
     (
         "workspace",
@@ -104,18 +114,6 @@ pub const TASK_SHOW_DERIVED_RESPONSE_FIELDS: &[(&str, &str)] = &[
     (
         "related_docs",
         "derived only when with_context is requested",
-    ),
-    (
-        "resolved_crew",
-        "conditional host-local crew configuration enrichment",
-    ),
-    (
-        "crew_model",
-        "conditional host-local crew configuration enrichment",
-    ),
-    (
-        "crew_unresolved",
-        "conditional host-local crew-resolution diagnostic",
     ),
 ];
 
@@ -142,8 +140,9 @@ pub fn unknown_task_show_field_message(name: &str) -> String {
 /// JSON for a Task-local (non-sidecar) projection field.
 ///
 /// Returns `None` for sidecar names, cross-task fields (`dependencies`,
-/// `resolved_dependencies`, `relations`), and unknown names so callers can
-/// keep those on their existing fetch paths.
+/// `resolved_dependencies`, `relations`), the crew enrichments a host resolves
+/// (`resolved_crew`, `crew_model`, `crew_unresolved`), and unknown names, so
+/// callers can keep those on their existing fetch paths.
 pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
     match field {
         "id" => Some(json!(task.id)),

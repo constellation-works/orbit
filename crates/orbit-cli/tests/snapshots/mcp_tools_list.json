@@ -952,7 +952,7 @@
               "type": "string"
             }
           ],
-          "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, crew, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution."
+          "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution."
         },
         "id": {
           "description": "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required.",

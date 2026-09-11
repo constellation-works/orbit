@@ -1,2 +1,2 @@
-orbit	<CONTENT_HASH>
-orbit-orchestrate	<CONTENT_HASH>
+orbit	<CONTENT_HASH>	0	
+orbit-orchestrate	<CONTENT_HASH>	0	

@@ -108,6 +108,28 @@ fn a_global_format_does_not_corrupt_a_command_owning_format() {
     assert!(Cli::from_arg_matches(&matches).is_ok());
 }
 
+/// [ORB-12113] A command that shadows the global flag has to say so: the same
+/// `--format` accepts `ndjson` everywhere else and rejects it here, with a
+/// different vocabulary in the error.
+#[test]
+fn a_command_owning_format_documents_the_shadowing_in_its_help() {
+    let help = parser()
+        .find_subcommand_mut("audit")
+        .and_then(|audit| audit.find_subcommand_mut("export"))
+        .expect("audit export")
+        .render_long_help()
+        .to_string();
+
+    assert!(
+        help.contains("shadows the global"),
+        "audit export help:\n{help}"
+    );
+    assert!(
+        help.contains("auto|table|json|ndjson"),
+        "audit export help must name the vocabulary it shadows:\n{help}"
+    );
+}
+
 #[test]
 fn every_command_declares_exactly_one_format_and_only_the_listed_commands_own_theirs() {
     let mut owners = Vec::new();

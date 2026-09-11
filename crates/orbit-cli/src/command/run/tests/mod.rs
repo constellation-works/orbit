@@ -443,6 +443,121 @@ fn run_show_projects_parallel_provider_completion_by_invocation_parent() {
     assert_eq!(processes[1]["finished"], false);
 }
 
+/// [ORB-12113] A v2 pipeline run records its steps in the audit trail, not in
+/// the job-run record, so `run.steps` is empty for exactly the runs whose own
+/// header reports `step_outputs=N` and whose `orbit run events` lists every
+/// step. `orbit run show` answered "no steps recorded" over those; it now
+/// renders them and says where they came from.
+#[test]
+fn run_show_recovers_steps_from_the_audit_trail_when_the_record_stores_none() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    let scheduled_at = Utc::now();
+    let run = JobRun {
+        run_id: "jrun-cli-audit-steps".to_string(),
+        job_id: "task_pipeline".to_string(),
+        attempt: 1,
+        // Terminal, so the lazy orphan reconciler leaves the record alone: the
+        // fixture's point is a run whose only step history is its audit trail.
+        state: JobRunState::Success,
+        scheduled_at,
+        started_at: Some(scheduled_at),
+        finished_at: Some(scheduled_at),
+        duration_ms: Some(4),
+        created_at: scheduled_at,
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+    };
+    runtime
+        .sqlite_store()
+        .expect("store")
+        .upsert_job_run_for_workspace(&workspace_id, &run, None)
+        .expect("insert run");
+
+    let events = [
+        json!({ "event_id": "run", "ts": "2026-09-10T04:00:00Z", "body_kind": "run_started" }),
+        json!({ "event_id": "step-pilot", "ts": "2026-09-10T04:00:01Z", "parent_event_id": "run", "body_kind": "step_started", "step_id": "pilot" }),
+        json!({ "event_id": "step-pilot-done", "ts": "2026-09-10T04:00:02Z", "parent_event_id": "run", "body_kind": "step_finished", "step_id": "pilot", "outcome": "success" }),
+        json!({ "event_id": "step-implement", "ts": "2026-09-10T04:00:03Z", "parent_event_id": "run", "body_kind": "step_started", "step_id": "implement_one" }),
+    ];
+    for event in events {
+        let ts = event["ts"]
+            .as_str()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc))
+            .expect("event timestamp");
+        runtime
+            .insert_v2_audit_event(&V2AuditEventInsertParams {
+                workspace_id: workspace_id.clone(),
+                event_id: event["event_id"].as_str().expect("event id").to_string(),
+                source: "v2_envelope".to_string(),
+                schema_version: 1,
+                event_type: "test.event".to_string(),
+                ts,
+                run_id: run.run_id.clone(),
+                agent_identity: "codex".to_string(),
+                parent_event_id: event
+                    .get("parent_event_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                workspace_path: None,
+                payload_json: event.to_string(),
+            })
+            .expect("insert event");
+    }
+
+    let output =
+        super::run_show_payload(&runtime, Some(&run.run_id), None).expect("show run payload");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("show should produce a payload");
+    };
+    let (document, view) = payload.into_view();
+
+    assert_eq!(document["steps_source"], "audit");
+    let steps = document["steps"].as_array().expect("step projection");
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["target_id"], "pilot");
+    assert_eq!(steps[0]["state"], "success");
+    assert_eq!(steps[1]["target_id"], "implement_one");
+    assert_eq!(steps[1]["state"], "running");
+    assert!(
+        document["run"]["steps"]
+            .as_array()
+            .expect("record steps")
+            .is_empty(),
+        "the record's own steps must stay as stored"
+    );
+
+    let crate::output::payload::View::Blocks(blocks) = view else {
+        panic!("show keeps a human view");
+    };
+    let crate::output::payload::Block::Text(header) = &blocks[0] else {
+        panic!("show opens with prose");
+    };
+    assert!(
+        header.contains("reconstructed from the run audit trail"),
+        "the view must say where the steps came from: {header}"
+    );
+    let crate::output::payload::Block::Table(table) = &blocks[1] else {
+        panic!("show renders a step table");
+    };
+    let rendered = table.render_plain(&crate::output::sink::OutputSink::resolve(
+        false,
+        &crate::output::sink::SinkEnv::default(),
+        None,
+        None,
+        false,
+    ));
+    assert!(rendered.contains("pilot"), "{rendered}");
+    assert!(rendered.contains("implement_one"), "{rendered}");
+}
+
 #[test]
 fn parses_run_show_step() {
     let command = parse_run(&["orbit", "run", "show", "jrun-1", "-s", "implement_one"]);
