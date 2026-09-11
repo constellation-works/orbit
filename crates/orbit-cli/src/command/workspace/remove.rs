@@ -10,6 +10,7 @@ use crate::command::{CommandOut, CommandOutput, Execute};
 #[derive(Args)]
 pub struct WorkspaceRemoveArgs {
     /// Workspace name, id, or absolute checkout path
+    #[arg(value_name = "WORKSPACE", id = "workspace_selector")]
     pub workspace: String,
 }
 
