@@ -276,6 +276,11 @@ impl RuntimeHost for OrbitRuntime {
             .map(ToOwned::to_owned)
     }
 
+    fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
+        self.sqlite_store()?
+            .refresh_file_connections(&self.context.persistence().audit_db)
+    }
+
     fn missing_required_environment_vars(&self, required_env_vars: &[&str]) -> Vec<String> {
         self.execution_env_policy()
             .missing_required(required_env_vars)

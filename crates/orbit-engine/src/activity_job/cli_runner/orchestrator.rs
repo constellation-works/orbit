@@ -503,6 +503,18 @@ pub fn run_cli_backend(
     let stdout_blob_ref = audit.write_blob(stdout.bytes());
     let stderr_blob_ref = audit.write_blob(stderr.bytes());
 
+    // The provider has exited and the supervisor owns its exact status,
+    // captured response, and durable blob evidence. Rebind before the first
+    // completion event: a sandboxed provider may have opened the explicitly
+    // granted SQLite/WAL files while this long-lived worker retained handles
+    // from before spawn.
+    host.refresh_persistence_after_cli_provider()
+        .map_err(|error| {
+            DispatchError::CliInvocationPermanent(format!(
+                "refresh durable store after provider `{provider}` exited: {error}"
+            ))
+        })?;
+
     audit.emit_lossy(V2AuditEventKind::CliInvocationFinished {
         provider: provider.clone(),
         exit_code,

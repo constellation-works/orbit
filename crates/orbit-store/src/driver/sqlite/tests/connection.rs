@@ -34,6 +34,143 @@ fn check_writable_acquires_and_releases_write_lock() {
         .expect("store still accepts transactions after the probe");
 }
 
+#[cfg(unix)]
+#[test]
+fn refresh_file_connections_rebinds_clones_after_database_replacement() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("store.db");
+    let replacement_path = dir.path().join("replacement.db");
+    let store = Store::open(&path).expect("open original store");
+    let clone = store.clone();
+
+    store
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute_batch(
+                    "CREATE TABLE refresh_fixture(value TEXT NOT NULL);
+                     INSERT INTO refresh_fixture VALUES ('original');",
+                )
+                .map_err(|error| OrbitError::Store(error.to_string()))
+        })
+        .expect("seed original database");
+    store
+        .conn
+        .lock()
+        .expect("original writer")
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")
+        .expect("detach original WAL sidecars");
+    {
+        let replacement = Store::open(&replacement_path).expect("open replacement store");
+        replacement
+            .with_transaction(|tx| {
+                tx.connection()
+                    .execute_batch(
+                        "CREATE TABLE refresh_fixture(value TEXT NOT NULL);
+                         INSERT INTO refresh_fixture VALUES ('replacement');",
+                    )
+                    .map_err(|error| OrbitError::Store(error.to_string()))
+            })
+            .expect("seed replacement database");
+        replacement
+            .conn
+            .lock()
+            .expect("replacement writer")
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")
+            .expect("detach replacement WAL sidecars");
+    }
+    let checked_out_before_refresh = store.read().expect("check out pre-refresh reader");
+    std::fs::rename(&replacement_path, &path).expect("replace database path");
+
+    store
+        .refresh_file_connections(&path)
+        .expect("refresh authoritative connections");
+    drop(checked_out_before_refresh);
+    assert_eq!(
+        store
+            .reader_pool_for_test()
+            .expect("file store has reader pool")
+            .idle_len(),
+        0,
+        "a reader checked out before refresh must not return to the new generation"
+    );
+    clone
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute("INSERT INTO refresh_fixture VALUES ('durable')", [])
+                .map(|_| ())
+                .map_err(|error| OrbitError::Store(error.to_string()))
+        })
+        .expect("clone shares the rebound writer");
+    let after_refresh = rusqlite::Connection::open(&path).expect("reopen authoritative path");
+    let values = after_refresh
+        .prepare("SELECT value FROM refresh_fixture ORDER BY rowid")
+        .expect("prepare values")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query values")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect values");
+    assert_eq!(values, vec!["replacement", "durable"]);
+}
+
+#[test]
+fn refresh_file_connections_fails_closed_during_a_writer_transaction() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("store.db");
+    let store = Store::open(&path).expect("open store");
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let writer_store = store.clone();
+    let writer = std::thread::spawn(move || {
+        writer_store.with_transaction_behavior(rusqlite::TransactionBehavior::Immediate, |tx| {
+            tx.connection()
+                .execute_batch("CREATE TABLE refresh_writer(value INTEGER);")
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            started_tx
+                .send(())
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            release_rx
+                .recv()
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+    });
+    started_rx.recv().expect("writer transaction started");
+
+    let error = store
+        .refresh_file_connections(&path)
+        .expect_err("refresh cannot bypass an active writer transaction");
+    assert!(error.to_string().contains("write probe failed"), "{error}");
+
+    release_tx.send(()).expect("release writer transaction");
+    writer
+        .join()
+        .expect("join writer")
+        .expect("writer transaction commits");
+    store
+        .refresh_file_connections(&path)
+        .expect("refresh succeeds after transaction completion");
+}
+
+#[test]
+fn refresh_file_connections_refuses_read_only_and_in_memory_handles() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("store.db");
+    drop(Store::open(&path).expect("initialize store"));
+
+    for store in [
+        Store::open_read_only(&path).expect("open read-only store"),
+        Store::open_in_memory().expect("open in-memory store"),
+    ] {
+        let error = store
+            .refresh_file_connections(&path)
+            .expect_err("only writable file stores may refresh");
+        assert!(
+            error.to_string().contains("writable file-backed store"),
+            "{error}"
+        );
+    }
+}
+
 #[test]
 fn path_write_probe_does_not_create_or_migrate_databases() {
     let dir = tempfile::tempdir().expect("tempdir");

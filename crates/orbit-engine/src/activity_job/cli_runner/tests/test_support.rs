@@ -450,6 +450,26 @@ impl RuntimeHost for TestHost {
     fn orbit_workspace_selector(&self) -> Option<String> {
         self.orbit_workspace_selector.clone()
     }
+
+    fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
+        if let Some(marker) = self
+            .task_context
+            .as_ref()
+            .and_then(|context| context.get("persistence_refresh_marker"))
+            .and_then(Value::as_str)
+        {
+            fs::write(marker, b"refreshed").map_err(|error| OrbitError::Io(error.to_string()))?;
+        }
+        match self
+            .task_context
+            .as_ref()
+            .and_then(|context| context.get("persistence_refresh_error"))
+            .and_then(Value::as_str)
+        {
+            Some(message) => Err(OrbitError::Store(message.to_string())),
+            None => Ok(()),
+        }
+    }
 }
 
 pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec(

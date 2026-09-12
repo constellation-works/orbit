@@ -110,7 +110,11 @@ fn run_cli_backend_finished_audit_event_keeps_stdout_stderr_blob_refs() {
         "codex:gpt-5.5",
         sink_for_writer,
     ));
-    let host = TestHost::with_command(script.display().to_string());
+    let refresh_marker = temp.path().join("persistence-refreshed");
+    let mut host = TestHost::with_command(script.display().to_string());
+    host.task_context = Some(serde_json::json!({
+        "persistence_refresh_marker": refresh_marker,
+    }));
     let spec = test_agent_loop_spec(Duration::from_secs(5));
     let input = serde_json::json!({
         "prompt": "do it",
@@ -129,6 +133,10 @@ fn run_cli_backend_finished_audit_event_keeps_stdout_stderr_blob_refs() {
     .expect("run succeeds");
 
     assert!(outcome.success);
+    assert!(
+        refresh_marker.exists(),
+        "the provider exit boundary must refresh persistence before completion audit"
+    );
     let stdout = "{\"schemaVersion\":1,\"status\":\"success\",\"result\":{},\"error\":null}\n";
     assert_eq!(outcome.output["stdout_text"], stdout);
     assert_eq!(outcome.output["stdout_text_truncated"], false);
@@ -162,6 +170,61 @@ fn run_cli_backend_finished_audit_event_keeps_stdout_stderr_blob_refs() {
     assert!(!finished.4);
     assert_eq!(sink.blob("blob-2"), Some(stdout.as_bytes().to_vec()));
     assert_eq!(sink.blob("blob-3"), Some(b"plain stderr\n".to_vec()));
+}
+
+#[test]
+fn run_cli_backend_fails_closed_when_post_provider_persistence_cannot_rebind() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("codex");
+    write_executable(
+        &script,
+        "#!/bin/sh\nprintf '%s\\n' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{},\"error\":null}'\nprintf '%s\\n' 'captured stderr' >&2\n",
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink.clone();
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-refresh-failure",
+        "codex:gpt-5.5",
+        sink_for_writer,
+    ));
+    let mut host = TestHost::with_command(script.display().to_string());
+    host.task_context = Some(serde_json::json!({
+        "persistence_refresh_error": "authoritative database unavailable",
+    }));
+
+    let error = run_cli_backend(
+        &host,
+        &test_agent_loop_spec(Duration::from_secs(5)),
+        "test_activity",
+        "job-refresh-failure",
+        audit.clone(),
+        &serde_json::json!({"prompt": "do it"}),
+        None,
+    )
+    .expect_err("a successful envelope cannot bypass a failed durable rebind");
+
+    assert!(
+        matches!(error, DispatchError::CliInvocationPermanent(_)),
+        "{error:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("authoritative database unavailable")
+    );
+    assert!(
+        audit
+            .events_snapshot()
+            .expect("events")
+            .iter()
+            .all(|event| !matches!(&event.kind, V2AuditEventKind::CliInvocationFinished { .. })),
+        "provider-finished must not be claimed through an unavailable authoritative store"
+    );
+    assert!(
+        sink.blob("blob-2").is_some() && sink.blob("blob-3").is_some(),
+        "exact stdout/stderr evidence is captured before persistence rebind"
+    );
 }
 
 #[test]

@@ -332,6 +332,14 @@ pub trait RuntimeHost: Send + Sync {
     fn orbit_workspace_selector(&self) -> Option<String> {
         None
     }
+    /// Rebind durable runtime handles after an external CLI provider exits.
+    ///
+    /// Provider sandboxes may receive explicit access to a SQLite database and
+    /// its WAL sidecars. A host with cached connections refreshes them here so
+    /// completion audit and checkpoints target the authoritative files.
+    fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
+        Ok(())
+    }
     fn missing_required_environment_vars(&self, _required_env_vars: &[&str]) -> Vec<String> {
         Vec::new()
     }
