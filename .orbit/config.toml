@@ -14,23 +14,26 @@ sandbox = "danger-full-access"
 [workflow]
 auto_ship = true
 base_branch = "agent-main"
-default_crew = "luna"
-system_crew = "sol"
+default_crew = "sonnet"
+system_crew = "luna"
 
 [crews.opus]
 backend = "cli"
 model = "claude-opus-5"
 provider = "claude"
+effort = "high"
 
 [crews.sonnet]
 backend = "cli"
 model = "claude-sonnet-5"
 provider = "claude"
+effort = "high"
 
 [crews.fable]
 backend = "cli"
 model = "claude-fable-5-1"
 provider = "claude"
+effort = "medium"
 
 [crews.astra]
 backend = "cli"
@@ -42,22 +45,25 @@ effort = "medium"
 backend = "cli"
 model = "gpt-5.6-sol"
 provider = "codex"
+effort = "high"
 
 [crews.terra]
 backend = "cli"
 model = "gpt-5.6-terra"
 provider = "codex"
+effort = "high"
 
 [crews.luna]
 backend = "cli"
 model = "gpt-5.6-luna"
 provider = "codex"
-effort = "high"
+effort = "xhigh"
 
 [crews.grok]
 backend = "cli"
 model = "grok-4.6"
 provider = "grok"
+effort = "high"
 
 [crews.gemini-flash]
 backend = "cli"
@@ -73,4 +79,4 @@ roots = ["docs/"]
 
 [operation]
 review_crew = "opus"
-review_policy = "after-landing"
+review_policy = "none"

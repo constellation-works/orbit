@@ -90,7 +90,7 @@ template:
   priority: medium
   # The portable system lane is seeded per machine and compatibility-aliased
   # for configs written before that crew existed.
-  crew: opus
+  crew: sonnet
   status: backlog
 dedupe: skip_if_open
 created_by: system

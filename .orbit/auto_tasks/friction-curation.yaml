@@ -41,7 +41,7 @@ template:
   - friction-curation
   - no-diff-expected
   priority: medium
-  crew: luna
+  crew: grok
   status: backlog
 dedupe: skip_if_open
 created_by: human
