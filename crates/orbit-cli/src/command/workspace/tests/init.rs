@@ -28,6 +28,7 @@ fn task_id_start_uses_the_host_task_prefix() {
 fn workspace_init_uses_the_checked_out_branch_when_base_branch_is_omitted() {
     let workspace = tempdir().expect("workspace tempdir");
     let home = tempdir().expect("home tempdir");
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
@@ -59,7 +60,6 @@ fn workspace_init_uses_the_checked_out_branch_when_base_branch_is_omitted() {
         .expect("create initial commit");
     assert!(git_commit.success(), "commit master branch fixture");
 
-    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
     WorkspaceInitArgs {
         name: Some("checked-out-branch".to_string()),
         base_branch: None,
@@ -89,6 +89,7 @@ fn workspace_init_uses_the_checked_out_branch_when_base_branch_is_omitted() {
 #[test]
 fn checked_out_branch_keeps_main_as_the_default_for_main_checkouts() {
     let workspace = tempdir().expect("workspace tempdir");
+    let _env = EnvGuard::acquire();
     let git_init = std::process::Command::new("git")
         .args(["init", "--quiet", "--initial-branch", "main"])
         .arg(workspace.path())
@@ -97,6 +98,25 @@ fn checked_out_branch_keeps_main_as_the_default_for_main_checkouts() {
     assert!(git_init.success(), "initialize main branch repository");
 
     assert_eq!(checked_out_branch(workspace.path()), "main");
+}
+
+#[test]
+fn empty_path_makes_unguarded_git_setup_return_not_found() {
+    let empty_path = tempdir().expect("empty PATH tempdir");
+    let env = EnvGuard::acquire().path(empty_path.path());
+
+    let error = std::process::Command::new("git")
+        .arg("--version")
+        .status()
+        .expect_err("an empty PATH must hide git");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+    drop(env);
+    let git = std::process::Command::new("git")
+        .arg("--version")
+        .status()
+        .expect("restored PATH must resolve git");
+    assert!(git.success(), "git must run after PATH restoration");
 }
 
 #[test]
@@ -1710,6 +1730,7 @@ fn workspace_init_from_git_subdir_gitignores_repo_orbit_dir() {
 fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
     let parent = tempdir().expect("parent workspace tempdir");
     let home = tempdir().expect("home tempdir");
+    let _env = EnvGuard::acquire().home(home.path()).cwd(parent.path());
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
@@ -1724,7 +1745,6 @@ fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
         .expect("run git init for parent");
     assert!(parent_git.success(), "initialize parent git repository");
 
-    let _env = EnvGuard::acquire().home(home.path()).cwd(parent.path());
     let init = |name: &str| WorkspaceInitArgs {
         name: Some(name.to_string()),
         base_branch: Some("agent-main".to_string()),
@@ -2098,6 +2118,7 @@ fn nameless_tmp_workspace_registers_only_in_isolated_registry() {
 fn workspace_init_guidance_and_generated_onboarding_files_lifecycle() {
     let workspace = tempdir().expect("workspace tempdir");
     let home = tempdir().expect("home tempdir");
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
@@ -2126,7 +2147,6 @@ fn workspace_init_guidance_and_generated_onboarding_files_lifecycle() {
         "checkout-local initialization must retain the commit guidance"
     );
 
-    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
     WorkspaceInitArgs {
         name: Some("guidance-test".to_string()),
         base_branch: Some("agent-main".to_string()),
