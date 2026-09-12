@@ -11,15 +11,16 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
+use orbit_common::test_env::{self, AGENT_IDENTITY_ENV};
 use orbit_store::contracts::TaskCreateParams;
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
-use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::json;
 
-use crate::OrbitRuntime;
+use crate::{ActorIdentity, OrbitRuntime};
 
 fn context_with(capabilities: [McpCapability; 1]) -> ToolContext {
     ToolContext {
@@ -299,4 +300,117 @@ fn audit_stats_denials_break_down_by_operation() {
             .map(|(_, count)| *count),
         Some(2)
     );
+}
+
+/// [ORB-12274]: a bare CLI caller with `USER` set must record audit `role`
+/// as the actor kind (`human`), never `human:<os-user>`. The same identity
+/// must not fragment `audit_denials_by_role`.
+#[test]
+fn authorization_row_role_for_bare_cli_is_human_not_os_user() {
+    let os_user = "qa-operator";
+    let _env = test_env::scoped(AGENT_IDENTITY_ENV.iter().map(|name| (*name, None)).chain([
+        ("ORBIT_OPERATOR", None),
+        ("USER", Some(os_user)),
+        ("USERNAME", None),
+        ("LOGNAME", None),
+    ]));
+
+    let actor = ActorIdentity::from_env();
+    assert_eq!(actor.label, format!("human:{os_user}"));
+
+    let runtime = deny_governed_tool_as(actor);
+    let record = authorization_record(&runtime, AuditEventStatus::Denied);
+
+    assert_eq!(record.role, "human");
+    assert!(
+        !record.role.contains(os_user),
+        "authorization role must not carry the OS account name: {}",
+        record.role
+    );
+
+    let buckets = runtime
+        .audit_denials_by_role(None)
+        .expect("denials by role");
+    assert!(
+        buckets.iter().any(|(role, _)| role == "human"),
+        "expected a human denial bucket, got {buckets:?}"
+    );
+    assert!(
+        buckets
+            .iter()
+            .all(|(role, _)| !role.contains(os_user) && !role.starts_with("human:")),
+        "denial-by-role buckets must be actor kinds, not OS accounts: {buckets:?}"
+    );
+}
+
+/// [ORB-12274]: when the operator override is the resolved identity, the
+/// authorization row records `operator`, not a named human or OS account.
+#[test]
+fn authorization_row_role_for_operator_override_identity_is_operator() {
+    let _env = test_env::scoped(AGENT_IDENTITY_ENV.iter().map(|name| (*name, None)).chain([
+        ("ORBIT_OPERATOR", Some("1")),
+        ("USER", Some("qa-operator")),
+        ("USERNAME", None),
+        ("LOGNAME", None),
+    ]));
+
+    let actor = ActorIdentity::from_env();
+    assert_eq!(actor.label, "operator");
+
+    let runtime = deny_governed_tool_as(actor);
+    let record = authorization_record(&runtime, AuditEventStatus::Denied);
+    assert_eq!(record.role, "operator");
+}
+
+/// [ORB-12274]: an agent envelope still records the canonical family as
+/// authorization `role`.
+#[test]
+fn authorization_row_role_for_agent_envelope_is_canonical_family() {
+    let _env = test_env::scoped(
+        AGENT_IDENTITY_ENV
+            .iter()
+            .filter(|name| **name != "ORBIT_AGENT_MODEL")
+            .map(|name| (*name, None))
+            .chain([
+                ("ORBIT_AGENT_MODEL", Some("grok")),
+                ("ORBIT_OPERATOR", None),
+                ("USER", Some("qa-operator")),
+            ]),
+    );
+
+    let actor = ActorIdentity::from_env();
+    assert_eq!(actor.label, "grok");
+
+    let runtime = deny_governed_tool_as(actor);
+    let record = authorization_record(&runtime, AuditEventStatus::Denied);
+    assert_eq!(record.role, "grok");
+}
+
+fn deny_governed_tool_as(actor: ActorIdentity) -> OrbitRuntime {
+    let runtime = OrbitRuntime::in_memory()
+        .expect("build runtime")
+        .with_actor(actor);
+    let task_id = seed_task(&runtime);
+    let error = runtime
+        .run_tool_with_context_and_role(
+            "orbit.task.delete",
+            json!({ "id": task_id, "force": true }),
+            Role::Admin,
+            context_with([McpCapability::Agent]),
+        )
+        .expect_err("agent capability must not reach task deletion");
+    assert!(
+        matches!(error, OrbitError::CapabilityDenied(_)),
+        "expected a capability denial, got: {error}"
+    );
+    runtime
+}
+
+fn authorization_record(runtime: &OrbitRuntime, status: AuditEventStatus) -> AuditEvent {
+    runtime
+        .list_audit_events(None, None, Some(status), None, 50)
+        .expect("list audit events")
+        .into_iter()
+        .find(|event| event.command == "authorization")
+        .expect("the decision persists its own audit row")
 }
