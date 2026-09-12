@@ -860,16 +860,21 @@ function wireGlobalTaskResolver() {
   }
 
   function adoptWorkspace(workspaceId) {
-    if (!workspaceId || workspaceId === getWorkspace()) return;
+    if (!workspaceId || workspaceId === getWorkspace()) return false;
     setWorkspace(workspaceId);
     persistScopeToUrl();
     const selector = $("workspace-select");
     if (selector) selector.value = workspaceId;
+    return true;
   }
 
-  function openLookedUpTask(task, workspaceId) {
-    adoptWorkspace(workspaceId);
+  async function openLookedUpTask(task, workspaceId, seq) {
+    const workspaceChanged = adoptWorkspace(workspaceId);
     sAT("tasks", { refresh: false });
+    if (workspaceChanged) {
+      await refreshDashboard();
+      if (seq !== lookupSeq || getWorkspace() !== workspaceId) return;
+    }
     searchQuery = "";
     const ts = $("task-search");
     if (ts) ts.value = "";
@@ -917,7 +922,7 @@ function wireGlobalTaskResolver() {
       }
       if (discardIfStale()) return;
       if (primary.res.ok && primary.body && primary.body.id) {
-        openLookedUpTask(primary.body, primary.workspaceId);
+        await openLookedUpTask(primary.body, primary.workspaceId, seq);
         return;
       }
 
@@ -945,7 +950,7 @@ function wireGlobalTaskResolver() {
 
     const hit = probed.find((result) => result && result.res && result.res.ok && result.body && result.body.id);
     if (hit) {
-      openLookedUpTask(hit.body, hit.workspaceId);
+      await openLookedUpTask(hit.body, hit.workspaceId, seq);
       return;
     }
     if (probed.some((result) => result && result.network)) {
