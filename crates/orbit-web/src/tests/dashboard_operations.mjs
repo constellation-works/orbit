@@ -19,6 +19,17 @@ let releaseGet = null;
 let nextTask = 1;
 const requests = [];
 const confirmations = [];
+const readinessTasks = [
+  { task_id: 'ORB-1', status: 'backlog', eligible: true, reason: 'ready' },
+  { task_id: 'ORB-2', status: 'backlog', eligible: false, reason: 'unmet_dependency', dependencies: [{ task_id: 'ORB-20', status: 'in-progress' }] },
+  { task_id: 'ORB-3', status: 'backlog', eligible: false, reason: 'conflict_deferred', blocking_task_ids: ['ORB-30'], conflicts: [{ requested_file: 'file:crates/shared/src/lib.rs', locking_task_id: 'ORB-30' }] },
+  { task_id: 'ORB-4', status: 'backlog', eligible: false, reason: 'claimed_by_live_child', run_ids: ['jrun-claimed-child'] },
+  { task_id: 'ORB-5', status: 'backlog', eligible: false, reason: 'capacity_saturated', active_run_ids: ['jrun-active-leaf'] },
+  { task_id: 'ORB-6', status: 'backlog', eligible: false, reason: 'crew_not_allowed', crew: 'luna', allowed_crews: ['sol', 'terra'] },
+  { task_id: 'ORB-7', status: 'backlog', eligible: false, reason: 'outside_grant_scope', grant_id: 'opg-fixture' },
+  { task_id: 'ORB-8', status: 'backlog', eligible: false, reason: 'future_server_reason' },
+  { task_id: 'ORB-9', status: 'backlog', eligible: false, reason: 'unmet_dependency' },
+];
 window.confirm = message => { confirmations.push(message); return true; };
 const response = (payload, status = 200) => ({ ok: status === 200, status, json: async () => payload, text: async () => JSON.stringify(payload) });
 globalThis.fetch = async (path, options = {}) => {
@@ -47,8 +58,14 @@ globalThis.fetch = async (path, options = {}) => {
   });
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     controls_authorized: true,
-    capacity: { active_leaf_runs: 1, max_active_leaf_runs: 4, free_slots: 3 },
-    tasks: [{ id: 'ORB-1', eligible: true }, { id: 'ORB-2', eligible: false }],
+    snapshot: { read_only: true, limitations: 'Fixture snapshot only; eligibility can change immediately and does not guarantee a task will start.' },
+    capacity: {
+      active_leaf_runs: 4, max_active_leaf_runs: 4, free_slots: 0,
+      candidate_pool_size: 8, candidate_pool_truncated: true,
+      occupancy: { phases: { implementing: 2, lock_waiting: 1, post_implementation: 1, unknown: 0 } },
+      deferred_conflicts: [{ task_id: 'ORB-3', blocking_task_ids: ['ORB-30'] }],
+    },
+    tasks: readinessTasks,
   });
   if (url.pathname === '/api/operation/explain') return response({
     controls_authorized: true,
@@ -61,6 +78,28 @@ globalThis.fetch = async (path, options = {}) => {
 };
 setWorkspace('one');
 initOperations({ getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })), formatAbsoluteTime: value => value });
+await fetchAndRenderOperations();
+const readiness = get('auto-drain-body');
+const readinessText = readiness.textContent;
+for (const value of ['ORB-1', 'ready', 'ORB-20', 'in-progress', 'conflict_deferred', 'file:crates/shared/src/lib.rs', 'ORB-30', 'jrun-claimed-child', 'jrun-active-leaf', 'luna', 'sol, terra', 'opg-fixture', 'future_server_reason']) {
+  assert(readinessText.includes(value), `readiness diagnostic exposes ${value}`);
+}
+assert(readinessText.includes('Eligible now1') && readinessText.includes('Waiting8'), 'readiness counts use strict server eligibility');
+assert(readinessText.includes('candidate pool was truncated'), 'candidate-pool truncation is explicit');
+assert(readinessText.includes('2 implementing, 1 lock-waiting, 1 post-implementation'), 'capacity occupancy phases are visible');
+assert(readinessText.includes('No additional evidence was supplied for this server reason.'), 'unknown reasons disclose absent evidence');
+assert(readinessText.includes('Dependency details were not supplied.'), 'known reasons disclose missing optional details');
+assert(readinessText.includes('not a workspace total'), 'bounded snapshot counts are not presented as a total');
+const readinessCards = descendants(readiness).filter(node => String(node.className || '').includes('auto-drain-task '));
+assert(readinessCards.length === readinessTasks.length, 'every returned readiness row is rendered');
+assert(readinessCards.every(card => !descendants(card).some(node => node.type === 'button')), 'readiness rows remain read-only');
+const readinessLinks = descendants(readiness).filter(node => String(node.className || '').includes('auto-drain-reference'));
+assert(readinessLinks.some(link => String(link.href).includes('workspace=one') && String(link.href).includes('q=ORB-20')), 'task evidence links stay workspace-qualified');
+assert(readinessLinks.some(link => String(link.href).includes('workspace=one') && String(link.href).includes('#runs/jrun-active-leaf')), 'run evidence links stay workspace-qualified');
+const populatedReadiness = readinessTasks.splice(0, readinessTasks.length);
+await fetchAndRenderOperations();
+assert(get('auto-drain-body').textContent.includes('No readiness rows were returned in this bounded snapshot.'), 'empty readiness snapshot avoids claiming the workspace has no backlog');
+readinessTasks.push(...populatedReadiness);
 await fetchAndRenderOperations();
 assert(!button('auto-tasks-body', 'Disable').disabled, 'authorized toggle available');
 assert(!button('auto-tasks-body', 'Mint now').disabled, 'authorized mint available');

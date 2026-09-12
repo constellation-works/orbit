@@ -698,6 +698,7 @@ fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
     let index = include_str!("../../assets/dashboard/index.html");
     let operations = include_str!("../../assets/dashboard/operations.js");
     let router = include_str!("../../assets/dashboard/router.js");
+    let css = include_str!("../../assets/dashboard/dashboard.css");
 
     for id in [
         "operations-auto-drain-main",
@@ -752,6 +753,32 @@ fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
     assert!(
         operations.contains("Proposed tasks are never drained automatically"),
         "the panel must explain proposed tasks require separate authorization"
+    );
+    assert!(
+        operations.contains("autoDrainReadinessList(payload, workspace)"),
+        "the panel must render every server-provided readiness row"
+    );
+    assert!(
+        operations.contains("task.task_id")
+            && operations.contains("task.reason")
+            && operations.contains("task.dependencies")
+            && operations.contains("task.conflicts")
+            && operations.contains("task.run_ids")
+            && operations.contains("task.active_run_ids")
+            && operations.contains("task.allowed_crews")
+            && operations.contains("task.grant_id"),
+        "readiness rows must expose the server's reason-specific evidence"
+    );
+    assert!(
+        operations.contains("these counts are not a workspace total")
+            && operations.contains("candidate_pool_truncated")
+            && operations.contains("No additional evidence was supplied"),
+        "bounded, truncated, and unknown snapshots must remain honest"
+    );
+    assert!(
+        css.contains(".auto-drain-task-head, .auto-drain-evidence-row { grid-template-columns: minmax(0, 1fr); }")
+            && css.contains(".auto-drain-reference { color: var(--accent); overflow-wrap: anywhere; }"),
+        "readiness evidence must stack and wrap at narrow widths"
     );
 
     // Failure recovery: an error must surface, not silently no-op, and must

@@ -95,21 +95,24 @@ try {
           const box = bounds(node);
           return box.width > 0 && box.height > 0 && box.right > 0 && box.left < window.innerWidth;
         };
-        const clipped = Array.from(panel.querySelectorAll('button, select, .operation-row-head, .operation-clock-summary')).some((node) => {
+        const clipped = Array.from(panel.querySelectorAll('button, select, .operation-row-head, .operation-clock-summary, .auto-drain-task-head, .auto-drain-evidence-row')).some((node) => {
           const box = bounds(node);
           return box.right > window.innerWidth + 1;
         });
+        const readinessRows = name === 'auto-drain' ? panel.querySelectorAll('.auto-drain-task').length : null;
         return {
           subtab: onscreen(button),
           panel: panel && !panel.hidden,
           workspace: workspace && onscreen(workspace),
           clipped,
+          readinessRows,
         };
       }, tab);
       if (!reachable.subtab) throw new Error(`${tab} subtab not reachable at ${viewport.name}`);
       if (!reachable.panel) throw new Error(`${tab} panel hidden at ${viewport.name}`);
       if (!reachable.workspace) throw new Error(`workspace selector not reachable at ${viewport.name} / ${tab}`);
       if (reachable.clipped) throw new Error(`Clipped Operations control at ${viewport.name} / ${tab}`);
+      if (tab === 'auto-drain' && reachable.readinessRows !== 9) throw new Error(`Auto-drain diagnostics missing at ${viewport.name}: ${reachable.readinessRows}`);
       await assertNoOverflow(`${viewport.name} / ${tab}`);
       await page.screenshot({ path: path.join(evidence, `${tab}-${viewport.name}.png`), fullPage: true });
     }
