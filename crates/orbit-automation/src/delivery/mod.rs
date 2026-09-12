@@ -92,7 +92,10 @@ pub fn evaluate(
     let mut state = match store.automation_state(consumer)? {
         Some(state) => state,
         None => {
-            if !enabled && !dry_run {
+            // Disabled definitions never pin a baseline. Preview must match the
+            // real pass here: probing git would invent `would_baseline` or an
+            // `evidence_unavailable` error the scheduled tick never sees.
+            if !enabled {
                 return diagnostic(store, consumer, "disabled", None);
             }
 
