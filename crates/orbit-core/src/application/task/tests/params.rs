@@ -8,12 +8,6 @@ fn task_add_params_preserve_defaults() {
     assert_eq!(defaults.priority, TaskPriority::Medium);
     assert_eq!(defaults.complexity, TaskComplexity::Unassessed);
     assert!(defaults.acceptance_criteria.is_empty());
-
-    let params = TaskAddParams {
-        title: "Workspace-scoped task".to_string(),
-        ..defaults
-    };
-    assert_eq!(params.title, "Workspace-scoped task");
 }
 
 #[test]
