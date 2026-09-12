@@ -3,6 +3,7 @@
 
 import { onWorkspaceChange, panelCanRender, el, statusPill, patchJson, postJson, syncNodes, isAggregateView, withWorkspace, makeToggleRow } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
+import { buildInlineFieldEditor } from './field-editor.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -17,13 +18,23 @@ let pinnedExternalTask = null;
 // once that window lapses (see scheduleFeedbackExpiry).
 let statusFeedback = new Map();
 let crewFeedback = new Map();
+// ORB-12235: the same feedback shape for the writable fields in the expanded
+// detail — the complexity select and the inline text editors. `fieldFeedback`
+// is keyed `<task id>:<field>` because one detail can hold several editors.
+let complexityFeedback = new Map();
+let fieldFeedback = new Map();
 const MUTATION_UNDO_WINDOW_MS = 8000;
+// A saved text field has no undo (restoring prose would need a second write of
+// its own), so its note only has to stay long enough to be read.
+const FIELD_SAVED_NOTICE_MS = 4000;
 
 onWorkspaceChange(() => {
   pinnedExternalTask = null;
   expandedTaskIds.clear();
   statusFeedback.clear();
   crewFeedback.clear();
+  complexityFeedback.clear();
+  fieldFeedback.clear();
 });
 
 // ORB-10444: task ids whose Ship dispatch this page has already issued. Ship is
@@ -111,6 +122,12 @@ function canMutateTask(task) {
   return !isAggregateView() || Boolean(task && task.workspace_id);
 }
 
+// One sentence for every inline control that cannot write in the aggregate
+// view, so the refusal reads the same whichever control the operator hovers.
+function aggregateRefusalTitle(label, action) {
+  return `${label} — select a specific workspace to ${action} in aggregate view`;
+}
+
 function taskMutationPath(task, suffix = "") {
   const base = `/api/tasks/${encodeURIComponent(task.id)}${suffix}`;
   if (isAggregateView() && task.workspace_id) {
@@ -120,11 +137,11 @@ function taskMutationPath(task, suffix = "") {
   return base;
 }
 
-function scheduleFeedbackExpiry(map, taskId, context, delay) {
+function scheduleFeedbackExpiry(map, key, context, delay) {
   setTimeout(() => {
-    const entry = map.get(taskId);
+    const entry = map.get(key);
     if (entry && entry.kind !== "pending") {
-      map.delete(taskId);
+      map.delete(key);
       renderTasks(taskList(context), context);
     }
   }, delay);
@@ -134,7 +151,7 @@ function scheduleFeedbackExpiry(map, taskId, context, delay) {
 // select, plus a bounded "undo" button while `entry.undo` is still live. The
 // wrapper is a live region so screen-reader users get the same feedback a
 // sighted user reads from the text/color change.
-function buildMutationFeedback(entry, onUndo) {
+function buildMutationFeedback(entry, onUndo = () => {}) {
   if (!entry) return null;
   const wrap = el("span", { class: `mutation-feedback ${entry.kind}`, text: entry.text });
   wrap.setAttribute("role", "status");
@@ -188,6 +205,18 @@ function feedbackSignature(map, taskId) {
   const entry = map.get(taskId);
   if (!entry) return "";
   return `${entry.kind}:${entry.text}:${entry.undo ? entry.undo.expiresAt : ""}`;
+}
+
+// The detail's own controls — the complexity select and each field editor —
+// keep their feedback outside the task object, so the detail's diff hash has to
+// see it the way the row's hash sees the status/crew entries. Without this a
+// saved or failed note would never paint.
+function detailFeedbackSignature(taskId) {
+  const parts = [feedbackSignature(complexityFeedback, taskId)];
+  for (const field of Object.keys(TASK_FIELD_EDITORS)) {
+    parts.push(feedbackSignature(fieldFeedback, fieldFeedbackKey(taskId, field)));
+  }
+  return parts.join("|");
 }
 
 function explicitCrewValue(task) {
@@ -259,7 +288,6 @@ const TASK_META_FIELDS = [
   ["job_run_id", "job_run"],
   ["created_at", "created"],
   ["updated_at", "updated"],
-  ["complexity", "complexity"],
 ];
 
 const RELATION_GROUPS = [
@@ -725,6 +753,265 @@ export function buildArtifacts(task) {
   return wrap;
 }
 
+/* ORB-12235: the task fields the expanded detail can edit in place. Each entry
+   reads the task's current value as editor text, renders the read-only view,
+   and turns the edited text back into a PATCH body carrying that one field —
+   never a whole task, which would clobber whatever an agent wrote concurrently.
+   `complexity` is not here: it is a fixed set of choices, so it gets a select
+   (buildComplexityUpdateControl) rather than a text editor. */
+const TASK_FIELD_EDITORS = {
+  description: {
+    label: "description",
+    toText: (task) => task.description || "",
+    renderView: (task) =>
+      task.description && task.description.trim()
+        ? markdownView(task.description)
+        : emptyFieldView("no description"),
+    toPayload: (text) => ({ description: text }),
+    placeholder: "Markdown description",
+  },
+  acceptance_criteria: {
+    label: "acceptance criteria",
+    toText: (task) => linesToText(task.acceptance_criteria),
+    renderView: (task) =>
+      Array.isArray(task.acceptance_criteria) && task.acceptance_criteria.length > 0
+        ? buildCriteriaList(task.acceptance_criteria)
+        : emptyFieldView("no acceptance criteria"),
+    toPayload: (text) => ({ acceptance_criteria: textToLines(text) }),
+    hint: "One criterion per line.",
+  },
+  tags: {
+    label: "tags",
+    multiline: false,
+    toText: (task) => (Array.isArray(task.tags) ? task.tags.join(", ") : ""),
+    renderView: (task) =>
+      Array.isArray(task.tags) && task.tags.length > 0
+        ? buildTagRow(task.tags)
+        : emptyFieldView("no tags"),
+    toPayload: (text) => ({ tags: splitTagText(text) }),
+    placeholder: "comma, separated, tags",
+  },
+  context_files: {
+    label: "context files",
+    toText: (task) => linesToText(task.context_files),
+    renderView: (task) =>
+      Array.isArray(task.context_files) && task.context_files.length > 0
+        ? buildFileList(task.context_files)
+        : emptyFieldView("no context files"),
+    // The server refuses a selector that names nothing unless the caller says
+    // the task is about to create it, so that escape is the editor's own
+    // checkbox rather than a second, silently different code path.
+    toPayload: (text, options) => {
+      const payload = { context_files: textToLines(text) };
+      if (options && options.allow_missing_context) payload.allow_missing_context = true;
+      return payload;
+    },
+    hint: "One selector per line (file:…, dir:…, symbol:…).",
+    toggle: {
+      key: "allow_missing_context",
+      label: "allow missing context",
+      title: "Accept a selector naming a target this task will create",
+    },
+  },
+};
+
+function markdownView(text) {
+  const view = el("div", { class: "markdown-body" });
+  const rendered = renderMarkdown(text);
+  if (rendered !== null) {
+    view.innerHTML = rendered;
+  } else {
+    view.textContent = text;
+  }
+  return view;
+}
+
+function emptyFieldView(text) {
+  return el("div", { class: "field-empty", text });
+}
+
+function buildCriteriaList(criteria) {
+  const ul = el("ul", { class: "ac-list" });
+  for (const ac of criteria) {
+    const rendered = renderMarkdownInline(ac);
+    if (rendered !== null) {
+      const li = el("li");
+      li.innerHTML = rendered;
+      ul.appendChild(li);
+    } else {
+      ul.appendChild(el("li", { text: ac }));
+    }
+  }
+  return ul;
+}
+
+function buildFileList(paths) {
+  const ul = el("ul", { class: "file-list" });
+  for (const path of paths) {
+    ul.appendChild(el("li", { text: path }));
+  }
+  return ul;
+}
+
+function linesToText(values) {
+  return Array.isArray(values) ? values.join("\n") : "";
+}
+
+// A blank line is how an operator separates entries while typing, not an empty
+// criterion or selector, so it never reaches the server.
+function textToLines(text) {
+  return String(text)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function splitTagText(text) {
+  return String(text)
+    .split(/[,\n]/)
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function fieldFeedbackKey(taskId, field) {
+  return `${taskId}:${field}`;
+}
+
+function taskFieldHasValue(task, spec) {
+  return spec.toText(task).trim() !== "";
+}
+
+/* ORB-11655: a detail holding an open editor is reused verbatim by the next
+   background refresh, the same way an open comment form is, so the operator's
+   unsaved text survives the poll. The open editors are tracked on the node
+   itself because that node is the thing being kept, and under their own dataset
+   key so closing one cannot cancel a comment draft's claim on the same node. */
+function setDetailEditing(detail, field, open) {
+  if (!detail) return;
+  const fields = new Set((detail.dataset.editing || "").split(",").filter(Boolean));
+  if (open) fields.add(field);
+  else fields.delete(field);
+  if (fields.size > 0) detail.dataset.editing = [...fields].join(",");
+  else delete detail.dataset.editing;
+}
+
+function buildTaskFieldEditor(task, field, detail, context) {
+  const spec = TASK_FIELD_EDITORS[field];
+  const mutable = canMutateTask(task);
+  const editTitle = `Edit ${spec.label} for ${task.id}`;
+  const wrap = el("div", { class: "field-editor-cell" });
+  wrap.appendChild(
+    buildInlineFieldEditor({
+      label: spec.label,
+      value: spec.toText(task),
+      renderView: () => spec.renderView(task),
+      multiline: spec.multiline !== false,
+      placeholder: spec.placeholder || "",
+      hint: spec.hint || "",
+      toggle: spec.toggle || null,
+      editable: mutable,
+      editTitle,
+      disabledTitle: aggregateRefusalTitle(editTitle, `edit ${spec.label}`),
+      save: (text, options) => patchJson(taskMutationPath(task), spec.toPayload(text, options)),
+      onSaved: (updatedTask) => completeFieldSave(task.id, field, updatedTask, context),
+      onEditingChange: (open) => setDetailEditing(detail, field, open),
+    }),
+  );
+  const feedback = fieldFeedback.get(fieldFeedbackKey(task.id, field));
+  const feedbackNode = buildMutationFeedback(feedback);
+  if (feedbackNode) wrap.appendChild(feedbackNode);
+  return wrap;
+}
+
+function completeFieldSave(taskId, field, updatedTask, context) {
+  applyUpdatedTask(updatedTask, context);
+  const key = fieldFeedbackKey(taskId, field);
+  fieldFeedback.set(key, { kind: "success", text: `${TASK_FIELD_EDITORS[field].label} saved` });
+  renderTasks(taskList(context), context);
+  scheduleFeedbackExpiry(fieldFeedback, key, context, FIELD_SAVED_NOTICE_MS);
+}
+
+/* ORB-12235: complexity gates dispatch — an unassessed task is withheld from
+   implementation — and until now only the CLI could set it. `unassessed` is
+   deliberately not an option: the update endpoint rejects it, so offering it
+   would only produce a 400. A task that currently carries it (or any value the
+   server later adds) keeps a disabled placeholder so the select still shows
+   what is stored. */
+const TASK_COMPLEXITY_OPTIONS = ["low", "medium", "hard"];
+
+function buildComplexityUpdateControl(task, context) {
+  const cell = el("div", { class: "complexity-cell" });
+  const mutable = canMutateTask(task);
+  const feedback = complexityFeedback.get(task.id);
+  const label = `Update complexity for ${task.id}`;
+  const select = el("select", {
+    class: "task-complexity-select mono",
+    title: mutable ? label : aggregateRefusalTitle(label, "change complexity"),
+  });
+  select.setAttribute("aria-label", label);
+
+  const currentValue = assessedComplexity(task);
+  if (!currentValue) {
+    const placeholder = el("option", { text: task.complexity ? String(task.complexity) : "unassessed" });
+    placeholder.value = "";
+    placeholder.disabled = true;
+    select.appendChild(placeholder);
+  }
+  for (const value of TASK_COMPLEXITY_OPTIONS) {
+    const option = el("option", { text: value });
+    option.value = value;
+    select.appendChild(option);
+  }
+  select.value = currentValue;
+  if (!mutable || (feedback && feedback.kind === "pending")) select.disabled = true;
+
+  select.addEventListener("change", (event) => {
+    event.stopPropagation();
+    applyTaskComplexityChange(task, select.value, context);
+  });
+  cell.appendChild(select);
+  const feedbackNode = buildMutationFeedback(feedback, () => {
+    if (feedback && feedback.undo) {
+      applyTaskComplexityChange(task, feedback.undo.previousValue, context);
+    }
+  });
+  if (feedbackNode) cell.appendChild(feedbackNode);
+  return cell;
+}
+
+function assessedComplexity(task) {
+  const value = task && task.complexity ? String(task.complexity) : "";
+  return TASK_COMPLEXITY_OPTIONS.includes(value) ? value : "";
+}
+
+async function applyTaskComplexityChange(task, nextValue, context) {
+  const previousValue = assessedComplexity(task);
+  if (!nextValue || nextValue === previousValue || !canMutateTask(task)) return;
+  complexityFeedback.set(task.id, { kind: "pending", text: "saving…" });
+  renderTasks(taskList(context), context);
+  try {
+    const updatedTask = await patchJson(taskMutationPath(task), { complexity: nextValue });
+    applyUpdatedTask(updatedTask, context);
+    complexityFeedback.set(task.id, {
+      kind: "success",
+      text: "complexity saved",
+      // Undo is offered only back to an assessed value; the endpoint refuses
+      // `unassessed`, so a task that arrived unassessed has nothing to restore.
+      undo: previousValue
+        ? { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS }
+        : undefined,
+    });
+  } catch (error) {
+    complexityFeedback.set(task.id, {
+      kind: "error",
+      text: `complexity update failed: ${error.message || String(error)}`,
+    });
+    console.error(error);
+  }
+  renderTasks(taskList(context), context);
+  scheduleFeedbackExpiry(complexityFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+}
+
 function buildTaskDetail(task, context) {
   const detail = el("div", { class: "row-detail split-layout" });
   detail.addEventListener("click", (e) => e.stopPropagation());
@@ -753,52 +1040,28 @@ function buildTaskDetail(task, context) {
     parent.appendChild(block);
   };
 
-  if (task.description && task.description.trim()) {
-    const view = el("div", { class: "markdown-body" });
-    const rendered = renderMarkdown(task.description);
-    if (rendered !== null) {
-      view.innerHTML = rendered;
-    } else {
-      view.textContent = task.description;
-    }
-    addField(leftCol, "description", view);
+  // An editable field is shown even when it is empty — adding a missing
+  // description is exactly the edit an operator comes here for — but only where
+  // editing is actually allowed, so the read-only aggregate view stays as terse
+  // as it was.
+  const editor = (field) => buildTaskFieldEditor(task, field, detail, context);
+  const showsEditor = (field) =>
+    canMutateTask(task) || taskFieldHasValue(task, TASK_FIELD_EDITORS[field]);
+
+  if (showsEditor("description")) {
+    addField(leftCol, "description", editor("description"));
   }
 
-  if (Array.isArray(task.acceptance_criteria) && task.acceptance_criteria.length > 0) {
-    const ul = el("ul", { class: "ac-list" });
-    for (const ac of task.acceptance_criteria) {
-      const rendered = renderMarkdownInline(ac);
-      if (rendered !== null) {
-        const li = el("li");
-        li.innerHTML = rendered;
-        ul.appendChild(li);
-      } else {
-        ul.appendChild(el("li", { text: ac }));
-      }
-    }
-    addField(leftCol, "acceptance criteria", ul, true, true);
+  if (showsEditor("acceptance_criteria")) {
+    addField(leftCol, "acceptance criteria", editor("acceptance_criteria"), true, true);
   }
 
   if (task.plan && task.plan.trim()) {
-    const view = el("div", { class: "markdown-body" });
-    const rendered = renderMarkdown(task.plan);
-    if (rendered !== null) {
-      view.innerHTML = rendered;
-    } else {
-      view.textContent = task.plan;
-    }
-    addField(leftCol, "plan", view, true, true);
+    addField(leftCol, "plan", markdownView(task.plan), true, true);
   }
 
   if (task.execution_summary && task.execution_summary.trim()) {
-    const view = el("div", { class: "markdown-body" });
-    const rendered = renderMarkdown(task.execution_summary);
-    if (rendered !== null) {
-      view.innerHTML = rendered;
-    } else {
-      view.textContent = task.execution_summary;
-    }
-    addField(leftCol, "execution summary", view, true, true);
+    addField(leftCol, "execution summary", markdownView(task.execution_summary), true, true);
   }
 
   if (Array.isArray(task.artifacts) && task.artifacts.length > 0) {
@@ -809,11 +1072,14 @@ function buildTaskDetail(task, context) {
     addField(leftCol, "review gate", buildReviewGate(task.review), true, true);
   }
 
-  if (Array.isArray(task.tags) && task.tags.length > 0) {
-    rightCol.appendChild(buildTagRow(task.tags));
+  addField(rightCol, "complexity", buildComplexityUpdateControl(task, context));
+
+  if (showsEditor("tags")) {
+    addField(rightCol, "tags", editor("tags"));
   }
 
-  // Routine status/crew controls live inline on the task row; details remain read-only.
+  // Provenance and timestamps: recorded by the pipeline, so read-only here even
+  // though the fields above are not.
   const meta = el("div", { class: "meta-list" });
   let metaCount = 0;
   for (const [key, label] of TASK_META_FIELDS) {
@@ -854,12 +1120,8 @@ function buildTaskDetail(task, context) {
     if (relations.children.length > 0) addField(rightCol, "relations", relations);
   }
 
-  if (Array.isArray(task.context_files) && task.context_files.length > 0) {
-    const ul = el("ul", { class: "file-list" });
-    for (const path of task.context_files) {
-      ul.appendChild(el("li", { text: path }));
-    }
-    addField(rightCol, "context files", ul);
+  if (showsEditor("context_files")) {
+    addField(rightCol, "context files", editor("context_files"));
   }
 
   if (Array.isArray(task.history) && task.history.length > 0) {
@@ -973,7 +1235,7 @@ function buildStatusUpdateControl(task, context) {
   const label = `Update status for ${task.id}`;
   const select = el("select", {
     class: "task-status-select mono",
-    title: mutable ? label : `${label} — select a specific workspace to change status in aggregate view`,
+    title: mutable ? label : aggregateRefusalTitle(label, "change status"),
     style: {
       color,
       borderLeftColor: color,
@@ -1020,7 +1282,7 @@ function buildCrewUpdateControl(task, context) {
   const label = `Update crew for ${task.id}`;
   const select = el("select", {
     class: "task-crew-select mono",
-    title: mutable ? label : `${label} — select a specific workspace to change crew in aggregate view`,
+    title: mutable ? label : aggregateRefusalTitle(label, "change crew"),
   });
   select.setAttribute("aria-label", label);
   const currentValue = explicitCrewValue(task);
@@ -1330,20 +1592,27 @@ function buildPinnedTask(ptask, context) {
 
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.dataset.key = `pinned-${ptask.id}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${detailFeedbackSignature(ptask.id)}`;
   return wrap;
 }
 
-/* ORB-11655: a comment or reject form holds text the operator is still typing,
-   so the 30 s refresh must not rebuild the detail node that contains it — not
-   even when the task itself changed. Collect the live top-level nodes holding
-   an open form, keyed the way syncNodes keys them, and reuse them verbatim.
-   The detail resumes tracking task data as soon as the form is closed. */
+/* ORB-11655: a comment or reject form, or an open field editor (ORB-12235),
+   holds text the operator is still typing, so the 30 s refresh must not rebuild
+   the node that contains it — not even when the task itself changed. Collect the
+   live top-level nodes holding one, keyed the way syncNodes keys them, and reuse
+   them verbatim. The detail resumes tracking task data as soon as it closes.
+   The nested lookups are for the pinned-task wrapper, whose draft marker sits on
+   the detail inside it rather than on the keyed node itself. */
 function openDraftNodes(body) {
   const drafts = new Map();
   for (const node of Array.from(body.children)) {
     if (!node.dataset.key) continue;
-    if (node.dataset.draft || node.querySelector?.("[data-draft]")) drafts.set(node.dataset.key, node);
+    const holdsDraft =
+      node.dataset.draft ||
+      node.dataset.editing ||
+      node.querySelector?.("[data-draft]") ||
+      node.querySelector?.("[data-editing]");
+    if (holdsDraft) drafts.set(node.dataset.key, node);
   }
   return drafts;
 }
@@ -1491,8 +1760,9 @@ export function renderTasks(tasks, context) {
           detail.dataset.key = key;
           // The row's `aria-controls` points here, so the detail needs a real id.
           detail.id = key;
-          // Diff by full task object stringified
-          detail.dataset.hash = JSON.stringify(t);
+          // Diff by full task object stringified, plus the feedback the detail's
+          // own controls render (the row hash only covers status and crew).
+          detail.dataset.hash = `${JSON.stringify(t)}-${detailFeedbackSignature(t.id)}`;
           nodes.push(detail);
         }
       }

@@ -6,10 +6,10 @@ use std::process::Command;
 
 use crate::{
     DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_automation_js, serve_common_js,
-    serve_diagnostics_js, serve_index, serve_inter_font, serve_jetbrains_mono_font,
-    serve_log_tail_js, serve_markdown_js, serve_marked_js, serve_operations_js, serve_purify_js,
-    serve_reliability_js, serve_router_js, serve_run_detail_js, serve_runs_js, serve_scoreboard_js,
-    serve_tasks_js,
+    serve_diagnostics_js, serve_field_editor_js, serve_index, serve_inter_font,
+    serve_jetbrains_mono_font, serve_log_tail_js, serve_markdown_js, serve_marked_js,
+    serve_operations_js, serve_purify_js, serve_reliability_js, serve_router_js,
+    serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
 };
 
 // The recent-history, aggregate-request, and route-selection assertions
@@ -63,6 +63,7 @@ async fn dashboard_html_and_js_routes_emit_csp() {
         ("common", serve_common_js().await),
         ("markdown", serve_markdown_js().await),
         ("tasks", serve_tasks_js().await),
+        ("field_editor", serve_field_editor_js().await),
         ("audit", serve_audit_js().await),
         ("scoreboard", serve_scoreboard_js().await),
         ("reliability", serve_reliability_js().await),
@@ -339,6 +340,7 @@ class Node {
   appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
   insertBefore(child, before) { const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); child.parentNode = this; return child; }
   removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  replaceChildren(...next) { for (const child of this.children) child.parentNode = null; this.children = []; for (const child of next) this.appendChild(child); }
   prepend(child) { this.children.unshift(child); child.parentNode = this; }
   remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this); }
   addEventListener(name, fn) { this.listeners[name] = fn; }
@@ -1393,6 +1395,7 @@ class Node {
   appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
   insertBefore(child, before) { const old = child.parentNode; if (old) old.children = old.children.filter((candidate) => candidate !== child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
   removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  replaceChildren(...next) { for (const child of this.children) child.parentNode = null; this.children = []; for (const child of next) this.appendChild(child); }
   replaceWith(next) { const parent = this.parentNode; if (!parent) return; parent.children = parent.children.map((candidate) => candidate === this ? next : candidate); next.parentNode = parent; this.parentNode = null; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   setAttribute(name, value) { this[name] = String(value); }
@@ -1906,11 +1909,303 @@ fn dashboard_aggregate_view_guards_inline_task_mutations() {
         tasks.contains("function taskMutationPath(task"),
         "an aggregate-mode mutation must target the task's own workspace explicitly, not the ambient one"
     );
-    assert_eq!(
-        tasks.matches("!mutable").count(),
-        2,
-        "both the status and crew controls must be disabled when the task cannot be safely mutated"
+
+    // ORB-12235: every inline control in the detail is refused the same way the
+    // crew select is, and says so in the same words.
+    run_task_detail_harness(
+        r#"
+setMultiWorkspace(true);
+render();
+expand();
+
+const crewSelect = find(body, (node) => node.className === "task-crew-select mono");
+if (!crewSelect.disabled) throw new Error("the crew select must be disabled in aggregate view");
+const refusal = "select a specific workspace to";
+const frame = (title) => title.includes(refusal) && title.endsWith(" in aggregate view");
+if (!frame(crewSelect.title)) throw new Error(`crew refusal changed shape: ${crewSelect.title}`);
+
+const complexitySelect = find(body, (node) => node.className === "task-complexity-select mono");
+if (!complexitySelect.disabled) throw new Error("the complexity select must be disabled in aggregate view");
+if (!frame(complexitySelect.title)) throw new Error(`complexity refusal reads differently: ${complexitySelect.title}`);
+
+for (const title of ["description", "acceptance criteria", "tags", "context files"]) {
+  const block = fieldBlock(title);
+  if (!block) throw new Error(`${title} is missing from the detail`);
+  const edit = find(block, (node) => node.className === "field-edit");
+  if (!edit.disabled) throw new Error(`the ${title} editor must be disabled in aggregate view`);
+  if (!frame(edit.title)) throw new Error(`${title} refusal reads differently: ${edit.title}`);
+  edit.listeners.click({ stopPropagation() {} });
+  if (editorInput(fieldBlock(title))) throw new Error(`the ${title} editor opened in aggregate view`);
+}
+
+complexitySelect.value = "hard";
+complexitySelect.listeners.change({ stopPropagation() {} });
+await tick();
+if (requests.length !== 0) throw new Error(`aggregate view issued writes: ${JSON.stringify(requests)}`);
+"#,
     );
+}
+
+/// ORB-12235: the five task fields the dashboard can write. Each save carries
+/// that field alone — a whole-task PATCH would clobber a concurrent agent write
+/// — and the server's refusal of a context selector stays inline so the
+/// operator can answer it with the allow-missing escape instead of retyping.
+#[test]
+fn dashboard_task_detail_edits_each_field_through_a_single_field_patch() {
+    run_task_detail_harness(
+        r#"
+render();
+expand();
+
+// complexity: a fixed select with no `unassessed` option (the server rejects it),
+// reporting saving… while the write is in flight and saved once it lands.
+const complexitySelect = find(body, (node) => node.className === "task-complexity-select mono");
+const offered = complexitySelect.children.filter((option) => option.value).map((option) => option.value);
+if (JSON.stringify(offered) !== JSON.stringify(["low", "medium", "hard"])) {
+  throw new Error(`complexity offered the wrong options: ${JSON.stringify(offered)}`);
+}
+if (complexitySelect.children.some((option) => option.value === "unassessed")) {
+  throw new Error("unassessed must not be offered; the update endpoint rejects it");
+}
+
+let release = null;
+hold = new Promise((resolve) => { release = resolve; });
+complexitySelect.value = "medium";
+complexitySelect.listeners.change({ stopPropagation() {} });
+await tick();
+if (!detailText().includes("saving…")) throw new Error(`no pending feedback: ${detailText()}`);
+if (!find(body, (node) => node.className === "task-complexity-select mono").disabled) {
+  throw new Error("the complexity select must refuse a second change while its own write is pending");
+}
+hold = null;
+release();
+await tick();
+if (!detailText().includes("complexity saved")) throw new Error(`no success feedback: ${detailText()}`);
+if (current.complexity !== "medium") throw new Error(`the applied task kept ${current.complexity}`);
+expectPatch({ complexity: "medium" });
+
+// Each text field: the editor opens on the persisted value and saves only itself.
+await saveField("description", "rewritten body", { description: "rewritten body" });
+if (!fieldBlock("description").textContent.includes("rewritten body")) {
+  throw new Error(`the saved description was not re-rendered: ${fieldBlock("description").textContent}`);
+}
+await saveField("acceptance criteria", "first\nsecond\n\n", { acceptance_criteria: ["first", "second"] });
+await saveField("tags", "dashboard, orbit-web", { tags: ["dashboard", "orbit-web"] });
+
+// A rejected context-files save keeps the editor, the text, and the server's reason.
+const block = openEditor("context files");
+editorInput(block).value = "file:a.rs\nfile:missing.rs";
+await clickAction(block, "save");
+const open = fieldBlock("context files");
+const input = editorInput(open);
+if (!input) throw new Error("the rejected save closed the context-files editor");
+if (input.value !== "file:a.rs\nfile:missing.rs") throw new Error(`the editor lost the text: ${input.value}`);
+const error = find(open, (node) => node.className === "field-editor-error");
+if (!error || !error.textContent.includes("context selector not found")) {
+  throw new Error(`the server's reason was not shown inline: ${open.textContent}`);
+}
+if (current.context_files.includes("file:missing.rs")) throw new Error("a refused save was applied anyway");
+
+// Ticking allow-missing-context answers it; the escape rides with that one field.
+find(open, (node) => node.className === "field-editor-toggle-input").checked = true;
+await clickAction(open, "save");
+expectPatch({ context_files: ["file:a.rs", "file:missing.rs"], allow_missing_context: true });
+if (JSON.stringify(current.context_files) !== JSON.stringify(["file:a.rs", "file:missing.rs"])) {
+  throw new Error(`context files were not applied: ${JSON.stringify(current.context_files)}`);
+}
+
+// Cancel restores the view without a request.
+const before = requests.length;
+const cancelled = openEditor("description");
+editorInput(cancelled).value = "never saved";
+clickAction(cancelled, "cancel");
+if (requests.length !== before) throw new Error("cancel issued a request");
+const restored = fieldBlock("description");
+if (editorInput(restored)) throw new Error("cancel left the editor open");
+if (!restored.textContent.includes("rewritten body")) {
+  throw new Error(`cancel did not restore the previous view: ${restored.textContent}`);
+}
+"#,
+    );
+}
+
+/// ORB-11655/ORB-12235: the 30 s refresh must not rebuild a detail that holds an
+/// open editor — the textarea is the only copy of the operator's unsaved text.
+/// The detail resumes tracking task data as soon as the editor closes.
+#[test]
+fn dashboard_task_refresh_keeps_an_open_field_editor() {
+    run_task_detail_harness(
+        r#"
+render();
+expand();
+
+// Control: with no editor open, a changed task rebuilds its detail.
+const before = detailNode();
+refresh();
+if (detailNode() === before) throw new Error("a changed task must still rebuild its detail");
+
+const held = detailNode();
+const block = openEditor("description");
+editorInput(block).value = "half written";
+refresh();
+if (detailNode() !== held) throw new Error("the refresh replaced a detail holding an open editor");
+const live = editorInput(fieldBlock("description"));
+if (!live || live.value !== "half written") throw new Error(`the draft text was lost: ${live && live.value}`);
+
+clickAction(fieldBlock("description"), "cancel");
+refresh();
+if (detailNode() === held) throw new Error("the detail stayed frozen after the editor was closed");
+if (editorInput(fieldBlock("description"))) throw new Error("the cancelled editor is still rendered");
+"#,
+    );
+}
+
+/// The DOM stand-in and task fixture shared by the task-detail editor harness
+/// tests. The scenario script runs with the shipped `tasks.js` imported, a task
+/// expanded on demand, and every PATCH recorded: `requests` holds them in order,
+/// `hold` defers the next response, and a context selector naming a missing
+/// target is refused the way the server refuses it.
+fn run_task_detail_harness(scenario: &str) {
+    let prelude = r#"
+class Node {
+  constructor(tag = "") {
+    this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {};
+    this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false;
+    this.hidden = false; this.value = ""; this.checked = false;
+  }
+  appendChild(child) { if (child == null) return child; if (child.parentNode) child.parentNode.removeChild(child); this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { if (child.parentNode) child.parentNode.removeChild(child); const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+  replaceChildren(...next) { for (const child of this.children) child.parentNode = null; this.children = []; for (const child of next) this.appendChild(child); }
+  replaceWith(next) { const parent = this.parentNode; if (!parent) return; parent.children = parent.children.map((candidate) => (candidate === this ? next : candidate)); next.parentNode = parent; this.parentNode = null; }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  focus() {}
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); for (const child of this.children) child.parentNode = null; this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get innerHTML() { return this.textContent; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  get classList() {
+    const self = this;
+    const names = () => self.className.split(/\s+/).filter(Boolean);
+    return {
+      add: (...added) => { for (const name of added) if (!names().includes(name)) self.className = `${self.className} ${name}`.trim(); },
+      toggle: (name) => {
+        if (names().includes(name)) { self.className = names().filter((candidate) => candidate !== name).join(" "); return false; }
+        self.className = `${self.className} ${name}`.trim();
+        return true;
+      },
+    };
+  }
+  querySelectorAll(selector) {
+    const wanted = selector.replace(".", "");
+    const found = [];
+    const visit = (node) => { for (const child of node.children) { if (child.className.split(/\s+/).includes(wanted)) found.push(child); visit(child); } };
+    visit(this);
+    return found;
+  }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: (tag) => new Node(tag),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  querySelectorAll: () => [],
+};
+globalThis.window = { location: new URL("http://dashboard.test/#tasks"), addEventListener() {}, confirm: () => true };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+
+// Feedback expiry is a timer the dashboard schedules against wall-clock; the
+// harness observes the states themselves, so the timers are recorded, not run.
+const nativeSetTimeout = setTimeout;
+globalThis.setTimeout = () => 0;
+const tick = () => new Promise((resolve) => nativeSetTimeout(resolve, 0));
+
+const task = {
+  id: "ORB-1", title: "Editable", status: "review", updated_at: "2026-09-12T01:00:00Z",
+  description: "original body", acceptance_criteria: ["first"], tags: ["dashboard"],
+  context_files: ["file:a.rs"], history: [], artifacts: [],
+};
+let current = task;
+const requests = [];
+let hold = null;
+globalThis.fetch = async (path, opts = {}) => {
+  const body = opts.body ? JSON.parse(opts.body) : null;
+  requests.push({ path: String(path), method: opts.method || "GET", body });
+  if (hold) await hold;
+  const selectors = body && Array.isArray(body.context_files) ? body.context_files : [];
+  if (selectors.some((selector) => selector.includes("missing")) && !(body && body.allow_missing_context)) {
+    const refusal = JSON.stringify({ error: "context selector not found: file:missing.rs" });
+    return { ok: false, status: 400, text: async () => refusal };
+  }
+  const updated = { ...current, ...body };
+  delete updated.allow_missing_context;
+  const payload = JSON.stringify(updated);
+  return { ok: true, status: 200, text: async () => payload };
+};
+
+const statuses = ["review"];
+const context = {
+  getTasks: () => [current], getTasksMeta: () => null, getSearchQuery: () => "",
+  getActiveStatuses: () => new Set(["review"]), statusOrder: statuses, statusUpdateTargets: statuses,
+  fmtAbsTime: (value) => value, refreshDashboard: () => Promise.resolve(),
+  replaceTask: (next) => { current = next; },
+};
+
+const { setMultiWorkspace } = await import("./common.js");
+const { renderTasks } = await import("./tasks.js");
+const body = get("tasks-body");
+
+function find(node, predicate) {
+  if (!node) return null;
+  if (predicate(node)) return node;
+  for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
+  return null;
+}
+const render = () => renderTasks(context.getTasks(), context);
+const expand = () => find(body, (node) => node.dataset.key === "task-ORB-1").listeners.click();
+const detailNode = () => find(body, (node) => node.dataset.key === "detail-ORB-1");
+const detailText = () => detailNode().textContent;
+// A background poll: the task data moved, nothing the operator did.
+const refresh = () => { current = { ...current, updated_at: `${current.updated_at}+` }; render(); };
+const fieldBlock = (title) => {
+  const blocks = [];
+  const visit = (node) => { for (const child of node.children) { if (child.className.split(/\s+/).includes("field-block")) blocks.push(child); visit(child); } };
+  visit(detailNode());
+  return blocks.find((block) => block.children[0] && block.children[0].textContent === title) || null;
+};
+const editorInput = (block) => find(block, (node) => node.className === "field-editor-input mono");
+const openEditor = (title) => {
+  const block = fieldBlock(title);
+  find(block, (node) => node.className === "field-edit").listeners.click({ stopPropagation() {} });
+  return fieldBlock(title);
+};
+const clickAction = (block, name) =>
+  find(block, (node) => node.className === `action ${name}`).listeners.click({ stopPropagation() {} });
+const expectPatch = (expected) => {
+  const last = requests[requests.length - 1];
+  if (last.method !== "PATCH" || last.path !== "/api/tasks/ORB-1") {
+    throw new Error(`unexpected request: ${JSON.stringify(last)}`);
+  }
+  if (JSON.stringify(last.body) !== JSON.stringify(expected)) {
+    throw new Error(`patch body was ${JSON.stringify(last.body)}, expected ${JSON.stringify(expected)}`);
+  }
+};
+const saveField = async (title, text, expected) => {
+  const block = openEditor(title);
+  const input = editorInput(block);
+  if (!input) throw new Error(`${title} has no editor`);
+  input.value = text;
+  await clickAction(block, "save");
+  expectPatch(expected);
+};
+"#;
+
+    run_dashboard_javascript_test(&format!("{prelude}\n{scenario}"));
 }
 
 /// ORB-10444: dashboard assets are a shipped, project-agnostic surface. A
@@ -1937,6 +2232,10 @@ fn dashboard_assets_carry_no_project_specific_identifiers() {
             include_str!("../../assets/dashboard/markdown.js"),
         ),
         ("tasks.js", include_str!("../../assets/dashboard/tasks.js")),
+        (
+            "field-editor.js",
+            include_str!("../../assets/dashboard/field-editor.js"),
+        ),
         ("audit.js", include_str!("../../assets/dashboard/audit.js")),
         (
             "scoreboard.js",
@@ -3248,6 +3547,11 @@ class Node {
     this.children = this.children.filter((candidate) => candidate !== child);
     child.parentNode = null;
     return child;
+  }
+  replaceChildren(...next) {
+    for (const child of this.children) child.parentNode = null;
+    this.children = [];
+    for (const child of next) this.appendChild(child);
   }
   prepend(child) { this.children.unshift(child); child.parentNode = this; return child; }
   addEventListener(name, fn) { this.listeners[name] = fn; }

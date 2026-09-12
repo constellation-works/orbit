@@ -5,6 +5,7 @@
 ### Highlights
 
 - **Task-pilot assessment precision**: task-pilot instructions define evidence gaps as rating-changing unknowns rather than unexecuted validation, and validate_recommendations allows assessed complexity with evidence gaps when confidence is low or medium. ([ORB-12232])
+- **Dashboard inline task editors**: the expanded task detail edits complexity, description, tags, acceptance criteria, and context files in place, each saved as a single-field `PATCH /api/tasks/:id` with inline errors and an allow-missing-context escape. ([ORB-12235])
 
 ## 0.21.0
 
