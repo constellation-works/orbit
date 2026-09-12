@@ -31,6 +31,8 @@ pub struct CommandMeta {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeNeed {
     Required,
+    /// The hidden detached worker may outlive one transient SQLite writer.
+    PipelineWorker,
     /// Read an existing workspace without stale-run reconciliation on open.
     ReadOnly,
     Forbidden,
@@ -791,8 +793,14 @@ impl Commands {
                     };
                 let mut meta = admin_meta("job", Some(subcommand), Some(target_type), target_id);
                 meta.job_run_id = job_run_id.map(String::from);
+                let runtime_need = if matches!(command.command, JobSubcommand::RunPipelineWorker(_))
+                {
+                    RuntimeNeed::PipelineWorker
+                } else {
+                    RuntimeNeed::Required
+                };
                 CommandOperation::new(
-                    RuntimeNeed::Required,
+                    runtime_need,
                     Some(meta),
                     None,
                     false,

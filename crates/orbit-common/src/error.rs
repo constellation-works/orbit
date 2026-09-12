@@ -118,6 +118,17 @@ pub struct WorkspaceClaimHeld {
     pub expires_at: String,
 }
 
+/// A SQLite bootstrap operation exhausted the connection's busy timeout.
+///
+/// The native SQLite code is classified before crossing the storage boundary,
+/// so detached-worker recovery never depends on matching an error string.
+#[derive(Debug, Serialize)]
+pub struct SqliteContention {
+    pub path: String,
+    pub phase: String,
+    pub detail: String,
+}
+
 #[derive(Debug, Error, Serialize)]
 #[non_exhaustive]
 /// Keep this widely propagated error below its 128-byte size budget. Box the
@@ -253,6 +264,11 @@ pub enum OrbitError {
     FileLockTimeout(Box<crate::fs::io::FileLockTimeout>),
     #[error("store error: {0}")]
     Store(String),
+    #[error(
+        "store error: SQLite database '{}' remained locked during {}: {}",
+        .0.path, .0.phase, .0.detail
+    )]
+    SqliteContention(Box<SqliteContention>),
     #[error("invalid task status transition: {0}")]
     TaskStatusTransition(String),
     /// A workflow run was refused because a dependency that reached `done` has
@@ -436,6 +452,13 @@ impl OrbitError {
     pub fn file_lock_timeout(&self) -> Option<&crate::fs::io::FileLockTimeout> {
         match self {
             Self::FileLockTimeout(timeout) => Some(timeout),
+            _ => None,
+        }
+    }
+
+    pub fn sqlite_contention(&self) -> Option<&SqliteContention> {
+        match self {
+            Self::SqliteContention(contention) => Some(contention),
             _ => None,
         }
     }
