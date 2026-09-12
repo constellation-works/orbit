@@ -65,6 +65,7 @@ await fetchAndRenderOperations();
 assert(!button('auto-tasks-body', 'Disable').disabled, 'authorized toggle available');
 assert(!button('auto-tasks-body', 'Mint now').disabled, 'authorized mint available');
 assert(!button('clock-body', 'Pause clock').disabled, 'authorized clock available');
+assert(!get('routines-body').textContent.includes('auto_task_scheduler'), 'scheduler is absent from routine fixture');
 
 // The old aggregate authorization bit must not suppress an independently allowed action.
 capabilities.auto_task_toggle = denied;
@@ -112,6 +113,7 @@ const cadence = descendants(get('clock-body')).find(node => node.title === 'Cloc
 cadence.value = '300'; cadence.dispatchEvent(new Event('change'));
 button('clock-body', 'Apply cadence').click(); await tick(); await tick();
 assert(requests.some(r => r.body?.action === 'set_cadence' && r.body.cadence_seconds === 300), 'cadence canonical request');
+assert(requests.filter(r => r.path === '/api/routines/clock').every(r => ['enable', 'disable', 'set_cadence'].includes(r.body.action)), 'clock controls use the canonical action set');
 
 // Mint acknowledgement, duplicate warning, no dispatch, feedback and task link.
 delayPost = true;

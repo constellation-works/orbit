@@ -466,9 +466,36 @@ impl Commands {
                 )
                 .governed_when(reaps, "gc", target)
             }
+            Commands::Clock(command) => {
+                use super::clock::ClockSubcommand;
+                let subcommand = match &command.command {
+                    ClockSubcommand::Status => "status",
+                    ClockSubcommand::Pause => "pause",
+                    ClockSubcommand::Enable => "enable",
+                    ClockSubcommand::Set { .. } => "set",
+                    ClockSubcommand::Tick(_) => "tick",
+                };
+                CommandOperation::new(
+                    RuntimeNeed::Forbidden,
+                    Some(admin_meta(
+                        "clock",
+                        Some(subcommand),
+                        Some("clock"),
+                        Some("host"),
+                    )),
+                    None,
+                    false,
+                    dispatch_clock,
+                )
+            }
             Commands::Sweep(_) => CommandOperation::new(
                 RuntimeNeed::Forbidden,
-                Some(admin_meta("sweep", None, Some("workflow"), Some("sweep"))),
+                Some(admin_meta(
+                    "clock",
+                    Some("tick"),
+                    Some("clock"),
+                    Some("host"),
+                )),
                 None,
                 false,
                 dispatch_sweep,
@@ -480,7 +507,6 @@ impl Commands {
                     RoutineSubcommand::Show(_) => "show",
                     RoutineSubcommand::Pause(_) => "pause",
                     RoutineSubcommand::Resume(_) => "resume",
-                    RoutineSubcommand::Clock(_) => "clock",
                     RoutineSubcommand::Init(_) => "init",
                 };
                 CommandOperation::new(
@@ -1072,6 +1098,15 @@ fn dispatch_sweep(command: Commands, context: DispatchContext<'_>) -> CommandOut
             command.execute_without_runtime(context.root_override, context.workspace_selector)
         }
         _ => dispatch_mismatch("Sweep"),
+    }
+}
+
+fn dispatch_clock(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+    match command {
+        Commands::Clock(command) => {
+            command.execute_without_runtime(context.root_override, context.workspace_selector)
+        }
+        _ => dispatch_mismatch("Clock"),
     }
 }
 

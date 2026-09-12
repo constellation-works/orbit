@@ -1,4 +1,4 @@
-//! Routine and host sweep-clock operations for the dashboard [ORB-10875].
+//! Routine and host clock operations for the dashboard [ORB-10875].
 
 use std::time::Instant;
 
@@ -214,7 +214,7 @@ pub(super) async fn control_clock(
                 &runtime,
                 workspace,
                 operation,
-                "sweep-clock",
+                "clock",
                 &body.host_id,
                 &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
                 None,
@@ -237,10 +237,7 @@ pub(super) async fn control_clock(
     if body.host_id != report.host_id {
         return selection_conflict(
             "host_mismatch",
-            format!(
-                "select host '{}' before changing its sweep clock",
-                report.host_id
-            ),
+            format!("select host '{}' before changing its clock", report.host_id),
         );
     }
     if before.enabled != body.expected_enabled
@@ -276,7 +273,7 @@ pub(super) async fn control_clock(
             &runtime,
             workspace,
             operation,
-            "sweep-clock",
+            "clock",
             &body.host_id,
             &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
             Some(&caller),
@@ -294,7 +291,7 @@ pub(super) async fn control_clock(
         &runtime,
         workspace,
         operation,
-        "sweep-clock",
+        "clock",
         &body.host_id,
         &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
         Some(&caller),

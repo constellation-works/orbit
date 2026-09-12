@@ -110,12 +110,12 @@ fn unwritable_cursor_directory_does_not_mint_or_rewrite_baseline() {
 
     assert_eq!(outcome.reports.len(), 1);
     let report = &outcome.reports[0];
-    assert_eq!(report.action, "skipped", "{report:?}");
+    assert_eq!(report.action, "error", "{report:?}");
     assert!(
         report
             .reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("error:")),
+            .is_some_and(|reason| reason.contains("write") || reason.contains("Permission")),
         "{report:?}"
     );
     assert!(runtime.list_tasks().expect("tasks").is_empty());

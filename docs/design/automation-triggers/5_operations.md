@@ -7,9 +7,8 @@ last_validated: 2026-09-07
 
 # Delivery automation operations [ORB-11330]
 
-Delivery triggers are opt-in. The existing sweep clock evaluates routines; the
-existing `auto_task_scheduler_pipeline` evaluates auto-task definitions. Routines
-submit ordinary jobs, and auto-tasks create ordinary backlog tasks for the normal
+Delivery triggers are opt-in. The host clock tick evaluates routines and auto-task
+definitions in-process. Routines submit ordinary jobs, and auto-tasks create ordinary backlog tasks for the normal
 approval/admission lifecycle. There is no new daemon or coverage submission tool.
 
 ## Configuration and migration

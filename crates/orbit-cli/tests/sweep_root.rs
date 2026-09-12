@@ -105,6 +105,42 @@ fn sweep_honors_orbit_root_over_uninitialized_home() {
     assert_home_empty(&fixture.home);
 }
 
+#[test]
+fn sweep_alias_and_clock_tick_have_identical_json_output() {
+    let fixture = Fixture::initialized();
+    let root_arg = fixture.root.to_string_lossy().into_owned();
+    let shared = ["--root", root_arg.as_str(), "--dry-run", "--format", "json"];
+
+    let sweep = run_json(
+        &fixture.repo,
+        &fixture.home,
+        &[
+            "sweep", shared[0], shared[1], shared[2], shared[3], shared[4],
+        ],
+        None,
+    );
+    let tick = run_json(
+        &fixture.repo,
+        &fixture.home,
+        &[
+            "clock", "tick", shared[0], shared[1], shared[2], shared[3], shared[4],
+        ],
+        None,
+    );
+
+    assert_eq!(sweep, tick);
+}
+
+#[test]
+fn routine_clock_is_not_a_compatibility_alias() {
+    let fixture = Fixture::initialized();
+
+    command(&fixture.repo, &fixture.home, &["routine", "clock"], None)
+        .args(["routine", "clock"])
+        .assert()
+        .failure();
+}
+
 fn assert_sweep_used_custom_root(outcome: &Value) {
     assert_eq!(outcome["host_id"], "sweep-root-host");
     assert_eq!(outcome["dry_run"], true);

@@ -39,8 +39,8 @@ pub use status::{
     recent_fires, resume_routine, routine_statuses_with_providers, set_routine_enabled,
 };
 pub use sweep::{
-    RoutineSweepReport, SweepOptions, SweepOutcome, run_sweep_at_with_providers,
-    run_sweep_with_providers,
+    AutoTaskSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
+    run_sweep_at_with_providers, run_sweep_with_providers,
 };
 
 /// Who this host is, as reported by routine status and sweep output. Routine

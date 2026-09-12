@@ -6,16 +6,14 @@
 //! git-versioned YAML record ([`loader`]) with a schedule, an `enabled` toggle,
 //! a task template, and a dedupe policy. A single generic scheduler
 //! ([`scheduler`]) fires the due, enabled definitions and mints tasks from
-//! their templates — periodic work becomes data, not code. The scheduler runs
-//! as the deterministic `run_auto_task_scheduler` action, wrapped in a job,
-//! fired by a seeded routine (so its fires are observable on the dashboard
-//! routines surface).
+//! their templates — periodic work becomes data, not code. The host scheduler
+//! tick runs the evaluator directly for each registered owner checkout.
 //!
 //! - [`loader`] — discover + parse definitions, fail-closed.
 //! - [`schedule`] — due-math (cron reuses the routine machinery; interval is
 //!   native), with catch-up collapse.
 //! - [`state`] — host-local, workspace-scoped last-fired cursors.
-//! - [`scheduler`] — the pass itself + the deterministic-action projection.
+//! - [`scheduler`] — the evaluator called by the host tick.
 //! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
 
 pub mod crud;
@@ -32,7 +30,7 @@ pub use loader::{
 pub use schedule::{AutoTaskDueDecision, decide_due, validate_schedule};
 pub use scheduler::{
     AutoTaskFireReport, AutoTaskSchedulerOutcome, SchedulerOptions, open_auto_task_instance,
-    run_auto_task_scheduler_at, run_scheduler_action_json,
+    run_auto_task_scheduler_at,
 };
 pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cursor_state};
 

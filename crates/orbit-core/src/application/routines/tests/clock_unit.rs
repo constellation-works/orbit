@@ -31,7 +31,8 @@ fn write_launchd_unit(home: &Path, program: &str) -> PathBuf {
     <key>ProgramArguments</key>
     <array>
         <string>{program}</string>
-        <string>sweep</string>
+        <string>clock</string>
+        <string>tick</string>
     </array>
 </dict>
 </plist>
@@ -48,7 +49,7 @@ fn write_systemd_unit(home: &Path, program: &str) -> PathBuf {
     let path = unit_dir.join("orbit-sweep.service");
     fs::write(
         &path,
-        format!("[Service]\nType=oneshot\nExecStart={program} sweep\n"),
+        format!("[Service]\nType=oneshot\nExecStart={program} clock tick\n"),
     )
     .expect("write systemd service");
     path
@@ -142,7 +143,7 @@ fn path_only_mismatch_is_a_warning() {
         inspection
             .doctor_remediation()
             .expect("path mismatch remediation")
-            .contains("orbit routine init --install-clock")
+            .contains("orbit clock enable")
     );
 }
 
@@ -187,7 +188,7 @@ fn version_mismatch_is_a_failure_naming_both_paths_and_versions() {
         inspection
             .doctor_remediation()
             .expect("version mismatch remediation")
-            .contains("orbit routine init --install-clock")
+            .contains("orbit clock enable")
     );
 }
 
@@ -255,7 +256,7 @@ fn parses_quoted_systemd_exec_start() {
     fs::create_dir_all(&unit_dir).expect("systemd user dir");
     fs::write(
         unit_dir.join("orbit-sweep.service"),
-        "[Service]\nExecStart=\"/opt/orbit with spaces/orbit\" sweep\n",
+        "[Service]\nExecStart=\"/opt/orbit with spaces/orbit\" clock tick\n",
     )
     .expect("write quoted service");
 
@@ -268,6 +269,41 @@ fn parses_quoted_systemd_exec_start() {
     assert_eq!(
         inspection.program_path.as_deref(),
         Some(Path::new("/opt/orbit with spaces/orbit"))
+    );
+}
+
+#[test]
+fn legacy_systemd_sweep_invocation_is_reported_as_stale() {
+    let home = tempdir().expect("home");
+    let program = home.path().join("orbit");
+    fs::write(&program, "binary").expect("touch running binary");
+    let unit_dir = home.path().join(".config/systemd/user");
+    fs::create_dir_all(&unit_dir).expect("systemd user dir");
+    fs::write(
+        unit_dir.join("orbit-sweep.service"),
+        format!("[Service]\nExecStart={} sweep\n", program.display()),
+    )
+    .expect("legacy service");
+    let running = RunningBinary {
+        path: program,
+        version: "0.21.0".to_string(),
+    };
+
+    let inspection = inspect_with_version(
+        home.path(),
+        ClockPlatform::Systemd,
+        &running,
+        "orbit 0.21.0",
+    );
+
+    assert_eq!(inspection.verdict, ClockUnitVerdict::InvocationMismatch);
+    assert!(inspection.status_line_suffix().contains("stale"));
+    assert!(inspection.doctor_message().contains("orbit sweep"));
+    assert!(
+        inspection
+            .doctor_remediation()
+            .expect("remediation")
+            .contains("orbit clock enable")
     );
 }
 

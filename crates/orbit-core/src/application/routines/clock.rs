@@ -1,4 +1,4 @@
-//! OS clock integration [ORB-10021] / ADR-0204: the OS owns the wake-up,
+//! OS clock integration [ORB-10021, ORB-12237]: the OS owns the wake-up,
 //! Orbit owns everything else. `orbit routine init --install-clock` renders
 //! the platform unit from the templates in `assets/clock/` and installs it
 //! as a per-user unit (launchd agent on macOS, systemd user timer on Linux).
@@ -294,7 +294,7 @@ impl ClockCommandRunner for NativeClockCommandRunner {
     }
 }
 
-/// Path launchd redirects `orbit sweep` stdout/stderr to on macOS, and the
+/// Path launchd redirects `orbit clock tick` stdout/stderr to on macOS, and the
 /// file `run_sweep` rotates so it stays bounded on an always-on host. Single
 /// source of truth shared by the installer and the sweep
 /// pass so the writer and the rotator never disagree. (Linux logs to the
@@ -607,6 +607,52 @@ fn migrate_stale_systemd_timer(home: &Path, settings: ClockSettings) -> Result<(
     Ok(())
 }
 
+/// Rewrite an already-installed service when it differs from the embedded
+/// template. In particular, this upgrades the compatibility invocation
+/// `orbit sweep` to the canonical `orbit clock tick` while preserving the
+/// installed Orbit program path.
+fn migrate_stale_systemd_service(home: &Path) -> Result<(), OrbitError> {
+    let service_path = systemd_service_path(home);
+    if !service_path.exists() {
+        return Ok(());
+    }
+    let installed = fs::read_to_string(&service_path).map_err(|error| {
+        OrbitError::Io(format!(
+            "failed to read '{}': {error}",
+            service_path.display()
+        ))
+    })?;
+    let orbit_bin = installed
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("ExecStart="))
+        .and_then(|command| {
+            let command = command.trim();
+            command.strip_prefix('"').map_or_else(
+                || command.split_whitespace().next(),
+                |quoted| quoted.split('"').next(),
+            )
+        })
+        .filter(|program| !program.is_empty())
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "installed clock service '{}' has no ExecStart program",
+                service_path.display()
+            ))
+        })?;
+    let expected = render_systemd_service(orbit_bin);
+    if installed == expected {
+        return Ok(());
+    }
+    atomic_write_text(&service_path, &expected).map_err(|error| {
+        OrbitError::Io(format!(
+            "failed to write '{}': {error}",
+            service_path.display()
+        ))
+    })?;
+    Ok(())
+}
+
 fn manager_status_command(platform: ClockPlatform) -> ManagerCommand {
     match platform {
         ClockPlatform::Launchd => ManagerCommand {
@@ -674,7 +720,7 @@ fn manager_set_enabled_command(
 }
 
 /// Enable or pause the native per-user clock. This does not touch the routine
-/// store, so manual `orbit sweep` and per-routine pause state remain available.
+/// store, so manual `orbit clock tick` and per-routine pause state remain available.
 pub fn set_clock_enabled(global_root: &Path, enabled: bool) -> Result<ClockStatus, OrbitError> {
     set_clock_enabled_with(
         global_root,
@@ -697,6 +743,7 @@ pub(super) fn set_clock_enabled_with(
         .run(&manager_status_command(platform))
         .unwrap_or(false);
     if platform == ClockPlatform::Systemd && enabled {
+        migrate_stale_systemd_service(home)?;
         migrate_stale_systemd_timer(home, settings)?;
         let reload = systemd_daemon_reload_command();
         if !runner.run(&reload)? {
@@ -772,7 +819,7 @@ pub(super) fn clock_status_with(
                     (
                         false,
                         Some(
-                            "systemd timer is enabled but is not active with a finite future trigger; recovery: `orbit routine clock enable` rewrites a stale installed timer if needed, re-arms it, and verifies the result"
+                            "systemd timer is enabled but is not active with a finite future trigger; recovery: `orbit clock enable` rewrites a stale installed unit if needed, re-arms it, and verifies the result"
                                 .to_string(),
                         ),
                     )
@@ -781,7 +828,7 @@ pub(super) fn clock_status_with(
             Err(_) if enabled => (
                 false,
                 Some(
-                    "systemd timer is enabled but its next trigger could not be verified; recovery: inspect `systemctl --user status orbit-sweep.timer`, then run `orbit routine clock enable` to rewrite a stale unit if needed, re-arm, and verify it"
+                    "systemd timer is enabled but its next trigger could not be verified; recovery: inspect `systemctl --user status orbit-sweep.timer`, then run `orbit clock enable` to rewrite a stale unit if needed, re-arm, and verify it"
                         .to_string(),
                 ),
             ),

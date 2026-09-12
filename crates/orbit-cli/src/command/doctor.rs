@@ -313,9 +313,9 @@ pub(crate) fn clock_unit_row_from_inspection(
     let status = match inspection.verdict {
         ClockUnitVerdict::Matching => WorkspaceDoctorStatus::Ok,
         ClockUnitVerdict::NoUnitInstalled => WorkspaceDoctorStatus::Skipped,
-        ClockUnitVerdict::PathMismatch | ClockUnitVerdict::Unrunnable { .. } => {
-            WorkspaceDoctorStatus::Warning
-        }
+        ClockUnitVerdict::PathMismatch
+        | ClockUnitVerdict::InvocationMismatch
+        | ClockUnitVerdict::Unrunnable { .. } => WorkspaceDoctorStatus::Warning,
         ClockUnitVerdict::VersionMismatch => WorkspaceDoctorStatus::Error,
     };
     WorkspaceDoctorResult {

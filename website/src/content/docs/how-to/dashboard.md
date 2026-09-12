@@ -192,10 +192,10 @@ CLI equivalents:
 
 ```bash
 orbit routine list
-orbit routine clock status
-orbit routine clock pause
-orbit routine clock enable
-orbit routine clock set --cadence-seconds 300
+orbit clock status
+orbit clock pause
+orbit clock enable
+orbit clock set --cadence-seconds 300
 ```
 
 ### Auto-tasks

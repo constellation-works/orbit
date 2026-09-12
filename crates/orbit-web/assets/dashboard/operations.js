@@ -1,4 +1,4 @@
-// Routine-definition, host sweep-clock, and auto-task operations [ORB-10875, ORB-10876].
+// Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
 import { requestPanel, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson } from './common.js';
 import { navigateToRun } from './router.js';
@@ -332,10 +332,10 @@ function clockButton(payload, action, label) {
   button.addEventListener("click", () => {
     if (reason || !selection.current() || pendingOperations.has(key)) return;
     const verb = action === "enable" ? "Start" : "Stop";
-    if (!window.confirm(`${verb} the ${payload.clock.provider} sweep clock on ${payload.host_id}? This does not change any routine definition.`)) return;
+    if (!window.confirm(`${verb} the ${payload.clock.provider} clock on ${payload.host_id}? This does not change any routine definition.`)) return;
     return runOperation({
       selection, key, feedbackId: "clock-operation-feedback",
-      pending: `${verb} host sweep clock…`, failure: "Clock service change failed",
+      pending: `${verb} host clock…`, failure: "Clock service change failed",
       render: () => { if (lastOperations) renderClock(lastOperations); },
       request: () => postJson("/api/routines/clock", {
         action, host_id: payload.host_id, expected_enabled: payload.clock.enabled,

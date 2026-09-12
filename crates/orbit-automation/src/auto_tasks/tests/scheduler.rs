@@ -244,7 +244,7 @@ fn interruption_after_claim_reports_unresolved_and_does_not_remint() {
         SchedulerOptions::default(),
     )
     .expect("interrupted");
-    assert_eq!(interrupted.reports[0].action, "skipped");
+    assert_eq!(interrupted.reports[0].action, "error");
     assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
     let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
     assert_eq!(
@@ -286,7 +286,7 @@ fn interruption_after_mint_reconciles_on_retry_without_reminting() {
         SchedulerOptions::default(),
     )
     .expect("interrupted");
-    assert_eq!(interrupted.reports[0].action, "skipped");
+    assert_eq!(interrupted.reports[0].action, "error");
     assert_eq!(dispatch.minted.load(Ordering::SeqCst), 1);
     let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
     assert_eq!(
@@ -446,7 +446,7 @@ fn malformed_cursor_is_not_baselined_or_rewritten() {
     let outcome =
         run_auto_task_scheduler_at(&dispatch, at(2026, 1, 1, 0, 0), SchedulerOptions::default())
             .expect("pass");
-    assert_eq!(outcome.reports[0].action, "skipped");
+    assert_eq!(outcome.reports[0].action, "error");
     assert!(
         outcome.reports[0]
             .reason

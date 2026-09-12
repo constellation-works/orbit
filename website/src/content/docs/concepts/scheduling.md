@@ -12,7 +12,7 @@ mints a weekly chore, follows the same path:
 <ol class="orbit-pipeline" aria-label="How a scheduled fire flows through Orbit">
   <li>
     <span class="orbit-pipeline-step">Sweep clock</span>
-    <span class="orbit-pipeline-note">The OS wakes <code>orbit sweep</code></span>
+    <span class="orbit-pipeline-note">The OS wakes <code>orbit clock tick</code></span>
   </li>
   <li>
     <span class="orbit-pipeline-step">Routine</span>
@@ -34,7 +34,7 @@ mints a weekly chore, follows the same path:
 
 ## The sweep clock
 
-`orbit sweep` is the scheduler pass. It is stateless in and durable out: it
+`orbit clock tick` is the scheduler pass. It is stateless in and durable out: it
 loads every routine definition from the registered workspaces that opt in,
 filters them for the current host, fires whatever is due, records what it did,
 and exits. Nothing in Orbit is scheduled unless that pass runs.
@@ -46,7 +46,7 @@ and event triggers are not possible, but there is no long-lived process to
 supervise, and a wedged pass costs one minute, not the scheduler.
 
 The clock is host infrastructure, configured per machine and never versioned.
-Pausing it stops scheduled sweeps; a manual `orbit sweep` still works, and no
+Pausing it stops scheduled ticks; a manual `orbit clock tick` still works, and no
 individual routine's state changes.
 
 ## Routine
@@ -90,7 +90,7 @@ Invariants that shape how routines behave:
   one is in flight; `timeout_minutes` is also the staleness horizon after which
   a stuck fire stops blocking the next.
 - **Seeded disabled.** `orbit init` writes a default set — task pilot, ship
-  sweep, auto-task scheduler, triage, worktree GC, CI and dependency alert
+  sweep, triage, worktree GC, CI and dependency alert
   sweeps — every one `enabled: false`. Enabling unattended agent work is an
   explicit, versioned decision.
 
@@ -106,12 +106,11 @@ become a task". It is one YAML file under `.orbit/auto_tasks/`, managed through
 the task it should produce: title, body, acceptance criteria, type, priority,
 tags, crew, required tools.
 
-The mechanism that turns definitions into tasks is deliberately generic. One
-seeded routine, `auto_task_scheduler`, fires the `auto_task_scheduler_pipeline`
-job every minute; that job reads every enabled definition and mints a task from
-each one that is due. Because each definition carries its own schedule, the
-minutely routine is cheap and idempotent, and adding a recurring chore is a new
-definition — never new code and never a new routine.
+The mechanism that turns definitions into tasks is deliberately generic. The
+host tick reads every enabled definition in each registered owner checkout and
+mints a task from each one that is due, in-process and without creating a job
+run. Because each definition carries its own schedule, adding a recurring chore
+is a new definition — never new code and never a new routine.
 
 Invariants that shape how auto-tasks behave:
 
@@ -141,7 +140,7 @@ kinds of thing.
 |---|---|---|
 | Schedules | A job | A task |
 | Question | Which job, when, on which host? | Which chore becomes a task? |
-| Fires through | `orbit sweep` directly | The generic scheduler routine |
+| Fires through | `orbit clock tick` | `orbit clock tick` in-process |
 | Lives in | `.orbit/routines/*.yaml` | `.orbit/auto_tasks/*.yaml` |
 | Adding one means | A new versioned trigger | A new definition, no new trigger |
 | Output | A run in job history | A task in the backlog |

@@ -12,16 +12,16 @@ Orbit has two layers of scheduling, and they answer different questions.
 | **Routines** | *Which job should fire, on what cadence, on which host?* | Versioned YAML in `.orbit/routines/` |
 | **Auto-tasks** | *Which recurring chore should become a task?* | Versioned YAML in `.orbit/auto_tasks/`, managed by `orbit auto-task` |
 
-Both are driven by the same clock: `orbit sweep`. Nothing is scheduled until
+Both are driven by the same clock: `orbit clock tick`. Nothing is scheduled until
 that clock runs. This guide is the operating procedure; the model behind it —
 why the layers are separate and what each one guarantees — is in
 [Routines and Auto-Tasks](../../concepts/scheduling/).
 
-## 1. Start the sweep clock
+## 1. Start the host clock
 
-`orbit sweep` is the scheduler pass. It loads routine definitions from every
-registered, active owner checkout on this host and dispatches whatever is due as
-a normal job run.
+`orbit clock tick` is the scheduler pass. It loads routine and auto-task
+definitions from every registered, active owner checkout. Due routines dispatch
+normal job runs; due auto-tasks mint normal tasks in-process.
 
 Point the OS at it once per host:
 
@@ -30,29 +30,29 @@ orbit routine init --install-clock
 ```
 
 That installs a per-user clock unit — launchd on macOS, a systemd user timer on
-Linux — which invokes `orbit sweep` every minute. `orbit routine init` without
+Linux — which invokes `orbit clock tick` every minute. `orbit routine init` without
 the flag just reports this host's identity; it never creates or rewrites host
 identity, which is `orbit init`'s job.
 
 Inspect and control the clock:
 
 ```bash
-orbit routine clock status
-orbit routine clock set --cadence-seconds 300   # whole-minute cadence, in seconds
-orbit routine clock pause
-orbit routine clock enable
+orbit clock status
+orbit clock set --cadence-seconds 300   # whole-minute cadence, in seconds
+orbit clock pause
+orbit clock enable
 ```
 
-Pausing the clock stops *scheduled* sweeps. A manual `orbit sweep` still works,
+Pausing the clock stops scheduled ticks. A manual `orbit clock tick` still works,
 and it does not change any individual routine's pause state.
 
 You can always run the pass by hand, which is the right way to try a change:
 
 ```bash
-orbit sweep --dry-run            # report what would fire; record and dispatch nothing
-orbit sweep --verbose            # a row per routine, including not-due ones
-orbit sweep --json
-orbit --workspace <name> sweep   # only that workspace's routines
+orbit clock tick --dry-run       # report what would fire; write nothing
+orbit clock tick --verbose       # every routine and auto-task row
+orbit clock tick --json
+orbit --workspace <name> clock tick  # only that workspace's schedules
 ```
 
 A pass visits every registered routine-source workspace on the host. The global
@@ -60,9 +60,10 @@ A pass visits every registered routine-source workspace on the host. The global
 nothing outside the selected workspace is evaluated, fired, or recorded. An
 unregistered selector fails instead of falling back to the whole host.
 
-By default `orbit sweep` prints only noteworthy rows — fires, retries,
-baselines, errors — so a per-minute clock does not fill the log with `not_due`
-churn.
+By default the tick prints only noteworthy rows — fires, mints, retries,
+baselines, and errors — so a per-minute clock does not fill the log with
+`not_due` churn. `orbit sweep` remains a compatibility alias with identical
+arguments and output.
 
 ## 2. Enable the routines you want
 
@@ -72,8 +73,8 @@ clock.
 
 `orbit init` seeds a set of default routines into `.orbit/routines/`, each
 **disabled**, because enabling unattended agent work is a deliberate, versioned
-decision. The shipped set covers task pilot preflight, ship sweeps, auto-task
-scheduling, triage, worktree GC, and CI/dependency alert sweeps.
+decision. The shipped set covers task pilot preflight, ship sweeps, triage,
+worktree GC, and CI/dependency alert sweeps.
 
 ```bash
 orbit routine list               # toggles, next-due, last fire
@@ -136,11 +137,9 @@ definition instead.
 An auto-task is a **template for a task**, minted on a schedule. Adding a
 recurring chore is a new definition — never new code and never a new routine.
 
-One generic routine does the minting: the seeded auto-task scheduler fires
-`auto_task_scheduler_pipeline` every minute, which reads every definition and
-mints from the due ones. Because each definition carries its own schedule, that
-minutely routine costs almost nothing and stays idempotent. Enable it once, and
-every future definition is picked up automatically.
+The host tick does the minting directly. It reads each enabled definition and
+mints from the due ones without creating a scheduler job run. Enable the host
+clock and the definition; there is no scheduler routine to enable.
 
 ### Create a definition
 
@@ -209,7 +208,7 @@ A minted task is an ordinary task, and a routine fire is an ordinary run:
 ```bash
 orbit auto-task list                                   # name, enabled state, schedule
 orbit routine list                                     # toggles, next-due, last fire
-orbit run history -j auto_task_scheduler_pipeline      # scheduler fires
+orbit clock tick --dry-run                             # scheduler decisions
 orbit task list --tag maintenance --status backlog     # what got minted
 ```
 
@@ -241,8 +240,8 @@ a human.
 ## Health
 
 ```bash
-orbit routine clock status
-orbit sweep --dry-run --verbose
+orbit clock status
+orbit clock tick --dry-run --verbose
 orbit doctor
 ```
 

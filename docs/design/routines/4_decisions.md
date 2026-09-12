@@ -166,17 +166,17 @@ Seed a workspace-local ship-sweep routine targeting a shipped wrapper job. The w
 
 **Recorded:** 2026-08-11 03:29:01.559340Z · [ORB-10720]
 **Paths:** `crates/orbit-core/src/application/routines/**`, `crates/orbit-cli/src/command/routine/**`, `docs/design/routines/**`
-**Superseded in part by:** [One host tick evaluates routines and auto-task definitions in-process](#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process) — the clock's storage, cadence rules, and native-manager health checks are unchanged; its CLI home moves from `orbit routine clock` to top-level `orbit clock`.
+**Superseded in part by:** [One host tick evaluates routines and auto-task definitions in-process](#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process) — the clock's storage, cadence rules, and native-manager health checks are unchanged; its controls now live at top-level `orbit clock`.
 
 ### Context
 The OS sweep clock is shared host infrastructure but previously had a hard-coded minutely cadence and only native-manager controls. The alternatives were a workspace routine setting, which would make one workspace own host infrastructure, or a host-local configuration plus Orbit CLI controls.
 
 ### Decision
-Store the supported whole-minute cadence in host-local `~/.orbit/clock.toml` and expose it through `orbit routine clock`. Native launchd/systemd user services remain the authority for enabled state; routine pauses and manual `orbit sweep` remain separate.
+Store the supported whole-minute cadence in host-local `~/.orbit/clock.toml`. Native launchd/systemd user services remain the authority for enabled state; routine pauses and manual ticks remain separate. The current control surface is `orbit clock`.
 
 ### Consequences
 - Clock status reports configured and effective cadence, and native-manager failures include recovery commands.
-- On Linux, enabled state and successful manager command exits are insufficient for health: installation and controls report success only when systemd exposes an active timer with a finite next trigger. An elapsed or unscheduled timer reports `orbit routine clock enable`, which rewrites a stale installed unit (for example a pre-fix `OnStartupSec` timer) when it differs from the embedded template, daemon-reloads, restarts the timer even when already enabled, and verifies the repaired state.
+- On Linux, enabled state and successful manager command exits are insufficient for health: installation and controls report success only when systemd exposes an active timer with a finite next trigger. An elapsed or unscheduled timer reports `orbit clock enable`, which rewrites a stale installed unit (for example a pre-fix `OnStartupSec` timer) when it differs from the embedded template, daemon-reloads, restarts the timer even when already enabled, and verifies the repaired state.
 - Linux uses monotonic timer-activation and service-activation triggers. `OnActiveSec` establishes the first deadline after every install, reinstall, cadence change, and re-enable; `OnUnitActiveSec` establishes recurrence after each sweep service activation. `AccuracySec=5s` bounds coalescing after either deadline. Missed timer ticks are not replayed, leaving catch-up versus skip behavior to each routine's persisted cursor and `missed_run` policy.
 - Cost: the host-local setting intentionally does not travel with a workspace, so operators configure each host separately.
 
@@ -265,7 +265,7 @@ Remove the `[routines]` config section. The tick evaluates definitions from ever
   (`GET /api/routines`), realizing the single-host half of the §7 cross-host-visibility
   vision. Read-only projection of `routine_statuses`; no new ADR (no new architectural
   constraint — mirrors the existing `orbit routine list --json` surface).
-- [ORB-11082] — Linux `orbit routine clock enable` rewrites a stale installed timer from
+- [ORB-11082] — Linux `orbit clock enable` rewrites a stale installed timer from
   the embedded template and daemon-reloads before restart, so an `OnStartupSec` upgrade
   leftover is recovered by the advertised command instead of looping on enable.
 

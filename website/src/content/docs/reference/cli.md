@@ -110,9 +110,10 @@ See [Delivery Workflows](../../getting-started/workflows/).
 
 | Command | Purpose |
 |---|---|
-| `orbit sweep` | The scheduler pass: fire due routines on this host. `--dry-run`, `--verbose`, `--json`. The global `--workspace <SELECTOR>` restricts the pass to one registered workspace's routines. |
+| `orbit clock tick` | The scheduler pass: fire due routines and mint due auto-tasks. `--dry-run`, `--verbose`, `--json`. The global `--workspace <SELECTOR>` restricts the pass to one registered workspace. |
+| `orbit sweep` | Compatibility alias for `orbit clock tick`, with identical arguments and output. |
 | `orbit routine list` \| `show` \| `pause` \| `resume` | Inspect routines and pause them host-locally. |
-| `orbit routine clock status` \| `pause` \| `enable` \| `set` | Control the host OS sweep clock. |
+| `orbit clock status` \| `pause` \| `enable` \| `set` | Control the host OS scheduler clock. |
 | `orbit routine init [--install-clock]` | Read host identity and optionally install the OS clock unit. |
 | `orbit auto-task add` \| `list` \| `show` \| `update` \| `toggle` \| `mint` | Define recurring auto-task templates and mint from them. |
 

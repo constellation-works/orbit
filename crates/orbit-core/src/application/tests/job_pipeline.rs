@@ -579,7 +579,7 @@ fn routine_style_detached_worker_is_claimed_within_ownership_window() {
     let run = runtime
         .stores()
         .jobs()
-        .insert_job_run("auto_task_scheduler_pipeline", 1, Utc::now(), None, None)
+        .insert_job_run("scheduler_fixture_pipeline", 1, Utc::now(), None, None)
         .expect("insert routine-dispatched run");
     let mut command = Command::new("sh");
     command.args(["-c", "printf 'routine worker startup\\n' >&2; sleep 0.25"]);

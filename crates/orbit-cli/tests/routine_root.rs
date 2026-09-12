@@ -98,7 +98,7 @@ fn routine_list_honors_explicit_root_over_uninitialized_home_and_environment() {
     assert_eq!(list["host_id"], "routine-root-host");
     let routines = list["routines"].as_array().expect("routine list array");
     assert!(
-        routines.len() >= 7,
+        routines.len() >= 6,
         "expected the seeded routines from the custom root: {list}"
     );
     assert!(

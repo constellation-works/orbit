@@ -294,7 +294,7 @@ fn rendered_systemd_service_discovers_local_provider_launchers() {
     assert!(!rendered_path.contains("/nix/store/"));
     assert!(rendered.contains("Type=oneshot"));
     assert!(rendered.contains("KillMode=process"));
-    assert!(rendered.contains("ExecStart=/opt/orbit/bin/orbit sweep"));
+    assert!(rendered.contains("ExecStart=/opt/orbit/bin/orbit clock tick"));
 }
 
 #[test]
@@ -411,6 +411,40 @@ fn enable_migrates_stale_on_startup_sec_elapsed_timer() {
             "systemctl --user restart orbit-sweep.timer".to_string(),
             systemd_show_command().to_string(),
         ]
+    );
+}
+
+#[test]
+fn enable_rewrites_a_legacy_systemd_sweep_service_to_clock_tick() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    let unit_dir = home.path().join(".config/systemd/user");
+    fs::create_dir_all(&unit_dir).expect("create systemd user unit dir");
+    fs::write(
+        unit_dir.join("orbit-sweep.service"),
+        "[Service]\nType=oneshot\nExecStart=/opt/orbit/bin/orbit sweep\n",
+    )
+    .expect("write legacy service");
+    fs::write(
+        unit_dir.join("orbit-sweep.timer"),
+        render_systemd_timer(ClockSettings::default()),
+    )
+    .expect("write current timer");
+    let runner = SystemdManagerFake::new(home.path(), 10);
+
+    let status = set_clock_enabled_with(
+        root.path(),
+        true,
+        ClockPlatform::Systemd,
+        &runner,
+        home.path(),
+    )
+    .expect("enable rewrites legacy service");
+
+    assert!(status.schedulable);
+    assert_eq!(
+        fs::read_to_string(unit_dir.join("orbit-sweep.service")).expect("rewritten service"),
+        render_systemd_service("/opt/orbit/bin/orbit")
     );
 }
 
@@ -608,7 +642,7 @@ fn enabled_systemd_timer_without_a_future_trigger_is_unhealthy() {
     assert!(!status.schedulable);
     assert_eq!(status.effective_cadence_seconds, None);
     assert!(status.health_issue.as_deref().is_some_and(|issue| {
-        issue.contains("finite future trigger") && issue.contains("orbit routine clock enable")
+        issue.contains("finite future trigger") && issue.contains("orbit clock enable")
     }));
     assert_eq!(
         runner.commands(),
@@ -871,7 +905,7 @@ fn systemd_install_rejects_successful_commands_without_a_finite_trigger() {
     assert!(error.to_string().contains("systemctl --user status"));
     assert!(error.to_string().contains("journalctl --user"));
     assert!(
-        !error.to_string().contains("orbit routine clock enable"),
+        !error.to_string().contains("orbit clock enable"),
         "a completed enable/install that is still unschedulable must not tell the operator to repeat enable"
     );
 }

@@ -23,13 +23,10 @@ enabled definitions, fires the due ones, and mints a task from each template.
 Adding a new periodic chore is a new definition (`orbit auto-task add`), never
 new orbit code or a new routine.
 
-> **Pending change — clock consolidation (decided 2026-09-12, unimplemented).** The
-> scheduler pass is reached today through the seeded `auto_task_scheduler` routine → job
-> → activity chain. It will instead be called directly by the host clock tick
-> (`orbit clock tick`, alias `orbit sweep`) for every registered owner checkout, and the
-> routine/job/activity trio is retired. Reasoning:
-> [Auto-task definitions are evaluated by the host tick, not fired by a routine](./4_decisions.md#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine);
-> target contract: [routines/3_vision.md §0](../routines/3_vision.md#0-graduating-clock-consolidation).
+The scheduler pass is called directly by the host clock tick (`orbit clock tick`, alias
+`orbit sweep`) for every registered owner checkout. No routine, job, activity, or job run
+mediates auto-task evaluation. See
+[Auto-task definitions are evaluated by the host tick, not fired by a routine](./4_decisions.md#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine).
 
 ## 1. Motivation
 
@@ -53,12 +50,10 @@ becomes just the first definition.
 - **Cursor** — per-definition last-fired state, host-local at
   `<orbit_dir>/state/auto-tasks.json`, so the git-versioned definition is never
   churned by a scheduler fire.
-- **Scheduler** — one deterministic activity (`run_auto_task_scheduler`) wrapped
-  in the `auto_task_scheduler_pipeline` job, fired by the seeded
-  `auto_task_scheduler` routine. Its fires appear on the dashboard routines
-  surface. Slated to change: the same pass is called directly by the host clock
-  tick, no job run is created, and fire evidence is the minted task, the cursor,
-  and the tick report row.
+- **Scheduler** — the host clock tick calls the evaluator directly after routine
+  evaluation. No job run is created; fire evidence is the minted task, the cursor,
+  and the tick report row. Auto-tasks are shown on the Operations auto-task panel,
+  not on the routines surface.
 - **Dedupe & provenance** — each minted task carries an `auto-task:<name>` tag;
   `skip_if_open` uses that tag to avoid firing while a prior instance is open.
 - **Manual mint** — `orbit auto-task mint <name>` mints one task from a

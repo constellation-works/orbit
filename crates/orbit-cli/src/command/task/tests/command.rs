@@ -146,7 +146,7 @@ fn root_help_groups_scheduler_commands_in_layer_order() {
     let help = Cli::command().render_long_help().to_string();
     assert_eq!(
         root_help_section(&help, "Scheduler"),
-        "  sweep       Fire due routines on this host (the scheduler pass)\n  routine     Inspect and control scheduled routines on this host\n  auto-task   Define recurring auto-task templates (the scheduler primitive)",
+        "  clock       Inspect, control, and manually tick the host scheduler\n  sweep       Compatibility alias for `orbit clock tick`\n  routine     Inspect and control scheduled routines on this host\n  auto-task   Define recurring auto-task templates (the scheduler primitive)",
         "{help}"
     );
     assert!(

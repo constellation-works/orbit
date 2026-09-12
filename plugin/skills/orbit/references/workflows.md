@@ -70,7 +70,6 @@ not a rewrite of failed history.
 | `task_triage_pipeline` | Diagnose tasks blocked by failed runs. |
 | `epic_pipeline` | Ship an epic and its descendants against one worktree. |
 | `workspace_ship_pipeline` / `workspace_auto_pipeline` | Workspace-scoped wrappers that resolve mode and base branch, then invoke the pipelines above. |
-| `auto_task_scheduler_pipeline` | Mint tasks from due auto-task definitions. |
 | `ci_failure_sweep_pipeline` | File GitHub Actions findings as proposed, pilot them, and admit only current warning-free repairs to backlog; never implements them. |
 | `dependabot_alert_sweep_pipeline` | Collect Dependabot/code/secret-scanning evidence and file remediation tasks. |
 | `worktree_gc_pipeline` | Reclaim settled worktrees. |
