@@ -37,7 +37,7 @@ records in a second store merely to get past a connection error.
 | Friction | `orbit_friction_add/list/update` | Additional show/stats/tags/resolve commands |
 | Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` |
 | Observe/resume workflows | `orbit_workflow_run_show/list/resume` | `orbit run show/history/events/trace/logs/cancel`; job replay/resume |
-| Operation mode | `orbit_operation_explain/list` (read); `orbit_operation_enable/stop/revoke` (operator-governed) | `orbit operation explain/enable/list/show/stop/revoke`, `orbit run auto --grant` |
+| Operation mode | CLI/dashboard only; agents read grant state via `orbit run readiness` | `orbit operation explain/enable/list/show/stop/revoke`, `orbit run auto --grant` |
 | Auto-tasks | `orbit_auto_task_list/mint` | Definition add/show/update/toggle are CLI operations; do not assume they are advertised over MCP |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
 | Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; asynchronous, returns a run ID |

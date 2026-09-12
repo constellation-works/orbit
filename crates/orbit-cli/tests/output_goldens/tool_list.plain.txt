@@ -10,11 +10,6 @@ orbit.command.exec	active	yes	argv:string|string[], working_directory:string	Exe
 orbit.friction.add	active	yes	body:string, model:string	Append a friction report
 orbit.friction.list	active	yes	-	List friction records
 orbit.friction.update	active	yes	id:string	Update triage metadata for a friction record
-orbit.operation.enable	active	yes	task_ids:string|string[], window:string, rights:string|string[]	Enable a scoped operation-mode grant: a finite task set, separate prepare/promote/complete rights, and a bounded admission window. Captures the effective policy once; changing a preference later does not change the grant
-orbit.operation.explain	active	yes	-	Explain the effective operation policy: every field with its winning source, the active grant, caps, and limiting reasons
-orbit.operation.list	active	yes	-	List this workspace's recent operation-mode grants, newest first
-orbit.operation.revoke	active	yes	-	Hard-revoke a grant: no further privileged actions, including completion of admitted work. Records the reason and stops bound drains
-orbit.operation.stop	active	yes	-	Stop new admissions and promotion under a grant. Admitted work keeps its captured bounds, including completion; this is not cancellation
 orbit.pipeline.invoke	active	yes	job_name:string, input:object	Submit a durable pipeline run and return immediately with its run ID.
 orbit.pipeline.wait	active	yes	run_ids:string|string[]	Block until the supplied pipeline runs reach terminal state or timeout.
 orbit.search	active	yes	-	Search tasks, docs, and frictions. Decision records are indexed as ordinary docs; hybrid vector ranking applies to indexed tasks and docs.
