@@ -563,8 +563,8 @@ backend = "cli"
                     // pipeline / job dispatch
                     "orbit.pipeline.invoke",
                     "orbit.pipeline.wait",
-                    // task lifecycle writes other than the activity's one
-                    // evidence-gated blocked -> done reconciliation
+                    // task lifecycle writes
+                    "orbit.task.update",
                     "orbit.task.start",
                     "orbit.task.approve",
                     "orbit.task.reject",
@@ -578,12 +578,7 @@ backend = "cli"
                         "triage agent must not be able to call `{denied}`"
                     );
                 }
-                for allowed in [
-                    "orbit.task.show",
-                    "orbit.task.update",
-                    "orbit.friction.add",
-                    "proc.spawn",
-                ] {
+                for allowed in ["orbit.task.show", "orbit.friction.add", "proc.spawn"] {
                     assert!(
                         tool_allowed(allowed, &spec.tools),
                         "triage agent should be able to call `{allowed}`"
