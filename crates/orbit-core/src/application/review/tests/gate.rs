@@ -1091,6 +1091,7 @@ fn page_for(delivery: &Delivery) -> (AutomationState, SourcePage) {
         unresolved: BTreeMap::new(),
         associations: BTreeMap::new(),
         active: None,
+        stall: None,
     };
     let page = SourcePage {
         from: delivery.before.clone(),

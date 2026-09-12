@@ -10,12 +10,53 @@ use sha2::{Digest, Sha256};
 pub mod evidence;
 mod observe;
 pub mod recovery;
+pub mod reset;
+pub mod stall;
 #[cfg(test)]
 mod tests;
 
 /// Authority/source owner, implemented by Core. It never decides coverage rules.
 pub trait DeliveryHost {
     fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
+        Ok(None)
+    }
+
+    /// Minutes a deferred reason may persist before the evaluator escalates it
+    /// to a warning and one friction record.
+    fn stall_window_minutes(&self) -> u32 {
+        stall::DEFAULT_WINDOW_MINUTES
+    }
+
+    /// The same replay proof `recover --replay-history` previews, for the
+    /// evaluator's automatic repair of a diverged branch history. A host with
+    /// no source proof refuses, which stalls the consumer for an operator.
+    fn replay_history(
+        &self,
+        _branch: &str,
+        _state: &AutomationState,
+    ) -> Result<recovery::HistoryReplayInput, AutomationError> {
+        Err(AutomationError::Refused(
+            orbit_types::workflow::automation::recovery::refusal::PROVIDER_PROOF_UNAVAILABLE.into(),
+        ))
+    }
+
+    /// True when the consumer's observed revision is reachable from the
+    /// branch head again, so a recorded divergence no longer applies.
+    fn history_converged(
+        &self,
+        _branch: &str,
+        _state: &AutomationState,
+    ) -> Result<bool, AutomationError> {
+        Ok(false)
+    }
+
+    /// File one friction for a stall, deduped on the divergence it reports,
+    /// and answer with the record it filed or found. Hosts without a friction
+    /// corpus report nothing.
+    fn report_stall(
+        &self,
+        _report: &stall::StallReport<'_>,
+    ) -> Result<Option<String>, AutomationError> {
         Ok(None)
     }
 
@@ -62,6 +103,7 @@ pub fn definition_epoch<T: serde::Serialize>(definition: &T) -> Result<String, A
 pub const DEFINITION_CHANGED: &str = "definition_changed";
 
 /// Inputs supplied by the existing sweep clock.
+#[derive(Clone, Copy)]
 pub struct Evaluation<'a> {
     pub consumer: &'a str,
     pub epoch: &'a str,
@@ -72,7 +114,26 @@ pub struct Evaluation<'a> {
 }
 
 /// Evaluate explicit configuration without another scheduler or ticking loop.
+///
+/// A deferred reason that survives the pass is classified rather than simply
+/// returned: `stall` decides whether the next tick may retry it silently, or
+/// whether the consumer has to stop and say so. Preview never writes, so it
+/// reports the deferral exactly as the evaluator saw it.
 pub fn evaluate(
+    store: &dyn AutomationStoreBackend,
+    host: &dyn DeliveryHost,
+    request: Evaluation<'_>,
+) -> Result<AutomationDiagnostic, AutomationError> {
+    match evaluate_pass(store, host, request) {
+        Err(AutomationError::Deferred(reason)) if !request.dry_run => {
+            stall::deferred(store, host, &request, reason)
+        }
+        outcome => outcome,
+    }
+}
+
+/// One ordinary evaluation pass: reconcile, observe, then admit what is due.
+fn evaluate_pass(
     store: &dyn AutomationStoreBackend,
     host: &dyn DeliveryHost,
     request: Evaluation<'_>,
@@ -118,6 +179,7 @@ pub fn evaluate(
                 unresolved: Default::default(),
                 associations: Default::default(),
                 active: None,
+                stall: None,
             };
 
             if !dry_run {
@@ -153,6 +215,13 @@ pub fn evaluate(
 
     if !enabled {
         return diagnostic(store, consumer, "disabled", Some(state));
+    }
+
+    // A consumer an operator has to repair observes nothing: retrying the same
+    // unprovable source fact every minute is what hid this debt before. Work
+    // already admitted was reconciled above, so evidence can still arrive.
+    if let Some(suspended) = stall::suspended(store, host, &request, &mut state)? {
+        return Ok(suspended);
     }
 
     // A claim that never reached admission resumes here, subject to its retry budget.

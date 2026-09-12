@@ -55,6 +55,123 @@ pub(super) fn commit(
     })
 }
 
+/// Drop the consumer row and record what the reset forgot. The generation and
+/// the exact prior state fence the delete, so a consumer another pass already
+/// moved is never reset against stale facts.
+pub(super) fn reset(
+    store: &Store,
+    previous: &AutomationState,
+    record: &RecoveryRecord,
+) -> Result<bool, OrbitError> {
+    validate_reset(previous, record)?;
+
+    let record_json = encode(record)?;
+    let record_id = format!("{:x}", Sha256::digest(record_json.as_bytes()));
+
+    store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+        let conn = tx.connection();
+
+        let changed = conn
+            .execute(
+                "DELETE FROM automation_consumers WHERE consumer=?1 AND generation=?2 AND state_json=?3",
+                params![previous.consumer, previous.generation, encode(previous)?],
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+        if changed == 0 {
+            return Ok(false);
+        }
+
+        conn.execute(
+            "INSERT INTO automation_recoveries VALUES (?1,?2,?3,?4)",
+            params![
+                record_id,
+                previous.consumer,
+                record.at.to_rfc3339(),
+                record_json
+            ],
+        )
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+        Ok(true)
+    })
+}
+
+/// A reset is the one recovery that forgets debt, so its record has to carry
+/// the exact identity and inventory of the state it destroyed.
+fn validate_reset(previous: &AutomationState, record: &RecoveryRecord) -> Result<(), OrbitError> {
+    let invalid = || OrbitError::InvalidInput("invalid automation reset record".into());
+
+    let Some(reset) = &record.reset else {
+        return Err(invalid());
+    };
+
+    if previous.consumer != record.consumer
+        || previous.members.is_some()
+        || record.reason.trim().is_empty()
+        || record.by.trim().is_empty()
+        || record.adopted_settings
+        || record.reissued.is_some()
+        || record.replayed_history.is_some()
+        || record.previous_epoch != previous.epoch
+        || record.epoch != previous.epoch
+        || record.previous_trigger != previous.trigger
+        || record.trigger != previous.trigger
+        || reset.previous_generation != previous.generation
+        || reset.cleared_stall != previous.stall
+        || reset.forgotten.baseline != previous.baseline
+        || reset.forgotten.covered != previous.covered
+        || reset.forgotten.observed != previous.observed
+        || reset.forgotten.pending_deliveries != previous.pending.len()
+        || reset.forgotten.pending_commits != previous.pending_commits.len()
+        || reset.forgotten.unresolved != previous.unresolved.len()
+        || reset.forgotten.waived != previous.waived.len()
+        || reset.forgotten.excluded != previous.excluded.len()
+    {
+        return Err(invalid());
+    }
+
+    Ok(())
+}
+
+/// Persist or clear the stall marker alone. Every cursor, obligation and
+/// frozen action has to arrive unchanged: a stall records why evaluation
+/// stopped, it never moves the consumer's position.
+pub(super) fn stall(
+    store: &Store,
+    previous: &AutomationState,
+    next: &AutomationState,
+) -> Result<bool, OrbitError> {
+    let invalid = || OrbitError::InvalidInput("invalid automation stall transition".into());
+
+    if previous.generation.checked_add(1) != Some(next.generation) || previous.stall == next.stall {
+        return Err(invalid());
+    }
+
+    let mut compared = next.clone();
+    compared.generation = previous.generation;
+    compared.stall = previous.stall.clone();
+    if compared != *previous {
+        return Err(invalid());
+    }
+
+    store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+        tx.connection()
+            .execute(
+                "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
+                params![
+                    next.generation,
+                    encode(next)?,
+                    previous.consumer,
+                    previous.generation,
+                    encode(previous)?
+                ],
+            )
+            .map(|changed| changed == 1)
+            .map_err(|e| OrbitError::Store(e.to_string()))
+    })
+}
+
 pub(super) fn list(
     store: &Store,
     consumer: &str,
@@ -100,6 +217,10 @@ fn validate(
         || previous.covered != next.covered
         || previous.waived != next.waived
         || previous.excluded != next.excluded
+        // Recovery is how a stalled consumer resumes, so it always leaves the
+        // marker cleared rather than carrying the old reason forward.
+        || next.stall.is_some()
+        || record.reset.is_some()
     {
         return Err(invalid());
     }

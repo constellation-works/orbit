@@ -75,6 +75,22 @@ impl AutomationStoreBackend for Store {
         recovery::commit(self, previous, next, record)
     }
 
+    fn automation_reset(
+        &self,
+        previous: &AutomationState,
+        record: &RecoveryRecord,
+    ) -> Result<bool, OrbitError> {
+        recovery::reset(self, previous, record)
+    }
+
+    fn automation_stall(
+        &self,
+        previous: &AutomationState,
+        next: &AutomationState,
+    ) -> Result<bool, OrbitError> {
+        recovery::stall(self, previous, next)
+    }
+
     fn automation_recoveries(
         &self,
         consumer: &str,
@@ -140,6 +156,7 @@ impl AutomationStoreBackend for Store {
             || state.baseline != state.observed
             || state.baseline != state.covered
             || state.active.is_some()
+            || state.stall.is_some()
             || !state.pending.is_empty()
             || !state.waived.is_empty()
             || !state.pending_commits.is_empty()
@@ -275,6 +292,8 @@ fn validate_transition(
         || previous.repository != next.repository
         || previous.branch != next.branch
         || previous.baseline != next.baseline
+        // The stall marker moves only through its own fenced write.
+        || previous.stall != next.stall
         || previous.generation.checked_add(1) != Some(next.generation)
         || next.pending.len() > 1000
         || next.pending_commits.len() > 5000

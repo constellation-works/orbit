@@ -7,6 +7,7 @@ use super::add::AutoTaskAddArgs;
 use super::list::AutoTaskListArgs;
 use super::mint::AutoTaskMintArgs;
 use super::recover::AutoTaskRecoverArgs;
+use super::reset::AutoTaskResetArgs;
 use super::show::AutoTaskShowArgs;
 use super::toggle::AutoTaskToggleArgs;
 use super::update::AutoTaskUpdateArgs;
@@ -42,6 +43,9 @@ pub enum AutoTaskSubcommand {
     /// Preview or apply the audited recovery for a delivery consumer stalled
     /// by a settings change (retains all coverage debt)
     Recover(AutoTaskRecoverArgs),
+    /// Preview or apply the audited reset of a delivery consumer: forget its
+    /// coverage debt and re-baseline at the branch head
+    Reset(AutoTaskResetArgs),
 }
 
 impl Execute for AutoTaskSubcommand {
@@ -54,6 +58,7 @@ impl Execute for AutoTaskSubcommand {
             AutoTaskSubcommand::Toggle(args) => args.execute(runtime),
             AutoTaskSubcommand::Mint(args) => args.execute(runtime),
             AutoTaskSubcommand::Recover(args) => args.execute(runtime),
+            AutoTaskSubcommand::Reset(args) => args.execute(runtime),
         }
     }
 }

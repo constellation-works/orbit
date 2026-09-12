@@ -16,6 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, CrewAssignment, resolve_crew};
+use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
 use orbit_types::workflow::{CODEX_PROVIDER_SANDBOX_MODES, Provider};
 
 use crate::operation::{
@@ -147,6 +148,11 @@ macro_rules! define_config_settings {
 }
 
 define_config_settings! {
+    automation_stall_window_minutes: u32 => u32 {
+        key: "automation.stall_window_minutes", value_type: "integer",
+        description: "Minutes a deferred delivery-automation reason may persist before the evaluator logs it at warn and files one friction (1..=1440).",
+        resolve: |raw: Option<u32>| resolve_bounded_minutes(raw, DEFAULT_STALL_WINDOW_MINUTES, "automation.stall_window_minutes"),
+    },
     codex_approval_policy: Option<String> => String {
         key: "execution.codex.approval_policy", value_type: "string",
         description: "Codex approval policy: one of untrusted, on-request, never.",
@@ -466,6 +472,19 @@ pub(crate) fn read_optional<T: DeserializeOwned>(
             redact_home_dir(&config_path.display().to_string())
         ))
     })
+}
+
+/// Admit a positive minute budget, defaulting when unset. A day is the
+/// ceiling: anything longer is indistinguishable from never escalating.
+fn resolve_bounded_minutes(raw: Option<u32>, default: u32, key: &str) -> Result<u32, OrbitError> {
+    const MAX_MINUTES: u32 = 1440;
+    match raw {
+        Some(value) if value == 0 || value > MAX_MINUTES => Err(OrbitError::InvalidInput(format!(
+            "{key} has invalid value {value}; expected 1..={MAX_MINUTES}"
+        ))),
+        Some(value) => Ok(value),
+        None => Ok(default),
+    }
 }
 
 fn resolve_choice(

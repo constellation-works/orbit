@@ -16,7 +16,9 @@ mod ownership;
 pub(crate) mod preparation;
 mod provider;
 mod recovery;
+mod reset;
 pub(crate) mod source;
+pub(crate) mod stall;
 mod task;
 #[cfg(test)]
 mod tests;
@@ -24,6 +26,8 @@ mod tests;
 pub(crate) use direct::record_direct_landing_intent;
 pub use inspect::{inspect_auto_task, inspect_routine};
 pub use recovery::recover_auto_task;
+pub use reset::reset_auto_task;
+pub use stall::{StalledConsumer, stalled_consumers, stalled_minutes};
 
 pub const COVERAGE_ARTIFACT: &str = "automation-coverage.json";
 
@@ -164,6 +168,49 @@ impl DeliveryHost for Host<'_> {
         }
 
         Ok(None)
+    }
+
+    fn stall_window_minutes(&self) -> u32 {
+        self.runtime.automation_stall_window_minutes()
+    }
+
+    fn replay_history(
+        &self,
+        branch: &str,
+        state: &AutomationState,
+    ) -> Result<delivery::recovery::HistoryReplayInput, AutomationError> {
+        let receipts = self
+            .runtime
+            .automation_store()?
+            .automation_receipts(&state.consumer, 100)?;
+        let (page, record) = self.source.replay_history(branch, state, receipts.len())?;
+
+        Ok(delivery::recovery::HistoryReplayInput { page, record })
+    }
+
+    fn history_converged(
+        &self,
+        branch: &str,
+        state: &AutomationState,
+    ) -> Result<bool, AutomationError> {
+        let (_, head) = self.source.head(branch)?;
+
+        Ok(self
+            .source
+            .git(&[
+                "merge-base",
+                "--is-ancestor",
+                &state.observed.commit,
+                &head.commit,
+            ])
+            .is_ok())
+    }
+
+    fn report_stall(
+        &self,
+        report: &delivery::stall::StallReport<'_>,
+    ) -> Result<Option<String>, AutomationError> {
+        stall::report(self.runtime, report).map_err(Into::into)
     }
 
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {

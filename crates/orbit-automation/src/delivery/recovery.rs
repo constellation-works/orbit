@@ -20,7 +20,7 @@ use orbit_types::workflow::automation::recovery::*;
 use orbit_types::workflow::automation::*;
 
 /// How many audited recoveries a preview reports.
-const HISTORY_LIMIT: usize = 10;
+pub(super) const HISTORY_LIMIT: usize = 10;
 
 /// One additional attempt is authorized for the same window the frozen batch
 /// budget grants, so a reissue never quietly widens the retry deadline policy.
@@ -118,7 +118,7 @@ pub fn apply(
     )
 }
 
-fn load(
+pub(super) fn load(
     store: &dyn AutomationStoreBackend,
     consumer: &str,
 ) -> Result<AutomationState, AutomationError> {
@@ -146,6 +146,10 @@ fn plan(
         .checked_add(1)
         .ok_or_else(|| AutomationError::Deferred("generation_exhausted".into()))?;
 
+    // Recovery is how a stalled consumer resumes, so the marker never
+    // survives it: the reason either no longer applies or has to be re-proven.
+    next.stall = None;
+
     if request.request.adopt_settings {
         next.epoch = request.epoch.into();
         next.trigger = Some(request.trigger.clone());
@@ -160,6 +164,9 @@ fn plan(
     let replayed_history = if request.request.replay_history {
         let (replayed, record) = replay_plan(state, request.replay.as_ref())?;
         next = replayed;
+        // The replayed state is derived from the pre-recovery one, so the
+        // marker has to be cleared again here.
+        next.stall = None;
         next.generation = state
             .generation
             .checked_add(1)
@@ -178,6 +185,13 @@ fn plan(
         adopted_settings: request.request.adopt_settings,
         reissued,
         replayed_history,
+        reset: None,
+        // The stall's friction is what this recovery answers, so the record
+        // links it and an operator can resolve the record from the audit.
+        friction_id: state
+            .stall
+            .as_ref()
+            .and_then(|stall| stall.friction_id.clone()),
         reason: request.request.reason.trim().into(),
         by: request.by.trim().into(),
         at: request.now,
@@ -321,12 +335,56 @@ fn refusals(
 /// The examination contract the retained debt was accumulated under. The
 /// recorded trigger answers; otherwise the frozen batch does, and a consumer
 /// with neither cannot prove it.
-fn recorded_coverage(state: &AutomationState) -> Option<CoverageClass> {
+pub(super) fn recorded_coverage(state: &AutomationState) -> Option<CoverageClass> {
     state
         .trigger
         .as_ref()
         .map(|trigger| trigger.coverage)
         .or_else(|| state.active.as_ref().map(|active| active.batch.coverage))
+}
+
+/// Everything the consumer owes right now, with its accepted receipts counted.
+pub(super) fn debt(
+    store: &dyn AutomationStoreBackend,
+    state: &AutomationState,
+) -> Result<CoverageDebt, AutomationError> {
+    Ok(CoverageDebt {
+        baseline: state.baseline.clone(),
+        covered: state.covered.clone(),
+        observed: state.observed.clone(),
+        pending_deliveries: state.pending.len(),
+        pending_commits: state.pending_commits.len(),
+        unresolved: state.unresolved.len(),
+        waived: state.waived.len(),
+        excluded: state.excluded.len(),
+        receipts: store.automation_receipts(&state.consumer, 100)?.len(),
+    })
+}
+
+/// The frozen action a consumer is holding, and whether it may be reissued.
+pub(super) fn stalled_action(
+    store: &dyn AutomationStoreBackend,
+    state: &AutomationState,
+) -> Result<Option<StalledAction>, AutomationError> {
+    let receipts = store.automation_receipts(&state.consumer, 100)?;
+    Ok(state.active.as_ref().map(|active| StalledAction {
+        batch_id: active.batch.id.clone(),
+        attempt: active.attempt,
+        state: active.state,
+        action_id: active.action_id.clone(),
+        reason: active.reason.clone(),
+        obligations: active
+            .batch
+            .deliveries
+            .iter()
+            .map(|delivery| delivery.key.clone())
+            .collect(),
+        commits: active.batch.commits.len(),
+        reissuable: matches!(active.state, BatchState::Failed | BatchState::Exhausted)
+            && !receipts
+                .iter()
+                .any(|receipt| receipt.batch_id == active.batch.id),
+    }))
 }
 
 fn project(
@@ -337,17 +395,9 @@ fn project(
     applied: Vec<String>,
     history_replay: Option<HistoryReplayRecord>,
 ) -> Result<RecoveryPreview, AutomationError> {
-    let receipts = store.automation_receipts(request.consumer, 100)?;
-    let reissuable = |active: &BatchAttempt| {
-        matches!(active.state, BatchState::Failed | BatchState::Exhausted)
-            && !receipts
-                .iter()
-                .any(|receipt| receipt.batch_id == active.batch.id)
-    };
-
     Ok(RecoveryPreview {
         consumer: state.consumer.clone(),
-        reason: stall_reason(state, request).into(),
+        reason: scheduling_reason(state, request.epoch, &request.trigger.branch),
         identity: RecoveryIdentity {
             recorded_epoch: state.epoch.clone(),
             configured_epoch: request.epoch.into(),
@@ -355,32 +405,8 @@ fn project(
             recorded_trigger: state.trigger.clone(),
             configured_trigger: request.trigger.clone(),
         },
-        debt: CoverageDebt {
-            baseline: state.baseline.clone(),
-            covered: state.covered.clone(),
-            observed: state.observed.clone(),
-            pending_deliveries: state.pending.len(),
-            pending_commits: state.pending_commits.len(),
-            unresolved: state.unresolved.len(),
-            waived: state.waived.len(),
-            excluded: state.excluded.len(),
-            receipts: receipts.len(),
-        },
-        action: state.active.as_ref().map(|active| StalledAction {
-            batch_id: active.batch.id.clone(),
-            attempt: active.attempt,
-            state: active.state,
-            action_id: active.action_id.clone(),
-            reason: active.reason.clone(),
-            obligations: active
-                .batch
-                .deliveries
-                .iter()
-                .map(|delivery| delivery.key.clone())
-                .collect(),
-            commits: active.batch.commits.len(),
-            reissuable: reissuable(active),
-        }),
+        debt: debt(store, state)?,
+        action: stalled_action(store, state)?,
         history_replay,
         refusals: refusals(store, request, requested, state)?,
         applied,
@@ -528,16 +554,22 @@ fn replay_plan(
 }
 
 /// Why this consumer is or is not stalled, in the evaluator's own precedence:
-/// an edited definition first, then a settled action needing attention.
-fn stall_reason(state: &AutomationState, request: &Recovery<'_>) -> &'static str {
-    if state.epoch != request.epoch || state.branch != request.trigger.branch {
-        return super::DEFINITION_CHANGED;
+/// a recorded stall first, then an edited definition, then a settled action.
+/// Shared with reset so both operations name the position the same way.
+pub(super) fn scheduling_reason(state: &AutomationState, epoch: &str, branch: &str) -> String {
+    // A recorded stall outranks configuration: it is why evaluation stopped.
+    if let Some(stall) = state.stall.as_ref() {
+        return stall.reason.clone();
+    }
+
+    if state.epoch != epoch || state.branch != branch {
+        return super::DEFINITION_CHANGED.into();
     }
 
     match state.active.as_ref().map(|active| active.state) {
-        Some(BatchState::Failed | BatchState::Exhausted) => "needs_attention",
-        Some(_) => "batch_pending",
-        None => "not_stalled",
+        Some(BatchState::Failed | BatchState::Exhausted) => "needs_attention".into(),
+        Some(_) => "batch_pending".into(),
+        None => "not_stalled".into(),
     }
 }
 

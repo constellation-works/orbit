@@ -626,6 +626,27 @@ impl<'a> Source<'a> {
         Ok(())
     }
 
+    /// Pinned refs this consumer holds for its frozen batches.
+    pub(super) fn retained_refs(&self, consumer: &str) -> Result<Vec<String>, AutomationError> {
+        let prefix = format!("refs/orbit/automation/{}/", digest(consumer.as_bytes()));
+
+        Ok(self
+            .git(&["for-each-ref", "--format=%(refname)", &prefix])?
+            .lines()
+            .map(str::to_owned)
+            .collect())
+    }
+
+    /// Drop pins whose batch is being forgotten. They exist only to keep a
+    /// frozen input reachable, so a pin that cannot be deleted is reported to
+    /// the caller rather than failing the operation that forgot the batch.
+    pub(super) fn release_refs(&self, refs: &[String]) -> Vec<String> {
+        refs.iter()
+            .filter(|name| self.git(&["update-ref", "-d", name]).is_err())
+            .cloned()
+            .collect()
+    }
+
     pub(super) fn verify_batch(&self, batch: &CoverageBatch) -> Result<(), AutomationError> {
         if self.revision(&batch.from_exclusive.commit)? != batch.from_exclusive
             || self.revision(&batch.through_inclusive.commit)? != batch.through_inclusive

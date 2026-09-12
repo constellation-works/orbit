@@ -192,6 +192,7 @@ fn seed_assessment(fixture: &Fixture, task_id: &str, fingerprint: &str, ready: b
                 unresolved: BTreeMap::new(),
                 associations: BTreeMap::new(),
                 active: None,
+                stall: None,
             };
             assert!(store.automation_initialize(&baseline).expect("initialize"));
             baseline

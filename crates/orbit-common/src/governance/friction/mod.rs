@@ -18,8 +18,16 @@ pub use title::{FRICTION_TITLE_MAX_CHARS, derive_title, effective_title, normali
 /// This list seeds `.orbit/frictions/tags.yaml` for new workspaces and keeps
 /// tool-schema affordances aligned with the default validator vocabulary.
 pub const DEFAULT_FRICTION_TAGS: &[(&str, &str)] = &[
+    (
+        "automation",
+        "Scheduler, auto-task, or delivery-automation friction",
+    ),
     ("build", "make/fmt/lint friction"),
     ("docs", "Stale or missing CLAUDE.md or design docs"),
+    (
+        "history-diverged",
+        "A rewritten branch history orphaned recorded automation state",
+    ),
     ("lifecycle", "Task lifecycle confusion or transition issues"),
     ("naming", "Naming drift or duplicated sources of truth"),
     ("other", "Fallback"),

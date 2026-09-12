@@ -1,10 +1,15 @@
-//! Operator recovery contracts for a stalled delivery consumer.
+//! Recovery, reset and stall contracts for a delivery consumer.
 //!
-//! A delivery consumer stalls when its definition is edited: the persisted
-//! epoch can no longer match configured settings, or a legitimate rebase can
-//! orphan its observed revision. These types describe the explicit, audited
-//! way out — what the operator asks for, what the consumer currently owes, and
-//! what was actually changed. Nothing here waives, covers or discards debt.
+//! A delivery consumer stops making progress for a few distinct reasons: its
+//! definition was edited so the persisted epoch no longer matches configured
+//! settings, a rebase orphaned its observed revision, or the evaluator hit a
+//! source fact that will not change on its own. These types describe the
+//! explicit, audited ways out — what the operator asks for, what the consumer
+//! currently owes, and what was actually changed.
+//!
+//! Recovery never waives, covers or discards debt. Reset is the one operation
+//! that forgets it, which is why its record carries the whole inventory of
+//! what disappeared.
 
 use super::{BatchState, DeliveryTrigger, SourceRevision};
 use chrono::{DateTime, Utc};
@@ -40,6 +45,116 @@ impl RecoveryRequest {
             || self.reissue_action
             || (self.replay_history && !self.reason.trim().is_empty())
     }
+}
+
+/// What an operator explicitly authorizes when resetting one consumer. Reset
+/// forgets every retained obligation, so it previews until it carries a
+/// reason.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetRequest {
+    /// Operator explanation, retained verbatim in the audit record. Empty
+    /// means preview only.
+    #[serde(default)]
+    pub reason: String,
+    /// Reset even while an admitted action is still executing. The action is
+    /// abandoned, not cancelled.
+    #[serde(default)]
+    pub force: bool,
+}
+
+impl ResetRequest {
+    /// True when the request asks for a durable reset rather than a preview.
+    pub fn mutates(&self) -> bool {
+        !self.reason.trim().is_empty()
+    }
+}
+
+/// What a reset forgot, and the baseline it left behind. Retained inside the
+/// audit record so the discarded debt stays readable after the state is gone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetRecord {
+    /// Generation the forgotten state carried.
+    pub previous_generation: u64,
+    /// Everything the consumer owed at the moment it was reset.
+    pub forgotten: CoverageDebt,
+    /// The frozen action abandoned by the reset, when one was held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abandoned_action: Option<StalledAction>,
+    /// Head of the configured branch the next evaluation re-baselines at.
+    pub baseline: SourceRevision,
+    /// Pinned `refs/orbit/automation/<consumer-digest>/*` refs released with
+    /// the forgotten batches.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub released_refs: Vec<String>,
+    /// The stall the reset cleared, when the consumer carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleared_stall: Option<AutomationStall>,
+}
+
+/// Preview or applied projection of a consumer reset. Both carry the same
+/// document, so an operator verifies exactly what a reason would forget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResetPreview {
+    pub consumer: String,
+    /// Current scheduling reason, in the shared inspection vocabulary.
+    pub reason: String,
+    pub generation: u64,
+    pub epoch: String,
+    /// Everything the reset would forget, or did.
+    pub debt: CoverageDebt,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<StalledAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall: Option<AutomationStall>,
+    /// Head of the configured branch the consumer re-baselines at.
+    pub baseline: SourceRevision,
+    /// Named refusals blocking the reset; empty means it may run.
+    pub refusals: Vec<String>,
+    /// True only when this call durably reset the consumer.
+    pub applied: bool,
+    /// Recent audited recoveries for this consumer, newest first.
+    pub history: Vec<RecoveryRecord>,
+}
+
+/// Why a consumer stopped making progress, recorded on its state so repeated
+/// evaluations report one durable fact instead of a new error every tick.
+///
+/// Only a reason that needs an operator is recorded: evaluation stays
+/// suspended while the marker is present.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationStall {
+    /// The deferred reason, in the evaluator's own vocabulary.
+    pub reason: String,
+    /// First evaluation that saw this reason.
+    pub since: DateTime<Utc>,
+    /// When the stall was escalated to a warning and a friction record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalated_at: Option<DateTime<Utc>>,
+    /// The friction record filed for this stall, when one was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub friction_id: Option<String>,
+    /// Divergence facts, present only for `history_diverged`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub divergence: Option<HistoryDivergence>,
+}
+
+/// The unprovable history rewrite behind a `history_diverged` stall.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryDivergence {
+    /// The observed revision the rewrite orphaned.
+    pub observed: SourceRevision,
+    /// Head of the configured branch when the divergence was detected.
+    pub head: SourceRevision,
+    /// The refusal that stopped the automatic replay proof. Empty when the
+    /// proof succeeded and the evaluator replayed the rewrite itself.
+    pub refusal: String,
+    /// Retained obligations the proof could not map onto the new head:
+    /// delivery keys and unresolved commit ids.
+    pub obligations: Vec<String>,
 }
 
 /// The configuration identity a consumer carries, against the configured one.
@@ -107,10 +222,41 @@ pub struct RecoveryRecord {
     pub reissued: Option<ReissuedAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replayed_history: Option<HistoryReplayRecord>,
+    /// Present only on a reset: the debt this record forgot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset: Option<ResetRecord>,
+    /// The friction record this recovery answers, when a stall filed one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub friction_id: Option<String>,
     pub reason: String,
     pub by: String,
     pub at: DateTime<Utc>,
 }
+
+impl RecoveryRecord {
+    /// Audit kind, in the operator-facing vocabulary.
+    pub fn kind(&self) -> &'static str {
+        if self.reset.is_some() {
+            "reset"
+        } else if self.replayed_history.is_some() {
+            "replay_history"
+        } else if self.reissued.is_some() && self.adopted_settings {
+            "adopt_settings+reissue_action"
+        } else if self.reissued.is_some() {
+            "reissue_action"
+        } else {
+            "adopt_settings"
+        }
+    }
+}
+
+/// Actor recorded on a recovery the evaluator applied without an operator.
+pub const SYSTEM_ACTOR: &str = "system:automation";
+
+/// Default minutes a deferred reason may persist before the evaluator
+/// escalates it to a warning and one friction record
+/// (`automation.stall_window_minutes`).
+pub const DEFAULT_STALL_WINDOW_MINUTES: u32 = 60;
 
 /// One deterministic orphan-to-canonical commit correspondence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,4 +382,6 @@ pub mod refusal {
     pub const HISTORY_DEBT_LOST: &str = "history_debt_lost";
     /// The configured branch moved after the preview facts were captured.
     pub const HISTORY_HEAD_CHANGED: &str = "history_head_changed";
+    /// A reset was requested while an action is executing, without `--force`.
+    pub const ACTION_EXECUTING: &str = "action_executing";
 }

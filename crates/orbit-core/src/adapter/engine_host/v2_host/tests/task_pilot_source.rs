@@ -854,6 +854,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         unresolved: Default::default(),
         associations: Default::default(),
         active: None,
+        stall: None,
     };
     assert!(store.automation_initialize(&state).unwrap());
     let claim = MemberAttempt {

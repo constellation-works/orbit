@@ -57,6 +57,7 @@ fn automation_state(consumer: &str) -> AutomationState {
         unresolved: Default::default(),
         associations: Default::default(),
         active: None,
+        stall: None,
     }
 }
 

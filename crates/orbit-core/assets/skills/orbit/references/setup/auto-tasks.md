@@ -154,6 +154,81 @@ exists. So:
   succeed, not fail or invent work to justify the run.
 - Require a dedupe check against existing tasks before filing anything.
 
+## Delivery consumers: stalls, automatic replay, and reset
+
+A definition scheduled on `deliveries_landed` (the shipped `delivery-qa` and
+`delivery-code-review` pair) is not on a clock: it watches a branch, records
+which landings it has examined, and mints an examination task when the debt is
+due. That recorded position — "observed commit X" — is what a rewritten branch
+history breaks.
+
+### A rewritten history is proved, or it stalls
+
+When the observed commit is no longer reachable from the configured branch head,
+the evaluator runs a replay proof: every observed commit must map onto a commit
+on the new head with the same `.orbit` tree and the same parent-relative patch.
+
+- **Proof succeeds** (a rebase or amend that preserved content) — the consumer
+  reconciles itself in that tick, under an audit record attributed to
+  `system:automation`, keeping every obligation. One friction is filed so the
+  rewrite is visible, and the next tick observes normally. Nothing to do.
+- **Proof fails** (a commit was dropped, squashed away, or its debt can no
+  longer be identified) — the consumer **stalls**: evaluation suspends, one
+  friction is filed listing the obligations that could not be mapped, and the
+  tick prints a single `stalled: history_diverged` line instead of an error
+  every 60 seconds. Nothing resumes it without an operator.
+
+Frictions are deduped per rewrite, so repeated ticks and the sibling consumer on
+the same branch share one record rather than filing hundreds.
+
+Find stalled consumers with `orbit doctor` (the `automation-consumers` row) or
+`orbit auto-task recover <name>`, whose stall reason names the cause. A stall
+that persists past `automation.stall_window_minutes` (default 60) is also logged
+at `warn`, so `orbit log tail --level warn` shows it.
+
+### Clearing a stall
+
+Two commands clear it, and both write an audit record:
+
+```bash
+# Retain every obligation: reconcile a rewrite the proof can verify.
+orbit auto-task recover delivery-qa --replay-history          # preview
+orbit auto-task recover delivery-qa --replay-history --reason "<why>"
+
+# Forget the debt: re-baseline at the current branch head.
+orbit auto-task reset delivery-qa                            # preview
+orbit auto-task reset delivery-qa --reason "<why>"
+```
+
+Prefer `recover`. Use `reset` when no recovery can repair the consumer — the
+rewrite destroyed the debt's identity, or the state predates the recorded
+trigger and `recover` refuses it as `coverage_unverifiable`.
+
+### What `reset` does
+
+`reset` is the only Orbit operation that discards coverage debt, so it previews
+until it carries `--reason`. The preview prints the consumer key, its
+generation, everything that would be forgotten (pending deliveries and commits,
+unresolved evidence, waived and excluded landings, accepted receipts), any
+executing action, and the head it would re-baseline at. Read it before
+authorizing.
+
+An apply writes one `reset` recovery record (who, when, why, the previous
+epoch/generation, the forgotten inventory, the new baseline), drops the consumer
+state, and deletes the `refs/orbit/automation/<digest>/*` pins of the forgotten
+batches. The next tick reports `baselined` at the branch head. Landings before
+that baseline are never examined — that is the cost of the command, and the
+record is the only trace they existed.
+
+It refuses while an action is executing unless `--force` is passed (the admitted
+task is abandoned, not cancelled), and refuses a state-member consumer. Never
+hand-edit the `automation_consumers` row instead: that leaves no audit record.
+
+Automation frictions are tagged `automation`, plus `history-diverged` for a
+rewritten history. Those tags ship in the default vocabulary; a workspace whose
+`.orbit/frictions/tags.yaml` predates them gets the record under `other`, so add
+them to that file if you filter on tags.
+
 ## Scheduling notes
 
 The host tick runs minutely by default, so each definition's own cron governs its cadence.

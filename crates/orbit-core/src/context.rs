@@ -354,6 +354,9 @@ pub(crate) struct OrbitRuntimeSettings {
     persistence: PersistenceConfig,
     actor: ActorIdentity,
     scoring_enabled: bool,
+    /// Minutes a deferred delivery-automation reason may persist before the
+    /// evaluator escalates it (`[automation] stall_window_minutes`).
+    automation_stall_window_minutes: u32,
     pr_config: PrConfig,
     /// Default base branch for ship workflows
     /// (`[workflow] base_branch` in `config.toml`, default `"main"`).
@@ -376,6 +379,7 @@ impl OrbitRuntimeSettings {
         persistence: PersistenceConfig,
         actor: ActorIdentity,
         scoring_enabled: bool,
+        automation_stall_window_minutes: u32,
         pr_config: PrConfig,
         workflow_base_branch: String,
         workflow_auto_ship: bool,
@@ -389,6 +393,7 @@ impl OrbitRuntimeSettings {
             persistence,
             actor,
             scoring_enabled,
+            automation_stall_window_minutes,
             pr_config,
             workflow_base_branch,
             workflow_auto_ship,
@@ -402,6 +407,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn operation(&self) -> &orbit_config::OperationPolicy {
         &self.operation
+    }
+
+    pub(crate) fn automation_stall_window_minutes(&self) -> u32 {
+        self.automation_stall_window_minutes
     }
 
     pub(crate) fn pr_config(&self) -> &PrConfig {

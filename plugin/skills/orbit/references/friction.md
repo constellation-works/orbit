@@ -84,8 +84,10 @@ The seeded defaults:
 
 | Tag | Use for |
 | --- | --- |
+| `automation` | Scheduler, auto-task, or delivery-automation friction |
 | `build` | Build, format, and lint friction |
 | `docs` | Stale or missing instruction and design docs |
+| `history-diverged` | A rewritten branch history orphaned recorded automation state |
 | `lifecycle` | Task lifecycle confusion or transition issues |
 | `naming` | Naming drift or duplicated sources of truth |
 | `policy` | Sandboxing and filesystem-profile surprises |

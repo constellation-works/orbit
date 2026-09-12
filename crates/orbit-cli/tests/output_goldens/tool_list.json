@@ -281,7 +281,7 @@
         "required": false
       },
       {
-        "description": "Friction taxonomy tags as a string or array; valid tags: build | docs | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other",
+        "description": "Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other",
         "name": "tags",
         "param_type": "string_list",
         "required": false
@@ -391,7 +391,7 @@
         "required": false
       },
       {
-        "description": "Optional replacement taxonomy tags as a string or array; valid tags: build | docs | lifecycle | naming | other | policy | skill-guidance | tooling",
+        "description": "Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling",
         "name": "tags",
         "param_type": "string_list",
         "required": false
