@@ -471,8 +471,20 @@ fn an_unknown_consumer_and_a_host_refusal_stop_before_any_write() {
 #[test]
 fn history_replay_preserves_frozen_coverage_and_adds_canonical_debt() {
     let (store, _host, trigger, frozen_batch) = stalled();
-    let before = store.automation_state(CONSUMER).unwrap().unwrap();
-    let orphan = before.observed.clone();
+    let previous = store.automation_state(CONSUMER).unwrap().unwrap();
+    let orphan = SourceRevision {
+        commit: "52d691ba".into(),
+        tree: "orphan-tree".into(),
+    };
+    let mut before = previous.clone();
+    before.generation += 1;
+    before.observed = orphan.clone();
+    before.pending_commits.push(orphan.commit.clone());
+    before
+        .unresolved
+        .insert(orphan.commit.clone(), "evidence_pending".into());
+    assert!(store.automation_commit(&previous, &before, None).unwrap());
+
     let inserted = SourceRevision {
         commit: "69555b04".into(),
         tree: "inserted-tree".into(),
@@ -481,11 +493,6 @@ fn history_replay_preserves_frozen_coverage_and_adds_canonical_debt() {
         commit: "50798789".into(),
         tree: orphan.tree.clone(),
     };
-    let mut replacement = landing(2);
-    replacement.before = inserted.clone();
-    replacement.after = canonical.clone();
-    replacement.commits = vec![canonical.commit.clone()];
-    replacement.evidence_digest = "canonical-proof".into();
     let added = Delivery {
         key: "pr:owner/repo:agent-main:1586".into(),
         repository: before.repository.clone(),
@@ -502,8 +509,10 @@ fn history_replay_preserves_frozen_coverage_and_adds_canonical_debt() {
         from: before.covered.clone(),
         through: canonical.clone(),
         commits: vec![inserted.commit.clone(), canonical.commit.clone()],
-        deliveries: vec![added.clone(), replacement],
-        unresolved: Default::default(),
+        deliveries: vec![added.clone()],
+        unresolved: [(canonical.commit.clone(), "evidence_pending".into())]
+            .into_iter()
+            .collect(),
         associations: Default::default(),
         exclusions: Default::default(),
         complete: true,
@@ -518,7 +527,7 @@ fn history_replay_preserves_frozen_coverage_and_adds_canonical_debt() {
         old_observed: orphan.clone(),
         new_observed: canonical.clone(),
         mappings: vec![HistoryMapping {
-            orphan,
+            orphan: orphan.clone(),
             canonical: canonical.clone(),
             proof_digest: "orbit-tree-and-binary-patch".into(),
         }],
@@ -532,6 +541,38 @@ fn history_replay_preserves_frozen_coverage_and_adds_canonical_debt() {
         reason: "reconcile the verified Sep 8 rebase".into(),
         ..Default::default()
     };
+
+    let mut unavailable_page = page.clone();
+    unavailable_page
+        .deliveries
+        .retain(|delivery| delivery.key != added.key);
+    unavailable_page
+        .unresolved
+        .insert(inserted.commit.clone(), "evidence_unavailable".into());
+    let unavailable_record = record.clone();
+    let unavailable = recovery::Recovery {
+        consumer: CONSUMER,
+        epoch: "v1",
+        trigger: &trigger,
+        repository: "owner/repo",
+        host_refusal: None,
+        request: &request,
+        by: "operator",
+        now: now(),
+        replay: Some(recovery::HistoryReplayInput {
+            page: unavailable_page,
+            record: unavailable_record,
+        }),
+    };
+    assert!(matches!(
+        recovery::preview(store.as_ref(), &unavailable),
+        Err(AutomationError::Refused(reason)) if reason == refusal::PROVIDER_PROOF_UNAVAILABLE
+    ));
+    assert_eq!(
+        store.automation_state(CONSUMER).unwrap(),
+        Some(before.clone())
+    );
+
     let operation = recovery::Recovery {
         consumer: CONSUMER,
         epoch: "v1",
@@ -564,6 +605,12 @@ fn history_replay_preserves_frozen_coverage_and_adds_canonical_debt() {
     assert_eq!(after.active, before.active);
     assert_eq!(after.active.unwrap().batch, frozen_batch);
     assert_eq!(after.observed, canonical);
+    assert_eq!(
+        after.unresolved.get("50798789").map(String::as_str),
+        Some("evidence_pending")
+    );
+    assert!(!after.unresolved.contains_key(&orphan.commit));
+    assert_eq!(after.pending[0..2], before.pending);
     assert!(
         after
             .pending

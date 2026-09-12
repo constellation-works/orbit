@@ -424,11 +424,7 @@ impl<'a> Source<'a> {
         let common_base = self.revision(&base_commit)?;
         let old_commits = self.first_parent_range(&base_commit, &old_observed.commit)?;
         let canonical_commits = self.first_parent_range(&base_commit, &head.commit)?;
-        if old_commits.is_empty() || old_commits.len() > 1000 || canonical_commits.len() > 1000 {
-            return Err(AutomationError::Refused(
-                refusal::HISTORY_TRAVERSAL_LIMIT.into(),
-            ));
-        }
+        validate_replay_range_lengths(old_commits.len(), canonical_commits.len())?;
 
         let mut candidates_by_proof = BTreeMap::<String, Vec<(usize, String)>>::new();
         for (position, canonical) in canonical_commits.iter().enumerate() {
@@ -448,17 +444,8 @@ impl<'a> Source<'a> {
                 .get(&proof_digest)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            let [(position, canonical)] = candidates else {
-                return Err(AutomationError::Refused(
-                    refusal::HISTORY_MAPPING_AMBIGUOUS.into(),
-                ));
-            };
-            if last_position.is_some_and(|last| *position <= last) {
-                return Err(AutomationError::Refused(
-                    refusal::HISTORY_MAPPING_AMBIGUOUS.into(),
-                ));
-            }
-            last_position = Some(*position);
+            let (position, canonical) = unique_mapping_candidate(candidates, last_position)?;
+            last_position = Some(position);
             mappings.push(HistoryMapping {
                 orphan: self.revision(orphan)?,
                 canonical: self.revision(canonical)?,
@@ -496,6 +483,19 @@ impl<'a> Source<'a> {
                         landed_at: delivery.landed_at,
                     }),
                 );
+                continue;
+            }
+
+            // A strongly mapped unresolved commit is already an identified
+            // obligation even though no provider owns it. Mark its canonical
+            // replacement as known so ordinary observation does not demand
+            // fresh provider proof for the same debt. The exact reason is
+            // restored on the page below; inserted commits still take the
+            // normal provider lookup path.
+            if state.unresolved.contains_key(&mapping.orphan.commit) {
+                probe
+                    .associations
+                    .insert(mapping.canonical.commit.clone(), None);
             }
         }
         probe.active = None;
@@ -503,7 +503,7 @@ impl<'a> Source<'a> {
             .last()
             .map(|mapping| mapping.canonical.clone())
             .ok_or_else(|| AutomationError::Refused(refusal::HISTORY_MAPPING_AMBIGUOUS.into()))?;
-        let page = self
+        let mut page = self
             .observe_with_lookup_limit(
                 branch,
                 &probe,
@@ -513,6 +513,18 @@ impl<'a> Source<'a> {
                 true,
             )
             .map_err(|_| AutomationError::Refused(refusal::PROVIDER_PROOF_UNAVAILABLE.into()))?;
+
+        for mapping in &mappings {
+            let Some(reason) = state.unresolved.get(&mapping.orphan.commit) else {
+                continue;
+            };
+
+            page.unresolved
+                .insert(mapping.canonical.commit.clone(), reason.clone());
+            if !state.associations.contains_key(&mapping.orphan.commit) {
+                page.associations.remove(&mapping.canonical.commit);
+            }
+        }
 
         Ok((
             page,
@@ -650,4 +662,35 @@ impl<'a> Source<'a> {
 
         Ok(())
     }
+}
+
+pub(super) fn validate_replay_range_lengths(
+    orphan_count: usize,
+    canonical_count: usize,
+) -> Result<(), AutomationError> {
+    if orphan_count == 0 || orphan_count > 1000 || canonical_count > 1000 {
+        return Err(AutomationError::Refused(
+            refusal::HISTORY_TRAVERSAL_LIMIT.into(),
+        ));
+    }
+
+    Ok(())
+}
+
+pub(super) fn unique_mapping_candidate(
+    candidates: &[(usize, String)],
+    last_position: Option<usize>,
+) -> Result<(usize, &str), AutomationError> {
+    let [(position, canonical)] = candidates else {
+        return Err(AutomationError::Refused(
+            refusal::HISTORY_MAPPING_AMBIGUOUS.into(),
+        ));
+    };
+    if last_position.is_some_and(|last| *position <= last) {
+        return Err(AutomationError::Refused(
+            refusal::HISTORY_MAPPING_AMBIGUOUS.into(),
+        ));
+    }
+
+    Ok((*position, canonical))
 }

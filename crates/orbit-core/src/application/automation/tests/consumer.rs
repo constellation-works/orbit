@@ -118,18 +118,6 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
     let source = super::super::source::Source::new(&fixture_root);
     let old = source.revision(ORPHAN).unwrap();
     let covered = source.revision(COVERED).unwrap();
-    let old_delivery = Delivery {
-        key: "direct:sep-8-settings".into(),
-        repository: "constellation-works/orbit".into(),
-        branch: "agent-main".into(),
-        before: source.revision(BASE).unwrap(),
-        after: old.clone(),
-        commits: vec![ORPHAN.into()],
-        task_ids: vec![],
-        evidence_reference: "incident:sep-8-settings".into(),
-        evidence_digest: "persisted-proof".into(),
-        landed_at: Utc::now(),
-    };
     let state = AutomationState {
         members: None,
         consumer: "ws/qa".into(),
@@ -142,10 +130,12 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
         observed: old,
         covered,
         pending_commits: vec![ORPHAN.into()],
-        pending: vec![old_delivery],
+        pending: vec![],
         waived: vec![],
         excluded: vec![],
-        unresolved: Default::default(),
+        unresolved: [(ORPHAN.into(), "evidence_pending".into())]
+            .into_iter()
+            .collect(),
         associations: Default::default(),
         active: None,
     };
@@ -171,11 +161,30 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
     assert_eq!(proof.mappings[0].orphan.commit, ORPHAN);
     assert_eq!(proof.mappings[0].canonical.commit, CANONICAL);
     assert_eq!(page.commits, vec![INSERTED, CANONICAL]);
+    assert_eq!(
+        page.unresolved.get(CANONICAL).map(String::as_str),
+        Some("evidence_pending")
+    );
+    assert!(!page.associations.contains_key(CANONICAL));
     assert!(
         page.deliveries
             .iter()
             .any(|delivery| delivery.key == "pr:constellation-works/orbit:agent-main:1586")
     );
+
+    git(&fixture_root, &["branch", "-f", "agent-main", INSERTED]);
+    let error = super::super::recovery::ensure_replay_head(
+        &super::super::source::Source::new(&fixture_root),
+        "agent-main",
+        &proof.captured_head,
+    )
+    .expect_err("a configured-head change must refuse apply");
+    assert!(matches!(
+        error,
+        orbit_common::OrbitError::InvalidInput(reason)
+            if reason == orbit_types::workflow::automation::recovery::refusal::HISTORY_HEAD_CHANGED
+    ));
+    git(&fixture_root, &["branch", "-f", "agent-main", HEAD]);
 
     let mut missing = state.clone();
     missing.observed.commit = "0000000000000000000000000000000000000000".into();
@@ -198,6 +207,26 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
         error,
         orbit_automation::AutomationError::Refused(reason)
             if reason == orbit_types::workflow::automation::recovery::refusal::HISTORY_BOUNDARY_UNREACHABLE
+    ));
+}
+
+#[test]
+fn replay_refuses_ambiguous_mapping_and_bounded_traversal_exhaustion() {
+    use orbit_automation::AutomationError;
+    use orbit_types::workflow::automation::recovery::refusal;
+
+    let ambiguous = vec![(1, "canonical-a".into()), (2, "canonical-b".into())];
+    assert!(matches!(
+        super::super::source::unique_mapping_candidate(&ambiguous, None),
+        Err(AutomationError::Refused(reason)) if reason == refusal::HISTORY_MAPPING_AMBIGUOUS
+    ));
+    assert!(matches!(
+        super::super::source::validate_replay_range_lengths(1001, 1),
+        Err(AutomationError::Refused(reason)) if reason == refusal::HISTORY_TRAVERSAL_LIMIT
+    ));
+    assert!(matches!(
+        super::super::source::validate_replay_range_lengths(1, 1001),
+        Err(AutomationError::Refused(reason)) if reason == refusal::HISTORY_TRAVERSAL_LIMIT
     ));
 }
 

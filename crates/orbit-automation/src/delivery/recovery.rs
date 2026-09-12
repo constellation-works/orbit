@@ -422,7 +422,18 @@ fn replay_plan(
             .ok_or_else(|| AutomationError::Refused(refusal::COVERAGE_UNVERIFIABLE.into()))?,
         DateTime::<Utc>::UNIX_EPOCH,
     )?;
-    if !canonical.unresolved.is_empty() {
+    let mapped_unresolved = input
+        .record
+        .mappings
+        .iter()
+        .filter_map(|mapping| {
+            state
+                .unresolved
+                .get(&mapping.orphan.commit)
+                .map(|reason| (mapping.canonical.commit.clone(), reason.clone()))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if canonical.unresolved != mapped_unresolved {
         return Err(AutomationError::Refused(
             refusal::PROVIDER_PROOF_UNAVAILABLE.into(),
         ));
@@ -505,6 +516,7 @@ fn replay_plan(
     });
     next.unresolved
         .retain(|commit, _| !mapped.contains(commit.as_str()));
+    next.unresolved.extend(mapped_unresolved);
     next.associations
         .retain(|commit, _| !mapped.contains(commit.as_str()));
     next.associations.extend(canonical.associations);
