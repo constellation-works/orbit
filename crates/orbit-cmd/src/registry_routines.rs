@@ -67,9 +67,12 @@ pub(crate) fn discover_registered_workspaces(
     workspace_filter: Option<&str>,
 ) -> Result<DiscoveredWorkspaces, OrbitError> {
     let registry_path = workspace_registry::registry_path_for(global_root);
-    let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-    workspace_registry::validate_workspaces(&mut registry);
-    workspace_registry::save_registry_to(&registry, &registry_path)?;
+    let registry = workspace_registry::with_registry_lock(&registry_path, || {
+        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
+        workspace_registry::validate_workspaces(&mut registry);
+        workspace_registry::save_registry_to(&registry, &registry_path)?;
+        Ok(registry)
+    })?;
 
     let mut discovered = DiscoveredWorkspaces::default();
     for (workspace, checkout) in workspace_registry::local_workspaces(&registry) {
