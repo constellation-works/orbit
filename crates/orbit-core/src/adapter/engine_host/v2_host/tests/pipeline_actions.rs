@@ -31,6 +31,23 @@ fn pipeline_success_guard_accepts_succeeded_result() {
 }
 
 #[test]
+fn pipeline_success_guard_accepts_success_result() {
+    let output = pipeline_success_guard(
+        "pipeline_success_guard",
+        &json!({
+            "result": {
+                "run_id": "jrun-ok",
+                "status": "success"
+            }
+        }),
+    )
+    .expect("canonical success spelling should pass");
+
+    assert_eq!(output["succeeded"], json!(true));
+    assert_eq!(output["checked_count"], json!(1));
+}
+
+#[test]
 fn pipeline_success_guard_rejects_failed_result() {
     let err = pipeline_success_guard(
         "pipeline_success_guard",
