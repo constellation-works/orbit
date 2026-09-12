@@ -892,7 +892,8 @@
         color: var(--fg);
         background: var(--bg);
       }
-      .task-crew-select {
+      .task-crew-select,
+      .task-complexity-select {
         width: 100%;
         min-width: 110px;
         max-width: 200px;
@@ -908,15 +909,19 @@
         text-overflow: ellipsis;
       }
       .task-crew-select:hover:not(:disabled),
-      .task-crew-select:focus {
+      .task-crew-select:focus,
+      .task-complexity-select:hover:not(:disabled),
+      .task-complexity-select:focus {
         border-color: var(--accent);
       }
-      .task-crew-select:disabled {
+      .task-crew-select:disabled,
+      .task-complexity-select:disabled {
         color: var(--fg-dim);
         opacity: 0.7;
         cursor: not-allowed;
       }
-      .task-crew-select option {
+      .task-crew-select option,
+      .task-complexity-select option {
         color: var(--fg);
         background: var(--bg);
       }
@@ -966,6 +971,8 @@
          border-color change. */
       .task-status-select:focus-visible,
       .task-crew-select:focus-visible,
+      .task-complexity-select:focus-visible,
+      .field-edit:focus-visible,
       .chip:focus-visible,
       .mutation-undo:focus-visible,
       .rail .tab:focus-visible,
@@ -1053,7 +1060,8 @@
         .row .status-cell { grid-area: status; }
         .row .crew-cell { grid-area: crew; }
         .task-status-select,
-        .task-crew-select {
+        .task-crew-select,
+        .task-complexity-select {
           max-width: none;
         }
       }
@@ -1353,6 +1361,106 @@
         display: none;
       }
       
+      /* ORB-12235: an editable field block shows its value with an `edit`
+         affordance, and swaps in a textarea with save/cancel while editing. The
+         editor is full width because the values it holds (markdown, one
+         selector per line) are written in lines, not in a cell. */
+      .field-editor {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+      .field-editor-cell,
+      .complexity-cell {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .field-editor > * {
+        max-width: 100%;
+      }
+      .field-edit {
+        font: inherit;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--fg-dim);
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        padding: 2px 8px;
+        cursor: pointer;
+      }
+      .field-edit:hover:not(:disabled) {
+        color: var(--fg);
+        border-color: var(--accent);
+      }
+      .field-edit:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .field-editor-input {
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 96px;
+        resize: vertical;
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 8px 10px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        line-height: 1.5;
+        outline: none;
+      }
+      input.field-editor-input {
+        min-height: 0;
+        resize: none;
+      }
+      .field-editor-input:focus {
+        border-color: var(--accent);
+      }
+      .field-editor-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .field-editor-hint,
+      .field-editor-status {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        color: var(--fg-dim);
+      }
+      .field-editor-toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--fg-dim);
+        cursor: pointer;
+      }
+      .field-editor-error {
+        border-left: 3px solid var(--state-failed);
+        border-radius: 4px;
+        padding: 6px 10px;
+        color: var(--state-failed);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        background: rgba(239, 68, 68, 0.1);
+        overflow-wrap: anywhere;
+      }
+      .field-empty {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--fg-dim);
+        font-style: italic;
+      }
+
       .markdown-body {
         color: #cecece;
         line-height: 1.6;
@@ -1527,6 +1635,14 @@
       .action.comment:hover:not(:disabled) {
         border-color: var(--fg);
         color: var(--fg);
+      }
+
+      .action.save {
+        border: 1px solid var(--accent);
+        color: var(--accent);
+      }
+      .action.save:hover:not(:disabled) {
+        background: rgba(110, 159, 255, 0.1);
       }
 
       .action.cancel {
