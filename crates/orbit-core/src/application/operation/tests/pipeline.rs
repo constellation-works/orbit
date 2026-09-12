@@ -178,6 +178,7 @@ fn seed_assessment(fixture: &Fixture, task_id: &str, fingerprint: &str, ready: b
                 members: Some(MemberState::default()),
                 consumer: consumer.clone(),
                 epoch: "epoch".to_string(),
+                trigger: None,
                 repository: "repo".to_string(),
                 branch: "main".to_string(),
                 generation: 0,

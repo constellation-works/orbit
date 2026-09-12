@@ -808,3 +808,196 @@ fn job_only_evidence_comes_from_persisted_step_and_matches_frozen_input() {
     attempt.input_digest = "changed".into();
     assert!(super::super::task::job_outcome(&runtime, &source, &attempt).is_err());
 }
+
+/// The live incident shape: a delivery consumer whose examination task was
+/// archived without evidence, then stalled by tonight's threshold retuning
+/// [ORB-12295].
+#[test]
+fn recovery_adopts_retuned_settings_and_reissues_an_archived_unevidenced_action() {
+    use orbit_types::workflow::automation::recovery::{RecoveryPreview, RecoveryRequest};
+
+    let runtime = runtime();
+    let definition = definition(&runtime, "delivery-qa", CoverageClass::IntegratedQaV1);
+    let baseline = evaluate_auto_task(&runtime, &definition, false, Utc::now())
+        .unwrap()
+        .state
+        .unwrap()
+        .baseline;
+
+    let landed = commit(&runtime.paths().repo_root, "unexamined change");
+    let delivery_run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("direct_fixture", 1, Utc::now(), Some(json!({})), None)
+        .unwrap();
+    record_direct_landing_intent(
+        &runtime,
+        &DirectLandingRequest {
+            run_id: delivery_run.run_id,
+            branch: "agent-main".into(),
+            before_commit: baseline.commit.clone(),
+            after_commit: landed.clone(),
+        },
+    )
+    .unwrap();
+
+    let archived_task = evaluate_auto_task(&runtime, &definition, false, Utc::now())
+        .unwrap()
+        .state
+        .unwrap()
+        .active
+        .unwrap()
+        .action_id
+        .unwrap();
+
+    // The examination task is closed without ever attaching coverage evidence.
+    runtime
+        .update_task(
+            &archived_task,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Rejected),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let settled = evaluate_auto_task(&runtime, &definition, false, Utc::now())
+        .unwrap()
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    assert_eq!(settled.state, BatchState::Failed);
+    assert_eq!(
+        settled.reason.as_deref(),
+        Some("task_closed_without_accepted_evidence")
+    );
+
+    // Tonight's retuning stalls the consumer: it stops examining new landings.
+    let mut retuned = definition.clone();
+    let AutoTaskSchedule::Deliveries { deliveries_landed } = &mut retuned.schedule else {
+        unreachable!("delivery fixture")
+    };
+    deliveries_landed.threshold = 2;
+    deliveries_landed.max_wait_minutes = 30;
+    assert_eq!(
+        evaluate_auto_task(&runtime, &retuned, false, Utc::now())
+            .unwrap()
+            .reason,
+        "definition_changed"
+    );
+
+    let preview = super::super::recover_auto_task(
+        &runtime,
+        &retuned,
+        &RecoveryRequest::default(),
+        Utc::now(),
+    )
+    .unwrap();
+    assert_eq!(preview.reason, "definition_changed");
+    assert_eq!(
+        preview.identity.changes,
+        vec!["threshold".to_string(), "max_wait_minutes".to_string()]
+    );
+    assert_eq!(preview.debt.pending_deliveries, 1);
+    assert_eq!(preview.debt.covered, baseline);
+    assert!(preview.refusals.is_empty());
+    assert!(preview.applied.is_empty());
+    let action = preview.action.expect("the archived action is retained");
+    assert_eq!(action.action_id.as_ref(), Some(&archived_task));
+    assert!(action.reissuable);
+
+    let applied = super::super::recover_auto_task(
+        &runtime,
+        &retuned,
+        &RecoveryRequest {
+            adopt_settings: true,
+            reissue_action: true,
+            reason: "adopt tonight's QA threshold and re-examine the unpaid landing".into(),
+        },
+        Utc::now(),
+    )
+    .unwrap();
+    assert_eq!(
+        applied.applied,
+        vec![
+            RecoveryPreview::ADOPTED_SETTINGS,
+            RecoveryPreview::REISSUED_ACTION
+        ]
+    );
+    assert_eq!(applied.history.len(), 1);
+
+    // The reissue mints a new linked task; the archived one is left closed.
+    let reissued = evaluate_auto_task(&runtime, &retuned, false, Utc::now())
+        .unwrap()
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    let reissued_task = reissued.action_id.clone().unwrap();
+    assert_ne!(reissued_task, archived_task);
+    assert_eq!(reissued.state, BatchState::Admitted);
+    assert_eq!(
+        reissued.batch, settled.batch,
+        "the obligations are unchanged"
+    );
+    assert_eq!(
+        runtime.get_task(&archived_task).unwrap().status,
+        TaskStatus::Rejected,
+        "recovery never reopens a terminal task"
+    );
+    assert!(
+        runtime
+            .get_task(&reissued_task)
+            .unwrap()
+            .description
+            .contains(&archived_task),
+        "the reissued task names the action it replaces"
+    );
+    assert_eq!(
+        evaluate_auto_task(&runtime, &retuned, false, Utc::now())
+            .unwrap()
+            .state
+            .unwrap()
+            .covered,
+        baseline,
+        "an authorized retry is not coverage"
+    );
+
+    // Only evidence from the reissued task's assigned executor covers the debt.
+    let worker = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "examination",
+            1,
+            Utc::now(),
+            Some(json!({ "task_id": reissued_task })),
+            None,
+        )
+        .unwrap();
+    runtime
+        .update_task(
+            &reissued_task,
+            TaskUpdateParams {
+                job_run_id: Some(Some(worker.run_id.clone())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let mut evidence = evidence_template(&reissued);
+    evidence.examination_complete = true;
+    evidence.checks = vec![ExaminationCheck {
+        subject: "reissued obligations".into(),
+        method: "fixture examination".into(),
+        observation: "examined the unpaid landing".into(),
+    }];
+    attach(&runtime, &reissued, Some(&worker.run_id), &evidence);
+
+    let covered = evaluate_auto_task(&runtime, &retuned, false, Utc::now()).unwrap();
+    assert_eq!(covered.state.unwrap().covered.commit, landed);
+    assert_eq!(covered.receipts.len(), 1);
+    assert_eq!(
+        covered.receipts[0].action_id, reissued_task,
+        "coverage is attributed to the reissued action"
+    );
+}

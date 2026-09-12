@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 pub mod evidence;
 mod observe;
+pub mod recovery;
 #[cfg(test)]
 mod tests;
 
@@ -100,6 +101,7 @@ pub fn evaluate(
                 members: None,
                 consumer: consumer.into(),
                 epoch: epoch.into(),
+                trigger: Some(trigger.clone()),
                 repository,
                 branch: trigger.branch.clone(),
                 generation: 0,
@@ -156,7 +158,7 @@ pub fn evaluate(
         && active.state == BatchState::Claimed
         && !dry_run
     {
-        if active.attempt > 1 && now > active.batch.retry_until {
+        if active.attempt > 1 && now > active.deadline() {
             let mut next = state.clone();
             if let Some(attempt) = &mut next.active {
                 attempt.state = BatchState::Exhausted;
@@ -326,6 +328,7 @@ pub fn evaluate(
         state: BatchState::Claimed,
         reason: None,
         retry_after: None,
+        reissue: None,
     };
 
     let mut next = state.clone();

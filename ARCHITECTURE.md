@@ -214,6 +214,14 @@ The auxiliary task-key table preserves the v5 task/allocator format so older
 readers can ignore it during rollback. Accepted receipt bytes are immutable and
 independent of later artifact replacement.
 
+Operator recovery of a stalled delivery consumer [ORB-12295] reuses that same
+feature migration: consumer state records the resolved trigger its epoch came
+from, and `automation_recoveries` retains one immutable record per applied
+recovery. Adoption of a compatible configuration and an authorized reissue of a
+settled unevidenced action commit with their record under the existing
+generation fence; no recovery may move a cursor, drop an obligation or mint a
+receipt. Older binaries ignore both the table and the recorded trigger.
+
 Task artifacts retain their existing bundle/manifest format. The artifact Store
 reserves `automation-evidence-authority.json`, writing transport-supplied run
 origin and a digest alongside coverage bytes under the existing task lock.

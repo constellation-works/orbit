@@ -6,6 +6,7 @@ use crate::command::{CommandOut, Execute};
 use super::add::AutoTaskAddArgs;
 use super::list::AutoTaskListArgs;
 use super::mint::AutoTaskMintArgs;
+use super::recover::AutoTaskRecoverArgs;
 use super::show::AutoTaskShowArgs;
 use super::toggle::AutoTaskToggleArgs;
 use super::update::AutoTaskUpdateArgs;
@@ -38,6 +39,9 @@ pub enum AutoTaskSubcommand {
     /// Mint a task from a definition now (ignores schedule, dedupe, and
     /// `enabled`; leaves the scheduler cursor untouched)
     Mint(AutoTaskMintArgs),
+    /// Preview or apply the audited recovery for a delivery consumer stalled
+    /// by a settings change (retains all coverage debt)
+    Recover(AutoTaskRecoverArgs),
 }
 
 impl Execute for AutoTaskSubcommand {
@@ -49,6 +53,7 @@ impl Execute for AutoTaskSubcommand {
             AutoTaskSubcommand::Update(args) => args.execute(runtime),
             AutoTaskSubcommand::Toggle(args) => args.execute(runtime),
             AutoTaskSubcommand::Mint(args) => args.execute(runtime),
+            AutoTaskSubcommand::Recover(args) => args.execute(runtime),
         }
     }
 }

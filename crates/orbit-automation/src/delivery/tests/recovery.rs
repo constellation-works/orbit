@@ -1,0 +1,465 @@
+//! Recovery keeps every obligation and never substitutes authorization for
+//! evidence [ORB-12295].
+
+use super::evidence::{Host, evaluate, landing, now, revision, setup};
+use crate::{
+    AutomationError,
+    delivery::{self, Evaluation, recovery},
+};
+use orbit_store::contracts::AutomationStoreBackend;
+use orbit_types::workflow::automation::recovery::{RecoveryPreview, RecoveryRequest, refusal};
+use orbit_types::workflow::automation::*;
+use std::sync::atomic::Ordering;
+
+const CONSUMER: &str = "ws/qa";
+
+fn request(adopt: bool, reissue: bool) -> RecoveryRequest {
+    RecoveryRequest {
+        adopt_settings: adopt,
+        reissue_action: reissue,
+        reason: "tonight's retuning keeps the same QA contract".into(),
+    }
+}
+
+fn recovery<'a>(
+    trigger: &'a DeliveryTrigger,
+    epoch: &'a str,
+    request: &'a RecoveryRequest,
+) -> recovery::Recovery<'a> {
+    recovery::Recovery {
+        consumer: CONSUMER,
+        epoch,
+        trigger,
+        repository: "owner/repo",
+        host_refusal: None,
+        request,
+        by: "operator",
+        now: now(),
+    }
+}
+
+/// Drive a consumer to a settled failed action over two retained landings,
+/// exactly as an archived unevidenced task leaves it.
+fn stalled() -> (
+    std::sync::Arc<dyn AutomationStoreBackend>,
+    Host,
+    DeliveryTrigger,
+    CoverageBatch,
+) {
+    let (store, host, trigger) = setup();
+    host.page(0, 2);
+    let batch = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap()
+        .active
+        .unwrap()
+        .batch;
+
+    // Spend the frozen retry budget: the worker fails, the automatic retry is
+    // admitted after its backoff, and that attempt fails too.
+    host.page(2, 2);
+    host.failed.store(true, Ordering::SeqCst);
+    evaluate(store.as_ref(), &host, &trigger, true);
+    delivery::evaluate(
+        store.as_ref(),
+        &host,
+        Evaluation {
+            consumer: CONSUMER,
+            epoch: "v1",
+            trigger: &trigger,
+            enabled: true,
+            dry_run: false,
+            now: now() + chrono::Duration::minutes(6),
+        },
+    )
+    .unwrap();
+    let settled = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    assert_eq!(settled.state, BatchState::Exhausted);
+    assert_eq!(settled.attempt, 2);
+    host.failed.store(false, Ordering::SeqCst);
+
+    (store, host, trigger, batch)
+}
+
+/// The settings the operator retuned tonight: a lower threshold over the same
+/// branch, repository and examination contract.
+fn retuned(trigger: &DeliveryTrigger) -> DeliveryTrigger {
+    DeliveryTrigger {
+        threshold: 1,
+        max_wait_minutes: 30,
+        ..trigger.clone()
+    }
+}
+
+#[test]
+fn preview_reports_the_stall_and_its_debt_without_writing() {
+    let (store, _host, trigger, batch) = stalled();
+    let before = store.automation_state(CONSUMER).unwrap();
+    let retuned = retuned(&trigger);
+    let request = RecoveryRequest::default();
+
+    let preview = recovery::preview(store.as_ref(), &recovery(&retuned, "v2", &request)).unwrap();
+
+    assert_eq!(preview.reason, delivery::DEFINITION_CHANGED);
+    assert_eq!(preview.identity.recorded_epoch, "v1");
+    assert_eq!(preview.identity.configured_epoch, "v2");
+    assert_eq!(
+        preview.identity.changes,
+        vec!["threshold".to_string(), "max_wait_minutes".to_string()]
+    );
+    assert_eq!(preview.debt.pending_deliveries, 2);
+    assert_eq!(preview.debt.pending_commits, 2);
+    assert_eq!(preview.debt.covered, revision(0));
+    assert_eq!(preview.debt.receipts, 0);
+
+    let action = preview.action.expect("a settled action is retained");
+    assert_eq!(action.batch_id, batch.id);
+    assert_eq!(action.obligations, vec![landing(1).key, landing(2).key]);
+    assert!(action.reissuable);
+    assert!(preview.refusals.is_empty());
+    assert!(preview.applied.is_empty());
+
+    assert_eq!(store.automation_state(CONSUMER).unwrap(), before);
+    assert!(
+        store
+            .automation_recoveries(CONSUMER, 10)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn adopting_settings_retains_every_obligation_and_records_the_old_identity() {
+    let (store, host, trigger, batch) = stalled();
+    let retuned = retuned(&trigger);
+    let request = request(true, false);
+
+    let applied = recovery::apply(store.as_ref(), &recovery(&retuned, "v2", &request)).unwrap();
+    assert_eq!(applied.applied, vec![RecoveryPreview::ADOPTED_SETTINGS]);
+    assert!(
+        applied.refusals.is_empty(),
+        "a completed recovery reports the position it left, not the request it settled"
+    );
+
+    let state = store.automation_state(CONSUMER).unwrap().unwrap();
+    assert_eq!(state.epoch, "v2");
+    assert_eq!(state.trigger.as_ref(), Some(&retuned));
+    assert_eq!(state.covered, revision(0), "adoption covers nothing");
+    assert_eq!(state.pending.len(), 2, "retained debt survives adoption");
+    assert_eq!(state.pending_commits.len(), 2);
+    assert_eq!(
+        state.active.as_ref().unwrap().batch,
+        batch,
+        "the frozen obligations are untouched"
+    );
+
+    let record = store.automation_recoveries(CONSUMER, 10).unwrap();
+    assert_eq!(record.len(), 1);
+    assert_eq!(record[0].previous_epoch, "v1");
+    assert_eq!(record[0].epoch, "v2");
+    assert_eq!(record[0].previous_trigger.as_ref(), Some(&trigger));
+    assert!(record[0].adopted_settings);
+    assert!(record[0].reissued.is_none());
+
+    // The adopted consumer evaluates again under its new settings instead of
+    // stalling, and still reports the settled action as needing attention.
+    let resumed = delivery::evaluate(
+        store.as_ref(),
+        &host,
+        Evaluation {
+            consumer: CONSUMER,
+            epoch: "v2",
+            trigger: &retuned,
+            enabled: true,
+            dry_run: false,
+            now: now(),
+        },
+    )
+    .unwrap();
+    assert_eq!(resumed.reason, "needs_attention");
+}
+
+#[test]
+fn a_reissued_action_admits_a_new_task_and_covers_only_with_fresh_evidence() {
+    let (store, host, trigger, batch) = stalled();
+    let retuned = retuned(&trigger);
+    let settled_action = store
+        .automation_state(CONSUMER)
+        .unwrap()
+        .unwrap()
+        .active
+        .unwrap()
+        .action_id
+        .unwrap();
+    let request = request(true, true);
+
+    let applied = recovery::apply(store.as_ref(), &recovery(&retuned, "v2", &request)).unwrap();
+    assert_eq!(
+        applied.applied,
+        vec![
+            RecoveryPreview::ADOPTED_SETTINGS,
+            RecoveryPreview::REISSUED_ACTION
+        ]
+    );
+
+    let claim = store
+        .automation_state(CONSUMER)
+        .unwrap()
+        .unwrap()
+        .active
+        .unwrap();
+    assert_eq!(
+        claim.batch, batch,
+        "the same frozen obligations are reissued"
+    );
+    assert_eq!(claim.attempt, 3);
+    assert_eq!(claim.state, BatchState::Claimed);
+    assert!(claim.action_id.is_none());
+    assert_eq!(
+        claim.reissue.as_ref().unwrap().from_action_id.as_ref(),
+        Some(&settled_action)
+    );
+
+    // The reissued claim admits a new action past the frozen retry deadline,
+    // which the operator authorization explicitly extended.
+    host.page(2, 2);
+    let admitted = delivery::evaluate(
+        store.as_ref(),
+        &host,
+        Evaluation {
+            consumer: CONSUMER,
+            epoch: "v2",
+            trigger: &retuned,
+            enabled: true,
+            dry_run: false,
+            now: now() + chrono::Duration::hours(2),
+        },
+    )
+    .unwrap()
+    .state
+    .unwrap()
+    .active
+    .unwrap();
+    assert_eq!(admitted.state, BatchState::Admitted);
+    assert_ne!(admitted.action_id, Some(settled_action));
+    assert_eq!(host.actions.lock().unwrap().len(), 3);
+    assert_eq!(
+        store.automation_state(CONSUMER).unwrap().unwrap().covered,
+        revision(0),
+        "authorizing a retry never advances coverage"
+    );
+
+    host.evidence(&admitted);
+    let covered = delivery::evaluate(
+        store.as_ref(),
+        &host,
+        Evaluation {
+            consumer: CONSUMER,
+            epoch: "v2",
+            trigger: &retuned,
+            enabled: true,
+            dry_run: false,
+            now: now() + chrono::Duration::hours(3),
+        },
+    )
+    .unwrap();
+    assert_eq!(covered.state.unwrap().covered, revision(2));
+    assert_eq!(covered.receipts.len(), 1);
+}
+
+#[test]
+fn evidence_frozen_against_the_replaced_attempt_cannot_cover_the_reissue() {
+    let (store, host, trigger, _batch) = stalled();
+    let stale = store
+        .automation_state(CONSUMER)
+        .unwrap()
+        .unwrap()
+        .active
+        .unwrap();
+    host.evidence(&stale);
+
+    let retuned = retuned(&trigger);
+    let request = request(true, true);
+    recovery::apply(store.as_ref(), &recovery(&retuned, "v2", &request)).unwrap();
+
+    host.page(2, 2);
+    let state = delivery::evaluate(
+        store.as_ref(),
+        &host,
+        Evaluation {
+            consumer: CONSUMER,
+            epoch: "v2",
+            trigger: &retuned,
+            enabled: true,
+            dry_run: false,
+            now: now() + chrono::Duration::hours(2),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        state.state.unwrap().covered,
+        revision(0),
+        "the archived action's evidence names an attempt that no longer exists"
+    );
+    assert!(state.receipts.is_empty());
+}
+
+#[test]
+fn incompatible_and_unauthorized_changes_are_refused_without_touching_state() {
+    let (store, _host, trigger, _batch) = stalled();
+    let before = store.automation_state(CONSUMER).unwrap();
+
+    let mut branch = retuned(&trigger);
+    branch.branch = "main".into();
+    let mut coverage = retuned(&trigger);
+    coverage.coverage = CoverageClass::LandedCodeReviewV1;
+    let mut owner = retuned(&trigger);
+    owner.owner_machine = Some("another-machine".into());
+
+    let adopt = request(true, false);
+    let unexplained = RecoveryRequest {
+        reason: "   ".into(),
+        ..request(true, false)
+    };
+
+    for (expected, trigger, epoch, request, repository) in [
+        (refusal::BRANCH_CHANGED, &branch, "v2", &adopt, "owner/repo"),
+        (
+            refusal::COVERAGE_CHANGED,
+            &coverage,
+            "v2",
+            &adopt,
+            "owner/repo",
+        ),
+        (refusal::OWNER_CHANGED, &owner, "v2", &adopt, "owner/repo"),
+        (
+            refusal::REPOSITORY_CHANGED,
+            &branch,
+            "v2",
+            &adopt,
+            "owner/moved",
+        ),
+        (
+            refusal::MISSING_AUTHORIZATION,
+            &retuned(&trigger),
+            "v2",
+            &unexplained,
+            "owner/repo",
+        ),
+        (
+            refusal::SETTINGS_UNCHANGED,
+            &trigger,
+            "v1",
+            &adopt,
+            "owner/repo",
+        ),
+    ] {
+        let mut recovery = recovery(trigger, epoch, request);
+        recovery.repository = repository;
+
+        let error = recovery::apply(store.as_ref(), &recovery).expect_err("refused");
+        let AutomationError::Refused(reasons) = error else {
+            panic!("expected a typed refusal, got {error}");
+        };
+        assert!(reasons.contains(expected), "{reasons} lacks {expected}");
+        assert_eq!(store.automation_state(CONSUMER).unwrap(), before);
+        assert!(
+            store
+                .automation_recoveries(CONSUMER, 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn a_live_action_and_an_evidenced_batch_are_never_recovered() {
+    let (store, host, trigger) = setup();
+    host.page(0, 2);
+    let admitted = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    assert_eq!(admitted.state, BatchState::Admitted);
+
+    let retuned = retuned(&trigger);
+    let request = request(true, true);
+    let error = recovery::apply(store.as_ref(), &recovery(&retuned, "v2", &request))
+        .expect_err("a running action is never interrupted");
+    let AutomationError::Refused(reasons) = error else {
+        panic!("expected a typed refusal, got {error}");
+    };
+    assert!(reasons.contains(refusal::ACTIVE_EXECUTION), "{reasons}");
+    assert!(reasons.contains(refusal::NO_SETTLED_ACTION), "{reasons}");
+
+    // Once the batch is covered there is nothing left to reissue either.
+    host.evidence(&admitted);
+    host.page(2, 2);
+    assert_eq!(
+        evaluate(store.as_ref(), &host, &trigger, true)
+            .state
+            .unwrap()
+            .covered,
+        revision(2)
+    );
+    let error = recovery::apply(store.as_ref(), &recovery(&retuned, "v2", &request))
+        .expect_err("an evidenced batch is not reissuable");
+    let AutomationError::Refused(reasons) = error else {
+        panic!("expected a typed refusal, got {error}");
+    };
+    assert!(reasons.contains(refusal::NO_SETTLED_ACTION), "{reasons}");
+    assert_eq!(
+        store.automation_state(CONSUMER).unwrap().unwrap().epoch,
+        "v1",
+        "one refused operation refuses the whole request"
+    );
+}
+
+#[test]
+fn a_reissue_alone_cannot_strand_a_claim_under_a_stale_identity() {
+    let (store, _host, trigger, _batch) = stalled();
+    let retuned = retuned(&trigger);
+    let request = request(false, true);
+
+    let error = recovery::apply(store.as_ref(), &recovery(&retuned, "v2", &request))
+        .expect_err("a claim under a stale identity would never admit");
+    let AutomationError::Refused(reasons) = error else {
+        panic!("expected a typed refusal, got {error}");
+    };
+    assert!(reasons.contains(refusal::DEFINITION_CHANGED), "{reasons}");
+}
+
+#[test]
+fn an_unknown_consumer_and_a_host_refusal_stop_before_any_write() {
+    let (store, _host, trigger, _batch) = stalled();
+    let retuned = retuned(&trigger);
+    let request = request(true, false);
+
+    let mut unknown = recovery(&retuned, "v2", &request);
+    unknown.consumer = "ws/absent";
+    let error = recovery::apply(store.as_ref(), &unknown).expect_err("nothing to recover");
+    assert!(matches!(
+        error,
+        AutomationError::Refused(reasons) if reasons == refusal::UNKNOWN_CONSUMER
+    ));
+
+    let mut elsewhere = recovery(&retuned, "v2", &request);
+    elsewhere.host_refusal = Some(refusal::OWNED_ELSEWHERE);
+    let error = recovery::apply(store.as_ref(), &elsewhere).expect_err("not this host's consumer");
+    let AutomationError::Refused(reasons) = error else {
+        panic!("expected a typed refusal, got {error}");
+    };
+    assert!(reasons.contains(refusal::OWNED_ELSEWHERE), "{reasons}");
+    assert!(
+        store
+            .automation_recoveries(CONSUMER, 10)
+            .unwrap()
+            .is_empty()
+    );
+}

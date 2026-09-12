@@ -731,6 +731,7 @@ impl Commands {
                     AutoTaskSubcommand::Update(args) => ("update", Some(args.name.as_str())),
                     AutoTaskSubcommand::Toggle(args) => ("toggle", Some(args.name.as_str())),
                     AutoTaskSubcommand::Mint(args) => ("mint", Some(args.name.as_str())),
+                    AutoTaskSubcommand::Recover(args) => ("recover", Some(args.name.as_str())),
                 };
                 CommandOperation::new(
                     RuntimeNeed::Required,

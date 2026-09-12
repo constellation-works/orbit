@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub mod members;
+pub mod recovery;
 
 /// Supported examination contracts; QA and review never share acceptance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,6 +183,36 @@ pub struct BatchAttempt {
     pub state: BatchState,
     pub reason: Option<String>,
     pub retry_after: Option<DateTime<Utc>>,
+    /// Operator authorization for the current attempt, present only when a
+    /// recovery reissued a settled action over this same frozen batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reissue: Option<ActionReissue>,
+}
+
+impl BatchAttempt {
+    /// Latest moment this attempt may still reach admission. The frozen batch
+    /// budget governs, unless an operator explicitly authorized a reissue.
+    pub fn deadline(&self) -> DateTime<Utc> {
+        self.reissue
+            .as_ref()
+            .map_or(self.batch.retry_until, |reissue| reissue.retry_until)
+    }
+}
+
+/// Recorded authorization for one additional attempt over an already frozen
+/// batch, after the previous action settled without accepted evidence. It
+/// grants exactly one attempt and never touches the batch or its obligations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionReissue {
+    /// The settled action this attempt replaces, when one was admitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_action_id: Option<String>,
+    pub reason: String,
+    pub by: String,
+    pub at: DateTime<Utc>,
+    /// Authorized admission deadline for this attempt alone.
+    pub retry_until: DateTime<Utc>,
 }
 
 /// Small current scheduler state; completed batches/receipts are separate rows.
@@ -191,6 +222,12 @@ pub struct AutomationState {
     pub members: Option<members::MemberState>,
     pub consumer: String,
     pub epoch: String,
+    /// The resolved trigger this consumer's epoch was derived from. Baselining
+    /// records it and only an audited recovery replaces it, so the settings the
+    /// retained debt was accumulated under stay provable. Absent on consumers
+    /// baselined before it was recorded, and on state-member consumers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<DeliveryTrigger>,
     pub repository: String,
     pub branch: String,
     pub generation: u64,

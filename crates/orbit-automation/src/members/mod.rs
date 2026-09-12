@@ -126,6 +126,8 @@ pub fn evaluate(
                 members: Some(MemberState::default()),
                 consumer: consumer.into(),
                 epoch: epoch.into(),
+                // State members carry no delivery trigger identity.
+                trigger: None,
                 repository,
                 branch: trigger.branch.clone(),
                 generation: 0,

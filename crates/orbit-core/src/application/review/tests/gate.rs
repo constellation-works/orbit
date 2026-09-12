@@ -1077,6 +1077,7 @@ fn page_for(delivery: &Delivery) -> (AutomationState, SourcePage) {
         members: None,
         consumer: "hm/ws/auto-task/delivery-code-review".into(),
         epoch: "e".into(),
+        trigger: None,
         repository: delivery.repository.clone(),
         branch: "main".into(),
         generation: 1,

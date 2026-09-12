@@ -32,6 +32,21 @@ pub(super) fn mint(
         "\n\nEvidence template (replace action_id with this task ID and fill actual checks/findings):\n```json\n{evidence_template}\n```"
     ));
 
+    // A reissued attempt examines obligations an earlier action left unpaid, so
+    // the new task names that action instead of appearing unrelated to it.
+    if let Some(reissue) = &attempt.reissue {
+        let replaced = reissue
+            .from_action_id
+            .as_deref()
+            .unwrap_or("an unadmitted claim");
+        params.description.push_str(&format!(
+            "\n\nThis action was reissued by {} on {}: {replaced} closed without accepted coverage evidence. Reason: {}. The obligations above are unchanged; coverage still requires evidence from this task's assigned executor.",
+            reissue.by,
+            reissue.at.to_rfc3339(),
+            reissue.reason
+        ));
+    }
+
     runtime
         .add_task_admitted(params, None, None, Some(&attempt.action_key))
         .map(|task| task.id)

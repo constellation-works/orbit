@@ -840,6 +840,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         members: Some(MemberState::default()),
         consumer: consumer.clone(),
         epoch,
+        trigger: None,
         repository: "fixture".into(),
         branch: LANDING.into(),
         generation: 0,
