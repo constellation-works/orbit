@@ -39,6 +39,9 @@ use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, workspace_runtime_binding};
+use orbit_core::application::routines::ClockStatus;
+#[cfg(test)]
+use orbit_core::application::routines::clock_status;
 use orbit_core::runtime::{HostLifetime, WorkspaceRuntimeBinding};
 use orbit_core::{OrbitError, OrbitRuntime, ShipMode};
 use orbit_registry::workspace_registry;
@@ -58,6 +61,12 @@ const INITIAL_GENERATION: u64 = 0;
 /// prove an older-snapshot runtime cannot republish as current.
 #[cfg(test)]
 pub(crate) type PrePublishHook = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// Test-only replacement for native host-clock observations. Production builds
+/// call `clock_status` directly and do not carry this indirection.
+#[cfg(test)]
+pub(crate) type ClockStatusObserver =
+    Arc<dyn Fn(&Path) -> Result<ClockStatus, OrbitError> + Send + Sync>;
 
 /// One registered workspace the dashboard can serve.
 ///
@@ -251,6 +260,9 @@ struct StateInner {
     /// Test seam: paused just before a freshly-built runtime is published.
     #[cfg(test)]
     on_pre_publish: Mutex<Option<PrePublishHook>>,
+    /// Test seam for deterministic host-clock reads in global API fixtures.
+    #[cfg(test)]
+    clock_status_observer: Mutex<ClockStatusObserver>,
 }
 
 impl StateInner {
@@ -540,6 +552,8 @@ impl DashboardState {
                 generation_counter: AtomicU64::new(INITIAL_GENERATION + 1),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
+                #[cfg(test)]
+                clock_status_observer: Mutex::new(Arc::new(clock_status)),
             }),
         }
     }
@@ -558,6 +572,25 @@ impl DashboardState {
     /// because routine fires live in the global store.
     pub(crate) fn global_root(&self) -> &std::path::Path {
         &self.inner.global_root
+    }
+
+    /// Observe the native host clock. Production retains the direct native
+    /// call; unit tests may replace only this read boundary.
+    pub(crate) fn clock_status(&self) -> Result<ClockStatus, OrbitError> {
+        #[cfg(test)]
+        {
+            let observer = self
+                .inner
+                .clock_status_observer
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            observer(&self.inner.global_root)
+        }
+        #[cfg(not(test))]
+        {
+            orbit_core::application::routines::clock_status(&self.inner.global_root)
+        }
     }
 
     /// Test-only convenience: the live default selection. Production reads the
@@ -674,6 +707,18 @@ impl DashboardState {
             .on_pre_publish
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(hook);
+    }
+
+    /// Replace host-clock observations before this state is cloned into a
+    /// router. Clock control still uses the native mutation functions.
+    #[cfg(test)]
+    pub(crate) fn with_clock_status_observer(self, observer: ClockStatusObserver) -> Self {
+        *self
+            .inner
+            .clock_status_observer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = observer;
+        self
     }
 }
 
