@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Vision
 owner: claude
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-09-12
+last_validated: 2026-09-12
 status: Accepted
 feature: auto-tasks
 doc_role: vision
@@ -10,7 +10,7 @@ type: design
 summary: Forward-looking directions for the auto-task primitive — cross-workspace scope, richer templates, and dispatch coupling.
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
-related_features: [auto-tasks]
+related_features: [auto-tasks, routines]
 related_artifacts: [ORB-10149, ORB-11315]
 ---
 
@@ -26,25 +26,32 @@ and unimplemented; existing scheduling and action semantics remain current.
 
 ## 1. Open Questions
 
-1. **Cross-workspace scheduling.** Today the scheduler processes only the
-   definitions of the workspace whose routine fired it. Should there be one
-   host-level pass that fans out over every routine-source workspace's
-   `auto_tasks/`, mirroring the routine sweep's discovery?
+1. **Cross-workspace scheduling.** *Graduating* — decided 2026-09-12 as part of
+   the clock consolidation ([Auto-task definitions are evaluated by the host tick, not fired by a routine](./4_decisions.md#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine)):
+   the host tick fans out over every registered owner checkout's `auto_tasks/`,
+   mirroring routine discovery, with no routine in between. Target contract in
+   [routines/3_vision.md §0](../routines/3_vision.md#0-graduating-clock-consolidation).
 2. **Dispatch coupling.** A minted task lands in `backlog`; the orchestrator
    still triages/ships it. Should a definition optionally auto-dispatch its
    task (e.g. straight into `workflow_ship`) under a crew, or does that
    re-introduce the "periodic work is code" coupling auto-tasks removed?
 3. **Retention / expiry.** Should a definition support a `max_open` or a
    sunset date so one-off recurring campaigns retire themselves?
-4. **Observability depth.** Routine fires are visible on `/api/routines`, but
-   per-definition history (which slots minted which tasks) currently lives only
-   in the cursor's `last_task_id`. Is a fuller per-definition ledger warranted?
+4. **Observability depth.** After the consolidation, fires no longer appear on
+   `/api/routines` at all; per-definition history (which slots minted which
+   tasks) lives in the cursor's `last_task_id`, the tagged tasks themselves, and
+   the tick report. Is a fuller per-definition ledger warranted?
+5. **Per-owner vs. repo-global definitions.** Under the multi-owner model every
+   owner checkout mints every enabled definition. Most defaults are per-owner by
+   nature (curate *my* frictions, review *my* merged commits). If a repo-global
+   chore ever needs to run once across owners, the additive answer is an
+   `owner:` field on the definition — deliberately not designed until it bites.
 
 ## 2. Prior Work
 
 ### Within orbit
-- **Routines** (`docs/design/routines/`) — the scheduler machinery auto-tasks
-  ride on (cron eval, fire records, host pinning, dashboard health).
+- **Routines** (`docs/design/routines/`) — the sibling consumer of the same host
+  clock; auto-tasks share its due-math and, after the consolidation, its tick.
 - **qa-sweep** (ORB-10039) — a bespoke periodic sweep that auto-tasks generalize;
   qa-sweep V1 (ORB-10148) is the first auto-task definition.
 - **Triage pipeline** (ORB-10129) — the closest existing "routine fires a job of

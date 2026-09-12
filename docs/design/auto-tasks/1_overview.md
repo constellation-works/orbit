@@ -1,16 +1,16 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-08-30
-last_validated: 2026-08-30
+last_updated: 2026-09-12
+last_validated: 2026-09-12
 status: Accepted
 feature: auto-tasks
 doc_role: overview
 type: design
-summary: Dynamically-defined recurring task templates minted by one generic scheduler routine — periodic work as data, not code.
+summary: Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code.
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
-related_features: [auto-tasks]
+related_features: [auto-tasks, routines]
 related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095]
 ---
 
@@ -18,10 +18,18 @@ related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-1
 
 Auto-tasks turn recurring chores into **data instead of code**. An auto-task
 definition is a git-versioned YAML record with a schedule, an `enabled` toggle,
-a task template, and a dedupe policy. One generic scheduler routine reads the
+a task template, and a dedupe policy. One generic scheduler pass reads the
 enabled definitions, fires the due ones, and mints a task from each template.
 Adding a new periodic chore is a new definition (`orbit auto-task add`), never
 new orbit code or a new routine.
+
+> **Pending change — clock consolidation (decided 2026-09-12, unimplemented).** The
+> scheduler pass is reached today through the seeded `auto_task_scheduler` routine → job
+> → activity chain. It will instead be called directly by the host clock tick
+> (`orbit clock tick`, alias `orbit sweep`) for every registered owner checkout, and the
+> routine/job/activity trio is retired. Reasoning:
+> [Auto-task definitions are evaluated by the host tick, not fired by a routine](./4_decisions.md#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine);
+> target contract: [routines/3_vision.md §0](../routines/3_vision.md#0-graduating-clock-consolidation).
 
 ## 1. Motivation
 
@@ -48,7 +56,9 @@ becomes just the first definition.
 - **Scheduler** — one deterministic activity (`run_auto_task_scheduler`) wrapped
   in the `auto_task_scheduler_pipeline` job, fired by the seeded
   `auto_task_scheduler` routine. Its fires appear on the dashboard routines
-  surface.
+  surface. Slated to change: the same pass is called directly by the host clock
+  tick, no job run is created, and fire evidence is the minted task, the cursor,
+  and the tick report row.
 - **Dedupe & provenance** — each minted task carries an `auto-task:<name>` tag;
   `skip_if_open` uses that tag to avoid firing while a prior instance is open.
 - **Manual mint** — `orbit auto-task mint <name>` mints one task from a
@@ -76,8 +86,8 @@ becomes just the first definition.
 | Scheduler pass | `crates/orbit-core/src/application/auto_tasks/scheduler.rs` | ORB-10149 |
 | CRUD (CLI + MCP shared) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10149 |
 | Manual mint (`mint`, CLI + MCP) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10439, ORB-10798 |
-| Deterministic action | `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs` | ORB-10149 |
-| Seeded assets | `crates/orbit-core/assets/{activities,jobs,routines}/…` | ORB-10149 |
+| Deterministic action (slated for retirement) | `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs` | ORB-10149 |
+| Seeded assets (scheduler routine/job/activity slated for retirement) | `crates/orbit-core/assets/{activities,jobs,routines}/…` | ORB-10149 |
 | Default auto-task catalog | `crates/orbit-core/assets/auto_tasks/…` | ORB-10549, ORB-10550, ORB-10950 |
 
 ## Embedded default catalog

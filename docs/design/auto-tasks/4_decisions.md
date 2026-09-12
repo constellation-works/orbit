@@ -1,16 +1,16 @@
 ---
 title: Auto-tasks — Decisions
 owner: claude
-last_updated: 2026-08-11
-last_validated: 2026-08-29
+last_updated: 2026-09-12
+last_validated: 2026-09-12
 status: Accepted
 feature: auto-tasks
 doc_role: decisions
 type: design
-summary: Decision log for the auto-task primitive.
+summary: Decision log for the auto-task primitive, including its move from a routine-fired job to a direct clock-tick evaluator.
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
-related_features: [auto-tasks]
+related_features: [auto-tasks, routines]
 related_artifacts: []
 ---
 
@@ -24,6 +24,7 @@ This document preserves the feature's non-obvious decisions and their reasoning.
 
 **Recorded:** 2026-07-12 02:58:04.684957Z · [ORB-10149], [ORB-10148]
 **Paths:** `crates/orbit-core/src/application/auto_tasks/**`
+**Superseded in part by:** [Auto-task definitions are evaluated by the host tick, not fired by a routine](#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine). The primitive (file-backed definitions, host-local cursors, catch-up collapse, dedupe, provenance, CRUD) stands; "one generic scheduler routine" does not.
 
 ### Context
 
@@ -95,6 +96,26 @@ All run budgets in Orbit config, auto-task definitions, job/activity assets, wor
 - Config and job assets stay portable across crews without provider conditionals in dispatch paths.
 - Existing turn-based policy knobs must be retired or demoted to adapter-internal defaults.
 - Cost: Orbit gives up fine-grained turn limits exposed by individual providers; a looping run is bounded by neutral time/resource limits instead.
+
+## Auto-task definitions are evaluated by the host tick, not fired by a routine
+
+**Recorded:** 2026-09-12 · implementation task pending (backfill the id when allocated)
+**Code anchors:** `crates/orbit-core/src/application/auto_tasks/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-core/src/application/routines/sweep.rs`
+
+### Context
+
+The scheduler pass was already a stateless, cursor-driven due evaluator — the same shape as the routine sweep, sharing its due-math — but it was reached by a routine firing a job that ran an activity that called it: a detached worker per tick, per workspace, plus a routine (`enabled`, `hosts`, `overlap`) and a job (`max_active_runs`) worth of switches to gate one function call that already holds its own lock. The full reasoning, the tick's shape, and the `orbit clock` surface are recorded once in the routines folder: [One host tick evaluates routines and auto-task definitions in-process](../routines/4_decisions.md#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process). The alternative was to keep auto-tasks as a routine consumer and accept the overhead as the price of "fires show up on the routines surface".
+
+### Decision
+
+`run_auto_task_scheduler_at` is called directly by the host tick for every registered owner checkout, after routine evaluation, under the host sweep lock. The `auto_task_scheduler` routine, `auto_task_scheduler_pipeline` job, `run_auto_task_scheduler` activity, and the deterministic dispatch arm are retired. Definitions carry no host field and are governed by [Definitions carry no host pin](../routines/4_decisions.md#definitions-carry-no-host-pin-every-owner-checkout-is-an-independent-schedule): every owner checkout with an enabled clock evaluates every enabled definition against its own store.
+
+### Consequences
+
+- Eligibility is *owner checkout registered + clock enabled + definition enabled*; nothing else to flip.
+- Fire evidence is the minted task, the cursor, and the tick report row — not a `jrun-*`. The Operations auto-task panel is the observability surface; `GET /api/routines` no longer carries auto-task fires.
+- `orbit auto-task mint` and `orbit clock tick --dry-run` cover the manual and inspection cases the retired job did.
+- Cost: a repo-global chore (one whose effect lands on the shared remote rather than the local store) runs once per owner; `skip_if_open` sees only the local store and cannot prevent that. Such a definition must dedupe against the remote itself or not ship as an embedded default.
 
 ## Task References
 
