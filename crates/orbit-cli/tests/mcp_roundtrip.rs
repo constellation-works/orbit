@@ -2334,6 +2334,192 @@ fn mcp_task_artifact_get_follows_the_global_id_and_explicit_workspace_stays_a_fi
     );
 }
 
+/// [ORB-12263] `orbit.task.artifact.get`'s schema advertises the identical
+/// "resolved globally by default" wording `orbit.task.show` does, and
+/// ORB-12254 made the MCP surface honor it, but left the CLI surfaces
+/// (`orbit tool run` and `orbit task artifact get`) resolving `id`
+/// cwd-locally and reporting the mismatch as `task_not_found`. Modelled on
+/// `task_show_is_global_by_default_across_tool_run_and_mcp`: a task owned by
+/// a sibling checkout B must still be readable by ID alone from checkout A on
+/// every surface, and an explicit foreign `workspace` selector must stay a
+/// fail-closed filter on all three. This must fail if the CLI routing change
+/// in `command/operation.rs` is reverted.
+#[test]
+fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
+    let workspace = McpWorkspace::init();
+
+    let checkout_b = workspace.home.join("checkout-b");
+    std::fs::create_dir_all(&checkout_b).expect("create the second checkout");
+    let output = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&checkout_b)
+        .output()
+        .expect("initialize the second Git checkout");
+    assert!(output.status.success(), "git init failed: {output:?}");
+    let output = McpWorkspace::orbit_command(&checkout_b, &workspace.home)
+        .args(["workspace", "init", "--name", "checkout-b"])
+        .output()
+        .expect("register checkout B");
+    assert!(
+        output.status.success(),
+        "checkout B init failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let checkout_b_selector = checkout_b.to_str().expect("utf8 checkout path");
+    let add_input = json!({
+        "title": "Owned by checkout B, read from checkout A",
+        "description": "The artifact payload is addressed by task ID alone",
+        "workspace": checkout_b_selector,
+        "complexity": "low",
+        "model": "codex",
+    })
+    .to_string();
+    let output = McpWorkspace::orbit_command(&checkout_b, &workspace.home)
+        .args(["tool", "run", "orbit.task.add", "--input", &add_input])
+        .output()
+        .expect("author a task owned by checkout B");
+    assert!(
+        output.status.success(),
+        "task add failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let created: Value = serde_json::from_slice(&output.stdout).expect("parse created task");
+    let task_id = created["id"].as_str().expect("task id").to_string();
+
+    std::fs::write(
+        checkout_b.join("qa-note.md"),
+        "globally addressable payload",
+    )
+    .expect("write the artifact source");
+    let put_input = json!({
+        "id": task_id,
+        "source_path": "qa-note.md",
+        "path": "qa/note.md",
+        "workspace": checkout_b_selector,
+        "model": "codex",
+    })
+    .to_string();
+    let output = McpWorkspace::orbit_command(&checkout_b, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.artifact.put",
+            "--input",
+            &put_input,
+        ])
+        .output()
+        .expect("attach the artifact from checkout B");
+    assert!(
+        output.status.success(),
+        "artifact put failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Checkout A (`workspace.work`) does not own the task. An id-only read
+    // must follow the id past cwd on every surface.
+    let checkout_a_selector = workspace.work.to_str().expect("utf8 checkout path");
+    let get_input = json!({ "id": task_id, "path": "qa/note.md" }).to_string();
+
+    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.artifact.get",
+            "--input",
+            &get_input,
+        ])
+        .output()
+        .expect("run id-only tool artifact get from checkout A");
+    assert!(
+        output.status.success(),
+        "`orbit tool run orbit.task.artifact.get` must follow the task id from a sibling \
+         checkout\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let via_tool_run: Value = serde_json::from_slice(&output.stdout).expect("parse tool run get");
+    assert_eq!(via_tool_run["content"], "globally addressable payload");
+
+    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["task", "artifact", "get", &task_id, "qa/note.md"])
+        .output()
+        .expect("run id-only task artifact get from checkout A");
+    assert!(
+        output.status.success(),
+        "`orbit task artifact get` must follow the task id from a sibling checkout\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("globally addressable payload"),
+        "`orbit task artifact get` must print the artifact content: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    // The MCP session announces checkout A at initialize and must still
+    // follow the task id, matching ORB-12254.
+    let mut client = workspace.serve();
+    let read = client.call_tool_ok(
+        "orbit_task_artifact_get",
+        json!({ "id": task_id, "path": "qa/note.md" }),
+    );
+    assert_eq!(read["content"], "globally addressable payload");
+    drop(client);
+
+    // An explicit foreign `workspace` selector stays a fail-closed filter on
+    // every surface: checkout A does not own the task.
+    let missed = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.artifact.get",
+            "--input",
+            &json!({
+                "id": task_id,
+                "path": "qa/note.md",
+                "workspace": checkout_a_selector,
+            })
+            .to_string(),
+        ])
+        .output()
+        .expect("run tool artifact get with an explicit foreign workspace");
+    assert!(
+        !missed.status.success(),
+        "an explicit foreign `workspace` input must filter rather than follow the id"
+    );
+    let missed_stderr = String::from_utf8_lossy(&missed.stderr);
+    assert!(
+        missed_stderr.contains(&task_id),
+        "the not-found error must name the task id: {missed_stderr}"
+    );
+
+    let missed = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "--workspace",
+            checkout_a_selector,
+            "task",
+            "artifact",
+            "get",
+            &task_id,
+            "qa/note.md",
+        ])
+        .output()
+        .expect("run task artifact get with an explicit foreign --workspace");
+    assert!(
+        !missed.status.success(),
+        "an explicit foreign `--workspace` must filter rather than follow the id"
+    );
+    let missed_stderr = String::from_utf8_lossy(&missed.stderr);
+    assert!(
+        missed_stderr.contains(&task_id),
+        "the not-found error must name the task id: {missed_stderr}"
+    );
+}
+
 /// [ORB-12254] Regression guard for the class of bug this task fixed: a tool
 /// whose schema advertises `workspace` as resolved-globally-by-default text
 /// must actually resolve globally when a session carries no selector, and a

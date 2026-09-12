@@ -558,6 +558,17 @@ impl Commands {
                     TaskSubcommand::Show(args) => RuntimeNeed::TaskOwner {
                         task_id: args.id.clone(),
                     },
+                    // `orbit.task.artifact.get` shares `orbit.task.show`'s
+                    // resolved-globally-by-default schema wording, so `orbit
+                    // task artifact get` must resolve the same way rather than
+                    // reporting a routing refusal as `task_not_found`
+                    // [ORB-12263].
+                    TaskSubcommand::Artifact(command) => match &command.command {
+                        TaskArtifactSubcommand::Get(args) => RuntimeNeed::TaskOwner {
+                            task_id: args.id.clone(),
+                        },
+                        TaskArtifactSubcommand::Put(_) => RuntimeNeed::Required,
+                    },
                     // Every other task verb keeps cwd (or `--workspace`) as its
                     // binding: only a read addressed by a globally unique ID can
                     // be routed from the ID alone.
@@ -830,7 +841,7 @@ impl Commands {
                         }
                     };
                 let runtime_need = match &command.command {
-                    ToolSubcommand::Run(args) => match args.task_show_id() {
+                    ToolSubcommand::Run(args) => match args.id_resolved_task_id() {
                         Some(task_id) => RuntimeNeed::TaskOwner { task_id },
                         None => RuntimeNeed::Required,
                     },

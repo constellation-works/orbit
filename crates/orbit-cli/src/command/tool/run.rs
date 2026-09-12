@@ -71,13 +71,16 @@ impl ToolRunArgs {
         }
     }
 
-    /// Globally unique task ID from `orbit tool run orbit.task.show` input.
+    /// Globally unique task ID from an id-resolved tool's `orbit tool run`
+    /// input.
     ///
-    /// The CLI bootstraps that one tool through the host task registry rather
-    /// than cwd, matching `orbit task show` [ORB-10961]. Other tools keep the
-    /// ordinary workspace runtime.
-    pub(crate) fn task_show_id(&self) -> Option<String> {
-        if self.name != "orbit.task.show" {
+    /// The CLI bootstraps `command::mcp::ID_RESOLVED_WORKSPACE_TOOLS` through
+    /// the host task registry rather than cwd, matching `orbit task show`
+    /// [ORB-10961] and `orbit task artifact get` [ORB-12263]. Sharing that
+    /// list with the MCP server's own routing keeps the two surfaces from
+    /// drifting apart. Other tools keep the ordinary workspace runtime.
+    pub(crate) fn id_resolved_task_id(&self) -> Option<String> {
+        if !crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS.contains(&self.name.as_str()) {
             return None;
         }
         let value = self.parsed_input().ok()?;

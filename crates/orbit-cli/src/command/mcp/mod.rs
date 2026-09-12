@@ -16,6 +16,7 @@ mod setup;
 pub use command::{McpCommand, McpSubcommand};
 pub(crate) use command::{normalize_ssh_login_shell_args, verify_ssh_acceptance_launch_boundary};
 pub(crate) use orbit_mcp::safe_mcp_tool_names;
+pub(crate) use server::ID_RESOLVED_WORKSPACE_TOOLS;
 #[allow(unused_imports)]
 pub(crate) use setup::init_auto_for_workspace;
 

@@ -102,6 +102,55 @@ fn tool_run_task_show_bootstraps_the_task_owner_from_id_only_input() {
 }
 
 #[test]
+fn tool_run_and_task_artifact_get_bootstrap_the_task_owner_from_id_only_input() {
+    assert_eq!(
+        operation_for(&[
+            "orbit",
+            "tool",
+            "run",
+            "orbit.task.artifact.get",
+            "--input",
+            r#"{"id":"ORB-12263","path":"qa/note.md"}"#,
+        ])
+        .runtime_need,
+        RuntimeNeed::TaskOwner {
+            task_id: "ORB-12263".to_string()
+        }
+    );
+    assert_eq!(
+        operation_for(&[
+            "orbit",
+            "tool",
+            "run",
+            "orbit.task.artifact.put",
+            "--input",
+            r#"{"id":"ORB-12263","source_path":"note.md"}"#,
+        ])
+        .runtime_need,
+        RuntimeNeed::Required,
+        "artifact.put's schema does not advertise global id resolution"
+    );
+    assert_eq!(
+        operation_for(&[
+            "orbit",
+            "task",
+            "artifact",
+            "get",
+            "ORB-12263",
+            "qa/note.md",
+        ])
+        .runtime_need,
+        RuntimeNeed::TaskOwner {
+            task_id: "ORB-12263".to_string()
+        }
+    );
+    assert_eq!(
+        operation_for(&["orbit", "task", "artifact", "put", "ORB-12263", "note.md",]).runtime_need,
+        RuntimeNeed::Required,
+    );
+}
+
+#[test]
 fn json_error_preferences_are_derived_from_operations() {
     assert_eq!(
         operation_for(&["orbit", "tool", "run", "orbit.task.show"]).json_error_preference,
