@@ -140,6 +140,56 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.dependency_result("orbit-core", "orbit-exec", "dev")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_goldens_runs_only_the_orbit_cli_snapshot_tests(self):
+        result = self.run_guard("check-goldens.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(
+            calls,
+            [
+                ["test", "-p", "orbit-cli", "--bin", "orbit", "help_matches_the_shipped_surface"],
+                ["test", "-p", "orbit-cli", "--test", "output_goldens"],
+                [
+                    "test",
+                    "-p",
+                    "orbit-cli",
+                    "--test",
+                    "mcp_roundtrip",
+                    "mcp_serve_tools_list_matches_production_snapshot",
+                    "--",
+                    "--exact",
+                ],
+            ],
+        )
+
+    def test_goldens_update_sets_regeneration_env_vars(self):
+        self.write_executable(
+            self.bin / "cargo",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps({
+        "argv": sys.argv[1:],
+        "help": os.environ.get("ORBIT_UPDATE_HELP_GOLDENS"),
+        "output": os.environ.get("ORBIT_UPDATE_OUTPUT_GOLDENS"),
+        "mcp": os.environ.get("ORBIT_MCP_UPDATE_SNAPSHOT"),
+    }) + "\\n")
+''',
+        )
+        result = self.run_guard("check-goldens.sh", "--update")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(len(calls), 3)
+        for call in calls:
+            self.assertEqual(call["help"], "1")
+            self.assertEqual(call["output"], "1")
+            self.assertEqual(call["mcp"], "1")
+
+    def test_goldens_rejects_unknown_flags(self):
+        result = self.run_guard("check-goldens.sh", "--fast")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage: check-goldens.sh [--update]", result.stderr)
+
 
 class CargoDenyGuardrailTests(unittest.TestCase):
     def setUp(self):

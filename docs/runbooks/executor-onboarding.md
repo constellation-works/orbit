@@ -130,9 +130,10 @@ cargo test -p orbit-engine --test v2_local_shell
 ./scripts/sync-plugin-skills.sh --check
 make ci-fast
 make ci-lint
+make goldens
 ```
 
-The first two commands are examples of target selection, not provider CLI flags. If no provider-specific test target exists yet, run the package's relevant test module and add the integration fixture before calling the lane supported. `make ci-fast` and `make ci-lint` are the repository handoff gates; do not substitute a live authenticated smoke for fixture coverage.
+The first two commands are examples of target selection, not provider CLI flags. If no provider-specific test target exists yet, run the package's relevant test module and add the integration fixture before calling the lane supported. `make ci-fast`, `make ci-lint`, and `make goldens` are the repository handoff gates; do not substitute a live authenticated smoke for fixture coverage.
 
 ## Package and hand off managed assets
 

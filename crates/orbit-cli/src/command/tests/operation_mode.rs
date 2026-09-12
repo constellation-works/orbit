@@ -1,5 +1,7 @@
 //! The `orbit operation` CLI is derived from the operation-mode registry
 //! [ORB-11332]; these tests freeze its argv surface and input projection.
+//! Help goldens regenerate with `ORBIT_UPDATE_HELP_GOLDENS=1` or
+//! `make goldens UPDATE=1`.
 
 use clap::Parser;
 use orbit_common::governance::operation_mode::OperationModeVerb;
@@ -14,49 +16,47 @@ fn invocation(args: &[&str]) -> super::super::operation_mode::OperationModeInvoc
     }
 }
 
-fn help_for(args: &[&str]) -> String {
-    let mut argv = args.to_vec();
-    argv.push("--help");
-    match Cli::try_parse_from(argv) {
-        Ok(_) => panic!("--help exits before parsing"),
-        Err(error) => error.to_string(),
-    }
-}
-
 #[test]
 fn operation_help_matches_the_shipped_surface() {
-    let cases: &[(&[&str], &str)] = &[
+    let cases: &[(&[&str], &str, &str)] = &[
         (
             &["orbit", "operation"],
+            "operation_mode_help/root.txt",
             include_str!("operation_mode_help/root.txt"),
         ),
         (
             &["orbit", "operation", "explain"],
+            "operation_mode_help/explain.txt",
             include_str!("operation_mode_help/explain.txt"),
         ),
         (
             &["orbit", "operation", "enable"],
+            "operation_mode_help/enable.txt",
             include_str!("operation_mode_help/enable.txt"),
         ),
         (
             &["orbit", "operation", "list"],
+            "operation_mode_help/list.txt",
             include_str!("operation_mode_help/list.txt"),
         ),
         (
             &["orbit", "operation", "show"],
+            "operation_mode_help/show.txt",
             include_str!("operation_mode_help/show.txt"),
         ),
         (
             &["orbit", "operation", "stop"],
+            "operation_mode_help/stop.txt",
             include_str!("operation_mode_help/stop.txt"),
         ),
         (
             &["orbit", "operation", "revoke"],
+            "operation_mode_help/revoke.txt",
             include_str!("operation_mode_help/revoke.txt"),
         ),
     ];
-    for (args, expected) in cases {
-        assert_eq!(help_for(args), *expected, "help for {args:?} moved");
+    for (args, relative, expected) in cases {
+        super::assert_help_matches_golden(args, relative, expected);
     }
 }
 
