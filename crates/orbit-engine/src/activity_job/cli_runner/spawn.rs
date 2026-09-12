@@ -13,6 +13,7 @@ use orbit_exec::{
 };
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::ExecutorSandboxKind;
+use orbit_types::workflow::activity_job::Provider;
 use tempfile::NamedTempFile;
 
 use super::super::dispatcher::ResolvedSandbox;
@@ -662,10 +663,19 @@ fn failed_write_path_candidates(line: &str) -> Vec<String> {
     candidates
 }
 
-/// Text a provider CLI emits when it cannot read its Keychain-backed OAuth
-/// session. The CLI cannot tell "the item is gone" from "the item is
-/// unreadable", so it reports both as an expiry.
-const KEYCHAIN_AUTH_FAILURE_MARKER: &str = "OAuth session expired";
+/// Text a provider CLI emits when it cannot read its Keychain-backed login.
+/// The CLI cannot tell "the item is gone" from "the item is unreadable", so
+/// each vendor reports both as a login failure in its own wording.
+fn keychain_auth_failure_marker(provider: &str) -> Option<&'static str> {
+    match Provider::parse(provider).ok()? {
+        Provider::Claude => Some("OAuth session expired"),
+        Provider::Copilot => Some("No authentication information found"),
+        // Matches both the documented quoted form (`run 'agent login' first`)
+        // and the live cursor-agent 2026.09.10 wording (`run agent login first`).
+        Provider::Cursor => Some("Authentication required. Please run"),
+        _ => None,
+    }
+}
 
 /// Distinguish a sandbox Keychain denial from a genuinely expired provider
 /// login.
@@ -680,6 +690,7 @@ const KEYCHAIN_AUTH_FAILURE_MARKER: &str = "OAuth session expired";
 /// reads the same profile the kernel enforced. Only the `Allowed` case may
 /// recommend re-authentication: the other cases are Orbit's own denial, which
 /// no amount of re-logging in outside the sandbox will clear. [ORB-10931]
+/// [ORB-12261]
 pub(super) fn macos_keychain_auth_diagnostic(
     provider: &str,
     sandbox: Option<&ResolvedSandbox>,
@@ -699,9 +710,8 @@ pub(crate) fn macos_keychain_auth_diagnostic_with(
     home: Option<&OsStr>,
 ) -> Option<String> {
     let sandbox = sandbox?;
-    if sandbox.kind != ExecutorSandboxKind::MacosSandboxExec
-        || !output.contains(KEYCHAIN_AUTH_FAILURE_MARKER)
-    {
+    let marker = keychain_auth_failure_marker(provider)?;
+    if sandbox.kind != ExecutorSandboxKind::MacosSandboxExec || !output.contains(marker) {
         return None;
     }
     match macos_login_keychain_access(provider, home, &sandbox.fs_profile) {
@@ -829,9 +839,9 @@ pub(crate) fn spawn_macos_sandboxed_with(
     // The sandboxed spawn itself goes through orbit-exec, which erases the
     // io::ErrorKind; classify it transient so retries are preserved.
     //
-    // `provider` reaches the compiler because the credential denylist has one
-    // provider-scoped exception: the confined CLI's own credential store. See
-    // `orbit_exec::macos_login_keychain_access`. [ORB-10929]
+    // `provider` reaches the compiler because the credential denylist has a
+    // provider-scoped exception: the confined CLI's own credential store.
+    // See `orbit_exec::macos_login_keychain_access`. [ORB-10929] [ORB-12261]
     let profile_text = compile_macos_sandbox_profile(&sandbox.fs_profile, provider)
         .map_err(|err| SpawnError::permanent(err.to_string()))?;
     let child_env = prepare_macos_codex_ca_environment_with(

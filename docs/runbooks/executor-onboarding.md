@@ -1,7 +1,7 @@
 ---
 type: runbook
 summary: Add and validate a CLI-agent or deterministic local-shell executor without changing existing users' routing or state.
-last_validated: 2026-09-07
+last_validated: 2026-09-12
 tags: [contributors, executors, providers, testing]
 paths: ["crates/orbit-agent/**", "crates/orbit-core/assets/executors/**", "crates/orbit-core/src/application/executor.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/cli_executor.rs", "crates/orbit-engine/src/activity_job/**"]
 related_features: [activity-job, policy-sandbox]
@@ -57,7 +57,7 @@ Verify the seams against the current checkout before editing. These are the auth
 | Provider terminal-output reduction | `crates/orbit-agent/src/providers/<provider>/<provider>_output.rs` | Reduce the provider protocol to trustworthy terminal response bytes before the common completion-envelope parser. Reject stale, partial, malformed, or failed frames. |
 | Child lifecycle, cancellation, and cleanup | `crates/orbit-engine/src/activity_job/cli_runner/`; `crates/orbit-exec/src/supervision/` | Reuse the v2 runner and supervisor. Do not add provider-owned process spawning or cleanup. |
 | Deterministic shell input and output | `crates/orbit-engine/src/executor/automation/shell.rs` — `local_shell`, `parse_shell_config`, `compose_argv` | Keep argv in static activity config. Run an actual shell only when `shell` and `script` are declared explicitly. |
-| OS sandbox / provider home grant | `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs`; `crates/orbit-exec/src/macos_sandbox/provider_dirs.rs` | Give only the active provider's required state directory a write grant. Keep the activity `fsProfile` authoritative for the worktree. |
+| OS sandbox / provider home grant | `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs`; `crates/orbit-exec/src/macos_sandbox/provider_dirs.rs`; `crates/orbit-exec/src/macos_sandbox/compile.rs` | Give only the active provider's required state directory a write grant. Keep the activity `fsProfile` authoritative for the worktree. On macOS, a state-directory grant is not a login: Claude, Copilot, and Cursor keep their default login in the user keychain and receive a narrow `$HOME/Library/Keychains` read carve-out. |
 | End-to-end fixtures | `crates/orbit-core/tests/pi_fake_agent.rs`, `crates/orbit-core/tests/antigravity_fake_agent.rs`, `crates/orbit-core/tests/opencode_fake_agent.rs`, `crates/orbit-engine/tests/v2_local_shell.rs` | Exercise the real v2 dispatch seam with fakes; add output/error/timeout/cancellation cases. |
 
 ## Add a CLI-agent executor
@@ -67,7 +67,7 @@ Verify the seams against the current checkout before editing. These are the auth
 3. Implement the provider runtime under `crates/orbit-agent/src/providers/<provider>/`. Follow the Pi or Antigravity split: a small argv/stdin transport, a runtime factory with only non-secret required environment, and an output normalizer. Pass optional model/effort only when the provider contract supports them; reject unsupported combinations during configuration resolution rather than silently dropping or remapping them.
 4. Add the bundled executor asset in `crates/orbit-core/assets/executors/<provider>.yaml` and register it in `DEFAULT_EXECUTOR_FILES`. Use static headless flags only. Keep the execution envelope and prompt off argv so process listings, audit argv, and spawn errors cannot expose task content or secrets.
 5. Wire provider discovery and init seeding through the current configuration/init seams. `orbit init` must add a crew only when the local CLI is detected; it must not replace a user-authored crew, credential, command override, or model pin. Check both a fresh seed and a legacy/customized asset through the migration path.
-6. Choose the sandbox posture deliberately. Shipped CLI agent assets opt in to the OS sandbox marker that becomes macOS `sandbox-exec` or Linux Bubblewrap when supported. The provider's own approval flag cannot grant filesystem access the enclosing sandbox denies. Do not use a provider's native sandbox flag as a substitute for Orbit's boundary.
+6. Choose the sandbox posture deliberately. Shipped CLI agent assets opt in to the OS sandbox marker that becomes macOS `sandbox-exec` or Linux Bubblewrap when supported. The provider's own approval flag cannot grant filesystem access the enclosing sandbox denies. Do not use a provider's native sandbox flag as a substitute for Orbit's boundary. If the CLI's default login lives in the macOS login keychain, add it to `provider_reads_macos_login_keychain` and teach `macos_keychain_auth_diagnostic` that CLI's auth-failure wording; a state-directory write grant does not make the keychain readable.
 7. State MCP and shell-tool reach precisely. If the provider has no MCP client, do not add one by implication: the execution envelope must direct the agent to the `orbit` binary supplied on its `PATH`, and tests must retain whatever provider shell capability this route needs. Tool grants and caller-role gates remain enforced by `orbit tool run`.
 
 ### Worked configuration: Pi
@@ -93,6 +93,18 @@ pi --list-models
 ```
 
 Do not put an API key in the executor asset or argv. An operator who deliberately uses an API key adds its variable name to `[execution.env].pass`; an interactive provider login is a separate, unsandboxed setup action and is never performed by an Orbit workflow turn.
+
+### macOS login-keychain credentials
+
+On macOS, Orbit's `macos-sandbox-exec` profile denies `$HOME/Library/Keychains` by default, then re-allows it only for the confined provider when that provider's CLI stores its login there. `/Library/Keychains` and `/System/Library/Keychains` stay denied. An activity `denyRead` on the user keychain directory outranks the carve-out.
+
+| Provider | Default macOS login store | How to skip the keychain |
+| --- | --- | --- |
+| `claude` | login keychain item `Claude Code-credentials` | `ANTHROPIC_API_KEY` via `[execution.env].pass` |
+| `copilot` | login keychain item `github-copilot-app` | `COPILOT_GITHUB_TOKEN` via `[execution.env].pass` |
+| `cursor` | login keychain items `cursor-access-token` / `cursor-refresh-token` | `CURSOR_API_KEY` via `[execution.env].pass`, or log in with `AGENT_CLI_CREDENTIAL_STORE=file` and pass that variable too (it writes `$HOME/.cursor/auth.json`, the CLI re-reads the variable on every run, and setting it later does not migrate an existing keychain login) |
+
+A failed keychain-backed step records Orbit's diagnosis — sandbox hid the item versus a real logout — on the run error and the task's `workflow_run_failed` note, not only `exited with code Some(1)`. Do not document a provider as file-backed on macOS from its state directory alone; inspect the CLI's credential store.
 
 ## Add a deterministic local-shell executor
 
