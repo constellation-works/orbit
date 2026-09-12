@@ -25,6 +25,8 @@ Pre-1.0 semver: `0.<minor>.<patch>`.
 
 - Validation tightening that rejects inputs that were already invalid by spec.
 - New guards that match documented behavior (e.g. MCP surface catching up to CLI).
+- MCP tool description-only wording changes that leave tool and parameter names,
+  types, requiredness, and input/output shape unchanged.
 - Internal module decomposition or refactors with no external API change.
 - Performance changes.
 - New optional fields with safe defaults.
