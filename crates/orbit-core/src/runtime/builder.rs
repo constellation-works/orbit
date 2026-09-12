@@ -181,7 +181,6 @@ pub(crate) fn build_context_from_roots(
     };
     let workflow_base_branch = runtime_config.workflow_base_branch.clone();
     let workflow_auto_ship = runtime_config.workflow_auto_ship;
-    let routines_source = runtime_config.routines_source;
     let crews = runtime_config.crews.clone();
     let default_crew = runtime_config.default_crew.clone();
     let system_crew = runtime_config.system_crew.clone();
@@ -217,7 +216,6 @@ pub(crate) fn build_context_from_roots(
             pr_config,
             workflow_base_branch,
             workflow_auto_ship,
-            routines_source,
             crews,
             default_crew,
             runtime_config.complexity_crews.clone(),

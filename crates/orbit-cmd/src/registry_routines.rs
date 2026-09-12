@@ -1,17 +1,17 @@
-//! Local-only routine placement composition over Core's scheduler kernels.
+//! Registry composition over Core's scheduler kernels: which checkouts this
+//! host evaluates schedules for, and who this host is.
 //!
-//! Pin placement is built exclusively from `host.toml` and `workspaces.json`.
+//! Both come exclusively from `host.toml` and `workspaces.json`.
 
 use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::application::routines::{
-    DiscoveredWorkspaces, RoutineHostIdentity, RoutineLoadError, RoutinePlacementProjection,
-    RoutinePlacementProvider, RoutineRegistryView, RoutineStatusReport, RoutineWorkspaceProvider,
-    SweepOptions, SweepOutcome,
+    DiscoveredWorkspaces, RoutineHostIdentity, RoutineLoadError, RoutineStatusReport,
+    RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
 };
-use orbit_types::workspace::WorkspaceStatus;
+use orbit_types::workspace::{WorkspaceCheckoutRole, WorkspaceStatus};
 
 use orbit_registry::host_identity::{HostIdentity, load_host_identity};
 use orbit_registry::workspace_registry;
@@ -19,7 +19,6 @@ use orbit_registry::workspace_registry;
 use crate::registry_runtime::RegisteredRuntimeFactory;
 
 struct RegistryRoutineEnvironment {
-    global_root: std::path::PathBuf,
     identity: HostIdentity,
     /// Registered workspace this pass is restricted to, resolved from the
     /// caller's `--workspace` selector. `None` visits every local workspace.
@@ -38,7 +37,6 @@ impl RegistryRoutineEnvironment {
             })
             .transpose()?;
         Ok(Self {
-            global_root: global_root.to_path_buf(),
             identity: load_host_identity(global_root)?,
             workspace_filter,
         })
@@ -52,41 +50,18 @@ impl RegistryRoutineEnvironment {
     }
 }
 
-impl RoutinePlacementProvider for RegistryRoutineEnvironment {
-    fn load_routine_placement(&self) -> Result<RoutinePlacementProjection, OrbitError> {
-        load_routine_placement_at(&self.global_root, &self.identity)
-    }
-}
-
-/// Build the v1 routine placement view from local files only.
-pub(crate) fn load_routine_placement_at(
-    global_root: &Path,
-    identity: &HostIdentity,
-) -> Result<RoutinePlacementProjection, OrbitError> {
-    let workspace_registry = workspace_registry::load_registry_from(
-        &workspace_registry::registry_path_for(global_root),
-    )?;
-    let registry =
-        RoutineRegistryView::from_workspace_registry(&workspace_registry, &identity.machine_id);
-    Ok(RoutinePlacementProjection {
-        local_host: RoutineHostIdentity {
-            machine_id: identity.machine_id.clone(),
-            host_id: identity.host_id.clone(),
-        },
-        registry,
-    })
-}
-
 impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
     fn discover_workspaces(&self, global_root: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
         discover_registered_workspaces(global_root, self.workspace_filter.as_deref())
     }
 }
 
-/// Discover runnable registered checkouts for routine execution, optionally
-/// restricted to one registered workspace id.
-/// The provider delegates here so this production path can be exercised with
-/// an explicit global root.
+/// Discover the checkouts this host evaluates schedules for, optionally
+/// restricted to one registered workspace id: every active **owner** checkout
+/// with a `.orbit/` directory. Registration is the whole opt-in [ORB-12236];
+/// a replica is skipped because it cannot write the owner's coordination
+/// store. The provider delegates here so this production path can be
+/// exercised with an explicit global root.
 pub(crate) fn discover_registered_workspaces(
     global_root: &Path,
     workspace_filter: Option<&str>,
@@ -99,6 +74,9 @@ pub(crate) fn discover_registered_workspaces(
     let mut discovered = DiscoveredWorkspaces::default();
     for (workspace, checkout) in workspace_registry::local_workspaces(&registry) {
         if workspace.status != WorkspaceStatus::Active || !checkout.orbit_dir.exists() {
+            continue;
+        }
+        if checkout.role == Some(WorkspaceCheckoutRole::Replica) {
             continue;
         }
         if workspace_filter.is_some_and(|selected| selected != workspace.id) {
@@ -120,7 +98,7 @@ pub fn routine_statuses(global_root: &Path) -> Result<RoutineStatusReport, Orbit
     let environment = RegistryRoutineEnvironment::load(global_root, None)?;
     orbit_core::application::routines::routine_statuses_with_providers(
         global_root,
-        &environment,
+        environment.local_host(),
         &environment,
         Utc::now(),
     )
@@ -138,7 +116,6 @@ pub fn run_sweep(
         options,
         environment.local_host(),
         &environment,
-        &environment,
     )
 }
 
@@ -153,7 +130,6 @@ pub fn run_sweep_at(
         global_root,
         options,
         environment.local_host(),
-        &environment,
         &environment,
     )
 }

@@ -268,7 +268,7 @@ introduced. Source retention uses the existing `refs/orbit/automation/` namespac
 
 Migration is an explicit edit of a selected routine. Disable its old temporal
 owner, settle any existing run, and replace only that definition's trigger.
-Preserve the user's hosts and policy. Do not run both old and new definitions;
+Preserve the user's policy. Do not run both old and new definitions;
 a sweep preview reports `duplicate_routine_ownership` for enabled definitions
 sharing the same source and target when one uses state scheduling. Existing
 shipped pilot/triage cron definitions remain unchanged and no live routine is
@@ -278,7 +278,6 @@ enabled by this implementation.
 schemaVersion: 1
 name: state-pilot
 enabled: false
-hosts: [your-host-id]
 target: job:task_pilot_pipeline
 trigger:
   state:

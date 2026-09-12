@@ -17,11 +17,11 @@ activity-job feature (activity, job, run, catalog) are defined in
 | Clock | The per-user OS unit (launchd/systemd) that invokes the tick on a whole-minute cadence; host-local, configured in `~/.orbit/clock.toml`. Controlled by `orbit routine clock` today, `orbit clock` after the pending consolidation. See [2_design.md](../2_design.md) and [3_vision.md §0](../3_vision.md#0-graduating-clock-consolidation). |
 | Fire | One scheduled dispatch of a routine's target; an ordinary run tagged `origin: routine/<name>`. See [2_design.md §3](../2_design.md). |
 | Fire intent | The idempotency record (routine name + scheduled slot) written before dispatch so a slot never double-fires. See [2_design.md §3](../2_design.md). |
-| Host identity | The `host_id` in `~/.orbit/host.toml`, matched against a routine's `hosts` list. Slated to stop participating in scheduling. See [2_design.md §2](../2_design.md). |
+| Host identity | The `host_id` in `~/.orbit/host.toml`. It names run ownership and display only; it takes no part in deciding what a host evaluates. See [2_design.md §2](../2_design.md). |
 | Local pause | A host-local, SQLite-persisted suppression of one routine (`orbit routine pause`); never versioned. See [2_design.md §4](../2_design.md). |
 | Missed-run policy | Per-routine handling of slots that elapsed while the host was down: `catch_up_once` or `skip`. See [2_design.md §1](../2_design.md). |
-| Owner checkout | A registered checkout whose logical workspace this machine owns (host-registry). Under the pending consolidation, the unit of scheduling. See [3_vision.md §0.3](../3_vision.md#03-eligibility). |
-| Routine | A versioned YAML definition of recurring work: trigger, target, hosts (slated for removal), enabled flag, policy. See [2_design.md §1](../2_design.md). |
-| Routine source | A registered workspace opted in via `[routines] role = "source"`; where routine YAML lives. Slated for removal: every registered owner checkout is a source. See [2_design.md §2](../2_design.md). |
+| Owner checkout | A registered checkout whose logical workspace this machine owns (host-registry). The unit of scheduling: each one is an independent schedule against its own store. See [2_design.md §2](../2_design.md). |
+| Routine | A versioned YAML definition of recurring work: trigger, target, enabled flag, policy. See [2_design.md §1](../2_design.md). |
+| Routine source | Any registered, active owner checkout on the host; where routine YAML lives. Registration is the whole opt-in. See [2_design.md §2](../2_design.md). |
 | Sweep | The stateless `orbit sweep` pass the OS clock invokes each minute to fire due routines on this host. Becomes `orbit clock tick` (alias kept) and also evaluates auto-task definitions. See [2_design.md §3](../2_design.md). |
 | Tick | One invocation of the pass by the clock; after the consolidation, evaluates routines then auto-task definitions for every owner checkout on the host. See [3_vision.md §0.2](../3_vision.md#02-the-tick). |

@@ -854,7 +854,7 @@ mod tests {
                 global_root_override: Some(global_root.clone()),
                 refresh_defaults: true,
                 routine_seed_identity: Some(
-                    RoutineSeedIdentity::new("host-a", "repo").expect("routine seed identity"),
+                    RoutineSeedIdentity::new("repo").expect("routine seed identity"),
                 ),
                 ..Default::default()
             },
@@ -871,7 +871,6 @@ mod tests {
         let routine = orbit_common::protocol::yaml::parse_routine_yaml(&yaml)
             .expect("seeded worktree GC routine parses");
         assert!(!routine.enabled);
-        assert_eq!(routine.hosts, vec!["host-a".to_string()]);
         assert_eq!(
             routine.target,
             orbit_types::workflow::RoutineTarget::Job("worktree_gc_pipeline".to_string())
@@ -889,7 +888,7 @@ mod tests {
                 global_root_override: Some(global_root.clone()),
                 refresh_defaults: true,
                 routine_seed_identity: Some(
-                    RoutineSeedIdentity::new("host-a", "repo").expect("routine seed identity"),
+                    RoutineSeedIdentity::new("repo").expect("routine seed identity"),
                 ),
                 ..Default::default()
             },
@@ -908,7 +907,7 @@ mod tests {
                 force: true,
                 refresh_defaults: true,
                 routine_seed_identity: Some(
-                    RoutineSeedIdentity::new("host-b", "repo").expect("routine seed identity"),
+                    RoutineSeedIdentity::new("repo").expect("routine seed identity"),
                 ),
                 ..Default::default()
             },
@@ -919,7 +918,6 @@ mod tests {
         assert!(!forced.contains("operator edited"));
         let forced = orbit_common::protocol::yaml::parse_routine_yaml(&forced)
             .expect("force-overwritten routine parses");
-        assert_eq!(forced.hosts, vec!["host-b".to_string()]);
         assert!(!forced.enabled);
     }
 

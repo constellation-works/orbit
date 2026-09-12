@@ -1,4 +1,4 @@
-//! Core assembly for explicit routine sources and target catalog resolution.
+//! Core assembly for routine sources and target catalog resolution.
 
 use crate::OrbitRuntime;
 pub use orbit_automation::routines::loader::{
@@ -13,7 +13,7 @@ use std::path::Path;
 /// registry hygiene must not silently shrink the source set).
 #[derive(Default)]
 pub struct DiscoveredWorkspaces {
-    /// Active, openable workspaces (source or not) with their runtimes.
+    /// Active, openable owner checkouts with their runtimes.
     pub entries: Vec<(Workspace, OrbitRuntime)>,
     /// Registered workspaces that could not be opened.
     pub errors: Vec<RoutineLoadError>,
@@ -26,26 +26,18 @@ pub trait RoutineWorkspaceProvider {
     fn discover_workspaces(&self, global_root: &Path) -> Result<DiscoveredWorkspaces, OrbitError>;
 }
 
-pub fn collect_routines(
-    workspaces: &[(Workspace, OrbitRuntime)],
-    host_id: &str,
-) -> RoutineCollection {
+pub fn collect_routines(workspaces: &[(Workspace, OrbitRuntime)]) -> RoutineCollection {
     let sources = workspaces
         .iter()
         .map(|(workspace, runtime)| RoutineSource {
             workspace: workspace.name.clone(),
             orbit_dir: runtime.shared_root(),
-            enabled: runtime.routines_source(),
         })
         .collect::<Vec<_>>();
-    orbit_automation::routines::loader::collect_routines(
-        &sources,
-        &|root, job| {
-            workspaces
-                .iter()
-                .find(|(_, runtime)| runtime.shared_root() == root)
-                .is_some_and(|(_, runtime)| runtime.load_v2_job_asset_by_name(job).is_ok())
-        },
-        host_id,
-    )
+    orbit_automation::routines::loader::collect_routines(&sources, &|root, job| {
+        workspaces
+            .iter()
+            .find(|(_, runtime)| runtime.shared_root() == root)
+            .is_some_and(|(_, runtime)| runtime.load_v2_job_asset_by_name(job).is_ok())
+    })
 }

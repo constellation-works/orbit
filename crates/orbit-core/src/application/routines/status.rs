@@ -1,28 +1,25 @@
 //! Read-only status projection for `orbit routine list` / `show` [ORB-10021]:
-//! every routine with all three toggle layers (versioned `enabled`, versioned
-//! host pinning, host-local pause), the computed next-due slot, and the last
-//! recorded fire — so "why didn't this fire?" is one command.
+//! every routine with both toggle layers (versioned `enabled` and host-local
+//! pause), the computed next-due slot, and the last recorded fire — so "why
+//! didn't this fire?" is one command.
 
 use std::path::Path;
 
 use chrono::{DateTime, Local, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
-use orbit_common::protocol::yaml::{parse_local_routine_yaml, parse_routine_yaml};
+use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::contracts::RoutineFireRecord;
 
+use super::RoutineHostIdentity;
 use super::due::{next_occurrence, parse_cron};
 use super::loader::{LoadedRoutine, RoutineLoadError, RoutineWorkspaceProvider, collect_routines};
-use super::validation::{
-    RoutinePinValidation, RoutinePlacementProjection, RoutinePlacementProvider,
-    RoutineRegistryStatus, validate_routine_pins,
-};
 
 /// Operator-facing schedule readiness. Theoretical next-slot math may still be
 /// present; this state says whether that time is armed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScheduleDisplayState {
-    /// Enabled, eligible, and a next slot is a real scheduled evaluation.
+    /// Enabled, not paused, and a next slot is a real scheduled evaluation.
     Scheduled,
     /// Definition `enabled` is false. A next slot, if present, is hypothetical.
     Disabled,
@@ -32,7 +29,7 @@ pub enum ScheduleDisplayState {
     Waiting,
     /// The scheduler has never recorded a cursor for this definition.
     NeverObserved,
-    /// Pin, source, or trigger state cannot be shown as a next evaluation.
+    /// Source or trigger state cannot be shown as a next evaluation.
     Unavailable,
 }
 
@@ -59,10 +56,6 @@ impl ScheduleDisplayState {
 pub struct RoutineStatus {
     /// The loaded definition plus its provenance.
     pub routine: LoadedRoutine,
-    /// Whether this host's `host_id` appears in the routine's `hosts`.
-    pub pinned_to_host: bool,
-    /// Registry-aware pin eligibility and additive diagnostics.
-    pub validation: RoutinePinValidation,
     /// Host-local pause, when one is set (RFC 3339 pause timestamp).
     pub paused_at: Option<String>,
     /// First scheduler observation on this host (RFC 3339).
@@ -78,9 +71,9 @@ pub struct RoutineStatus {
 
 impl RoutineStatus {
     /// Whether the routine would currently fire on this host when due:
-    /// enabled, pinned, and not paused.
+    /// enabled and not paused.
     pub fn effective(&self) -> bool {
-        self.routine.definition.enabled && self.pinned_to_host && self.paused_at.is_none()
+        self.routine.definition.enabled && self.paused_at.is_none()
     }
 
     /// How Operations (and other projections) should label the next slot.
@@ -90,9 +83,6 @@ impl RoutineStatus {
         }
         if self.paused_at.is_some() {
             return ScheduleDisplayState::Paused;
-        }
-        if !self.pinned_to_host {
-            return ScheduleDisplayState::Unavailable;
         }
         if automation_unavailable(self.automation.as_ref()) {
             return ScheduleDisplayState::Unavailable;
@@ -124,34 +114,27 @@ fn automation_unavailable(automation: Option<&serde_json::Value>) -> bool {
 pub struct RoutineStatusReport {
     /// This host's identity.
     pub host_id: String,
-    /// Stable machine identity used by registry-resolved pins.
+    /// Stable machine identity of this host.
     pub machine_id: String,
-    /// Registry source/state used by this projection.
-    pub registry: RoutineRegistryStatus,
     /// Per-routine status rows, in discovery order.
     pub statuses: Vec<RoutineStatus>,
     /// Fail-closed load failures (these routines are absent).
     pub load_errors: Vec<RoutineLoadError>,
 }
 
-/// Collect routine status from caller-supplied placement and workspace
-/// providers. Registry/cache ownership remains outside Core.
+/// Collect routine status from a caller-supplied workspace provider. Registry
+/// ownership remains outside Core.
 pub fn routine_statuses_with_providers(
     global_root: &Path,
-    placement_provider: &dyn RoutinePlacementProvider,
+    local_host: RoutineHostIdentity,
     workspace_provider: &dyn RoutineWorkspaceProvider,
     now_utc: DateTime<Utc>,
 ) -> Result<RoutineStatusReport, OrbitError> {
     let store = super::open_routine_store(global_root)?;
-    let RoutinePlacementProjection {
-        local_host,
-        registry: registry_view,
-    } = placement_provider.load_routine_placement()?;
-    let registry = registry_view.status();
 
     let discovered = workspace_provider.discover_workspaces(global_root)?;
     let mut load_errors = discovered.errors.clone();
-    let mut collection = collect_routines(&discovered.entries, &local_host.host_id);
+    let mut collection = collect_routines(&discovered.entries);
     load_errors.append(&mut collection.errors);
 
     let pauses = store.routine_pauses()?;
@@ -165,20 +148,11 @@ pub fn routine_statuses_with_providers(
         let paused_at = pauses
             .get(&routine.definition.name)
             .map(|pause| pause.paused_at.clone());
-        let validation = validate_routine_pins(
-            &local_host,
-            routine.origin,
-            &routine.definition.hosts,
-            &registry_view,
-        );
-        let pinned_to_host = validation.eligible;
         let automation=(routine.definition.trigger.deliveries_landed.is_some() || routine.definition.trigger.state.is_some()).then(|| {
             discovered.entries.iter().find(|(_,runtime)|runtime.shared_root()==routine.source_orbit_dir).map_or_else(||serde_json::json!({"reason":"source_unavailable"}),|(_,runtime)|match crate::application::automation::inspect_routine(runtime,&routine.definition,now_utc) {Ok(value)=>serde_json::json!(value),Err(error)=>serde_json::json!({"reason":"state_unavailable","error":error.to_string()})})
         });
         statuses.push(RoutineStatus {
             routine,
-            pinned_to_host,
-            validation,
             paused_at,
             first_observed_at: cursor.as_ref().map(|cursor| cursor.baseline_at.clone()),
             last_evaluated_slot: cursor.and_then(|cursor| cursor.last_slot),
@@ -191,7 +165,6 @@ pub fn routine_statuses_with_providers(
     Ok(RoutineStatusReport {
         host_id: local_host.host_id,
         machine_id: local_host.machine_id,
-        registry,
         statuses,
         load_errors,
     })
@@ -231,13 +204,12 @@ pub enum RoutineToggleOutcome {
 /// toggle cannot accidentally alter any other routine behavior.
 pub fn set_routine_enabled(
     routine: &LoadedRoutine,
-    local_host_id: &str,
     expected_enabled: bool,
     enabled: bool,
 ) -> Result<RoutineToggleOutcome, OrbitError> {
     let raw = std::fs::read_to_string(&routine.path)
         .map_err(|error| OrbitError::Io(format!("read {}: {error}", routine.path.display())))?;
-    let current = parse_for_origin(&raw, routine.origin, local_host_id)?;
+    let current = parse_routine_yaml(&raw)?;
     if current.name != routine.definition.name {
         return Err(OrbitError::InvalidInput(format!(
             "routine definition at {} changed identity from '{}' to '{}'",
@@ -256,7 +228,7 @@ pub fn set_routine_enabled(
     }
 
     let rendered = rewrite_enabled_line(&raw, enabled)?;
-    let rewritten = parse_for_origin(&rendered, routine.origin, local_host_id)?;
+    let rewritten = parse_routine_yaml(&rendered)?;
     let mut expected = current;
     expected.enabled = enabled;
     if rewritten != expected {
@@ -267,17 +239,6 @@ pub fn set_routine_enabled(
     atomic_write_text(&routine.path, &rendered)
         .map_err(|error| OrbitError::Io(format!("write {}: {error}", routine.path.display())))?;
     Ok(RoutineToggleOutcome::Changed)
-}
-
-fn parse_for_origin(
-    raw: &str,
-    origin: super::loader::RoutineOrigin,
-    local_host_id: &str,
-) -> Result<orbit_types::workflow::RoutineDefinition, OrbitError> {
-    match origin {
-        super::loader::RoutineOrigin::Committed => parse_routine_yaml(raw),
-        super::loader::RoutineOrigin::Local => parse_local_routine_yaml(raw, local_host_id),
-    }
 }
 
 fn rewrite_enabled_line(raw: &str, enabled: bool) -> Result<String, OrbitError> {

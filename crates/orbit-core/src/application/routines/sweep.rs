@@ -8,13 +8,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use super::RoutineHostIdentity;
 use super::loader::{RoutineLoadError, RoutineWorkspaceProvider, collect_routines};
-use super::validation::{RoutinePlacementProjection, RoutinePlacementProvider};
 use crate::OrbitRuntime;
 use crate::application::job::run_owner_liveness;
 use crate::application::routines::clock::load_clock_settings;
 use chrono::Utc;
-use orbit_automation::routines::sweep::run_sweep_core_with_registry;
+use orbit_automation::routines::sweep::run_sweep_core;
 pub use orbit_automation::routines::sweep::{
     RoutineDispatch, RoutineSweepReport, RunOwnerLiveness, SweepOptions, SweepOutcome,
 };
@@ -104,12 +104,11 @@ impl RoutineDispatch for RuntimeDispatch<'_> {
     }
 }
 
-/// Run one sweep pass against the default global root with caller-supplied
-/// placement and workspace providers.
+/// Run one sweep pass against the default global root with a caller-supplied
+/// workspace provider.
 pub fn run_sweep_with_providers(
     options: SweepOptions,
-    local_host: super::validation::RoutineHostIdentity,
-    placement_provider: &dyn RoutinePlacementProvider,
+    local_host: RoutineHostIdentity,
     workspace_provider: &dyn RoutineWorkspaceProvider,
 ) -> Result<SweepOutcome, OrbitError> {
     let global_root = crate::runtime::resolve_global_root()?;
@@ -124,22 +123,15 @@ pub fn run_sweep_with_providers(
         &super::clock::sweep_log_path(&global_root),
         &LogRotationConfig::load_global_best_effort(),
     );
-    run_sweep_at_with_providers(
-        &global_root,
-        options,
-        local_host,
-        placement_provider,
-        workspace_provider,
-    )
+    run_sweep_at_with_providers(&global_root, options, local_host, workspace_provider)
 }
 
-/// Run one sweep pass against an explicit global root using injected remote
+/// Run one sweep pass against an explicit global root using injected
 /// composition. Provider calls occur only after the sweep lock is held.
 pub fn run_sweep_at_with_providers(
     global_root: &Path,
     options: SweepOptions,
-    local_host: super::validation::RoutineHostIdentity,
-    placement_provider: &dyn RoutinePlacementProvider,
+    local_host: RoutineHostIdentity,
     workspace_provider: &dyn RoutineWorkspaceProvider,
 ) -> Result<SweepOutcome, OrbitError> {
     // One pass per host at a time: overlapping invocations from a slow prior
@@ -161,18 +153,13 @@ pub fn run_sweep_at_with_providers(
     // five-minute intervals instead of retaining the old 120-second default.
     let options = configured_sweep_options(global_root, options)?;
     let now_utc = Utc::now();
-    let RoutinePlacementProjection {
-        local_host,
-        registry: registry_view,
-    } = placement_provider.load_routine_placement()?;
-    let registry = registry_view.status();
 
     // One runtime per active workspace; discovery and dispatch share them.
     let discovered = workspace_provider.discover_workspaces(global_root)?;
     refresh_discovered_token_scoreboards(&discovered.entries);
     let mut load_errors: Vec<RoutineLoadError> = discovered.errors.clone();
 
-    let mut collection = collect_routines(&discovered.entries, &local_host.host_id);
+    let mut collection = collect_routines(&discovered.entries);
     load_errors.append(&mut collection.errors);
 
     let dispatch = RuntimeDispatch {
@@ -183,20 +170,11 @@ pub fn run_sweep_at_with_providers(
             .collect(),
     };
 
-    let reports = run_sweep_core_with_registry(
-        store.as_ref(),
-        &local_host,
-        &registry_view,
-        &collection,
-        &dispatch,
-        options,
-        now_utc,
-    )?;
+    let reports = run_sweep_core(store.as_ref(), &collection, &dispatch, options, now_utc)?;
 
     Ok(SweepOutcome {
         host_id: local_host.host_id,
         machine_id: local_host.machine_id,
-        registry,
         lock_busy: false,
         reports,
         load_errors,

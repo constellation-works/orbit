@@ -42,7 +42,7 @@ globalThis.fetch = async (path, options = {}) => {
   }
   if (url.pathname === '/api/routines') return response({
     host_id: 'fixture-host', controls_authorized: capabilities.routine_toggle.authorized, capabilities: { ...capabilities }, session_explanation: 'Session access: restart the dashboard server with explicit operator authority.',
-    routines: ['one', 'two'].map(source => ({ name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], pinned_to_host: source === 'one', cron: '30 14 * * *', description: 'Sweep landed deliveries.', next_evaluation: { state: enabled[source] ? 'scheduled' : 'disabled', at: '2026-09-07T21:30:00Z', hypothetical: !enabled[source] } })),
+    routines: ['one', 'two'].map(source => ({ name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], cron: '30 14 * * *', description: 'Sweep landed deliveries.', next_evaluation: { state: enabled[source] ? 'scheduled' : 'disabled', at: '2026-09-07T21:30:00Z', hypothetical: !enabled[source] } })),
     clock: { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true, last_tick_at: '2026-09-07T21:00:00Z', next_tick_at: '2026-09-07T21:01:00Z' },
   });
   if (url.pathname === '/api/workflows/auto/readiness') return response({
@@ -157,7 +157,7 @@ await fetchAndRenderOperations();
 releasePost(); await tick(); await tick();
 assert(get('auto-tasks-body').textContent.includes('Chore two'), 'old mutation cannot replace new workspace');
 assert(!get('auto-task-operation-feedback').textContent.includes('Minted'), 'old success cannot be attributed to new workspace');
-assert(button('routines-body', 'Disable').disabled, 'foreign host routine disabled despite operator authority');
+assert(!button('routines-body', 'Disable').disabled, 'routine toggle follows operator authority alone');
 assert(!button('auto-tasks-body', 'Mint now').disabled, 'workspace switch does not lock another workspace');
 
 // A→B→A does not revive a response from the prior visit.

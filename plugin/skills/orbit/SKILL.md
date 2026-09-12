@@ -102,7 +102,7 @@ is seeded disabled and requires deliberate enablement:
 | [setup/auto-tasks.md](references/setup/auto-tasks.md) | Recurring work as data — definitions that mint tasks on a schedule, instead of new code. |
 | [setup/publication.md](references/setup/publication.md) | Publish task snapshots to a dedicated Git repository, inspect them, and restore on the owning authority. |
 | [setup/maintenance.md](references/setup/maintenance.md) | Worktree GC, `orbit doctor` repairs, log retention, audit pruning, upgrades. Skipping the first is what breaks busy workspaces. |
-| [setup/multi-host.md](references/setup/multi-host.md) | More than one machine: task-ID namespaces, routine host pins, and what syncs versus what stays local. |
+| [setup/multi-host.md](references/setup/multi-host.md) | More than one machine: task-ID namespaces, independent per-host schedules, and what syncs versus what stays local. |
 | [setup/remote-access.md](references/setup/remote-access.md) | Reaching another machine's Orbit: the dashboard, `web connect`, and MCP over SSH or a socket. |
 
 ## Start here

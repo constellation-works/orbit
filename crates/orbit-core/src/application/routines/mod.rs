@@ -1,13 +1,13 @@
 //! Routines [ORB-10021]: Orbit as the constellation's single scheduler.
 //!
 //! A routine is a durable, git-versioned YAML definition of recurring work —
-//! a cron trigger, a catalog target, host pinning, and a retry/overlap
-//! policy — living under `.orbit/routines/` in a routine-source workspace
-//! (`[routines] role = "source"`). The stateless [`run_sweep`] pass, invoked
-//! every minute by the OS clock (see [`clock`]), fires whatever is due on
-//! the current host through the existing v2 run machinery. Definitions are
-//! shared across hosts via git; all scheduler state is host-local and never
-//! synced (ADR-0204..ADR-0208; design in `docs/design/routines/`).
+//! a cron trigger, a catalog target, and a retry/overlap policy — living
+//! under `.orbit/routines/` in a registered owner checkout. The stateless
+//! [`run_sweep_with_providers`] pass, invoked every minute by the OS clock
+//! (see [`clock`]), fires whatever is due on this host through the existing
+//! v2 run machinery. Definitions are shared across hosts via git; all
+//! scheduler state is host-local and never synced, so every owner checkout
+//! is an independent schedule (design in `docs/design/routines/`).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -20,7 +20,6 @@ pub use orbit_automation::routines::due;
 pub mod loader;
 pub mod status;
 pub mod sweep;
-pub use orbit_automation::routines::validation;
 
 pub use clock::{
     ClockInstallReport, ClockSettings, ClockStatus, DEFAULT_CLOCK_CADENCE_SECONDS, clock_status,
@@ -39,11 +38,17 @@ pub use sweep::{
     RoutineSweepReport, SweepOptions, SweepOutcome, run_sweep_at_with_providers,
     run_sweep_with_providers,
 };
-pub use validation::{
-    RoutineDiagnosticSeverity, RoutineHostIdentity, RoutineHostIdentityView, RoutinePinValidation,
-    RoutinePlacementProjection, RoutinePlacementProvider, RoutineRegistryStatus,
-    RoutineRegistryView, RoutineValidationDiagnostic, validate_routine_pins,
-};
+
+/// Who this host is, as reported by routine status and sweep output. Routine
+/// eligibility no longer consults it: it identifies the host whose store and
+/// clock a pass acted on, for display and audit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutineHostIdentity {
+    /// Stable machine identity.
+    pub machine_id: String,
+    /// Operator-facing host name.
+    pub host_id: String,
+}
 
 /// Open the config-resolved machine-local scheduler store.
 fn open_routine_store(global_root: &Path) -> Result<Arc<dyn RoutineStoreBackend>, OrbitError> {

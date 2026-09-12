@@ -64,7 +64,6 @@ impl Fixture {
         );
         for (repo, name) in [(&selected_repo, SELECTED), (&other_repo, OTHER)] {
             run_success(repo, &home, &["workspace", "init", "--name", name]);
-            enable_routine_source(repo);
             enable_seeded_routine(repo);
         }
 
@@ -212,14 +211,6 @@ fn command(cwd: &Path, home: &Path) -> assert_cmd::Command {
         .env("HOME", home)
         .env("USERPROFILE", home);
     command
-}
-
-fn enable_routine_source(repo: &Path) {
-    fs::write(
-        repo.join(".orbit").join("config.toml"),
-        "[routines]\nrole = \"source\"\n",
-    )
-    .expect("declare routine source");
 }
 
 fn enable_seeded_routine(repo: &Path) {

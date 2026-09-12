@@ -65,10 +65,6 @@ pub struct ResolvedConfig {
     /// Opt-in for unattended ship dispatch (`[workflow] auto_ship`; defaults
     /// to `false`).
     pub workflow_auto_ship: bool,
-    /// Whether this workspace is a routine source (`[routines] role =
-    /// "source"`; defaults to `false`). Consulted by `orbit sweep` before
-    /// loading `.orbit/routines/*.yaml`.
-    pub routines_source: bool,
     /// Named provider-model assignments from `[crews.<name>]`.
     pub crews: BTreeMap<String, Crew>,
     /// Crew used when a task declares none and no override is given.
@@ -106,7 +102,6 @@ impl ResolvedConfig {
             scoring_enabled: snapshot.scoring_enabled,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             workflow_auto_ship: snapshot.workflow_auto_ship,
-            routines_source: snapshot.routines_role.as_deref() == Some("source"),
             crews: default_crews(),
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {
@@ -199,6 +194,9 @@ impl ResolvedConfig {
         if parsed.duel.is_some() {
             warn_retired_duel_config(config_path);
         }
+        if parsed.routines.is_some() {
+            warn_retired_routines_config(config_path);
+        }
 
         Ok(Self {
             execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot),
@@ -210,7 +208,6 @@ impl ResolvedConfig {
             scoring_enabled: snapshot.scoring_enabled,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             workflow_auto_ship: snapshot.workflow_auto_ship,
-            routines_source: snapshot.routines_role.as_deref() == Some("source"),
             crews,
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {
@@ -508,6 +505,21 @@ fn warn_retired_duel_config(config_path: &Path) {
     tracing::warn!(
         config = %path,
         RETIRED_DUEL_CONFIG_WARNING,
+    );
+}
+
+/// [ORB-12236] Registering an owner checkout is the automation opt-in, so the
+/// versioned `[routines] role` key no longer selects anything. Accepted and
+/// ignored for one release; delete this guard after 2026-12-01, when the key
+/// becomes an ordinary unknown section.
+pub(crate) const RETIRED_ROUTINES_CONFIG_WARNING: &str = "[routines] is retired and ignored; every registered owner checkout is a routine source — \
+     remove the section from config.toml";
+
+fn warn_retired_routines_config(config_path: &Path) {
+    let path = redact_home_dir(&config_path.display().to_string());
+    tracing::warn!(
+        config = %path,
+        RETIRED_ROUTINES_CONFIG_WARNING,
     );
 }
 

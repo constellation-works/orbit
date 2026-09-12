@@ -973,7 +973,6 @@ fn workspace_init_seeds_disabled_routines_and_reinit_preserves_authored_files() 
             definition.name,
             format!("{}-routine-seed-test", stem.replace('_', "-"))
         );
-        assert_eq!(definition.hosts, ["init-host"]);
         assert_eq!(definition.target, RoutineTarget::Job(target.to_string()));
         assert_eq!(definition.policy.overlap, OverlapPolicy::Forbid);
         assert!(!definition.enabled);
@@ -983,7 +982,6 @@ fn workspace_init_seeds_disabled_routines_and_reinit_preserves_authored_files() 
 name: custom-ship-sweep
 description: authored values must survive re-init
 enabled: true
-hosts: [custom-host]
 trigger:
   cron: "7 3 * * *"
   missed_run: catch_up_once
@@ -1077,6 +1075,54 @@ fn same_basename_checkouts_with_distinct_names_seed_distinct_routine_names() {
     );
 }
 
+/// Seeded definitions carry no host id [ORB-12236], so the same workspace name
+/// initialized on two machines produces the same bytes — a repository can be
+/// registered on a second host with no definition edits.
+#[test]
+fn seeded_routines_are_byte_identical_across_host_identities() {
+    let base = tempdir().expect("base tempdir");
+    let first_home = tempdir().expect("first home tempdir");
+    let second_home = tempdir().expect("second home tempdir");
+    seed_named_host_identity(first_home.path(), "hm_first", "first-host");
+    seed_named_host_identity(second_home.path(), "hm_second", "second-host");
+    let first = base.path().join("first/server");
+    let second = base.path().join("second/server");
+    std::fs::create_dir_all(&first).expect("create first checkout");
+    std::fs::create_dir_all(&second).expect("create second checkout");
+
+    let env = EnvGuard::acquire().home(first_home.path()).cwd(&first);
+    routine_seed_init("shared")
+        .execute_without_runtime(None)
+        .expect("first host workspace init");
+    let _env = env.home(second_home.path()).cwd(&second);
+    routine_seed_init("shared")
+        .execute_without_runtime(None)
+        .expect("second host workspace init");
+
+    let read_routines = |checkout: &std::path::Path| -> Vec<(String, String)> {
+        let mut files: Vec<(String, String)> = std::fs::read_dir(checkout.join(".orbit/routines"))
+            .expect("read seeded routines directory")
+            .map(|entry| entry.expect("routines directory entry").path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
+            .map(|path| {
+                (
+                    path.file_name()
+                        .expect("routine file name")
+                        .to_string_lossy()
+                        .into_owned(),
+                    std::fs::read_to_string(&path).expect("read seeded routine"),
+                )
+            })
+            .collect();
+        files.sort();
+        files
+    };
+
+    let first_routines = read_routines(&first);
+    assert!(!first_routines.is_empty(), "init must seed routines");
+    assert_eq!(first_routines, read_routines(&second));
+}
+
 /// Routine discovery drops *every* definition sharing a name, so a duplicate
 /// would silently disable both workspaces' routines. Init reports it instead,
 /// and leaves the second checkout uninitialized [ORB-12107].
@@ -1129,11 +1175,17 @@ fn workspace_init_refuses_a_name_whose_seeded_routines_already_exist() {
 }
 
 fn seed_host_identity(home: &std::path::Path) {
+    seed_named_host_identity(home, "hm_inithost", "init-host");
+}
+
+fn seed_named_host_identity(home: &std::path::Path, machine_id: &str, host_id: &str) {
     let global = home.join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
         global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_inithost\"\nhost_id = \"init-host\"\ntask_prefix = \"ORB\"\n",
+        format!(
+            "schema_version = 2\nmachine_id = \"{machine_id}\"\nhost_id = \"{host_id}\"\ntask_prefix = \"ORB\"\n"
+        ),
     )
     .expect("write host identity");
 }

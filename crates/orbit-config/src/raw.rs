@@ -29,6 +29,9 @@ pub(crate) struct RawRuntimeConfig {
     /// Retired in ORB-10627. Existing workspaces may still carry the section
     /// written by older `orbit init`; loaders warn and ignore it.
     pub(crate) duel: Option<toml::Value>,
+    /// Retired in ORB-12236. Existing workspaces may still carry
+    /// `[routines] role = "source"`; loaders warn and ignore it.
+    pub(crate) routines: Option<toml::Value>,
 }
 
 /// One provider-model crew assignment supplied by a caller seeding a fresh

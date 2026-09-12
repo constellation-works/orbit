@@ -37,16 +37,12 @@ impl RoutineShowArgs {
         let doc = json!({
             "host_id": report.host_id,
             "machine_id": report.machine_id,
-            "registry": &report.registry,
             "name": definition.name,
             "description": definition.description,
             "source": status.routine.source_workspace,
             "origin": status.routine.origin.as_str(),
             "path": status.routine.path.display().to_string(),
             "enabled": definition.enabled,
-            "hosts": definition.hosts,
-            "pinned_to_host": status.pinned_to_host,
-            "validation": &status.validation,
             "paused_at": status.paused_at,
             "effective": status.effective(),
             "cron": definition.trigger.cron,
@@ -120,36 +116,14 @@ impl RoutineShowArgs {
         );
         let _ = writeln!(
             out,
-            "Enabled: {} | Pinned to {}: {} | Paused: {}",
+            "Enabled: {} | Paused: {}",
             definition.enabled,
-            report.host_id,
-            status.pinned_to_host,
             status
                 .paused_at
                 .as_deref()
                 .map(|at| format!("yes (since {at})"))
                 .unwrap_or_else(|| "no".to_string())
         );
-        let _ = writeln!(
-            out,
-            "Registry: {}/{}{}",
-            report.registry.source,
-            report.registry.state,
-            report
-                .registry
-                .age_seconds
-                .map(|age| format!(" ({age}s old)"))
-                .unwrap_or_default()
-        );
-        for diagnostic in &status.validation.diagnostics {
-            let _ = writeln!(
-                out,
-                "Validation [{}:{}]: {}",
-                diagnostic.severity.as_str(),
-                diagnostic.code,
-                diagnostic.message
-            );
-        }
         let _ = writeln!(
             out,
             "Effective on this host: {}",

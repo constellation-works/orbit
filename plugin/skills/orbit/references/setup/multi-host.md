@@ -64,17 +64,19 @@ bounded, so distinct prefixes are preferable to guessed disjoint ranges.
 
 ## Scheduling and claims
 
-Routine definitions use explicit `hosts: [<host-id>]`; inspect their actual
-seeded names and pins with `orbit routine list`. Definition enablement travels
-through Git; last-fire timestamps and pauses do not. Two hosts pinned to the
-same routine each evaluate it independently, and `overlap: forbid` is local.
+Routine definitions carry no host field: every host with a registered owner
+checkout and an enabled clock evaluates them against its own store. Inspect
+their seeded names with `orbit routine list`. Definition enablement travels
+through Git; last-fire timestamps and pauses do not. Two hosts running the same
+routine each evaluate it independently, and `overlap: forbid` is local — pause
+it on the hosts that should not run it.
 
 ```bash
 orbit host rename <current-name> <new-name>
 ```
 
-Renaming updates the host identity and local owner records, but does not rewrite
-versioned routine host pins. Update those definitions deliberately as well.
+Renaming updates the host identity and local owner records. Routine definitions
+name no host, so nothing versioned has to be rewritten.
 
 Workspace claims coordinate operators acting on **the same authoritative
 store**. `--claim-token` or `ORBIT_WORKSPACE_CLAIM_TOKEN` presents an existing

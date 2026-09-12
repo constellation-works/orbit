@@ -38,24 +38,6 @@ pub fn parse_auto_task_yaml(yaml: &str) -> Result<AutoTaskDefinition, OrbitError
 }
 
 pub fn parse_routine_yaml(yaml: &str) -> Result<RoutineDefinition, OrbitError> {
-    let definition = parse_routine_document(yaml)?;
-    definition.validate_committed()?;
-    Ok(definition)
-}
-
-pub fn parse_local_routine_yaml(
-    yaml: &str,
-    local_host_id: &str,
-) -> Result<RoutineDefinition, OrbitError> {
-    let mut definition = parse_routine_document(yaml)?;
-    definition.validate_local(local_host_id)?;
-    if definition.hosts.is_empty() {
-        definition.hosts = vec![local_host_id.to_string()];
-    }
-    Ok(definition)
-}
-
-fn parse_routine_document(yaml: &str) -> Result<RoutineDefinition, OrbitError> {
     let header: SchemaHeader = serde_yaml::from_str(yaml)
         .map_err(|error| OrbitError::InvalidInput(format!("routine header: {error}")))?;
     if header.schema_version != ROUTINE_SCHEMA_VERSION {
@@ -66,7 +48,7 @@ fn parse_routine_document(yaml: &str) -> Result<RoutineDefinition, OrbitError> {
     }
     let definition: RoutineDefinition = serde_yaml::from_str(yaml)
         .map_err(|error| OrbitError::InvalidInput(format!("routine: {error}")))?;
-    definition.validate_common()?;
+    definition.validate()?;
     Ok(definition)
 }
 

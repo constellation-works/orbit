@@ -491,14 +491,6 @@ impl OrbitRuntime {
         self.context.settings().workflow_auto_ship()
     }
 
-    /// Whether this workspace declared itself a routine source
-    /// (`[routines] role = "source"` in the active `config.toml`; defaults
-    /// to `false`). Consulted by `orbit sweep` before loading routine
-    /// definitions nobody registered explicitly.
-    pub fn routines_source(&self) -> bool {
-        self.context.settings().routines_source()
-    }
-
     /// The resolved operation-mode preferences (`[operation]` layered over
     /// the built-in supervised defaults) with per-field provenance. These are
     /// preferences: they authorize nothing by themselves [ORB-11332].

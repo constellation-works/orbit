@@ -50,7 +50,6 @@ assuming a value.
 | `workflow.default_crew` | Crew for any task that doesn't declare one. |
 | `workflow.system_crew` | Crew for Orbit's own bounded activities (failure recovery, triage). |
 | `workflow.auto_ship` | Opt-in for unattended ship dispatch via the scheduler. |
-| `routines.role` | `"source"` marks the workspace as a routine source for `orbit sweep`. |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |
 | `execution.codex.sandbox` | `read-only`, `workspace-write`, or `danger-full-access`. |

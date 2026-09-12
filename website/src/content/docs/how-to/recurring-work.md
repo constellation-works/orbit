@@ -20,8 +20,8 @@ why the layers are separate and what each one guarantees — is in
 ## 1. Start the sweep clock
 
 `orbit sweep` is the scheduler pass. It loads routine definitions from every
-registered workspace whose config declares `[routines] role = "source"`, filters
-them for this host, and dispatches whatever is due as a normal job run.
+registered, active owner checkout on this host and dispatches whatever is due as
+a normal job run.
 
 Point the OS at it once per host:
 
@@ -64,13 +64,11 @@ By default `orbit sweep` prints only noteworthy rows — fires, retries,
 baselines, errors — so a per-minute clock does not fill the log with `not_due`
 churn.
 
-## 2. Opt the workspace in
+## 2. Enable the routines you want
 
-A workspace is only a routine source if it says so:
-
-```bash
-orbit config set routines.role source
-```
+Registering the checkout is the whole opt-in — there is no config key to set,
+and every registered owner checkout's definitions are evaluated by this host's
+clock.
 
 `orbit init` seeds a set of default routines into `.orbit/routines/`, each
 **disabled**, because enabling unattended agent work is a deliberate, versioned
@@ -92,8 +90,6 @@ schemaVersion: 1
 name: ship_sweep_myrepo
 description: Ship this workspace's ready backlog through the gated pipeline.
 enabled: true
-hosts:
-  - hm_alpha            # explicit host pinning; there is no "any host" value
 trigger:
   cron: "*/20 * * * *"  # 5-field cron, evaluated in host-local time
   missed_run: skip      # or catch_up_once
@@ -108,8 +104,10 @@ policy:
 
 Notes that matter in practice:
 
-- **`hosts` is required** for a committed definition, and it is how you keep one
-  routine from firing on every machine that shares the repository.
+- **There is no host field.** Every machine with a registered owner checkout and
+  an enabled clock evaluates the definition against its own store. To keep a
+  routine on one machine, put it under `.orbit/routines/local/` there, or pause
+  it on the others.
 - **`missed_run`** decides what happens to slots that fell in a gap while the
   host was asleep. `skip` (the default) waits for the next natural slot;
   `catch_up_once` fires a single make-up run no matter how many slots were
@@ -248,6 +246,6 @@ orbit sweep --dry-run --verbose
 orbit doctor
 ```
 
-If routines are not firing, check in that order: the clock is enabled, the
-workspace declares `[routines] role = "source"`, the definition has
-`enabled: true`, and this host's ID appears in its `hosts` list.
+If routines are not firing, check in that order: the clock is enabled, this
+checkout is registered as an owner (`orbit workspace list`), the definition has
+`enabled: true`, and it is not paused on this host.

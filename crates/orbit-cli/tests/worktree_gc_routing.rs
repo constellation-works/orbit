@@ -420,11 +420,6 @@ fn enable_worktree_gc_routine(workspace: &Workspace) {
         .replace("enabled: false", "enabled: true")
         .replace("cron: \"35 * * * *\"", "cron: \"* * * * *\"");
     fs::write(&path, updated).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-
-    let config_path = workspace.orbit_dir.join("config.toml");
-    let mut config = fs::read_to_string(&config_path).unwrap_or_default();
-    config.push_str("\n[routines]\nrole = \"source\"\n");
-    fs::write(&config_path, config).expect("enable routine source role");
 }
 
 fn routine_report<'a>(sweep_report: &'a Value, routine_name: &str) -> Option<&'a Value> {

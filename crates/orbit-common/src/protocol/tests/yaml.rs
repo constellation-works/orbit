@@ -1,5 +1,5 @@
 use crate::OrbitError;
-use crate::protocol::yaml::{parse_auto_task_yaml, parse_local_routine_yaml, parse_routine_yaml};
+use crate::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
 use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy, RoutineTarget};
 
 const VALID_ROUTINE: &str = r#"
@@ -7,7 +7,6 @@ schemaVersion: 1
 name: almanac-auto-commit
 description: Commit & push almanac changes nightly
 enabled: true
-hosts: [dk-mac]
 trigger:
   cron: "0 22 * * *"
   missed_run: catch_up_once
@@ -87,7 +86,6 @@ fn parses_the_design_doc_example() {
     let routine = parse_routine_yaml(VALID_ROUTINE).expect("valid routine");
     assert_eq!(routine.name, "almanac-auto-commit");
     assert!(routine.enabled);
-    assert_eq!(routine.hosts, vec!["dk-mac".to_string()]);
     assert_eq!(routine.trigger.cron, "0 22 * * *");
     assert_eq!(routine.trigger.missed_run, MissedRunPolicy::CatchUpOnce);
     assert_eq!(
@@ -106,7 +104,6 @@ fn defaults_apply_when_optional_fields_are_absent() {
         r#"
 schemaVersion: 1
 name: reindex
-hosts: [dk-server-1]
 trigger:
   cron: "*/30 * * * *"
 target: job:docs_reindex
@@ -126,7 +123,6 @@ fn rejects_unknown_fields_fail_closed() {
         r#"
 schemaVersion: 1
 name: reindex
-hosts: [dk-server-1]
 trigger:
   cron: "*/30 * * * *"
   jitter_seconds: 5
@@ -149,7 +145,6 @@ fn rejects_duration_values_above_one_week() {
         let error = parse_routine_yaml(&format!(
             "schemaVersion: 1\n\
              name: reindex\n\
-             hosts: [dk-server-1]\n\
              trigger:\n  cron: \"*/30 * * * *\"\n\
              target: job:docs_reindex\n\
              policy:\n  {policy}\n"
@@ -169,7 +164,6 @@ fn rejects_unsupported_schema_version() {
         r#"
 schemaVersion: 2
 name: reindex
-hosts: [dk-server-1]
 trigger:
   cron: "*/30 * * * *"
 target: job:docs_reindex
@@ -185,7 +179,6 @@ fn rejects_activity_targets_with_wrapping_guidance() {
         r#"
 schemaVersion: 1
 name: reindex
-hosts: [dk-server-1]
 trigger:
   cron: "*/30 * * * *"
 target: activity:semantic_reindex
@@ -203,7 +196,6 @@ fn rejects_inline_command_shaped_targets() {
         r#"
 schemaVersion: 1
 name: reindex
-hosts: [dk-server-1]
 trigger:
   cron: "*/30 * * * *"
 target: "sh -c 'rm -rf /'"
@@ -220,28 +212,11 @@ target: "sh -c 'rm -rf /'"
 }
 
 #[test]
-fn rejects_empty_hosts_and_bad_names() {
-    let no_hosts = parse_routine_yaml(
-        r#"
-schemaVersion: 1
-name: reindex
-hosts: []
-trigger:
-  cron: "*/30 * * * *"
-target: job:docs_reindex
-"#,
-    )
-    .expect_err("empty hosts must fail");
-    assert!(
-        no_hosts.to_string().contains("at least one host"),
-        "{no_hosts}"
-    );
-
+fn rejects_bad_names() {
     let bad_name = parse_routine_yaml(
         r#"
 schemaVersion: 1
 name: "Almanac Commit"
-hosts: [dk-mac]
 trigger:
   cron: "0 22 * * *"
 target: job:almanac_commit_pipeline
@@ -251,57 +226,35 @@ target: job:almanac_commit_pipeline
     assert!(bad_name.to_string().contains("routine name"), "{bad_name}");
 }
 
+/// [ORB-12236] A definition written before host pins were retired still loads
+/// — ignored, and flagged so the loader can name the file it came from.
 #[test]
-fn local_routine_may_omit_hosts_and_pins_the_loading_host() {
-    // A local definition carries no `hosts:` — it is implicit to the machine
-    // loading it and must resolve without a registry or network.
-    let routine = parse_local_routine_yaml(
+fn retired_hosts_key_loads_and_is_reported() {
+    let routine = parse_routine_yaml(
         r#"
 schemaVersion: 1
-name: local-reindex
+name: reindex
+hosts: [some-other-host]
 trigger:
   cron: "*/30 * * * *"
 target: job:docs_reindex
 "#,
-        "dk-mac",
     )
-    .expect("local routine loads without a host pin");
-    // Normalized to an implicit single-host pin so downstream matching is
-    // origin-agnostic.
-    assert_eq!(routine.hosts, vec!["dk-mac".to_string()]);
-}
+    .expect("a definition still carrying hosts: must load");
+    assert!(routine.enabled);
+    assert!(routine.has_legacy_host_pin());
 
-#[test]
-fn local_routine_may_name_only_the_loading_host() {
-    let ok = parse_local_routine_yaml(
+    let without = parse_routine_yaml(
         r#"
 schemaVersion: 1
-name: local-reindex
-hosts: [dk-mac]
+name: reindex
 trigger:
   cron: "*/30 * * * *"
 target: job:docs_reindex
 "#,
-        "dk-mac",
     )
-    .expect("local routine naming the loading host is valid");
-    assert_eq!(ok.hosts, vec!["dk-mac".to_string()]);
-
-    let remote = parse_local_routine_yaml(
-        r#"
-schemaVersion: 1
-name: local-reindex
-hosts: [dk-server-1]
-trigger:
-  cron: "*/30 * * * *"
-target: job:docs_reindex
-"#,
-        "dk-mac",
-    )
-    .expect_err("a local definition naming another host is a remote pin and must fail");
-    let message = remote.to_string();
-    assert!(message.contains("local-reindex"), "{message}");
-    assert!(message.contains("dk-server-1"), "{message}");
+    .expect("a definition without hosts: must load");
+    assert!(!without.has_legacy_host_pin());
 }
 
 #[test]

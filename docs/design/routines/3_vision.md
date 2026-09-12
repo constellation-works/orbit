@@ -24,7 +24,9 @@ task, implementation, and validation evidence, not by drifting in.
 
 ## 0. Graduating: clock consolidation
 
-Decided 2026-09-12; implemented by [ORB-12236] (hosts/role removal) then [ORB-12237] (tick, `orbit clock`, scheduler retirement). The reasoning is in
+Decided 2026-09-12; [ORB-12236] shipped the eligibility half (no `hosts:` pin, no
+`[routines] role`), and [ORB-12237] implements the rest (tick, `orbit clock`, scheduler
+retirement). Items below marked *shipped* are already the current contract. The reasoning is in
 [One host tick evaluates routines and auto-task definitions in-process](./4_decisions.md#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process),
 [Definitions carry no host pin: every owner checkout is an independent schedule](./4_decisions.md#definitions-carry-no-host-pin-every-owner-checkout-is-an-independent-schedule),
 and [Registration is the automation opt-in; there is no routine-source role](./4_decisions.md#registration-is-the-automation-opt-in-there-is-no-routine-source-role).
@@ -55,7 +57,7 @@ Per pass, after taking the host sweep flock:
    consulted.
 2. Load `.orbit/routines/*.yaml` and `.orbit/routines/local/*.yaml` from each. There is no
    placement validation step: a `hosts:` key is ignored with a load warning (one release),
-   then rejected as unknown.
+   then rejected as unknown. *(shipped)*
 3. Routine evaluation — unchanged from [2_design.md §3](./2_design.md) steps 4–10: outcome
    sync, cursor due-math, overlap, fire intent, `submit_pipeline_run`, worker identity gate.
 4. Auto-task evaluation — for each runtime, call the existing scheduler pass
@@ -92,25 +94,27 @@ store under its own `task_prefix`. Nothing coordinates across hosts.
   Existing seeded copies retire through the managed-asset manifest
   (`orbit doctor --fix-stale-artifacts`); an operator-edited copy is preserved under
   `.retired-managed/`.
-- `RoutineDefinition::hosts`, `validate_committed`/`validate_local`'s host checks,
+- *(shipped)* `RoutineDefinition::hosts`, `validate_committed`/`validate_local`'s host checks,
   `RoutinePlacementProvider`, `owner_host_ids` projection, and the `host_belongs_elsewhere` /
   `host_unresolvable` diagnostics. `RoutineSeedIdentity` keeps only the workspace name.
-- `[routines] role` in `orbit-config` raw/resolved config.
-- The `hosts` column in `orbit routine list`, `GET /api/routines`, and the dashboard routine
-  rows.
-- Docs and skills that teach `orbit routine clock`, `role = "source"`, or `hosts:` (the
-  `orbit` skill's `setup/automation.md` and `setup/auto-tasks.md`, the website
-  `concepts/scheduling` and `how-to/recurring-work` pages, `docs/runbooks/health-checks.md`).
+- *(shipped)* `[routines] role` in `orbit-config` raw/resolved config.
+- *(shipped)* The `hosts` column in `orbit routine list`, `GET /api/routines`, and the
+  dashboard routine rows.
+- Docs and skills that teach `orbit routine clock` (the `orbit` skill's
+  `setup/automation.md` and `setup/auto-tasks.md`, the website `concepts/scheduling` and
+  `how-to/recurring-work` pages, `docs/runbooks/health-checks.md`). The `role = "source"`
+  and `hosts:` passages in those same files are *(shipped)*.
 
 ### 0.5 Migration on an existing host
 
 1. Upgrade the binary; `orbit clock status` reports the installed unit as stale (it still
    invokes `orbit sweep`, which continues to work as an alias) and `orbit clock enable`
    rewrites it.
-2. `orbit workspace sync` re-seeds defaults: `auto_task_scheduler` is retired, other seeded
-   routines lose their `hosts:` line (adopted as a managed refresh, not a collision).
+2. `orbit workspace sync` re-seeds defaults: seeded routines lose their `hosts:` line
+   (adopted as a managed refresh, not a collision) *(shipped)*, and `auto_task_scheduler`
+   is retired.
 3. Delete `[routines]` from `.orbit/config.toml` and `hosts:` from any workspace-authored
-   routine at leisure; both warn until the following release.
+   routine at leisure; both warn until the following release *(shipped)*.
 4. Enable the clock on any additional owner host (e.g. a laptop that also ships tasks). Every
    enabled committed definition becomes live there against that host's store.
 

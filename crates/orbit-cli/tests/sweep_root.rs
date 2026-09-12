@@ -56,7 +56,6 @@ impl Fixture {
             ],
             None,
         );
-        enable_routine_source(&root);
         assert_home_empty(&home);
 
         Self {
@@ -182,13 +181,6 @@ fn assert_home_empty(home: &Path) {
         "sweep touched isolated HOME at {}",
         home.display()
     );
-}
-
-fn enable_routine_source(root: &Path) {
-    let config_path = root.join("config.toml");
-    let mut config = fs::read_to_string(&config_path).expect("read workspace config");
-    config.push_str("\n[routines]\nrole = \"source\"\n");
-    fs::write(config_path, config).expect("enable routine source");
 }
 
 fn init_git_repo(repo: &Path) {

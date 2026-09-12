@@ -11,8 +11,8 @@ use crate::application::workspace_sync::{
 };
 use crate::bootstrap::init::{InitOptions, init_workspace_at_root};
 
-fn seed_identity(host_id: &str, workspace_name: &str) -> RoutineSeedIdentity {
-    RoutineSeedIdentity::new(host_id, workspace_name).expect("routine seed identity")
+fn seed_identity(workspace_name: &str) -> RoutineSeedIdentity {
+    RoutineSeedIdentity::new(workspace_name).expect("routine seed identity")
 }
 
 fn initialized_roots(base: &Path) -> (PathBuf, PathBuf) {
@@ -32,7 +32,7 @@ fn initialized_roots(base: &Path) -> (PathBuf, PathBuf) {
         InitOptions {
             global_root_override: Some(global.clone()),
             routine_seed_identity: Some(
-                RoutineSeedIdentity::new("host-a", "alpha").expect("routine seed identity"),
+                RoutineSeedIdentity::new("alpha").expect("routine seed identity"),
             ),
             refresh_defaults: true,
             ..Default::default()
@@ -50,6 +50,77 @@ fn sha256(content: &str) -> String {
     format!("{:x}", Sha256::digest(content.as_bytes()))
 }
 
+/// [ORB-12236] A workspace seeded before host pins were retired carries a
+/// `hosts:` line and a manifest binding that names a host. Sync adopts the new
+/// host-free bytes as an ordinary managed refresh — not a collision, and not a
+/// preserved local modification.
+#[test]
+fn a_workspace_seeded_with_host_pins_refreshes_onto_the_host_free_bytes() {
+    let root = tempdir().expect("create tempdir");
+    let (global, workspace) = initialized_roots(root.path());
+    let routine = workspace.join("routines/task_triage.yaml");
+
+    // Reconstruct what the previous release wrote: the same document plus the
+    // host pin it rendered, recorded in the manifest under a hosts binding.
+    let current = std::fs::read_to_string(&routine).expect("read seeded routine");
+    let pinned = current.replace("trigger:", "hosts:\n  - host-a\ntrigger:");
+    assert_ne!(pinned, current, "fixture must add the retired pin");
+    std::fs::write(&routine, &pinned).expect("write the previously seeded routine");
+
+    let manifest_path = routine_manifest(&workspace);
+    let mut manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    manifest["assets"]["task_triage"] = Value::from(sha256(&pinned));
+    let provenance = &mut manifest["routineProvenance"]["task_triage"];
+    provenance["templateDigest"] = Value::from("digest-of-the-host-pinned-template");
+    provenance["renderedDigest"] = Value::from(sha256(&pinned));
+    provenance["binding"]["hosts"] = Value::from(vec!["host-a"]);
+    std::fs::write(
+        &manifest_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).expect("serialize pre-upgrade manifest")
+        ),
+    )
+    .expect("write pre-upgrade manifest");
+
+    let applied = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("alpha")),
+        false,
+    )
+    .expect("sync the upgraded workspace");
+
+    assert!(applied.actions.iter().any(|action| {
+        action.name == "task_triage" && action.outcome == ManagedArtifactOutcome::Refreshed
+    }));
+    assert!(
+        !applied
+            .actions
+            .iter()
+            .any(|action| action.name == "task_triage"
+                && action.outcome == ManagedArtifactOutcome::Preserved),
+    );
+    let refreshed = std::fs::read_to_string(&routine).expect("read refreshed routine");
+    assert!(!refreshed.contains("hosts:"), "{refreshed}");
+    let definition = orbit_common::protocol::yaml::parse_routine_yaml(&refreshed)
+        .expect("refreshed routine parses");
+    assert_eq!(definition.name, "task-triage-alpha");
+    assert!(!definition.has_legacy_host_pin());
+
+    // Converged: a second sync is a no-op.
+    let second = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("alpha")),
+        false,
+    )
+    .expect("second sync");
+    assert!(!second.has_pending_changes());
+}
+
 /// A workspace seeded under an earlier binding — including one whose routine
 /// names came from the checkout directory before [ORB-12107] — keeps the
 /// recorded name and bytes. Convergence reports the drift and renames nothing,
@@ -65,7 +136,7 @@ fn binding_drift_does_not_claim_template_drift_or_rewrite_routines() {
     let report = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some(&seed_identity("renamed-host", "different-workspace")),
+        Some(&seed_identity("different-workspace")),
         false,
     )
     .expect("sync with drifted current binding");
@@ -111,7 +182,7 @@ fn legacy_routine_manifest_check_is_read_only_and_apply_migrates_only_exact_inst
     let checked = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some(&seed_identity("new-host", "new-suffix")),
+        Some(&seed_identity("new-suffix")),
         true,
     )
     .expect("check legacy migration");
@@ -132,7 +203,7 @@ fn legacy_routine_manifest_check_is_read_only_and_apply_migrates_only_exact_inst
     let applied = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some(&seed_identity("new-host", "new-suffix")),
+        Some(&seed_identity("new-suffix")),
         false,
     )
     .expect("apply legacy migration");
@@ -150,7 +221,7 @@ fn legacy_routine_manifest_check_is_read_only_and_apply_migrates_only_exact_inst
     let entry = &provenance["worktree_gc"];
     assert!(entry["templateDigest"].as_str().is_some());
     assert!(entry["renderedDigest"].as_str().is_some());
-    assert_eq!(entry["binding"]["hosts"][0], "host-a");
+    assert_eq!(entry["binding"]["name"], "worktree-gc-alpha");
     assert_eq!(
         std::fs::read_to_string(&modified).expect("modified routine survives"),
         edited
@@ -179,10 +250,7 @@ fn real_template_refresh_uses_recorded_binding_and_second_run_is_a_no_op() {
     let applied = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some(&seed_identity(
-            "different-current-host",
-            "different-current-suffix",
-        )),
+        Some(&seed_identity("different-current-suffix")),
         false,
     )
     .expect("refresh true template drift");
@@ -195,16 +263,12 @@ fn real_template_refresh_uses_recorded_binding_and_second_run_is_a_no_op() {
     )
     .expect("parse refreshed routine");
     assert_eq!(routine.name, "task-triage-alpha");
-    assert_eq!(routine.hosts, vec!["host-a".to_string()]);
 
     let before = std::fs::read(&manifest_path).expect("snapshot converged manifest");
     let second = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some(&seed_identity(
-            "different-current-host",
-            "different-current-suffix",
-        )),
+        Some(&seed_identity("different-current-suffix")),
         false,
     )
     .expect("second sync");
@@ -234,7 +298,7 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
     let checked = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some(&seed_identity("host-a", "alpha")),
+        Some(&seed_identity("alpha")),
         true,
     )
     .expect("check a pre-provenance workspace");
@@ -253,7 +317,7 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
     let applied = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some(&seed_identity("host-a", "alpha")),
+        Some(&seed_identity("alpha")),
         false,
     )
     .expect("adopt a pre-provenance workspace");
@@ -273,7 +337,7 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
             .expect("parse adopted manifest");
     let entry = &manifest["routineProvenance"]["task_triage"];
     assert_eq!(entry["renderedDigest"], Value::from(sha256(&edited)));
-    assert_eq!(entry["binding"]["hosts"][0], "host-a");
+    assert_eq!(entry["binding"]["name"], "task-triage-alpha");
 
     // Provenance now exists, so a later shipped-template change reconciles
     // rather than repeating a collision report forever.
@@ -290,7 +354,7 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
     let refreshed = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some(&seed_identity("host-a", "alpha")),
+        Some(&seed_identity("alpha")),
         false,
     )
     .expect("refresh the adopted routine");
@@ -331,7 +395,7 @@ fn sync_refreshes_only_provenance_clean_non_routine_assets_and_retires_safely() 
     let checked = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some(&seed_identity("host-a", "alpha")),
+        Some(&seed_identity("alpha")),
         true,
     )
     .expect("check non-routine convergence");
@@ -350,7 +414,7 @@ fn sync_refreshes_only_provenance_clean_non_routine_assets_and_retires_safely() 
     reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some(&seed_identity("host-a", "alpha")),
+        Some(&seed_identity("alpha")),
         false,
     )
     .expect("apply non-routine convergence");
@@ -364,7 +428,7 @@ fn sync_refreshes_only_provenance_clean_non_routine_assets_and_retires_safely() 
     let second = reconcile_workspace_managed_artifacts(
         &global,
         &workspace,
-        Some(&seed_identity("host-a", "alpha")),
+        Some(&seed_identity("alpha")),
         false,
     )
     .expect("second convergence");

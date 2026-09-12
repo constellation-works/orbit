@@ -105,7 +105,7 @@ already grants authority for arbitrary tasks.
 | Seam | Verified behavior |
 | --- | --- |
 | [Seeded task-pilot routine](../../../crates/orbit-core/assets/routines/task_pilot.yaml) | Disabled by default; cron `*/40 * * * *`, missed runs skipped, overlap forbidden, 90-minute timeout. Its four-hour prose comment is stale; the cron is authoritative. |
-| [Workspace pilot routine](../../../.orbit/routines/task_pilot.yaml) | Enabled in the checked-in definition, with the same cron and a host pin. `*/40` fires at minutes 0 and 40 each hour, giving alternating 40/20-minute gaps, not a uniform 40-minute interval. |
+| [Workspace pilot routine](../../../.orbit/routines/task_pilot.yaml) | Enabled in the checked-in definition, with the same cron. `*/40` fires at minutes 0 and 40 each hour, giving alternating 40/20-minute gaps, not a uniform 40-minute interval. |
 | [Workspace triage](../../../.orbit/routines/task_triage.yaml) / [ship sweep](../../../.orbit/routines/ship_sweep.yaml) | Both disabled in this checkout. Mode configuration would need deliberate scheduler integration, not just a faster config number. |
 | [Auto CLI](../../../crates/orbit-cli/src/command/run/auto.rs) | `--complete` is **off by default**; it authorizes completion for all tasks admitted during the window, including later backlog arrivals. It never approves proposed work. No window means one tick. |
 | [Workspace auto job](../../../crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml) | One coordinator, default five live leaf runs, detached children, slot polling at 30 seconds and idle polling at 60 seconds; one epic may run alongside leaves. A successful coordinator is not evidence that its detached children succeeded. |

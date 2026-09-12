@@ -330,16 +330,15 @@ async fn authorized_routine_toggle_reads_back_and_rejects_stale_or_wrong_selecti
         "schema_version: 1\nworkspace_id: ws_alpha\n",
     )
     .expect("workspace identity");
-    std::fs::write(
-        orbit_dir.join("config.toml"),
-        "[routines]\nrole = \"source\"\n",
-    )
-    .expect("source role");
     super::test_support::write_replay_job_under(&orbit_dir, "noop");
     let routines = orbit_dir.join("routines");
     std::fs::create_dir_all(&routines).expect("routines");
     let path = routines.join("fixture.yaml");
-    std::fs::write(&path, "schemaVersion: 1\nname: fixture\nhosts: [dashboard-test]\nenabled: true\ntrigger: {cron: '* * * * *'}\ntarget: job:noop\n").expect("definition");
+    std::fs::write(
+        &path,
+        "schemaVersion: 1\nname: fixture\nenabled: true\ntrigger: {cron: '* * * * *'}\ntarget: job:noop\n",
+    )
+    .expect("definition");
     let now = Utc::now();
     let registry = WorkspaceRegistry {
         workspaces: vec![Workspace {

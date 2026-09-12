@@ -23,9 +23,9 @@ use crate::command::CommandOut;
     about = "Inspect and control scheduled routines on this host",
     arg_required_else_help = true,
     subcommand_required = true,
-    after_help = "Routine definitions are versioned YAML under `.orbit/routines/` in\n\
-                  workspaces with `[routines] role = \"source\"`. Pauses are host-local\n\
-                  and never synced. The scheduler pass itself is `orbit sweep`."
+    after_help = "Routine definitions are versioned YAML under `.orbit/routines/` in any\n\
+                  registered owner checkout. Pauses are host-local and never synced.\n\
+                  The scheduler pass itself is `orbit sweep`."
 )]
 pub struct RoutineCommand {
     #[command(subcommand)]

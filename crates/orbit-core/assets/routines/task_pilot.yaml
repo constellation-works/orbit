@@ -1,5 +1,5 @@
 # Default task-pilot routine [ORB-10739]. Seeded into `.orbit/routines/` on
-# `orbit init` with the routine name and host pin resolved at seed time. It is
+# `orbit init` with the routine name resolved at seed time. It is
 # intentionally disabled: enabling scheduled task preflight is an explicit,
 # versioned workspace decision.
 #
@@ -19,8 +19,6 @@ description: >
   pipeline. Disabled by default; set enabled to true in this versioned
   definition to opt this workspace into scheduled task preflight.
 enabled: false
-hosts:
-  - __ORBIT_HOST_ID__
 trigger:
   cron: "*/40 * * * *"
   missed_run: skip

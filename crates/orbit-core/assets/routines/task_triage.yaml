@@ -1,8 +1,8 @@
 # Default failed-run triage routine [ORB-10129]. Seeded into
-# `.orbit/routines/` on `orbit init` with the routine name and host pin
-# resolved at seed time (see `seed_default_routines` in
-# `crates/orbit-core/src/command/routine.rs`). It only fires from workspaces
-# whose config declares `[routines] role = "source"`. The versioned
+# `.orbit/routines/` on `orbit init` with the routine name resolved at seed
+# time (see `seed_default_routines` in
+# `crates/orbit-core/src/application/routine.rs`). It is evaluated by the
+# clock of every host with an owner checkout of this workspace. The versioned
 # `enabled` switch is deliberately false when seeded; opt in by reviewing
 # this definition and changing it to true.
 #
@@ -16,8 +16,6 @@ description: >
   re-backlog environmental casualties, and leave everything else blocked
   with a diagnosis attached.
 enabled: false
-hosts:
-  - __ORBIT_HOST_ID__
 trigger:
   cron: "15 * * * *"
   missed_run: skip

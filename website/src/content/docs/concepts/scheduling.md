@@ -52,14 +52,13 @@ individual routine's state changes.
 ## Routine
 
 A routine is a **versioned trigger**. It is one YAML file under
-`.orbit/routines/`, committed to the repository, that says which job fires, on
-what cadence, on which hosts:
+`.orbit/routines/`, committed to the repository, that says which job fires and on
+what cadence:
 
 ```yaml
 schemaVersion: 1
 name: ship_sweep_myrepo
 enabled: true
-hosts: [hm_alpha]
 trigger:
   cron: "*/20 * * * *"
   missed_run: skip
@@ -76,9 +75,10 @@ job can do. To fire a single activity on a schedule, wrap it in a one-step job.
 
 Invariants that shape how routines behave:
 
-- **Explicit hosts.** `hosts` is required and there is no "any host" value.
-  Definitions travel with the repository, so this is how one routine avoids
-  firing on every machine that has a checkout.
+- **No host field.** A definition is evaluated by every machine with a
+  registered owner checkout and an enabled clock, each against its own store.
+  Registration is the opt-in; to keep a routine on one machine, put it under
+  `.orbit/routines/local/` there or pause it elsewhere.
 - **Versioned enable, host-local pause.** `enabled` lives in the file and is a
   reviewed change; `orbit routine pause` is a per-host override that is never
   synced and survives reboots. Use pause for "not on this machine right now",
