@@ -56,17 +56,18 @@ pub(crate) fn normalize_context_files_for_write(
 }
 
 impl OrbitRuntime {
-    /// Reject context selectors that do not name an existing target in the
+    /// Reject context selectors whose filesystem anchor does not exist in the
     /// workspace the task write will use.
     ///
     /// This is an operator-surface guard: `orbit task add` / `orbit task
     /// update`, the `orbit.task.add` / `orbit.task.update` tools, and the
     /// dashboard `POST /api/tasks` / `PATCH /api/tasks/:id` handlers all call
     /// it so a mistyped selector cannot ship a task whose context is dead on
-    /// arrival. Every surface exposes an explicit `allow_missing_context`
-    /// escape for the deliberate not-yet-created target. `add_task` and
-    /// `update_task` themselves stay permissive so internal callers are
-    /// unaffected.
+    /// arrival. Existence is the filesystem anchor only: a `symbol:` name and
+    /// kind are parsed and stored, but not looked up. Every surface exposes an
+    /// explicit `allow_missing_context` escape for the deliberate
+    /// not-yet-created target. `add_task` and `update_task` themselves stay
+    /// permissive so internal callers are unaffected.
     pub fn ensure_context_selectors_exist(&self, selectors: &[String]) -> Result<(), OrbitError> {
         if selectors.is_empty() {
             return Ok(());
@@ -161,7 +162,8 @@ fn resolve_selector_in(
 
     if !exists_in_workspace(&canonical, canonical_workspace) {
         return Err(OrbitError::InvalidInput(format!(
-            "selector `{entry}` does not resolve to an existing in-workspace target"
+            "selector `{entry}` does not resolve to an existing in-workspace target; \
+             only the filesystem anchor is verified, not a `symbol:` name or kind"
         )));
     }
 

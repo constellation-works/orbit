@@ -225,6 +225,11 @@ fn schema_exposes_only_trimmed_create_task_fields() {
         .find(|p| p.name == "context_files")
         .expect("context_files");
     assert_eq!(context_files.param_type, "string_list");
+    assert!(
+        context_files.description.contains("filesystem anchor only"),
+        "context_files help must document that a `symbol:` name is not verified: {}",
+        context_files.description
+    );
 }
 
 #[test]

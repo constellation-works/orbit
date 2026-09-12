@@ -221,6 +221,10 @@ fn task_update_rejects_unassessed_complexity() {
         !rendered.contains("unassessed"),
         "unassessed is reserved for automated creation: {rendered}"
     );
+    assert!(
+        rendered.contains("filesystem anchor only"),
+        "--context help must document that a `symbol:` name is not verified: {rendered}"
+    );
 }
 
 #[test]
