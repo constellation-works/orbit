@@ -2052,8 +2052,114 @@ fn dashboard_inline_task_edits_report_pending_success_failure_and_offer_undo() {
         "the control must disable itself while its own change is pending"
     );
     assert!(
-        tasks.contains("if (statusTransition(task, \"archived\"))"),
-        "archive must be offered only when the canonical projection allows it"
+        tasks.contains("if (task.status !== \"archived\")"),
+        "archive must be offered for any non-archived task, including terminal statuses"
+    );
+}
+
+#[test]
+fn dashboard_task_detail_offers_archive_for_non_archived_tasks_and_omits_for_archived() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(tag = "") {
+    this.tag = tag;
+    this.children = [];
+    this.dataset = {};
+    this.style = {};
+    this.listeners = {};
+    this.className = "";
+    this._text = "";
+    this.parentNode = null;
+    this.disabled = false;
+  }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) {
+    const old = child.parentNode;
+    if (old) old.children = old.children.filter((c) => c !== child);
+    const index = this.children.indexOf(before);
+    this.children.splice(index < 0 ? this.children.length : index, 0, child);
+    child.parentNode = this;
+    return child;
+  }
+  removeChild(child) {
+    this.children = this.children.filter((c) => c !== child);
+    child.parentNode = null;
+    return child;
+  }
+  replaceChildren(...next) { for (const child of this.children) child.parentNode = null; this.children = []; for (const child of next) this.appendChild(child); }
+  replaceWith(next) { const parent = this.parentNode; if (!parent) return; parent.children = parent.children.map((c) => c === this ? next : c); next.parentNode = parent; this.parentNode = null; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  focus() {}
+  get textContent() { return this._text + this.children.map((c) => c.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() {
+    return {
+      add: (...names) => { this.className = `${this.className} ${names.join(" ")}`.trim(); },
+      remove: () => {},
+      toggle: () => {},
+    };
+  }
+}
+const nodes = new Map();
+const get = (id) => nodes.get(id) || (nodes.set(id, new Node()), nodes.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: (tag) => new Node(tag),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+const location = new URL("http://dashboard.test/#tasks");
+globalThis.window = { location, addEventListener: () => {}, confirm: () => false };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+globalThis.setTimeout = () => 0;
+
+const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
+const { renderTasks } = await import("./tasks.js");
+
+function find(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
+  return null;
+}
+
+for (const status of statuses) {
+  // Even when status_transitions is empty (as for done, archived) or excludes archived (as for rejected):
+  const task = {
+    id: `ORB-${status}`,
+    title: `${status} task`,
+    status,
+    history: [],
+    artifacts: [],
+    status_transitions: status === "done" || status === "archived" ? [] : [{ status: "backlog", required_field: null }],
+  };
+  renderTasks([task], {
+    getTasks: () => [task],
+    getTasksMeta: () => null,
+    getSearchQuery: () => "",
+    getActiveStatuses: () => new Set([status]),
+    statusOrder: statuses,
+    fmtAbsTime: (value) => value,
+    refreshDashboard: () => Promise.resolve(),
+  });
+
+  const row = find(get("tasks-body"), (node) => node.dataset.key === `task-ORB-${status}`);
+  if (!row || !row.listeners.click) throw new Error(`task row did not render for ${status}`);
+  row.listeners.click();
+
+  const detail = find(get("tasks-body"), (node) => node.dataset.key === `detail-ORB-${status}`);
+  if (!detail) throw new Error(`task detail did not render for ${status}`);
+
+  const archiveBtn = find(detail, (node) => node.className && node.className.includes("action archive"));
+  if (status === "archived") {
+    if (archiveBtn) throw new Error("archived task must not offer archive action");
+  } else {
+    if (!archiveBtn) throw new Error(`task with status '${status}' must offer archive action`);
+  }
+}
+"#,
     );
 }
 
