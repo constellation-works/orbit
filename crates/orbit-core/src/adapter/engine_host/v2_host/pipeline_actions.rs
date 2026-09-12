@@ -7,7 +7,7 @@ use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::ChildDispatchPhase;
+use orbit_types::workflow::{ChildDispatchPhase, JobRunState};
 use serde_json::Value;
 
 use super::child_dispatch;
@@ -178,7 +178,7 @@ where
     if invoke_output_skipped(&invoke_output) {
         return Ok(serde_json::json!({
             "skipped": true,
-            "status": "succeeded",
+            "status": wait_success_status(),
             "reason": "admissions_stopped",
             "job_name": job_name,
         }));
@@ -636,7 +636,7 @@ fn gate_admission_stop(
     )?;
     Ok(Some(gate_admission_stop_output(
         input,
-        "succeeded",
+        &wait_success_status(),
         "stale_noop",
         &reason,
         &task_statuses,
@@ -651,8 +651,15 @@ fn summarize_statuses(statuses: &[(String, String)]) -> String {
         .join(", ")
 }
 
+/// Canonical wait-envelope success token. Skip and stale-noop emitters, and
+/// the admission-stop `error` branch, share this so a spelling change cannot
+/// attach `error` to a successful stop.
+fn wait_success_status() -> String {
+    JobRunState::Success.to_string()
+}
+
 /// Build the synthetic child-run result an admission stop reports in place of a
-/// real dispatch. `status` drives the gate: `succeeded` lets
+/// real dispatch. `status` drives the gate: the canonical success token lets
 /// `pipeline_success_guard` pass, anything else fails the gate *after*
 /// `release_reservation` has run, and `error` is what the guard quotes.
 fn gate_admission_stop_output(
@@ -673,7 +680,7 @@ fn gate_admission_stop_output(
         "reason": reason,
         "task_statuses": task_statuses,
     });
-    if status != "succeeded" {
+    if status != wait_success_status() {
         output["error"] = Value::String(reason.to_string());
     }
     output

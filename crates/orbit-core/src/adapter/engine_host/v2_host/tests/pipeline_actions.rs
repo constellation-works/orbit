@@ -246,7 +246,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase, PipelineState,
+    ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase, JobRunState, PipelineState,
 };
 use serde_json::Value;
 use std::cell::RefCell;
@@ -375,7 +375,7 @@ fn stop_between_eligibility_observation_and_admission_creates_no_child() {
     .expect("admissions stop is an idempotent skip");
 
     assert_eq!(output["skipped"], true);
-    assert_eq!(output["status"], "succeeded");
+    assert_eq!(output["status"], JobRunState::Success.to_string());
     assert_eq!(output["reason"], "admissions_stopped");
     assert!(
         runtime
@@ -1026,7 +1026,7 @@ fn an_eligible_bundle_still_dispatches_after_the_gate_waited() {
     assert_eq!(recorded_dispatches(&runtime, &parent).len(), 1);
 }
 
-/// Positive control: already-shipped work keeps its succeeded no-op. Making
+/// Positive control: already-shipped work keeps its successful no-op. Making
 /// withdrawal fail the gate must not turn "this already landed" into a failure.
 #[test]
 fn already_shipped_work_still_reports_a_succeeded_noop() {
@@ -1036,8 +1036,12 @@ fn already_shipped_work_still_reports_a_succeeded_noop() {
 
     let output = dispatch_expecting_no_child(&runtime, &gate_dispatch_input(&parent, &[&task_id]));
 
-    assert_eq!(output["status"], "succeeded");
+    assert_eq!(output["status"], JobRunState::Success.to_string());
     assert_eq!(output["skipped"], json!(true));
+    assert!(
+        output.get("error").is_none(),
+        "a successful stop must not carry error: {output}"
+    );
     assert!(
         pipeline_success_guard(
             "pipeline_success_guard",
@@ -1047,6 +1051,80 @@ fn already_shipped_work_still_reports_a_succeeded_noop() {
         "a stale no-op must still pass the gate's success guard"
     );
     assert_eq!(audit_payloads(&runtime, GATE_STALE_NOOP_AUDIT).len(), 1);
+}
+
+/// [ORB-12299] Synthetic skip / stale-noop wait results must use a status the
+/// published `invoke_and_wait` enum actually declares, not the compatibility
+/// token `succeeded`.
+#[test]
+fn synthetic_skip_and_admission_stop_status_is_in_invoke_and_wait_enum() {
+    let statuses = published_invoke_and_wait_status_enum();
+    let canonical = JobRunState::Success.to_string();
+    assert!(
+        statuses.iter().any(|status| status == &canonical),
+        "published wait enum must contain {canonical}, got {statuses:?}"
+    );
+    assert!(
+        !statuses.iter().any(|status| status == "succeeded"),
+        "succeeded is a compatibility token, not a published wait status: {statuses:?}"
+    );
+
+    let (runtime, parent) = parent_runtime();
+    let skip = invoke_and_wait_with(
+        &runtime,
+        "invoke_and_wait",
+        &ship_leaves_input(&parent),
+        |_| {
+            Ok(json!({
+                "skipped": true,
+                "reason": "admissions_stopped",
+                "job_name": "task_auto_pipeline",
+            }))
+        },
+        |_| panic!("a skipped invoke must not wait on a child"),
+    )
+    .expect("admissions skip is a wait result");
+    let skip_status = skip["status"].as_str().expect("skip status");
+    assert!(
+        statuses.iter().any(|status| status == skip_status),
+        "skip status {skip_status:?} is not in the published enum {statuses:?}"
+    );
+    assert_eq!(skip_status, canonical);
+
+    let task_id = backlog_task(&runtime, "Landed while the gate waited");
+    ship_to_review(&runtime, &task_id);
+    let stop = dispatch_expecting_no_child(&runtime, &gate_dispatch_input(&parent, &[&task_id]));
+    let stop_status = stop["status"].as_str().expect("admission-stop status");
+    assert!(
+        statuses.iter().any(|status| status == stop_status),
+        "admission-stop status {stop_status:?} is not in the published enum {statuses:?}"
+    );
+    assert_eq!(stop_status, canonical);
+    assert!(
+        stop.get("error").is_none(),
+        "a successful admission stop must not carry error: {stop}"
+    );
+}
+
+fn published_invoke_and_wait_status_enum() -> Vec<String> {
+    use orbit_engine::activity_job::load_activity_asset;
+
+    let (_, yaml) = crate::runtime::assets::DEFAULT_ACTIVITY_FILES
+        .iter()
+        .find(|(name, _)| *name == "invoke_and_wait")
+        .expect("invoke_and_wait activity is seeded");
+    let wait = load_activity_asset(yaml).expect("parse invoke_and_wait");
+    wait.spec.output_schema_json["properties"]["status"]["enum"]
+        .as_array()
+        .expect("invoke_and_wait status enum")
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .expect("status enum values are strings")
+                .to_string()
+        })
+        .collect()
 }
 
 /// A task id that resolves to no task at all stays a hard activity failure:
