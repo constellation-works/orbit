@@ -121,7 +121,7 @@ impl ArtifactKind {
 fn init_command(kind: ArtifactKind) -> &'static str {
     match kind {
         ArtifactKind::Skill | ArtifactKind::Job | ArtifactKind::Activity => "orbit init",
-        ArtifactKind::AutoTask | ArtifactKind::Routine => "orbit workspace init",
+        ArtifactKind::AutoTask | ArtifactKind::Routine => "orbit workspace sync",
     }
 }
 

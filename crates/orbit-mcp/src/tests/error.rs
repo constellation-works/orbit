@@ -180,3 +180,39 @@ fn friction_not_local_has_a_stable_code_and_names_owners() {
             && message.contains("ws_friction")
     }));
 }
+
+#[test]
+fn control_conflict_has_stable_conflict_code_and_names_object() {
+    for (error, expected_object, expected_hint) in [
+        (
+            OrbitError::JobRunControlConflict(
+                "operation grant 'ogrant-123' is at revision 2, not the expected 1; reread and retry"
+                    .to_string(),
+            ),
+            "operation grant 'ogrant-123'",
+            "reread and retry",
+        ),
+        (
+            OrbitError::JobRunControlConflict(
+                "worker ceiling of job run 'jrun-456' is at revision 2, not 1; re-read it and decide again"
+                    .to_string(),
+            ),
+            "worker ceiling of job run 'jrun-456'",
+            "re-read it and decide again",
+        ),
+    ] {
+        let payload = error_payload(&error);
+        assert_eq!(payload["code"], "conflict");
+        let message = payload["message"].as_str().expect("error message");
+        assert!(!message.starts_with("job run control conflict:"));
+        assert!(message.contains(expected_object), "missing object in message: {message}");
+        assert!(message.contains(expected_hint), "missing hint in message: {message}");
+
+        let result = tool_error_result(&error);
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(
+            result.structured_content.expect("structured error payload")["code"],
+            "conflict"
+        );
+    }
+}

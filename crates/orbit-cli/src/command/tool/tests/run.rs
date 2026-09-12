@@ -275,3 +275,84 @@ fn local_machine_identity_prefers_persisted_host_identity() {
         ("hm_cli".to_string(), Some("cli-host".to_string()))
     );
 }
+
+#[test]
+fn infer_tool_name_preserves_dotted_names_without_known_script_extension() {
+    use super::super::manifest::infer_tool_name;
+    use std::path::Path;
+
+    assert_eq!(infer_tool_name(Path::new("qa.echo")), "qa.echo");
+    assert_eq!(
+        infer_tool_name(Path::new("my.nested.tool.name")),
+        "my.nested.tool.name"
+    );
+    assert_eq!(infer_tool_name(Path::new("/path/to/qa.echo")), "qa.echo");
+}
+
+#[test]
+fn infer_tool_name_strips_known_script_extensions() {
+    use super::super::manifest::infer_tool_name;
+    use std::path::Path;
+
+    assert_eq!(infer_tool_name(Path::new("qa.echo.py")), "qa.echo");
+    assert_eq!(infer_tool_name(Path::new("qa.echo.sh")), "qa.echo");
+    assert_eq!(infer_tool_name(Path::new("qa.echo.js")), "qa.echo");
+    assert_eq!(infer_tool_name(Path::new("echo.py")), "echo");
+    assert_eq!(infer_tool_name(Path::new("echo.sh")), "echo");
+}
+
+#[test]
+fn sidecar_manifest_path_preserves_dotted_names() {
+    use super::super::manifest::sidecar_manifest_path;
+    use std::path::Path;
+
+    assert_eq!(
+        sidecar_manifest_path(Path::new("qa.echo")),
+        Path::new("qa.echo.orbit-tool.yaml")
+    );
+    assert_eq!(
+        sidecar_manifest_path(Path::new("/tools/qa.echo")),
+        Path::new("/tools/qa.echo.orbit-tool.yaml")
+    );
+    assert_eq!(
+        sidecar_manifest_path(Path::new("qa.echo.py")),
+        Path::new("qa.echo.orbit-tool.yaml")
+    );
+    assert_eq!(
+        sidecar_manifest_path(Path::new("echo.py")),
+        Path::new("echo.orbit-tool.yaml")
+    );
+}
+
+#[test]
+fn tool_scaffold_registers_full_dotted_name_in_manifest() {
+    use crate::command::Execute;
+    use crate::command::tool::manifest::load_external_tool_manifest;
+    use crate::command::tool::scaffold::ToolScaffoldArgs;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script_path = dir.path().join("qa.echo");
+
+    let args = ToolScaffoldArgs {
+        path: script_path.display().to_string(),
+        name: None,
+        description: "Test description".to_string(),
+        force: false,
+    };
+
+    let runtime = orbit_core::OrbitRuntime::from_roots(dir.path(), dir.path()).expect("runtime");
+    args.execute(&runtime).expect("scaffold succeeds");
+
+    assert!(script_path.exists(), "script was created");
+    let manifest_path = dir.path().join("qa.echo.orbit-tool.yaml");
+    assert!(
+        manifest_path.exists(),
+        "manifest with full dotted name was created"
+    );
+
+    let manifest = load_external_tool_manifest(&manifest_path).expect("load manifest");
+    assert_eq!(
+        manifest.name, "qa.echo",
+        "registered name must be full name"
+    );
+}

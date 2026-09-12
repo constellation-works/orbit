@@ -294,12 +294,12 @@ pub enum OrbitError {
     /// without matching on message text.
     #[error("job run start conflict: {0}")]
     JobRunStartConflict(String),
-    /// [ORB-11253] A run-control update lost a compare-and-set to a concurrent
-    /// update of the same control. Distinct from
+    /// [ORB-11253, ORB-12260] A control update lost a compare-and-set to a
+    /// concurrent update of the same control. Distinct from
     /// [`OrbitError::JobValidation`] on purpose: nothing is wrong with the
     /// request, it was simply superseded, so the caller re-reads the current
     /// value and decides again rather than correcting anything.
-    #[error("job run control conflict: {0}")]
+    #[error("{0}")]
     JobRunControlConflict(String),
     #[error("workspace error: {0}")]
     WorkspaceError(String),
