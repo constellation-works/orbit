@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 
 use orbit_store::maintenance::task_registry::{
-    TaskRegistryStore, read_workspace_config_optional, task_registry_path,
+    BindWorkspaceParams, TaskRegistryStore, read_workspace_config_optional, task_registry_path,
+    write_workspace_config,
 };
 
 use crate::OrbitError;
@@ -87,7 +88,7 @@ fn registry_neutral_binding_rejects_a_conflicting_workspace_config() {
     let workspace_root = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global_root).expect("create global root");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
-    orbit_store::maintenance::task_registry::write_workspace_config(
+    write_workspace_config(
         &workspace_root,
         &orbit_store::maintenance::task_registry::WorkspaceConfig {
             schema_version: 1,
@@ -261,7 +262,7 @@ fn v2_task_backend_adopts_the_bound_workspace_when_the_checkout_identity_drifts(
         .expect("workspace id");
     drop(runtime);
 
-    orbit_store::maintenance::task_registry::write_workspace_config(
+    write_workspace_config(
         &workspace_root,
         &orbit_store::maintenance::task_registry::WorkspaceConfig {
             schema_version: 1,
@@ -290,6 +291,11 @@ fn explicit_data_dir_runtime_does_not_bind_parent_as_a_checkout() {
     std::fs::create_dir_all(&data_dir).expect("create data dir");
 
     let runtime = OrbitRuntime::from_roots(&data_dir, &data_dir).expect("build data-dir runtime");
+    assert_eq!(
+        runtime.context.paths().repo_root,
+        data_dir,
+        "an unbound data-dir open must not treat parent(data-dir) as repo_root"
+    );
     drop(runtime);
 
     assert!(
@@ -307,6 +313,52 @@ fn explicit_data_dir_runtime_does_not_bind_parent_as_a_checkout() {
     assert!(
         candidates.is_empty(),
         "executor-list-style data-dir open must not insert a checkout for parent(data-dir); got {candidates:?}"
+    );
+}
+
+/// ORB-12222: a registered workspace sharing an explicit data dir still has a
+/// checkout row. Opening that data dir without a cwd binding must recover that
+/// checkout instead of minting parent(data-dir) as `repo_root`.
+#[test]
+fn explicit_data_dir_runtime_recovers_the_stored_checkout_repo_root() {
+    let root = tempdir().expect("tempdir");
+    let data_dir = root.path().join("orbit-root");
+    let repo_root = root.path().join("repo");
+    std::fs::create_dir_all(&data_dir).expect("create data dir");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create repo");
+    std::fs::write(repo_root.join("src/main.rs"), b"fn main() {}\n").expect("write source");
+
+    write_workspace_config(
+        &data_dir,
+        &orbit_store::maintenance::task_registry::WorkspaceConfig {
+            schema_version: 1,
+            workspace_id: "ws_repo".to_string(),
+        },
+    )
+    .expect("write workspace config");
+    let registry =
+        TaskRegistryStore::open(&task_registry_path(&data_dir)).expect("open task registry");
+    let bound = registry
+        .bind_workspace(BindWorkspaceParams {
+            workspace_id: Some("ws_repo".to_string()),
+            slug: "repo".to_string(),
+            repo_root: repo_root.clone(),
+            workspace_path: repo_root.clone(),
+            orbit_dir: data_dir.clone(),
+            repo_fingerprint: None,
+        })
+        .expect("bind stored checkout");
+
+    let runtime = OrbitRuntime::from_roots(&data_dir, &data_dir).expect("build data-dir runtime");
+    assert_eq!(
+        runtime.context.paths().repo_root,
+        bound.repo_root,
+        "explicit-root open without a cwd binding must use the stored checkout, not parent(data-dir)"
+    );
+    assert_ne!(
+        runtime.context.paths().repo_root,
+        data_dir.parent().expect("data dir parent"),
+        "parent(data-dir) must not become repo_root for a registered workspace"
     );
 }
 
