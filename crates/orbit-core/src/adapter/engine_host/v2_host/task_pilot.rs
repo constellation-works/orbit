@@ -673,10 +673,10 @@ fn validate_recommendations(
             format!("task {task_id} unassessed complexity requires actionable evidence_gaps"),
         ));
     }
-    if complexity.is_assessed() && !evidence_gaps.is_empty() {
+    if complexity.is_assessed() && !evidence_gaps.is_empty() && confidence == "high" {
         return Err(action_failed(
             action,
-            format!("task {task_id} must remain unassessed while evidence_gaps are present"),
+            format!("task {task_id} with high confidence must not have evidence_gaps"),
         ));
     }
     for field in [

@@ -289,3 +289,57 @@ fn an_applied_assessment_is_durable_and_only_a_later_audited_pass_changes_it() {
         Some(TaskComplexity::Unassessed)
     );
 }
+
+#[test]
+fn assessed_complexity_with_evidence_gaps_persists_when_confidence_is_low() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/gap.rs");
+    let task = seed_task(&runtime, "assessed repair with rating-changing unknowns");
+    let prepared = prepare_task(&runtime, &repo_root, &task);
+    let mut result = assessment(&task, "file:src/gap.rs", "medium");
+    result["confidence"] = json!("low");
+    result["evidence_gaps"] =
+        json!(["Unresolved fixture semantics might change the repair to hard."]);
+
+    let output = apply_assessment(&runtime, &repo_root, prepared, &task, result);
+    assert_eq!(output["status"], "succeeded");
+    let updated = runtime.get_task(&task.id).expect("reload assessed task");
+    assert_eq!(updated.complexity, Some(TaskComplexity::Medium));
+}
+
+#[test]
+fn assessed_complexity_with_evidence_gaps_is_rejected_when_confidence_is_high() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/gap.rs");
+    let task = seed_task(&runtime, "high-confidence repair claiming gaps");
+    let prepared = prepare_task(&runtime, &repo_root, &task);
+    let mut result = assessment(&task, "file:src/gap.rs", "medium");
+    result["confidence"] = json!("high");
+    result["evidence_gaps"] = json!(["Contradictory gap under high confidence."]);
+
+    let output = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": prepared,
+            "results": [{
+                "partition_index": 0,
+                "task_ids": [task.id],
+                "tasks": [result],
+                "summary": "assessment fixture",
+            }],
+            "workspace_path": &repo_root,
+        }),
+    )
+    .expect("apply result");
+    assert_eq!(output["status"], "failed");
+    assert_eq!(output["repair_count"], 1);
+    let errors = &output["repair_partitions"][0]["validation_errors"];
+    assert!(
+        errors.as_array().unwrap().iter().any(|e| e
+            .as_str()
+            .unwrap()
+            .contains("with high confidence must not have evidence_gaps")),
+        "expected high-confidence evidence_gaps rejection, got: {errors:?}"
+    );
+}
