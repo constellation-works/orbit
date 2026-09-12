@@ -1,11 +1,11 @@
 ---
 type: pattern
 summary: "Command Pattern"
-last_validated: 2026-08-22
+last_validated: 2026-09-12
 ---
 # Command Pattern
 
-In this codebase, Command = the `Tool` trait at `crates/orbit-tools/src/lib.rs:246`:
+In this codebase, Command = the `Tool` trait at `crates/orbit-tools/src/lib.rs:286`:
 
 ```rust
 pub trait Tool: Send + Sync {
@@ -14,15 +14,15 @@ pub trait Tool: Send + Sync {
 }
 ```
 
-The registry at `crates/orbit-tools/src/registry.rs:31` stores `Arc<dyn Tool>` keyed by `ToolSchema::name`. Adding a tool means: writing a struct, `impl Tool`, registering in `builtin::register_builtins`. The dispatcher never changes.
+The registry at `crates/orbit-tools/src/registry.rs:32` stores `Arc<dyn Tool>` keyed by `ToolSchema::name`. Adding a tool means: writing a struct, `impl Tool`, registering in `builtin::register_builtins`. The dispatcher never changes.
 
 ## Destructive CLI confirmation
 
-CLI commands never prompt or read stdin. An irreversible single action exposes
+Destructive CLI commands never prompt or read stdin. An irreversible single action exposes
 `--confirm` and refuses before mutation when it is absent. A migration or bulk
 cleanup command is non-destructive by default (report/dry-run) and uses
 `--confirm` to apply. Existing spellings may remain as compatibility aliases
-(`--yes` for worktree GC and `--delete` for learning prune), but new commands
+(`--yes` for worktree GC), but new commands
 must not introduce another confirmation spelling. Reversible mutations should
 instead document and test their recovery command.
 
@@ -44,12 +44,12 @@ impl Tool for OrbitPipelineInvokeTool {
 }
 ```
 
-`execute_host_action` (`orbit/mod.rs:251`) resolves the caller's identity, requires a host on the context, and forwards `(action, input, agent, model, reservation_owner)` into the runtime.
+`execute_host_action` (`orbit/mod.rs:273`) resolves the caller's identity, requires a host on the context, and forwards the action, input, identity, and reservation metadata into the runtime.
 
 Patterns to copy:
 
 - **A new tool of this kind lands in three places.** New struct in `orbit/<area>/<verb>.rs`, new variant in `OrbitBuiltinAction`, new match arm in the host's `execute()`. The dispatcher and registry are untouched.
-- **Schema in `orbit-tools`; logic in `orbit-core`.** This is the rule that keeps `orbit-tools` free of runtime / store dependencies per the architecture diagram in `CLAUDE.md`. If your tool needs the task store, the activity-job engine, or sandboxed exec, it must dispatch through the host — don't pull those deps into `orbit-tools`.
+- **Schema in `orbit-tools`; logic in `orbit-core`.** This is the rule that keeps `orbit-tools` free of runtime / store dependencies per the architecture diagram in `ARCHITECTURE.md`. If your tool needs the task store, the activity-job engine, or sandboxed exec, it must dispatch through the host — don't pull those deps into `orbit-tools`.
 - **MCP-only adapters stay in `orbit-mcp`.** Global host/workspace discovery is not a generic `ToolRegistry` command. Its schema and projection live beside MCP framing and are composed with the caller-supplied host; adding one does not add an `OrbitBuiltinAction` or Core `run_tool` arm.
 
 ---

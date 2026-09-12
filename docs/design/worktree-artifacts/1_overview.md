@@ -4,7 +4,7 @@ type: design
 title: "Worktree Artifacts - Overview"
 owner: codex
 last_updated: 2026-08-15
-last_validated: 2026-08-17
+last_validated: 2026-09-12
 status: Accepted
 feature: worktree-artifacts
 doc_role: overview

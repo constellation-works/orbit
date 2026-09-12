@@ -4,7 +4,7 @@ type: design
 title: "User Interface — Vision"
 owner: gemini
 last_updated: 2026-04-30
-last_validated: 2026-08-17
+last_validated: 2026-09-12
 status: Draft
 feature: user-interface
 doc_role: vision

@@ -3,8 +3,8 @@ summary: "User Interface — Decisions"
 type: design
 title: "User Interface — Decisions"
 owner: gemini
-last_updated: 2026-08-11
-last_validated: 2026-08-17
+last_updated: 2026-09-12
+last_validated: 2026-09-12
 status: Draft
 feature: user-interface
 doc_role: decisions
@@ -66,6 +66,9 @@ Render companion metrics as compact pairs: `tokens` is `total/output`, `tool fai
 
 **Recorded:** 2026-05-11 02:06:39.449202Z · [T20260430-29]
 
+This layout was superseded by the Tasks side dock: Status and Log now share the
+right column, and `#log-panel` fills the dock when Log is selected.
+
 ### Context
 The Tasks view keeps `orbit.log` visible beside the task list, but the log panel could grow taller than short viewports and push footer controls below the screen.
 
@@ -116,6 +119,9 @@ Render the dashboard scoreboard as focused sections: Delivery, Review, Knowledge
 
 **Recorded:** 2026-05-18 06:55:55.249402Z · [ORB-00146]
 
+The extracted crate is now named `orbit-web`; it still owns the HTTP API and
+embedded dashboard assets while `orbit-cli` remains the thin entry point.
+
 ### Context
 The Orbit web dashboard lived inside orbit-cli even though its HTML, JavaScript, read-only axum API handlers, and embedded assets formed a distinct internal surface. The only local coupling was the CLI Execute trait; keeping the dashboard in orbit-cli forced unrelated CLI edits to rebuild the heavier web tree and mixed dashboard tests into the CLI target.
 
@@ -150,6 +156,10 @@ Render canonical scoreboard metrics as one metric-major Unified Leaderboard Matr
 ## Global, Multi-Workspace Dashboard
 
 **Recorded:** 2026-07-26 21:51:44.038593Z · [ORB-00030], [ORB-10458]
+
+The single-workspace serving branch described below has since been retired.
+`orbit web serve` now always enumerates the selected registry; `--global` is an
+accepted compatibility no-op, and `--workspace` selects the initial workspace.
 
 ### Context
 
