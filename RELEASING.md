@@ -151,6 +151,8 @@ Task execution never touches `CHANGELOG.md` — no PR adds an `## Unreleased` bu
 
 `scripts/check-changelog-style.sh` still lints whatever lands under `## Unreleased`, so it's worth drafting bullets there first if that helps you iterate before moving them into the version section — but that section is scratch space at release time now, not a per-PR accumulation target. Released `## <X.Y.Z>` sections are frozen history and are never reflowed.
 
+**Not enforced mechanically**: no guardrail rejects a `CHANGELOG.md` edit from a non-release commit, and that is deliberate. Release drafting itself edits the file, and the commit- or branch-shaped heuristics that would tell the two apart are unreliable in shallow CI checkouts. The rule lives in [`AGENTS.md`](AGENTS.md) ("CHANGELOG entries") and in review instead; `scripts/check-changelog-style.sh` keeps linting bullet shape either way.
+
 ### 3. Confirm breaking changes with the human
 
 Surface the breaking-change candidate list before drafting the final section. Show each candidate with its task ID, title, and the reason it was flagged. Let the human accept, downgrade, or add to the list. Do not classify autonomously.
