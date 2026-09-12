@@ -4,7 +4,7 @@ summary: Check Orbit workspace, database, dashboard, log-sink, job-run, and rout
 tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
-related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223]
+related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12259]
 last_validated: 2026-09-12
 ---
 
@@ -24,6 +24,7 @@ Every check degrades to a row rather than aborting unless the store itself canno
 | `database` | store DB `PRAGMA quick_check` + schema-ledger version versus this binary |
 | `disk-space` | free space on the volume holding `.orbit` (warn below 1 GiB or 5%; fail below 256 MiB or 1%) |
 | `semantic-index` | stale embedding rows; skipped if never indexed |
+| `docs-index` | docs corpus sources with no embedding row; skipped when no docs corpus is configured |
 | `stale-locks` | `.lock` files under `state/`, `tasks/`, `learnings/`, and `adrs/.locks/` whose recorded holder PID is dead |
 | `job-runs` | orphaned `pending` or `running` runs with no live worker process |
 | `task-reservations` | active reservations whose owner run or terminal task association proves the reservation stale |
@@ -40,6 +41,7 @@ $ orbit doctor
 │ database         ok        quick_check ok; schema version 1 matches this binary             │
 │ disk-space       ok        11.2 GiB free of 65.6 GiB (17.1%) on the volume holding …/.orbit │
 │ semantic-index   skipped   no semantic embeddings indexed yet                               │
+│ docs-index       warning   docs: 0 of 12 sources embedded — run `orbit docs index`          │
 │ stale-locks      warning   1 lock file(s) left by dead holders (the OS already released     │
 │                            the flock; safe to delete): …/state/layout.lock                  │
 │                            (dead pid 154488, op: layout upgrade, since 2026-07-04T09:25…)   │
@@ -47,7 +49,7 @@ $ orbit doctor
 │ task-reservations ok       no conclusively stale active task reservations                    │
 │ task-relations   ok        no unresolved relation/dependency targets                        │
 │ orphan-task-stores ok      2 task-store partition(s) scanned, all claimed …                 │
-0 failure(s), 1 warning(s).
+0 failure(s), 2 warning(s).
 ```
 
 The command exits nonzero only when at least one check is `ERROR`; warnings and skips exit

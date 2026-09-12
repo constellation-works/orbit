@@ -17,6 +17,8 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeSet;
+
 use orbit_common::OrbitError;
 pub use orbit_search::{DocIndexParams, DocIndexResult, SearchResult};
 use orbit_search::{score_doc_record, sort_search_results};
@@ -150,22 +152,25 @@ impl OrbitRuntime {
 
     /// How much of the live docs corpus has a doc embedding row.
     ///
-    /// An index that was never built (no vector store yet) reports zero
-    /// coverage rather than an error: that is exactly the state `orbit doctor`
-    /// needs to name, not a failure to diagnose it [ORB-12259].
+    /// A corpus that was never indexed is zero coverage, not an error: the
+    /// store opens empty, which is exactly the state `orbit doctor` needs to
+    /// name. Storage that refuses the index altogether is a different fact —
+    /// `orbit docs index` cannot fix a read-only state directory — so that
+    /// error propagates instead of reading as "nothing is embedded"
+    /// [ORB-12259].
     pub fn docs_embedding_coverage(&self) -> Result<DocsEmbeddingCoverage, OrbitError> {
         let docs = self.list_docs(None, None)?;
         let total_sources = docs.len();
-        let live_paths: std::collections::BTreeSet<&str> =
-            docs.iter().map(|doc| doc.path.as_str()).collect();
-        let embedded_sources = match self.stores().semantic_index().store() {
-            Ok(store) => store
-                .source_ids(orbit_search::SOURCE_KIND_DOC)?
-                .iter()
-                .filter(|source_id| live_paths.contains(source_id.as_str()))
-                .count(),
-            Err(_) => 0,
-        };
+        let live_paths: BTreeSet<&str> = docs.iter().map(|doc| doc.path.as_str()).collect();
+        let embedded_sources = self
+            .stores()
+            .semantic_index()
+            .store()?
+            .source_ids(orbit_search::SOURCE_KIND_DOC)?
+            .iter()
+            .filter(|source_id| live_paths.contains(source_id.as_str()))
+            .count();
+
         Ok(DocsEmbeddingCoverage {
             total_sources,
             embedded_sources,
